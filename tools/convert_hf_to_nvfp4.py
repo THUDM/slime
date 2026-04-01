@@ -1,3 +1,4 @@
+      
 import argparse
 import gc
 import json
@@ -33,12 +34,36 @@ EXPERT_NAME_MARKERS = (
     ".moe.experts.",
 )
 
+DENSE_LINEAR_WEIGHT_SUFFIXES = (
+    ".self_attn.q_proj.weight",
+    ".self_attn.k_proj.weight",
+    ".self_attn.v_proj.weight",
+    ".self_attn.o_proj.weight",
+    ".mlp.gate_proj.weight",
+    ".mlp.up_proj.weight",
+    ".mlp.down_proj.weight",
+)
+
+DENYLIST_SUFFIXES = (
+    ".input_layernorm.weight",
+    ".post_attention_layernorm.weight",
+    ".self_attn.q_norm.weight",
+    ".self_attn.k_norm.weight",
+    ".norm.weight",
+)
+
 FUSED_QKV_SUFFIXES = (".q_proj", ".k_proj", ".v_proj")
 GATED_PAIR_SUFFIXES = {
     ".gate_proj.weight": "gate",
     ".up_proj.weight": "up",
     ".w1.weight": "gate",
     ".w3.weight": "up",
+}
+
+QKV_PAIR_SUFFIXES = {
+    ".self_attn.q_proj.weight": "q",
+    ".self_attn.k_proj.weight": "k",
+    ".self_attn.v_proj.weight": "v",
 }
 
 
@@ -48,6 +73,28 @@ def _is_moe_expert_weight_name(name: str) -> bool:
     if not any(marker in name for marker in EXPERT_NAME_MARKERS):
         return False
     return any(name.endswith(suffix) for suffix in EXPERT_WEIGHT_SUFFIXES)
+
+
+def _is_dense_linear_weight_name(name: str) -> bool:
+    if not name.endswith(".weight"):
+        return False
+    if any(name.endswith(suffix) for suffix in DENYLIST_SUFFIXES):
+        return False
+    if name == "model.embed_tokens.weight":
+        return False
+    if name == "lm_head.weight":
+        return False
+    return any(name.endswith(suffix) for suffix in DENSE_LINEAR_WEIGHT_SUFFIXES)
+
+
+def _is_quantizable_weight_name(name: str, quant_target: str) -> bool:
+    if quant_target == "experts":
+        return _is_moe_expert_weight_name(name)
+    if quant_target == "linear":
+        return _is_dense_linear_weight_name(name)
+    if quant_target == "experts_and_linear":
+        return _is_moe_expert_weight_name(name) or _is_dense_linear_weight_name(name)
+    raise ValueError(f"Unknown quant_target: {quant_target}")
 
 
 def _extract_layer_id(name: str) -> int | None:
@@ -80,21 +127,36 @@ def _get_last_n_layer_ids(num_layers: int, keep_last_n: int) -> set[int]:
     return set(range(start, num_layers))
 
 
-def _build_keep_last_n_ignore_list(num_layers: int, keep_last_n: int) -> list[str]:
+def _build_keep_last_n_ignore_list(num_layers: int, keep_last_n: int, quant_target: str) -> list[str]:
     if keep_last_n <= 0:
         return []
     start = max(0, num_layers - keep_last_n)
     ignore_list = []
     for layer_id in range(start, num_layers):
         prefix = f"model.layers.{layer_id}"
-        ignore_list.extend(
-            [
-                f"{prefix}.self_attn.qkv_proj",
-                f"{prefix}.self_attn.o_proj",
-                f"{prefix}.mlp",
-                f"{prefix}.mlp.experts",
-            ]
-        )
+
+        if quant_target in ("linear", "experts_and_linear"):
+            ignore_list.extend(
+                [
+                    f"{prefix}.self_attn.q_proj",
+                    f"{prefix}.self_attn.k_proj",
+                    f"{prefix}.self_attn.v_proj",
+                    f"{prefix}.self_attn.qkv_proj",
+                    f"{prefix}.self_attn.o_proj",
+                    f"{prefix}.mlp.gate_proj",
+                    f"{prefix}.mlp.up_proj",
+                    f"{prefix}.mlp.down_proj",
+                    f"{prefix}.mlp",
+                ]
+            )
+
+        if quant_target in ("experts", "experts_and_linear"):
+            ignore_list.extend(
+                [
+                    f"{prefix}.mlp.experts",
+                ]
+            )
+
     return ignore_list
 
 
@@ -102,20 +164,22 @@ def should_quantize(
     name: str,
     weight: torch.Tensor,
     skip_layers: set[int] | None = None,
+    quant_target: str = "experts",
 ) -> bool:
     if skip_layers:
         layer_id = _extract_layer_id(name)
         if layer_id is not None and layer_id in skip_layers:
             return False
-    if not _is_moe_expert_weight_name(name):
+    if not _is_quantizable_weight_name(name, quant_target):
         return False
     if weight.dtype not in (torch.float16, torch.bfloat16, torch.float32):
         return False
-    if weight.dim() < 2:
+    if weight.dim() != 2:
         return False
     if weight.shape[-1] % NVFP4_GROUP_SIZE != 0:
         raise ValueError(
-            f"Last dim {weight.shape[-1]} must be divisible by {NVFP4_GROUP_SIZE} " f"for NVFP4 quantization ({name})."
+            f"Last dim {weight.shape[-1]} must be divisible by {NVFP4_GROUP_SIZE} "
+            f"for NVFP4 quantization ({name})."
         )
     return True
 
@@ -344,6 +408,13 @@ def _split_gated_pair_name(name: str) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _split_qkv_pair_name(name: str) -> tuple[str | None, str | None]:
+    for suffix, role in QKV_PAIR_SUFFIXES.items():
+        if name.endswith(suffix):
+            return name[: -len(suffix)], role
+    return None, None
+
+
 def process_file(
     input_path: str,
     output_path: str,
@@ -351,6 +422,7 @@ def process_file(
     result_collector: ConversionResult,
     device: str,
     skip_layers: set[int],
+    quant_target: str,
 ) -> None:
     if not filename.endswith(".safetensors"):
         return
@@ -364,23 +436,46 @@ def process_file(
 
     modules_to_not_convert: list[str] = []
     shared_global_amax: dict[str, torch.Tensor] = {}
+
     gated_candidates: dict[str, dict[str, torch.Tensor]] = {}
+    qkv_candidates: dict[str, dict[str, torch.Tensor]] = {}
+
     for key, tensor in weights.items():
         base, role = _split_gated_pair_name(key)
-        if base is None or role is None:
-            continue
-        if should_quantize(key, tensor, skip_layers):
-            gated_candidates.setdefault(base, {})[role] = tensor
+        if base is not None and role is not None:
+            if should_quantize(key, tensor, skip_layers, quant_target):
+                gated_candidates.setdefault(base, {})[role] = tensor
+
+        base, role = _split_qkv_pair_name(key)
+        if base is not None and role is not None:
+            if should_quantize(key, tensor, skip_layers, quant_target):
+                qkv_candidates.setdefault(base, {})[role] = tensor
+
     for base, roles in gated_candidates.items():
         if "gate" in roles and "up" in roles:
             gate_amax = roles["gate"].abs().max().to(torch.float32)
             up_amax = roles["up"].abs().max().to(torch.float32)
             shared_global_amax[base] = torch.max(gate_amax, up_amax)
+
+    for base, roles in qkv_candidates.items():
+        if "q" in roles and "k" in roles and "v" in roles:
+            q_amax = roles["q"].abs().max().to(torch.float32)
+            k_amax = roles["k"].abs().max().to(torch.float32)
+            v_amax = roles["v"].abs().max().to(torch.float32)
+            shared_global_amax[base] = torch.max(torch.max(q_amax, k_amax), v_amax)
     for key, tensor in weights.items():
-        if should_quantize(key, tensor, skip_layers):
-            base, role = _split_gated_pair_name(key)
-            global_amax = shared_global_amax.get(base) if base else None
-            qweight, block_scale, weight_scale_2 = quantize_nvfp4(tensor, global_amax=global_amax)
+        if should_quantize(key, tensor, skip_layers, quant_target):
+            print(f"[quantize] {key}")
+
+            gated_base, _ = _split_gated_pair_name(key)
+            qkv_base, _ = _split_qkv_pair_name(key)
+            shared_base = gated_base if gated_base is not None else qkv_base
+            global_amax = shared_global_amax.get(shared_base) if shared_base else None
+
+            qweight, block_scale, weight_scale_2 = quantize_nvfp4(
+                tensor,
+                global_amax=global_amax,
+            )
             q_weights[key] = qweight
             q_weights[key.replace(".weight", ".weight_scale")] = block_scale
             q_weights[key.replace(".weight", ".weight_scale_2")] = weight_scale_2.detach().clone()
@@ -394,7 +489,13 @@ def process_file(
     result_collector.add_result(filename, q_weights, modules_to_not_convert)
 
 
-def convert_nvfp4(model_dir: str, save_dir: str, device: str, keep_last_n: int) -> None:
+def convert_nvfp4(
+    model_dir: str,
+    save_dir: str,
+    device: str,
+    keep_last_n: int,
+    quant_target: str,
+) -> None:
     input_path = os.path.abspath(model_dir)
     output_path = os.path.abspath(save_dir)
     os.makedirs(output_path, exist_ok=True)
@@ -407,7 +508,7 @@ def convert_nvfp4(model_dir: str, save_dir: str, device: str, keep_last_n: int) 
 
     num_layers = _get_num_hidden_layers(input_path) if keep_last_n > 0 else 0
     skip_layers = _get_last_n_layer_ids(num_layers, keep_last_n)
-    keep_last_ignore = _build_keep_last_n_ignore_list(num_layers, keep_last_n)
+    keep_last_ignore = _build_keep_last_n_ignore_list(num_layers, keep_last_n, quant_target)
 
     result_collector = ConversionResult()
     for filename in tqdm(safetensors_files, desc="Processing files"):
@@ -418,6 +519,7 @@ def convert_nvfp4(model_dir: str, save_dir: str, device: str, keep_last_n: int) 
             result_collector,
             device,
             skip_layers,
+            quant_target,
         )
         gc.collect()
         if torch.cuda.is_available():
@@ -460,6 +562,13 @@ def main() -> None:
         default=0,
         help="Keep the last N transformer layers unquantized (BF16/FP16).",
     )
+    parser.add_argument(
+        "--quant-target",
+        type=str,
+        default="experts",
+        choices=["experts", "linear", "experts_and_linear"],
+        help="Which weights to quantize: MoE experts only, dense Linear only, or both.",
+    )
     args = parser.parse_args()
 
     if isinstance(args.device, str) and args.device.isdigit():
@@ -480,8 +589,16 @@ def main() -> None:
     elif not os.path.isdir(args.save_dir):
         raise ValueError("The save_dir should be a directory.")
 
-    convert_nvfp4(args.model_dir, args.save_dir, str(device), args.keep_last_n)
+    convert_nvfp4(
+        args.model_dir,
+        args.save_dir,
+        str(device),
+        args.keep_last_n,
+        args.quant_target,
+    )
 
 
 if __name__ == "__main__":
     main()
+
+    
