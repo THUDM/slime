@@ -1,3 +1,4 @@
+
 import re
 from typing import List, Tuple
 
@@ -12,6 +13,12 @@ GATED_PAIR_SUFFIXES = {
     ".up_proj.weight": "up",
     ".w1.weight": "gate",
     ".w3.weight": "up",
+}
+
+QKV_TRIPLET_SUFFIXES = {
+    ".q_proj.weight": "q",
+    ".k_proj.weight": "k",
+    ".v_proj.weight": "v",
 }
 
 
@@ -33,6 +40,22 @@ def quantize_params_nvfp4(args, megatron_name, converted_named_params, quantizat
         rest = rest.replace("transformer_layer.", "")
     else:
         _, rest = match.groups()
+
+    # q,k,v proj
+    qkv_pattern = r"self_attention\.(.+)"
+    match = re.match(qkv_pattern, rest)
+    if match:
+        rest = match.groups()[0]
+        if rest in ["linear_qkv.weight"]:
+            return _quantize_qkv_params(converted_named_params, group_size)
+
+    # mlp proj
+    mlp_pattern = r"mlp\.(.+)"
+    match = re.match(mlp_pattern, rest)
+    if match:
+        rest = match.groups()[0]
+        if rest in ["linear_fc1.weight"]:
+            return _quantize_mlp_params(converted_named_params, group_size)
 
     # experts
     expert_pattern = r"mlp.experts\.(.+)\.weight(\d+)"
@@ -99,6 +122,61 @@ def _quantize_moe_params(converted_named_params, group_size):
         )
 
     return quantize_named_params
+
+
+
+def _quantize_mlp_params(converted_named_params, group_size):
+    # dense fused linear_fc1 -> gate_proj/up_proj
+    return _quantize_moe_params(converted_named_params, group_size)
+
+
+def _quantize_qkv_params(converted_named_params, group_size):
+    shared_global_amax = {}
+    qkv_candidates = {}
+
+    for converted_name, param in converted_named_params:
+        base, role = _split_qkv_triplet_name(converted_name)
+        if base is None or role is None:
+            continue
+        if _should_quantize_param(converted_name, param, group_size):
+            qkv_candidates.setdefault(base, {})[role] = param
+
+    for base, roles in qkv_candidates.items():
+        if "q" in roles and "k" in roles and "v" in roles:
+            q_amax = roles["q"].abs().max().to(torch.float32)
+            k_amax = roles["k"].abs().max().to(torch.float32)
+            v_amax = roles["v"].abs().max().to(torch.float32)
+            shared_global_amax[base] = torch.max(torch.max(q_amax, k_amax), v_amax)
+
+    quantize_named_params = []
+    for converted_name, param in converted_named_params:
+        if not _should_quantize_param(converted_name, param, group_size):
+            quantize_named_params.append((converted_name, param))
+            continue
+
+        base, _role = _split_qkv_triplet_name(converted_name)
+        global_amax = shared_global_amax.get(base) if base else None
+
+        qweight, block_scale, weight_scale_2 = quantize_nvfp4(
+            param,
+            global_amax=global_amax,
+            group_size=group_size,
+        )
+        quantize_named_params.append((converted_name, qweight))
+        quantize_named_params.append((converted_name.replace(".weight", ".weight_scale"), block_scale))
+        quantize_named_params.append((converted_name.replace(".weight", ".weight_scale_2"), weight_scale_2))
+        quantize_named_params.append(
+            (converted_name.replace(".weight", ".input_scale"), torch.ones_like(weight_scale_2, dtype=torch.float32))
+        )
+
+    return quantize_named_params
+
+
+def _split_qkv_triplet_name(name: str):
+    for suffix, role in QKV_TRIPLET_SUFFIXES.items():
+        if name.endswith(suffix):
+            return name[: -len(suffix)], role
+    return None, None
 
 
 def _should_quantize_param(name, weight, group_size):
