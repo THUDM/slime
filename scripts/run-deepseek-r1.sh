@@ -121,12 +121,18 @@ SGLANG_ARGS=(
    --sglang-moe-dense-tp-size 1
    --sglang-enable-dp-lm-head
 
-   # enable deepep for sglang
-   --sglang-moe-a2a-backend deepep
-   --sglang-deepep-mode auto
+    # enable deepep for sglang
+    --sglang-moe-a2a-backend deepep
+    --sglang-deepep-mode auto
 
-   # make every dp rank has 128 concurrency
-   --sglang-server-concurrency 1024
+    # mtp
+    --sglang-speculative-algorithm EAGLE
+    --sglang-speculative-num-steps 3
+    --sglang-speculative-eagle-topk 1
+    --sglang-speculative-num-draft-tokens 4
+
+    # make every dp rank has 128 concurrency
+    --sglang-server-concurrency 1024
 )
 
 MISC_ARGS=(

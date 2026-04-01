@@ -1,4 +1,4 @@
-ARG SGLANG_IMAGE_TAG=nightly-dev-20260107-dce8b060
+ARG SGLANG_IMAGE_TAG=v0.5.9
 FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
@@ -77,6 +77,9 @@ RUN pip install nvidia-cudnn-cu12==9.16.0.29
 
 # reinstall numpy 1.x for megatron
 RUN pip install "numpy<2"
+
+RUN pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-5f8d397/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
+RUN python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
 
 RUN rm -rf /root/.cache/pip /root/flash-attention
 

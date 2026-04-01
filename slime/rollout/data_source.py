@@ -39,6 +39,12 @@ class DataSource(abc.ABC):
         Load the state of the data source
         """
 
+    @abc.abstractmethod
+    def __len__(self) -> int:
+        """
+        Length of the data source. May change when samples are added/fetched.
+        """
+
 
 # TODO may further refactor data-loading part later
 class RolloutDataSource(DataSource):
@@ -52,7 +58,7 @@ class RolloutDataSource(DataSource):
         # TODO remove this
         self.metadata = {}
 
-        if args.rollout_global_dataset:
+        if args.rollout_global_dataset and args.prompt_data is not None:
             tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
             processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
@@ -150,8 +156,13 @@ class RolloutDataSource(DataSource):
         self.sample_index = state_dict.get("sample_index", 0)
         self.metadata = state_dict.get("metadata", {})
 
-        if self.args.rollout_global_dataset and self.args.rollout_shuffle:
+        if self.args.rollout_global_dataset and self.args.rollout_shuffle and self.dataset is not None:
             self.dataset.shuffle(self.epoch_id)
+
+    def __len__(self) -> int:
+        if self.dataset is None:
+            return 0
+        return len(self.dataset)
 
 
 class RolloutDataSourceWithBuffer(RolloutDataSource):
