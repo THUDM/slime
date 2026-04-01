@@ -185,6 +185,7 @@ local/
 *.out
 *.pkl
 *.code-workspace
+exp/
 
 .idea
 *.iml
