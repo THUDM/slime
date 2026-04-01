@@ -1,0 +1,290 @@
+<% set jobs = {
+    'e2e-test-short': {
+      'label': 'run-ci-short',
+      'tests': [
+        {'test_file': 'test_qwen2.5_0.5B_gsm8k_async_short.py', 'num_gpus': 4},
+        {'test_file': 'test_qwen2.5_0.5B_gsm8k_short.py', 'num_gpus': 4},
+        {'test_file': 'test_qwen2.5_0.5B_ppo_critic_only_short.py', 'num_gpus': 4},
+      ],
+    },
+    'e2e-test-sglang-config': {
+      'label': 'run-ci-sglang-config',
+      'tests': [
+        {'test_file': 'test_qwen2.5_0.5B_sglang_config.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen2.5_0.5B_sglang_config_distributed.py', 'num_gpus': 8},
+        {'test_file': 'test_sglang_config_mixed_offload.py', 'num_gpus': 8},
+        {'test_file': 'test_sglang_config_mixed_offload_ft.py', 'num_gpus': 8},
+      ],
+    },
+    'e2e-test-megatron': {
+      'label': 'run-ci-megatron',
+      'tests': [
+        {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1'},
+        {'test_file': 'test_qwen3_30B_A3B_r3.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1', 'enable_eval': '0'},
+        {'test_file': 'test_qwen3_30B_A3B_r3.py', 'num_gpus': 8, 'enable_eval': '0'},
+        {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ppo_train_critic_only.py', 'num_gpus': 8},
+        {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8},
+        {'test_file': 'test_moonlight_16B_A3B_r3.py', 'num_gpus': 8, 'enable_eval': '0'},
+        {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen2.5_0.5B_debug_rollout_then_train.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen2.5_0.5B_opd_sglang.py', 'num_gpus': 8},
+      ],
+    },
+    'e2e-test-precision': {
+      'label': 'run-ci-precision',
+      'tests': [
+        {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
+      ],
+    },
+    'e2e-test-ckpt': {
+      'label': 'run-ci-ckpt',
+      'tests': [
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py --async-save', 'num_gpus': 8},
+      ],
+    },
+
+    'e2e-test-plugin-contracts': {
+      'label': 'run-ci-plugin-contracts',
+      'always': True,
+      'cpu': True,
+      'tests': [
+        {'test_file': 'plugin_contracts/test_plugin_rollout_contracts.py', 'num_gpus': 0},
+        {'test_file': 'plugin_contracts/test_plugin_runtime_hook_contracts.py', 'num_gpus': 0},
+        {'test_file': 'plugin_contracts/test_plugin_path_loading_contracts.py', 'num_gpus': 0},
+        {'test_file': 'plugin_contracts/test_plugin_generate_contracts.py', 'num_gpus': 0},
+      ],
+    },
+
+    'e2e-test-image': {
+      'label': 'run-ci-image',
+      'image': 'slimerl/slime-test:latest',
+      'tests': [
+        {'test_file': 'test_qwen2.5_0.5B_gsm8k_async_short.py', 'num_gpus': 4},
+        {'test_file': 'test_qwen2.5_0.5B_gsm8k_short.py', 'num_gpus': 4},
+        {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8},
+        {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8},
+        {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py --async-save', 'num_gpus': 8},
+        {'test_file': 'test_qwen2.5_0.5B_debug_rollout_then_train.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen2.5_0.5B_opd_sglang.py', 'num_gpus': 8},
+      ],
+    },
+} %>
+name: PR Test
+
+on:
+  # Do not run CI on push to reduce CI time
+  # push:
+  #   branches: [main]
+  pull_request:
+    branches: [main]
+    types: [synchronize, labeled]
+  workflow_dispatch:
+    inputs:
+      infinite_run:
+        description: 'Run training infinitely'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+<% for job_name, config in jobs.items() %>
+  << job_name >>:
+<% if config.get('always') %>
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+<% else %>
+    if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, '<< config.label >>'))
+<% endif %>
+<% if config.get('cpu') %>
+    runs-on: ubuntu-latest
+<% else %>
+    runs-on: self-hosted
+    container:
+      image: << config.image if config.image else 'slimerl/slime:latest' >>
+      options: >
+        --gpus all
+        --ipc=host
+        --shm-size=16g
+        --ulimit memlock=-1
+        --ulimit stack=67108864
+        --memory=0
+        --memory-swap=0
+        -e http_proxy=$http_proxy
+        -e https_proxy=$https_proxy
+        -e HTTP_PROXY=$HTTP_PROXY
+        -e HTTPS_PROXY=$HTTPS_PROXY
+        -v /mnt/nvme0n1/slime_ci:/data/slime_ci
+        -v /mnt/nvme0n1/slime_ci/models:/root/models
+        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
+<% endif %>
+    strategy:
+      fail-fast: false
+      matrix:
+        info: << config.tests | tojson >>
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    env:
+      GITHUB_COMMIT_NAME: ${{ github.sha }}_${{ github.event.pull_request.number || 'non-pr' }}
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      SLIME_TEST_ENABLE_INFINITE_RUN: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.infinite_run) || 'false' }}
+      SLIME_TEST_USE_DEEPEP: ${{ matrix.info.use_deepep || '0' }}
+      SLIME_TEST_USE_FP8_ROLLOUT: ${{ matrix.info.use_fp8_rollout || '0' }}
+      SLIME_TEST_ENABLE_EVAL: ${{ matrix.info.enable_eval || '1' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+<% if config.get('cpu') %>
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx pybase64 pylatexenc sympy aiohttp pillow
+
+      - name: Install
+        shell: bash
+        run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps
+<% else %>
+
+      - name: Install
+        shell: bash
+        run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
+<% endif %>
+
+      - name: Execute
+        shell: bash
+        run: |
+          TEST_PATH="${{ matrix.info.test_file }}"
+          if [[ "$TEST_PATH" != tests/* ]]; then
+            TEST_PATH="tests/$TEST_PATH"
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+          fi
+<% endfor %>
+
+  e2e-test-changed-detect:
+    if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-changed'))
+    runs-on: self-hosted
+    container:
+      image: slimerl/slime:latest
+      options: >
+        --gpus all
+        --ipc=host
+        --shm-size=16g
+        --ulimit memlock=-1
+        --ulimit stack=67108864
+        --memory=0
+        --memory-swap=0
+    outputs:
+      matrix: ${{ steps.detect.outputs.matrix }}
+      has_tests: ${{ steps.detect.outputs.has_tests }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed tests
+        id: detect
+        shell: bash
+        run: |
+          CHANGED=$(git diff --name-only --diff-filter=AM origin/main...HEAD -- 'tests/test_*.py' 'tests/plugin_contracts/test_*.py' || true)
+          if [ -z "$CHANGED" ]; then
+            echo "No new or modified test files found."
+            echo "has_tests=false" >> $GITHUB_OUTPUT
+            echo 'matrix={"info":[]}' >> $GITHUB_OUTPUT
+          else
+            echo "Changed test files:"
+            echo "$CHANGED"
+            MATRIX="["
+            FIRST=true
+            for filepath in $CHANGED; do
+              # Extract NUM_GPUS from the test file, default to 8
+              NGPU=$(grep -oP '^NUM_GPUS\s*=\s*\K\d+' "$filepath" | head -1)
+              NGPU=${NGPU:-8}
+              if [ "$FIRST" = true ]; then FIRST=false; else MATRIX+=","; fi
+              MATRIX+="{\"test_file\":\"$filepath\",\"num_gpus\":$NGPU}"
+            done
+            MATRIX+="]"
+            echo "has_tests=true" >> $GITHUB_OUTPUT
+            echo "matrix={\"info\":$MATRIX}" >> $GITHUB_OUTPUT
+            echo "Generated matrix: $MATRIX"
+          fi
+
+  e2e-test-changed:
+    needs: e2e-test-changed-detect
+    if: needs.e2e-test-changed-detect.outputs.has_tests == 'true'
+    runs-on: self-hosted
+    container:
+      image: slimerl/slime:latest
+      options: >
+        --gpus all
+        --ipc=host
+        --shm-size=16g
+        --ulimit memlock=-1
+        --ulimit stack=67108864
+        --memory=0
+        --memory-swap=0
+        -e http_proxy=$http_proxy
+        -e https_proxy=$https_proxy
+        -e HTTP_PROXY=$HTTP_PROXY
+        -e HTTPS_PROXY=$HTTPS_PROXY
+        -v /mnt/nvme0n1/slime_ci:/data/slime_ci
+        -v /mnt/nvme0n1/slime_ci/models:/root/models
+        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.e2e-test-changed-detect.outputs.matrix) }}
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    env:
+      GITHUB_COMMIT_NAME: ${{ github.sha }}_${{ github.event.pull_request.number || 'non-pr' }}
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      SLIME_TEST_ENABLE_INFINITE_RUN: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.infinite_run) || 'false' }}
+      SLIME_TEST_USE_DEEPEP: ${{ matrix.info.use_deepep || '0' }}
+      SLIME_TEST_USE_FP8_ROLLOUT: ${{ matrix.info.use_fp8_rollout || '0' }}
+      SLIME_TEST_ENABLE_EVAL: ${{ matrix.info.enable_eval || '1' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install
+        shell: bash
+        run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
+
+      - name: Execute
+        shell: bash
+        run: |
+          TEST_PATH="${{ matrix.info.test_file }}"
+          if [[ "$TEST_PATH" != tests/* ]]; then
+            TEST_PATH="tests/$TEST_PATH"
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+          fi

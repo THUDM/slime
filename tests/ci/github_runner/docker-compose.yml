@@ -1,0 +1,29 @@
+# Please refer to `README.md` for how to setup this GitHub action runner
+version: "3.9"
+
+services:
+  runner:
+    # NOTE need to use the latest, o/w the runner will want to upgrade itself
+    image: ghcr.io/actions/actions-runner:2.329.0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /data/slime_ci:/data/slime_ci
+      # it requires this folder
+      - /home/runner/externals:/home/runner/externals
+    deploy:
+      replicas: 8
+    restart: always
+    environment:
+      RUNNER_ALLOW_RUNASROOT: "1"
+    privileged: true
+    user: root
+    # ref: https://github.com/actions/runner/issues/367#issuecomment-2007558723
+    # ref: https://github.com/actions/runner
+    # args ref: https://github.com/actions/runner/blob/68ff57dbc4c836d50f46602a8a53301fb9513eb4/src/Runner.Listener/CommandSettings.cs#L53
+    # TODO seems we should not run config.sh repeatedly
+    entrypoint: >
+      sh -c "
+      cd /data/slime_ci &&
+      /home/runner/config.sh --url ${GITHUB_RUNNER_URL} --token ${GITHUB_RUNNER_TOKEN} --unattended --work /data/slime_ci/runner_$(hostname) --disableupdate &&
+      /home/runner/run.sh
+      "

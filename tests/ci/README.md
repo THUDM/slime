@@ -1,0 +1,57 @@
+# Doc about CI
+
+## Configure GitHub secrets
+
+https://github.com/THUDM/slime/settings/secrets/actions
+
+* `WANDB_API_KEY`: get from https://wandb.ai/authorize
+
+## Setup new GitHub runners
+
+### Step 1: Env
+
+Write `.env` mimicking `.env.example`.
+The token can be found at https://github.com/THUDM/slime/settings/actions/runners/new?arch=x64&os=linux.
+
+WARN: The `GITHUB_RUNNER_TOKEN` changes after a while.
+
+### Step 2: Prepare `/home/runner/externals`
+
+```shell
+docker run --rm -it --privileged --pid=host -v /:/host_root ubuntu /bin/bash -c 'rm -rf /host_root/home/runner/externals && mkdir -p /host_root/home/runner/externals && chmod -R 777 /host_root/home/runner/externals'
+docker run -d --name temp-runner ghcr.io/actions/actions-runner:2.328.0 tail -f /dev/null
+docker cp temp-runner:/home/runner/externals/. /home/runner/externals
+docker rm -f temp-runner
+ls -alh /home/runner/externals
+```
+
+### Step 3: Run
+
+```shell
+cd /mnt/data/tom/primary_synced/slime/tests/ci/github_runner
+docker compose up -d
+```
+
+### Debugging
+
+Logs
+
+```shell
+# All containers
+docker compose logs -f
+
+# One container
+docker logs -f github_runner-runner-1
+```
+
+Exec
+
+```shell
+docker exec -it github_runner-runner-1 /bin/bash
+```
+
+An example of quickly iterate
+
+```shell
+docker compose down -v && docker compose up -d && docker logs -f github_runner-runner-1
+```
