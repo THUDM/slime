@@ -1,6 +1,7 @@
 import aiohttp
 import torch
 
+from slime.rollout.sglang_rollout import get_model_url
 from slime.utils.processing_utils import encode_image_for_rollout_engine
 from slime.utils.types import Sample
 
@@ -25,6 +26,34 @@ async def reward_func(args, sample, **kwargs):
     session_kwargs = {}
     async with aiohttp.ClientSession(**session_kwargs) as session:
         async with session.post(args.rm_url, json=payload) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+
+async def reward_func_route_by_domain(args, sample, **kwargs):
+    """Like ``reward_func`` but routes to the per-domain teacher via ``get_model_url``."""
+    payload = {
+        "input_ids": sample.tokens,
+        "sampling_params": {
+            "temperature": 0,
+            "max_new_tokens": 0,
+            "skip_special_tokens": False,
+        },
+        "return_logprob": True,
+        "logprob_start_len": 0,
+    }
+
+    if sample.multimodal_inputs and sample.multimodal_inputs.get("images"):
+        image_data = sample.multimodal_inputs["images"]
+        payload["image_data"] = [encode_image_for_rollout_engine(image) for image in image_data]
+
+    model_name = sample.metadata.get("domain", None)
+    if model_name is None:
+        raise KeyError("sample.metadata['domain'] is not set")
+    url = get_model_url(args, model_name, "/generate")
+    session_kwargs = {}
+    async with aiohttp.ClientSession(**session_kwargs) as session:
+        async with session.post(url, json=payload) as resp:
             resp.raise_for_status()
             return await resp.json()
 
