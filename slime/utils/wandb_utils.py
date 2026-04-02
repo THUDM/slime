@@ -79,6 +79,62 @@ def init_wandb_primary(args):
     args.wandb_run_id = wandb.run.id
 
 
+def reinit_wandb_primary_with_open_metrics(args, router_addr):
+    """Re-initialize the primary W&B run with open metrics endpoints.
+
+    The primary wandb init happens before rollout servers start (to obtain
+    ``wandb_run_id`` for secondary processes).  This function is called
+    *after* servers are up so the router address is available for scraping
+    SGLang Prometheus metrics via the primary process's stats monitor.
+    """
+    if not args.use_wandb or _is_offline_mode(args):
+        return
+    if getattr(args, "wandb_mode", None) == "disabled":
+        return
+    if router_addr is None:
+        return
+    wandb_run_id = getattr(args, "wandb_run_id", None)
+    if wandb_run_id is None:
+        return
+
+    import sglang_router
+
+    if "slime" not in sglang_router.__version__:
+        logger.warning(
+            "Only customized sglang_router from https://github.com/zhuzilin/sgl-router supports uploading metrics."
+        )
+        return
+
+    logger.info(f"Re-initializing primary W&B with SGLang metrics at {router_addr}.")
+
+    wandb.finish()
+
+    init_kwargs = {
+        "id": wandb_run_id,
+        "entity": args.wandb_team,
+        "project": args.wandb_project,
+        "resume": "allow",
+        "reinit": True,
+        "settings": wandb.Settings(
+            mode="shared",
+            x_primary=True,
+            x_stats_open_metrics_endpoints={
+                "sgl_engine": f"{router_addr}/engine_metrics",
+            },
+            x_stats_open_metrics_filters={
+                "sgl_engine.*": {},
+            },
+        ),
+    }
+
+    if args.wandb_dir:
+        os.makedirs(args.wandb_dir, exist_ok=True)
+        init_kwargs["dir"] = args.wandb_dir
+
+    wandb.init(**init_kwargs)
+    _init_wandb_common()
+
+
 def _compute_config_for_logging(args):
     output = deepcopy(args.__dict__)
 
@@ -92,7 +148,7 @@ def _compute_config_for_logging(args):
 
 
 # https://docs.wandb.ai/guides/track/log/distributed-training/#track-all-processes-to-a-single-run
-def init_wandb_secondary(args, router_addr=None):
+def init_wandb_secondary(args):
     wandb_run_id = getattr(args, "wandb_run_id", None)
     if wandb_run_id is None:
         return
@@ -114,17 +170,6 @@ def init_wandb_secondary(args, router_addr=None):
             mode="shared",
             x_primary=False,
             x_update_finish_state=False,
-        )
-
-    if router_addr is not None:
-        logger.info(f"Forward SGLang metrics at {router_addr} to WandB.")
-        settings_kwargs |= dict(
-            x_stats_open_metrics_endpoints={
-                "sgl_engine": f"{router_addr}/engine_metrics",
-            },
-            x_stats_open_metrics_filters={
-                "sgl_engine.*": {},
-            },
         )
 
     init_kwargs = {
