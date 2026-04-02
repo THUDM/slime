@@ -11,29 +11,31 @@ from typing import Any, Iterator, Sequence
 POOL_SUBDIRS = ("structured", "stem", "tool")
 DATASET_SOURCE_MAP: dict[str, tuple[str, ...]] = {
     "toolbench_v1": (
-        "tool/train/toolbench_v1_data_train-00000-of-00004.jsonl",
-        "tool/train/toolbench_v1_data_train-00001-of-00004.jsonl",
-        "tool/train/toolbench_v1_data_train-00002-of-00004.jsonl",
-        "tool/train/toolbench_v1_data_train-00003-of-00004.jsonl",
+        "tool/toolbench_v1_data_train-00000-of-00004.jsonl",
+        "tool/toolbench_v1_data_train-00001-of-00004.jsonl",
+        "tool/toolbench_v1_data_train-00002-of-00004.jsonl",
+        "tool/toolbench_v1_data_train-00003-of-00004.jsonl",
     ),
     "apibench": (
-        "tool/train/apibench_huggingface_train.jsonl",
-        "tool/train/apibench_tensorflow_train.jsonl",
-        "tool/train/apibench_torchhub_train.jsonl",
+        "tool/apibench_huggingface_train.jsonl",
+        "tool/apibench_tensorflow_train.jsonl",
+        "tool/apibench_torchhub_train.jsonl",
     ),
-    "apigen": ("tool/train/apigen_mt_5k_apigen-mt_5k.jsonl",),
+    "apigen": ("tool/apigen_mt_5k_apigen-mt_5k.jsonl",),
+    "xlam_function_calling_60k": ("tool/xlam_function_calling_60k_xlam-function-calling-60k.jsonl",),
     "agent": (
-        "tool/train/agent_function_calling_open_dataset_deepnlp_agent_function_call_202510.jsonl",
-        "tool/train/agent_function_calling_open_dataset_deepnlp_agent_function_call_202601.jsonl",
+        "tool/agent_function_calling_open_dataset_deepnlp_agent_function_call_202510.jsonl",
+        "tool/agent_function_calling_open_dataset_deepnlp_agent_function_call_202601.jsonl",
     ),
-    "jsonschemabench": ("structured/train/jsonschemabench_data_train-00000-of-00001.jsonl",),
-    "nemotron_structured_outputs": ("structured/train/nemotron_structured_outputs_structured_outputs_251027_nano_v3_sdg_json_train.jsonl",),
+    "jsonschemabench": ("structured/jsonschemabench_data_train-00000-of-00001.jsonl",),
+    "nemotron_structured_outputs": ("structured/nemotron_structured_outputs_structured_outputs_251027_nano_v3_sdg_json_train.jsonl",),
     "nemotron_knowledge_mcqa": (
-        "stem/train/nemotron_knowledge_mcqa_data_train-00000-of-00004.jsonl",
-        "stem/train/nemotron_knowledge_mcqa_data_train-00001-of-00004.jsonl",
-        "stem/train/nemotron_knowledge_mcqa_data_train-00002-of-00004.jsonl",
-        "stem/train/nemotron_knowledge_mcqa_data_train-00003-of-00004.jsonl",
+        "stem/nemotron_knowledge_mcqa_data_train-00000-of-00004.jsonl",
+        "stem/nemotron_knowledge_mcqa_data_train-00001-of-00004.jsonl",
+        "stem/nemotron_knowledge_mcqa_data_train-00002-of-00004.jsonl",
+        "stem/nemotron_knowledge_mcqa_data_train-00003-of-00004.jsonl",
     ),
+    "medmcqa": ("stem/medmcqa_data_train-00000-of-00001.jsonl",),
 }
 
 
@@ -61,9 +63,21 @@ def iter_rows(path: Path) -> Iterator[dict]:
             yield payload
 
 
-def ensure_row_is_ready(row: dict[str, Any]) -> dict[str, Any]:
-    # v2 reads pool rows directly and should not mutate schema here.
-    return row
+def align_row_to_v1_normalized_shape(row: dict[str, Any]) -> dict[str, Any]:
+    aligned = dict(row)
+    aligned["tools"] = list(row.get("tools") or [])
+    return aligned
+
+
+def _expand_layout_candidates(relative_path: str) -> list[str]:
+    # Prefer the current pool layout (<domain>/train/*.jsonl), but keep backward
+    # compatibility with the old <domain>/*.jsonl structure.
+    if "/train/" in relative_path:
+        return [relative_path, relative_path.replace("/train/", "/", 1)]
+    head, sep, tail = relative_path.partition("/")
+    if not sep:
+        return [relative_path]
+    return [f"{head}/train/{tail}", relative_path]
 
 
 def resolve_named_datasets(pool_root: Path, dataset_names: Sequence[str]) -> list[Path]:
@@ -76,10 +90,20 @@ def resolve_named_datasets(pool_root: Path, dataset_names: Sequence[str]) -> lis
             supported = ", ".join(sorted(DATASET_SOURCE_MAP))
             raise ValueError(f"Unsupported dataset '{dataset_name}'. Supported datasets: {supported}")
         for relative_path in DATASET_SOURCE_MAP[dataset_name]:
-            source = pool_root / relative_path
-            if not source.is_file():
-                raise FileNotFoundError(f"Dataset source does not exist: {source}")
-            sources.append(source)
+            resolved = None
+            tried: list[Path] = []
+            for candidate_relpath in _expand_layout_candidates(relative_path):
+                candidate = pool_root / candidate_relpath
+                tried.append(candidate)
+                if candidate.is_file():
+                    resolved = candidate
+                    break
+            if resolved is None:
+                tried_str = ", ".join(str(path) for path in tried)
+                raise FileNotFoundError(
+                    f"Dataset source does not exist for '{dataset_name}': expected one of [{tried_str}]"
+                )
+            sources.append(resolved)
     return sources
 
 
@@ -111,10 +135,18 @@ def write_dataset(
     written = 0
     with dest.open("w", encoding="utf-8") as handle:
         for row in iter_selected_rows(sources, skip_samples=skip_samples, max_samples=max_samples):
-            row = ensure_row_is_ready(row)
+            row = align_row_to_v1_normalized_shape(row)
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
             written += 1
     return written
+
+
+def write_source_manifest(sources: Sequence[Path], dest: Path) -> int:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with dest.open("w", encoding="utf-8") as handle:
+        for source in sources:
+            handle.write(f"{source}\n")
+    return len(sources)
 
 
 def _resolve_sources(args: argparse.Namespace) -> list[Path]:
@@ -132,11 +164,12 @@ def _resolve_sources(args: argparse.Namespace) -> list[Path]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Concatenate pre-normalized multidomain v2 jsonl data.")
+    parser = argparse.ArgumentParser(description="Resolve or concatenate pre-normalized multidomain v2 pool data.")
     parser.add_argument("--source", action="append", default=None)
     parser.add_argument("--dataset", action="append", default=None)
     parser.add_argument("--pool-root", default=None)
-    parser.add_argument("--dest", required=True)
+    parser.add_argument("--dest", default=None)
+    parser.add_argument("--print-sources", action="store_true", default=False)
     parser.add_argument("--skip-samples", type=int, default=0)
     parser.add_argument("--max-samples", type=int, default=None)
     return parser.parse_args()
@@ -147,6 +180,12 @@ def main() -> None:
     sources = _resolve_sources(args)
     if not sources:
         raise SystemExit("No normalized pool sources were found.")
+    if args.print_sources:
+        for source in sources:
+            print(source)
+        return
+    if not args.dest:
+        raise SystemExit("--dest is required unless --print-sources is set.")
     write_dataset(
         sources,
         Path(args.dest),

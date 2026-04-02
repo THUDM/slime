@@ -76,6 +76,9 @@ TOOLCALL_PARSER_TYPE=${TOOLCALL_PARSER_TYPE:-qwen3}
 TOOLCALL_LR=${TOOLCALL_LR:-1e-6}
 TOOLCALL_ADAM_BETA2=${TOOLCALL_ADAM_BETA2:-0.98}
 TOOLCALL_COLOCATE=${TOOLCALL_COLOCATE:-0}
+TOOLCALL_DYNAMIC_FILTER=${TOOLCALL_DYNAMIC_FILTER:-}
+TOOLCALL_USE_ROUTING_REPLAY=${TOOLCALL_USE_ROUTING_REPLAY:-0}
+TOOLCALL_USE_ROLLOUT_ROUTING_REPLAY=${TOOLCALL_USE_ROLLOUT_ROUTING_REPLAY:-0}
 TOOLCALL_RESUME_TRAINING=${TOOLCALL_RESUME_TRAINING:-0}
 TOOLCALL_RESUME_NO_OPTIM=${TOOLCALL_RESUME_NO_OPTIM:-1}
 TOOLCALL_RESUME_NO_RNG=${TOOLCALL_RESUME_NO_RNG:-1}
@@ -535,6 +538,9 @@ submit_ray_job() {
     --num-steps-per-rollout "${TOOLCALL_STEPS_PER_ROLLOUT}"
     --balance-data
   )
+  if [[ -n "${TOOLCALL_DYNAMIC_FILTER}" ]]; then
+    ROLLOUT_ARGS+=(--dynamic-sampling-filter-path "${TOOLCALL_DYNAMIC_FILTER}")
+  fi
 
   EVAL_ARGS=()
   EVAL_PROMPT_DATA_ARGS=()
@@ -621,6 +627,12 @@ submit_ray_job() {
     --attention-softmax-in-fp32
     --attention-backend flash
   )
+  if [[ "${TOOLCALL_USE_ROUTING_REPLAY}" == "1" ]]; then
+    MISC_ARGS+=(--use-routing-replay)
+  fi
+  if [[ "${TOOLCALL_USE_ROLLOUT_ROUTING_REPLAY}" == "1" ]]; then
+    MISC_ARGS+=(--use-rollout-routing-replay)
+  fi
 
   CUSTOM_ARGS=(
     --custom-rm-path reward_multidomain_v1.reward_func
