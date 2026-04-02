@@ -799,11 +799,15 @@ def convert_ifeval_row(row: dict[str, Any]) -> list[dict[str, Any]]:
 
 def convert_jsonschemabench_row(row: dict[str, Any]) -> list[dict[str, Any]]:
     schema = normalize_json_like_value(row.get("json_schema")) or {}
-    prompt_text = str(row.get("prompt") or row.get("instruction") or "Return a JSON object that matches the provided schema.")
+    prompt_text = str(row.get("prompt") or row.get("instruction") or "")
+    if prompt_text:
+        content = f"{prompt_text}\n\nSchema:\n{json.dumps(schema, ensure_ascii=False)}"
+    else:
+        content = json.dumps(schema, ensure_ascii=False)
     prompt = [
         {
             "role": "user",
-            "content": f"{prompt_text}\n\nSchema:\n{json.dumps(schema, ensure_ascii=False)}",
+            "content": content,
         }
     ]
     return [

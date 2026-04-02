@@ -47,7 +47,10 @@ def get_tokenizer(model_path: str):
 def load_reward_func():
     import importlib.util
 
-    spec = importlib.util.spec_from_file_location("reward_multidomain_v1", SCRIPT_DIR / "reward_multidomain_v1.py")
+    reward_path = SCRIPT_DIR / "reward_multidomain_v1.py"
+    if not reward_path.exists():
+        reward_path = SCRIPT_DIR.parent / "multidomain_v1" / "reward_multidomain_v1.py"
+    spec = importlib.util.spec_from_file_location("reward_multidomain_v1", reward_path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -60,8 +63,24 @@ def load_eval_data(path: str) -> list[dict[str, Any]]:
         for line in f:
             line = line.strip()
             if line:
-                samples.append(json.loads(line))
+                samples.append(_normalize_eval_sample_for_backfill(json.loads(line)))
     return samples
+
+
+def _normalize_eval_sample_for_backfill(sample: dict[str, Any]) -> dict[str, Any]:
+    """Patch known stale eval metadata so old experiment caches can be rescored correctly."""
+
+    metadata = sample.get("metadata")
+    if not isinstance(metadata, dict):
+        return sample
+
+    dataset_name = str(metadata.get("dataset_name", "")).strip().lower()
+    if dataset_name in {"bfcl_v3", "bfcl_v3_multi_turn_base"}:
+        metadata = dict(metadata)
+        metadata["reward_type"] = "tool_call_soft"
+        sample = dict(sample)
+        sample["metadata"] = metadata
+    return sample
 
 
 def apply_chat_template(tokenizer, sample: dict[str, Any]) -> str:
@@ -299,12 +318,12 @@ def wait_for_sglang(url: str, timeout: int = 300):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Eval backfill for multidomain_v1 checkpoints")
+    parser = argparse.ArgumentParser(description="Eval backfill for multidomain_v2 checkpoints")
     parser.add_argument("--sglang-url", type=str, default="http://localhost:30000")
     parser.add_argument("--eval-data", action="append", required=True, help="name:path pairs for eval datasets")
     parser.add_argument("--rollout-id", type=int, required=True, help="Rollout ID (= checkpoint step) for wandb logging")
     parser.add_argument("--wandb-run-id", type=str, required=True)
-    parser.add_argument("--wandb-project", type=str, default="slime-multidomain-v1")
+    parser.add_argument("--wandb-project", type=str, default="slime-multidomain-v2")
     parser.add_argument("--wandb-host", type=str, default="")
     parser.add_argument("--wandb-key", type=str, default="")
     parser.add_argument("--wandb-group", type=str, default="")

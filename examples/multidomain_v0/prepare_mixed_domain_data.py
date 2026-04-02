@@ -185,13 +185,7 @@ def iter_selected_samples(
 
 def build_choice_prompt(question: str, choices: Sequence[tuple[str, str]]) -> list[dict[str, str]]:
     options_block = "\n".join(f"{label}. {text}" for label, text in choices)
-    prompt = (
-        "Answer the following multiple choice question.\n"
-        "Return the final choice on the last line in the format `Answer: X` (for example, `Answer: B`).\n\n"
-        f"Question: {question}\n"
-        f"{options_block}\n"
-        "Answer: X"
-    )
+    prompt = f"{question}\n{options_block}"
     return [{"role": "user", "content": prompt}]
 
 
