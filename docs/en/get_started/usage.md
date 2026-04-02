@@ -130,6 +130,9 @@ When using slime, there are three parameters for loading and saving checkpoints:
   - `--ref-load`: The Megatron checkpoint for the reference model.
   - `--load`: The Megatron checkpoint for the actor. If `--load` is not set, or if the specified directory does not exist or does not contain `latest_checkpointed_iteration.txt`, the actor will be initialized from the `--ref-load` checkpoint.
   - `--save`: The path where the actor's checkpoints are saved.
+  - `--max-actor-ckpt-to-keep`: Maximum number of actor checkpoints to keep on disk. When exceeded after saving, the oldest checkpoints are deleted. Applies to Megatron checkpoints (`--save`) and HF checkpoints (`--save-hf`). Default: `None` (unlimited).
+  - `--max-critic-ckpt-to-keep`: Maximum number of critic checkpoints to keep on disk. When exceeded after saving, the oldest checkpoints are deleted. Applies to critic Megatron checkpoints (`--critic-save`). Default: `None` (unlimited).
+  - `--checkpoint-storage-type`: Checkpoint storage type for cleanup. `shared` (default): all ranks share a filesystem (e.g. FSx) — cleanup runs on global rank 0 only. `local`: each node has its own disk (e.g. NVMe) — cleanup runs on local rank 0 of each node.
 
 Note:
 

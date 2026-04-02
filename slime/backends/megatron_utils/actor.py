@@ -23,6 +23,7 @@ from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.misc import Box
 from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
 from slime.utils.routing_replay import RoutingReplay
+from slime.utils.checkpoint_utils import cleanup_old_checkpoints, should_run_cleanup
 from slime.utils.timer import Timer, inverse_timer, timer, with_defer
 from slime.utils.types import RolloutBatch
 
@@ -512,6 +513,40 @@ class MegatronTrainRayActor(TrainRayActor):
 
         log_perf_data(rollout_id, self.args)
 
+    def _maybe_cleanup_old_checkpoints(self) -> None:
+        """Clean up old checkpoints before writing the new one (keep-1 so peak = N)."""
+        keep = None
+        if self.role == "actor" and self.args.max_actor_ckpt_to_keep is not None:
+            keep = self.args.max_actor_ckpt_to_keep
+        elif self.role == "critic" and self.args.max_critic_ckpt_to_keep is not None:
+            keep = self.args.max_critic_ckpt_to_keep
+
+        if keep is None:
+            return
+
+        if not hasattr(self, "_saved_rollout_ids"):
+            self._saved_rollout_ids = []
+
+        storage_type = getattr(self.args, "checkpoint_storage_type", "shared")
+        should_cleanup_megatron, should_cleanup_hf = should_run_cleanup(
+            storage_type, dist.get_rank(), int(os.environ.get("LOCAL_RANK", 0)),
+        )
+
+        if should_cleanup_megatron:
+            save_dir = self.args.save if self.role == "actor" else self.args.critic_save
+            cleanup_old_checkpoints(
+                self._saved_rollout_ids,
+                keep - 1,
+                path_fn=lambda rid: os.path.join(save_dir, f"iter_{rid:07d}"),
+            )
+
+        if should_cleanup_hf and self.args.save_hf is not None and self.role == "actor":
+            cleanup_old_checkpoints(
+                self._saved_rollout_ids,
+                keep - 1,
+                path_fn=lambda rid: self.args.save_hf.format(rollout_id=rid),
+            )
+
     @timer
     def save_model(self, rollout_id: int, force_sync: bool = False) -> None:
         if self.args.debug_rollout_only:
@@ -526,6 +561,8 @@ class MegatronTrainRayActor(TrainRayActor):
 
             maybe_finalize_async_save(blocking=True)
 
+        self._maybe_cleanup_old_checkpoints()
+
         save(rollout_id, self.model, self.optimizer, self.opt_param_scheduler)
 
         if force_sync and self.args.async_save:
@@ -535,6 +572,10 @@ class MegatronTrainRayActor(TrainRayActor):
             from slime.backends.megatron_utils.model import save_hf_model
 
             save_hf_model(self.args, rollout_id, self.model)
+
+        if not hasattr(self, "_saved_rollout_ids"):
+            self._saved_rollout_ids = []
+        self._saved_rollout_ids.append(rollout_id)
 
         if self.args.offload_train:
             destroy_process_groups()
