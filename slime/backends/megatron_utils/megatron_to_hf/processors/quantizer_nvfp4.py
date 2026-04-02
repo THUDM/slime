@@ -1,4 +1,3 @@
-
 import re
 from typing import List, Tuple
 
@@ -41,13 +40,15 @@ def quantize_params_nvfp4(args, megatron_name, converted_named_params, quantizat
     else:
         _, rest = match.groups()
 
-    # q,k,v proj
+    # q,k,v proj / o proj
     qkv_pattern = r"self_attention\.(.+)"
     match = re.match(qkv_pattern, rest)
     if match:
         rest = match.groups()[0]
         if rest in ["linear_qkv.weight"]:
             return _quantize_qkv_params(converted_named_params, group_size)
+        if rest in ["linear_proj.weight"]:
+            return _quantize_dense_single_params(converted_named_params, group_size)
 
     # mlp proj
     mlp_pattern = r"mlp\.(.+)"
@@ -56,6 +57,8 @@ def quantize_params_nvfp4(args, megatron_name, converted_named_params, quantizat
         rest = match.groups()[0]
         if rest in ["linear_fc1.weight"]:
             return _quantize_mlp_params(converted_named_params, group_size)
+        if rest in ["linear_fc2.weight"]:
+            return _quantize_dense_single_params(converted_named_params, group_size)
 
     # experts
     expert_pattern = r"mlp.experts\.(.+)\.weight(\d+)"
@@ -124,10 +127,31 @@ def _quantize_moe_params(converted_named_params, group_size):
     return quantize_named_params
 
 
-
 def _quantize_mlp_params(converted_named_params, group_size):
     # dense fused linear_fc1 -> gate_proj/up_proj
     return _quantize_moe_params(converted_named_params, group_size)
+
+
+def _quantize_dense_single_params(converted_named_params, group_size):
+    quantize_named_params = []
+    for converted_name, param in converted_named_params:
+        if not _should_quantize_param(converted_name, param, group_size):
+            quantize_named_params.append((converted_name, param))
+            continue
+
+        qweight, block_scale, weight_scale_2 = quantize_nvfp4(
+            param,
+            global_amax=None,
+            group_size=group_size,
+        )
+        quantize_named_params.append((converted_name, qweight))
+        quantize_named_params.append((converted_name.replace(".weight", ".weight_scale"), block_scale))
+        quantize_named_params.append((converted_name.replace(".weight", ".weight_scale_2"), weight_scale_2))
+        quantize_named_params.append(
+            (converted_name.replace(".weight", ".input_scale"), torch.ones_like(weight_scale_2, dtype=torch.float32))
+        )
+
+    return quantize_named_params
 
 
 def _quantize_qkv_params(converted_named_params, group_size):
@@ -228,7 +252,6 @@ def _quantize_nvfp4(
     pow_2_scales: bool = False,
     with_2d_quantization: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-
     tile_len_x = 16
     tile_len_y = 16
 
@@ -236,7 +259,7 @@ def _quantize_nvfp4(
     x_f = x.to(torch.float32)
 
     if global_amax is None:
-        global_amax = torch.amax(torch.abs(x_f))          # scalar tensor (fp32, on device)
+        global_amax = torch.amax(torch.abs(x_f))  # scalar tensor (fp32, on device)
     else:
         global_amax = global_amax.to(device=x.device, dtype=torch.float32)
 
