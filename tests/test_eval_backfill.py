@@ -49,3 +49,20 @@ def test_load_eval_data_rewrites_stale_bfcl_strict_reward_type(tmp_path: Path):
     assert loaded[0]["metadata"]["reward_type"] == "tool_call_soft"
     assert loaded[1]["metadata"]["reward_type"] == "instruction_following_strict"
 
+
+def test_merge_eval_history_rows_keeps_latest_values_per_eval_step():
+    rows = [
+        {"_step": 103, "eval/step": 19, "eval/bfcl_v3_eval": 0.0, "eval/mmlu_pro_eval": 0.76},
+        {"_step": 206, "eval/step": 39, "eval/bfcl_v3_eval": 0.0004, "eval/mmlu_pro_eval": 0.77},
+        {"_step": 1595, "eval/step": 19, "eval/bfcl_v3_eval": 0.4148, "eval/mmlu_pro_eval": 0.7676},
+        {"_step": 1678, "eval/step": 39, "eval/bfcl_v3_eval": 0.4037},
+        {"_step": 1768, "eval/step": 59, "eval/bfcl_v3_eval": 0.4227, "eval/ifeval_eval": 0.3438},
+    ]
+
+    merged = eval_backfill.merge_eval_history_rows(rows)
+
+    assert merged == [
+        {"eval/step": 19, "eval/bfcl_v3_eval": 0.4148, "eval/mmlu_pro_eval": 0.7676},
+        {"eval/step": 39, "eval/bfcl_v3_eval": 0.4037, "eval/mmlu_pro_eval": 0.77},
+        {"eval/step": 59, "eval/bfcl_v3_eval": 0.4227, "eval/ifeval_eval": 0.3438},
+    ]
