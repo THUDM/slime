@@ -9,6 +9,7 @@ source "${PROJECT_ROOT}/login.sh"
 RESOURCE="${RESOURCE:-8xH100}"
 PRIORITY="${PRIORITY:-10}"
 MAX_TIME="${MAX_TIME:-24}"
+FAULT_TOLERANT="${FAULT_TOLERANT:-1}"
 JOB_NAME="${JOB_NAME:-multidomain-v2-3node-$(date '+%m%d-%H%M')}"
 SUBMIT_NODES="${SUBMIT_NODES:-3}"
 IMAGE="${IMAGE:-${INSP_IMAGE:-}}"
@@ -80,6 +81,10 @@ CMD=(
   --no-auto
   --command "${RUN_CMD}"
 )
+
+if [[ "${FAULT_TOLERANT}" == "1" ]]; then
+  CMD+=(--fault-tolerant)
+fi
 
 if [[ -n "${IMAGE}" ]]; then
   CMD+=(--image "${IMAGE}")

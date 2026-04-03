@@ -261,16 +261,16 @@ def compute_eval_metrics(
     for ds_name, items in by_dataset.items():
         ds_rewards = [r for r, _ in items]
         ds_responses = [resp for _, resp in items]
-        metrics[f"eval_by_source/{ds_name}/count"] = len(items)
-        metrics[f"eval_by_source/{ds_name}/score"] = sum(ds_rewards) / len(ds_rewards)
+        metrics[f"eval/{eval_name}/by_source/{ds_name}/count"] = len(items)
+        metrics[f"eval/{eval_name}/by_source/{ds_name}/score"] = sum(ds_rewards) / len(ds_rewards)
         lengths = [len(r) for r in ds_responses]
         if lengths:
-            metrics[f"eval_by_source/{ds_name}/response_len/mean"] = sum(lengths) / len(lengths)
+            metrics[f"eval/{eval_name}/by_source/{ds_name}/response_len/mean"] = sum(lengths) / len(lengths)
 
     for domain_name, items in by_domain.items():
         dom_rewards = [r for r, _ in items]
-        metrics[f"eval_by_domain/{domain_name}/count"] = len(items)
-        metrics[f"eval_by_domain/{domain_name}/score"] = sum(dom_rewards) / len(dom_rewards)
+        metrics[f"eval/{eval_name}/by_domain/{domain_name}/count"] = len(items)
+        metrics[f"eval/{eval_name}/by_domain/{domain_name}/score"] = sum(dom_rewards) / len(dom_rewards)
 
     return metrics
 
@@ -286,7 +286,10 @@ def log_to_wandb(
 ):
     """Resume wandb run and log metrics at the given step."""
     if wandb_key:
-        wandb.login(key=wandb_key, host=wandb_host)
+        login_kwargs = {"key": wandb_key}
+        if wandb_host:
+            login_kwargs["host"] = wandb_host
+        wandb.login(**login_kwargs)
 
     run = wandb.init(
         id=wandb_run_id,
@@ -295,10 +298,128 @@ def log_to_wandb(
         reinit=True,
         settings=wandb.Settings(mode="shared"),
     )
+    # Must define custom x-axis so eval metrics plot against eval/step,
+    # matching the training framework's _init_wandb_common() in wandb_utils.py.
+    wandb.define_metric("eval/step", overwrite=True)
+    wandb.define_metric("eval/*", step_metric="eval/step", overwrite=True)
     metrics["eval/step"] = step
-    wandb.log(metrics, step=step)
+    wandb.log(metrics)
     wandb.finish()
     logger.info(f"  Logged {len(metrics)} metrics to wandb run {wandb_run_id} at step {step}")
+
+
+def merge_eval_history_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge eval history rows by eval/step, keeping the latest values per metric."""
+    by_eval_step: dict[int | float, dict[str, Any]] = {}
+
+    for row in rows:
+        eval_step = row.get("eval/step")
+        if eval_step is None:
+            continue
+
+        if isinstance(eval_step, float) and eval_step.is_integer():
+            eval_step = int(eval_step)
+        if not isinstance(eval_step, (int, float)):
+            continue
+
+        if eval_step not in by_eval_step:
+            by_eval_step[eval_step] = {"eval/step": eval_step}
+
+        merged = by_eval_step[eval_step]
+        for key, value in row.items():
+            if key.startswith("eval/") and key != "eval/step":
+                merged[key] = value
+
+    return [by_eval_step[step] for step in sorted(by_eval_step)]
+
+
+def migrate_eval_history(
+    wandb_run_id: str,
+    wandb_project: str,
+    wandb_entity: str,
+    wandb_host: str,
+    wandb_key: str,
+    target_wandb_run_id: str | None = None,
+    target_wandb_run_name: str | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Migrate eval history to a new run with clean eval/step ordering and dedup."""
+    if wandb_key:
+        login_kwargs = {"key": wandb_key}
+        if wandb_host:
+            login_kwargs["host"] = wandb_host
+        wandb.login(**login_kwargs)
+
+    api_kwargs: dict[str, Any] = {"timeout": 60}
+    if wandb_host:
+        api_kwargs["overrides"] = {"base_url": wandb_host}
+    api = wandb.Api(**api_kwargs)
+
+    entity = wandb_entity or getattr(api.viewer, "entity", None)
+    if not entity:
+        raise RuntimeError("Cannot determine wandb entity. Please pass --wandb-entity.")
+
+    source_path = f"{entity}/{wandb_project}/{wandb_run_id}"
+    source_run = api.run(source_path)
+
+    raw_eval_rows = []
+    for row in source_run.scan_history(page_size=500):
+        if "eval/step" not in row:
+            continue
+        filtered = {}
+        for key, value in row.items():
+            if key == "eval/step" or key.startswith("eval/"):
+                filtered[key] = value
+        if len(filtered) > 1:
+            raw_eval_rows.append(filtered)
+
+    if not raw_eval_rows:
+        raise RuntimeError(f"No eval history rows found in {source_path}.")
+
+    merged_rows = merge_eval_history_rows(raw_eval_rows)
+    logger.info(
+        "Eval history rows: raw=%d, merged=%d, dropped=%d",
+        len(raw_eval_rows),
+        len(merged_rows),
+        len(raw_eval_rows) - len(merged_rows),
+    )
+
+    if dry_run:
+        logger.info("Dry-run only, not creating target run.")
+        return
+
+    source_name = source_run.display_name or source_run.name or wandb_run_id
+    target_name = target_wandb_run_name or f"{source_name}-eval-migrated"
+
+    tags = list(source_run.tags or [])
+    if "eval-history-migrated" not in tags:
+        tags.append("eval-history-migrated")
+
+    init_kwargs: dict[str, Any] = {
+        "project": wandb_project,
+        "entity": entity,
+        "name": target_name,
+        "config": dict(source_run.config or {}),
+        "tags": tags,
+        "reinit": True,
+        "settings": wandb.Settings(mode="shared"),
+    }
+    if target_wandb_run_id:
+        init_kwargs["id"] = target_wandb_run_id
+        init_kwargs["resume"] = "never"
+
+    target_run = wandb.init(**init_kwargs)
+    wandb.define_metric("eval/step", overwrite=True)
+    wandb.define_metric("eval/*", step_metric="eval/step", overwrite=True)
+    for row in merged_rows:
+        wandb.log(row)
+    target_url = getattr(target_run, "url", "")
+    target_id = getattr(target_run, "id", "")
+    wandb.finish()
+
+    logger.info("Created migrated run: %s/%s/%s", entity, wandb_project, target_id)
+    if target_url:
+        logger.info("Migrated run URL: %s", target_url)
 
 
 def wait_for_sglang(url: str, timeout: int = 300):
@@ -319,14 +440,19 @@ def wait_for_sglang(url: str, timeout: int = 300):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Eval backfill for multidomain_v2 checkpoints")
+    parser.add_argument("--migrate-eval-history", action="store_true", help="Migrate existing eval history to a clean run (no inference)")
     parser.add_argument("--sglang-url", type=str, default="http://localhost:30000")
-    parser.add_argument("--eval-data", action="append", required=True, help="name:path pairs for eval datasets")
-    parser.add_argument("--rollout-id", type=int, required=True, help="Rollout ID (= checkpoint step) for wandb logging")
+    parser.add_argument("--eval-data", action="append", default=[], help="name:path pairs for eval datasets")
+    parser.add_argument("--rollout-id", type=int, default=None, help="Rollout ID (= checkpoint step) for wandb logging")
     parser.add_argument("--wandb-run-id", type=str, required=True)
     parser.add_argument("--wandb-project", type=str, default="slime-multidomain-v2")
+    parser.add_argument("--wandb-entity", type=str, default="", help="Wandb entity/team name")
     parser.add_argument("--wandb-host", type=str, default="")
     parser.add_argument("--wandb-key", type=str, default="")
     parser.add_argument("--wandb-group", type=str, default="")
+    parser.add_argument("--target-wandb-run-id", type=str, default="", help="Target run id for migration mode")
+    parser.add_argument("--target-wandb-run-name", type=str, default="", help="Target display name for migration mode")
+    parser.add_argument("--dry-run", action="store_true", help="Analyze migration source and print stats without writing a run")
     parser.add_argument("--model-path", type=str, default=None, help="HF model path (for tokenizer chat template)")
     parser.add_argument("--max-context-len", type=int, default=32768, help="Max context length for sglang server (prompt tokens only, response excluded)")
     parser.add_argument("--max-tokens", type=int, default=8192)
@@ -336,6 +462,26 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    if args.migrate_eval_history:
+        migrate_eval_history(
+            wandb_run_id=args.wandb_run_id,
+            wandb_project=args.wandb_project,
+            wandb_entity=args.wandb_entity,
+            wandb_host=args.wandb_host,
+            wandb_key=args.wandb_key,
+            target_wandb_run_id=args.target_wandb_run_id or None,
+            target_wandb_run_name=args.target_wandb_run_name or None,
+            dry_run=args.dry_run,
+        )
+        logger.info("Eval history migration complete.")
+        return
+
+    if not args.eval_data:
+        raise RuntimeError("--eval-data is required unless --migrate-eval-history is set")
+    if args.rollout_id is None:
+        raise RuntimeError("--rollout-id is required unless --migrate-eval-history is set")
+
     reward_func = load_reward_func()
 
     # Load tokenizer for applying chat template (bakes tools into prompt text)
