@@ -780,7 +780,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--loss-type",
                 type=str,
-                choices=["policy_loss", "sft_loss", "custom_loss"],
+                choices=["policy_loss", "sft_loss", "custom_loss", "fipo_loss"],
                 default="policy_loss",
                 help=(
                     "Choose loss type, currently support ppo policy_loss or sft_loss, "
@@ -796,6 +796,44 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "we will use this function to calculate the loss. "
                 ),
             )
+            # FIPO (Future-KL Influenced Policy Optimization) arguments
+            parser.add_argument(
+                "--fipo-decay-rate",
+                type=float,
+                default=32.0,
+                help="Half-life (tau) for exponential decay in Future-KL accumulation. gamma = 2^(-1/tau).",
+            )
+            parser.add_argument(
+                "--fipo-chunk-size",
+                type=int,
+                default=128,
+                help="Chunk size for memory-efficient Future-KL computation.",
+            )
+            parser.add_argument(
+                "--fipo-clip-ratio",
+                type=float,
+                default=0.2,
+                help="Clipping range for Future-KL influence weights.",
+            )
+            parser.add_argument(
+                "--fipo-clip-high-only",
+                action="store_true",
+                default=False,
+                help="Only clip upper bound of influence weights (recommended for large models).",
+            )
+            parser.add_argument(
+                "--fipo-safety-thresh",
+                type=float,
+                default=10.0,
+                help="Safety threshold for capping negative-advantage samples with high importance ratio.",
+            )
+            parser.add_argument(
+                "--fipo-dual-clip-c",
+                type=float,
+                default=10.0,
+                help="Dual-clip threshold c for FIPO. Tokens with ratio > c are masked from Future-KL and dual-clipped in loss.",
+            )
+
             parser.add_argument(
                 "--kl-loss-type",
                 type=str,
