@@ -2,9 +2,9 @@
 #SBATCH --job-name=fipo-qwen3.5-2b
 #SBATCH --partition=normal
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:H100:4
-#SBATCH --cpus-per-task=56
-#SBATCH --mem=512G
+#SBATCH --gres=gpu:H100:8
+#SBATCH --ntasks=1
+#SBATCH --mem=0
 #SBATCH --time=48:00:00
 #SBATCH --output=/mnt/weka1/private/logan/experiments/fipo-qwen3.5-2b/logs/%j.out
 #SBATCH --error=/mnt/weka1/private/logan/experiments/fipo-qwen3.5-2b/logs/%j.err
@@ -21,24 +21,30 @@ set -ex
 # Create log directory
 mkdir -p /mnt/weka1/private/logan/experiments/fipo-qwen3.5-2b/logs
 
+# Activate venv (shared via weka NAS)
+source /mnt/weka1/private/logan/repos/slime/.venv/bin/activate
+
+# Install flash-attn on compute node if not already present (needs CUDA)
+python3 -c "import flash_attn" 2>/dev/null || pip install flash-attn --no-build-isolation 2>&1 | tail -5 || true
+
 export PYTHONBUFFERED=16
 export CUDA_DEVICE_MAX_CONNECTIONS=1
+export SGLANG_DISABLE_CUDNN_CHECK=1
 
 NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
 HAS_NVLINK=$( [ "$NVLINK_COUNT" -gt 0 ] && echo 1 || echo 0 )
 export NCCL_NVLS_ENABLE=${HAS_NVLINK}
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-SCRIPT_ROOT="$(cd -- "${SCRIPT_DIR}/../.." &>/dev/null && pwd)"
+SLIME_ROOT="/mnt/weka1/private/logan/repos/slime"
 
-export PYTHONPATH="/mnt/weka1/private/logan/repos/Megatron-LM:${SCRIPT_ROOT}:${PYTHONPATH}"
+export PYTHONPATH="/mnt/weka1/private/logan/repos/Megatron-LM:${SLIME_ROOT}:${PYTHONPATH}"
 
 # Network config for slurm
 export SLIME_HOST_IP=$(hostname -I | awk '{print $1}')
-export GLOO_SOCKET_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\./ {print $2}')
-export NCCL_SOCKET_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\./ {print $2}')
+export GLOO_SOCKET_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\./ {print $2; exit}')
+export NCCL_SOCKET_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\./ {print $2; exit}')
 
-source "${SCRIPT_ROOT}/scripts/models/qwen3.5-2B.sh"
+source "${SLIME_ROOT}/scripts/models/qwen3.5-2B.sh"
 
 # --- Kill stale processes ---
 pkill -9 sglang 2>/dev/null || true
@@ -46,7 +52,7 @@ pkill -9 ray 2>/dev/null || true
 sleep 2
 
 # --- Start Ray ---
-ray start --head --node-ip-address ${SLIME_HOST_IP} --num-gpus 4 --disable-usage-stats
+ray start --head --node-ip-address ${SLIME_HOST_IP} --num-gpus 8 --disable-usage-stats
 
 # --- Arguments ---
 CKPT_ARGS=(
@@ -142,17 +148,21 @@ MISC_ARGS=(
 # --- Launch ---
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
-    \"PYTHONPATH\": \"/mnt/weka1/private/logan/repos/Megatron-LM:${SCRIPT_ROOT}:${PYTHONPATH}\",
+    \"PYTHONPATH\": \"/mnt/weka1/private/logan/repos/Megatron-LM:${SLIME_ROOT}:${PYTHONPATH}\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\"
+    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
+    \"SGLANG_DISABLE_CUDNN_CHECK\": \"1\"
   }
 }"
 
+cd ${SLIME_ROOT}
+
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
+   --working-dir="${SLIME_ROOT}" \
    -- python3 train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 4 \
+   --actor-num-gpus-per-node 8 \
    --colocate \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
