@@ -43,6 +43,10 @@ TRAIN_POOL_INCLUDE_DOMAINS=${TRAIN_POOL_INCLUDE_DOMAINS:-tool,stem,structured,co
 TRAIN_POOL_EXCLUDE_PATTERNS=${TRAIN_POOL_EXCLUDE_PATTERNS:-stem/train/openbookqa,stem/train/scienceqa,stem/train/sciq,stem/train/ai2_arc,stem/train/aqua_rat,tool/train/xlam_function_calling_60k,structured/train/nemotron_structured_outputs}
 TRAIN_SOURCE_LIST_BASENAME=${TRAIN_SOURCE_LIST_BASENAME:-mopd_train_sources.list}
 
+# ---- Eval ----
+EVAL_INTERVAL=${EVAL_INTERVAL:-50}
+EVAL_CONFIG_PATH="${WORK_ROOT}/data_cache/eval_config.yaml"
+
 # ---- SGLang multimodel config ----
 SGLANG_MULTIMODEL_CONFIG=${SGLANG_MULTIMODEL_CONFIG:-${SCRIPT_DIR}/sglang_mopd_qwen3_30b.yaml}
 SGLANG_MEM_FRACTION_STATIC=${SGLANG_MEM_FRACTION_STATIC:-0.82}
@@ -467,6 +471,13 @@ PY
   ensure_nonempty_file "${TRAIN_SOURCE_LIST}" "Training source manifest"
 }
 
+write_eval_config() {
+  python3 "${SCRIPT_DIR}/write_eval_config.py" \
+    --pool-root "${TRAIN_POOL_ROOT}" \
+    --output "${EVAL_CONFIG_PATH}" \
+    --max-response-len "${TOOLCALL_MAX_RESPONSE_LEN}"
+}
+
 # ---- Checkpoint ----
 
 ensure_torch_dist_checkpoint() {
@@ -588,6 +599,13 @@ submit_ray_job() {
     --attention-backend flash
   )
 
+  # ---- Eval ----
+  EVAL_ARGS=(
+    --eval-interval "${EVAL_INTERVAL}"
+    --eval-config "${EVAL_CONFIG_PATH}"
+    --eval-function-path examples.MOPD.mopd_eval.generate_rollout
+  )
+
   # ---- Reward: OPD route-by-domain ----
   CUSTOM_ARGS=(
     --custom-rm-path examples.MOPD.reward_func_mopd.reward_func_route_by_domain
@@ -609,7 +627,9 @@ submit_ray_job() {
     )
   fi
 
-  RUNTIME_ENV_JSON="{\"env_vars\":{\"PYTHONPATH\":\"${SLIME_DIR}/examples/multidomain_v1:${MEGATRON_PATH}:${SLIME_DIR}\",\"CUDA_DEVICE_MAX_CONNECTIONS\":\"1\",\"NCCL_NVLS_ENABLE\":\"${HAS_NVLINK}\",\"MASTER_ADDR\":\"${MASTER_ADDR}\",\"WANDB_API_KEY\":\"${WANDB_API_KEY:-}\",\"WANDB_BASE_URL\":\"${WANDB_BASE_URL:-}\",\"MULTIDOMAIN_V1_TRACE_DIR\":\"${MULTIDOMAIN_V1_TRACE_DIR}\",\"MULTIDOMAIN_V1_TRACE_MAX_SAMPLES\":\"${MULTIDOMAIN_V1_TRACE_MAX_SAMPLES}\",\"OPD_DOMAIN_MODEL_MAP\":\"${OPD_DOMAIN_MODEL_MAP}\"}}"
+  JL_MATH_DIR="${AVALANCHE_ROOT}/jl_workspace/experiment/math"
+  JL_CODE_DIR="${AVALANCHE_ROOT}/jl_workspace/experiment/code"
+  RUNTIME_ENV_JSON="{\"env_vars\":{\"PYTHONPATH\":\"${JL_MATH_DIR}:${JL_CODE_DIR}:${SLIME_DIR}/examples/multidomain_v1:${MEGATRON_PATH}:${SLIME_DIR}\",\"CUDA_DEVICE_MAX_CONNECTIONS\":\"1\",\"NCCL_NVLS_ENABLE\":\"${HAS_NVLINK}\",\"MASTER_ADDR\":\"${MASTER_ADDR}\",\"WANDB_API_KEY\":\"${WANDB_API_KEY:-}\",\"WANDB_BASE_URL\":\"${WANDB_BASE_URL:-}\",\"MULTIDOMAIN_V1_TRACE_DIR\":\"${MULTIDOMAIN_V1_TRACE_DIR}\",\"MULTIDOMAIN_V1_TRACE_MAX_SAMPLES\":\"${MULTIDOMAIN_V1_TRACE_MAX_SAMPLES}\",\"OPD_DOMAIN_MODEL_MAP\":\"${OPD_DOMAIN_MODEL_MAP}\"}}"
 
   TRAINING_RESOURCE_ARGS=(
     --actor-num-nodes "${ACTOR_NUM_NODES}"
@@ -632,6 +652,7 @@ submit_ray_job() {
     "${GRPO_ARGS[@]}" \
     "${WANDB_ARGS[@]}" \
     "${PERF_ARGS[@]}" \
+    "${EVAL_ARGS[@]}" \
     "${SGLANG_ARGS[@]}" \
     "${MISC_ARGS[@]}" \
     "${CUSTOM_ARGS[@]}"
@@ -676,6 +697,7 @@ cleanup_local_processes
 if [[ "${IS_RAY_HEAD}" -eq 1 ]]; then
   start_ray_head_and_persist_addr
   prepare_training_source_list
+  write_eval_config
   ensure_torch_dist_checkpoint
   wait_for_full_ray_cluster
   submit_ray_job

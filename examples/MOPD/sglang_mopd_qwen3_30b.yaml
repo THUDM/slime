@@ -4,7 +4,7 @@
 # Layout:
 #   Actor (training): 2 nodes x 8 GPUs = 16 GPUs (TP=4, EP=8, DP=2)
 #   Rollout:          2 nodes x 8 GPUs = 16 GPUs (below)
-#     student: 10 GPUs (rollout generation, weight updates)
+#     student: 10 GPUs, TP=2 → 5 engines (rollout generation, weight updates)
 #     tool:     2 GPUs (teacher log-probs, frozen; handles tool/stem/structured)
 #     code:     2 GPUs (teacher log-probs, frozen)
 #     math:     2 GPUs (teacher log-probs, frozen)
@@ -23,7 +23,7 @@ sglang:
     server_groups:
       - worker_type: regular
         num_gpus: 10
-        num_gpus_per_engine: 1
+        num_gpus_per_engine: 2
         overrides:
           mem_fraction_static: 0.82
 
