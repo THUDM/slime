@@ -277,9 +277,21 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
         if "mlp.experts.linear_fc" in mcore_weights_name and len(hf_weights) == 1:
             w = hf_weights[0]
             if w.dim() == 3:
-                # Extract expert_id from name like "...linear_fc1.weight42"
-                expert_id = int(mcore_weights_name.split("weight")[-1])
-                expert_w = w[expert_id]  # (out_features, in_features)
+                # Extract local expert_id from name like "...linear_fc1.weight42"
+                local_expert_id = int(mcore_weights_name.split("weight")[-1])
+                # When using Expert Parallelism (EP), the local expert_id is relative
+                # to this EP rank. We need to convert to global expert_id to index
+                # into the full HF fused tensor [num_experts, ...].
+                from megatron.core import mpu
+
+                ep_size = mpu.get_expert_model_parallel_world_size()
+                if ep_size > 1:
+                    ep_rank = mpu.get_expert_model_parallel_rank()
+                    num_local_experts = w.shape[0] // ep_size
+                    global_expert_id = ep_rank * num_local_experts + local_expert_id
+                else:
+                    global_expert_id = local_expert_id
+                expert_w = w[global_expert_id]  # (out_features, in_features)
                 return expert_w.contiguous()
 
         return super()._weight_to_mcore_format(mcore_weights_name, hf_weights)
