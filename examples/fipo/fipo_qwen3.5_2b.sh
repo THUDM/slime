@@ -21,15 +21,18 @@ set -ex
 # Create log directory
 mkdir -p /mnt/weka1/private/logan/experiments/fipo-qwen3.5-2b/logs
 
-# Activate venv (shared via weka NAS)
-source /mnt/weka1/private/logan/repos/slime/.venv/bin/activate
-
-# Install flash-attn on compute node if not already present (needs CUDA)
-python3 -c "import flash_attn" 2>/dev/null || pip install flash-attn --no-build-isolation 2>&1 | tail -5 || true
+# Activate conda env (shared via weka NAS)
+export CONDA_PREFIX=/mnt/weka1/private/logan/micromamba/envs/slime
+export PATH="${CONDA_PREFIX}/bin:${PATH}"
+export CUDA_HOME=$CONDA_PREFIX
 
 export PYTHONBUFFERED=16
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export SGLANG_DISABLE_CUDNN_CHECK=1
+
+# Prioritize conda CUDA libs over system CUDA 12.4
+export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH}"
+
 
 NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
 HAS_NVLINK=$( [ "$NVLINK_COUNT" -gt 0 ] && echo 1 || echo 0 )
@@ -46,6 +49,18 @@ export NCCL_SOCKET_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\./ {print $2; ex
 
 source "${SLIME_ROOT}/scripts/models/qwen3.5-2B.sh"
 
+# --- Convert HF checkpoint to torch_dist if needed ---
+HF_CKPT="Qwen/Qwen3.5-2B-Base"
+TORCH_DIST_CKPT="/mnt/weka1/private/logan/experiments/fipo-qwen3.5-2b/Qwen3.5-2B-Base_torch_dist"
+if [ ! -d "${TORCH_DIST_CKPT}" ]; then
+    echo "Converting HF checkpoint to torch_dist format..."
+    python3 ${SLIME_ROOT}/tools/convert_hf_to_torch_dist.py \
+        ${MODEL_ARGS[@]} \
+        --hf-checkpoint ${HF_CKPT} \
+        --save ${TORCH_DIST_CKPT} \
+        --rotary-base 10000000
+fi
+
 # --- Kill stale processes ---
 pkill -9 sglang 2>/dev/null || true
 pkill -9 ray 2>/dev/null || true
@@ -56,7 +71,8 @@ ray start --head --node-ip-address ${SLIME_HOST_IP} --num-gpus 8 --disable-usage
 
 # --- Arguments ---
 CKPT_ARGS=(
-   --hf-checkpoint Qwen/Qwen3.5-2B-Base
+   --hf-checkpoint ${HF_CKPT}
+   --load ${TORCH_DIST_CKPT}
    --save /mnt/weka1/private/logan/experiments/fipo-qwen3.5-2b/checkpoints
    --save-interval 20
    --rotary-base 10000000
@@ -129,7 +145,7 @@ WANDB_ARGS=(
    --use-wandb
    --wandb-project slime-fipo
    --wandb-group qwen3.5-2B-fipo
-   --wandb-key ${WANDB_KEY:-""}
+   --wandb-key ${WANDB_KEY}
 )
 
 SGLANG_ARGS=(
@@ -151,7 +167,8 @@ RUNTIME_ENV_JSON="{
     \"PYTHONPATH\": \"/mnt/weka1/private/logan/repos/Megatron-LM:${SLIME_ROOT}:${PYTHONPATH}\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
-    \"SGLANG_DISABLE_CUDNN_CHECK\": \"1\"
+    \"SGLANG_DISABLE_CUDNN_CHECK\": \"1\",
+    \"LD_LIBRARY_PATH\": \"${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH}\"
   }
 }"
 
@@ -159,8 +176,7 @@ cd ${SLIME_ROOT}
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
-   --working-dir="${SLIME_ROOT}" \
-   -- python3 train.py \
+   -- python3 ${SLIME_ROOT}/train.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 8 \
    --colocate \
