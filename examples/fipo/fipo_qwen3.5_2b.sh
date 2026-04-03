@@ -116,7 +116,8 @@ FIPO_ARGS=(
    # FIPO hyperparameters (small-model setting from paper)
    --fipo-decay-rate 32.0          # Half-life for Future-KL exponential decay
    --fipo-chunk-size 128           # Chunk size for memory-efficient computation
-   --fipo-clip-ratio 0.2           # Both-side clipping [0.8, 1.2] for small models
+   --fipo-clip-ratio-low 0.2        # Lower bound: f_t >= 0.8 (attenuate bad trajectories)
+   --fipo-clip-ratio-high 0.28      # Upper bound: f_t <= 1.28 (amplify good trajectories more)
    --fipo-safety-thresh 3.0        # Paper: 3.0 for 7B scale
    --fipo-dual-clip-c 10.0         # Dual-clip threshold
 )

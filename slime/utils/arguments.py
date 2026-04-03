@@ -810,16 +810,25 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Chunk size for memory-efficient Future-KL computation.",
             )
             parser.add_argument(
-                "--fipo-clip-ratio",
+                "--fipo-clip-ratio-low",
                 type=float,
                 default=0.2,
-                help="Clipping range for Future-KL influence weights.",
+                help="Lower clipping bound for influence weights: f_t >= 1 - this value. "
+                "Controls how much FutureKL can attenuate the advantage.",
+            )
+            parser.add_argument(
+                "--fipo-clip-ratio-high",
+                type=float,
+                default=0.2,
+                help="Upper clipping bound for influence weights: f_t <= 1 + this value. "
+                "Controls how much FutureKL can amplify the advantage. "
+                "Set higher than --fipo-clip-ratio-low to favor amplification of good trajectories.",
             )
             parser.add_argument(
                 "--fipo-clip-high-only",
                 action="store_true",
                 default=False,
-                help="Only clip upper bound of influence weights (recommended for large models).",
+                help="Set lower bound to 1.0 (ignore --fipo-clip-ratio-low). Recommended for large models.",
             )
             parser.add_argument(
                 "--fipo-safety-thresh",

@@ -1056,19 +1056,12 @@ def fipo_loss_function(
     )
 
     # Compute influence weights (detached — no gradient through Future-KL)
-    if args.fipo_clip_ratio != 0.0:
-        if args.fipo_clip_high_only:
-            influence_padded = torch.clamp(
-                torch.exp(future_kl_padded), min=1.0, max=1.0 + args.fipo_clip_ratio
-            ).detach()
-        else:
-            influence_padded = torch.clamp(
-                torch.exp(future_kl_padded),
-                min=1.0 - args.fipo_clip_ratio,
-                max=1.0 + args.fipo_clip_ratio,
-            ).detach()
-    else:
-        influence_padded = torch.clamp(torch.exp(future_kl_padded), max=10.0).detach()
+    # Eq. (8): f_t = clip(exp(FutureKL_t), 1 - ε_low, 1 + ε_high)
+    lower_bound = 1.0 if args.fipo_clip_high_only else 1.0 - args.fipo_clip_ratio_low
+    upper_bound = 1.0 + args.fipo_clip_ratio_high
+    influence_padded = torch.clamp(
+        torch.exp(future_kl_padded), min=lower_bound, max=upper_bound
+    ).detach()
 
     # Safety: cap influence weight for negative-advantage, high-IS samples
     ratio_padded = ratio.new_zeros(batch_size, max_len)
