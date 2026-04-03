@@ -1000,7 +1000,13 @@ def fipo_loss_function(
     Influenced Policy Optimization" (arXiv:2603.19835)
     """
     advantages = torch.cat(batch["advantages"], dim=0)
-    old_log_probs = batch["rollout_log_probs"] if args.use_rollout_logprobs else batch["log_probs"]
+    # FIPO requires rollout log_probs (π_old from generation time) to compute
+    # FutureKL = log π_θ - log π_old. In multi-step training, π_θ drifts from
+    # π_old across steps, so we must use the original rollout log_probs.
+    assert "rollout_log_probs" in batch and batch["rollout_log_probs"], (
+        "FIPO requires rollout_log_probs. Set --use-rollout-logprobs."
+    )
+    old_log_probs = batch["rollout_log_probs"]
 
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
@@ -1112,7 +1118,7 @@ def fipo_loss_function(
             final_mask[offset : offset + slen] = 0
         offset += slen
 
-    pg_loss = sum_of_sample_mean(pg_losses * final_mask / (loss_masks + 1e-8) * loss_masks)
+    pg_loss = sum_of_sample_mean(pg_losses * final_mask)
     pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
     ppo_kl = sum_of_sample_mean(old_log_probs - log_probs)
 

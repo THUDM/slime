@@ -107,6 +107,7 @@ PERF_ARGS=(
 # FIPO uses GRPO advantage estimator + FIPO loss type
 FIPO_ARGS=(
    --loss-type fipo_loss
+   --use-rollout-logprobs
    --advantage-estimator grpo
    --eps-clip 0.2
    --eps-clip-high 0.28
