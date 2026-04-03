@@ -980,79 +980,6 @@ def _compute_future_kl(
     return future_kl
 
 
-_fipo_step_counter = 0
-
-
-def _fipo_log_token_ratios(
-    args: Namespace,
-    batch: RolloutBatch,
-    neg_approx_kl: torch.Tensor,
-    influence_weights: torch.Tensor,
-    sample_lengths: list[int],
-    loss_masks: torch.Tensor,
-    log_interval: int = 8,
-) -> None:
-    """Log token-level log-ratio heatmap to wandb as HTML table.
-
-    Only runs on rank 0, every `log_interval` steps. Picks the first sample
-    in the batch and color-codes each token by its log ratio (green = reinforced,
-    red = suppressed) with influence weight annotation.
-    """
-    global _fipo_step_counter
-    _fipo_step_counter += 1
-
-    if mpu.get_data_parallel_rank() != 0 or mpu.get_tensor_model_parallel_rank() != 0:
-        return
-    if _fipo_step_counter % log_interval != 0:
-        return
-
-    try:
-        import wandb
-        if wandb.run is None:
-            return
-
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
-
-        # Take first sample
-        slen = sample_lengths[0]
-        tokens = batch["unconcat_tokens"][0][-slen:]
-        log_ratios = neg_approx_kl[:slen].detach().cpu().float().numpy()
-        inf_weights = influence_weights[:slen].detach().cpu().float().numpy()
-        mask = loss_masks[:slen].detach().cpu().float().numpy()
-
-        # Decode tokens one by one
-        token_ids = tokens.cpu().tolist()
-        token_strs = [tokenizer.decode([tid]) for tid in token_ids]
-
-        # Build HTML: color tokens by log ratio
-        max_abs = max(abs(log_ratios[mask > 0]).max(), 1e-6) if (mask > 0).any() else 1.0
-        html_parts = ['<div style="font-family:monospace;font-size:12px;line-height:2;word-wrap:break-word;">']
-        for i, (tok_str, lr, iw, m) in enumerate(zip(token_strs, log_ratios, inf_weights, mask)):
-            if m < 0.5:
-                continue
-            # Normalize to [-1, 1]
-            intensity = max(-1.0, min(1.0, lr / max_abs))
-            if intensity > 0:
-                r, g, b = int(255 * (1 - intensity)), 255, int(255 * (1 - intensity))
-            else:
-                r, g, b = 255, int(255 * (1 + intensity)), int(255 * (1 + intensity))
-            tok_esc = tok_str.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace(" ", "&nbsp;")
-            if tok_esc.strip() == "":
-                tok_esc = "·"
-            html_parts.append(
-                f'<span title="ratio={lr:.3f} f_t={iw:.3f}" '
-                f'style="background:rgb({r},{g},{b});padding:1px 2px;margin:1px;'
-                f'border-radius:2px;display:inline-block;">{tok_esc}</span>'
-            )
-        html_parts.append("</div>")
-        html_str = "".join(html_parts)
-
-        wandb.log({"fipo/token_ratio_viz": wandb.Html(html_str)}, commit=False)
-    except Exception:
-        pass  # Don't crash training for visualization errors
-
-
 def fipo_loss_function(
     args: Namespace,
     batch: RolloutBatch,
@@ -1195,9 +1122,6 @@ def fipo_loss_function(
 
     if log_probs.numel() == 0:
         loss += 0 * logits.sum()
-
-    # Log token-level ratio visualization to wandb (rank 0 only, every N steps)
-    _fipo_log_token_ratios(args, batch, neg_approx_kl, influence_weights, sample_lengths, loss_masks)
 
     # Metrics
     influence_valid = influence_weights[loss_masks > 0]
