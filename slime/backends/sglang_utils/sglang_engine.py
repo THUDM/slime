@@ -52,17 +52,23 @@ def _to_local_gpu_id(physical_gpu_id: int) -> int:
 
 def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
     if getattr(server_args, "encoder_only", False):
-        from sglang.srt.disaggregation.encode_server import launch_server
-    else:
-        from sglang.srt.entrypoints.http_server import launch_server
+        from sglang.srt.disaggregation.encode_server import launch_server_process as sglang_launch_server_process
+
+        return sglang_launch_server_process(
+            server_args,
+            start_method="spawn",
+            wait_for_server=True,
+        )
+
+    from sglang.srt.entrypoints.http_server import launch_server
 
     multiprocessing.set_start_method("spawn", force=True)
     server_args.host = server_args.host.strip("[]")
     p = multiprocessing.Process(target=launch_server, args=(server_args,))
     p.start()
 
-    if server_args.node_rank != 0:
-        return
+    if getattr(server_args, "node_rank", 0) != 0:
+        return p
 
     _wait_server_healthy(
         base_url=server_args.url(),
@@ -198,7 +204,7 @@ class SGLangEngine(RayActor):
             if parse(sglang_router.__version__) <= parse("0.2.1"):
                 assert self.worker_type == "regular", "pd disaggregation is not supported in old router."
                 response = requests.post(
-                    f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}"
+                    f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}",
                 )
             else:
                 payload = {

@@ -170,7 +170,6 @@ def _get_megatron_local_param_infos(args: Namespace, model: Sequence[torch.nn.Mo
                 continue
             for name, info in infos.items():
                 if name in param_infos:
-                    assert args.mtp_num_layers is not None
                     old_info = param_infos[name]
                     if old_info.src_rank > src_rank:
                         param_infos[name] = info
