@@ -69,3 +69,43 @@ def test_mopd_rollout_log_preserves_scalar_reward_in_trace(tmp_path: Path):
     assert row["reward_type"] == "float"
     assert row["reward_scalar"] == 0.75
     assert row["domain"] == "tool"
+
+
+def test_mopd_run_script_wires_custom_eval_wandb_logging():
+    script_path = Path(__file__).resolve().parents[1] / "examples" / "MOPD" / "run_mopd_qwen3_30b_4node.sh"
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert "--custom-eval-rollout-log-function-path examples.MOPD.log_mopd_rollout.log_eval_rollout_data" in script_text
+
+
+def test_mopd_eval_log_adds_domain_metrics_without_skipping_default_logging(tmp_path: Path):
+    args = _args(tmp_path)
+    captured: list[tuple[dict, str]] = []
+
+    original_logging_utils = log_mopd_rollout.logging_utils
+    log_mopd_rollout.logging_utils = SimpleNamespace(
+        log=lambda _args, metrics, step_key: captured.append((metrics, step_key))
+    )
+    try:
+        handled = log_mopd_rollout.log_eval_rollout_data(
+            5,
+            args,
+            {
+                "aime24": {"samples": [_sample(reward=1.0, domain="math", dataset_name="aime24")]},
+                "livecodebench": {"samples": [_sample(reward=0.0, domain="code", dataset_name="livecodebench")]},
+            },
+            {"eval/custom_metric": 0.5},
+        )
+    finally:
+        log_mopd_rollout.logging_utils = original_logging_utils
+
+    assert handled is False
+    assert len(captured) == 1
+    metrics, step_key = captured[0]
+    assert step_key == "eval/step"
+    assert metrics["eval/step"] == 5
+    assert metrics["eval/custom_metric"] == 0.5
+    assert metrics["eval_by_domain/math/count"] == 1
+    assert metrics["eval_by_domain/code/count"] == 1
+    assert metrics["eval_by_source/aime24/count"] == 1
+    assert metrics["eval_by_source/livecodebench/count"] == 1
