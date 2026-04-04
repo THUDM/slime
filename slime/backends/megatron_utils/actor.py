@@ -229,7 +229,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
             rollout_data["max_seq_lens"] = [max_seq_len] * len(rollout_data["tokens"])
 
-        for key in ["rollout_log_probs", "teacher_log_probs"]:
+        for key in ["rollout_log_probs", "teacher_log_probs", "sampling_logprob_sum"]:
             if key not in rollout_data:
                 continue
             rollout_data[key] = [
@@ -245,6 +245,28 @@ class MegatronTrainRayActor(TrainRayActor):
                     dtype=torch.float32,
                 )
                 for i, (log_prob, total_length, response_length) in enumerate(
+                    zip(
+                        rollout_data[key],
+                        rollout_data["total_lengths"],
+                        rollout_data["response_lengths"],
+                        strict=False,
+                    )
+                )
+            ]
+        # sampling_token_ids: variable-length nested lists, apply zigzag CP slicing but keep as lists.
+        # For allgather_cp, skip zigzag slicing — contiguous slicing is done at training time
+        # inside get_masked_log_probs_for_token_ids to match the allgather logits layout.
+        if "sampling_token_ids" in rollout_data and not self.args.allgather_cp:
+            key = "sampling_token_ids"
+            rollout_data[key] = [
+                slice_log_prob_with_cp(
+                    token_ids,
+                    total_length,
+                    response_length,
+                    self.args.qkv_format,
+                    rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
+                )
+                for i, (token_ids, total_length, response_length) in enumerate(
                     zip(
                         rollout_data[key],
                         rollout_data["total_lengths"],

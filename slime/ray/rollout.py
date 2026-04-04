@@ -743,6 +743,12 @@ class RolloutManager:
         if samples[0].teacher_log_probs is not None:
             train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
 
+        if samples[0].sampling_token_ids is not None:
+            train_data["sampling_token_ids"] = [sample.sampling_token_ids for sample in samples]
+
+        if samples[0].sampling_logprob_sum is not None:
+            train_data["sampling_logprob_sum"] = [sample.sampling_logprob_sum for sample in samples]
+
         return train_data
 
     def set_train_parallel_config(self, config: dict):
@@ -782,6 +788,8 @@ class RolloutManager:
                 "rollout_routed_experts",
                 "prompt",
                 "teacher_log_probs",
+                "sampling_token_ids",
+                "sampling_logprob_sum",
             ]:
                 if key not in data:
                     continue
@@ -1200,6 +1208,7 @@ def compute_metrics_from_samples(args, samples):
     log_dict |= dict_add_prefix(compute_statistics(response_lengths), "response_len/")
     log_dict |= _compute_zero_std_metrics(args, samples)
     log_dict |= _compute_reward_cat_metrics(args, samples)
+    log_dict |= _compute_topp_mask_metrics(args, samples)
     log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
     log_dict["truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()
     return log_dict
@@ -1284,3 +1293,24 @@ def _compute_reward_cat_metrics(args, all_samples: list[Sample]):
     samples_of_reward_cat = group_by(all_samples, lambda s: s.reward[reward_cat_key])
 
     return {f"error_cat/{reward_cat}": len(s) / len(all_samples) for reward_cat, s in samples_of_reward_cat.items()}
+
+
+def _compute_topp_mask_metrics(args, all_samples: list[Sample]):
+    if not getattr(args, "use_topp_mask", False) and not getattr(args, "use_topk_mask", False):
+        return {}
+    if not getattr(args, "use_topp_mask", False):
+        return {"sampling_mask_topk_fallback_ratio": 0.0}
+
+    positions = [
+        (len(token_ids), np.exp(logprob_sum).item())
+        for sample in all_samples
+        if sample.sampling_token_ids is not None and sample.sampling_logprob_sum is not None
+        for token_ids, logprob_sum in zip(sample.sampling_token_ids, sample.sampling_logprob_sum, strict=False)
+    ]
+    if not positions:
+        return {}
+    topk_fallback = sum(
+        candidate_size >= args.rollout_top_logprobs_num and prob + 1e-6 < args.rollout_top_p
+        for candidate_size, prob in positions
+    )
+    return {"sampling_mask_topk_fallback_ratio": topk_fallback / len(positions)}

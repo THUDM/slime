@@ -149,6 +149,41 @@ def compute_policy_loss(
     return pg_losses, clipfrac
 
 
+def mask_logits_for_token_ids(
+    logits: torch.Tensor,
+    sampling_token_ids: list[list[int]],
+    vocab_shard_size: int,
+    tp_rank: int,
+) -> torch.Tensor:
+    """Mask logits to keep only the sampling token subset, setting others to -inf.
+
+    During training, this restricts the softmax normalization domain to an
+    externally provided sampling token subset for each position.
+
+    Uses ``torch.where`` (not in-place ``masked_fill_``) so the returned tensor
+    has a clean autograd graph that is safe for downstream custom autograd
+    functions (e.g. ``fused_vocab_parallel_cross_entropy``) which modify their
+    input in-place.
+
+    Args:
+        logits: Logits tensor of shape ``[seq_len, vocab_shard_size]``.
+        sampling_token_ids: Per-position list of *global* token IDs to keep.
+        vocab_shard_size: Size of the local vocabulary shard on this TP rank.
+        tp_rank: Tensor-parallel rank (to map global IDs to local indices).
+
+    Returns:
+        A **new** tensor with non-selected entries replaced by ``-inf``.
+    """
+    vocab_start = tp_rank * vocab_shard_size
+    mask = torch.zeros_like(logits, dtype=torch.bool)
+    for t, ids in enumerate(sampling_token_ids):
+        local_ids = [gid - vocab_start for gid in ids if vocab_start <= gid < vocab_start + vocab_shard_size]
+        if local_ids:
+            idx = torch.tensor(local_ids, dtype=torch.long, device=logits.device)
+            mask[t].scatter_(0, idx, True)
+    return torch.where(mask, logits, torch.tensor(float("-inf"), device=logits.device, dtype=logits.dtype))
+
+
 def compute_log_probs(logits: torch.Tensor, tokens: torch.Tensor, process_group: dist.ProcessGroup | None):
     # TODO: when megatron is not installed, fall back to naive implementation
     from megatron.core.fusions.fused_cross_entropy import fused_vocab_parallel_cross_entropy

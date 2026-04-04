@@ -259,6 +259,35 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--rollout-top-k", type=int, default=-1, help="the top-k for the inference engine during rollout."
             )
             parser.add_argument(
+                "--use-topp-mask",
+                action="store_true",
+                default=False,
+                help=(
+                    "Enable top-p sampling mask for training-inference consistency. "
+                    "Records per-position sampling token candidates during rollout and re-normalizes "
+                    "log probabilities over the same token subset during training."
+                ),
+            )
+            parser.add_argument(
+                "--use-topk-mask",
+                action="store_true",
+                default=False,
+                help=(
+                    "Enable top-k sampling mask for training-inference consistency. "
+                    "Records per-position sampling token candidates during rollout and re-normalizes "
+                    "log probabilities over the same token subset during training."
+                ),
+            )
+            parser.add_argument(
+                "--rollout-top-logprobs-num",
+                type=int,
+                default=256,
+                help=(
+                    "Number of top logprobs to request from sglang per position. "
+                    "Used with --use-topp-mask/--use-topk-mask to recover the rollout sampling support."
+                ),
+            )
+            parser.add_argument(
                 "--rollout-max-context-len",
                 type=int,
                 default=None,
@@ -1494,6 +1523,24 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
     return eval_datasets
 
 
+def _validate_sampling_mask_args(args):
+    if not args.use_topp_mask and not getattr(args, "use_topk_mask", False):
+        return
+
+    if args.use_topp_mask:
+        assert args.rollout_top_p < 1.0, (
+            "--use-topp-mask requires rollout_top_p < 1.0. " f"Current value: rollout_top_p={args.rollout_top_p}"
+        )
+    if getattr(args, "use_topk_mask", False):
+        assert args.rollout_top_k > 0, (
+            "--use-topk-mask requires rollout_top_k > 0. " f"Current value: rollout_top_k={args.rollout_top_k}"
+        )
+    assert args.rollout_top_logprobs_num > 0, (
+        "--use-topp-mask/--use-topk-mask requires --rollout-top-logprobs-num > 0. "
+        f"Current value: {args.rollout_top_logprobs_num}"
+    )
+
+
 def slime_validate_args(args):
     args.eval_datasets = _resolve_eval_datasets(args)
 
@@ -1589,6 +1636,8 @@ def slime_validate_args(args):
 
     if args.use_rollout_logprobs:
         assert not args.use_tis, "use_rollout_logprobs and use_tis cannot be set at the same time."
+
+    _validate_sampling_mask_args(args)
 
     if args.get_mismatch_metrics:
         assert (
