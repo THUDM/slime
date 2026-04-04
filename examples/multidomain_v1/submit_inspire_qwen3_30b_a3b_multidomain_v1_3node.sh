@@ -8,7 +8,7 @@ source "${PROJECT_ROOT}/login.sh"
 
 RESOURCE="${RESOURCE:-8xH100}"
 PRIORITY="${PRIORITY:-10}"
-MAX_TIME="${MAX_TIME:-24}"
+MAX_TIME="${MAX_TIME:-168}"
 JOB_NAME="${JOB_NAME:-multidomain-v1-3node-$(date '+%m%d-%H%M')}"
 SUBMIT_NODES="${SUBMIT_NODES:-3}"
 IMAGE="${IMAGE:-${INSP_IMAGE:-}}"

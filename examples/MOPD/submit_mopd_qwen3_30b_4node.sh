@@ -22,7 +22,7 @@ INSPIRE_BIN="${INSPIRE_CLI:-inspire}"
 
 RESOURCE="${RESOURCE:-8xH100}"
 PRIORITY="${PRIORITY:-10}"
-MAX_TIME="${MAX_TIME:-24}"
+MAX_TIME="${MAX_TIME:-168}"
 JOB_NAME="${JOB_NAME:-mopd-4node-$(date '+%m%d-%H%M')}"
 SUBMIT_NODES="${SUBMIT_NODES:-4}"
 IMAGE="${IMAGE:-docker.sii.shaipower.online/inspire-studio/slime-avalanche:0.0.2}"

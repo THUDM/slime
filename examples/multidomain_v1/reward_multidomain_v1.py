@@ -318,6 +318,12 @@ async def reward_func(args, sample, **kwargs):
     if reward_type == "stem_mcqa":
         return 1.0 if _v0._extract_mcqa_answer(response) == str(metadata.get("answer", "")).strip().upper() else 0.0
 
+    if reward_type == "bfcl_official":
+        raise RuntimeError(
+            "BFCL official evaluation is no longer supported through the generic multidomain reward router. "
+            "Use the official BFCL evaluator over pool native rows instead."
+        )
+
     if reward_type in {"tool_call_soft", "tool_call_strict", "tool_call", "tool_selection_strict"}:
         tools = metadata.get("tools") or []
         expected_calls = metadata.get("ground_truth") or []
@@ -351,7 +357,10 @@ async def reward_func(args, sample, **kwargs):
         if dataset_name == "ifbench_test":
             scores = _ifbench_rule_scores(metadata, sample, strict=reward_type != "instruction_following_soft")
             if scores is None:
-                scores = _instruction_rule_scores(metadata, sample)
+                raise RuntimeError(
+                    "IFBench official evaluation_lib is required for ifbench_test. "
+                    "Heuristic fallback has been removed."
+                )
         else:
             scores = _instruction_rule_scores(metadata, sample)
         if not scores:

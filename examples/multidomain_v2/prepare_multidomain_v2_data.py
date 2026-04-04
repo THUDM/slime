@@ -18,10 +18,10 @@ from pool_runtime_semantics import materialize_runtime_pool_row
 POOL_SUBDIRS = ("structured", "stem", "tool")
 DATASET_SOURCE_MAP: dict[str, tuple[str, ...]] = {
     "toolbench_v1": (
-        "tool/toolbench_v1_data_train-00000-of-00004.jsonl",
-        "tool/toolbench_v1_data_train-00001-of-00004.jsonl",
-        "tool/toolbench_v1_data_train-00002-of-00004.jsonl",
-        "tool/toolbench_v1_data_train-00003-of-00004.jsonl",
+        "tool/toolbench_v1_train-00000-of-00004.jsonl",
+        "tool/toolbench_v1_train-00001-of-00004.jsonl",
+        "tool/toolbench_v1_train-00002-of-00004.jsonl",
+        "tool/toolbench_v1_train-00003-of-00004.jsonl",
     ),
     "apibench": (
         "tool/apibench_huggingface_train.jsonl",
@@ -34,9 +34,9 @@ DATASET_SOURCE_MAP: dict[str, tuple[str, ...]] = {
         "tool/agent_function_calling_open_dataset_deepnlp_agent_function_call_202510.jsonl",
         "tool/agent_function_calling_open_dataset_deepnlp_agent_function_call_202601.jsonl",
     ),
-    "jsonschemabench": ("structured/jsonschemabench_data_train-00000-of-00001.jsonl",),
+    "jsonschemabench": ("structured/jsonschemabench_train-00000-of-00001.jsonl",),
     "ifeval": ("structured/eval/ifeval_ifeval_input_data.jsonl",),
-    "ifbench_test": ("structured/eval/ifbench_test_data_train-00000-of-00001.jsonl",),
+    "ifbench_test": ("structured/eval/ifbench_test_train-00000-of-00001.jsonl",),
     "nemotron_structured_outputs": ("structured/nemotron_structured_outputs_structured_outputs_251027_nano_v3_sdg_json_train.jsonl",),
     "nemotron_knowledge_mcqa": (
         "stem/nemotron_knowledge_mcqa_data_train-00000-of-00004.jsonl",
@@ -56,7 +56,15 @@ def discover_sources(pool_root: Path) -> list[Path]:
         candidate = pool_root / subdir
         if not candidate.is_dir():
             continue
-        sources.extend(path for path in candidate.rglob("*.jsonl") if path.is_file())
+        train_dir = candidate / "train"
+        if not train_dir.is_dir():
+            continue
+        for path in train_dir.rglob("*.jsonl"):
+            if not path.is_file():
+                continue
+            if "_data_" in path.name:
+                continue
+            sources.append(path)
     return sorted(sources)
 
 
@@ -72,7 +80,7 @@ def iter_rows(path: Path) -> Iterator[dict]:
             yield payload
 
 
-def align_row_to_v1_normalized_shape(row: dict[str, Any]) -> dict[str, Any]:
+def align_row_to_v1_normalized_shape(row: dict[str, Any]) -> dict[str, Any] | None:
     return materialize_runtime_pool_row(row)
 
 
@@ -143,6 +151,8 @@ def write_dataset(
     with dest.open("w", encoding="utf-8") as handle:
         for row in iter_selected_rows(sources, skip_samples=skip_samples, max_samples=max_samples):
             row = align_row_to_v1_normalized_shape(row)
+            if row is None:
+                continue
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
             written += 1
     return written

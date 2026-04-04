@@ -162,29 +162,17 @@ def _bfcl_strict_with_schema_check(
     return 1.0
 
 
-# ---------------------------------------------------------------------------
-# Improved IFEval scoring — clearer fallback behavior
-# ---------------------------------------------------------------------------
-
-_IFEVAL_FALLBACK_WARNED = False
-
-
 def _eval_ifeval(metadata: dict[str, Any], sample, reward_type: str) -> float:
-    """IFEval/IFBench evaluation with improved fallback logging."""
-    global _IFEVAL_FALLBACK_WARNED
-
+    """IFEval/IFBench evaluation routed by dataset semantics."""
     dataset_name = str(metadata.get("dataset_name", "")).strip().lower()
 
     if dataset_name == "ifbench_test":
         scores = _ifbench_rule_scores(metadata, sample, strict=reward_type != "instruction_following_soft")
         if scores is None:
-            if not _IFEVAL_FALLBACK_WARNED:
-                logger.warning(
-                    "IFBench evaluation_lib not available; falling back to rule-based _check_instruction. "
-                    "Install IFBench (if_rl/offline_ifbench/) for official scoring."
-                )
-                _IFEVAL_FALLBACK_WARNED = True
-            scores = _instruction_rule_scores(metadata, sample)
+            raise RuntimeError(
+                "IFBench official evaluation_lib is required for ifbench_test. "
+                "Heuristic fallback has been removed."
+            )
     else:
         scores = _instruction_rule_scores(metadata, sample)
 
@@ -213,6 +201,12 @@ async def _eval_multidomain_reward(args, sample, **kwargs) -> float:
     # ---- STEM MCQ ----
     if reward_type == "stem_mcqa":
         return 1.0 if _extract_mcqa_answer(response) == str(metadata.get("answer", "")).strip().upper() else 0.0
+
+    if reward_type == "bfcl_official":
+        raise RuntimeError(
+            "BFCL official evaluation is not available through the generic MOPD reward router. "
+            "Use the official BFCL evaluator over pool native rows instead."
+        )
 
     # ---- Tool calling ----
     if reward_type in {"tool_call_soft", "tool_call_strict", "tool_call", "tool_selection_strict"}:

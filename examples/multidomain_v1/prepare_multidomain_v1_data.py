@@ -310,6 +310,11 @@ def _stable_shuffle_choices(record_id: str, choices: list[tuple[str, str]]) -> l
 def _api_name_from_entry(item: Any) -> str:
     if isinstance(item, str):
         return item.strip()
+    if isinstance(item, (list, tuple)):
+        for value in reversed(item):
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
     if not isinstance(item, dict):
         return ""
     for key in ("name", "api_name", "tool_name", "api", "tool"):

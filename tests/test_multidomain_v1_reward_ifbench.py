@@ -96,3 +96,49 @@ def test_ifbench_reward_uses_ifbench_verifier_for_new_instruction_ids():
             sys.modules["instructions_registry"] = original_registry_module
 
     assert score == 1.0
+
+
+def test_ifbench_reward_fails_fast_without_official_verifier():
+    class _Status(Enum):
+        COMPLETED = "completed"
+        TRUNCATED = "truncated"
+
+    class _Sample:
+        Status = _Status
+
+        def __init__(self, prompt, response, status, metadata):
+            self.prompt = prompt
+            self.response = response
+            self.status = status
+            self.metadata = metadata
+
+    original_module = sys.modules.pop("evaluation_lib", None)
+    original_registry_module = sys.modules.pop("instructions_registry", None)
+    try:
+        reward_module = _load_reward_module()
+        reward_module._IFBENCH_REGISTRY = {}
+        sample = _Sample(
+            prompt=[{"role": "system", "content": "Do task"}],
+            response="anything",
+            status=_Sample.Status.COMPLETED,
+            metadata={
+                "dataset_name": "ifbench_test",
+                "reward_type": "instruction_following_soft",
+                "prompt_text": "Do task",
+                "instruction_id_list": ["count:keywords_multiple"],
+                "kwargs": [{"keyword1": "kaleidoscope"}],
+            },
+        )
+        try:
+            asyncio.run(reward_module.reward_func(None, sample))
+            raised = None
+        except RuntimeError as exc:
+            raised = exc
+    finally:
+        if original_module is not None:
+            sys.modules["evaluation_lib"] = original_module
+        if original_registry_module is not None:
+            sys.modules["instructions_registry"] = original_registry_module
+
+    assert raised is not None
+    assert "evaluation_lib" in str(raised)

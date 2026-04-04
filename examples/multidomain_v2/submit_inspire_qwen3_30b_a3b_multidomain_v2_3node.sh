@@ -9,7 +9,7 @@ source "${PROJECT_ROOT}/login.sh"
 
 RESOURCE="${RESOURCE:-8xH100}"
 PRIORITY="${PRIORITY:-10}"
-MAX_TIME="${MAX_TIME:-24}"
+MAX_TIME="${MAX_TIME:-168}"
 FAULT_TOLERANT="${FAULT_TOLERANT:-1}"
 JOB_NAME="${JOB_NAME:-multidomain-v2-3node-$(date '+%m%d-%H%M')}"
 SUBMIT_NODES="${SUBMIT_NODES:-3}"
