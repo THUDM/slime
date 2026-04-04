@@ -55,8 +55,10 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 def test_discover_sources_returns_sorted_jsonl_files(tmp_path: Path):
     pool_root = tmp_path / "pool"
-    _write_jsonl(pool_root / "structured" / "zeta.jsonl", [{"prompt": [], "label": "3", "metadata": {}}])
-    _write_jsonl(pool_root / "tool" / "alpha.jsonl", [{"prompt": [], "label": "1", "metadata": {}}])
+    _write_jsonl(pool_root / "structured" / "train" / "zeta.jsonl", [{"prompt": [], "label": "3", "metadata": {}}])
+    _write_jsonl(pool_root / "tool" / "train" / "alpha.jsonl", [{"prompt": [], "label": "1", "metadata": {}}])
+    _write_jsonl(pool_root / "tool" / "train" / "toolbench_v1_data_train-00000-of-00004.jsonl", [{"prompt": [], "label": "2", "metadata": {}}])
+    _write_jsonl(pool_root / "tool" / "eval" / "ignored.jsonl", [{"prompt": [], "label": "4", "metadata": {}}])
     _write_jsonl(pool_root / "math" / "ignored.jsonl", [{"question": "q-ignored", "label": "0"}])
     (pool_root / "code").mkdir(parents=True, exist_ok=True)
     (pool_root / "code" / "ignore.txt").write_text("ignored\n", encoding="utf-8")
@@ -64,8 +66,8 @@ def test_discover_sources_returns_sorted_jsonl_files(tmp_path: Path):
     discovered = prepare_multidomain_v2.discover_sources(pool_root)
 
     assert [path.relative_to(pool_root).as_posix() for path in discovered] == [
-        "structured/zeta.jsonl",
-        "tool/alpha.jsonl",
+        "structured/train/zeta.jsonl",
+        "tool/train/alpha.jsonl",
     ]
 
 
@@ -148,11 +150,11 @@ def test_write_dataset_aligns_missing_tools_to_v1_shape(tmp_path: Path):
 def test_resolve_named_datasets_expands_requested_pool_sources(tmp_path: Path):
     pool_root = tmp_path / "pool"
     expected_relpaths = [
-        "tool/train/toolbench_v1_data_train-00000-of-00004.jsonl",
-        "tool/train/toolbench_v1_data_train-00001-of-00004.jsonl",
-        "tool/train/toolbench_v1_data_train-00002-of-00004.jsonl",
-        "tool/train/toolbench_v1_data_train-00003-of-00004.jsonl",
-        "structured/train/jsonschemabench_data_train-00000-of-00001.jsonl",
+        "tool/train/toolbench_v1_train-00000-of-00004.jsonl",
+        "tool/train/toolbench_v1_train-00001-of-00004.jsonl",
+        "tool/train/toolbench_v1_train-00002-of-00004.jsonl",
+        "tool/train/toolbench_v1_train-00003-of-00004.jsonl",
+        "structured/train/jsonschemabench_train-00000-of-00001.jsonl",
         "structured/train/nemotron_structured_outputs_structured_outputs_251027_nano_v3_sdg_json_train.jsonl",
     ]
     for relpath in expected_relpaths:
@@ -224,7 +226,135 @@ def test_align_row_to_v1_shape_uses_instruction_following_prompts_for_ifbench():
     assert aligned["prompt"][1:] == [{"role": "user", "content": "Follow the rule"}]
 
 
-def test_align_row_to_v1_shape_copies_top_level_tools_into_metadata():
+def test_align_row_to_v1_shape_materializes_ifbench_eval_metadata_from_native_payload():
+    row = {
+        "dataset_name": "ifbench_test",
+        "domain": "structured",
+        "record_id": "ifbench-1",
+        "prompt": [{"role": "user", "content": "Follow the rule"}],
+        "label": "",
+        "metadata": {
+            "dataset_name": "ifbench_test",
+            "domain": "structured",
+            "record_id": "ifbench-1",
+        },
+        "tools": [],
+        "native": {
+            "key": "ifbench-1",
+            "prompt": "Follow the rule",
+            "instruction_id_list": ["keywords:existence"],
+            "kwargs": [{"keywords": ["alpha"], "unused": None}],
+        },
+    }
+
+    aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
+
+    assert aligned["metadata"]["reward_type"] == "instruction_following_soft"
+    assert aligned["metadata"]["instruction_id_list"] == ["keywords:existence"]
+    assert aligned["metadata"]["kwargs"] == [{"keywords": ["alpha"], "unused": None}]
+    assert aligned["metadata"]["prompt_text"] == "Follow the rule"
+    assert aligned["prompt"][0]["role"] == "system"
+
+
+def test_align_row_to_v1_shape_materializes_bfcl_eval_metadata_from_native_payload():
+    row = {
+        "dataset_name": "bfcl_v3",
+        "domain": "tool",
+        "record_id": "irrelevance_0",
+        "prompt": [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "Question"},
+        ],
+        "label": "",
+        "metadata": {
+            "dataset_name": "bfcl_v3",
+            "domain": "tool",
+            "record_id": "irrelevance_0",
+        },
+        "tools": [{"type": "function", "function": {"name": "weather", "description": "", "parameters": {}}}],
+        "native": {
+            "id": "irrelevance_0",
+            "ground_truth": {},
+            "subset": "eval",
+            "test_category": "irrelevance",
+            "language": "python",
+            "turns": [[
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "Question"},
+            ]],
+        },
+    }
+
+    aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
+
+    assert aligned["metadata"]["reward_type"] == "bfcl_official"
+    assert aligned["metadata"]["official_eval_name"] == "bfcl"
+    assert aligned["metadata"]["test_category"] == "irrelevance"
+    assert aligned["metadata"]["native"]["id"] == "irrelevance_0"
+    assert aligned["tools"] == row["tools"]
+
+
+def test_align_row_to_v1_shape_materializes_train_native_function_call_family():
+    row = {
+        "dataset_name": "xlam_function_calling_60k",
+        "domain": "tool",
+        "record_id": "row-1",
+        "supervision_family": "function_call_single",
+        "prompt": [{"role": "user", "content": "check weather"}],
+        "label": "",
+        "metadata": {
+            "dataset_name": "xlam_function_calling_60k",
+            "domain": "tool",
+            "record_id": "row-1",
+        },
+        "tools": [{"type": "function", "function": {"name": "weather", "description": "", "parameters": {}}}],
+        "native": {
+            "ground_truth": [
+                {
+                    "name": "weather",
+                    "arguments": {"city": "Paris"},
+                    "function": {"name": "weather", "arguments": {"city": "Paris"}},
+                }
+            ],
+            "source_fields": {"extra": {"id": "row-1"}},
+        },
+    }
+
+    aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
+
+    assert aligned["metadata"]["reward_type"] == "tool_call_soft"
+    assert aligned["metadata"]["ground_truth"] == row["native"]["ground_truth"]
+    assert aligned["metadata"]["source_fields"] == {"extra": {"id": "row-1"}}
+    assert aligned["tools"] == row["tools"]
+
+
+def test_align_row_to_v1_shape_materializes_toolbench_benchmark_api_names_from_nested_native_payload():
+    row = {
+        "dataset_name": "toolbench_v1_benchmark",
+        "domain": "tool",
+        "record_id": 7,
+        "prompt": [{"role": "user", "content": "Find a tutorial"}],
+        "label": "",
+        "metadata": {
+            "dataset_name": "toolbench_v1_benchmark",
+            "domain": "tool",
+            "record_id": 7,
+        },
+        "tools": [{"type": "function", "function": {"name": "Search", "description": "", "parameters": {}}}],
+        "native": {
+            "query_id": 7,
+            "query": "Find a tutorial",
+            "relevant_apis": [["Simple YouTube Search", "Search"], ["Calendar", "CreateEvent"]],
+        },
+    }
+
+    aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
+
+    assert aligned["metadata"]["reward_type"] == "tool_selection_strict"
+    assert aligned["metadata"]["allowed_tool_names"] == ["Search", "CreateEvent"]
+
+
+def test_align_row_to_v1_shape_keeps_tools_top_level_only():
     row = {
         "prompt": [{"role": "user", "content": "Use the tool"}],
         "label": "",
@@ -238,7 +368,8 @@ def test_align_row_to_v1_shape_copies_top_level_tools_into_metadata():
 
     aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
 
-    assert aligned["metadata"]["tools"] == row["tools"]
+    assert aligned["tools"] == row["tools"]
+    assert "tools" not in aligned["metadata"]
 
 
 def test_v2_run_script_is_not_a_v1_wrapper_anymore():
@@ -263,4 +394,18 @@ def test_v2_run_script_keeps_bfcl_eval_on_soft_reward():
     )
     script_text = script_path.read_text(encoding="utf-8")
 
-    assert "--reward-type-override tool_call_strict" not in script_text
+    assert "EVAL_PROMPT_DATA_ARGS+=(bfcl_v3_eval" not in script_text
+    assert "EVAL_PROMPT_DATA_ARGS+=(bfcl_multi_turn_eval" not in script_text
+
+
+def test_v1_run_script_removes_bfcl_from_online_eval():
+    script_path = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "multidomain_v1"
+        / "run_qwen3_30b_a3b_multidomain_v1_3node.sh"
+    )
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert "EVAL_PROMPT_DATA_ARGS+=(bfcl_v3_eval" not in script_text
+    assert "EVAL_PROMPT_DATA_ARGS+=(bfcl_multi_turn_eval" not in script_text

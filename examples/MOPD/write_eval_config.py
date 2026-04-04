@@ -22,6 +22,10 @@ if str(EXAMPLES_DIR) not in sys.path:
 from pool_runtime_semantics import materialize_runtime_pool_row
 
 
+def _infer_domain_from_pool_rel(rel: str) -> str:
+    return rel.split("/", 1)[0]
+
+
 def _preprocess_eval_jsonl(src: Path, dst: Path, domain: str) -> int:
     """Copy eval JSONL from pool to data_cache, materializing runtime prompt semantics."""
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -57,14 +61,11 @@ EVAL_DATASETS = [
     ("livecodebench",   "code/livecodebench.jsonl",                                1),
     ("humanevalplus",   "code/humanevalplus.jsonl",                                1),
     ("mbppplus",        "code/mbppplus.jsonl",                                     1),
-    # --- tool ---
-    ("bfcl_v3",         "tool/eval/bfcl_v3_train-00000-of-00001.jsonl",            1),
-    ("bfcl_v3_multi_turn", "tool/eval/bfcl_v3_multi_turn_base_train-00000-of-00001.jsonl", 1),
     # --- stem ---
-    ("mmlu_pro",        "stem/eval/mmlu_pro_data_test-00000-of-00001.jsonl",       1),
+    ("mmlu_pro",        "stem/eval/mmlu_pro_test-00000-of-00001.jsonl",            1),
     ("gpqa",            "stem/eval/gpqa_gpqa_main.jsonl",                          1),
     # --- structured ---
-    ("jsonschemabench", "structured/eval/jsonschemabench_data_test-00000-of-00001.jsonl", 1),
+    ("jsonschemabench", "structured/eval/jsonschemabench_test-00000-of-00001.jsonl", 1),
     ("ifeval",          "structured/eval/ifeval_ifeval_input_data.jsonl",           1),
 ]
 

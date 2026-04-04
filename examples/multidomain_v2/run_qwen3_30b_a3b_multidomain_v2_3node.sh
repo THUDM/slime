@@ -394,24 +394,6 @@ prepare_training_source_list() {
 }
 
 prepare_eval_data() {
-  if (( EVAL_BFCL_V3_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/../multidomain_v1/prepare_multidomain_v1_data.py" \
-      --source "${EVAL_TOOL_BFCL_V3}" --dataset-format bfcl_v3 --source-ratio 1 \
-      --dest "${BFCL_V3_EVAL}" \
-      --max-samples "${EVAL_BFCL_V3_SAMPLES}" \
-      --parser-type "${TOOLCALL_PARSER_TYPE}"
-    filter_jsonl_by_prompt_budget "${BFCL_V3_EVAL}" bfcl_v3_eval
-  fi
-
-  if (( EVAL_BFCL_MULTI_TURN_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/../multidomain_v1/prepare_multidomain_v1_data.py" \
-      --source "${EVAL_TOOL_BFCL_MULTI_TURN}" --dataset-format bfcl_v3_multi_turn_base --source-ratio 1 \
-      --dest "${BFCL_MULTI_TURN_EVAL}" \
-      --max-samples "${EVAL_BFCL_MULTI_TURN_SAMPLES}" \
-      --parser-type "${TOOLCALL_PARSER_TYPE}"
-    filter_jsonl_by_prompt_budget "${BFCL_MULTI_TURN_EVAL}" bfcl_multi_turn_eval
-  fi
-
   if (( EVAL_TOOLBENCH_BENCHMARK_SAMPLES > 0 )); then
     python3 "${SCRIPT_DIR}/../multidomain_v1/prepare_multidomain_v1_data.py" \
       --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G1_TOOL}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
@@ -553,12 +535,6 @@ submit_ray_job() {
 
   EVAL_ARGS=()
   EVAL_PROMPT_DATA_ARGS=()
-  if (( EVAL_BFCL_V3_SAMPLES > 0 )); then
-    EVAL_PROMPT_DATA_ARGS+=(bfcl_v3_eval "${BFCL_V3_EVAL}")
-  fi
-  if (( EVAL_BFCL_MULTI_TURN_SAMPLES > 0 )); then
-    EVAL_PROMPT_DATA_ARGS+=(bfcl_multi_turn_eval "${BFCL_MULTI_TURN_EVAL}")
-  fi
   if (( EVAL_TOOLBENCH_BENCHMARK_SAMPLES > 0 )); then
     EVAL_PROMPT_DATA_ARGS+=(toolbench_benchmark_eval "${TOOLBENCH_BENCHMARK_EVAL}")
   fi

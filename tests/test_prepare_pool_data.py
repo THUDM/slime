@@ -91,7 +91,8 @@ def test_convert_xlam_row_for_pool_preserves_prior_tool_context_and_call_metadat
     ]
     assert prompt[3]["name"] == "weather"
     assert prompt[3]["tool_call_id"] == "call_1"
-    assert second["metadata"]["ground_truth"] == [
+    assert second["supervision_family"] == "function_call_single"
+    assert second["native"]["ground_truth"] == [
         {
             "id": "call_2",
             "type": "function",
@@ -103,6 +104,7 @@ def test_convert_xlam_row_for_pool_preserves_prior_tool_context_and_call_metadat
     assert second["tools"][0]["x-extra"] == "keep-me"
     assert "tools" not in second["metadata"]
     assert second["metadata"]["source_fields"] == {"extra": {"id": "row-1"}}
+    assert "reward_type" not in second["metadata"]
 
 
 def test_normalize_prompt_message_for_pool_keeps_multimodal_content_blocks():
@@ -238,6 +240,116 @@ def test_convert_agent_row_for_pool_preserves_source_fields_and_record_fields():
     assert sample["prompt"][2]["tool_call_id"] == "call_1"
 
 
+def test_convert_agent_row_for_pool_recovers_supervision_from_html_trace():
+    row = {
+        "trace_id": "trace-html-1",
+        "function_calls": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Make me a background image"},
+                    {
+                        "role": "assistant",
+                        "content": """
+<span class="header-text">Call Tool generate_image_gemini of Server gemini-nano-banana</span>
+<div class="div_tool_call_json">{
+  "aspect_ratio": "16:9",
+  "image_name": "futuristic_city_background.png"
+}</div>
+""",
+                    },
+                ],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "generate_image_gemini",
+                            "description": "Generate image",
+                            "parameters": {"type": "object", "properties": {"image_name": {"type": "string"}}},
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    samples = prepare_pool_data.convert_row_for_pool(row, "agent_function_calling_open_dataset")
+
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample["supervision_family"] == "agent_trace_call_recovery"
+    assert sample["prompt"] == [{"role": "user", "content": "Make me a background image"}]
+    assert sample["native"]["recovery_source"] == "html_trace"
+    assert sample["native"]["ground_truth"] == [
+        {
+            "name": "generate_image_gemini",
+            "arguments": {
+                "aspect_ratio": "16:9",
+                "image_name": "futuristic_city_background.png",
+            },
+            "function": {
+                "name": "generate_image_gemini",
+                "arguments": {
+                    "aspect_ratio": "16:9",
+                    "image_name": "futuristic_city_background.png",
+                },
+            },
+        }
+    ]
+    assert "reward_type" not in sample["metadata"]
+    assert "ground_truth" not in sample["metadata"]
+
+
+def test_convert_xlam_row_for_pool_uses_native_supervision_contract():
+    row = {
+        "messages": [
+            {"role": "user", "content": "check weather"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "weather", "arguments": '{"city":"Paris"}'},
+                    }
+                ],
+            },
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "weather",
+                    "description": "desc",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                },
+            }
+        ],
+        "extra": {"id": "row-1"},
+    }
+
+    samples = prepare_pool_data.convert_row_for_pool(row, "xlam_function_calling_60k")
+
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample["supervision_family"] == "function_call_single"
+    assert sample["native"]["ground_truth"] == [
+        {
+            "id": "call_1",
+            "type": "function",
+            "name": "weather",
+            "arguments": {"city": "Paris"},
+            "function": {"name": "weather", "arguments": {"city": "Paris"}},
+        }
+    ]
+    assert sample["metadata"] == {
+        "dataset_name": "xlam_function_calling_60k",
+        "domain": "tool",
+        "record_id": "row-1",
+        "source_fields": {"extra": {"id": "row-1"}},
+    }
+
+
 def test_convert_ifbench_row_for_pool_preserves_extra_source_fields():
     row = {
         "key": "ifbench-1",
@@ -258,6 +370,115 @@ def test_convert_ifbench_row_for_pool_preserves_extra_source_fields():
         "source_name": "ifbench-open",
         "split": "train",
     }
+
+
+def test_convert_ifbench_row_for_eval_pool_keeps_native_payload_as_truth():
+    row = {
+        "key": "ifbench-1",
+        "prompt": "Do task",
+        "instruction_id_list": ["keywords:existence"],
+        "kwargs": [{"keywords": ["alpha"], "unused": None}],
+    }
+
+    samples = prepare_pool_data.convert_row_for_pool(
+        row,
+        "ifbench_test",
+        native_eval_contract=True,
+    )
+
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample["dataset_name"] == "ifbench_test"
+    assert sample["domain"] == "structured"
+    assert sample["record_id"] == "ifbench-1"
+    assert sample["prompt"] == [{"role": "user", "content": "Do task"}]
+    assert sample["metadata"] == {
+        "dataset_name": "ifbench_test",
+        "domain": "structured",
+        "record_id": "ifbench-1",
+    }
+    assert sample["native"] == {
+        "key": "ifbench-1",
+        "prompt": "Do task",
+        "instruction_id_list": ["keywords:existence"],
+        "kwargs": [{"keywords": ["alpha"], "unused": None}],
+    }
+
+
+def test_convert_bfcl_row_for_eval_pool_keeps_native_payload_and_drops_generic_reward_fields():
+    row = {
+        "id": "irrelevance_0",
+        "turns": [[
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "Question"},
+        ]],
+        "tools": [{"type": "function", "function": {"name": "weather", "description": "", "parameters": {}}}],
+        "ground_truth": {},
+        "subset": "eval",
+        "test_category": "irrelevance",
+        "language": "python",
+    }
+
+    samples = prepare_pool_data.convert_row_for_pool(
+        row,
+        "bfcl_v3",
+        native_eval_contract=True,
+    )
+
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample["dataset_name"] == "bfcl_v3"
+    assert sample["domain"] == "tool"
+    assert sample["record_id"] == "irrelevance_0"
+    assert sample["metadata"] == {
+        "dataset_name": "bfcl_v3",
+        "domain": "tool",
+        "record_id": "irrelevance_0",
+    }
+    assert sample["native"]["id"] == "irrelevance_0"
+    assert sample["native"]["ground_truth"] == {}
+    assert sample["native"]["test_category"] == "irrelevance"
+
+
+def test_convert_toolbench_benchmark_row_for_eval_pool_keeps_native_payload():
+    row = {
+        "query_id": 7,
+        "query": "Find a tutorial",
+        "api_list": [{"name": "Search", "description": "d", "required_parameters": [], "optional_parameters": []}],
+        "relevant_apis": ["Search"],
+    }
+
+    samples = prepare_pool_data.convert_row_for_pool(
+        row,
+        "toolbench_v1_benchmark",
+        native_eval_contract=True,
+    )
+
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample["dataset_name"] == "toolbench_v1_benchmark"
+    assert sample["domain"] == "tool"
+    assert sample["record_id"] == 7
+    assert sample["metadata"] == {
+        "dataset_name": "toolbench_v1_benchmark",
+        "domain": "tool",
+        "record_id": 7,
+    }
+    assert sample["native"]["relevant_apis"] == ["Search"]
+
+
+def test_convert_toolbench_benchmark_row_parses_nested_relevant_api_names():
+    row = {
+        "query_id": 7,
+        "query": "Find a tutorial",
+        "api_list": [{"name": "Search", "description": "d", "required_parameters": [], "optional_parameters": []}],
+        "relevant_apis": [["Simple YouTube Search", "Search"], ["Calendar", "CreateEvent"]],
+    }
+
+    samples = prepare_pool_data.convert_row_for_pool(row, "toolbench_v1_benchmark")
+
+    assert len(samples) == 1
+    assert samples[0]["metadata"]["allowed_tool_names"] == ["Search", "CreateEvent"]
 
 
 def test_convert_gpqa_invalid_row_is_skipped():
