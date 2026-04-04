@@ -4,8 +4,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any, Iterator, Sequence
+
+EXAMPLES_DIR = Path(__file__).resolve().parents[1]
+if str(EXAMPLES_DIR) not in sys.path:
+    sys.path.insert(0, str(EXAMPLES_DIR))
+
+from pool_runtime_semantics import materialize_runtime_pool_row
 
 
 POOL_SUBDIRS = ("structured", "stem", "tool")
@@ -28,6 +35,8 @@ DATASET_SOURCE_MAP: dict[str, tuple[str, ...]] = {
         "tool/agent_function_calling_open_dataset_deepnlp_agent_function_call_202601.jsonl",
     ),
     "jsonschemabench": ("structured/jsonschemabench_data_train-00000-of-00001.jsonl",),
+    "ifeval": ("structured/eval/ifeval_ifeval_input_data.jsonl",),
+    "ifbench_test": ("structured/eval/ifbench_test_data_train-00000-of-00001.jsonl",),
     "nemotron_structured_outputs": ("structured/nemotron_structured_outputs_structured_outputs_251027_nano_v3_sdg_json_train.jsonl",),
     "nemotron_knowledge_mcqa": (
         "stem/nemotron_knowledge_mcqa_data_train-00000-of-00004.jsonl",
@@ -64,9 +73,7 @@ def iter_rows(path: Path) -> Iterator[dict]:
 
 
 def align_row_to_v1_normalized_shape(row: dict[str, Any]) -> dict[str, Any]:
-    aligned = dict(row)
-    aligned["tools"] = list(row.get("tools") or [])
-    return aligned
+    return materialize_runtime_pool_row(row)
 
 
 def _expand_layout_candidates(relative_path: str) -> list[str]:

@@ -22,6 +22,8 @@ def _load_reward_module():
 
 def _install_fake_ifbench_verifier():
     fake_module = types.ModuleType("evaluation_lib")
+    fake_registry_module = types.ModuleType("instructions_registry")
+    fake_registry_module.INSTRUCTION_DICT = {"count:keywords_multiple": object()}
 
     class InputExample:
         def __init__(self, key, instruction_id_list, prompt, kwargs) -> None:
@@ -46,8 +48,10 @@ def _install_fake_ifbench_verifier():
     fake_module.test_instruction_following_strict = test_instruction_following_loose
 
     original_module = sys.modules.get("evaluation_lib")
+    original_registry_module = sys.modules.get("instructions_registry")
     sys.modules["evaluation_lib"] = fake_module
-    return original_module
+    sys.modules["instructions_registry"] = fake_registry_module
+    return original_module, original_registry_module
 
 
 def test_ifbench_reward_uses_ifbench_verifier_for_new_instruction_ids():
@@ -64,11 +68,12 @@ def test_ifbench_reward_uses_ifbench_verifier_for_new_instruction_ids():
             self.status = status
             self.metadata = metadata
 
-    original_module = _install_fake_ifbench_verifier()
+    original_module, original_registry_module = _install_fake_ifbench_verifier()
     try:
         reward_module = _load_reward_module()
+        reward_module._IFBENCH_REGISTRY = {"count:keywords_multiple": object()}
         sample = _Sample(
-            prompt=[{"role": "user", "content": "Do task"}],
+            prompt=[{"role": "system", "content": "Do task"}],
             response="kaleidoscope nebula",
             status=_Sample.Status.COMPLETED,
             metadata={
@@ -85,5 +90,9 @@ def test_ifbench_reward_uses_ifbench_verifier_for_new_instruction_ids():
             sys.modules.pop("evaluation_lib", None)
         else:
             sys.modules["evaluation_lib"] = original_module
+        if original_registry_module is None:
+            sys.modules.pop("instructions_registry", None)
+        else:
+            sys.modules["instructions_registry"] = original_registry_module
 
     assert score == 1.0
