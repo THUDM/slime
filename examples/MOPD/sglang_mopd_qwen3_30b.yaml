@@ -4,13 +4,13 @@
 # Layout:
 #   Actor (training): 2 nodes x 8 GPUs = 16 GPUs (TP=4, EP=8, DP=2)
 #   Rollout:          2 nodes x 8 GPUs = 16 GPUs (below)
-#     student: 10 GPUs, TP=2 → 5 engines (rollout generation, weight updates)
+#     student:  8 GPUs, TP=2 → 4 engines (rollout generation, weight updates)
 #     tool:     2 GPUs (teacher log-probs, frozen; handles tool/stem/structured)
 #     code:     2 GPUs (teacher log-probs, frozen)
-#     math:     2 GPUs (teacher log-probs, frozen)
+#     math:     4 GPUs, TP=2 → 2 engines (teacher log-probs, frozen)
 #
 # Teacher names must match sample.metadata["domain"] from pool data.
-# Total num_gpus = 10 + 2 + 2 + 2 = 16 = --rollout-num-gpus.
+# Total num_gpus = 8 + 2 + 2 + 4 = 16 = --rollout-num-gpus.
 #
 # Teachers are latency-insensitive compared with the student rollout path, so
 # we bias them for stability: lower static memory reservation, cap concurrent
@@ -22,7 +22,7 @@ sglang:
     update_weights: true
     server_groups:
       - worker_type: regular
-        num_gpus: 10
+        num_gpus: 8
         num_gpus_per_engine: 2
         overrides:
           mem_fraction_static: 0.82
@@ -32,11 +32,11 @@ sglang:
     update_weights: false
     server_groups:
       - worker_type: regular
-        num_gpus: 2
+        num_gpus: 4
         num_gpus_per_engine: 2
         overrides:
-          mem_fraction_static: 0.8
-          max_running_requests: 64
+          mem_fraction_static: 0.76
+          max_running_requests: 24
           disable_cuda_graph: true
 
   - name: code

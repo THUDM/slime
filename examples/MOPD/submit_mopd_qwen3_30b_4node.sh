@@ -11,6 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
+AVALANCHE_ROOT="$(cd -- "${PROJECT_ROOT}/.." && pwd)"
 
 if [[ -f "${PROJECT_ROOT}/login.sh" ]]; then
   # shellcheck source=/dev/null
@@ -24,10 +25,14 @@ PRIORITY="${PRIORITY:-10}"
 MAX_TIME="${MAX_TIME:-24}"
 JOB_NAME="${JOB_NAME:-mopd-4node-$(date '+%m%d-%H%M')}"
 SUBMIT_NODES="${SUBMIT_NODES:-4}"
-IMAGE="${IMAGE:-${INSP_IMAGE:-}}"
+IMAGE="${IMAGE:-docker.sii.shaipower.online/inspire-studio/slime-avalanche:0.0.2}"
 WORKSPACE_ID="${WORKSPACE_ID:-ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6}"
-REMOTE_ROOT="${INSPIRE_TARGET_DIR:-${PROJECT_ROOT}}"
-RUN_SCRIPT="slime/examples/MOPD/run_mopd_qwen3_30b_4node.sh"
+WORK_ROOT_VALUE="${WORK_ROOT:-${AVALANCHE_ROOT}/experiments/mopd_qwen3_30b_a3b_4node_pool_direct}"
+REMOTE_ROOT_DEFAULT="${INSPIRE_TARGET_DIR:-${PROJECT_ROOT}}"
+REMOTE_ROOT="${REMOTE_ROOT:-${REMOTE_ROOT_DEFAULT}}"
+JOB_LOG_ROOT="${JOB_LOG_ROOT:-${WORK_ROOT_VALUE}/logs}"
+RUN_SCRIPT="examples/MOPD/run_mopd_qwen3_30b_4node.sh"
+RUN_SCRIPT_FALLBACK="slime/${RUN_SCRIPT}"
 
 FORWARDED_ENV_VARS=(
   JOB_NAME
@@ -54,6 +59,7 @@ FORWARDED_ENV_VARS=(
   TOOLCALL_PARSER_TYPE
   TOOLCALL_LR
   TOOLCALL_ADAM_BETA2
+  TOOLCALL_USE_ROLLOUT_ROUTING_REPLAY
   OPD_KL_COEF
   KL_LOSS_COEF
   TOOLCALL_RESUME_TRAINING
@@ -62,6 +68,17 @@ FORWARDED_ENV_VARS=(
   TOOLCALL_RESUME_FINETUNE
   TOOL_CALL_WANDB_PROJECT
   TOOL_CALL_WANDB_GROUP
+  RAY_CLUSTER_WAIT_MAX_ATTEMPTS
+  RAY_CLUSTER_WAIT_SLEEP_SECONDS
+  RAY_CLUSTER_STATUS_TIMEOUT_SECONDS
+  RAY_WORKER_JOIN_MAX_ATTEMPTS
+  RAY_WORKER_JOIN_RETRY_SLEEP_SECONDS
+  RAY_HEAD_ADDR_WAIT_ATTEMPTS
+  RAY_HEAD_ADDR_WAIT_SLEEP
+  RAY_HEAD_START_STATUS_MAX_ATTEMPTS
+  RAY_HEAD_START_STATUS_SLEEP_SECONDS
+  RAY_GCS_RPC_SERVER_RECONNECT_TIMEOUT_SECONDS
+  RAY_gcs_rpc_server_reconnect_timeout_s
   WANDB_API_KEY
   WANDB_BASE_URL
 )
@@ -72,7 +89,10 @@ for var_name in "${FORWARDED_ENV_VARS[@]}"; do
     RUN_ENV_EXPORTS+=" export ${var_name}=$(printf '%q' "${!var_name}");"
   fi
 done
-RUN_CMD="cd ${REMOTE_ROOT} &&${RUN_ENV_EXPORTS} bash ${RUN_SCRIPT}"
+if [[ -z "${TOOLCALL_USE_ROLLOUT_ROUTING_REPLAY+x}" ]]; then
+  RUN_ENV_EXPORTS+=" export TOOLCALL_USE_ROLLOUT_ROUTING_REPLAY=0;"
+fi
+RUN_CMD="cd ${REMOTE_ROOT} &&${RUN_ENV_EXPORTS} if [[ -f \"${RUN_SCRIPT}\" ]]; then bash ${RUN_SCRIPT}; elif [[ -f \"${RUN_SCRIPT_FALLBACK}\" ]]; then bash ${RUN_SCRIPT_FALLBACK}; else echo \"Run script not found: ${RUN_SCRIPT} or ${RUN_SCRIPT_FALLBACK}\" >&2; exit 1; fi"
 
 CMD=(
   "${INSPIRE_BIN}" job create
@@ -93,4 +113,9 @@ if [[ -n "${WORKSPACE_ID}" ]]; then
   CMD+=(--workspace-id "${WORKSPACE_ID}")
 fi
 
-"${CMD[@]}"
+SUBMIT_CWD="${SUBMIT_CWD:-${TMPDIR:-/tmp}}"
+(
+  cd "${SUBMIT_CWD}"
+  export INSPIRE_TARGET_DIR="${JOB_LOG_ROOT}"
+  "${CMD[@]}"
+)

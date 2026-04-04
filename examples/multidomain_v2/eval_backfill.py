@@ -333,6 +333,111 @@ def merge_eval_history_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [by_eval_step[step] for step in sorted(by_eval_step)]
 
 
+def load_eval_split_metadata(runtime_data_dir: str) -> dict[str, dict[str, Any]]:
+    """Load per-eval split dataset/domain metadata from normalized eval jsonl files."""
+    runtime_path = Path(runtime_data_dir)
+    split_meta: dict[str, dict[str, Any]] = {}
+
+    for path in sorted(runtime_path.glob("*_eval.normalized.jsonl")):
+        eval_name = path.name.removesuffix(".normalized.jsonl")
+        dataset_names: set[str] = set()
+        domains: set[str] = set()
+        count = 0
+
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                metadata = row.get("metadata", {}) or {}
+                dataset_names.add(str(metadata.get("dataset_name", eval_name)))
+                domains.add(str(metadata.get("domain", "unknown")))
+                count += 1
+
+        if count == 0:
+            continue
+        if len(dataset_names) != 1 or len(domains) != 1:
+            raise RuntimeError(
+                f"{path} contains multiple dataset/domain values: datasets={sorted(dataset_names)} domains={sorted(domains)}"
+            )
+
+        split_meta[eval_name] = {
+            "count": count,
+            "dataset_name": next(iter(dataset_names)),
+            "domain": next(iter(domains)),
+        }
+
+    return split_meta
+
+
+def enrich_eval_row_with_split_metadata(
+    row: dict[str, Any],
+    split_meta: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Add per-source and per-domain eval aliases for single-source eval splits."""
+    enriched = dict(row)
+
+    for eval_name, meta in split_meta.items():
+        score_key = f"eval/{eval_name}"
+        if score_key not in row:
+            continue
+
+        dataset_name = meta["dataset_name"]
+        domain = meta["domain"]
+        count = meta["count"]
+        score = row[score_key]
+        response_len_key = f"eval/{eval_name}/response_len/mean"
+
+        enriched[f"eval/{eval_name}/by_source/{dataset_name}/count"] = count
+        enriched[f"eval/{eval_name}/by_source/{dataset_name}/score"] = score
+        enriched[f"eval/{eval_name}/by_domain/{domain}/count"] = count
+        enriched[f"eval/{eval_name}/by_domain/{domain}/score"] = score
+
+        enriched[f"eval_by_source/{dataset_name}/count"] = count
+        enriched[f"eval_by_source/{dataset_name}/score"] = score
+        enriched[f"eval_by_domain/{domain}/count"] = count
+        enriched[f"eval_by_domain/{domain}/score"] = score
+
+        if response_len_key in row:
+            response_len_mean = row[response_len_key]
+            enriched[f"eval/{eval_name}/by_source/{dataset_name}/response_len/mean"] = response_len_mean
+            enriched[f"eval/{eval_name}/by_domain/{domain}/response_len/mean"] = response_len_mean
+            enriched[f"eval_by_source/{dataset_name}/response_len/mean"] = response_len_mean
+            enriched[f"eval_by_domain/{domain}/response_len/mean"] = response_len_mean
+
+    return enriched
+
+
+def _define_wandb_common_metrics() -> None:
+    wandb.define_metric("train/step", overwrite=True)
+    wandb.define_metric("train/*", step_metric="train/step", overwrite=True)
+    wandb.define_metric("rollout/step", overwrite=True)
+    wandb.define_metric("rollout/*", step_metric="rollout/step", overwrite=True)
+    wandb.define_metric("multi_turn/*", step_metric="rollout/step", overwrite=True)
+    wandb.define_metric("passrate/*", step_metric="rollout/step", overwrite=True)
+    wandb.define_metric("eval/step", overwrite=True)
+    wandb.define_metric("eval/*", step_metric="eval/step", overwrite=True)
+    wandb.define_metric("eval_by_source/*", step_metric="eval/step", overwrite=True)
+    wandb.define_metric("eval_by_domain/*", step_metric="eval/step", overwrite=True)
+    wandb.define_metric("perf/*", step_metric="rollout/step", overwrite=True)
+
+
+def _filter_logged_history_row(row: dict[str, Any], *, include_eval: bool) -> dict[str, Any]:
+    filtered = {}
+    for key, value in row.items():
+        if key.startswith("_"):
+            continue
+        if include_eval:
+            if key == "eval/step" or key.startswith("eval/"):
+                filtered[key] = value
+        else:
+            if key == "eval/step" or key.startswith("eval/"):
+                continue
+            filtered[key] = value
+    return filtered
+
+
 def migrate_eval_history(
     wandb_run_id: str,
     wandb_project: str,
@@ -422,6 +527,104 @@ def migrate_eval_history(
         logger.info("Migrated run URL: %s", target_url)
 
 
+def migrate_full_run_with_clean_eval(
+    wandb_run_id: str,
+    wandb_project: str,
+    wandb_entity: str,
+    wandb_host: str,
+    wandb_key: str,
+    runtime_data_dir: str,
+    target_wandb_run_id: str | None = None,
+    target_wandb_run_name: str | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Rebuild a run with original non-eval history plus clean eval history."""
+    if wandb_key:
+        login_kwargs = {"key": wandb_key}
+        if wandb_host:
+            login_kwargs["host"] = wandb_host
+        wandb.login(**login_kwargs)
+
+    api_kwargs: dict[str, Any] = {"timeout": 60}
+    if wandb_host:
+        api_kwargs["overrides"] = {"base_url": wandb_host}
+    api = wandb.Api(**api_kwargs)
+
+    entity = wandb_entity or getattr(api.viewer, "entity", None)
+    if not entity:
+        raise RuntimeError("Cannot determine wandb entity. Please pass --wandb-entity.")
+
+    source_path = f"{entity}/{wandb_project}/{wandb_run_id}"
+    source_run = api.run(source_path)
+    split_meta = load_eval_split_metadata(runtime_data_dir)
+
+    non_eval_rows: list[tuple[int, dict[str, Any]]] = []
+    raw_eval_rows = []
+    for row in source_run.scan_history(page_size=500):
+        source_step = row.get("_step")
+        if isinstance(source_step, int):
+            non_eval = _filter_logged_history_row(row, include_eval=False)
+            if non_eval:
+                non_eval_rows.append((source_step, non_eval))
+
+        eval_row = _filter_logged_history_row(row, include_eval=True)
+        if len(eval_row) > 1:
+            raw_eval_rows.append(eval_row)
+
+    if not non_eval_rows:
+        raise RuntimeError(f"No non-eval history rows found in {source_path}.")
+    if not raw_eval_rows:
+        raise RuntimeError(f"No eval history rows found in {source_path}.")
+
+    merged_eval_rows = [enrich_eval_row_with_split_metadata(row, split_meta) for row in merge_eval_history_rows(raw_eval_rows)]
+    logger.info(
+        "Full migration rows: non_eval=%d, eval_raw=%d, eval_merged=%d",
+        len(non_eval_rows),
+        len(raw_eval_rows),
+        len(merged_eval_rows),
+    )
+
+    if dry_run:
+        logger.info("Dry-run only, not creating target run.")
+        return
+
+    source_name = source_run.display_name or source_run.name or wandb_run_id
+    target_name = target_wandb_run_name or f"{source_name}-clean"
+    tags = list(source_run.tags or [])
+    if "full-history-migrated" not in tags:
+        tags.append("full-history-migrated")
+
+    init_kwargs: dict[str, Any] = {
+        "project": wandb_project,
+        "entity": entity,
+        "name": target_name,
+        "config": dict(source_run.config or {}),
+        "tags": tags,
+        "reinit": True,
+        "settings": wandb.Settings(mode="shared"),
+    }
+    if target_wandb_run_id:
+        init_kwargs["id"] = target_wandb_run_id
+        init_kwargs["resume"] = "never"
+
+    target_run = wandb.init(**init_kwargs)
+    _define_wandb_common_metrics()
+
+    for source_step, row in non_eval_rows:
+        wandb.log(row, step=source_step)
+
+    next_step = max(step for step, _ in non_eval_rows) + 1
+    for offset, row in enumerate(merged_eval_rows):
+        wandb.log(row, step=next_step + offset)
+
+    target_url = getattr(target_run, "url", "")
+    target_id = getattr(target_run, "id", "")
+    wandb.finish()
+    logger.info("Created rebuilt run: %s/%s/%s", entity, wandb_project, target_id)
+    if target_url:
+        logger.info("Rebuilt run URL: %s", target_url)
+
+
 def wait_for_sglang(url: str, timeout: int = 300):
     """Wait for sglang server to be ready."""
     base_url = url.rstrip("/")
@@ -441,6 +644,7 @@ def wait_for_sglang(url: str, timeout: int = 300):
 def parse_args():
     parser = argparse.ArgumentParser(description="Eval backfill for multidomain_v2 checkpoints")
     parser.add_argument("--migrate-eval-history", action="store_true", help="Migrate existing eval history to a clean run (no inference)")
+    parser.add_argument("--migrate-full-run", action="store_true", help="Copy non-eval history and rebuild eval history into a clean run")
     parser.add_argument("--sglang-url", type=str, default="http://localhost:30000")
     parser.add_argument("--eval-data", action="append", default=[], help="name:path pairs for eval datasets")
     parser.add_argument("--rollout-id", type=int, default=None, help="Rollout ID (= checkpoint step) for wandb logging")
@@ -452,6 +656,7 @@ def parse_args():
     parser.add_argument("--wandb-group", type=str, default="")
     parser.add_argument("--target-wandb-run-id", type=str, default="", help="Target run id for migration mode")
     parser.add_argument("--target-wandb-run-name", type=str, default="", help="Target display name for migration mode")
+    parser.add_argument("--runtime-data-dir", type=str, default="", help="Directory containing *_eval.normalized.jsonl files")
     parser.add_argument("--dry-run", action="store_true", help="Analyze migration source and print stats without writing a run")
     parser.add_argument("--model-path", type=str, default=None, help="HF model path (for tokenizer chat template)")
     parser.add_argument("--max-context-len", type=int, default=32768, help="Max context length for sglang server (prompt tokens only, response excluded)")
@@ -462,6 +667,23 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    if args.migrate_full_run:
+        if not args.runtime_data_dir:
+            raise RuntimeError("--runtime-data-dir is required for --migrate-full-run")
+        migrate_full_run_with_clean_eval(
+            wandb_run_id=args.wandb_run_id,
+            wandb_project=args.wandb_project,
+            wandb_entity=args.wandb_entity,
+            wandb_host=args.wandb_host,
+            wandb_key=args.wandb_key,
+            runtime_data_dir=args.runtime_data_dir,
+            target_wandb_run_id=args.target_wandb_run_id or None,
+            target_wandb_run_name=args.target_wandb_run_name or None,
+            dry_run=args.dry_run,
+        )
+        logger.info("Full run migration complete.")
+        return
 
     if args.migrate_eval_history:
         migrate_eval_history(
