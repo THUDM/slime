@@ -106,12 +106,15 @@ def test_write_dataset_preserves_normalized_rows_without_rewriting_fields(tmp_pa
 
     assert written == 1
     assert len(rows) == 1
-    assert rows[0] == {
-        "prompt": [{"role": "user", "content": "prompt-b"}],
-        "label": "label-b",
-        "metadata": {"reward_type": "structured_json_schema"},
-        "tools": [],
-    }
+    assert rows[0]["prompt"][0]["role"] == "system"
+    assert (
+        "structured output assistant" in rows[0]["prompt"][0]["content"].lower()
+        or "information extraction assistant" in rows[0]["prompt"][0]["content"].lower()
+    )
+    assert rows[0]["prompt"][1:] == [{"role": "user", "content": "prompt-b"}]
+    assert rows[0]["label"] == "label-b"
+    assert rows[0]["metadata"] == {"reward_type": "structured_json_schema"}
+    assert rows[0]["tools"] == []
 
 
 def test_write_dataset_aligns_missing_tools_to_v1_shape(tmp_path: Path):
@@ -133,14 +136,13 @@ def test_write_dataset_aligns_missing_tools_to_v1_shape(tmp_path: Path):
     rows = _read_jsonl(dest)
 
     assert written == 1
-    assert rows == [
-        {
-            "prompt": [{"role": "user", "content": "prompt-stem"}],
-            "label": "A",
-            "metadata": {"reward_type": "stem_mcqa"},
-            "tools": [],
-        }
-    ]
+    assert len(rows) == 1
+    assert rows[0]["prompt"][0]["role"] == "system"
+    assert "stem" in rows[0]["prompt"][0]["content"].lower() or "science" in rows[0]["prompt"][0]["content"].lower()
+    assert rows[0]["prompt"][1:] == [{"role": "user", "content": "prompt-stem"}]
+    assert rows[0]["label"] == "A"
+    assert rows[0]["metadata"] == {"reward_type": "stem_mcqa"}
+    assert rows[0]["tools"] == []
 
 
 def test_resolve_named_datasets_expands_requested_pool_sources(tmp_path: Path):
@@ -201,6 +203,42 @@ def test_read_file_accepts_manifest_of_pool_sources(tmp_path: Path):
         {"prompt": [{"role": "user", "content": "a"}], "label": "A", "metadata": {}},
         {"prompt": [{"role": "user", "content": "b"}], "label": "B", "metadata": {}},
     ]
+
+
+def test_align_row_to_v1_shape_uses_instruction_following_prompts_for_ifbench():
+    row = {
+        "prompt": [{"role": "user", "content": "Follow the rule"}],
+        "label": "",
+        "metadata": {
+            "domain": "structured",
+            "dataset_name": "ifbench_test",
+            "reward_type": "instruction_following_soft",
+        },
+        "tools": [],
+    }
+
+    aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
+
+    assert aligned["prompt"][0]["role"] == "system"
+    assert "structured output assistant" not in aligned["prompt"][0]["content"].lower()
+    assert aligned["prompt"][1:] == [{"role": "user", "content": "Follow the rule"}]
+
+
+def test_align_row_to_v1_shape_copies_top_level_tools_into_metadata():
+    row = {
+        "prompt": [{"role": "user", "content": "Use the tool"}],
+        "label": "",
+        "metadata": {
+            "domain": "tool",
+            "dataset_name": "toolbench_v1",
+            "reward_type": "tool_call_soft",
+        },
+        "tools": [{"type": "function", "function": {"name": "weather", "description": "", "parameters": {}}}],
+    }
+
+    aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
+
+    assert aligned["metadata"]["tools"] == row["tools"]
 
 
 def test_v2_run_script_is_not_a_v1_wrapper_anymore():
