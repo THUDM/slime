@@ -88,8 +88,17 @@ TOOL_CALL_WANDB_PROJECT=${TOOL_CALL_WANDB_PROJECT:-slime-multidomain-v2}
 DEFAULT_WANDB_GROUP_FROM_DATASETS="${TRAIN_POOL_DATASETS//,/+}"
 DEFAULT_WANDB_GROUP_FROM_DATASETS="${DEFAULT_WANDB_GROUP_FROM_DATASETS//[[:space:]]/}"
 TOOL_CALL_WANDB_GROUP=${TOOL_CALL_WANDB_GROUP:-${DEFAULT_WANDB_GROUP_FROM_DATASETS:-${JOB_NAME:-qwen3-30b-a3b-mdv2-3node}}}
-RAY_CLUSTER_WAIT_MAX_ATTEMPTS=${RAY_CLUSTER_WAIT_MAX_ATTEMPTS:-60}
+RAY_CLUSTER_WAIT_MAX_ATTEMPTS=${RAY_CLUSTER_WAIT_MAX_ATTEMPTS:-120}
 RAY_CLUSTER_WAIT_SLEEP_SECONDS=${RAY_CLUSTER_WAIT_SLEEP_SECONDS:-10}
+RAY_CLUSTER_STATUS_TIMEOUT_SECONDS=${RAY_CLUSTER_STATUS_TIMEOUT_SECONDS:-30}
+RAY_WORKER_JOIN_MAX_ATTEMPTS=${RAY_WORKER_JOIN_MAX_ATTEMPTS:-60}
+RAY_WORKER_JOIN_RETRY_SLEEP_SECONDS=${RAY_WORKER_JOIN_RETRY_SLEEP_SECONDS:-10}
+RAY_HEAD_ADDR_WAIT_ATTEMPTS=${RAY_HEAD_ADDR_WAIT_ATTEMPTS:-300}
+RAY_HEAD_ADDR_WAIT_SLEEP=${RAY_HEAD_ADDR_WAIT_SLEEP:-2}
+RAY_HEAD_START_STATUS_MAX_ATTEMPTS=${RAY_HEAD_START_STATUS_MAX_ATTEMPTS:-30}
+RAY_HEAD_START_STATUS_SLEEP_SECONDS=${RAY_HEAD_START_STATUS_SLEEP_SECONDS:-2}
+RAY_GCS_RPC_SERVER_RECONNECT_TIMEOUT_SECONDS=${RAY_GCS_RPC_SERVER_RECONNECT_TIMEOUT_SECONDS:-300}
+export RAY_gcs_rpc_server_reconnect_timeout_s="${RAY_gcs_rpc_server_reconnect_timeout_s:-${RAY_GCS_RPC_SERVER_RECONNECT_TIMEOUT_SECONDS}}"
 RAY_HEAD_ADDR_FILE="${WORK_ROOT}/ray_head_addr.txt"
 RAY_HEAD_LOCK_DIR="${WORK_ROOT}/ray_head_lock"
 
@@ -220,7 +229,7 @@ expected_gpus = ${expected_gpus}
 expected_nodes = ${expected_nodes}
 
 try:
-    with urllib.request.urlopen("http://127.0.0.1:${DASHBOARD_PORT}/api/cluster_status", timeout=5) as response:
+    with urllib.request.urlopen("http://127.0.0.1:${DASHBOARD_PORT}/api/cluster_status", timeout=${RAY_CLUSTER_STATUS_TIMEOUT_SECONDS}) as response:
         payload = json.load(response)
 except Exception:
     sys.exit(1)
@@ -264,7 +273,7 @@ start_ray_worker_with_retry() {
   local rc
   local node_name="${WORKER_ID:-${HOSTNAME:-worker-${NODE_RANK}}}"
 
-  for attempt in $(seq 1 30); do
+  for attempt in $(seq 1 "${RAY_WORKER_JOIN_MAX_ATTEMPTS}"); do
     set +e
     ray start \
       --address="${MASTER_ADDR}:${MASTER_PORT}" \
@@ -282,7 +291,7 @@ start_ray_worker_with_retry() {
 
     echo "Ray worker join failed on attempt ${attempt}, retrying..."
     ray stop --force 2>/dev/null || true
-    sleep 5
+    sleep "${RAY_WORKER_JOIN_RETRY_SLEEP_SECONDS}"
   done
 
   echo "Ray worker failed to join cluster after retries." >&2
@@ -344,11 +353,11 @@ PY
   echo "Persisted Ray head address: ${MASTER_ADDR}"
 
   local attempt
-  for attempt in $(seq 1 10); do
+  for attempt in $(seq 1 "${RAY_HEAD_START_STATUS_MAX_ATTEMPTS}"); do
     if ray status --address="${MASTER_ADDR}:${MASTER_PORT}" >/dev/null 2>&1; then
       return 0
     fi
-    sleep 2
+    sleep "${RAY_HEAD_START_STATUS_SLEEP_SECONDS}"
   done
 
   echo "Ray head address ${MASTER_ADDR}:${MASTER_PORT} was not reachable after startup." >&2

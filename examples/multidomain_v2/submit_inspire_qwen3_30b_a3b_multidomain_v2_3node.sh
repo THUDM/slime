@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
+AVALANCHE_ROOT="$(cd -- "${PROJECT_ROOT}/.." && pwd)"
 
 source "${PROJECT_ROOT}/login.sh"
 
@@ -14,9 +15,13 @@ JOB_NAME="${JOB_NAME:-multidomain-v2-3node-$(date '+%m%d-%H%M')}"
 SUBMIT_NODES="${SUBMIT_NODES:-3}"
 IMAGE="${IMAGE:-${INSP_IMAGE:-}}"
 WORKSPACE_ID="${WORKSPACE_ID:-ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6}"
-REMOTE_ROOT="${INSPIRE_TARGET_DIR:-${PROJECT_ROOT}}"
+WORK_ROOT_VALUE="${WORK_ROOT:-${AVALANCHE_ROOT}/experiments/multidomain_v2_3node}"
+REMOTE_ROOT_DEFAULT="${INSPIRE_TARGET_DIR:-${PROJECT_ROOT}}"
+REMOTE_ROOT="${REMOTE_ROOT:-${REMOTE_ROOT_DEFAULT}}"
+JOB_LOG_ROOT="${JOB_LOG_ROOT:-${WORK_ROOT_VALUE}/logs}"
 UV_VENV_DIR="${UV_VENV_DIR:-${REMOTE_ROOT}/.nemo_gym_venvs}"
-RUN_SCRIPT="slime/examples/multidomain_v2/run_qwen3_30b_a3b_multidomain_v2_3node.sh"
+RUN_SCRIPT="examples/multidomain_v2/run_qwen3_30b_a3b_multidomain_v2_3node.sh"
+RUN_SCRIPT_FALLBACK="slime/${RUN_SCRIPT}"
 
 FORWARDED_ENV_VARS=(
   JOB_NAME
@@ -69,7 +74,7 @@ for var_name in "${FORWARDED_ENV_VARS[@]}"; do
     RUN_ENV_EXPORTS+=" export ${var_name}=$(printf '%q' "${!var_name}");"
   fi
 done
-RUN_CMD="cd ${REMOTE_ROOT} &&${RUN_ENV_EXPORTS} bash ${RUN_SCRIPT}"
+RUN_CMD="cd ${REMOTE_ROOT} &&${RUN_ENV_EXPORTS} if [[ -f \"${RUN_SCRIPT}\" ]]; then bash ${RUN_SCRIPT}; elif [[ -f \"${RUN_SCRIPT_FALLBACK}\" ]]; then bash ${RUN_SCRIPT_FALLBACK}; else echo \"Run script not found: ${RUN_SCRIPT} or ${RUN_SCRIPT_FALLBACK}\" >&2; exit 1; fi"
 
 CMD=(
   "$INSPIRE_CLI" job create
@@ -94,4 +99,9 @@ if [[ -n "${WORKSPACE_ID}" ]]; then
   CMD+=(--workspace-id "${WORKSPACE_ID}")
 fi
 
-"${CMD[@]}"
+SUBMIT_CWD="${SUBMIT_CWD:-${TMPDIR:-/tmp}}"
+(
+  cd "${SUBMIT_CWD}"
+  export INSPIRE_TARGET_DIR="${JOB_LOG_ROOT}"
+  "${CMD[@]}"
+)
