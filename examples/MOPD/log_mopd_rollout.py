@@ -234,4 +234,6 @@ def log_eval_rollout_data(rollout_id, args, data, extra_metrics) -> bool:
     metrics.update(_build_split_metrics(samples=samples, prefix="eval"))
     metrics["eval/step"] = _compute_rollout_step(args, rollout_id)
     logging_utils.log(args, metrics, step_key="eval/step")
-    return True
+    # Keep default eval logging enabled so per-dataset metrics such as
+    # eval/aime24 and eval/livecodebench still appear in W&B.
+    return False
