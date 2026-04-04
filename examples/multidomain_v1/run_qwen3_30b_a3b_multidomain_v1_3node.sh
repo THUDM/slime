@@ -523,30 +523,6 @@ prepare_training_data() {
   ensure_nonempty_jsonl "${NORMALIZED_TRAIN}" "Training dataset"
   filter_jsonl_by_prompt_budget "${NORMALIZED_TRAIN}" train
 
-  if (( EVAL_BFCL_V3_SAMPLES > 0 )); then
-    if (( reused_prepared_data_cache == 0 )); then
-      python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
-        --source "${EVAL_TOOL_BFCL_V3}" --dataset-format bfcl_v3 --source-ratio 1 \
-        --dest "${BFCL_V3_EVAL}" \
-        --max-samples "${EVAL_BFCL_V3_SAMPLES}" \
-        --reward-type-override tool_call_strict \
-        --parser-type "${TOOLCALL_PARSER_TYPE}"
-    fi
-    filter_jsonl_by_prompt_budget "${BFCL_V3_EVAL}" bfcl_v3_eval
-  fi
-
-  if (( EVAL_BFCL_MULTI_TURN_SAMPLES > 0 )); then
-    if (( reused_prepared_data_cache == 0 )); then
-      python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
-        --source "${EVAL_TOOL_BFCL_MULTI_TURN}" --dataset-format bfcl_v3_multi_turn_base --source-ratio 1 \
-        --dest "${BFCL_MULTI_TURN_EVAL}" \
-        --max-samples "${EVAL_BFCL_MULTI_TURN_SAMPLES}" \
-        --reward-type-override tool_call_strict \
-        --parser-type "${TOOLCALL_PARSER_TYPE}"
-    fi
-    filter_jsonl_by_prompt_budget "${BFCL_MULTI_TURN_EVAL}" bfcl_multi_turn_eval
-  fi
-
   if (( EVAL_TOOLBENCH_BENCHMARK_SAMPLES > 0 )); then
     if (( reused_prepared_data_cache == 0 )); then
       python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
@@ -696,12 +672,6 @@ submit_ray_job() {
 
   EVAL_ARGS=()
   EVAL_PROMPT_DATA_ARGS=()
-  if (( EVAL_BFCL_V3_SAMPLES > 0 )); then
-    EVAL_PROMPT_DATA_ARGS+=(bfcl_v3_eval "${BFCL_V3_EVAL}")
-  fi
-  if (( EVAL_BFCL_MULTI_TURN_SAMPLES > 0 )); then
-    EVAL_PROMPT_DATA_ARGS+=(bfcl_multi_turn_eval "${BFCL_MULTI_TURN_EVAL}")
-  fi
   if (( EVAL_TOOLBENCH_BENCHMARK_SAMPLES > 0 )); then
     EVAL_PROMPT_DATA_ARGS+=(toolbench_benchmark_eval "${TOOLBENCH_BENCHMARK_EVAL}")
   fi

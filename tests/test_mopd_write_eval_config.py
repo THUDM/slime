@@ -17,6 +17,11 @@ def _load_write_eval_config_module():
 write_eval_config = _load_write_eval_config_module()
 
 
+def test_infer_domain_from_pool_rel():
+    assert write_eval_config._infer_domain_from_pool_rel("tool/eval/bfcl_v3.jsonl") == "tool"
+    assert write_eval_config._infer_domain_from_pool_rel("structured/eval/ifeval.jsonl") == "structured"
+
+
 def test_preprocess_eval_jsonl_uses_instruction_following_prompt_for_ifbench(tmp_path: Path):
     src = tmp_path / "ifbench.jsonl"
     dst = tmp_path / "out.jsonl"
@@ -76,3 +81,40 @@ def test_preprocess_eval_jsonl_keeps_structured_prompt_for_json_schema(tmp_path:
         "structured output assistant" in row["prompt"][0]["content"].lower()
         or "information extraction assistant" in row["prompt"][0]["content"].lower()
     )
+
+
+def test_preprocess_eval_jsonl_materializes_native_ifbench_payload(tmp_path: Path):
+    src = tmp_path / "ifbench_native.jsonl"
+    dst = tmp_path / "out.jsonl"
+    src.write_text(
+        json.dumps(
+            {
+                "dataset_name": "ifbench_test",
+                "domain": "structured",
+                "record_id": "ifbench-1",
+                "prompt": [{"role": "user", "content": "Do the task"}],
+                "label": "",
+                "metadata": {
+                    "dataset_name": "ifbench_test",
+                    "domain": "structured",
+                    "record_id": "ifbench-1",
+                },
+                "tools": [],
+                "native": {
+                    "key": "ifbench-1",
+                    "prompt": "Do the task",
+                    "instruction_id_list": ["keywords:existence"],
+                    "kwargs": [{"keywords": ["alpha"]}],
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    write_eval_config._preprocess_eval_jsonl(src, dst, "structured")
+
+    row = json.loads(dst.read_text(encoding="utf-8").strip())
+    assert row["metadata"]["reward_type"] == "instruction_following_soft"
+    assert row["metadata"]["instruction_id_list"] == ["keywords:existence"]
