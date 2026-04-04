@@ -1261,6 +1261,26 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=128,
                 help="Multiplier for data padding size in data processing.",
             )
+            # YaRN RoPE parameters for long context extension (MLA models)
+            # These map to MLATransformerConfig fields via core_transformer_config_from_args.
+            parser.add_argument(
+                "--original-max-position-embeddings",
+                type=int,
+                default=None,
+                help="Original max position embeddings before YaRN scaling (e.g., 8192 for Moonlight).",
+            )
+            parser.add_argument(
+                "--beta-fast",
+                type=float,
+                default=None,
+                help="Beta fast for YaRN RoPE.",
+            )
+            parser.add_argument(
+                "--beta-slow",
+                type=float,
+                default=None,
+                help="Beta slow for YaRN RoPE.",
+            )
             parser.add_argument(
                 "--rollout-sample-filter-path",
                 type=str,

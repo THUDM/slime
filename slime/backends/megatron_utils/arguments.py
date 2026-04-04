@@ -99,6 +99,14 @@ def _set_default_megatron_args(args):
     if hasattr(args, "rope_type") and args.rope_type is None:
         args.rope_type = "yarn" if args.multi_latent_attention else "rope"
 
+    # YaRN RoPE defaults for MLATransformerConfig — only set when not explicitly provided.
+    if getattr(args, "original_max_position_embeddings", None) is None:
+        args.original_max_position_embeddings = 4096
+    if getattr(args, "beta_fast", None) is None:
+        args.beta_fast = 32.0
+    if getattr(args, "beta_slow", None) is None:
+        args.beta_slow = 1.0
+
     if args.vocab_size and not args.padded_vocab_size:
         args.padded_vocab_size = _vocab_size_with_padding(args.vocab_size, args)
 
