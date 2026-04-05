@@ -38,11 +38,14 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
         if len(token_ids) > max_length:
             token_ids = token_ids[:max_length]
 
-        # CPT: compute loss on all tokens
-        loss_mask = [1] * len(token_ids)
+        # CPT: compute loss on all tokens except the first.
+        # The first token acts as "prompt" (prompt_length=1) so that
+        # logit slicing in loss.py works correctly:
+        #   logits[0 : n-1] predicts tokens[1 : n]
+        loss_mask = [1] * (len(token_ids) - 1)
 
         sample.tokens = token_ids
-        sample.response_length = len(token_ids)
+        sample.response_length = len(token_ids) - 1
         sample.reward = 0
         sample.loss_mask = loss_mask
 
