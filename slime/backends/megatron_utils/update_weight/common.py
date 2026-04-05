@@ -2,6 +2,7 @@ import inspect
 import re
 from argparse import Namespace
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 
 import torch
 import torch.distributed as dist
@@ -10,6 +11,57 @@ from megatron.core.transformer.transformer_layer import get_transformer_layer_of
 
 from slime.backends.megatron_utils.misc_utils import strip_param_name_prefix
 from slime.utils.types import ParamInfo
+from .delta_sync import DeltaCompressionCommitState
+
+
+@dataclass
+class HFUpdate:
+    tensors: list[tuple[str, torch.Tensor]]
+    load_format: str | None
+    commit_state: DeltaCompressionCommitState | None
+
+    @property
+    def should_send(self) -> bool:
+        return bool(self.tensors)
+
+    @property
+    def byte_size(self) -> int:
+        return sum(tensor.numel() * tensor.element_size() for _, tensor in self.tensors)
+
+
+@dataclass
+class PendingHFUpdateBucket:
+    tensors: list[tuple[str, torch.Tensor]]
+    commit_states: list[DeltaCompressionCommitState | None]
+    load_format: str | None
+    byte_size: int = 0
+
+    @classmethod
+    def empty(cls) -> "PendingHFUpdateBucket":
+        return cls(tensors=[], commit_states=[], load_format=None)
+
+    @property
+    def has_updates(self) -> bool:
+        return bool(self.tensors)
+
+    def should_flush_before_add(self, update: HFUpdate, byte_limit: int) -> bool:
+        if not self.has_updates:
+            return False
+        if self.load_format != update.load_format:
+            return True
+        return self.byte_size + update.byte_size > byte_limit
+
+    def add(self, update: HFUpdate) -> None:
+        self.tensors.extend(update.tensors)
+        self.commit_states.append(update.commit_state)
+        self.load_format = update.load_format
+        self.byte_size += update.byte_size
+
+    def clear(self) -> None:
+        self.tensors.clear()
+        self.commit_states.clear()
+        self.load_format = None
+        self.byte_size = 0
 
 
 def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
