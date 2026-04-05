@@ -142,6 +142,27 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="The method to convert megatron weights to hugging face weights for SGLang.",
             )
             parser.add_argument(
+                "--enable-delta-compression",
+                action="store_true",
+                default=False,
+                help="Enable additive HF delta sync after HF conversion.",
+            )
+            parser.add_argument(
+                "--delta-compression-artifact-dir",
+                type=str,
+                default=None,
+                help=(
+                    "Optional directory for asynchronously saving delta-compression artifacts. "
+                    "This is not used for hot-path baseline storage."
+                ),
+            )
+            parser.add_argument(
+                "--delta-compression-dtype",
+                choices=["fp16", "bf16", "fp32"],
+                default="fp32",
+                help="Dtype used for transmitted delta tensors.",
+            )
+            parser.add_argument(
                 "--custom-model-provider-path",
                 type=str,
                 default=None,
