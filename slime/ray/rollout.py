@@ -1,4 +1,5 @@
 import dataclasses
+import importlib
 import itertools
 import logging
 import multiprocessing
@@ -362,6 +363,7 @@ class RolloutManager:
 
         self.generate_rollout = load_function(self.args.rollout_function_path)
         self.eval_generate_rollout = load_function(self.args.eval_function_path)
+        self.generate_rollout_module = importlib.import_module(self.generate_rollout.__module__)
         self.custom_reward_post_process_func = None
         if self.args.custom_reward_post_process_path is not None:
             self.custom_reward_post_process_func = load_function(self.args.custom_reward_post_process_path)
@@ -382,6 +384,8 @@ class RolloutManager:
         init_tracking(args, primary=False)
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
         self.rollout_id = -1
+        self._fully_async_log_step = 0
+        self.update_runtime_state(current_rollout_id=-1, current_policy_version=0)
 
         self._health_monitors = []
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
@@ -431,9 +435,52 @@ class RolloutManager:
                 logger.warning(f"CI Fault Injection failed: {e}")
 
     def dispose(self):
+        self._log_fully_async_metrics(self._call_generate_rollout_hook("flush_metrics"))
+        self._call_generate_rollout_hook("shutdown_worker")
         for monitor in self._health_monitors:
             monitor.stop()
         logging_utils.finish_tracking(self.args)
+
+    def update_runtime_state(self, **metadata):
+        for key, value in metadata.items():
+            setattr(self.args, key, value)
+        if hasattr(self.data_source, "update_metadata"):
+            self.data_source.update_metadata(metadata)
+
+    def _call_generate_rollout_hook(self, hook_name: str, **kwargs):
+        hook = getattr(self.generate_rollout_module, hook_name, None)
+        if hook is None:
+            return None
+        return hook(self.args, self.data_source, **kwargs)
+
+    def _log_fully_async_metrics(self, hook_result):
+        if not hook_result or self.rollout_id < 0:
+            return
+        fully_async_metrics = {key: value for key, value in hook_result.items() if key.startswith("fully_async/")}
+        if not fully_async_metrics:
+            return
+        fully_async_step = getattr(self, "_fully_async_log_step", 0)
+        fully_async_metrics["fully_async/step"] = fully_async_step
+        logging_utils.log(self.args, fully_async_metrics, step_key="fully_async/step")
+        self._fully_async_log_step = fully_async_step + 1
+
+    def before_weight_update(self, policy_version: int):
+        """Called *before* weights are synced.
+
+        ``policy_version`` is the **current** (soon-to-be-old) version.
+        """
+        self.update_runtime_state(current_policy_version=policy_version)
+        return self._call_generate_rollout_hook("before_weight_update", policy_version=policy_version)
+
+    def after_weight_update(self, policy_version: int):
+        """Called *after* weights are synced.
+
+        ``policy_version`` is the **new** version just applied.
+        """
+        self.update_runtime_state(current_policy_version=policy_version)
+        result = self._call_generate_rollout_hook("after_weight_update", policy_version=policy_version)
+        self._log_fully_async_metrics(result)
+        return result
 
     @property
     def server(self) -> RolloutServer | None:
@@ -479,6 +526,7 @@ class RolloutManager:
     def generate(self, rollout_id):
         start_time = time.time()
         self.rollout_id = rollout_id
+        self.update_runtime_state(current_rollout_id=rollout_id)
         self.health_monitoring_resume()
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
