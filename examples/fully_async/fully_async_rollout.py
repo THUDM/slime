@@ -5,8 +5,11 @@ import threading
 import time
 
 # Import core functions from sglang_rollout directly to avoid code duplication
+from slime.rollout.base_types import RolloutFnTrainOutput
+from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter
 from slime.rollout.sglang_rollout import GenerateState, generate_and_rm_group
 from slime.utils.async_utils import run
+from slime.utils.misc import load_function
 from slime.utils.types import Sample
 
 # Global worker manager
@@ -54,7 +57,7 @@ class AsyncRolloutWorker:
         print("Continuous async rollout worker started")
 
         active_tasks = set()
-        max_concurrent_tasks = self.args.rollout_batch_size
+        max_concurrent_tasks = self.concurrency
         group_id_counter = 0
 
         while self.running:
@@ -157,6 +160,12 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer) -> list[lis
     # Simplified: directly use rollout_batch_size as target
     target_data_size = args.rollout_batch_size
 
+    # instantiate dynamic sampling filter (same as sync path)
+    dynamic_filter = (
+        load_function(args.dynamic_sampling_filter_path) if args.dynamic_sampling_filter_path is not None else None
+    )
+    metric_gatherer = MetricGatherer()
+
     data = []
     completed_groups = {}
     do_print = True
@@ -217,7 +226,12 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer) -> list[lis
                 )
                 do_print = False
 
-            # Simplified: directly add samples, no filters used
+            # Apply dynamic sampling filter (e.g. filter zero-std reward groups)
+            dynamic_filter_output = call_dynamic_filter(dynamic_filter, args, group)
+            if not dynamic_filter_output.keep:
+                metric_gatherer.on_dynamic_filter_drop(reason=dynamic_filter_output.reason)
+                continue
+
             data.append(group)
             processed_any = True
 
@@ -246,15 +260,15 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer) -> list[lis
         )
 
     data = sorted(data, key=lambda group: group[0].index)
-    return data
+    return RolloutFnTrainOutput(samples=data, metrics=metric_gatherer.collect())
 
 
 def generate_rollout_fully_async(args, rollout_id, data_buffer, evaluation=False):
     if evaluation:
         raise ValueError("Evaluation mode not supported in simple async rollout")
 
-    completed_samples = run(generate_rollout_async(args, rollout_id, data_buffer))
-    return completed_samples
+    result = run(generate_rollout_async(args, rollout_id, data_buffer))
+    return result
 
 
 # Register exit cleanup function
