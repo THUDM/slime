@@ -1112,6 +1112,205 @@ def sft_loss_function(
     )
 
 
+def _compute_future_kl(
+    neg_approx_kl: torch.Tensor,
+    response_mask: torch.Tensor,
+    filter_threshold: float,
+    gamma: float,
+    chunk_size: int,
+) -> torch.Tensor:
+    """Compute discounted Future-KL for each token position.
+
+    For each position t, accumulates the exponentially-decayed sum of
+    per-token KL contributions from position t to the end of the response:
+        FutureKL_t = sum_{k=t}^{T} M_k * gamma^{k-t} * delta_log_p_k
+    where M_k masks out tokens with extreme importance ratios.
+
+    Uses a chunked matmul implementation for memory efficiency.
+    """
+    batch_size, response_len = neg_approx_kl.shape
+    device = neg_approx_kl.device
+    dtype = neg_approx_kl.dtype
+
+    # Mask out tokens with extreme IS ratios to avoid instability
+    participation_mask = (neg_approx_kl <= filter_threshold).to(dtype)
+    kl_masked = neg_approx_kl * response_mask.to(dtype) * participation_mask
+
+    future_kl = torch.zeros((batch_size, response_len), device=device, dtype=dtype)
+    pos_i = torch.arange(response_len, device=device).unsqueeze(1)  # (L, 1)
+    gamma_t = torch.tensor(gamma, dtype=dtype, device=device)
+
+    for j_start in range(0, response_len, chunk_size):
+        j_end = min(response_len, j_start + chunk_size)
+        j_idx = torch.arange(j_start, j_end, device=device).unsqueeze(0)  # (1, K)
+        distance = j_idx - pos_i  # (L, K)
+        causal_mask = (distance >= 0).to(dtype)
+        decay_block = torch.pow(gamma_t, distance.clamp(min=0)) * causal_mask  # (L, K)
+        kl_block = kl_masked[:, j_start:j_end]  # (B, K)
+        future_kl += torch.matmul(kl_block, decay_block.t())  # (B, K) @ (K, L) -> (B, L)
+
+    return future_kl
+
+
+def fipo_loss_function(
+    args: Namespace,
+    batch: RolloutBatch,
+    logits: torch.Tensor,
+    sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Compute FIPO (Future-KL Influenced Policy Optimization) loss.
+
+    Extends standard clipped PPO by re-weighting per-token advantages with
+    Future-KL influence weights. This provides dense, token-level credit
+    assignment without a value network.
+
+    Requires multi-step training per rollout (global_batch_size < total rollout
+    samples) so that the policy drifts from the rollout policy, making
+    Future-KL non-trivial.
+
+    Reference: Ma et al., "FIPO: Eliciting Deep Reasoning with Future-KL
+    Influenced Policy Optimization" (arXiv:2603.19835)
+    """
+    advantages = torch.cat(batch["advantages"], dim=0)
+    # FIPO requires rollout log_probs (π_old from generation time) to compute
+    # FutureKL = log π_θ - log π_old. In multi-step training, π_θ drifts from
+    # π_old across steps, so we must use the original rollout log_probs.
+    assert "rollout_log_probs" in batch and batch["rollout_log_probs"], (
+        "FIPO requires rollout_log_probs. Set --use-rollout-logprobs."
+    )
+    old_log_probs = batch["rollout_log_probs"]
+
+    response_lengths = batch["response_lengths"]
+    total_lengths = batch["total_lengths"]
+    max_seq_lens = batch.get("max_seq_lens", None)
+
+    _, log_probs_and_entropy = get_log_probs_and_entropy(
+        logits,
+        args=args,
+        unconcat_tokens=batch["unconcat_tokens"],
+        total_lengths=total_lengths,
+        response_lengths=response_lengths,
+        with_entropy=True,
+        max_seq_lens=max_seq_lens,
+    )
+
+    log_probs = torch.cat(log_probs_and_entropy["log_probs"], dim=0)
+    old_log_probs = torch.cat(old_log_probs, dim=0)
+
+    # --- Core FIPO: Future-KL computation ---
+    neg_approx_kl = log_probs - old_log_probs
+    neg_approx_kl = torch.clamp(neg_approx_kl, min=-20.0, max=20.0)
+    ratio = torch.exp(neg_approx_kl)
+
+    # Build a flat response mask from per-sample loss masks
+    loss_masks = torch.cat(batch["loss_masks"], dim=0)
+
+    gamma = 2.0 ** (-1.0 / args.fipo_decay_rate)
+    filter_threshold = torch.log(torch.tensor(args.fipo_dual_clip_c, device=logits.device, dtype=logits.dtype)).item()
+
+    # Pad to 2D for chunked matmul: each sample becomes a row
+    # Since slime concatenates all samples into 1D, we need per-sample processing
+    sample_lengths = response_lengths
+    max_len = max(sample_lengths)
+    batch_size = len(sample_lengths)
+
+    # Pad neg_approx_kl and loss_masks into (batch_size, max_len) for batched computation
+    neg_kl_padded = neg_approx_kl.new_zeros(batch_size, max_len)
+    mask_padded = loss_masks.new_zeros(batch_size, max_len)
+    offset = 0
+    for i, slen in enumerate(sample_lengths):
+        neg_kl_padded[i, :slen] = neg_approx_kl[offset : offset + slen]
+        mask_padded[i, :slen] = loss_masks[offset : offset + slen]
+        offset += slen
+
+    future_kl_padded = _compute_future_kl(
+        neg_kl_padded, mask_padded, filter_threshold, gamma, args.fipo_chunk_size
+    )
+
+    # Compute influence weights (detached — no gradient through Future-KL)
+    # Eq. (8): f_t = clip(exp(FutureKL_t), 1 - ε_low, 1 + ε_high)
+    lower_bound = 1.0 if args.fipo_clip_high_only else 1.0 - args.fipo_clip_ratio_low
+    upper_bound = 1.0 + args.fipo_clip_ratio_high
+    influence_padded = torch.clamp(
+        torch.exp(future_kl_padded), min=lower_bound, max=upper_bound
+    ).detach()
+
+    # Safety: cap influence weight for negative-advantage, high-IS samples
+    ratio_padded = ratio.new_zeros(batch_size, max_len)
+    adv_padded = advantages.new_zeros(batch_size, max_len)
+    offset = 0
+    for i, slen in enumerate(sample_lengths):
+        ratio_padded[i, :slen] = ratio[offset : offset + slen]
+        adv_padded[i, :slen] = advantages[offset : offset + slen]
+        offset += slen
+
+    mask_neg_high_is = (adv_padded < 0) & (ratio_padded > args.fipo_safety_thresh)
+    influence_padded = torch.where(mask_neg_high_is, torch.clamp(influence_padded, min=0.8, max=1.0), influence_padded)
+
+    # Unpad influence weights back to 1D
+    influence_weights = neg_approx_kl.new_zeros(neg_approx_kl.shape)
+    offset = 0
+    for i, slen in enumerate(sample_lengths):
+        influence_weights[offset : offset + slen] = influence_padded[i, :slen]
+        offset += slen
+
+    # --- Weighted clipped PPO loss with dual-clip ---
+    weighted_advantages = advantages * influence_weights
+
+    pg_losses1 = -weighted_advantages * ratio
+    pg_losses2 = -weighted_advantages * torch.clamp(ratio, 1 - args.eps_clip, 1 + args.eps_clip_high)
+    clip_pg_losses1 = torch.maximum(pg_losses1, pg_losses2)
+    pg_clipfrac = torch.gt(pg_losses2, pg_losses1).float()
+
+    # Dual-clip for negative advantages
+    pg_losses3 = -weighted_advantages * args.fipo_dual_clip_c
+    clip_pg_losses2 = torch.min(pg_losses3, clip_pg_losses1)
+    pg_losses = torch.where(weighted_advantages < 0, clip_pg_losses2, clip_pg_losses1)
+
+    # Sequence-level filtering: invalidate sequences with >1 dual-clip activated tokens
+    lower_clip_mask = (advantages < 0) & (clip_pg_losses1 > pg_losses3) & (loss_masks > 0)
+    low_clip_counts = lower_clip_mask.new_zeros(batch_size)
+    offset = 0
+    for i, slen in enumerate(sample_lengths):
+        low_clip_counts[i] = lower_clip_mask[offset : offset + slen].sum()
+        offset += slen
+    # Expand per-sequence validity back to 1D
+    seq_valid = (low_clip_counts <= 1)
+    final_mask = loss_masks.clone()
+    offset = 0
+    for i, slen in enumerate(sample_lengths):
+        if not seq_valid[i]:
+            final_mask[offset : offset + slen] = 0
+        offset += slen
+
+    pg_loss = sum_of_sample_mean(pg_losses * final_mask)
+    pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
+    ppo_kl = sum_of_sample_mean(old_log_probs - log_probs)
+
+    # Entropy loss
+    entropy = torch.cat(log_probs_and_entropy["entropy"], dim=0)
+    entropy_loss = sum_of_sample_mean(entropy)
+    loss = pg_loss - args.entropy_coef * entropy_loss
+
+    if log_probs.numel() == 0:
+        loss += 0 * logits.sum()
+
+    # Metrics
+    influence_valid = influence_weights[loss_masks > 0]
+    reported_loss = {
+        "loss": loss.clone().detach(),
+        "pg_loss": pg_loss.clone().detach(),
+        "entropy_loss": entropy_loss.clone().detach(),
+        "pg_clipfrac": pg_clipfrac.clone().detach(),
+        "ppo_kl": ppo_kl.clone().detach(),
+        "fipo_influence_mean": influence_valid.mean().detach() if influence_valid.numel() > 0 else torch.tensor(0.0, device=logits.device),
+        "fipo_influence_min": influence_valid.min().detach() if influence_valid.numel() > 0 else torch.tensor(0.0, device=logits.device),
+        "fipo_influence_max": influence_valid.max().detach() if influence_valid.numel() > 0 else torch.tensor(0.0, device=logits.device),
+    }
+
+    return loss, reported_loss
+
+
 def loss_function(
     args: Namespace,
     batch: RolloutBatch,
@@ -1160,6 +1359,8 @@ def loss_function(
             func = value_loss_function
         case "sft_loss":
             func = sft_loss_function
+        case "fipo_loss":
+            func = fipo_loss_function
         case "custom_loss":
             func = load_function(args.custom_loss_function_path)
         case _:
