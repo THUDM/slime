@@ -220,3 +220,30 @@ def test_reward_func_uses_top_level_sample_tools_for_tool_rewards(monkeypatch):
 
     assert score > 0.0
     assert seen == {"tools": tools, "parser_type": "qwen3"}
+
+
+def test_compute_generic_reward_accepts_raw_final_contract_tool_pool_rows():
+    metadata = {
+        "dataset_name": "agent_function_calling_open_dataset",
+        "reward_type": "function_call_single",
+        "ground_truth": [
+            {
+                "name": "maps_text_search",
+                "arguments": {"keywords": "Italian Restaurants", "city": "New York"},
+                "function": {"name": "maps_text_search", "arguments": {"keywords": "Italian Restaurants", "city": "New York"}},
+            }
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "maps_text_search",
+                    "description": "",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    }
+    response = '<tool_call>{"name":"maps_text_search","arguments":{"keywords":"Italian Restaurants","city":"New York"}}</tool_call>'
+
+    assert multidomain_shared.compute_generic_reward(metadata, "Find restaurants", response) > 0.0
