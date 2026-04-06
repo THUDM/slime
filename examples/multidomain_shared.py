@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from dataset_registry import (
+from common.dataset_registry import (
     DEFAULT_TRAIN_DATASETS_BY_DOMAIN,
     DEFAULT_TRAIN_DATASETS_BY_GROUP,
     EVAL_DATASET_SPECS,
@@ -18,7 +18,7 @@ from dataset_registry import (
     TRAIN_DATASET_GROUP_MAP,
     TRAIN_DATASET_SOURCE_MAP,
 )
-from dataset_selection import (
+from common.dataset_selection import (
     discover_canonical_train_sources as discover_canonical_train_sources_shared,
     resolve_named_datasets as resolve_named_datasets_shared,
     train_domains_for_datasets as train_domains_for_datasets_shared,

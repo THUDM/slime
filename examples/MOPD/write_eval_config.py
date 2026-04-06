@@ -19,8 +19,8 @@ EXAMPLES_DIR = Path(__file__).resolve().parents[1]
 if str(EXAMPLES_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLES_DIR))
 
-from dataset_selection import resolve_eval_datasets
-from eval_prep_utils import (
+from common.dataset_selection import resolve_eval_datasets
+from common.eval_prep_utils import (
     build_code_eval_row as _build_code_eval_row_shared,
     build_math_eval_row as _build_math_eval_row_shared,
     materialize_eval_dataset as materialize_eval_dataset_shared,

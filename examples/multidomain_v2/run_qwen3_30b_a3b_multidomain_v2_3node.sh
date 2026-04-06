@@ -490,7 +490,7 @@ prepare_eval_data() {
 import sys
 from pathlib import Path
 
-from dataset_selection import resolve_eval_datasets
+from common.dataset_selection import resolve_eval_datasets
 
 pool_root = Path(sys.argv[1])
 datasets = [item.strip() for item in sys.argv[2].split(",") if item.strip()]

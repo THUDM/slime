@@ -6,6 +6,9 @@ export PYTHONUNBUFFERED=1
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/_shared/checkpoint_utils.sh"
+
 EXPERIMENT_DIR="${EXPERIMENT_DIR:?Set EXPERIMENT_DIR to the experiment path}"
 MODEL_DIR="${MODEL_DIR:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/experiments/ifrl_qwen3_30b_a3b/checkpoints/iter_0001432_hf}"
 HF_CACHE="${HF_CACHE:-${EXPERIMENT_DIR}/hf_cache}"
@@ -21,21 +24,15 @@ fi
 mkdir -p "${HF_CACHE}" "${EXPERIMENT_DIR}/logs"
 
 ITERATIONS=()
-for iter_dir in "${CKPT_DIR}"/iter_*; do
-  [[ -d "${iter_dir}" ]] || continue
-  iter_name="$(basename "${iter_dir}")"
-  iter_num="${iter_name#iter_}"
-  iter_num="$((10#${iter_num}))"
+while IFS= read -r iter_num; do
+  [[ -n "${iter_num}" ]] || continue
   ITERATIONS+=("${iter_num}")
-done
+done < <(list_checkpoint_iterations "${CKPT_DIR}")
 
 if [[ ${#ITERATIONS[@]} -eq 0 ]]; then
   echo "ERROR: no checkpoints found under ${CKPT_DIR}" >&2
   exit 1
 fi
-
-IFS=$'\n' ITERATIONS=($(sort -n <<<"${ITERATIONS[*]}"))
-unset IFS
 
 echo "=== Convert checkpoints to HF ==="
 echo "Experiment: ${EXPERIMENT_DIR}"
@@ -60,12 +57,7 @@ for iter_num in "${ITERATIONS[@]}"; do
     continue
   fi
 
-  rm -rf "${hf_out}"
-  if python3 "${PROJECT_ROOT}/slime/tools/convert_torch_dist_to_hf.py" \
-    --input-dir "${iter_dir}" \
-    --output-dir "${hf_out}" \
-    --origin-hf-dir "${MODEL_DIR}" \
-    --force; then
+  if convert_torch_dist_checkpoint_to_hf "${iter_dir}" "${hf_out}"; then
     converted=$((converted + 1))
   else
     echo "ERROR: conversion failed for ${iter_name}" >&2

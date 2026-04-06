@@ -30,11 +30,11 @@ JL_MOPD_DIR = AVALANCHE_ROOT / "jl_workspace" / "experiment" / "mopd"
 if str(JL_MOPD_DIR) not in sys.path:
     sys.path.insert(0, str(JL_MOPD_DIR))
 
-from pool_data_utils import (
+from common.pool_data_utils import (
     file_has_supervision_family,
     transform_jsonl,
 )
-from pool_runtime_semantics import materialize_runtime_pool_row  # noqa: E402
+from common.pool_runtime_semantics import materialize_runtime_pool_row  # noqa: E402
 from build_mopd_runtime_data import (  # type: ignore  # noqa: E402
     DEFAULT_CODE_TRAIN_DATASETS,
     DEFAULT_MATH_TRAIN_DATASETS,
@@ -43,7 +43,7 @@ from build_mopd_runtime_data import (  # type: ignore  # noqa: E402
     normalize_math_names,
     parse_code_names,
 )
-from dataset_selection import (
+from common.dataset_selection import (
     legacy_train_sources,
     materialize_training_sources,
     resolve_train_sources,

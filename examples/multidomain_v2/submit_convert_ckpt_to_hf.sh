@@ -16,6 +16,9 @@ RUN_SCRIPT="slime/examples/run_convert_ckpt_to_hf.sh"
 MODEL_DIR="${MODEL_DIR:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/experiments/ifrl_qwen3_30b_a3b/checkpoints/iter_0001432_hf}"
 FORCE_RECONVERT="${FORCE_RECONVERT:-0}"
 
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../_shared/submit_inspire_utils.sh"
+
 submit_one() {
   local exp_name="$1"
   local experiment_dir="$2"
@@ -23,27 +26,8 @@ submit_one() {
   local job_name="v2-ckpt2hf-${exp_name}-$(date '+%m%d-%H%M')"
   local run_cmd="cd ${REMOTE_ROOT} && export EXPERIMENT_DIR='${experiment_dir}' && export MODEL_DIR='${MODEL_DIR}' && export FORCE_RECONVERT='${FORCE_RECONVERT}' && bash ${RUN_SCRIPT}"
 
-  local cmd=(
-    "$INSPIRE_CLI" job create
-    --name "${job_name}"
-    --resource "${RESOURCE}"
-    --nodes 1
-    --priority "${PRIORITY}"
-    --max-time "${MAX_TIME}"
-    --no-auto
-    --command "${run_cmd}"
-  )
-
-  if [[ -n "${IMAGE}" ]]; then
-    cmd+=(--image "${IMAGE}")
-  fi
-
-  if [[ -n "${WORKSPACE_ID}" ]]; then
-    cmd+=(--workspace-id "${WORKSPACE_ID}")
-  fi
-
   echo "=== Submitting v2 ckpt->hf convert: ${exp_name} ==="
-  "${cmd[@]}"
+  submit_inspire_command_job "${job_name}" 1 "${run_cmd}"
   echo ""
 }
 

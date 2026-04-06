@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from dataset_registry import (
+from common.dataset_registry import (
     EVAL_DATASET_SPECS,
     TRAIN_DATASET_DOMAIN_MAP,
     TRAIN_DATASET_GROUP_MAP,
@@ -14,8 +14,8 @@ from dataset_registry import (
     default_train_datasets_for_profile,
     eval_dataset_spec,
 )
-from pool_data_utils import file_has_supervision_family, transform_jsonl, write_source_manifest
-from pool_runtime_semantics import materialize_runtime_pool_row
+from common.pool_data_utils import file_has_supervision_family, transform_jsonl, write_source_manifest
+from common.pool_runtime_semantics import materialize_runtime_pool_row
 
 
 @dataclass(frozen=True)
@@ -355,4 +355,3 @@ def eval_name_map(include_official: bool = True) -> dict[str, str]:
             continue
         names[spec.name] = spec.relpath
     return names
-

@@ -14,6 +14,9 @@ WORKSPACE_ID="${WORKSPACE_ID:-ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6}"
 REMOTE_ROOT="${INSPIRE_TARGET_DIR:-${PROJECT_ROOT}}"
 RUN_SCRIPT="slime/examples/run_eval_backfill.sh"
 
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../_shared/submit_inspire_utils.sh"
+
 submit_one() {
   local exp_name="$1"
   local experiment_dir="$2"
@@ -23,27 +26,8 @@ submit_one() {
   local job_name="v2-eval-backfill-${exp_name}-$(date '+%m%d-%H%M')"
   local run_cmd="cd ${REMOTE_ROOT} && export WANDB_API_KEY='${WANDB_API_KEY:-}' && export WANDB_BASE_URL='${WANDB_BASE_URL:-}' && export EXPERIMENT_DIR='${experiment_dir}' && export WANDB_RUN_ID='${wandb_run_id}' && export WANDB_GROUP='${wandb_group}' && bash ${RUN_SCRIPT}"
 
-  local cmd=(
-    "$INSPIRE_CLI" job create
-    --name "${job_name}"
-    --resource "${RESOURCE}"
-    --nodes 1
-    --priority "${PRIORITY}"
-    --max-time "${MAX_TIME}"
-    --no-auto
-    --command "${run_cmd}"
-  )
-
-  if [[ -n "${IMAGE}" ]]; then
-    cmd+=(--image "${IMAGE}")
-  fi
-
-  if [[ -n "${WORKSPACE_ID}" ]]; then
-    cmd+=(--workspace-id "${WORKSPACE_ID}")
-  fi
-
   echo "=== Submitting v2 eval backfill: ${exp_name} ==="
-  "${cmd[@]}"
+  submit_inspire_command_job "${job_name}" 1 "${run_cmd}"
   echo ""
 }
 

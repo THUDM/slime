@@ -5,11 +5,11 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from pool_data_utils import transform_jsonl
-from pool_runtime_semantics import materialize_runtime_pool_row
+from common.pool_data_utils import transform_jsonl
+from common.pool_runtime_semantics import materialize_runtime_pool_row
 
 
-AVALANCHE_ROOT = Path(__file__).resolve().parents[3]
+AVALANCHE_ROOT = Path(__file__).resolve().parents[4]
 JL_EXPERIMENT_ROOT = AVALANCHE_ROOT / "jl_workspace" / "experiment"
 JL_MATH_DIR = JL_EXPERIMENT_ROOT / "math"
 JL_CODE_DIR = JL_EXPERIMENT_ROOT / "code"
@@ -144,4 +144,3 @@ def materialize_eval_dataset(
                 written += 1
         return written
     return rewrite_eval_jsonl(src, dst, runtime_row_builder_for_mode(runtime_mode), max_samples=max_samples)
-
