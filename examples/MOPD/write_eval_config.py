@@ -20,14 +20,20 @@ if str(EXAMPLES_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLES_DIR))
 
 from pool_runtime_semantics import materialize_runtime_pool_row
+from multidomain_shared import GENERIC_EVAL_DATASETS
 
 
 def _infer_domain_from_pool_rel(rel: str) -> str:
     return rel.split("/", 1)[0]
 
 
-def _preprocess_eval_jsonl(src: Path, dst: Path, domain: str) -> int:
-    """Copy eval JSONL from pool to data_cache, materializing runtime prompt semantics."""
+def _preprocess_eval_jsonl(src: Path, dst: Path, domain: str, row_filter=None) -> int:
+    """Copy eval JSONL from pool to data_cache, materializing runtime prompt semantics.
+
+    Args:
+        row_filter: optional callable(dict) -> bool applied after materialization.
+                    Rows returning False are dropped.
+    """
     dst.parent.mkdir(parents=True, exist_ok=True)
     count = 0
     with src.open("r", encoding="utf-8") as fin, dst.open("w", encoding="utf-8") as fout:
@@ -40,37 +46,31 @@ def _preprocess_eval_jsonl(src: Path, dst: Path, domain: str) -> int:
             except json.JSONDecodeError:
                 continue
             payload = materialize_runtime_pool_row(payload)
+            if payload is None:
+                continue
+            if row_filter and not row_filter(payload):
+                continue
             fout.write(json.dumps(payload, ensure_ascii=False) + "\n")
             count += 1
     return count
 
 
-# ---------------------------------------------------------------------------
-# Eval dataset definitions
-# ---------------------------------------------------------------------------
-EVAL_DATASETS = [
-    # (name,  pool-relative path,  n_samples_per_eval_prompt)
-    # --- math ---
-    ("aime24",          "math/aime24.jsonl",                                      32),
-    ("aime25",          "math/aime25.jsonl",                                      32),
-    ("amc23",           "math/amc23.jsonl",                                       32),
-    ("math500",         "math/math500.jsonl",                                      1),
-    ("olympiadmath",    "math/olympiadmath.jsonl",                                 1),
-    ("minerva",         "math/minerva.jsonl",                                      1),
-    # --- code ---
-    ("livecodebench",   "code/livecodebench.jsonl",                                1),
-    ("humanevalplus",   "code/humanevalplus.jsonl",                                1),
-    ("mbppplus",        "code/mbppplus.jsonl",                                     1),
-    # --- stem ---
-    ("mmlu_pro",        "stem/eval/mmlu_pro_test-00000-of-00001.jsonl",            1),
-    ("gpqa",            "stem/eval/gpqa_gpqa_main.jsonl",                          1),
-    # --- structured ---
-    ("jsonschemabench", "structured/eval/jsonschemabench_test-00000-of-00001.jsonl", 1),
-    ("ifeval",          "structured/eval/ifeval_ifeval_input_data.jsonl",           1),
-]
+def _bfcl_single_turn_filter(row: dict) -> bool:
+    """Keep only BFCL samples that can be evaluated in single-turn mode."""
+    meta = row.get("metadata") or {}
+    test_cat = str(meta.get("test_category", "")).lower()
+    return "multi_turn" not in test_cat
+
+
+EVAL_DATASETS = GENERIC_EVAL_DATASETS
 
 # Domains that get system prompt injection (math/code handled by their own data prep)
 _INJECT_DOMAINS = {"stem", "tool", "structured"}
+
+# Per-dataset row filters applied during preprocessing
+_DATASET_FILTERS: dict[str, callable] = {
+    "bfcl_v3": _bfcl_single_turn_filter,
+}
 
 
 def main():
@@ -95,7 +95,8 @@ def main():
 
         if domain in _INJECT_DOMAINS:
             dst_path = eval_data_dir / f"{name}.jsonl"
-            count = _preprocess_eval_jsonl(src_path, dst_path, domain)
+            row_filter = _DATASET_FILTERS.get(name)
+            count = _preprocess_eval_jsonl(src_path, dst_path, domain, row_filter=row_filter)
             if count == 0:
                 print(f"  SKIP {name}: no valid samples after preprocessing")
                 continue
