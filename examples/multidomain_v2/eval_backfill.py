@@ -30,6 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+EXAMPLES_DIR = SCRIPT_DIR.parents[1]
 
 _tokenizer = None
 
@@ -44,17 +45,14 @@ def get_tokenizer(model_path: str):
     return _tokenizer
 
 
-def load_reward_func():
-    import importlib.util
-
-    reward_path = SCRIPT_DIR / "reward_multidomain_v1.py"
-    if not reward_path.exists():
-        reward_path = SCRIPT_DIR.parent / "multidomain_v1" / "reward_multidomain_v1.py"
-    spec = importlib.util.spec_from_file_location("reward_multidomain_v1", reward_path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module.reward_func
+def load_reward_func(module_path: str = "multidomain_shared.reward_func"):
+    if str(EXAMPLES_DIR) not in sys.path:
+        sys.path.insert(0, str(EXAMPLES_DIR))
+    parts = module_path.rsplit(".", 1)
+    if len(parts) != 2:
+        raise ValueError(f"--reward-module must be 'module.attr', got: {module_path}")
+    mod = importlib.import_module(parts[0])
+    return getattr(mod, parts[1])
 
 
 def load_eval_data(path: str) -> list[dict[str, Any]]:
@@ -68,19 +66,41 @@ def load_eval_data(path: str) -> list[dict[str, Any]]:
 
 
 def _normalize_eval_sample_for_backfill(sample: dict[str, Any]) -> dict[str, Any]:
-    """Patch known stale eval metadata so old experiment caches can be rescored correctly."""
-
-    metadata = sample.get("metadata")
-    if not isinstance(metadata, dict):
-        return sample
-
-    dataset_name = str(metadata.get("dataset_name", "")).strip().lower()
-    if dataset_name in {"bfcl_v3", "bfcl_v3_multi_turn_base"}:
-        metadata = dict(metadata)
-        metadata["reward_type"] = "tool_call_soft"
-        sample = dict(sample)
-        sample["metadata"] = metadata
     return sample
+
+
+def _load_bfcl_runner():
+    if str(EXAMPLES_DIR) not in sys.path:
+        sys.path.insert(0, str(EXAMPLES_DIR))
+    from bfcl_official_runner import (
+        DEFAULT_BFCL_MODEL_NAME,
+        generate_bfcl_multi_turn_outputs,
+        run_bfcl_official_eval,
+        summary_to_metrics,
+    )
+
+    return {
+        "DEFAULT_BFCL_MODEL_NAME": DEFAULT_BFCL_MODEL_NAME,
+        "generate_bfcl_multi_turn_outputs": generate_bfcl_multi_turn_outputs,
+        "run_bfcl_official_eval": run_bfcl_official_eval,
+        "summary_to_metrics": summary_to_metrics,
+    }
+
+
+def _is_bfcl_official_eval(eval_samples: list[dict[str, Any]]) -> bool:
+    if not eval_samples:
+        return False
+    metadata = eval_samples[0].get("metadata", {}) or {}
+    dataset_name = str(metadata.get("dataset_name", "")).strip()
+    reward_type = str(metadata.get("reward_type", "")).strip()
+    return dataset_name in {"bfcl_v3", "bfcl_v3_multi_turn_base"} or reward_type == "bfcl_official"
+
+
+def _is_bfcl_multi_turn_eval(eval_samples: list[dict[str, Any]]) -> bool:
+    if not eval_samples:
+        return False
+    metadata = eval_samples[0].get("metadata", {}) or {}
+    return str(metadata.get("dataset_name", "")).strip() == "bfcl_v3_multi_turn_base"
 
 
 def apply_chat_template(tokenizer, sample: dict[str, Any]) -> str:
@@ -195,6 +215,24 @@ def generate_batch(
     )
 
 
+def generate_one(
+    sglang_url: str,
+    prompt_text: str,
+    max_tokens: int = 8192,
+    temperature: float = 0.7,
+    top_p: float = 1.0,
+) -> str:
+    responses = generate_batch(
+        sglang_url=sglang_url,
+        prompt_texts=[prompt_text],
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        batch_size=1,
+    )
+    return responses[0] if responses else ""
+
+
 class MockSample:
     """Minimal sample object compatible with the reward function."""
 
@@ -306,6 +344,12 @@ def log_to_wandb(
     wandb.log(metrics)
     wandb.finish()
     logger.info(f"  Logged {len(metrics)} metrics to wandb run {wandb_run_id} at step {step}")
+
+
+def _official_benchmark_dirs(runtime_data_dir: str, eval_path: str, eval_name: str, rollout_id: int) -> tuple[Path, Path]:
+    base = Path(runtime_data_dir) if runtime_data_dir else Path(eval_path).resolve().parent
+    root = base / "official_benchmarks" / eval_name / f"step_{rollout_id}"
+    return root / "result", root / "score"
 
 
 def merge_eval_history_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -662,6 +706,8 @@ def parse_args():
     parser.add_argument("--max-context-len", type=int, default=32768, help="Max context length for sglang server (prompt tokens only, response excluded)")
     parser.add_argument("--max-tokens", type=int, default=8192)
     parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--bfcl-model-name", type=str, default="", help="bfcl-eval registry model name for official BFCL evaluation")
+    parser.add_argument("--reward-module", type=str, default="multidomain_shared.reward_func", help="Dotted path to reward function (module.attr)")
     return parser.parse_args()
 
 
@@ -704,7 +750,8 @@ def main():
     if args.rollout_id is None:
         raise RuntimeError("--rollout-id is required unless --migrate-eval-history is set")
 
-    reward_func = load_reward_func()
+    reward_func = load_reward_func(args.reward_module)
+    bfcl_runner = _load_bfcl_runner()
 
     # Load tokenizer for applying chat template (bakes tools into prompt text)
     model_path = args.model_path
@@ -720,6 +767,7 @@ def main():
     if not model_path:
         raise RuntimeError("--model-path required (HF checkpoint path for tokenizer)")
     tokenizer = get_tokenizer(model_path)
+    bfcl_model_name = args.bfcl_model_name or bfcl_runner["DEFAULT_BFCL_MODEL_NAME"]
 
     # Parse eval datasets
     eval_datasets = {}
@@ -735,6 +783,53 @@ def main():
         logger.info(f"Running eval: {eval_name} from {eval_path}")
         eval_samples = load_eval_data(eval_path)
         logger.info(f"  Loaded {len(eval_samples)} samples")
+
+        if _is_bfcl_official_eval(eval_samples):
+            if _is_bfcl_multi_turn_eval(eval_samples):
+                outputs = bfcl_runner["generate_bfcl_multi_turn_outputs"](
+                    eval_samples,
+                    tokenizer=tokenizer,
+                    generate_one=lambda prompt_text: generate_one(
+                        sglang_url=args.sglang_url,
+                        prompt_text=prompt_text,
+                        max_tokens=args.max_tokens,
+                    ),
+                    max_prompt_tokens=args.max_context_len,
+                )
+            else:
+                prompt_texts = [apply_chat_template(tokenizer, sample) for sample in eval_samples]
+                eval_samples, prompt_texts = filter_long_prompts(
+                    tokenizer,
+                    eval_samples,
+                    prompt_texts,
+                    args.max_context_len,
+                )
+                if not eval_samples:
+                    logger.warning(f"  All BFCL samples filtered out for {eval_name}, skipping")
+                    continue
+                outputs = generate_batch(
+                    sglang_url=args.sglang_url,
+                    prompt_texts=prompt_texts,
+                    max_tokens=args.max_tokens,
+                    batch_size=args.batch_size,
+                )
+
+            result_dir, score_dir = _official_benchmark_dirs(
+                args.runtime_data_dir,
+                eval_path,
+                eval_name,
+                args.rollout_id,
+            )
+            summary = bfcl_runner["run_bfcl_official_eval"](
+                eval_samples,
+                outputs,
+                model_name=bfcl_model_name,
+                result_dir=result_dir,
+                score_dir=score_dir,
+            )
+            logger.info(f"  {eval_name}: official BFCL accuracy = {summary['overall_accuracy']:.4f}")
+            all_metrics.update(bfcl_runner["summary_to_metrics"](eval_name, summary))
+            continue
 
         # Apply chat template: bakes tools + messages into a single prompt string
         prompt_texts = []

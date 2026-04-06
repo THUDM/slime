@@ -50,6 +50,12 @@ IFRL_LOAD_NO_RNG=${IFRL_LOAD_NO_RNG:-0}
 IFRL_LOAD_FINETUNE=${IFRL_LOAD_FINETUNE:-0}
 IFRL_WANDB_PROJECT=${IFRL_WANDB_PROJECT:-slime-ifrl}
 IFRL_WANDB_GROUP=${IFRL_WANDB_GROUP:-qwen3-30b-a3b-ifrl-3node}
+RAY_CLUSTER_WAIT_MAX_ATTEMPTS=${RAY_CLUSTER_WAIT_MAX_ATTEMPTS:-240}
+RAY_CLUSTER_WAIT_SLEEP_SECONDS=${RAY_CLUSTER_WAIT_SLEEP_SECONDS:-15}
+RAY_WORKER_JOIN_MAX_ATTEMPTS=${RAY_WORKER_JOIN_MAX_ATTEMPTS:-180}
+RAY_WORKER_JOIN_RETRY_SLEEP_SECONDS=${RAY_WORKER_JOIN_RETRY_SLEEP_SECONDS:-15}
+RAY_GCS_RPC_SERVER_RECONNECT_TIMEOUT_SECONDS=${RAY_GCS_RPC_SERVER_RECONNECT_TIMEOUT_SECONDS:-1800}
+export RAY_gcs_rpc_server_reconnect_timeout_s="${RAY_gcs_rpc_server_reconnect_timeout_s:-${RAY_GCS_RPC_SERVER_RECONNECT_TIMEOUT_SECONDS}}"
 
 mkdir -p "${DATA_CACHE_DIR}" "${LOG_DIR}" "${SAVE_DIR}"
 
@@ -68,7 +74,7 @@ wait_for_full_ray_cluster() {
   local expected_nodes=${NUM_NODES}
   local attempt
 
-  for attempt in $(seq 1 30); do
+  for attempt in $(seq 1 "${RAY_CLUSTER_WAIT_MAX_ATTEMPTS}"); do
     if python3 - <<PY
 import json
 import sys
@@ -98,8 +104,8 @@ PY
       return 0
     fi
 
-    echo "Waiting for Ray workers to join (${attempt}/30)..."
-    sleep 10
+    echo "Waiting for Ray workers to join (${attempt}/${RAY_CLUSTER_WAIT_MAX_ATTEMPTS})..."
+    sleep "${RAY_CLUSTER_WAIT_SLEEP_SECONDS}"
   done
 
   echo "Ray workers did not join the cluster in time." >&2
@@ -112,7 +118,7 @@ start_ray_worker_with_retry() {
   local rc
   local node_name="${WORKER_ID:-${HOSTNAME:-worker-${NODE_RANK}}}"
 
-  for attempt in $(seq 1 30); do
+  for attempt in $(seq 1 "${RAY_WORKER_JOIN_MAX_ATTEMPTS}"); do
     set +e
     ray start \
       --address="${MASTER_ADDR}:${MASTER_PORT}" \
@@ -131,7 +137,7 @@ start_ray_worker_with_retry() {
 
     echo "Ray worker join failed on attempt ${attempt}, retrying..."
     ray stop --force 2>/dev/null || true
-    sleep 5
+    sleep "${RAY_WORKER_JOIN_RETRY_SLEEP_SECONDS}"
   done
 
   echo "Ray worker failed to join cluster after retries." >&2

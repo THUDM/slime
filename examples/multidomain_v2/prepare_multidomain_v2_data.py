@@ -12,45 +12,32 @@ EXAMPLES_DIR = Path(__file__).resolve().parents[1]
 if str(EXAMPLES_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLES_DIR))
 
+from multidomain_shared import (
+    TRAIN_DATASET_SOURCE_MAP,
+    discover_canonical_train_sources,
+    resolve_named_datasets as resolve_named_datasets_from_registry,
+)
 from pool_runtime_semantics import materialize_runtime_pool_row
 
 
 POOL_SUBDIRS = ("structured", "stem", "tool")
-DATASET_SOURCE_MAP: dict[str, tuple[str, ...]] = {
-    "toolbench_v1": (
-        "tool/toolbench_v1_train-00000-of-00004.jsonl",
-        "tool/toolbench_v1_train-00001-of-00004.jsonl",
-        "tool/toolbench_v1_train-00002-of-00004.jsonl",
-        "tool/toolbench_v1_train-00003-of-00004.jsonl",
-    ),
-    "apibench": (
-        "tool/apibench_huggingface_train.jsonl",
-        "tool/apibench_tensorflow_train.jsonl",
-        "tool/apibench_torchhub_train.jsonl",
-    ),
-    "apigen": ("tool/apigen_mt_5k_apigen-mt_5k.jsonl",),
-    "xlam_function_calling_60k": ("tool/xlam_function_calling_60k_xlam-function-calling-60k.jsonl",),
-    "agent": (
-        "tool/agent_function_calling_open_dataset_deepnlp_agent_function_call_202510.jsonl",
-        "tool/agent_function_calling_open_dataset_deepnlp_agent_function_call_202601.jsonl",
-    ),
-    "jsonschemabench": ("structured/jsonschemabench_train-00000-of-00001.jsonl",),
-    "ifeval": ("structured/eval/ifeval_ifeval_input_data.jsonl",),
-    "ifbench_test": ("structured/eval/ifbench_test_train-00000-of-00001.jsonl",),
-    "nemotron_structured_outputs": ("structured/nemotron_structured_outputs_structured_outputs_251027_nano_v3_sdg_json_train.jsonl",),
-    "nemotron_knowledge_mcqa": (
-        "stem/nemotron_knowledge_mcqa_data_train-00000-of-00004.jsonl",
-        "stem/nemotron_knowledge_mcqa_data_train-00001-of-00004.jsonl",
-        "stem/nemotron_knowledge_mcqa_data_train-00002-of-00004.jsonl",
-        "stem/nemotron_knowledge_mcqa_data_train-00003-of-00004.jsonl",
-    ),
-    "medmcqa": ("stem/medmcqa_data_train-00000-of-00001.jsonl",),
-}
+DATASET_SOURCE_MAP = TRAIN_DATASET_SOURCE_MAP
+
+
+def _is_discoverable_source(path: Path, train_dir: Path) -> bool:
+    try:
+        relative_parts = path.relative_to(train_dir).parts
+    except ValueError:
+        return False
+    return all(part and not part.startswith(".") for part in relative_parts)
 
 
 def discover_sources(pool_root: Path) -> list[Path]:
     if not pool_root.exists():
         raise FileNotFoundError(f"Pool root does not exist: {pool_root}")
+    canonical_sources = discover_canonical_train_sources(pool_root)
+    if canonical_sources:
+        return canonical_sources
     sources: list[Path] = []
     for subdir in POOL_SUBDIRS:
         candidate = pool_root / subdir
@@ -61,6 +48,8 @@ def discover_sources(pool_root: Path) -> list[Path]:
             continue
         for path in train_dir.rglob("*.jsonl"):
             if not path.is_file():
+                continue
+            if not _is_discoverable_source(path, train_dir):
                 continue
             if "_data_" in path.name:
                 continue
@@ -84,42 +73,8 @@ def align_row_to_v1_normalized_shape(row: dict[str, Any]) -> dict[str, Any] | No
     return materialize_runtime_pool_row(row)
 
 
-def _expand_layout_candidates(relative_path: str) -> list[str]:
-    # Prefer the current pool layout (<domain>/train/*.jsonl), but keep backward
-    # compatibility with the old <domain>/*.jsonl structure.
-    if "/train/" in relative_path:
-        return [relative_path, relative_path.replace("/train/", "/", 1)]
-    head, sep, tail = relative_path.partition("/")
-    if not sep:
-        return [relative_path]
-    return [f"{head}/train/{tail}", relative_path]
-
-
 def resolve_named_datasets(pool_root: Path, dataset_names: Sequence[str]) -> list[Path]:
-    if not pool_root.exists():
-        raise FileNotFoundError(f"Pool root does not exist: {pool_root}")
-
-    sources: list[Path] = []
-    for dataset_name in dataset_names:
-        if dataset_name not in DATASET_SOURCE_MAP:
-            supported = ", ".join(sorted(DATASET_SOURCE_MAP))
-            raise ValueError(f"Unsupported dataset '{dataset_name}'. Supported datasets: {supported}")
-        for relative_path in DATASET_SOURCE_MAP[dataset_name]:
-            resolved = None
-            tried: list[Path] = []
-            for candidate_relpath in _expand_layout_candidates(relative_path):
-                candidate = pool_root / candidate_relpath
-                tried.append(candidate)
-                if candidate.is_file():
-                    resolved = candidate
-                    break
-            if resolved is None:
-                tried_str = ", ".join(str(path) for path in tried)
-                raise FileNotFoundError(
-                    f"Dataset source does not exist for '{dataset_name}': expected one of [{tried_str}]"
-                )
-            sources.append(resolved)
-    return sources
+    return resolve_named_datasets_from_registry(pool_root, list(dataset_names))
 
 
 def iter_selected_rows(
