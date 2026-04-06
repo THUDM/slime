@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 
 def _load_module():
-    module_path = Path(__file__).resolve().parents[1] / "examples" / "multidomain_v2" / "eval_backfill.py"
-    spec = importlib.util.spec_from_file_location("multidomain_v2_eval_backfill_test_module", module_path)
+    module_path = Path(__file__).resolve().parents[1] / "examples" / "eval_backfill.py"
+    spec = importlib.util.spec_from_file_location("eval_backfill_test_module", module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
