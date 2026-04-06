@@ -51,6 +51,10 @@ from dataset_selection import (
 )
 
 
+def _split_csv(text: str) -> list[str]:
+    return [item.strip() for item in text.split(",") if item.strip()]
+
+
 def materialize_file(src: Path, dst: Path) -> int:
     """Materialize a single pool JSONL file.  Returns number of rows written."""
     return transform_jsonl(
@@ -122,6 +126,8 @@ def main():
     parser.add_argument("--source", action="append", default=None)
     parser.add_argument("--source-extra", action="append", default=None)
     parser.add_argument("--manifest", default=None)
+    parser.add_argument("--stem-train-datasets", default="nemotron_knowledge_mcqa")
+    parser.add_argument("--structured-train-datasets", default="nemotron_structured_outputs")
     parser.add_argument("--math-train-datasets", default=DEFAULT_MATH_TRAIN_DATASETS)
     parser.add_argument("--code-train-datasets", default=DEFAULT_CODE_TRAIN_DATASETS)
     args = parser.parse_args()
@@ -168,7 +174,17 @@ def main():
             manifest=args.manifest,
         )
     else:
-        overlap_sources = legacy_train_sources(pool_root, overlap_domains, exclude_patterns)
+        default_overlap_dataset_names: list[str] = []
+        if "stem" in overlap_domains:
+            default_overlap_dataset_names.extend(_split_csv(args.stem_train_datasets))
+        if "structured" in overlap_domains:
+            default_overlap_dataset_names.extend(_split_csv(args.structured_train_datasets))
+        overlap_sources = resolve_train_sources(
+            pool_root=pool_root,
+            default_dataset_names=default_overlap_dataset_names or None,
+            include_domains=overlap_domains,
+            exclude_patterns=exclude_patterns,
+        )
 
     overlap_materialized_paths = materialize_training_sources(
         sources=overlap_sources,

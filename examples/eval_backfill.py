@@ -358,12 +358,14 @@ def main():
             runner = _load_bfcl_runner()
             if _is_bfcl_multi_turn_eval(eval_samples):
                 outputs = runner["generate_bfcl_multi_turn_outputs"](
-                    eval_samples=eval_samples,
-                    generate_one_fn=lambda prompt: generate_one(
+                    rows=eval_samples,
+                    tokenizer=tokenizer,
+                    generate_one=lambda prompt: generate_one(
                         args.sglang_url,
                         prompt,
                         max_tokens=args.max_tokens,
                     ),
+                    max_prompt_tokens=args.max_context_len,
                 )
             else:
                 outputs = generate_batch(
