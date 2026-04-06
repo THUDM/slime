@@ -52,13 +52,26 @@ WORK_ROOT=${WORK_ROOT:-${AVALANCHE_ROOT}/experiments/mopd_qwen3_30b_a3b_3node_h2
 
 # ---- Data ----
 TRAIN_POOL_ROOT=${TRAIN_POOL_ROOT:-${AVALANCHE_ROOT}/data/pool}
-TRAIN_POOL_INCLUDE_DOMAINS=${TRAIN_POOL_INCLUDE_DOMAINS:-tool,stem,structured,code,math}
+TRAIN_POOL_INCLUDE_DOMAINS=${TRAIN_POOL_INCLUDE_DOMAINS:-stem,structured,code,math}
+TRAIN_DATASETS=${TRAIN_DATASETS:-}
+TRAIN_DATASETS_EXTRA=${TRAIN_DATASETS_EXTRA:-}
+TRAIN_PATHS=${TRAIN_PATHS:-}
+TRAIN_PATHS_EXTRA=${TRAIN_PATHS_EXTRA:-}
+TRAIN_MANIFEST=${TRAIN_MANIFEST:-}
+MOPD_MATH_TRAIN_DATASETS=${MOPD_MATH_TRAIN_DATASETS:-deepmath,dapo,bigmath}
+MOPD_CODE_TRAIN_DATASETS=${MOPD_CODE_TRAIN_DATASETS:-apps,code_contests,taco,codeforces}
 TRAIN_POOL_EXCLUDE_PATTERNS=${TRAIN_POOL_EXCLUDE_PATTERNS:-stem/train/openbookqa,stem/train/scienceqa,stem/train/sciq,stem/train/ai2_arc,stem/train/aqua_rat,stem/train/mmlu_auxiliary,tool/train/xlam_function_calling_60k,structured/train/nemotron_structured_outputs,stem/train/medmcqa_data_,structured/train/jsonschemabench_train-}
 TRAIN_SOURCE_LIST_BASENAME=${TRAIN_SOURCE_LIST_BASENAME:-mopd_train_sources.list}
 
 # ---- Eval ----
 EVAL_INTERVAL=${EVAL_INTERVAL:-10}
 EVAL_CONFIG_PATH="${WORK_ROOT}/data_cache/eval_config.yaml"
+OFFICIAL_EVAL_MANIFEST_PATH="${WORK_ROOT}/data_cache/eval_official_benchmarks.json"
+TEACHER_STEP0_INCLUDE_BFCL=${TEACHER_STEP0_INCLUDE_BFCL:-1}
+EVAL_DATASETS=${EVAL_DATASETS:-}
+EVAL_DATASETS_EXTRA=${EVAL_DATASETS_EXTRA:-}
+EVAL_PATHS=${EVAL_PATHS:-}
+EVAL_PATHS_EXTRA=${EVAL_PATHS_EXTRA:-}
 
 # ---- SGLang multimodel config ----
 SGLANG_MULTIMODEL_CONFIG=${SGLANG_MULTIMODEL_CONFIG:-${SCRIPT_DIR}/sglang_mopd_qwen3_30b_3node_h200.yaml}
@@ -161,59 +174,6 @@ print(hashlib.sha1(sys.argv[1].encode("utf-8")).hexdigest()[:8])
 PY
 )
   printf '%.119s-%s\n' "$candidate" "$suffix"
-}
-
-resolve_hostname_to_ip() {
-  local host="$1"
-  python3 - "$host" <<'PY'
-import socket
-import sys
-
-host = sys.argv[1]
-try:
-    print(socket.gethostbyname(host))
-except OSError:
-    sys.exit(1)
-PY
-}
-
-is_ip_address() {
-  local candidate="$1"
-  python3 - "$candidate" <<'PY'
-import ipaddress
-import sys
-
-candidate = sys.argv[1]
-try:
-    ipaddress.ip_address(candidate)
-except ValueError:
-    sys.exit(1)
-PY
-}
-
-normalize_master_addr() {
-  local candidate="$1"
-  if [[ -z "${candidate}" ]]; then
-    return 1
-  fi
-  if is_ip_address "${candidate}" 2>/dev/null; then
-    printf '%s\n' "${candidate}"
-    return 0
-  fi
-  resolve_hostname_to_ip "${candidate}"
-}
-
-wait_for_master_addr_file() {
-  local path="$1"
-  local attempt
-  for attempt in $(seq 1 180); do
-    if [[ -s "${path}" ]]; then
-      cat "${path}"
-      return 0
-    fi
-    sleep 2
-  done
-  return 1
 }
 
 elect_ray_head_role() {
@@ -470,23 +430,93 @@ prepare_training_source_list() {
     return 1
   fi
 
+  local materialize_args=(
+    "${TRAIN_POOL_ROOT}"
+    "${DATA_CACHE_DIR}/materialized_train"
+    "${TRAIN_SOURCE_LIST}"
+    "${TRAIN_POOL_INCLUDE_DOMAINS}"
+    "${TRAIN_POOL_EXCLUDE_PATTERNS}"
+    --math-train-datasets "${MOPD_MATH_TRAIN_DATASETS}"
+    --code-train-datasets "${MOPD_CODE_TRAIN_DATASETS}"
+  )
+  local item
+  IFS=',' read -r -a _train_datasets <<< "${TRAIN_DATASETS}"
+  for item in "${_train_datasets[@]}"; do
+    item="${item//[[:space:]]/}"
+    if [[ -n "${item}" ]]; then
+      materialize_args+=(--dataset "${item}")
+    fi
+  done
+  IFS=',' read -r -a _train_dataset_extras <<< "${TRAIN_DATASETS_EXTRA}"
+  for item in "${_train_dataset_extras[@]}"; do
+    item="${item//[[:space:]]/}"
+    if [[ -n "${item}" ]]; then
+      materialize_args+=(--dataset-extra "${item}")
+    fi
+  done
+  IFS=',' read -r -a _train_paths <<< "${TRAIN_PATHS}"
+  for item in "${_train_paths[@]}"; do
+    item="${item//[[:space:]]/}"
+    if [[ -n "${item}" ]]; then
+      materialize_args+=(--source "${item}")
+    fi
+  done
+  IFS=',' read -r -a _train_path_extras <<< "${TRAIN_PATHS_EXTRA}"
+  for item in "${_train_path_extras[@]}"; do
+    item="${item//[[:space:]]/}"
+    if [[ -n "${item}" ]]; then
+      materialize_args+=(--source-extra "${item}")
+    fi
+  done
+  if [[ -n "${TRAIN_MANIFEST}" ]]; then
+    materialize_args+=(--manifest "${TRAIN_MANIFEST}")
+  fi
+
   # Materialize pool data: bridge top-level supervision_family fields -> metadata.ground_truth/reward_type
   # so that downstream reward functions can consume the data directly.
-  PYTHONPATH="${SLIME_DIR}:${PYTHONPATH:-}" python3 "${SCRIPT_DIR}/materialize_train_pool.py" \
-    "${TRAIN_POOL_ROOT}" \
-    "${DATA_CACHE_DIR}/materialized_train" \
-    "${TRAIN_SOURCE_LIST}" \
-    "${TRAIN_POOL_INCLUDE_DOMAINS}" \
-    "${TRAIN_POOL_EXCLUDE_PATTERNS}"
+  PYTHONPATH="${SLIME_DIR}:${PYTHONPATH:-}" python3 "${SCRIPT_DIR}/materialize_train_pool.py" "${materialize_args[@]}"
 
   ensure_nonempty_file "${TRAIN_SOURCE_LIST}" "Training source manifest"
 }
 
 write_eval_config() {
-  python3 "${SCRIPT_DIR}/write_eval_config.py" \
-    --pool-root "${TRAIN_POOL_ROOT}" \
-    --output "${EVAL_CONFIG_PATH}" \
+  local eval_args=(
+    --pool-root "${TRAIN_POOL_ROOT}"
+    --output "${EVAL_CONFIG_PATH}"
+    --official-manifest-output "${OFFICIAL_EVAL_MANIFEST_PATH}"
     --max-response-len "${TOOLCALL_MAX_RESPONSE_LEN}"
+  )
+  local item
+  IFS=',' read -r -a _eval_datasets <<< "${EVAL_DATASETS}"
+  for item in "${_eval_datasets[@]}"; do
+    item="${item//[[:space:]]/}"
+    if [[ -n "${item}" ]]; then
+      eval_args+=(--dataset "${item}")
+    fi
+  done
+  IFS=',' read -r -a _eval_dataset_extras <<< "${EVAL_DATASETS_EXTRA}"
+  for item in "${_eval_dataset_extras[@]}"; do
+    item="${item//[[:space:]]/}"
+    if [[ -n "${item}" ]]; then
+      eval_args+=(--dataset-extra "${item}")
+    fi
+  done
+  IFS=',' read -r -a _eval_paths <<< "${EVAL_PATHS}"
+  for item in "${_eval_paths[@]}"; do
+    item="${item//[[:space:]]/}"
+    if [[ -n "${item}" ]]; then
+      eval_args+=(--source "${item}")
+    fi
+  done
+  IFS=',' read -r -a _eval_path_extras <<< "${EVAL_PATHS_EXTRA}"
+  for item in "${_eval_path_extras[@]}"; do
+    item="${item//[[:space:]]/}"
+    if [[ -n "${item}" ]]; then
+      eval_args+=(--source-extra "${item}")
+    fi
+  done
+
+  python3 "${SCRIPT_DIR}/write_eval_config.py" "${eval_args[@]}"
 }
 
 # ---- Checkpoint ----
@@ -552,6 +582,24 @@ for dataset in (cfg.get('eval') or {}).get('datasets', []):
     print(f"{dataset['name']}:{dataset['path']}")
 INNERPY
   )
+
+  if [[ "${TEACHER_STEP0_INCLUDE_BFCL}" == "1" ]] && [[ -f "${OFFICIAL_EVAL_MANIFEST_PATH}" ]]; then
+    mapfile -t official_specs < <(
+      python3 - "${OFFICIAL_EVAL_MANIFEST_PATH}" <<'INNERPY'
+import json
+import sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as handle:
+    manifest = json.load(handle)
+
+for dataset in manifest.get('datasets', []):
+    print(f"{dataset['name']}:{dataset['path']}")
+INNERPY
+    )
+    if [[ ${#official_specs[@]} -gt 0 ]]; then
+      EVAL_DATA_SPECS+=("${official_specs[@]}")
+    fi
+  fi
 }
 
 stop_local_sglang_eval_server() {
