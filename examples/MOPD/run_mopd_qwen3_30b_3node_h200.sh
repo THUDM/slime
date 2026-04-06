@@ -18,9 +18,9 @@ PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 AVALANCHE_ROOT="$(cd -- "${PROJECT_ROOT}/.." && pwd)"
 
 # shellcheck source=/dev/null
-source "${SCRIPT_DIR}/ray_bootstrap_utils.sh"
+source "${SCRIPT_DIR}/../_shared/ray_bootstrap_utils.sh"
 # shellcheck source=/dev/null
-source "${SCRIPT_DIR}/data_cache_reuse_utils.sh"
+source "${SCRIPT_DIR}/../_shared/data_cache_reuse_utils.sh"
 
 # ---- Cluster layout ----
 NUM_NODES=${NUM_NODES:-3}
