@@ -78,40 +78,7 @@ FORWARDED_ENV_VARS=(
   UV_VENV_DIR
 )
 
-RUN_ENV_EXPORTS=""
-for var_name in "${FORWARDED_ENV_VARS[@]}"; do
-  if [[ -n "${!var_name+x}" ]]; then
-    RUN_ENV_EXPORTS+=" export ${var_name}=$(printf '%q' "${!var_name}");"
-  fi
-done
-RUN_CMD="cd ${REMOTE_ROOT} &&${RUN_ENV_EXPORTS} if [[ -f \"${RUN_SCRIPT}\" ]]; then bash ${RUN_SCRIPT}; elif [[ -f \"${RUN_SCRIPT_FALLBACK}\" ]]; then bash ${RUN_SCRIPT_FALLBACK}; else echo \"Run script not found: ${RUN_SCRIPT} or ${RUN_SCRIPT_FALLBACK}\" >&2; exit 1; fi"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../_shared/submit_inspire_utils.sh"
 
-CMD=(
-  "$INSPIRE_CLI" job create
-  --name "${JOB_NAME}"
-  --resource "${RESOURCE}"
-  --nodes "${SUBMIT_NODES}"
-  --priority "${PRIORITY}"
-  --max-time "${MAX_TIME}"
-  --no-auto
-  --command "${RUN_CMD}"
-)
-
-if [[ "${FAULT_TOLERANT}" == "1" ]]; then
-  CMD+=(--fault-tolerant)
-fi
-
-if [[ -n "${IMAGE}" ]]; then
-  CMD+=(--image "${IMAGE}")
-fi
-
-if [[ -n "${WORKSPACE_ID}" ]]; then
-  CMD+=(--workspace-id "${WORKSPACE_ID}")
-fi
-
-SUBMIT_CWD="${SUBMIT_CWD:-${TMPDIR:-/tmp}}"
-(
-  cd "${SUBMIT_CWD}"
-  export INSPIRE_TARGET_DIR="${JOB_LOG_ROOT}"
-  "${CMD[@]}"
-)
+submit_inspire_job

@@ -67,7 +67,7 @@ ROLLOUT_ARGS=(
 )
 
 RM_ARGS=(
-   --custom-rm-path slime.rollout.on_policy_distillation.reward_func_route_by_domain
+   --custom-rm-path examples.MOPD.reward_func_mopd.reward_func_route_by_domain
    --custom-reward-post-process-path slime.rollout.on_policy_distillation.post_process_rewards
 )
 

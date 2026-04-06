@@ -10,81 +10,37 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from dataset_registry import (
+    DEFAULT_TRAIN_DATASETS_BY_DOMAIN,
+    DEFAULT_TRAIN_DATASETS_BY_GROUP,
+    EVAL_DATASET_SPECS,
+    TRAIN_DATASET_DOMAIN_MAP,
+    TRAIN_DATASET_GROUP_MAP,
+    TRAIN_DATASET_SOURCE_MAP,
+)
+from dataset_selection import (
+    discover_canonical_train_sources as discover_canonical_train_sources_shared,
+    resolve_named_datasets as resolve_named_datasets_shared,
+    train_domains_for_datasets as train_domains_for_datasets_shared,
+    train_groups_for_datasets as train_groups_for_datasets_shared,
+)
+
 
 logger = logging.getLogger(__name__)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 IFBENCH_DIR = SCRIPT_DIR / "if_rl" / "offline_ifbench"
 
-
-TRAIN_DATASET_SOURCE_MAP: dict[str, tuple[str, ...]] = {
-    "apibench": (
-        "tool/train/apibench_huggingface_train.jsonl",
-        "tool/train/apibench_tensorflow_train.jsonl",
-        "tool/train/apibench_torchhub_train.jsonl",
-    ),
-    "xlam_function_calling_60k": ("tool/train/xlam_function_calling_60k_xlam-function-calling-60k.jsonl",),
-    "agent": (
-        "tool/train/agent_function_calling_open_dataset_deepnlp_agent_function_call_202510.jsonl",
-        "tool/train/agent_function_calling_open_dataset_deepnlp_agent_function_call_202601.jsonl",
-    ),
-    "jsonschemabench": ("structured/train/jsonschemabench_train-00000-of-00001.jsonl",),
-    "nemotron_structured_outputs": ("structured/train/nemotron_structured_outputs_structured_outputs_251027_nano_v3_sdg_json_train.jsonl",),
-    "nemotron_knowledge_mcqa": (
-        "stem/train/nemotron_knowledge_mcqa_data_train-00000-of-00004.jsonl",
-        "stem/train/nemotron_knowledge_mcqa_data_train-00001-of-00004.jsonl",
-        "stem/train/nemotron_knowledge_mcqa_data_train-00002-of-00004.jsonl",
-        "stem/train/nemotron_knowledge_mcqa_data_train-00003-of-00004.jsonl",
-    ),
-    "medmcqa": ("stem/train/medmcqa_data_train-00000-of-00001.jsonl",),
-}
-
-DEFAULT_TRAIN_DATASETS_BY_DOMAIN: dict[str, tuple[str, ...]] = {
-    "tool": ("apibench", "agent", "xlam_function_calling_60k"),
-    "structured": ("jsonschemabench", "nemotron_structured_outputs"),
-    "stem": ("medmcqa", "nemotron_knowledge_mcqa"),
-}
-
-TRAIN_DATASET_DOMAIN_MAP: dict[str, str] = {
-    dataset_name: relpaths[0].split("/", 1)[0] for dataset_name, relpaths in TRAIN_DATASET_SOURCE_MAP.items()
-}
-
-TRAIN_DATASET_GROUP_MAP: dict[str, str] = {
-    "apibench": "tool_call",
-    "xlam_function_calling_60k": "tool_call",
-    "agent": "tool_call",
-    "jsonschemabench": "structured",
-    "nemotron_structured_outputs": "structured",
-    "nemotron_knowledge_mcqa": "stem",
-    "medmcqa": "stem",
-}
-
-DEFAULT_TRAIN_DATASETS_BY_GROUP: dict[str, tuple[str, ...]] = {
-    "tool_call": ("apibench", "xlam_function_calling_60k", "agent"),
-    "structured": DEFAULT_TRAIN_DATASETS_BY_DOMAIN["structured"],
-    "stem": DEFAULT_TRAIN_DATASETS_BY_DOMAIN["stem"],
-}
-
 GENERIC_EVAL_DATASETS: list[tuple[str, str, int]] = [
-    ("aime24", "math/aime24.jsonl", 32),
-    ("aime25", "math/aime25.jsonl", 32),
-    ("amc23", "math/amc23.jsonl", 32),
-    ("math500", "math/math500.jsonl", 1),
-    ("olympiadmath", "math/olympiadmath.jsonl", 1),
-    ("minerva", "math/minerva.jsonl", 1),
-    ("livecodebench", "code/livecodebench.jsonl", 1),
-    ("humanevalplus", "code/humanevalplus.jsonl", 1),
-    ("mbppplus", "code/mbppplus.jsonl", 1),
-    ("mmlu_pro", "stem/eval/mmlu_pro_test-00000-of-00001.jsonl", 1),
-    ("gpqa", "stem/eval/gpqa_gpqa_main.jsonl", 1),
-    ("jsonschemabench", "structured/eval/jsonschemabench_test-00000-of-00001.jsonl", 1),
-    ("ifeval", "structured/eval/ifeval_ifeval_input_data.jsonl", 1),
-    ("ifbench_test", "structured/eval/ifbench_test_data_train-00000-of-00001.jsonl", 1),
+    (spec.name, spec.relpath, spec.n_samples_per_eval_prompt)
+    for spec in EVAL_DATASET_SPECS.values()
+    if not spec.official
 ]
 
 OFFICIAL_EVAL_DATASETS: list[tuple[str, str]] = [
-    ("bfcl_v3", "tool/eval/bfcl_v3_train-00000-of-00001.jsonl"),
-    ("bfcl_v3_multi_turn_base", "tool/eval/bfcl_v3_multi_turn_base_train-00000-of-00001.jsonl"),
+    (spec.name, spec.relpath)
+    for spec in EVAL_DATASET_SPECS.values()
+    if spec.official
 ]
 
 TRAIN_TOOL_REWARD_TYPES = {
@@ -116,29 +72,11 @@ def default_train_datasets_for_group(group: str) -> tuple[str, ...]:
 
 
 def train_domains_for_datasets(dataset_names: list[str] | tuple[str, ...]) -> tuple[str, ...]:
-    domains: list[str] = []
-    for dataset_name in dataset_names:
-        try:
-            domain = TRAIN_DATASET_DOMAIN_MAP[dataset_name]
-        except KeyError as exc:
-            supported = ", ".join(sorted(TRAIN_DATASET_DOMAIN_MAP))
-            raise ValueError(f"Unsupported dataset '{dataset_name}'. Supported datasets: {supported}") from exc
-        if domain not in domains:
-            domains.append(domain)
-    return tuple(domains)
+    return tuple(train_domains_for_datasets_shared(list(dataset_names)))
 
 
 def train_groups_for_datasets(dataset_names: list[str] | tuple[str, ...]) -> tuple[str, ...]:
-    groups: list[str] = []
-    for dataset_name in dataset_names:
-        try:
-            group = TRAIN_DATASET_GROUP_MAP[dataset_name]
-        except KeyError as exc:
-            supported = ", ".join(sorted(TRAIN_DATASET_GROUP_MAP))
-            raise ValueError(f"Unsupported dataset '{dataset_name}'. Supported datasets: {supported}") from exc
-        if group not in groups:
-            groups.append(group)
-    return tuple(groups)
+    return tuple(train_groups_for_datasets_shared(list(dataset_names)))
 
 
 def domain_signature(domains: list[str] | tuple[str, ...]) -> str:
@@ -169,30 +107,11 @@ def group_signature_for_train_datasets(dataset_names: list[str] | tuple[str, ...
 
 
 def resolve_named_datasets(pool_root: Path, dataset_names: list[str] | tuple[str, ...]) -> list[Path]:
-    if not pool_root.exists():
-        raise FileNotFoundError(f"Pool root does not exist: {pool_root}")
-    sources: list[Path] = []
-    for dataset_name in dataset_names:
-        relpaths = TRAIN_DATASET_SOURCE_MAP.get(dataset_name)
-        if relpaths is None:
-            supported = ", ".join(sorted(TRAIN_DATASET_SOURCE_MAP))
-            raise ValueError(f"Unsupported dataset '{dataset_name}'. Supported datasets: {supported}")
-        for relpath in relpaths:
-            candidate = pool_root / relpath
-            if not candidate.is_file():
-                raise FileNotFoundError(f"Dataset source does not exist for '{dataset_name}': {candidate}")
-            sources.append(candidate)
-    return sources
+    return resolve_named_datasets_shared(pool_root, list(dataset_names))
 
 
 def discover_canonical_train_sources(pool_root: Path) -> list[Path]:
-    sources: list[Path] = []
-    for dataset_name in TRAIN_DATASET_SOURCE_MAP:
-        for relpath in TRAIN_DATASET_SOURCE_MAP[dataset_name]:
-            candidate = pool_root / relpath
-            if candidate.is_file():
-                sources.append(candidate)
-    return sorted(dict.fromkeys(sources))
+    return discover_canonical_train_sources_shared(pool_root)
 
 
 def _clean_response(text: str) -> str:
