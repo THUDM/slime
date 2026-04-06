@@ -17,7 +17,7 @@ MODEL_DIR="${MODEL_DIR:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/p
 FORCE_RECONVERT="${FORCE_RECONVERT:-0}"
 
 # shellcheck source=/dev/null
-source "${SCRIPT_DIR}/../_shared/submit_inspire_utils.sh"
+source "${SCRIPT_DIR}/../common/submit_inspire_utils.sh"
 
 submit_one() {
   local exp_name="$1"

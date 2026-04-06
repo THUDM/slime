@@ -10,6 +10,6 @@ EVAL_BACKFILL_PY="${EVAL_BACKFILL_PY:-${SCRIPT_DIR}/eval_backfill.py}"
 EVAL_BACKFILL_PYTHONPATH_PREFIX="${EVAL_BACKFILL_PYTHONPATH_PREFIX:-${SCRIPT_DIR}:${PROJECT_ROOT}/slime}"
 
 # shellcheck source=/dev/null
-source "${SCRIPT_DIR}/_shared/eval_backfill_utils.sh"
+source "${SCRIPT_DIR}/common/eval_backfill_utils.sh"
 
 run_eval_backfill_main

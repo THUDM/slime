@@ -284,20 +284,38 @@ def log_to_wandb(
     group: str = "",
     run_name: str = "",
 ):
+    if not metrics:
+        logger.info("No eval metrics to log to W&B for rollout %s", rollout_id)
+        return False
+
     if host:
         os.environ["WANDB_BASE_URL"] = host
     if key:
         os.environ["WANDB_API_KEY"] = key
-    wandb.init(
-        project=project,
-        entity=entity or None,
-        id=run_id,
-        resume="allow",
-        group=group or None,
-        name=run_name or None,
-    )
-    wandb.log(metrics, step=rollout_id)
-    wandb.finish()
+
+    try:
+        wandb.init(
+            project=project,
+            entity=entity or None,
+            id=run_id,
+            resume="allow",
+            reinit=True,
+            group=group or None,
+            name=run_name or None,
+        )
+        wandb.define_metric("eval/step", overwrite=True)
+        wandb.define_metric("eval/*", step_metric="eval/step", overwrite=True)
+        wandb.log({"eval/step": rollout_id, **metrics})
+        return True
+    except Exception as exc:
+        logger.warning("Skipping W&B logging because initialization or upload failed: %s", exc)
+        return False
+    finally:
+        try:
+            if wandb.run is not None:
+                wandb.finish()
+        except Exception as exc:
+            logger.warning("Failed to finish W&B run cleanly: %s", exc)
 
 
 def wait_for_sglang(base_url: str, timeout_seconds: int = 300):
@@ -345,6 +363,7 @@ def main():
     wait_for_sglang(args.sglang_url)
     tokenizer = get_tokenizer(args.model_path)
     reward_func = load_reward_func(args.reward_module)
+    combined_metrics: dict[str, float] = {}
 
     for spec in args.eval_data:
         eval_name, eval_path = spec.split(":", 1)
@@ -391,17 +410,25 @@ def main():
             logger.info("Dry run metrics for %s: %s", eval_name, metrics)
             continue
 
-        log_to_wandb(
-            metrics=metrics,
-            rollout_id=args.rollout_id,
-            run_id=args.wandb_run_id,
-            project=args.wandb_project,
-            entity=args.wandb_entity,
-            host=args.wandb_host,
-            key=args.wandb_key,
-            group=args.wandb_group,
-            run_name=getattr(args, "wandb_run_name", ""),
-        )
+        overlap = set(combined_metrics).intersection(metrics)
+        if overlap:
+            logger.warning("Eval metrics for %s overwrite existing keys: %s", eval_name, sorted(overlap))
+        combined_metrics.update(metrics)
+
+    if args.dry_run:
+        return
+
+    log_to_wandb(
+        metrics=combined_metrics,
+        rollout_id=args.rollout_id,
+        run_id=args.wandb_run_id,
+        project=args.wandb_project,
+        entity=args.wandb_entity,
+        host=args.wandb_host,
+        key=args.wandb_key,
+        group=args.wandb_group,
+        run_name=getattr(args, "wandb_run_name", ""),
+    )
 
 
 if __name__ == "__main__":
