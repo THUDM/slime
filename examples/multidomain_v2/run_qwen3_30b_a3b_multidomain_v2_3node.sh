@@ -8,7 +8,7 @@ PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 AVALANCHE_ROOT="$(cd -- "${PROJECT_ROOT}/.." && pwd)"
 
 # shellcheck source=/dev/null
-source "${SCRIPT_DIR}/../multidomain_v1/ray_bootstrap_utils.sh"
+source "${SCRIPT_DIR}/ray_bootstrap_utils.sh"
 
 NUM_NODES=${NUM_NODES:-3}
 NUM_GPUS_PER_NODE=${NUM_GPUS_PER_NODE:-8}
@@ -20,28 +20,22 @@ MODEL_DIR=${MODEL_DIR:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/pu
 TORCH_DIST_DIR=${TORCH_DIST_DIR:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/experiments/ifrl_qwen3_30b_a3b/checkpoints}
 WORK_ROOT=${WORK_ROOT:-${AVALANCHE_ROOT}/experiments/multidomain_v2_3node}
 TRAIN_POOL_ROOT=${TRAIN_POOL_ROOT:-${AVALANCHE_ROOT}/data/pool}
-TRAIN_POOL_DATASETS=${TRAIN_POOL_DATASETS:-toolbench_v1,apibench,apigen,agent,jsonschemabench,nemotron_structured_outputs}
+TRAIN_POOL_GROUP=${TRAIN_POOL_GROUP:-${TRAIN_POOL_DOMAIN:-tool_call}}
+TRAIN_POOL_DATASETS=${TRAIN_POOL_DATASETS:-}
 
 SLIME_DIR=${SLIME_DIR:-${PROJECT_ROOT}/slime}
 MEGATRON_PATH=${MEGATRON_PATH:-/root/Megatron-LM}
 
-EVAL_TOOL_BFCL_V3=${EVAL_TOOL_BFCL_V3:-${AVALANCHE_ROOT}/data/open_data/tool_call/bfcl_v3/data/train-00000-of-00001.parquet}
-EVAL_TOOL_BFCL_MULTI_TURN=${EVAL_TOOL_BFCL_MULTI_TURN:-${AVALANCHE_ROOT}/data/open_data/tool_call/bfcl_v3_multi_turn_base/data/train-00000-of-00001.parquet}
-EVAL_TOOL_TOOLBENCH_BENCHMARK_G1_TOOL=${EVAL_TOOL_TOOLBENCH_BENCHMARK_G1_TOOL:-${AVALANCHE_ROOT}/data/open_data/tool_call/toolbench_v1/benchmark/g1_tool-00000-of-00001.parquet}
-EVAL_TOOL_TOOLBENCH_BENCHMARK_G1_CATEGORY=${EVAL_TOOL_TOOLBENCH_BENCHMARK_G1_CATEGORY:-${AVALANCHE_ROOT}/data/open_data/tool_call/toolbench_v1/benchmark/g1_category-00000-of-00001.parquet}
-EVAL_TOOL_TOOLBENCH_BENCHMARK_G1_INSTRUCTION=${EVAL_TOOL_TOOLBENCH_BENCHMARK_G1_INSTRUCTION:-${AVALANCHE_ROOT}/data/open_data/tool_call/toolbench_v1/benchmark/g1_instruction-00000-of-00001.parquet}
-EVAL_TOOL_TOOLBENCH_BENCHMARK_G2_CATEGORY=${EVAL_TOOL_TOOLBENCH_BENCHMARK_G2_CATEGORY:-${AVALANCHE_ROOT}/data/open_data/tool_call/toolbench_v1/benchmark/g2_category-00000-of-00001.parquet}
-EVAL_TOOL_TOOLBENCH_BENCHMARK_G2_INSTRUCTION=${EVAL_TOOL_TOOLBENCH_BENCHMARK_G2_INSTRUCTION:-${AVALANCHE_ROOT}/data/open_data/tool_call/toolbench_v1/benchmark/g2_instruction-00000-of-00001.parquet}
-EVAL_TOOL_TOOLBENCH_BENCHMARK_G3_INSTRUCTION=${EVAL_TOOL_TOOLBENCH_BENCHMARK_G3_INSTRUCTION:-${AVALANCHE_ROOT}/data/open_data/tool_call/toolbench_v1/benchmark/g3_instruction-00000-of-00001.parquet}
-EVAL_STRUCTURED_IFEVAL=${EVAL_STRUCTURED_IFEVAL:-${AVALANCHE_ROOT}/data/open_data/structured_output/ifeval/ifeval_input_data.jsonl}
-EVAL_STRUCTURED_JSONSCHEMABENCH=${EVAL_STRUCTURED_JSONSCHEMABENCH:-${AVALANCHE_ROOT}/data/open_data/structured_output/jsonschemabench/data/test-00000-of-00001.parquet}
-EVAL_STRUCTURED_IFBENCH_TEST=${EVAL_STRUCTURED_IFBENCH_TEST:-${AVALANCHE_ROOT}/data/open_data/structured_output/ifbench_test/data/train-00000-of-00001.parquet}
-EVAL_STEM_MMLU_PRO=${EVAL_STEM_MMLU_PRO:-${AVALANCHE_ROOT}/data/open_data/stem/mmlu_pro/data/test-00000-of-00001.parquet}
-EVAL_STEM_GPQA_MAIN=${EVAL_STEM_GPQA_MAIN:-${AVALANCHE_ROOT}/data/open_data/stem/gpqa/gpqa_main.csv}
+EVAL_TOOL_BFCL_V3=${EVAL_TOOL_BFCL_V3:-${TRAIN_POOL_ROOT}/tool/eval/bfcl_v3_train-00000-of-00001.jsonl}
+EVAL_TOOL_BFCL_MULTI_TURN=${EVAL_TOOL_BFCL_MULTI_TURN:-${TRAIN_POOL_ROOT}/tool/eval/bfcl_v3_multi_turn_base_train-00000-of-00001.jsonl}
+EVAL_STRUCTURED_IFEVAL=${EVAL_STRUCTURED_IFEVAL:-${TRAIN_POOL_ROOT}/structured/eval/ifeval_ifeval_input_data.jsonl}
+EVAL_STRUCTURED_JSONSCHEMABENCH=${EVAL_STRUCTURED_JSONSCHEMABENCH:-${TRAIN_POOL_ROOT}/structured/eval/jsonschemabench_test-00000-of-00001.jsonl}
+EVAL_STRUCTURED_IFBENCH_TEST=${EVAL_STRUCTURED_IFBENCH_TEST:-${TRAIN_POOL_ROOT}/structured/eval/ifbench_test_data_train-00000-of-00001.jsonl}
+EVAL_STEM_MMLU_PRO=${EVAL_STEM_MMLU_PRO:-${TRAIN_POOL_ROOT}/stem/eval/mmlu_pro_test-00000-of-00001.jsonl}
+EVAL_STEM_GPQA_MAIN=${EVAL_STEM_GPQA_MAIN:-${TRAIN_POOL_ROOT}/stem/eval/gpqa_gpqa_main.jsonl}
 
 EVAL_BFCL_V3_SAMPLES=${EVAL_BFCL_V3_SAMPLES:-4441}
 EVAL_BFCL_MULTI_TURN_SAMPLES=${EVAL_BFCL_MULTI_TURN_SAMPLES:-200}
-EVAL_TOOLBENCH_BENCHMARK_SAMPLES=${EVAL_TOOLBENCH_BENCHMARK_SAMPLES:-0}
 EVAL_IFEVAL_SAMPLES=${EVAL_IFEVAL_SAMPLES:-541}
 EVAL_JSONSCHEMABENCH_SAMPLES=${EVAL_JSONSCHEMABENCH_SAMPLES:-5722}
 EVAL_IFBENCH_TEST_SAMPLES=${EVAL_IFBENCH_TEST_SAMPLES:-300}
@@ -54,7 +48,6 @@ RUNTIME_DATA_DIR="${WORK_ROOT}/runtime_data"
 TRAIN_SOURCE_LIST="${LOG_DIR}/train_pool_sources.list"
 BFCL_V3_EVAL="${RUNTIME_DATA_DIR}/bfcl_v3_eval.normalized.jsonl"
 BFCL_MULTI_TURN_EVAL="${RUNTIME_DATA_DIR}/bfcl_multi_turn_eval.normalized.jsonl"
-TOOLBENCH_BENCHMARK_EVAL="${RUNTIME_DATA_DIR}/toolbench_benchmark_eval.normalized.jsonl"
 IFEVAL_EVAL="${RUNTIME_DATA_DIR}/ifeval_eval.normalized.jsonl"
 JSONSCHEMABENCH_EVAL="${RUNTIME_DATA_DIR}/jsonschemabench_eval.normalized.jsonl"
 IFBENCH_TEST_EVAL="${RUNTIME_DATA_DIR}/ifbench_test_eval.normalized.jsonl"
@@ -85,9 +78,6 @@ TOOLCALL_RESUME_NO_RNG=${TOOLCALL_RESUME_NO_RNG:-1}
 TOOLCALL_RESUME_FINETUNE=${TOOLCALL_RESUME_FINETUNE:-1}
 TOOL_CALL_LOAD_DIR=${TOOL_CALL_LOAD_DIR:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/experiments/ifrl_qwen3_30b_a3b/checkpoints}
 TOOL_CALL_WANDB_PROJECT=${TOOL_CALL_WANDB_PROJECT:-slime-multidomain-v2}
-DEFAULT_WANDB_GROUP_FROM_DATASETS="${TRAIN_POOL_DATASETS//,/+}"
-DEFAULT_WANDB_GROUP_FROM_DATASETS="${DEFAULT_WANDB_GROUP_FROM_DATASETS//[[:space:]]/}"
-TOOL_CALL_WANDB_GROUP=${TOOL_CALL_WANDB_GROUP:-${DEFAULT_WANDB_GROUP_FROM_DATASETS:-${JOB_NAME:-qwen3-30b-a3b-mdv2-3node}}}
 RAY_CLUSTER_WAIT_MAX_ATTEMPTS=${RAY_CLUSTER_WAIT_MAX_ATTEMPTS:-120}
 RAY_CLUSTER_WAIT_SLEEP_SECONDS=${RAY_CLUSTER_WAIT_SLEEP_SECONDS:-10}
 RAY_CLUSTER_STATUS_TIMEOUT_SECONDS=${RAY_CLUSTER_STATUS_TIMEOUT_SECONDS:-30}
@@ -104,9 +94,41 @@ RAY_HEAD_LOCK_DIR="${WORK_ROOT}/ray_head_lock"
 
 mkdir -p "${LOG_DIR}" "${SAVE_DIR}" "${RUNTIME_DATA_DIR}" "${TRACE_DIR}"
 
+if [[ -z "${TRAIN_POOL_DATASETS}" ]]; then
+  TRAIN_POOL_DATASETS="$(
+    PYTHONPATH="${SCRIPT_DIR}:${SCRIPT_DIR}/..:${PYTHONPATH:-}" python3 - "${TRAIN_POOL_GROUP}" <<'PY'
+import sys
+
+from multidomain_shared import default_train_datasets_for_group
+
+print(",".join(default_train_datasets_for_group(sys.argv[1])))
+PY
+  )"
+fi
+
+TRAIN_GROUP_SIGNATURE="$(
+  PYTHONPATH="${SCRIPT_DIR}:${SCRIPT_DIR}/..:${PYTHONPATH:-}" python3 - "${TRAIN_POOL_DATASETS}" <<'PY'
+import sys
+
+from multidomain_shared import group_signature_for_train_datasets
+
+dataset_names = [item.strip() for item in sys.argv[1].split(",") if item.strip()]
+print(group_signature_for_train_datasets(dataset_names))
+PY
+)"
+
+DEFAULT_WANDB_GROUP_FROM_DOMAINS="qwen3-30b-a3b-mdv2-3node-${TRAIN_GROUP_SIGNATURE}"
+TOOL_CALL_WANDB_GROUP=${TOOL_CALL_WANDB_GROUP:-${DEFAULT_WANDB_GROUP_FROM_DOMAINS:-${JOB_NAME:-qwen3-30b-a3b-mdv2-3node}}}
+
 BOOTSTRAP_NODE_ID="${WORKER_ID:-${HOSTNAME:-node-${NODE_RANK:-unknown}}}"
 BOOTSTRAP_LOG_FILE="${LOG_DIR}/bootstrap_${BOOTSTRAP_NODE_ID}.log"
 exec > >(tee -a "${BOOTSTRAP_LOG_FILE}") 2>&1
+
+if [[ "${TRAIN_GROUP_SIGNATURE}" == mixed-* ]]; then
+  echo "Training mixes multiple groups: ${TRAIN_GROUP_SIGNATURE}"
+else
+  echo "Training group: ${TRAIN_GROUP_SIGNATURE}"
+fi
 
 cleanup_local_processes() {
   pkill -9 sglang 2>/dev/null || true
@@ -394,62 +416,43 @@ prepare_training_source_list() {
 }
 
 prepare_eval_data() {
-  if (( EVAL_TOOLBENCH_BENCHMARK_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/../multidomain_v1/prepare_multidomain_v1_data.py" \
-      --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G1_TOOL}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
-      --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G1_CATEGORY}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
-      --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G1_INSTRUCTION}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
-      --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G2_CATEGORY}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
-      --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G2_INSTRUCTION}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
-      --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G3_INSTRUCTION}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
-      --dest "${TOOLBENCH_BENCHMARK_EVAL}" \
-      --max-samples "${EVAL_TOOLBENCH_BENCHMARK_SAMPLES}" \
-      --parser-type "${TOOLCALL_PARSER_TYPE}"
-    filter_jsonl_by_prompt_budget "${TOOLBENCH_BENCHMARK_EVAL}" toolbench_benchmark_eval
-  fi
-
   if (( EVAL_IFEVAL_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/../multidomain_v1/prepare_multidomain_v1_data.py" \
-      --source "${EVAL_STRUCTURED_IFEVAL}" --dataset-format ifeval --source-ratio 1 \
+    python3 "${SCRIPT_DIR}/prepare_multidomain_v2_data.py" \
+      --source "${EVAL_STRUCTURED_IFEVAL}" \
       --dest "${IFEVAL_EVAL}" \
-      --max-samples "${EVAL_IFEVAL_SAMPLES}" \
-      --parser-type "${TOOLCALL_PARSER_TYPE}"
+      --max-samples "${EVAL_IFEVAL_SAMPLES}"
     filter_jsonl_by_prompt_budget "${IFEVAL_EVAL}" ifeval_eval
   fi
 
   if (( EVAL_JSONSCHEMABENCH_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/../multidomain_v1/prepare_multidomain_v1_data.py" \
-      --source "${EVAL_STRUCTURED_JSONSCHEMABENCH}" --dataset-format jsonschemabench --source-ratio 1 \
+    python3 "${SCRIPT_DIR}/prepare_multidomain_v2_data.py" \
+      --source "${EVAL_STRUCTURED_JSONSCHEMABENCH}" \
       --dest "${JSONSCHEMABENCH_EVAL}" \
-      --max-samples "${EVAL_JSONSCHEMABENCH_SAMPLES}" \
-      --parser-type "${TOOLCALL_PARSER_TYPE}"
+      --max-samples "${EVAL_JSONSCHEMABENCH_SAMPLES}"
     filter_jsonl_by_prompt_budget "${JSONSCHEMABENCH_EVAL}" jsonschemabench_eval
   fi
 
   if (( EVAL_IFBENCH_TEST_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/../multidomain_v1/prepare_multidomain_v1_data.py" \
-      --source "${EVAL_STRUCTURED_IFBENCH_TEST}" --dataset-format ifbench_test --source-ratio 1 \
+    python3 "${SCRIPT_DIR}/prepare_multidomain_v2_data.py" \
+      --source "${EVAL_STRUCTURED_IFBENCH_TEST}" \
       --dest "${IFBENCH_TEST_EVAL}" \
-      --max-samples "${EVAL_IFBENCH_TEST_SAMPLES}" \
-      --parser-type "${TOOLCALL_PARSER_TYPE}"
+      --max-samples "${EVAL_IFBENCH_TEST_SAMPLES}"
     filter_jsonl_by_prompt_budget "${IFBENCH_TEST_EVAL}" ifbench_test_eval
   fi
 
   if (( EVAL_MMLU_PRO_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/../multidomain_v1/prepare_multidomain_v1_data.py" \
-      --source "${EVAL_STEM_MMLU_PRO}" --dataset-format mmlu_pro --source-ratio 1 \
+    python3 "${SCRIPT_DIR}/prepare_multidomain_v2_data.py" \
+      --source "${EVAL_STEM_MMLU_PRO}" \
       --dest "${MMLU_PRO_EVAL}" \
-      --max-samples "${EVAL_MMLU_PRO_SAMPLES}" \
-      --parser-type "${TOOLCALL_PARSER_TYPE}"
+      --max-samples "${EVAL_MMLU_PRO_SAMPLES}"
     filter_jsonl_by_prompt_budget "${MMLU_PRO_EVAL}" mmlu_pro_eval
   fi
 
   if (( EVAL_GPQA_MAIN_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/../multidomain_v1/prepare_multidomain_v1_data.py" \
-      --source "${EVAL_STEM_GPQA_MAIN}" --dataset-format gpqa --source-ratio 1 \
+    python3 "${SCRIPT_DIR}/prepare_multidomain_v2_data.py" \
+      --source "${EVAL_STEM_GPQA_MAIN}" \
       --dest "${GPQA_MAIN_EVAL}" \
-      --max-samples "${EVAL_GPQA_MAIN_SAMPLES}" \
-      --parser-type "${TOOLCALL_PARSER_TYPE}"
+      --max-samples "${EVAL_GPQA_MAIN_SAMPLES}"
     filter_jsonl_by_prompt_budget "${GPQA_MAIN_EVAL}" gpqa_main_eval
   fi
 }
@@ -535,9 +538,6 @@ submit_ray_job() {
 
   EVAL_ARGS=()
   EVAL_PROMPT_DATA_ARGS=()
-  if (( EVAL_TOOLBENCH_BENCHMARK_SAMPLES > 0 )); then
-    EVAL_PROMPT_DATA_ARGS+=(toolbench_benchmark_eval "${TOOLBENCH_BENCHMARK_EVAL}")
-  fi
   if (( EVAL_IFEVAL_SAMPLES > 0 )); then
     EVAL_PROMPT_DATA_ARGS+=(ifeval_eval "${IFEVAL_EVAL}")
   fi
@@ -620,9 +620,9 @@ submit_ray_job() {
   fi
 
   CUSTOM_ARGS=(
-    --custom-rm-path reward_multidomain_v1.reward_func
-    --custom-rollout-log-function-path log_multidomain_v1.log_rollout_data
-    --custom-eval-rollout-log-function-path log_multidomain_v1.log_eval_rollout_data
+    --custom-rm-path "multidomain_shared.reward_func"
+    --custom-rollout-log-function-path log_rollout.log_rollout_data
+    --custom-eval-rollout-log-function-path log_rollout.log_eval_rollout_data
   )
 
   WANDB_ARGS=()
@@ -638,7 +638,7 @@ submit_ray_job() {
     )
   fi
 
-  RUNTIME_ENV_JSON="{\"env_vars\":{\"PYTHONPATH\":\"${SCRIPT_DIR}:${SCRIPT_DIR}/../multidomain_v1:${MEGATRON_PATH}:${SLIME_DIR}\",\"CUDA_DEVICE_MAX_CONNECTIONS\":\"1\",\"NCCL_NVLS_ENABLE\":\"${HAS_NVLINK}\",\"MASTER_ADDR\":\"${MASTER_ADDR}\",\"WANDB_API_KEY\":\"${WANDB_API_KEY:-}\",\"WANDB_BASE_URL\":\"${WANDB_BASE_URL:-}\",\"MULTIDOMAIN_V1_TRACE_DIR\":\"${MULTIDOMAIN_V1_TRACE_DIR}\",\"MULTIDOMAIN_V1_TRACE_MAX_SAMPLES\":\"${MULTIDOMAIN_V1_TRACE_MAX_SAMPLES}\"}}"
+  RUNTIME_ENV_JSON="{\"env_vars\":{\"PYTHONPATH\":\"${SCRIPT_DIR}:${SCRIPT_DIR}/..:${MEGATRON_PATH}:${SLIME_DIR}\",\"CUDA_DEVICE_MAX_CONNECTIONS\":\"1\",\"NCCL_NVLS_ENABLE\":\"${HAS_NVLINK}\",\"MASTER_ADDR\":\"${MASTER_ADDR}\",\"WANDB_API_KEY\":\"${WANDB_API_KEY:-}\",\"WANDB_BASE_URL\":\"${WANDB_BASE_URL:-}\",\"MULTIDOMAIN_V1_TRACE_DIR\":\"${MULTIDOMAIN_V1_TRACE_DIR}\",\"MULTIDOMAIN_V1_TRACE_MAX_SAMPLES\":\"${MULTIDOMAIN_V1_TRACE_MAX_SAMPLES}\"}}"
 
   TRAINING_RESOURCE_ARGS=(
     --actor-num-nodes "${ACTOR_NUM_NODES}"
