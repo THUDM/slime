@@ -8,7 +8,7 @@ PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 AVALANCHE_ROOT="$(cd -- "${PROJECT_ROOT}/.." && pwd)"
 
 # shellcheck source=/dev/null
-source "${SCRIPT_DIR}/ray_bootstrap_utils.sh"
+source "${SCRIPT_DIR}/../_shared/ray_bootstrap_utils.sh"
 
 NUM_NODES=${NUM_NODES:-3}
 NUM_GPUS_PER_NODE=${NUM_GPUS_PER_NODE:-8}
