@@ -18,9 +18,9 @@ PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 AVALANCHE_ROOT="$(cd -- "${PROJECT_ROOT}/.." && pwd)"
 
 # shellcheck source=/dev/null
-source "${PROJECT_ROOT}/slime/examples/multidomain_v1/ray_bootstrap_utils.sh"
+source "${SCRIPT_DIR}/ray_bootstrap_utils.sh"
 # shellcheck source=/dev/null
-source "${PROJECT_ROOT}/slime/examples/multidomain_v1/data_cache_reuse_utils.sh"
+source "${SCRIPT_DIR}/data_cache_reuse_utils.sh"
 
 # ---- Cluster layout ----
 NUM_NODES=${NUM_NODES:-4}
@@ -41,7 +41,7 @@ WORK_ROOT=${WORK_ROOT:-${AVALANCHE_ROOT}/experiments/mopd_qwen3_30b_a3b_4node_po
 # ---- Data ----
 TRAIN_POOL_ROOT=${TRAIN_POOL_ROOT:-${AVALANCHE_ROOT}/data/pool}
 TRAIN_POOL_INCLUDE_DOMAINS=${TRAIN_POOL_INCLUDE_DOMAINS:-tool,stem,structured,code,math}
-TRAIN_POOL_EXCLUDE_PATTERNS=${TRAIN_POOL_EXCLUDE_PATTERNS:-stem/train/openbookqa,stem/train/scienceqa,stem/train/sciq,stem/train/ai2_arc,stem/train/aqua_rat,tool/train/xlam_function_calling_60k,structured/train/nemotron_structured_outputs}
+TRAIN_POOL_EXCLUDE_PATTERNS=${TRAIN_POOL_EXCLUDE_PATTERNS:-stem/train/openbookqa,stem/train/scienceqa,stem/train/sciq,stem/train/ai2_arc,stem/train/aqua_rat,tool/train/xlam_function_calling_60k,structured/train/nemotron_structured_outputs,stem/train/medmcqa_data_,structured/train/jsonschemabench_train-}
 TRAIN_SOURCE_LIST_BASENAME=${TRAIN_SOURCE_LIST_BASENAME:-mopd_train_sources.list}
 
 # ---- Eval ----
@@ -77,22 +77,21 @@ TOOLCALL_RESUME_FINETUNE=${TOOLCALL_RESUME_FINETUNE:-1}
 
 # ---- W&B ----
 TOOL_CALL_WANDB_PROJECT=${TOOL_CALL_WANDB_PROJECT:-slime-mopd}
-TOOL_CALL_WANDB_GROUP=${TOOL_CALL_WANDB_GROUP:-${JOB_NAME:-mopd-qwen3-30b-a3b-4node}}
 
 # ---- Misc ----
 SLIME_DIR=${SLIME_DIR:-${PROJECT_ROOT}/slime}
 MEGATRON_PATH=${MEGATRON_PATH:-/root/Megatron-LM}
 
-RAY_CLUSTER_WAIT_MAX_ATTEMPTS=${RAY_CLUSTER_WAIT_MAX_ATTEMPTS:-120}
-RAY_CLUSTER_WAIT_SLEEP_SECONDS=${RAY_CLUSTER_WAIT_SLEEP_SECONDS:-10}
+RAY_CLUSTER_WAIT_MAX_ATTEMPTS=${RAY_CLUSTER_WAIT_MAX_ATTEMPTS:-240}
+RAY_CLUSTER_WAIT_SLEEP_SECONDS=${RAY_CLUSTER_WAIT_SLEEP_SECONDS:-15}
 RAY_CLUSTER_STATUS_TIMEOUT_SECONDS=${RAY_CLUSTER_STATUS_TIMEOUT_SECONDS:-30}
-RAY_WORKER_JOIN_MAX_ATTEMPTS=${RAY_WORKER_JOIN_MAX_ATTEMPTS:-60}
-RAY_WORKER_JOIN_RETRY_SLEEP_SECONDS=${RAY_WORKER_JOIN_RETRY_SLEEP_SECONDS:-10}
-RAY_HEAD_ADDR_WAIT_ATTEMPTS=${RAY_HEAD_ADDR_WAIT_ATTEMPTS:-300}
+RAY_WORKER_JOIN_MAX_ATTEMPTS=${RAY_WORKER_JOIN_MAX_ATTEMPTS:-180}
+RAY_WORKER_JOIN_RETRY_SLEEP_SECONDS=${RAY_WORKER_JOIN_RETRY_SLEEP_SECONDS:-15}
+RAY_HEAD_ADDR_WAIT_ATTEMPTS=${RAY_HEAD_ADDR_WAIT_ATTEMPTS:-900}
 RAY_HEAD_ADDR_WAIT_SLEEP=${RAY_HEAD_ADDR_WAIT_SLEEP:-2}
-RAY_HEAD_START_STATUS_MAX_ATTEMPTS=${RAY_HEAD_START_STATUS_MAX_ATTEMPTS:-30}
-RAY_HEAD_START_STATUS_SLEEP_SECONDS=${RAY_HEAD_START_STATUS_SLEEP_SECONDS:-2}
-RAY_GCS_RPC_SERVER_RECONNECT_TIMEOUT_SECONDS=${RAY_GCS_RPC_SERVER_RECONNECT_TIMEOUT_SECONDS:-300}
+RAY_HEAD_START_STATUS_MAX_ATTEMPTS=${RAY_HEAD_START_STATUS_MAX_ATTEMPTS:-120}
+RAY_HEAD_START_STATUS_SLEEP_SECONDS=${RAY_HEAD_START_STATUS_SLEEP_SECONDS:-5}
+RAY_GCS_RPC_SERVER_RECONNECT_TIMEOUT_SECONDS=${RAY_GCS_RPC_SERVER_RECONNECT_TIMEOUT_SECONDS:-1800}
 export RAY_gcs_rpc_server_reconnect_timeout_s="${RAY_gcs_rpc_server_reconnect_timeout_s:-${RAY_GCS_RPC_SERVER_RECONNECT_TIMEOUT_SECONDS}}"
 RAY_HEAD_ADDR_FILE="${WORK_ROOT}/ray_head_addr.txt"
 RAY_HEAD_LOCK_DIR="${WORK_ROOT}/ray_head_lock"
@@ -109,9 +108,23 @@ export MULTIDOMAIN_V1_TRACE_MAX_SAMPLES="${TRACE_MAX_SAMPLES}"
 
 mkdir -p "${DATA_CACHE_DIR}" "${LOG_DIR}" "${SAVE_DIR}" "${TRACE_DIR}"
 
+MOPD_DOMAIN_SIGNATURE="$(
+  PYTHONPATH="${SLIME_DIR}/examples:${PYTHONPATH:-}" python3 - "${TRAIN_POOL_INCLUDE_DOMAINS}" <<'PY'
+import sys
+
+from multidomain_shared import domain_signature
+
+domains = [item.strip() for item in sys.argv[1].split(",") if item.strip()]
+print(domain_signature(domains))
+PY
+)"
+TOOL_CALL_WANDB_GROUP=${TOOL_CALL_WANDB_GROUP:-mopd-qwen3-30b-a3b-4node-${MOPD_DOMAIN_SIGNATURE}}
+
 BOOTSTRAP_NODE_ID="${WORKER_ID:-${HOSTNAME:-node-${NODE_RANK:-unknown}}}"
 BOOTSTRAP_LOG_FILE="${LOG_DIR}/bootstrap_${BOOTSTRAP_NODE_ID}.log"
 exec > >(tee -a "${BOOTSTRAP_LOG_FILE}") 2>&1
+
+echo "MOPD training domains: ${MOPD_DOMAIN_SIGNATURE}"
 
 # ---- Helpers (from mdv1) ----
 
@@ -445,39 +458,14 @@ prepare_training_source_list() {
     return 1
   fi
 
-  python3 - "${TRAIN_POOL_ROOT}" "${TRAIN_SOURCE_LIST}" "${TRAIN_POOL_INCLUDE_DOMAINS}" "${TRAIN_POOL_EXCLUDE_PATTERNS}" <<'PY'
-import sys
-from pathlib import Path
-
-pool_root = Path(sys.argv[1]).resolve()
-dest = Path(sys.argv[2])
-include_domains = [item.strip() for item in sys.argv[3].split(",") if item.strip()]
-exclude_patterns = [item.strip() for item in sys.argv[4].split(",") if item.strip()]
-
-paths = []
-for domain in include_domains:
-    domain_root = pool_root / domain
-    if not domain_root.exists():
-        continue
-    if domain in {"tool", "stem", "structured"}:
-        candidates = sorted((domain_root / "train").glob("*.jsonl"))
-    else:
-        candidates = sorted(domain_root.glob("*.jsonl"))
-    for path in candidates:
-        rel = path.relative_to(pool_root).as_posix()
-        if any(pattern in rel for pattern in exclude_patterns):
-            continue
-        paths.append(path.resolve())
-
-dest.parent.mkdir(parents=True, exist_ok=True)
-with dest.open("w", encoding="utf-8") as handle:
-    for path in paths:
-        handle.write(f"{path}\n")
-
-print(f"wrote {len(paths)} training sources to {dest}")
-for path in paths:
-    print(path)
-PY
+  # Materialize pool data: bridge top-level supervision_family fields -> metadata.ground_truth/reward_type
+  # so that downstream reward functions can consume the data directly.
+  PYTHONPATH="${SLIME_DIR}:${PYTHONPATH:-}" python3 "${SCRIPT_DIR}/materialize_train_pool.py" \
+    "${TRAIN_POOL_ROOT}" \
+    "${DATA_CACHE_DIR}/materialized_train" \
+    "${TRAIN_SOURCE_LIST}" \
+    "${TRAIN_POOL_INCLUDE_DOMAINS}" \
+    "${TRAIN_POOL_EXCLUDE_PATTERNS}"
 
   ensure_nonempty_file "${TRAIN_SOURCE_LIST}" "Training source manifest"
 }
@@ -643,7 +631,7 @@ submit_ray_job() {
   fi
 
   MOPD_DIR="${SLIME_DIR}/examples/MOPD"
-  RUNTIME_ENV_JSON="{\"env_vars\":{\"PYTHONPATH\":\"${MOPD_DIR}:${SLIME_DIR}/examples/multidomain_v1:${MEGATRON_PATH}:${SLIME_DIR}\",\"CUDA_DEVICE_MAX_CONNECTIONS\":\"1\",\"NCCL_NVLS_ENABLE\":\"${HAS_NVLINK}\",\"MASTER_ADDR\":\"${MASTER_ADDR}\",\"WANDB_API_KEY\":\"${WANDB_API_KEY:-}\",\"WANDB_BASE_URL\":\"${WANDB_BASE_URL:-}\",\"MULTIDOMAIN_V1_TRACE_DIR\":\"${MULTIDOMAIN_V1_TRACE_DIR}\",\"MULTIDOMAIN_V1_TRACE_MAX_SAMPLES\":\"${MULTIDOMAIN_V1_TRACE_MAX_SAMPLES}\",\"OPD_DOMAIN_MODEL_MAP\":\"${OPD_DOMAIN_MODEL_MAP}\"}}"
+  RUNTIME_ENV_JSON="{\"env_vars\":{\"PYTHONPATH\":\"${MOPD_DIR}:${SLIME_DIR}/examples:${MEGATRON_PATH}:${SLIME_DIR}\",\"CUDA_DEVICE_MAX_CONNECTIONS\":\"1\",\"NCCL_NVLS_ENABLE\":\"${HAS_NVLINK}\",\"MASTER_ADDR\":\"${MASTER_ADDR}\",\"WANDB_API_KEY\":\"${WANDB_API_KEY:-}\",\"WANDB_BASE_URL\":\"${WANDB_BASE_URL:-}\",\"MULTIDOMAIN_V1_TRACE_DIR\":\"${MULTIDOMAIN_V1_TRACE_DIR}\",\"MULTIDOMAIN_V1_TRACE_MAX_SAMPLES\":\"${MULTIDOMAIN_V1_TRACE_MAX_SAMPLES}\",\"OPD_DOMAIN_MODEL_MAP\":\"${OPD_DOMAIN_MODEL_MAP}\"}}"
 
   TRAINING_RESOURCE_ARGS=(
     --actor-num-nodes "${ACTOR_NUM_NODES}"
