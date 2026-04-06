@@ -536,11 +536,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
                 help=(
-                    "The path to the prompt data. "
-                    "Currently we only support jsonl format, and each line should contains --input-key and --label-key, "
-                    "which will be used as the prompt and the label respectively. "
-                    "If you want to use a custom template, you can set --apply-chat-template to true, in that case, "
-                    "the input should be the same structure as an openai message, e.g. [{'role': 'user', 'content': 'blabla'}]. "
+                    "Path to the prompt dataset. Supported formats:\n"
+                    "  - .jsonl  : one JSON object per line, each containing --input-key and --label-key.\n"
+                    "  - .parquet: Apache Parquet file with the same column schema.\n"
+                    "  - .list   : plain-text file listing one .jsonl/.parquet path per line (lines\n"
+                    "              starting with '#' or empty lines are skipped).\n"
+                    "Row slicing is supported by appending '@[start:end]' to the path,\n"
+                    "e.g. '/data/train.jsonl@[0:1000]'.\n"
+                    "If --apply-chat-template is set, the --input-key value should be a list of\n"
+                    "message dicts (OpenAI format), e.g. [{'role': 'user', 'content': '...'}].\n"
+                    "For multidomain pool data, pre-materialize with\n"
+                    "examples/MOPD/materialize_train_pool.py before passing here."
                 ),
             )
             parser.add_argument("--apply-chat-template", action="store_true", default=False)
