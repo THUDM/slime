@@ -156,7 +156,7 @@ def test_write_dataset_aligns_missing_tools_to_v1_shape(tmp_path: Path):
     assert "stem" in rows[0]["prompt"][0]["content"].lower() or "science" in rows[0]["prompt"][0]["content"].lower()
     assert rows[0]["prompt"][1:] == [{"role": "user", "content": "prompt-stem"}]
     assert rows[0]["label"] == "A"
-    assert rows[0]["metadata"] == {"reward_type": "stem_mcqa"}
+    assert rows[0]["metadata"] == {"reward_type": "stem_mcqa", "answer": "A"}
     assert rows[0]["tools"] == []
 
 
@@ -269,7 +269,7 @@ def test_align_row_to_v1_shape_materializes_clean_stem_row_without_native():
         "domain": "stem",
         "record_id": "rec-1",
         "prompt": [{"role": "user", "content": "Question: ..."}],
-        "answer": "C",
+        "label": "C",
         "question": "Question: ...",
         "options": ["A1", "B1", "C1", "D1"],
         "metadata": {
@@ -284,7 +284,7 @@ def test_align_row_to_v1_shape_materializes_clean_stem_row_without_native():
 
     assert aligned["metadata"]["reward_type"] == "stem_mcqa"
     assert aligned["metadata"]["answer"] == "C"
-    assert aligned["label"] == ""
+    assert aligned["label"] == "C"
     assert aligned["tools"] == []
     assert aligned["prompt"][0]["role"] == "system"
 
