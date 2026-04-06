@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from examples.MOPD import log_mopd_rollout
+from examples import log_rollout
 
 
 def _args(trace_dir: Path):
@@ -48,7 +48,7 @@ def test_mopd_rollout_log_handles_dict_reward_and_bypasses_core_logging(tmp_path
         )
     ]
 
-    handled = log_mopd_rollout.log_rollout_data(7, args, samples, {}, 2.0)
+    handled = log_rollout.log_rollout_data(7, args, samples, {}, 2.0)
 
     assert handled is True
     trace_path = tmp_path / "rollout_0000007.jsonl"
@@ -62,7 +62,7 @@ def test_mopd_rollout_log_preserves_scalar_reward_in_trace(tmp_path: Path):
     args = _args(tmp_path)
     samples = [_sample(reward=0.75, domain="tool", dataset_name="toolbench")]
 
-    log_mopd_rollout.log_rollout_data(3, args, samples, {}, 1.5)
+    log_rollout.log_rollout_data(3, args, samples, {}, 1.5)
 
     trace_path = tmp_path / "rollout_0000003.jsonl"
     row = json.loads(trace_path.read_text(encoding="utf-8").strip())
@@ -75,19 +75,19 @@ def test_mopd_run_script_wires_custom_eval_wandb_logging():
     script_path = Path(__file__).resolve().parents[1] / "examples" / "MOPD" / "run_mopd_qwen3_30b_4node.sh"
     script_text = script_path.read_text(encoding="utf-8")
 
-    assert "--custom-eval-rollout-log-function-path examples.MOPD.log_mopd_rollout.log_eval_rollout_data" in script_text
+    assert "--custom-eval-rollout-log-function-path log_rollout.log_eval_rollout_data" in script_text
 
 
 def test_mopd_eval_log_adds_domain_metrics_without_skipping_default_logging(tmp_path: Path):
     args = _args(tmp_path)
     captured: list[tuple[dict, str]] = []
 
-    original_logging_utils = log_mopd_rollout.logging_utils
-    log_mopd_rollout.logging_utils = SimpleNamespace(
+    original_logging_utils = log_rollout.logging_utils
+    log_rollout.logging_utils = SimpleNamespace(
         log=lambda _args, metrics, step_key: captured.append((metrics, step_key))
     )
     try:
-        handled = log_mopd_rollout.log_eval_rollout_data(
+        handled = log_rollout.log_eval_rollout_data(
             5,
             args,
             {
@@ -97,7 +97,7 @@ def test_mopd_eval_log_adds_domain_metrics_without_skipping_default_logging(tmp_
             {"eval/custom_metric": 0.5},
         )
     finally:
-        log_mopd_rollout.logging_utils = original_logging_utils
+        log_rollout.logging_utils = original_logging_utils
 
     assert handled is False
     assert len(captured) == 1

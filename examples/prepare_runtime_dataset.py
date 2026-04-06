@@ -11,16 +11,16 @@ EXAMPLES_DIR = Path(__file__).resolve().parent
 if str(EXAMPLES_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLES_DIR))
 
-from dataset_selection import (
+from common.dataset_selection import (
     ResolvedEvalDataset,
     discover_train_sources,
     resolve_eval_datasets,
     resolve_named_datasets as resolve_named_datasets_from_registry,
     resolve_train_sources,
 )
-from eval_prep_utils import materialize_eval_dataset as materialize_eval_dataset_shared
-from pool_data_utils import iter_json_object_rows, write_source_manifest as write_source_manifest_shared
-from pool_runtime_semantics import materialize_runtime_pool_row
+from common.eval_prep_utils import materialize_eval_dataset as materialize_eval_dataset_shared
+from common.pool_data_utils import iter_json_object_rows, write_source_manifest as write_source_manifest_shared
+from common.pool_runtime_semantics import materialize_runtime_pool_row
 
 
 def discover_sources(pool_root: Path) -> list[Path]:
