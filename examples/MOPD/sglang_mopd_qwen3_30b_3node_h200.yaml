@@ -1,0 +1,58 @@
+# Multi-model SGLang layout for MOPD (Multi-Objective Policy Distillation)
+# with Qwen3-30B-A3B on 3 H200 nodes (24 GPUs).
+#
+# Layout:
+#   Actor (training): 2 nodes x 8 GPUs = 16 GPUs
+#   Rollout:          1 node  x 8 GPUs = 8 GPUs
+#     student: 4 GPUs, TP=2 -> 2 engines
+#     tool:    1 GPU
+#     code:    1 GPU
+#     math:    1 GPU
+#
+# Total num_gpus = 7 = --rollout-num-gpus.
+
+sglang:
+  - name: student
+    update_weights: true
+    server_groups:
+      - worker_type: regular
+        num_gpus: 4
+        num_gpus_per_engine: 2
+        overrides:
+          mem_fraction_static: 0.82
+
+  - name: tool
+    model_path: /inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/experiments/multidomain_v2_main_retry/hf_cache/iter_0000279_hf
+    update_weights: false
+    server_groups:
+      - worker_type: regular
+        num_gpus: 1
+        num_gpus_per_engine: 1
+        overrides:
+          mem_fraction_static: 0.72
+          max_running_requests: 24
+          disable_cuda_graph: true
+
+  - name: code
+    model_path: /inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/jl_workspace/experiment/code/output/qwen3-30b-a3b-code-3node/hf_cache/iter_0000099_hf
+    update_weights: false
+    server_groups:
+      - worker_type: regular
+        num_gpus: 1
+        num_gpus_per_engine: 1
+        overrides:
+          mem_fraction_static: 0.76
+          max_running_requests: 32
+          disable_cuda_graph: true
+
+  - name: math
+    model_path: /inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/jl_workspace/experiment/math/output/qwen3-30b-a3b-deepmath-3node/hf_cache/iter_0000339_hf
+    update_weights: false
+    server_groups:
+      - worker_type: regular
+        num_gpus: 1
+        num_gpus_per_engine: 1
+        overrides:
+          mem_fraction_static: 0.76
+          max_running_requests: 32
+          disable_cuda_graph: true
