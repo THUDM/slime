@@ -461,7 +461,7 @@ prepare_training_source_list() {
     train_pool_prep_args+=("--manifest" "${TRAIN_MANIFEST}")
   fi
 
-  python3 "${SCRIPT_DIR}/prepare_multidomain_v2_data.py" \
+  python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" train \
     "${train_pool_prep_args[@]}" \
     --dest /dev/null \
     --print-sources > "${TRAIN_SOURCE_LIST}"
@@ -478,7 +478,7 @@ prepare_eval_data() {
     while IFS=$'\t' read -r name source_path sample_count; do
       [[ -n "${name}" ]] || continue
       local_dest="${RUNTIME_DATA_DIR}/${name}_eval.normalized.jsonl"
-      python3 "${SCRIPT_DIR}/../materialize_eval_dataset.py" \
+      python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" eval \
         --pool-root "${TRAIN_POOL_ROOT}" \
         --source "${source_path}" \
         --dest "${local_dest}" \
@@ -513,7 +513,8 @@ PY
   fi
 
   if (( EVAL_IFEVAL_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/prepare_multidomain_v2_data.py" \
+    python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" eval \
+      --pool-root "${TRAIN_POOL_ROOT}" \
       --source "${EVAL_STRUCTURED_IFEVAL}" \
       --dest "${IFEVAL_EVAL}" \
       --max-samples "${EVAL_IFEVAL_SAMPLES}"
@@ -521,7 +522,8 @@ PY
   fi
 
   if (( EVAL_JSONSCHEMABENCH_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/prepare_multidomain_v2_data.py" \
+    python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" eval \
+      --pool-root "${TRAIN_POOL_ROOT}" \
       --source "${EVAL_STRUCTURED_JSONSCHEMABENCH}" \
       --dest "${JSONSCHEMABENCH_EVAL}" \
       --max-samples "${EVAL_JSONSCHEMABENCH_SAMPLES}"
@@ -529,7 +531,8 @@ PY
   fi
 
   if (( EVAL_IFBENCH_TEST_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/prepare_multidomain_v2_data.py" \
+    python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" eval \
+      --pool-root "${TRAIN_POOL_ROOT}" \
       --source "${EVAL_STRUCTURED_IFBENCH_TEST}" \
       --dest "${IFBENCH_TEST_EVAL}" \
       --max-samples "${EVAL_IFBENCH_TEST_SAMPLES}"
@@ -537,7 +540,8 @@ PY
   fi
 
   if (( EVAL_MMLU_PRO_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/prepare_multidomain_v2_data.py" \
+    python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" eval \
+      --pool-root "${TRAIN_POOL_ROOT}" \
       --source "${EVAL_STEM_MMLU_PRO}" \
       --dest "${MMLU_PRO_EVAL}" \
       --max-samples "${EVAL_MMLU_PRO_SAMPLES}"
@@ -545,7 +549,8 @@ PY
   fi
 
   if (( EVAL_GPQA_MAIN_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/prepare_multidomain_v2_data.py" \
+    python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" eval \
+      --pool-root "${TRAIN_POOL_ROOT}" \
       --source "${EVAL_STEM_GPQA_MAIN}" \
       --dest "${GPQA_MAIN_EVAL}" \
       --max-samples "${EVAL_GPQA_MAIN_SAMPLES}"

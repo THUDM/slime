@@ -8,15 +8,15 @@ import types
 
 
 def _load_prepare_module():
-    module_path = Path(__file__).resolve().parents[1] / "examples" / "multidomain_v2" / "prepare_multidomain_v2_data.py"
-    spec = importlib.util.spec_from_file_location("prepare_multidomain_v2_test_module", module_path)
+    module_path = Path(__file__).resolve().parents[1] / "examples" / "prepare_runtime_dataset.py"
+    spec = importlib.util.spec_from_file_location("prepare_runtime_dataset_test_module", module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-prepare_multidomain_v2 = _load_prepare_module()
+prepare_runtime_dataset = _load_prepare_module()
 
 
 def _load_data_module():
@@ -63,7 +63,7 @@ def test_discover_sources_returns_sorted_jsonl_files(tmp_path: Path):
     (pool_root / "code").mkdir(parents=True, exist_ok=True)
     (pool_root / "code" / "ignore.txt").write_text("ignored\n", encoding="utf-8")
 
-    discovered = prepare_multidomain_v2.discover_sources(pool_root)
+    discovered = prepare_runtime_dataset.discover_sources(pool_root)
 
     assert [path.relative_to(pool_root).as_posix() for path in discovered] == [
         "structured/train/zeta.jsonl",
@@ -77,7 +77,7 @@ def test_discover_sources_excludes_hidden_and_appledouble_jsonl_files(tmp_path: 
     _write_jsonl(pool_root / "tool" / "train" / ".hidden.jsonl", [{"prompt": [], "label": "2", "metadata": {}}])
     _write_jsonl(pool_root / "tool" / "train" / "nested" / "._alpha.jsonl", [{"prompt": [], "label": "3", "metadata": {}}])
 
-    discovered = prepare_multidomain_v2.discover_sources(pool_root)
+    discovered = prepare_runtime_dataset.discover_sources(pool_root)
 
     assert [path.relative_to(pool_root).as_posix() for path in discovered] == [
         "tool/train/alpha.jsonl",
@@ -110,7 +110,7 @@ def test_write_dataset_preserves_normalized_rows_without_rewriting_fields(tmp_pa
     )
 
     dest = tmp_path / "multidomain_v2_train.jsonl"
-    written = prepare_multidomain_v2.write_dataset(
+    written = prepare_runtime_dataset.write_dataset(
         [source_a, source_b],
         dest,
         skip_samples=1,
@@ -147,7 +147,7 @@ def test_write_dataset_aligns_missing_tools_to_v1_shape(tmp_path: Path):
     )
 
     dest = tmp_path / "multidomain_v2_train.jsonl"
-    written = prepare_multidomain_v2.write_dataset([source], dest)
+    written = prepare_runtime_dataset.write_dataset([source], dest)
     rows = _read_jsonl(dest)
 
     assert written == 1
@@ -174,7 +174,7 @@ def test_resolve_named_datasets_expands_requested_pool_sources(tmp_path: Path):
             [{"prompt": [{"role": "user", "content": relpath}], "label": "", "metadata": {}}],
         )
 
-    resolved = prepare_multidomain_v2.resolve_named_datasets(
+    resolved = prepare_runtime_dataset.resolve_named_datasets(
         pool_root,
         ["agent", "jsonschemabench", "nemotron_structured_outputs"],
     )
@@ -196,7 +196,7 @@ def test_resolve_nemotron_knowledge_mcqa_expands_all_train_shards(tmp_path: Path
             [{"prompt": [{"role": "user", "content": relpath}], "label": "", "metadata": {}}],
         )
 
-    resolved = prepare_multidomain_v2.resolve_named_datasets(pool_root, ["nemotron_knowledge_mcqa"])
+    resolved = prepare_runtime_dataset.resolve_named_datasets(pool_root, ["nemotron_knowledge_mcqa"])
 
     assert [path.relative_to(pool_root).as_posix() for path in resolved] == expected_relpaths
 
@@ -230,7 +230,7 @@ def test_align_row_to_v1_shape_uses_instruction_following_prompts_for_ifbench():
         "tools": [],
     }
 
-    aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
+    aligned = prepare_runtime_dataset.align_row_to_v1_normalized_shape(row)
 
     assert aligned["prompt"][0]["role"] == "system"
     assert "structured output assistant" not in aligned["prompt"][0]["content"].lower()
@@ -254,7 +254,7 @@ def test_align_row_to_v1_shape_materializes_ifbench_eval_metadata_from_top_level
         },
     }
 
-    aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
+    aligned = prepare_runtime_dataset.align_row_to_v1_normalized_shape(row)
 
     assert aligned["metadata"]["reward_type"] == "instruction_following_soft"
     assert aligned["metadata"]["instruction_id_list"] == ["keywords:existence"]
@@ -280,7 +280,7 @@ def test_align_row_to_v1_shape_materializes_clean_stem_row_without_native():
         },
     }
 
-    aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
+    aligned = prepare_runtime_dataset.align_row_to_v1_normalized_shape(row)
 
     assert aligned["metadata"]["reward_type"] == "stem_mcqa"
     assert aligned["metadata"]["answer"] == "C"
@@ -304,7 +304,7 @@ def test_align_row_to_v1_shape_materializes_clean_structured_row_without_native(
         },
     }
 
-    aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
+    aligned = prepare_runtime_dataset.align_row_to_v1_normalized_shape(row)
 
     assert aligned["metadata"]["reward_type"] == "structured_json_schema"
     assert aligned["metadata"]["schema"] == {"type": "object"}
@@ -330,7 +330,7 @@ def test_align_row_to_v1_shape_materializes_clean_ifeval_row_without_native():
         },
     }
 
-    aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
+    aligned = prepare_runtime_dataset.align_row_to_v1_normalized_shape(row)
 
     assert aligned["metadata"]["reward_type"] == "instruction_following_strict"
     assert aligned["metadata"]["prompt_text"] == "Do the task"
@@ -367,7 +367,7 @@ def test_align_row_to_v1_shape_materializes_bfcl_eval_metadata_from_top_level_fi
         "tools": [{"type": "function", "function": {"name": "weather", "description": "", "parameters": {}}}],
     }
 
-    aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
+    aligned = prepare_runtime_dataset.align_row_to_v1_normalized_shape(row)
 
     assert aligned["metadata"]["reward_type"] == "bfcl_official"
     assert aligned["metadata"]["official_eval_name"] == "bfcl"
@@ -403,7 +403,7 @@ def test_align_row_to_v1_shape_materializes_train_function_call_family_from_top_
         "tools": [{"type": "function", "function": {"name": "weather", "description": "", "parameters": {}}}],
     }
 
-    aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
+    aligned = prepare_runtime_dataset.align_row_to_v1_normalized_shape(row)
 
     assert aligned["metadata"]["reward_type"] == "function_call_single"
     assert aligned["metadata"]["supervision_family"] == "function_call_single"
@@ -456,7 +456,7 @@ def test_align_row_to_v1_shape_is_near_noop_for_final_contract_tool_train_row():
         "tools": [{"type": "function", "function": {"name": "weather", "description": "", "parameters": {}}}],
     }
 
-    aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
+    aligned = prepare_runtime_dataset.align_row_to_v1_normalized_shape(row)
 
     assert aligned["metadata"]["reward_type"] == "function_call_single"
     assert aligned["metadata"]["ground_truth"] == row["metadata"]["ground_truth"]
@@ -476,7 +476,7 @@ def test_align_row_to_v1_shape_keeps_tools_top_level_only():
         "tools": [{"type": "function", "function": {"name": "weather", "description": "", "parameters": {}}}],
     }
 
-    aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
+    aligned = prepare_runtime_dataset.align_row_to_v1_normalized_shape(row)
 
     assert aligned["tools"] == row["tools"]
     assert "tools" not in aligned["metadata"]
