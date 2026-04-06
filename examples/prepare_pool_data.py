@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 import csv
 import hashlib
@@ -454,18 +455,118 @@ def _choices_dict_to_options(choices: Any) -> list[str]:
     return [str(item) for item in _json_ready(choices or [])]
 
 
+def _normalize_call_arguments(value: Any) -> Any:
+    parsed = _parse_json_like(value)
+    return parsed if parsed not in (None, "") else {}
+
+
+def _normalize_ground_truth_call(name: Any, arguments: Any) -> dict[str, Any]:
+    call_name = str(name or "").strip()
+    args = _normalize_call_arguments(arguments)
+    return {
+        "name": call_name,
+        "arguments": args,
+        "function": {
+            "name": call_name,
+            "arguments": args,
+        },
+    }
+
+
+def _extract_ground_truth_from_tool_calls(tool_calls: Any) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    parsed_tool_calls = _parse_json_like(tool_calls)
+    for call in parsed_tool_calls if isinstance(parsed_tool_calls, list) else []:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function")
+        if isinstance(function, dict):
+            normalized.append(_normalize_ground_truth_call(function.get("name"), function.get("arguments")))
+        else:
+            normalized.append(_normalize_ground_truth_call(call.get("name"), call.get("arguments")))
+    return [call for call in normalized if call["name"]]
+
+
+def _messages_before_first_tool_call(messages: Any) -> list[dict[str, Any]]:
+    prompt: list[dict[str, Any]] = []
+    for message in messages if isinstance(messages, list) else []:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "")
+        if role == "assistant" and message.get("tool_calls"):
+            break
+        if role == "tool":
+            break
+        prompt.append({"role": role or "user", "content": message.get("content") or ""})
+    return prompt
+
+
+def _extract_python_call_ground_truth(api_call: Any) -> list[dict[str, Any]]:
+    text = str(api_call or "").strip()
+    if not text:
+        return []
+    try:
+        node = ast.parse(text, mode="eval").body
+    except SyntaxError:
+        return []
+    if not isinstance(node, ast.Call):
+        return []
+
+    def _name(expr: ast.AST) -> str:
+        if isinstance(expr, ast.Name):
+            return expr.id
+        if isinstance(expr, ast.Attribute):
+            base = _name(expr.value)
+            return f"{base}.{expr.attr}" if base else expr.attr
+        return ""
+
+    def _literal(expr: ast.AST) -> Any:
+        try:
+            return ast.literal_eval(expr)
+        except Exception:
+            return ast.unparse(expr)
+
+    arguments: dict[str, Any] = {}
+    if node.args:
+        arguments["_args"] = [_literal(arg) for arg in node.args]
+    for kw in node.keywords:
+        if kw.arg:
+            arguments[kw.arg] = _literal(kw.value)
+    call_name = _name(node.func)
+    return [_normalize_ground_truth_call(call_name, arguments)] if call_name else []
+
+
 def _convert_apibench_row(row: dict[str, Any], dataset_name: str, supervision_family: str) -> list[dict[str, Any]]:
     record_id = _stable_record_id(dataset_name, {"api_call": row.get("api_call"), "code": row.get("code")})
+    code = row.get("code")
+    api_call = row.get("api_call")
+    provider = row.get("provider")
+    api_data = _json_ready(row.get("api_data"))
     sample = {
         "dataset_name": dataset_name,
         "domain": "tool",
         "record_id": record_id,
         "supervision_family": supervision_family,
-        "code": row.get("code"),
-        "api_call": row.get("api_call"),
-        "provider": row.get("provider"),
-        "api_data": _json_ready(row.get("api_data")),
-        "metadata": _tool_metadata(dataset_name, record_id, supervision_family),
+        "prompt": _ensure_message_prompt(code),
+        "label": "",
+        "tools": [],
+        "code": code,
+        "api_call": api_call,
+        "provider": provider,
+        "api_data": api_data,
+        "metadata": _tool_metadata(
+            dataset_name,
+            record_id,
+            supervision_family,
+            reward_type="api_call_text",
+            prompt_family="api_call_codegen",
+            raw_api_call=api_call,
+            ground_truth=_extract_python_call_ground_truth(api_call),
+            source_fields={
+                "provider": provider,
+                "api_data": api_data,
+            },
+        ),
     }
     return [sample]
 
@@ -473,18 +574,34 @@ def _convert_apibench_row(row: dict[str, Any], dataset_name: str, supervision_fa
 def _convert_xlam_row(row: dict[str, Any], dataset_name: str, supervision_family: str) -> list[dict[str, Any]]:
     extra = _json_ready(row.get("extra"))
     record_id = str((extra or {}).get("id") or _stable_record_id(dataset_name, row))
+    messages = _json_ready(row.get("messages") or [])
+    tools = _json_ready(_parse_json_like(row.get("tools")) or [])
     sample = {
         "dataset_name": dataset_name,
         "domain": "tool",
         "record_id": record_id,
         "supervision_family": supervision_family,
-        "messages": _json_ready(row.get("messages") or []),
-        "tools": _json_ready(_parse_json_like(row.get("tools")) or []),
+        "prompt": _messages_before_first_tool_call(messages),
+        "label": "",
+        "messages": messages,
+        "tools": tools,
         "extra": extra,
         "metadata": _tool_metadata(
             dataset_name,
             record_id,
             supervision_family,
+            reward_type="function_call_single",
+            prompt_family="function_call_single",
+            ground_truth=_extract_ground_truth_from_tool_calls(
+                next(
+                    (
+                        message.get("tool_calls")
+                        for message in messages
+                        if isinstance(message, dict) and message.get("tool_calls")
+                    ),
+                    [],
+                )
+            ),
             source_fields={"extra": extra} if extra else None,
         ),
     }
@@ -498,6 +615,20 @@ def _convert_agent_row(row: dict[str, Any], dataset_name: str, supervision_famil
     samples: list[dict[str, Any]] = []
     for index, item in enumerate(row.get("function_calls") or []):
         record_id = f"{trace_id}:{index}"
+        messages = _json_ready(item.get("messages") or [])
+        tools = _json_ready(item.get("tools") or [])
+        ground_truth = _extract_ground_truth_from_tool_calls(
+            next(
+                (
+                    message.get("tool_calls")
+                    for message in messages
+                    if isinstance(message, dict) and message.get("tool_calls")
+                ),
+                [],
+            )
+        )
+        if not ground_truth:
+            continue
         source_record_fields = {
             key: _json_ready(value)
             for key, value in item.items()
@@ -512,12 +643,17 @@ def _convert_agent_row(row: dict[str, Any], dataset_name: str, supervision_famil
                 "trace_id": trace_id,
                 "model": model,
                 "session_id": session_id,
-                "messages": _json_ready(item.get("messages") or []),
-                "tools": _json_ready(item.get("tools") or []),
+                "prompt": _messages_before_first_tool_call(messages),
+                "label": "",
+                "messages": messages,
+                "tools": tools,
                 "metadata": _tool_metadata(
                     dataset_name,
                     record_id,
                     supervision_family,
+                    reward_type="function_call_single",
+                    prompt_family="next_action_tool_call",
+                    ground_truth=ground_truth,
                     source_fields={
                         "model": model,
                         "session_id": session_id,
