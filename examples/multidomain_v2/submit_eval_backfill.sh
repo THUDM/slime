@@ -15,7 +15,7 @@ REMOTE_ROOT="${INSPIRE_TARGET_DIR:-${PROJECT_ROOT}}"
 RUN_SCRIPT="slime/examples/run_eval_backfill.sh"
 
 # shellcheck source=/dev/null
-source "${SCRIPT_DIR}/../_shared/submit_inspire_utils.sh"
+source "${SCRIPT_DIR}/../common/submit_inspire_utils.sh"
 
 submit_one() {
   local exp_name="$1"
