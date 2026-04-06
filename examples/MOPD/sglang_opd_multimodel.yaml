@@ -6,7 +6,7 @@
 #
 # Teacher `name` values must match sample.metadata["domain"] when using
 # `slime.rollout.on_policy_distillation.reward_func_route_by_domain`
-# (e.g. multidomain data from examples/multidomain_v1/prepare_multidomain_v1_data.py).
+# (e.g. multidomain data materialized from the current pool-based helpers).
 #
 # GPU hint: teachers only run forward for log-probs (max_new_tokens=0). Prefer the minimum
 # `num_gpus` per teacher (often 1). Give the student enough GPUs for your generation load.

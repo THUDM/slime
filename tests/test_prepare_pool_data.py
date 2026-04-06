@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _load_prepare_pool_module():
     module_path = Path(__file__).resolve().parents[1] / "examples" / "prepare_pool_data.py"
@@ -19,160 +21,87 @@ def _load_prepare_pool_module():
 prepare_pool_data = _load_prepare_pool_module()
 
 
-def test_convert_xlam_row_for_pool_preserves_prior_tool_context_and_call_metadata():
+def test_convert_xlam_row_for_pool_preserves_raw_fields_without_native_wrapper():
     row = {
         "messages": [
-            {"role": "system", "content": "sys"},
-            {"role": "user", "content": "u1"},
+            {"role": "user", "content": "Where can I find beta giveaways?"},
             {
                 "role": "assistant",
-                "content": "first call",
+                "content": "",
                 "tool_calls": [
                     {
-                        "id": "call_1",
                         "type": "function",
-                        "function": {"name": "weather", "arguments": '{"city":"Paris"}'},
-                    }
-                ],
-            },
-            {
-                "role": "tool",
-                "name": "weather",
-                "tool_call_id": "call_1",
-                "content": "sunny",
-            },
-            {
-                "role": "assistant",
-                "content": "second call",
-                "tool_calls": [
-                    {
-                        "id": "call_2",
-                        "type": "function",
-                        "function": {"name": "calendar", "arguments": {"day": "Monday"}},
+                        "function": {"name": "live_giveaways_by_type", "arguments": '{"type":"beta"}'},
                     }
                 ],
             },
         ],
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "weather",
-                    "description": "desc",
-                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
-                },
-                "x-extra": "keep-me",
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "calendar",
-                    "description": "desc2",
-                    "parameters": {"type": "object", "properties": {"day": {"type": "string"}}},
-                },
-            },
-        ],
-        "extra": {"id": "row-1"},
+        "tools": '[{"type":"function","function":{"name":"live_giveaways_by_type","parameters":{"type":"object"}}}]',
+        "extra": {"id": 7},
     }
 
     samples = prepare_pool_data.convert_row_for_pool(row, "xlam_function_calling_60k")
 
-    assert len(samples) == 2
-    second = samples[1]
-    prompt = second["prompt"]
-    assert prompt[2]["tool_calls"] == [
-        {
-            "id": "call_1",
-            "type": "function",
-            "name": "weather",
-            "arguments": {"city": "Paris"},
-            "function": {"name": "weather", "arguments": {"city": "Paris"}},
-        }
-    ]
-    assert prompt[3]["name"] == "weather"
-    assert prompt[3]["tool_call_id"] == "call_1"
-    assert second["supervision_family"] == "function_call_single"
-    assert second["native"]["ground_truth"] == [
-        {
-            "id": "call_2",
-            "type": "function",
-            "name": "calendar",
-            "arguments": {"day": "Monday"},
-            "function": {"name": "calendar", "arguments": {"day": "Monday"}},
-        }
-    ]
-    assert second["tools"][0]["x-extra"] == "keep-me"
-    assert "tools" not in second["metadata"]
-    assert second["metadata"]["source_fields"] == {"extra": {"id": "row-1"}}
-    assert "reward_type" not in second["metadata"]
-
-
-def test_normalize_prompt_message_for_pool_keeps_multimodal_content_blocks():
-    message = {
-        "role": "user",
-        "content": [
-            {"type": "image", "image": "image-1.png"},
-            {"type": "text", "text": "Describe the image."},
-        ],
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample["dataset_name"] == "xlam_function_calling_60k"
+    assert sample["domain"] == "tool"
+    assert sample["record_id"] == "7"
+    assert sample["supervision_family"] == "function_call_single"
+    assert sample["messages"] == row["messages"]
+    assert isinstance(sample["tools"], list)
+    assert sample["extra"] == {"id": 7}
+    assert "native" not in sample
+    assert sample["metadata"] == {
+        "dataset_name": "xlam_function_calling_60k",
+        "domain": "tool",
+        "record_id": "7",
+        "supervision_family": "function_call_single",
+        "source_fields": {"extra": {"id": 7}},
     }
 
-    normalized = prepare_pool_data._normalize_prompt_message_for_pool(message)
 
-    assert normalized == message
+def test_convert_apibench_row_for_pool_preserves_api_bench_shape():
+    row = {
+        "code": "###Instruction: Load the model.\n###Output: <<<api_call>>>: AutoModel.from_pretrained(\"bert-base-uncased\")",
+        "api_call": 'AutoModel.from_pretrained("bert-base-uncased")',
+        "provider": "Hugging Face Transformers",
+        "api_data": {"api_name": "bert-base-uncased", "framework": "transformers"},
+    }
 
+    samples = prepare_pool_data.convert_row_for_pool(row, "apibench_huggingface")
 
-def test_resolve_avalanche_root_falls_back_to_project_root_when_legacy_mount_is_missing(tmp_path: Path):
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-
-    resolved = prepare_pool_data._resolve_avalanche_root(
-        project_root=project_root,
-        legacy_root=tmp_path / "missing-legacy-root",
-        env={},
-    )
-
-    assert resolved == project_root
-
-
-def test_resolve_avalanche_root_prefers_ancestor_with_open_data(tmp_path: Path):
-    avalanche_root = tmp_path / "avalanche"
-    nested_project = avalanche_root / "jy_workspace"
-    (avalanche_root / "data" / "open_data").mkdir(parents=True)
-    nested_project.mkdir()
-
-    resolved = prepare_pool_data._resolve_avalanche_root(
-        project_root=nested_project,
-        legacy_root=tmp_path / "missing-legacy-root",
-        env={},
-    )
-
-    assert resolved == avalanche_root
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample["dataset_name"] == "apibench_huggingface"
+    assert sample["supervision_family"] == "function_call_single"
+    assert sample["code"] == row["code"]
+    assert sample["api_call"] == row["api_call"]
+    assert sample["provider"] == row["provider"]
+    assert sample["api_data"] == row["api_data"]
+    assert "native" not in sample
 
 
-def test_pool_output_paths_prefers_nested_existing_targets(tmp_path: Path, monkeypatch):
-    avalanche_root = tmp_path / "avalanche"
-    root_level = avalanche_root / "data" / "pool" / "tool" / "sample.jsonl"
-    nested = avalanche_root / "data" / "pool" / "tool" / "train" / "sample.jsonl"
-    root_level.parent.mkdir(parents=True)
-    nested.parent.mkdir(parents=True)
-    root_level.write_text("", encoding="utf-8")
-    nested.write_text("", encoding="utf-8")
-    monkeypatch.setattr(prepare_pool_data, "AVALANCHE_ROOT", avalanche_root)
+def test_convert_row_for_pool_rejects_removed_apigen_train_dataset():
+    row = {
+        "system": "You are a helpful airline agent.",
+        "tools": [{"type": "function", "function": {"name": "get_reservation_details"}}],
+        "conversations": [],
+    }
 
-    output_paths = prepare_pool_data._pool_output_paths("tool", "sample.jsonl")
-
-    assert output_paths == [nested]
+    with pytest.raises(ValueError, match="Unsupported dataset for pool conversion: apigen_mt_5k"):
+        prepare_pool_data.convert_row_for_pool(row, "apigen_mt_5k")
 
 
-def test_convert_agent_row_for_pool_preserves_source_fields_and_record_fields():
+def test_convert_agent_row_for_pool_preserves_trace_item_fields():
     row = {
         "trace_id": "trace-1",
-        "model": "gpt-test",
-        "session_metadata": {"region": "cq"},
+        "model": "qwen3-plus",
+        "session_id": "TEMP_SESSION_123",
         "function_calls": [
             {
                 "messages": [
-                    {"role": "user", "content": "where is times square"},
+                    {"role": "user", "content": "Italian restaurants in New York"},
                     {
                         "role": "assistant",
                         "content": "",
@@ -182,47 +111,13 @@ def test_convert_agent_row_for_pool_preserves_source_fields_and_record_fields():
                                 "type": "tool_use",
                                 "function": {
                                     "name": "maps_text_search",
-                                    "arguments": '{"city":"New York"}',
+                                    "arguments": '{"keywords":"Italian Restaurants","city":"New York"}',
                                 },
                             }
                         ],
                     },
-                    {
-                        "role": "tool",
-                        "tool_call_id": "call_1",
-                        "name": "maps_text_search",
-                        "content": "[]",
-                    },
-                    {
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [
-                            {
-                                "id": "call_2",
-                                "type": "tool_use",
-                                "function": {"name": "maps_geo", "arguments": {"address": "Times Square"}},
-                            }
-                        ],
-                    },
                 ],
-                "tool_calls": [
-                    {
-                        "id": "call_2",
-                        "type": "tool_use",
-                        "function": {"name": "maps_geo", "arguments": {"address": "Times Square"}},
-                    }
-                ],
-                "tools": [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "maps_geo",
-                            "description": "desc",
-                            "parameters": {"type": "object", "properties": {"address": {"type": "string"}}},
-                        },
-                    }
-                ],
-                "tool_choice": "auto",
+                "tools": [{"type": "function", "function": {"name": "maps_text_search"}}],
             }
         ],
     }
@@ -231,338 +126,346 @@ def test_convert_agent_row_for_pool_preserves_source_fields_and_record_fields():
 
     assert len(samples) == 1
     sample = samples[0]
-    assert sample["metadata"]["source_fields"] == {
-        "model": "gpt-test",
-        "session_metadata": {"region": "cq"},
-    }
-    assert sample["metadata"]["source_record_fields"] == {"tool_choice": "auto"}
-    assert sample["prompt"][1]["tool_calls"][0]["id"] == "call_1"
-    assert sample["prompt"][2]["tool_call_id"] == "call_1"
-
-
-def test_convert_agent_row_for_pool_recovers_supervision_from_html_trace():
-    row = {
-        "trace_id": "trace-html-1",
-        "function_calls": [
-            {
-                "messages": [
-                    {"role": "user", "content": "Make me a background image"},
-                    {
-                        "role": "assistant",
-                        "content": """
-<span class="header-text">Call Tool generate_image_gemini of Server gemini-nano-banana</span>
-<div class="div_tool_call_json">{
-  "aspect_ratio": "16:9",
-  "image_name": "futuristic_city_background.png"
-}</div>
-""",
-                    },
-                ],
-                "tools": [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "generate_image_gemini",
-                            "description": "Generate image",
-                            "parameters": {"type": "object", "properties": {"image_name": {"type": "string"}}},
-                        },
-                    }
-                ],
-            }
-        ],
-    }
-
-    samples = prepare_pool_data.convert_row_for_pool(row, "agent_function_calling_open_dataset")
-
-    assert len(samples) == 1
-    sample = samples[0]
-    assert sample["supervision_family"] == "agent_trace_call_recovery"
-    assert sample["prompt"] == [{"role": "user", "content": "Make me a background image"}]
-    assert sample["native"]["recovery_source"] == "html_trace"
-    assert sample["native"]["ground_truth"] == [
-        {
-            "name": "generate_image_gemini",
-            "arguments": {
-                "aspect_ratio": "16:9",
-                "image_name": "futuristic_city_background.png",
-            },
-            "function": {
-                "name": "generate_image_gemini",
-                "arguments": {
-                    "aspect_ratio": "16:9",
-                    "image_name": "futuristic_city_background.png",
-                },
-            },
-        }
-    ]
-    assert "reward_type" not in sample["metadata"]
-    assert "ground_truth" not in sample["metadata"]
-
-
-def test_convert_xlam_row_for_pool_uses_native_supervision_contract():
-    row = {
-        "messages": [
-            {"role": "user", "content": "check weather"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "weather", "arguments": '{"city":"Paris"}'},
-                    }
-                ],
-            },
-        ],
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "weather",
-                    "description": "desc",
-                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
-                },
-            }
-        ],
-        "extra": {"id": "row-1"},
-    }
-
-    samples = prepare_pool_data.convert_row_for_pool(row, "xlam_function_calling_60k")
-
-    assert len(samples) == 1
-    sample = samples[0]
+    assert sample["dataset_name"] == "agent_function_calling_open_dataset"
     assert sample["supervision_family"] == "function_call_single"
-    assert sample["native"]["ground_truth"] == [
-        {
-            "id": "call_1",
-            "type": "function",
-            "name": "weather",
-            "arguments": {"city": "Paris"},
-            "function": {"name": "weather", "arguments": {"city": "Paris"}},
-        }
-    ]
-    assert sample["metadata"] == {
-        "dataset_name": "xlam_function_calling_60k",
-        "domain": "tool",
-        "record_id": "row-1",
-        "source_fields": {"extra": {"id": "row-1"}},
+    assert sample["trace_id"] == "trace-1"
+    assert sample["model"] == "qwen3-plus"
+    assert sample["session_id"] == "TEMP_SESSION_123"
+    assert sample["messages"] == row["function_calls"][0]["messages"]
+    assert sample["tools"] == row["function_calls"][0]["tools"]
+    assert "native" not in sample
+    assert sample["metadata"]["source_fields"] == {
+        "model": "qwen3-plus",
+        "session_id": "TEMP_SESSION_123",
     }
 
 
-def test_convert_ifbench_row_for_pool_preserves_extra_source_fields():
+def test_convert_row_for_pool_rejects_removed_toolbench_train_dataset():
     row = {
-        "key": "ifbench-1",
-        "prompt": "Do task",
-        "instruction_id_list": ["keywords:existence"],
-        "kwargs": [{"keywords": ["alpha"]}],
-        "split": "train",
-        "source_name": "ifbench-open",
+        "id": "step-7",
+        "conversations": {
+            "from": ["system", "user", "assistant", "function", "assistant"],
+            "value": [
+                "You are AutoGPT.",
+                "Find nike's Instagram info.",
+                "Thought: search it.\nAction: userinfo_for_instagram_cheapest\nAction Input: {\"username\": \"nike\"}",
+                '{"username":"nike","followers":1}',
+                "Final answer.",
+            ],
+        },
     }
 
-    samples = prepare_pool_data.convert_row_for_pool(row, "ifbench_test")
-
-    assert len(samples) == 1
-    assert samples[0]["prompt"] == [{"role": "user", "content": "Do task"}]
-    metadata = samples[0]["metadata"]
-    assert metadata["prompt_text"] == "Do task"
-    assert metadata["source_fields"] == {
-        "source_name": "ifbench-open",
-        "split": "train",
-    }
+    with pytest.raises(ValueError, match="Unsupported dataset for pool conversion: toolbench_v1"):
+        prepare_pool_data.convert_row_for_pool(row, "toolbench_v1")
 
 
-def test_convert_ifbench_row_for_eval_pool_keeps_native_payload_as_truth():
+def test_convert_row_for_pool_rejects_removed_toolbench_benchmark_dataset():
     row = {
-        "key": "ifbench-1",
-        "prompt": "Do task",
-        "instruction_id_list": ["keywords:existence"],
-        "kwargs": [{"keywords": ["alpha"], "unused": None}],
+        "query_id": 7,
+        "query": "Find a tutorial",
+        "api_list": [{"name": "Search"}],
+        "relevant_apis": [["Simple YouTube Search", "Search"], ["Calendar", "CreateEvent"]],
     }
 
-    samples = prepare_pool_data.convert_row_for_pool(
-        row,
-        "ifbench_test",
-        native_eval_contract=True,
-    )
-
-    assert len(samples) == 1
-    sample = samples[0]
-    assert sample["dataset_name"] == "ifbench_test"
-    assert sample["domain"] == "structured"
-    assert sample["record_id"] == "ifbench-1"
-    assert sample["prompt"] == [{"role": "user", "content": "Do task"}]
-    assert sample["metadata"] == {
-        "dataset_name": "ifbench_test",
-        "domain": "structured",
-        "record_id": "ifbench-1",
-    }
-    assert sample["native"] == {
-        "key": "ifbench-1",
-        "prompt": "Do task",
-        "instruction_id_list": ["keywords:existence"],
-        "kwargs": [{"keywords": ["alpha"], "unused": None}],
-    }
+    with pytest.raises(ValueError, match="Unsupported dataset for pool conversion: toolbench_v1_benchmark"):
+        prepare_pool_data.convert_row_for_pool(row, "toolbench_v1_benchmark")
 
 
-def test_convert_bfcl_row_for_eval_pool_keeps_native_payload_and_drops_generic_reward_fields():
+def test_convert_bfcl_row_for_pool_promotes_official_fields_to_top_level():
     row = {
         "id": "irrelevance_0",
-        "turns": [[
-            {"role": "system", "content": "sys"},
-            {"role": "user", "content": "Question"},
-        ]],
-        "tools": [{"type": "function", "function": {"name": "weather", "description": "", "parameters": {}}}],
-        "ground_truth": {},
-        "subset": "eval",
+        "multi_turn": False,
+        "functions": '[{"name":"determine_body_mass_index"}]',
+        "tools": '[{"type":"function","function":{"name":"determine_body_mass_index","parameters":{"type":"object"}}}]',
+        "missed_functions": "{}",
+        "initial_config": "{}",
+        "involved_classes": [],
+        "turns": '[[{"role":"system","content":"sys"},{"role":"user","content":"Question"}]]',
+        "language": "Python",
         "test_category": "irrelevance",
-        "language": "python",
+        "subset": "irrelevance",
+        "ground_truth": "{}",
     }
 
-    samples = prepare_pool_data.convert_row_for_pool(
-        row,
-        "bfcl_v3",
-        native_eval_contract=True,
-    )
+    samples = prepare_pool_data.convert_row_for_pool(row, "bfcl_v3")
 
     assert len(samples) == 1
     sample = samples[0]
     assert sample["dataset_name"] == "bfcl_v3"
-    assert sample["domain"] == "tool"
     assert sample["record_id"] == "irrelevance_0"
-    assert sample["metadata"] == {
-        "dataset_name": "bfcl_v3",
-        "domain": "tool",
-        "record_id": "irrelevance_0",
-    }
-    assert sample["native"]["id"] == "irrelevance_0"
-    assert sample["native"]["ground_truth"] == {}
-    assert sample["native"]["test_category"] == "irrelevance"
+    assert sample["id"] == "irrelevance_0"
+    assert sample["test_category"] == "irrelevance"
+    assert sample["subset"] == "irrelevance"
+    assert sample["turns"][0][1]["content"] == "Question"
+    assert sample["prompt"] == [{"role": "system", "content": "sys"}, {"role": "user", "content": "Question"}]
+    assert sample["tools"][0]["function"]["name"] == "determine_body_mass_index"
+    assert "native" not in sample
+    assert "label" not in sample
 
 
-def test_convert_toolbench_benchmark_row_for_eval_pool_keeps_native_payload():
+def test_write_jsonl_rows_uses_atomic_replace(tmp_path: Path):
+    dest = tmp_path / "pool" / "tool" / "train" / "xlam.jsonl"
+    rows = [{"dataset_name": "xlam_function_calling_60k", "record_id": "1"}]
+
+    prepare_pool_data.write_jsonl_rows(dest, rows)
+
+    assert json.loads(dest.read_text(encoding="utf-8").strip()) == rows[0]
+
+
+def test_convert_gpqa_row_for_pool_promotes_answer_to_top_level():
     row = {
-        "query_id": 7,
-        "query": "Find a tutorial",
-        "api_list": [{"name": "Search", "description": "d", "required_parameters": [], "optional_parameters": []}],
-        "relevant_apis": ["Search"],
-    }
-
-    samples = prepare_pool_data.convert_row_for_pool(
-        row,
-        "toolbench_v1_benchmark",
-        native_eval_contract=True,
-    )
-
-    assert len(samples) == 1
-    sample = samples[0]
-    assert sample["dataset_name"] == "toolbench_v1_benchmark"
-    assert sample["domain"] == "tool"
-    assert sample["record_id"] == 7
-    assert sample["metadata"] == {
-        "dataset_name": "toolbench_v1_benchmark",
-        "domain": "tool",
-        "record_id": 7,
-    }
-    assert sample["native"]["relevant_apis"] == ["Search"]
-
-
-def test_convert_toolbench_benchmark_row_parses_nested_relevant_api_names():
-    row = {
-        "query_id": 7,
-        "query": "Find a tutorial",
-        "api_list": [{"name": "Search", "description": "d", "required_parameters": [], "optional_parameters": []}],
-        "relevant_apis": [["Simple YouTube Search", "Search"], ["Calendar", "CreateEvent"]],
-    }
-
-    samples = prepare_pool_data.convert_row_for_pool(row, "toolbench_v1_benchmark")
-
-    assert len(samples) == 1
-    assert samples[0]["metadata"]["allowed_tool_names"] == ["Search", "CreateEvent"]
-
-
-def test_convert_gpqa_invalid_row_is_skipped():
-    row = {
-        "Question": "Which option is correct?",
-        "Correct Answer": "",
-        "Incorrect Answer 1": "A",
-        "Incorrect Answer 2": "B",
-        "Incorrect Answer 3": "C",
-        "Record ID": "gpqa-invalid",
+        "Record ID": "rec-1",
+        "Question": "What is the answer?",
+        "Correct Answer": "alpha",
+        "Incorrect Answer 1": "beta",
+        "Incorrect Answer 2": "gamma",
+        "Incorrect Answer 3": "delta",
+        "High-level domain": "biology",
+        "Subdomain": "genetics",
     }
 
     samples = prepare_pool_data.convert_row_for_pool(row, "gpqa")
 
-    assert samples == []
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample["dataset_name"] == "gpqa"
+    assert sample["domain"] == "stem"
+    assert sample["record_id"] == "rec-1"
+    assert sample["answer"] in {"A", "B", "C", "D"}
+    assert sample["question"] == "What is the answer?"
+    assert len(sample["options"]) == 4
+    assert "native" not in sample
+    assert "label" not in sample
+    assert "tools" not in sample
+    assert sample["metadata"]["reward_type"] == "stem_mcqa"
 
 
-def test_convert_xlam_row_without_tool_calls_is_skipped():
+def test_convert_ifeval_row_for_pool_promotes_instruction_fields_to_top_level():
     row = {
-        "messages": [
-            {"role": "user", "content": "hello"},
-            {"role": "assistant", "content": "plain answer"},
-        ],
-        "tools": [],
-        "extra": {"id": "row-2"},
+        "key": 1000,
+        "prompt": "Do the task",
+        "instruction_id_list": ["keywords:existence"],
+        "kwargs": [{"keywords": ["alpha"]}],
     }
 
-    samples = prepare_pool_data.convert_row_for_pool(row, "xlam_function_calling_60k")
+    samples = prepare_pool_data.convert_row_for_pool(row, "ifeval")
 
-    assert samples == []
-
-
-def test_process_ifrl_writes_message_prompts_without_prebaked_system(tmp_path: Path):
-    src = tmp_path / "ifrl_source.jsonl"
-    src.write_text(
-        json.dumps(
-            {
-                "id": 1,
-                "prompt": "Follow the instruction",
-                "dataset": "ifrl-dataset",
-                "agent_ref": {"name": "agent"},
-                "instruction_id_list": ["rule-1"],
-                "kwargs": [{"alpha": 1}],
-                "split": "train",
-            },
-            ensure_ascii=False,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    original_root = prepare_pool_data.AVALANCHE_ROOT
-    try:
-        prepare_pool_data.AVALANCHE_ROOT = tmp_path
-        prepare_pool_data.process_ifrl(str(src))
-    finally:
-        prepare_pool_data.AVALANCHE_ROOT = original_root
-
-    out_path = tmp_path / "data" / "pool" / "ifrl" / "ifrl_ifrl_source.jsonl"
-    row = json.loads(out_path.read_text(encoding="utf-8").strip())
-
-    assert row["prompt"] == [{"role": "user", "content": "Follow the instruction"}]
-    assert row["metadata"]["domain"] == "ifrl"
-    assert row["metadata"]["dataset_name"] == "ifrl-dataset"
-    assert row["metadata"]["instruction_id_list"] == ["rule-1"]
-    assert row["metadata"]["source_fields"] == {"split": "train"}
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample["dataset_name"] == "ifeval"
+    assert sample["domain"] == "structured"
+    assert sample["record_id"] == "1000"
+    assert sample["prompt"] == [{"role": "user", "content": "Do the task"}]
+    assert sample["prompt_text"] == "Do the task"
+    assert sample["instruction_id_list"] == ["keywords:existence"]
+    assert sample["kwargs"] == [{"keywords": ["alpha"]}]
+    assert "native" not in sample
+    assert "label" not in sample
+    assert "tools" not in sample
+    assert sample["metadata"]["reward_type"] == "instruction_following_strict"
 
 
-def test_convert_scienceqa_row_for_pool_preserves_extra_source_fields():
+def test_convert_jsonschemabench_row_for_pool_promotes_schema_to_top_level():
     row = {
-        "question": "What is H2O?",
-        "choices": ["Water", "Oxygen", "Hydrogen"],
-        "answer": 0,
-        "hint": "It is common on Earth.",
-        "lecture": "H2O is the chemical formula for water.",
-        "topic": "chemistry",
+        "unique_id": "calculate_area_88ee549f",
+        "json_schema": '{"type":"object","properties":{"radius":{"type":"number"}}}',
+    }
+
+    samples = prepare_pool_data.convert_row_for_pool(row, "jsonschemabench")
+
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample["dataset_name"] == "jsonschemabench"
+    assert sample["domain"] == "structured"
+    assert sample["record_id"] == "calculate_area_88ee549f"
+    assert sample["schema"] == {"type": "object", "properties": {"radius": {"type": "number"}}}
+    assert sample["prompt"] == [{"role": "user", "content": row["json_schema"]}]
+    assert "native" not in sample
+    assert "label" not in sample
+    assert "tools" not in sample
+    assert sample["metadata"]["reward_type"] == "structured_json_schema"
+
+
+def test_convert_nemotron_structured_outputs_row_for_pool_preserves_prompt_and_schema():
+    row = {
+        "responses_create_params": {
+            "input": [
+                {
+                    "role": "user",
+                    "content": "Extract the fields from the document.",
+                }
+            ]
+        },
+        "schema_str": '{"type":"object","properties":{"name":{"type":"string"}}}',
+        "schema_type": "json",
+        "schema_fields_count": "1",
+    }
+
+    samples = prepare_pool_data.convert_row_for_pool(row, "nemotron_structured_outputs")
+
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample["dataset_name"] == "nemotron_structured_outputs"
+    assert sample["domain"] == "structured"
+    assert sample["prompt"] == row["responses_create_params"]["input"]
+    assert sample["schema"] == {"type": "object", "properties": {"name": {"type": "string"}}}
+    assert sample["responses_create_params"] == row["responses_create_params"]
+    assert "native" not in sample
+    assert "label" not in sample
+    assert "tools" not in sample
+    assert sample["metadata"]["reward_type"] == "structured_json_schema"
+
+
+def test_convert_ai2_arc_row_for_pool_promotes_choices_dict_to_mcqa_shape():
+    row = {
+        "id": "Mercury_SC_415702",
+        "question": "Which skin surface will produce the most heat?",
+        "choices": {
+            "text": ["dry palms", "wet palms", "palms covered with oil", "palms covered with lotion"],
+            "label": ["A", "B", "C", "D"],
+        },
+        "answerKey": "A",
+    }
+
+    samples = prepare_pool_data.convert_row_for_pool(row, "ai2_arc")
+
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample["domain"] == "stem"
+    assert sample["question"] == row["question"]
+    assert sample["options"] == row["choices"]["text"]
+    assert sample["answer"] == "A"
+    assert "label" not in sample and "tools" not in sample and "native" not in sample
+
+
+def test_convert_mmlu_row_for_pool_uses_letter_answer_from_index():
+    row = {
+        "question": "Find all c in Z_3 such that ...",
+        "subject": "abstract_algebra",
+        "choices": ["0", "1", "2", "3"],
+        "answer": 1,
+    }
+
+    samples = prepare_pool_data.convert_row_for_pool(row, "mmlu")
+
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample["options"] == row["choices"]
+    assert sample["answer"] == "B"
+    assert sample["metadata"]["reward_type"] == "stem_mcqa"
+
+
+def test_convert_sciq_row_for_pool_builds_mcqa_options_from_correct_and_distractors():
+    row = {
+        "question": "What type of organism is used in yogurt?",
+        "correct_answer": "mesophilic organisms",
+        "distractor1": "protozoa",
+        "distractor2": "gymnosperms",
+        "distractor3": "viruses",
+        "support": "Mesophiles grow best in moderate temperature.",
+    }
+
+    samples = prepare_pool_data.convert_row_for_pool(row, "sciq")
+
+    assert len(samples) == 1
+    sample = samples[0]
+    assert len(sample["options"]) == 4
+    assert sample["answer"] in {"A", "B", "C", "D"}
+    assert sample["metadata"]["source_fields"]["support"] == row["support"]
+
+
+def test_convert_scienceqa_row_for_pool_serializes_image_bytes():
+    row = {
+        "question": "What is shown?",
+        "choices": ["A cat", "A dog"],
+        "answer": 1,
+        "image": {"bytes": b"png-bytes", "path": "sample.png"},
+        "hint": "Look closely",
     }
 
     samples = prepare_pool_data.convert_row_for_pool(row, "scienceqa")
 
     assert len(samples) == 1
-    metadata = samples[0]["metadata"]
-    assert metadata["source_fields"] == {
-        "hint": "It is common on Earth.",
-        "lecture": "H2O is the chemical formula for water.",
-        "topic": "chemistry",
+    sample = samples[0]
+    assert sample["answer"] == "B"
+    assert sample["metadata"]["source_fields"]["image"]["path"] == "sample.png"
+    assert isinstance(sample["metadata"]["source_fields"]["image"]["bytes"], str)
+    assert "native" not in sample and "label" not in sample and "tools" not in sample
+
+
+def test_convert_agieval_row_for_pool_preserves_jsonl_mcqa_shape():
+    row = {
+        "question": "Find the distance between P and Q.",
+        "options": ["(A)1.75km", "(B)2.75km", "(C)3.75km", "(D)4.75km", "(E)5.75km"],
+        "label": "C",
+        "explanation": "Reasoning",
+        "other": {"solution": "Detailed solution"},
     }
+
+    samples = prepare_pool_data.convert_row_for_pool(row, "agieval")
+
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample["options"] == row["options"]
+    assert sample["answer"] == "C"
+    assert sample["metadata"]["source_fields"]["explanation"] == "Reasoning"
+
+
+def test_iter_source_rows_supports_multiple_paths_for_single_dataset(tmp_path: Path):
+    left = tmp_path / "left.jsonl"
+    right = tmp_path / "right.jsonl"
+    left.write_text(json.dumps({"id": "l"}) + "\n", encoding="utf-8")
+    right.write_text(json.dumps({"id": "r"}) + "\n", encoding="utf-8")
+
+    rows = list(prepare_pool_data._iter_source_rows([left, right], "jsonl"))
+
+    assert rows == [{"id": "l"}, {"id": "r"}]
+
+
+def test_iter_source_rows_supports_jsonl_directory_reader(tmp_path: Path):
+    source_dir = tmp_path / "agieval"
+    source_dir.mkdir()
+    (source_dir / "b.jsonl").write_text(json.dumps({"label": "B"}) + "\n", encoding="utf-8")
+    (source_dir / "a.jsonl").write_text(json.dumps({"label": "A"}) + "\n", encoding="utf-8")
+
+    rows = list(prepare_pool_data._iter_source_rows(source_dir, "jsonl_dir"))
+
+    assert rows == [{"label": "A"}, {"label": "B"}]
+
+
+def test_build_dataset_maps_aggregated_ai2_arc_key_to_ai2_arc_converter(tmp_path: Path, monkeypatch):
+    source_left = tmp_path / "arc_left.jsonl"
+    source_right = tmp_path / "arc_right.jsonl"
+    output = tmp_path / "ai2_arc.jsonl"
+    source_left.write_text(
+        json.dumps({"id": "1", "question": "q1", "choices": {"text": ["x", "y"]}, "answerKey": "A"}) + "\n",
+        encoding="utf-8",
+    )
+    source_right.write_text(
+        json.dumps({"id": "2", "question": "q2", "choices": {"text": ["x", "y"]}, "answerKey": "B"}) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setitem(
+        prepare_pool_data.DATASET_SPECS,
+        "ai2_arc_train",
+        {"source": [source_left, source_right], "output": output, "reader": "jsonl"},
+    )
+
+    count = prepare_pool_data.build_dataset("ai2_arc_train")
+
+    rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+    assert count == 2
+    assert [row["dataset_name"] for row in rows] == ["ai2_arc", "ai2_arc"]
+
+
+def test_jsonschemabench_dataset_specs_cover_default_and_named_configs():
+    specs = prepare_pool_data.DATASET_SPECS
+
+    assert "jsonschemabench_val" in specs
+    assert specs["jsonschemabench_val"]["output"].name == "jsonschemabench_val-00000-of-00001.jsonl"
+
+    assert "jsonschemabench_github_easy_train" in specs
+    assert "jsonschemabench_github_easy_val" in specs
+    assert "jsonschemabench_github_easy_test" in specs
+    assert specs["jsonschemabench_github_easy_train"]["output"].name == "jsonschemabench_Github_easy_train-00000-of-00001.jsonl"
