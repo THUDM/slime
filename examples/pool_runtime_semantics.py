@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import ast
 import json
 from hashlib import sha1
 from typing import Any
 
 
-BENCHMARK_NATIVE_DATASETS = {
+BENCHMARK_DATASETS = {
     "bfcl_v3",
     "bfcl_v3_multi_turn_base",
-    "toolbench_v1_benchmark",
     "ifeval",
     "ifbench_test",
     "jsonschemabench",
@@ -18,9 +18,6 @@ BENCHMARK_NATIVE_DATASETS = {
 
 TRAIN_NATIVE_SUPERVISION_FAMILIES = {
     "function_call_single",
-    "function_call_verified_multi_turn",
-    "agent_trace_call_recovery",
-    "tool_use_trajectory",
 }
 
 
@@ -102,7 +99,7 @@ def infer_prompt_family(payload: dict[str, Any]) -> str | None:
         return "instruction_following"
     if dataset_name in {"ifbench_test", "ifeval"} or domain == "ifrl":
         return "instruction_following"
-    if dataset_name in {"bfcl_v3", "bfcl_v3_multi_turn_base", "toolbench_v1_benchmark"}:
+    if dataset_name in {"bfcl_v3", "bfcl_v3_multi_turn_base"}:
         return "tool"
     if dataset_name in {"gpqa", "mmlu_pro"}:
         return "stem"
@@ -112,47 +109,130 @@ def infer_prompt_family(payload: dict[str, Any]) -> str | None:
         return "structured"
     if reward_type == "stem_mcqa" or domain == "stem":
         return "stem"
-    if reward_type in {"tool_call_soft", "tool_call_strict", "tool_call", "tool_selection_strict"} or domain == "tool":
+    if reward_type in {
+        "tool_call_soft",
+        "tool_call_strict",
+        "tool_call",
+        "tool_selection_strict",
+        "function_call_single",
+        "api_call_text",
+    } or domain == "tool":
         return "tool"
     if domain == "structured":
         return "structured"
     return None
 
 
-def _toolbench_allowed_tool_names(native: dict[str, Any]) -> list[str]:
-    relevant = native.get("relevant_apis")
-    if isinstance(relevant, list):
-        names: list[str] = []
-        for item in relevant:
-            if isinstance(item, str):
-                name = item.strip()
-            elif isinstance(item, (list, tuple)):
-                name = ""
-                for value in reversed(item):
-                    if isinstance(value, str) and value.strip():
-                        name = value.strip()
-                        break
-            elif isinstance(item, dict):
-                name = ""
-                for key in ("api_name", "name", "tool_name", "api", "tool"):
-                    value = item.get(key)
-                    if isinstance(value, str) and value.strip():
-                        name = value.strip()
-                        break
-            else:
-                name = ""
-            if name:
-                names.append(name)
-        return names
-    return []
+def _parse_json_like(value: Any) -> Any:
+    if isinstance(value, str):
+        text = value.strip()
+        if text and text[0] in "[{":
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return value
+    return value
 
 
-def _runtime_metadata_from_train_native(
+def _ensure_list(value: Any) -> list[Any]:
+    parsed = _parse_json_like(value)
+    return parsed if isinstance(parsed, list) else []
+
+
+def _json_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _normalize_call_arguments(value: Any) -> Any:
+    parsed = _parse_json_like(value)
+    return parsed if parsed not in (None, "") else {}
+
+
+def _normalize_ground_truth_call(name: Any, arguments: Any) -> dict[str, Any]:
+    call_name = str(name or "").strip()
+    args = _normalize_call_arguments(arguments)
+    return {
+        "name": call_name,
+        "arguments": args,
+        "function": {
+            "name": call_name,
+            "arguments": args,
+        },
+    }
+
+
+def _extract_ground_truth_from_tool_calls(tool_calls: Any) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for call in _ensure_list(tool_calls):
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function")
+        if isinstance(function, dict):
+            normalized.append(_normalize_ground_truth_call(function.get("name"), function.get("arguments")))
+            continue
+        normalized.append(_normalize_ground_truth_call(call.get("name"), call.get("arguments")))
+    return [call for call in normalized if call["name"]]
+
+
+def _messages_before_first_tool_call(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    prompt: list[dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "")
+        if role == "assistant" and message.get("tool_calls"):
+            break
+        if role == "tool":
+            break
+        prompt.append({"role": role or "user", "content": message.get("content") or ""})
+    return prompt
+
+
+def _extract_python_call_ground_truth(api_call: Any) -> list[dict[str, Any]]:
+    text = str(api_call or "").strip()
+    if not text:
+        return []
+    try:
+        node = ast.parse(text, mode="eval").body
+    except SyntaxError:
+        return []
+    if not isinstance(node, ast.Call):
+        return []
+
+    def _name(expr: ast.AST) -> str:
+        if isinstance(expr, ast.Name):
+            return expr.id
+        if isinstance(expr, ast.Attribute):
+            base = _name(expr.value)
+            return f"{base}.{expr.attr}" if base else expr.attr
+        return ""
+
+    def _literal(expr: ast.AST) -> Any:
+        try:
+            return ast.literal_eval(expr)
+        except Exception:
+            return ast.unparse(expr)
+
+    arguments: dict[str, Any] = {}
+    if node.args:
+        arguments["_args"] = [_literal(arg) for arg in node.args]
+    for kw in node.keywords:
+        if kw.arg:
+            arguments[kw.arg] = _literal(kw.value)
+    call_name = _name(node.func)
+    return [_normalize_ground_truth_call(call_name, arguments)] if call_name else []
+
+
+def _runtime_metadata_from_train_row(
+    row: dict[str, Any],
     dataset_name: str,
     domain: str,
     record_id: Any,
     supervision_family: str,
-    native: dict[str, Any],
     base_metadata: dict[str, Any],
 ) -> dict[str, Any] | None:
     metadata = {
@@ -160,37 +240,49 @@ def _runtime_metadata_from_train_native(
         "domain": domain,
         "record_id": record_id,
         **base_metadata,
-        "native": native,
+        "supervision_family": supervision_family,
     }
     metadata.pop("tools", None)
-    source_fields = native.get("source_fields")
+    source_fields = row.get("source_fields")
     if isinstance(source_fields, dict):
         metadata["source_fields"] = source_fields
-    source_record_fields = native.get("source_record_fields")
+    source_record_fields = row.get("source_record_fields")
     if isinstance(source_record_fields, dict):
         metadata["source_record_fields"] = source_record_fields
 
-    if supervision_family in TRAIN_NATIVE_SUPERVISION_FAMILIES:
-        ground_truth = native.get("ground_truth") or []
+    if supervision_family == "function_call_single":
+        ground_truth = row.get("ground_truth") or []
+        if not ground_truth:
+            ground_truth = _extract_ground_truth_from_tool_calls(
+                next(
+                    (
+                        message.get("tool_calls")
+                        for message in _ensure_list(row.get("messages"))
+                        if isinstance(message, dict) and message.get("role") == "assistant" and message.get("tool_calls")
+                    ),
+                    [],
+                )
+            )
+        if not ground_truth and row.get("api_call") not in (None, ""):
+            ground_truth = _extract_python_call_ground_truth(row.get("api_call"))
         if not ground_truth:
             return None
-        metadata["reward_type"] = "tool_call_soft"
+        metadata["reward_type"] = "api_call_text" if row.get("api_call") not in (None, "") else "function_call_single"
         metadata["ground_truth"] = ground_truth
-        if native.get("assistant_reference") not in (None, ""):
-            metadata["assistant_reference"] = str(native.get("assistant_reference"))
-        for key in ("provider", "parse_mode", "raw_api_call", "accepted_for_eval", "recovery_source", "target_message_index"):
-            if native.get(key) not in (None, ""):
-                metadata[key] = native.get(key)
+        if row.get("api_call") not in (None, ""):
+            metadata["raw_api_call"] = str(row.get("api_call"))
+        if row.get("provider") not in (None, ""):
+            metadata["provider"] = row.get("provider")
         return metadata
 
     return metadata
 
 
-def _runtime_metadata_from_native(
+def _runtime_metadata_from_benchmark_row(
+    row: dict[str, Any],
     dataset_name: str,
     domain: str,
     record_id: Any,
-    native: dict[str, Any],
     base_metadata: dict[str, Any],
 ) -> dict[str, Any]:
     metadata = {
@@ -198,78 +290,134 @@ def _runtime_metadata_from_native(
         "domain": domain,
         "record_id": record_id,
         **base_metadata,
-        "native": native,
     }
     metadata.pop("tools", None)
 
     if dataset_name == "ifbench_test":
         metadata["reward_type"] = "instruction_following_soft"
-        metadata["prompt_text"] = str(native.get("prompt") or "")
-        metadata["instruction_id_list"] = list(native.get("instruction_id_list") or [])
-        metadata["kwargs"] = list(native.get("kwargs") or [])
+        metadata["prompt_text"] = str(row.get("prompt_text") or "")
+        metadata["instruction_id_list"] = list(row.get("instruction_id_list") or [])
+        metadata["kwargs"] = list(row.get("kwargs") or [])
         return metadata
     if dataset_name == "ifeval":
         metadata["reward_type"] = "instruction_following_strict"
-        metadata["prompt_text"] = str(native.get("prompt") or "")
-        metadata["instruction_id_list"] = list(native.get("instruction_id_list") or [])
-        metadata["kwargs"] = list(native.get("kwargs") or [])
+        metadata["prompt_text"] = str(row.get("prompt_text") or "")
+        metadata["instruction_id_list"] = list(row.get("instruction_id_list") or [])
+        metadata["kwargs"] = list(row.get("kwargs") or [])
         return metadata
     if dataset_name == "jsonschemabench":
         metadata["reward_type"] = "structured_json_schema"
-        schema = native.get("json_schema")
+        schema = row.get("schema")
         metadata["schema"] = schema if isinstance(schema, dict) else {}
-        return metadata
-    if dataset_name == "toolbench_v1_benchmark":
-        metadata["reward_type"] = "tool_selection_strict"
-        metadata["allowed_tool_names"] = _toolbench_allowed_tool_names(native)
         return metadata
     if dataset_name in {"gpqa", "mmlu_pro"}:
         metadata["reward_type"] = "stem_mcqa"
-        answer = native.get("answer", native.get("Correct Answer", ""))
+        answer = row.get("answer", row.get("Correct Answer", ""))
         metadata["answer"] = "" if answer is None else str(answer).strip().upper()
         return metadata
     if dataset_name in {"bfcl_v3", "bfcl_v3_multi_turn_base"}:
         metadata["reward_type"] = "bfcl_official"
         metadata["official_eval_name"] = "bfcl"
-        if native.get("test_category") not in (None, ""):
-            metadata["test_category"] = str(native.get("test_category"))
-        if native.get("subset") not in (None, ""):
-            metadata["subset"] = native.get("subset")
+        if row.get("test_category") not in (None, ""):
+            metadata["test_category"] = str(row.get("test_category"))
+        if row.get("subset") not in (None, ""):
+            metadata["subset"] = row.get("subset")
         return metadata
+    return metadata
+
+
+def _runtime_metadata_from_row_fields(
+    row: dict[str, Any],
+    dataset_name: str,
+    domain: str,
+    record_id: Any,
+    base_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    metadata = {**base_metadata}
+    if dataset_name:
+        metadata["dataset_name"] = dataset_name
+    if domain:
+        metadata["domain"] = domain
+    if record_id not in (None, ""):
+        metadata["record_id"] = record_id
+    metadata.pop("tools", None)
+
+    reward_type = str(metadata.get("reward_type") or "").strip().lower()
+
+    if reward_type in {"instruction_following_soft", "instruction_following_strict"}:
+        prompt_text = row.get("prompt_text")
+        if prompt_text in (None, "") and (
+            row.get("instruction_id_list") not in (None, [])
+            or row.get("kwargs") not in (None, [])
+            or dataset_name in {"ifeval", "ifbench_test"}
+        ):
+            prompt = _coerce_prompt_to_messages(row.get("prompt"))
+            prompt_text = prompt[0].get("content", "") if len(prompt) == 1 else ""
+        if prompt_text not in (None, ""):
+            metadata["prompt_text"] = str(prompt_text or "")
+        if row.get("instruction_id_list") not in (None, []):
+            metadata["instruction_id_list"] = list(row.get("instruction_id_list") or [])
+        if row.get("kwargs") not in (None, []):
+            metadata["kwargs"] = list(row.get("kwargs") or [])
+        return metadata
+
+    if reward_type == "structured_json_schema":
+        schema = row.get("schema")
+        if isinstance(schema, dict):
+            metadata["schema"] = schema
+        return metadata
+
+    if reward_type == "stem_mcqa":
+        if "answer" in row:
+            answer = row.get("answer", "")
+            metadata["answer"] = "" if answer is None else str(answer).strip().upper()
+        return metadata
+
     return metadata
 
 
 def materialize_runtime_pool_row(row: dict[str, Any]) -> dict[str, Any] | None:
     materialized = dict(row)
+    materialized.pop("native", None)
     metadata = dict(materialized.get("metadata") or {})
     prompt = _coerce_prompt_to_messages(materialized.get("prompt"))
 
-    raw_tools = materialized.get("tools") or []
+    raw_tools = _parse_json_like(materialized.get("tools")) or []
     tools = list(raw_tools) if isinstance(raw_tools, list) else []
     materialized["tools"] = tools
+    materialized.setdefault("label", "")
     metadata.pop("tools", None)
 
     dataset_name = str(materialized.get("dataset_name") or metadata.get("dataset_name") or "").strip()
     domain = str(materialized.get("domain") or metadata.get("domain") or "").strip()
     record_id = materialized.get("record_id", metadata.get("record_id"))
     supervision_family = str(materialized.get("supervision_family") or "").strip()
-    native = materialized.get("native")
-    if dataset_name in BENCHMARK_NATIVE_DATASETS and isinstance(native, dict):
-        metadata = _runtime_metadata_from_native(dataset_name, domain, record_id, native, metadata)
+
+    if not prompt and dataset_name.startswith("apibench_"):
+        prompt = [{"role": "user", "content": str(materialized.get("code") or "").strip()}]
+    elif not prompt and dataset_name == "xlam_function_calling_60k":
+        prompt = _messages_before_first_tool_call(_ensure_list(materialized.get("messages")))
+    elif not prompt and supervision_family == "function_call_single":
+        prompt = _messages_before_first_tool_call(_ensure_list(materialized.get("messages")))
+
+    if dataset_name in BENCHMARK_DATASETS:
+        metadata = _runtime_metadata_from_benchmark_row(materialized, dataset_name, domain, record_id, metadata)
         materialized["dataset_name"] = dataset_name
         materialized["domain"] = domain
         materialized["record_id"] = record_id
-    elif supervision_family and isinstance(native, dict):
-        metadata = _runtime_metadata_from_train_native(
+    elif supervision_family:
+        metadata = _runtime_metadata_from_train_row(
+            materialized,
             dataset_name,
             domain,
             record_id,
             supervision_family,
-            native,
             metadata,
         )
         if metadata is None:
             return None
+    else:
+        metadata = _runtime_metadata_from_row_fields(materialized, dataset_name, domain, record_id, metadata)
 
     family = infer_prompt_family({"prompt": prompt, "metadata": metadata, "id": materialized.get("id")})
     if family and not _has_system_message(prompt):

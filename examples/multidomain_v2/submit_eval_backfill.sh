@@ -57,7 +57,7 @@ submit_one "main-retry" \
 submit_one "main-plus-xlam" \
   "/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/experiments/multidomain_v2_main_plus_xlam" \
   "xcphh05q" \
-  "toolbench_v1,apibench,apigen,agent,jsonschemabench,nemotron_structured_outputs,xlam_function_calling_60k"
+  "mdv2-main-plus-xlam-toolcall"
 
 submit_one "nk-ns" \
   "/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/experiments/multidomain_v2_nk_ns" \
@@ -67,4 +67,4 @@ submit_one "nk-ns" \
 submit_one "no-jsonschema-only-ns" \
   "/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/experiments/multidomain_v2_no_jsonschema_only_ns" \
   "22lh8kda" \
-  "toolbench_v1,apibench,apigen,agent,nemotron_structured_outputs"
+  "mdv2-no-jsonschema-toolcall"
