@@ -261,7 +261,7 @@ def test_write_jsonl_rows_uses_atomic_replace(tmp_path: Path):
     assert json.loads(dest.read_text(encoding="utf-8").strip()) == rows[0]
 
 
-def test_convert_gpqa_row_for_pool_promotes_answer_to_top_level():
+def test_convert_gpqa_row_for_pool_uses_label_for_correct_answer():
     row = {
         "Record ID": "rec-1",
         "Question": "What is the answer?",
@@ -280,13 +280,14 @@ def test_convert_gpqa_row_for_pool_promotes_answer_to_top_level():
     assert sample["dataset_name"] == "gpqa"
     assert sample["domain"] == "stem"
     assert sample["record_id"] == "rec-1"
-    assert sample["answer"] in {"A", "B", "C", "D"}
+    assert sample["label"] in {"A", "B", "C", "D"}
     assert sample["question"] == "What is the answer?"
     assert len(sample["options"]) == 4
     assert "native" not in sample
-    assert "label" not in sample
+    assert "answer" not in sample
     assert "tools" not in sample
     assert sample["metadata"]["reward_type"] == "stem_mcqa"
+    assert sample["metadata"]["answer"] == sample["label"]
 
 
 def test_convert_ifeval_row_for_pool_promotes_instruction_fields_to_top_level():
@@ -383,8 +384,9 @@ def test_convert_ai2_arc_row_for_pool_promotes_choices_dict_to_mcqa_shape():
     assert sample["domain"] == "stem"
     assert sample["question"] == row["question"]
     assert sample["options"] == row["choices"]["text"]
-    assert sample["answer"] == "A"
-    assert "label" not in sample and "tools" not in sample and "native" not in sample
+    assert sample["label"] == "A"
+    assert "answer" not in sample and "tools" not in sample and "native" not in sample
+    assert sample["metadata"]["answer"] == "A"
 
 
 def test_convert_mmlu_row_for_pool_uses_letter_answer_from_index():
@@ -400,8 +402,10 @@ def test_convert_mmlu_row_for_pool_uses_letter_answer_from_index():
     assert len(samples) == 1
     sample = samples[0]
     assert sample["options"] == row["choices"]
-    assert sample["answer"] == "B"
+    assert sample["label"] == "B"
+    assert "answer" not in sample
     assert sample["metadata"]["reward_type"] == "stem_mcqa"
+    assert sample["metadata"]["answer"] == "B"
 
 
 def test_convert_sciq_row_for_pool_builds_mcqa_options_from_correct_and_distractors():
@@ -419,8 +423,10 @@ def test_convert_sciq_row_for_pool_builds_mcqa_options_from_correct_and_distract
     assert len(samples) == 1
     sample = samples[0]
     assert len(sample["options"]) == 4
-    assert sample["answer"] in {"A", "B", "C", "D"}
+    assert sample["label"] in {"A", "B", "C", "D"}
+    assert "answer" not in sample
     assert sample["metadata"]["source_fields"]["support"] == row["support"]
+    assert sample["metadata"]["answer"] == sample["label"]
 
 
 def test_convert_scienceqa_row_for_pool_serializes_image_bytes():
@@ -436,10 +442,11 @@ def test_convert_scienceqa_row_for_pool_serializes_image_bytes():
 
     assert len(samples) == 1
     sample = samples[0]
-    assert sample["answer"] == "B"
+    assert sample["label"] == "B"
     assert sample["metadata"]["source_fields"]["image"]["path"] == "sample.png"
     assert isinstance(sample["metadata"]["source_fields"]["image"]["bytes"], str)
-    assert "native" not in sample and "label" not in sample and "tools" not in sample
+    assert "native" not in sample and "answer" not in sample and "tools" not in sample
+    assert sample["metadata"]["answer"] == "B"
 
 
 def test_convert_agieval_row_for_pool_preserves_jsonl_mcqa_shape():
@@ -456,8 +463,10 @@ def test_convert_agieval_row_for_pool_preserves_jsonl_mcqa_shape():
     assert len(samples) == 1
     sample = samples[0]
     assert sample["options"] == row["options"]
-    assert sample["answer"] == "C"
+    assert sample["label"] == "C"
+    assert "answer" not in sample
     assert sample["metadata"]["source_fields"]["explanation"] == "Reasoning"
+    assert sample["metadata"]["answer"] == "C"
 
 
 def test_iter_source_rows_supports_multiple_paths_for_single_dataset(tmp_path: Path):
@@ -518,3 +527,7 @@ def test_jsonschemabench_dataset_specs_cover_default_and_named_configs():
     assert "jsonschemabench_github_easy_val" in specs
     assert "jsonschemabench_github_easy_test" in specs
     assert specs["jsonschemabench_github_easy_train"]["output"].name == "jsonschemabench_Github_easy_train-00000-of-00001.jsonl"
+
+
+def test_mmlu_auxiliary_train_is_not_in_current_pool_specs():
+    assert "mmlu_auxiliary_train" not in prepare_pool_data.DATASET_SPECS

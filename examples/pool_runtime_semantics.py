@@ -343,7 +343,7 @@ def _runtime_metadata_from_benchmark_row(
         return metadata
     if dataset_name in {"gpqa", "mmlu_pro"}:
         metadata["reward_type"] = "stem_mcqa"
-        answer = row.get("answer", row.get("Correct Answer", ""))
+        answer = row.get("answer", row.get("label", row.get("Correct Answer", "")))
         metadata["answer"] = "" if answer is None else str(answer).strip().upper()
         return metadata
     if dataset_name in {"bfcl_v3", "bfcl_v3_multi_turn_base"}:
@@ -399,8 +399,8 @@ def _runtime_metadata_from_row_fields(
         return metadata
 
     if reward_type == "stem_mcqa":
-        if "answer" in row:
-            answer = row.get("answer", "")
+        if "answer" in row or "label" in row:
+            answer = row.get("answer", row.get("label", ""))
             metadata["answer"] = "" if answer is None else str(answer).strip().upper()
         return metadata
 
