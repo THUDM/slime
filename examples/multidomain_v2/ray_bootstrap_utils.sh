@@ -43,7 +43,7 @@ normalize_master_addr() {
 wait_for_master_addr_file() {
   local path="$1"
   local attempt
-  local max_attempts="${RAY_HEAD_ADDR_WAIT_ATTEMPTS:-300}"
+  local max_attempts="${RAY_HEAD_ADDR_WAIT_ATTEMPTS:-900}"
   local sleep_seconds="${RAY_HEAD_ADDR_WAIT_SLEEP:-2}"
   for attempt in $(seq 1 "${max_attempts}"); do
     if [[ -s "${path}" ]]; then

@@ -131,7 +131,7 @@ run_eval_for_checkpoint() {
     EVAL_ARGS+=(--eval-data "${ds}")
   done
 
-  PYTHONPATH="${SCRIPT_DIR}:${SCRIPT_DIR}/../multidomain_v1:${PROJECT_ROOT}/slime:${PYTHONPATH:-}" \
+  PYTHONPATH="${SCRIPT_DIR}:${SCRIPT_DIR}/..:${PROJECT_ROOT}/slime:${PYTHONPATH:-}" \
   python3 "${SCRIPT_DIR}/eval_backfill.py" \
     --sglang-url "http://localhost:${SGLANG_PORT}" \
     --model-path "${hf_dir}" \
