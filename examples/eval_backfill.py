@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-EXAMPLES_DIR = SCRIPT_DIR.parents[1]
+EXAMPLES_DIR = SCRIPT_DIR
 
 _tokenizer = None
 
@@ -258,232 +258,148 @@ def compute_eval_metrics(eval_name, eval_samples, rewards, responses):
     by_dataset = defaultdict(list)
     by_domain = defaultdict(list)
     for sample_data, reward, response in zip(eval_samples, rewards, responses):
-        meta = sample_data.get("metadata", {})
-        ds_name = meta.get("dataset_name", eval_name)
-        domain = meta.get("domain", "unknown")
-        by_dataset[ds_name].append((reward, response))
-        by_domain[domain].append((reward, response))
+        metadata = sample_data.get("metadata", {}) or {}
+        dataset_name = str(metadata.get("dataset_name", "unknown")).strip() or "unknown"
+        domain = str(metadata.get("domain", "unknown")).strip() or "unknown"
+        by_dataset[dataset_name].append(reward)
+        by_domain[domain].append(reward)
 
-    for ds_name, items in by_dataset.items():
-        ds_rewards = [r for r, _ in items]
-        ds_responses = [resp for _, resp in items]
-        metrics[f"eval/{eval_name}/by_source/{ds_name}/count"] = len(items)
-        metrics[f"eval/{eval_name}/by_source/{ds_name}/score"] = sum(ds_rewards) / len(ds_rewards)
-        lengths = [len(r) for r in ds_responses]
-        if lengths:
-            metrics[f"eval/{eval_name}/by_source/{ds_name}/response_len/mean"] = sum(lengths) / len(lengths)
-
-    for domain_name, items in by_domain.items():
-        dom_rewards = [r for r, _ in items]
-        metrics[f"eval/{eval_name}/by_domain/{domain_name}/count"] = len(items)
-        metrics[f"eval/{eval_name}/by_domain/{domain_name}/score"] = sum(dom_rewards) / len(dom_rewards)
-
+    for dataset_name, values in by_dataset.items():
+        metrics[f"eval/{eval_name}/{dataset_name}"] = sum(values) / len(values)
+    for domain, values in by_domain.items():
+        metrics[f"eval/{eval_name}/domain/{domain}"] = sum(values) / len(values)
+    metrics[f"eval/{eval_name}/response_len"] = sum(len(response) for response in responses) / n
     return metrics
 
 
-def log_to_wandb(wandb_run_id, wandb_project, wandb_entity, wandb_host, wandb_key, wandb_group, wandb_run_name, step, metrics):
-    if wandb_key:
-        login_kwargs = {"key": wandb_key}
-        if wandb_host:
-            login_kwargs["host"] = wandb_host
-        wandb.login(**login_kwargs)
-
-    mode = os.getenv("WANDB_MODE", "").strip().lower()
-    if mode not in {"offline", "disabled"}:
-        mode = "shared" if wandb_key or os.getenv("WANDB_API_KEY") else "disabled"
-
-    init_kwargs: dict[str, Any] = {
-        "id": wandb_run_id,
-        "project": wandb_project,
-        "resume": "allow",
-        "reinit": True,
-        "settings": wandb.Settings(mode=mode),
-    }
-    if wandb_entity:
-        init_kwargs["entity"] = wandb_entity
-    if wandb_group:
-        init_kwargs["group"] = wandb_group
-    if wandb_run_name:
-        init_kwargs["name"] = wandb_run_name
-    wandb.init(**init_kwargs)
-    wandb.define_metric("eval/step", overwrite=True)
-    wandb.define_metric("eval/*", step_metric="eval/step", overwrite=True)
-    metrics["eval/step"] = step
-    wandb.log(metrics)
+def log_to_wandb(
+    *,
+    metrics: dict[str, float],
+    rollout_id: int,
+    run_id: str,
+    project: str,
+    entity: str = "",
+    host: str = "",
+    key: str = "",
+    group: str = "",
+    run_name: str = "",
+):
+    if host:
+        os.environ["WANDB_BASE_URL"] = host
+    if key:
+        os.environ["WANDB_API_KEY"] = key
+    wandb.init(
+        project=project,
+        entity=entity or None,
+        id=run_id,
+        resume="allow",
+        group=group or None,
+        name=run_name or None,
+    )
+    wandb.log(metrics, step=rollout_id)
     wandb.finish()
-    logger.info("  Logged %d metrics to wandb run %s at step %s", len(metrics), wandb_run_id, step)
 
 
-def _official_benchmark_dirs(runtime_data_dir: str, eval_path: str, eval_name: str, rollout_id: int):
-    base = Path(runtime_data_dir) if runtime_data_dir else Path(eval_path).resolve().parent
-    root = base / "official_benchmarks" / eval_name / f"step_{rollout_id}"
-    return root / "result", root / "score"
-
-
-def wait_for_sglang(url: str, timeout: int = 300):
-    base_url = url.rstrip("/")
-    deadline = time.time() + timeout
+def wait_for_sglang(base_url: str, timeout_seconds: int = 300):
+    deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         try:
-            resp = requests.get(f"{base_url}/v1/models", timeout=5)
-            if resp.status_code == 200:
-                logger.info("sglang server is ready.")
-                return True
+            response = requests.get(f"{base_url.rstrip('/')}/v1/models", timeout=5)
+            if response.ok:
+                return
         except Exception:
             pass
-        time.sleep(5)
-    raise RuntimeError(f"sglang server not ready after {timeout}s")
+        time.sleep(2)
+    raise TimeoutError(f"SGLang server did not become ready within {timeout_seconds}s: {base_url}")
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Eval backfill for multidomain_v2 checkpoints")
-    parser.add_argument("--migrate-eval-history", action="store_true")
-    parser.add_argument("--migrate-full-run", action="store_true")
-    parser.add_argument("--sglang-url", type=str, default="http://localhost:30000")
-    parser.add_argument("--eval-data", action="append", default=[], help="name:path pairs for eval datasets")
-    parser.add_argument("--rollout-id", type=int, default=None, help="Rollout ID (= checkpoint step) for wandb logging")
-    parser.add_argument("--wandb-run-id", type=str, required=True)
-    parser.add_argument("--wandb-project", type=str, default="slime-multidomain-v2")
-    parser.add_argument("--wandb-entity", type=str, default="")
-    parser.add_argument("--wandb-host", type=str, default="")
-    parser.add_argument("--wandb-key", type=str, default="")
-    parser.add_argument("--wandb-group", type=str, default="")
-    parser.add_argument("--wandb-run-name", type=str, default="")
-    parser.add_argument("--target-wandb-run-id", type=str, default="")
-    parser.add_argument("--target-wandb-run-name", type=str, default="")
-    parser.add_argument("--runtime-data-dir", type=str, default="")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--model-path", type=str, default=None, help="HF model path (for tokenizer chat template)")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sglang-url", required=True)
+    parser.add_argument("--model-path", required=True)
+    parser.add_argument("--reward-module", default="multidomain_shared.reward_func")
+    parser.add_argument("--eval-data", action="append", default=[])
+    parser.add_argument("--rollout-id", type=int, required=True)
+    parser.add_argument("--wandb-run-id", required=True)
+    parser.add_argument("--wandb-run-name", default="")
+    parser.add_argument("--wandb-project", required=True)
+    parser.add_argument("--wandb-entity", default="")
+    parser.add_argument("--wandb-host", default="")
+    parser.add_argument("--wandb-key", default="")
+    parser.add_argument("--wandb-group", default="")
+    parser.add_argument("--runtime-data-dir", default="")
+    parser.add_argument("--dry-run", action="store_true", default=False)
     parser.add_argument("--max-context-len", type=int, default=32768)
     parser.add_argument("--max-tokens", type=int, default=8192)
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--bfcl-model-name", type=str, default="")
-    parser.add_argument("--reward-module", type=str, default="multidomain_shared.reward_func")
+    parser.add_argument("--bfcl-model-name", default="")
+    parser.add_argument("--migrate-full-run", action="store_true", default=False)
+    parser.add_argument("--migrate-eval-history", action="store_true", default=False)
+    parser.add_argument("--target-wandb-run-id", default="")
+    parser.add_argument("--target-wandb-run-name", default="")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-
-    if args.migrate_eval_history or args.migrate_full_run:
-        raise RuntimeError("Migration modes are not supported in this lightweight recovery version")
-
-    if not args.eval_data:
-        raise RuntimeError("--eval-data is required")
-    if args.rollout_id is None:
-        raise RuntimeError("--rollout-id is required")
-
-    reward_func = load_reward_func(args.reward_module)
-    bfcl_runner = None
-
-    model_path = args.model_path
-    if not model_path:
-        try:
-            resp = requests.get(f"{args.sglang_url.rstrip('/')}/v1/models", timeout=10)
-            model_id = resp.json()["data"][0]["id"]
-            if Path(model_id).exists():
-                model_path = model_id
-        except Exception:
-            pass
-    if not model_path:
-        raise RuntimeError("--model-path required (HF checkpoint path for tokenizer)")
-    tokenizer = get_tokenizer(model_path)
-    bfcl_model_name = args.bfcl_model_name or "gorilla-openfunctions-v2"
-
-    eval_datasets = {}
-    for spec in args.eval_data:
-        name, path = spec.split(":", 1)
-        eval_datasets[name] = path
-
     wait_for_sglang(args.sglang_url)
+    tokenizer = get_tokenizer(args.model_path)
+    reward_func = load_reward_func(args.reward_module)
 
-    all_metrics = {}
-    for eval_name, eval_path in eval_datasets.items():
-        logger.info("Running eval: %s from %s", eval_name, eval_path)
+    for spec in args.eval_data:
+        eval_name, eval_path = spec.split(":", 1)
+        logger.info("Evaluating %s from %s", eval_name, eval_path)
         eval_samples = load_eval_data(eval_path)
-        logger.info("  Loaded %d samples", len(eval_samples))
+        prompt_texts = [apply_chat_template(tokenizer, sample) for sample in eval_samples]
+        eval_samples, prompt_texts = filter_long_prompts(tokenizer, eval_samples, prompt_texts, args.max_context_len)
 
+        metrics = {}
         if _is_bfcl_official_eval(eval_samples):
-            if bfcl_runner is None:
-                bfcl_runner = _load_bfcl_runner()
-                bfcl_model_name = args.bfcl_model_name or bfcl_runner["DEFAULT_BFCL_MODEL_NAME"]
+            runner = _load_bfcl_runner()
             if _is_bfcl_multi_turn_eval(eval_samples):
-                outputs = bfcl_runner["generate_bfcl_multi_turn_outputs"](
-                    eval_samples,
-                    tokenizer=tokenizer,
-                    generate_one=lambda prompt_text: generate_one(
-                        sglang_url=args.sglang_url,
-                        prompt_text=prompt_text,
+                outputs = runner["generate_bfcl_multi_turn_outputs"](
+                    eval_samples=eval_samples,
+                    generate_one_fn=lambda prompt: generate_one(
+                        args.sglang_url,
+                        prompt,
                         max_tokens=args.max_tokens,
                     ),
-                    max_prompt_tokens=args.max_context_len,
                 )
             else:
-                prompt_texts = [apply_chat_template(tokenizer, sample) for sample in eval_samples]
-                eval_samples, prompt_texts = filter_long_prompts(
-                    tokenizer,
-                    eval_samples,
-                    prompt_texts,
-                    args.max_context_len,
-                )
-                if not eval_samples:
-                    logger.warning("  All BFCL samples filtered out for %s, skipping", eval_name)
-                    continue
                 outputs = generate_batch(
                     sglang_url=args.sglang_url,
                     prompt_texts=prompt_texts,
                     max_tokens=args.max_tokens,
                     batch_size=args.batch_size,
                 )
+            model_name = args.bfcl_model_name or runner["DEFAULT_BFCL_MODEL_NAME"]
+            summary = runner["run_bfcl_official_eval"](eval_samples, outputs, model_name=model_name)
+            metrics = runner["summary_to_metrics"](eval_name, summary)
+        else:
+            responses = generate_batch(
+                sglang_url=args.sglang_url,
+                prompt_texts=prompt_texts,
+                max_tokens=args.max_tokens,
+                batch_size=args.batch_size,
+            )
+            rewards = asyncio.run(compute_rewards(reward_func, eval_samples, responses))
+            metrics = compute_eval_metrics(eval_name, eval_samples, rewards, responses)
 
-            result_dir, score_dir = _official_benchmark_dirs(
-                args.runtime_data_dir,
-                eval_path,
-                eval_name,
-                args.rollout_id,
-            )
-            summary = bfcl_runner["run_bfcl_official_eval"](
-                eval_samples,
-                outputs,
-                model_name=bfcl_model_name,
-                result_dir=result_dir,
-                score_dir=score_dir,
-            )
-            logger.info("  %s: official BFCL accuracy = %.4f", eval_name, summary["overall_accuracy"])
-            all_metrics.update(bfcl_runner["summary_to_metrics"](eval_name, summary))
+        if args.dry_run:
+            logger.info("Dry run metrics for %s: %s", eval_name, metrics)
             continue
 
-        prompt_texts = [apply_chat_template(tokenizer, sample) for sample in eval_samples]
-        eval_samples, prompt_texts = filter_long_prompts(tokenizer, eval_samples, prompt_texts, args.max_context_len)
-        if not eval_samples:
-            logger.warning("  All samples filtered out for %s, skipping", eval_name)
-            continue
-
-        responses = generate_batch(
-            sglang_url=args.sglang_url,
-            prompt_texts=prompt_texts,
-            max_tokens=args.max_tokens,
-            batch_size=args.batch_size,
-        )
-        rewards = asyncio.run(compute_rewards(reward_func, eval_samples, responses))
-        avg_reward = sum(rewards) / len(rewards) if rewards else 0.0
-        logger.info("  %s: avg reward = %.4f", eval_name, avg_reward)
-        all_metrics.update(compute_eval_metrics(eval_name, eval_samples, rewards, responses))
-
-    if all_metrics:
         log_to_wandb(
-            wandb_run_id=args.wandb_run_id,
-            wandb_project=args.wandb_project,
-            wandb_entity=args.wandb_entity,
-            wandb_host=args.wandb_host,
-            wandb_key=args.wandb_key,
-            wandb_group=args.wandb_group,
-            wandb_run_name=getattr(args, "wandb_run_name", ""),
-            step=args.rollout_id,
-            metrics=all_metrics,
+            metrics=metrics,
+            rollout_id=args.rollout_id,
+            run_id=args.wandb_run_id,
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            host=args.wandb_host,
+            key=args.wandb_key,
+            group=args.wandb_group,
+            run_name=getattr(args, "wandb_run_name", ""),
         )
-
-    logger.info("Eval backfill complete.")
 
 
 if __name__ == "__main__":

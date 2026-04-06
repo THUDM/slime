@@ -669,7 +669,7 @@ INNERPY
 
   start_local_sglang_eval_server "${label}" "${hf_dir}" "${port}" "${tp_size}" "${mem_fraction}"
   PYTHONPATH="${SCRIPT_DIR}:${SLIME_DIR}/examples:${SLIME_DIR}:${PYTHONPATH:-}" \
-    python3 "${SLIME_DIR}/examples/multidomain_v2/eval_backfill.py" \
+    python3 "${SLIME_DIR}/examples/eval_backfill.py" \
       --sglang-url "http://127.0.0.1:${port}" \
       --model-path "${hf_dir}" \
       --reward-module reward_mopd_eval_router.reward_func \

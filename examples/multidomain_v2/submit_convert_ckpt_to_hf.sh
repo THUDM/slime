@@ -12,7 +12,7 @@ MAX_TIME="${MAX_TIME:-24}"
 IMAGE="${IMAGE:-${INSP_IMAGE:-}}"
 WORKSPACE_ID="${WORKSPACE_ID:-ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6}"
 REMOTE_ROOT="${INSPIRE_TARGET_DIR:-${PROJECT_ROOT}}"
-RUN_SCRIPT="slime/examples/multidomain_v2/run_convert_ckpt_to_hf.sh"
+RUN_SCRIPT="slime/examples/run_convert_ckpt_to_hf.sh"
 MODEL_DIR="${MODEL_DIR:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/experiments/ifrl_qwen3_30b_a3b/checkpoints/iter_0001432_hf}"
 FORCE_RECONVERT="${FORCE_RECONVERT:-0}"
 
@@ -58,4 +58,3 @@ submit_one "nk-ns" \
 
 submit_one "no-jsonschema-only-ns" \
   "/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/experiments/multidomain_v2_no_jsonschema_only_ns"
-

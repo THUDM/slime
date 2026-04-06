@@ -12,7 +12,7 @@ MAX_TIME="${MAX_TIME:-24}"
 IMAGE="${IMAGE:-${INSP_IMAGE:-}}"
 WORKSPACE_ID="${WORKSPACE_ID:-ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6}"
 REMOTE_ROOT="${INSPIRE_TARGET_DIR:-${PROJECT_ROOT}}"
-RUN_SCRIPT="slime/examples/multidomain_v2/run_eval_backfill.sh"
+RUN_SCRIPT="slime/examples/run_eval_backfill.sh"
 
 submit_one() {
   local exp_name="$1"
