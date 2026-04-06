@@ -18,8 +18,6 @@ if [[ -f "${PROJECT_ROOT}/login.sh" ]]; then
   source "${PROJECT_ROOT}/login.sh"
 fi
 
-INSPIRE_BIN="${INSPIRE_CLI:-inspire}"
-
 RESOURCE="${RESOURCE:-8xH100}"
 PRIORITY="${PRIORITY:-10}"
 MAX_TIME="${MAX_TIME:-168}"
@@ -83,39 +81,15 @@ FORWARDED_ENV_VARS=(
   WANDB_BASE_URL
 )
 
-RUN_ENV_EXPORTS=""
-for var_name in "${FORWARDED_ENV_VARS[@]}"; do
-  if [[ -n "${!var_name+x}" ]]; then
-    RUN_ENV_EXPORTS+=" export ${var_name}=$(printf '%q' "${!var_name}");"
+customize_run_env_exports() {
+  local run_env_exports="$1"
+  if [[ -z "${TOOLCALL_USE_ROLLOUT_ROUTING_REPLAY+x}" ]]; then
+    run_env_exports+=" export TOOLCALL_USE_ROLLOUT_ROUTING_REPLAY=0;"
   fi
-done
-if [[ -z "${TOOLCALL_USE_ROLLOUT_ROUTING_REPLAY+x}" ]]; then
-  RUN_ENV_EXPORTS+=" export TOOLCALL_USE_ROLLOUT_ROUTING_REPLAY=0;"
-fi
-RUN_CMD="cd ${REMOTE_ROOT} &&${RUN_ENV_EXPORTS} if [[ -f \"${RUN_SCRIPT}\" ]]; then bash ${RUN_SCRIPT}; elif [[ -f \"${RUN_SCRIPT_FALLBACK}\" ]]; then bash ${RUN_SCRIPT_FALLBACK}; else echo \"Run script not found: ${RUN_SCRIPT} or ${RUN_SCRIPT_FALLBACK}\" >&2; exit 1; fi"
+  printf '%s' "${run_env_exports}"
+}
 
-CMD=(
-  "${INSPIRE_BIN}" job create
-  --name "${JOB_NAME}"
-  --resource "${RESOURCE}"
-  --nodes "${SUBMIT_NODES}"
-  --priority "${PRIORITY}"
-  --max-time "${MAX_TIME}"
-  --no-auto
-  --command "${RUN_CMD}"
-)
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../_shared/submit_inspire_utils.sh"
 
-if [[ -n "${IMAGE}" ]]; then
-  CMD+=(--image "${IMAGE}")
-fi
-
-if [[ -n "${WORKSPACE_ID}" ]]; then
-  CMD+=(--workspace-id "${WORKSPACE_ID}")
-fi
-
-SUBMIT_CWD="${SUBMIT_CWD:-${TMPDIR:-/tmp}}"
-(
-  cd "${SUBMIT_CWD}"
-  export INSPIRE_TARGET_DIR="${JOB_LOG_ROOT}"
-  "${CMD[@]}"
-)
+submit_inspire_job

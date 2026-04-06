@@ -22,6 +22,15 @@ WORK_ROOT=${WORK_ROOT:-${AVALANCHE_ROOT}/experiments/multidomain_v2_3node}
 TRAIN_POOL_ROOT=${TRAIN_POOL_ROOT:-${AVALANCHE_ROOT}/data/pool}
 TRAIN_POOL_GROUP=${TRAIN_POOL_GROUP:-${TRAIN_POOL_DOMAIN:-tool_call}}
 TRAIN_POOL_DATASETS=${TRAIN_POOL_DATASETS:-}
+TRAIN_DATASETS=${TRAIN_DATASETS:-}
+TRAIN_DATASETS_EXTRA=${TRAIN_DATASETS_EXTRA:-}
+TRAIN_PATHS=${TRAIN_PATHS:-}
+TRAIN_PATHS_EXTRA=${TRAIN_PATHS_EXTRA:-}
+TRAIN_MANIFEST=${TRAIN_MANIFEST:-}
+EVAL_DATASETS=${EVAL_DATASETS:-}
+EVAL_DATASETS_EXTRA=${EVAL_DATASETS_EXTRA:-}
+EVAL_PATHS=${EVAL_PATHS:-}
+EVAL_PATHS_EXTRA=${EVAL_PATHS_EXTRA:-}
 
 SLIME_DIR=${SLIME_DIR:-${PROJECT_ROOT}/slime}
 MEGATRON_PATH=${MEGATRON_PATH:-/root/Megatron-LM}
@@ -53,6 +62,7 @@ JSONSCHEMABENCH_EVAL="${RUNTIME_DATA_DIR}/jsonschemabench_eval.normalized.jsonl"
 IFBENCH_TEST_EVAL="${RUNTIME_DATA_DIR}/ifbench_test_eval.normalized.jsonl"
 MMLU_PRO_EVAL="${RUNTIME_DATA_DIR}/mmlu_pro_eval.normalized.jsonl"
 GPQA_MAIN_EVAL="${RUNTIME_DATA_DIR}/gpqa_main_eval.normalized.jsonl"
+CUSTOM_EVAL_PROMPT_DATA_FILE="${RUNTIME_DATA_DIR}/custom_eval_prompt_data.txt"
 TRACE_DIR="${WORK_ROOT}/rollout_traces"
 TRACE_MAX_SAMPLES=${TRACE_MAX_SAMPLES:-8}
 export MULTIDOMAIN_V1_TRACE_DIR="${TRACE_DIR}"
@@ -106,14 +116,24 @@ PY
   )"
 fi
 
+if [[ -z "${TRAIN_DATASETS}" ]]; then
+  TRAIN_DATASETS="${TRAIN_POOL_DATASETS}"
+fi
+
 TRAIN_GROUP_SIGNATURE="$(
-  PYTHONPATH="${SCRIPT_DIR}:${SCRIPT_DIR}/..:${PYTHONPATH:-}" python3 - "${TRAIN_POOL_DATASETS}" <<'PY'
+  PYTHONPATH="${SCRIPT_DIR}:${SCRIPT_DIR}/..:${PYTHONPATH:-}" python3 - "${TRAIN_DATASETS}" "${TRAIN_DATASETS_EXTRA}" "${TRAIN_PATHS}" "${TRAIN_PATHS_EXTRA}" <<'PY'
 import sys
 
 from multidomain_shared import group_signature_for_train_datasets
 
-dataset_names = [item.strip() for item in sys.argv[1].split(",") if item.strip()]
-print(group_signature_for_train_datasets(dataset_names))
+dataset_names = [item.strip() for item in ",".join(sys.argv[1:3]).split(",") if item.strip()]
+path_names = [item.strip() for item in ",".join(sys.argv[3:]).split(",") if item.strip()]
+if dataset_names:
+    print(group_signature_for_train_datasets(dataset_names))
+elif path_names:
+    print("custom")
+else:
+    print("unknown")
 PY
 )"
 
@@ -393,16 +413,52 @@ prepare_training_source_list() {
   fi
 
   local train_pool_prep_args=("--pool-root" "${TRAIN_POOL_ROOT}")
-  if [[ -n "${TRAIN_POOL_DATASETS}" ]]; then
+  if [[ -n "${TRAIN_DATASETS}" ]]; then
     local dataset_name
     local train_pool_dataset_array=()
-    IFS=',' read -r -a train_pool_dataset_array <<< "${TRAIN_POOL_DATASETS}"
+    IFS=',' read -r -a train_pool_dataset_array <<< "${TRAIN_DATASETS}"
     for dataset_name in "${train_pool_dataset_array[@]}"; do
       dataset_name="${dataset_name//[[:space:]]/}"
       if [[ -n "${dataset_name}" ]]; then
         train_pool_prep_args+=("--dataset" "${dataset_name}")
       fi
     done
+  fi
+  if [[ -n "${TRAIN_DATASETS_EXTRA}" ]]; then
+    local dataset_extra
+    local train_pool_dataset_extra_array=()
+    IFS=',' read -r -a train_pool_dataset_extra_array <<< "${TRAIN_DATASETS_EXTRA}"
+    for dataset_extra in "${train_pool_dataset_extra_array[@]}"; do
+      dataset_extra="${dataset_extra//[[:space:]]/}"
+      if [[ -n "${dataset_extra}" ]]; then
+        train_pool_prep_args+=("--dataset-extra" "${dataset_extra}")
+      fi
+    done
+  fi
+  if [[ -n "${TRAIN_PATHS}" ]]; then
+    local train_path
+    local train_pool_path_array=()
+    IFS=',' read -r -a train_pool_path_array <<< "${TRAIN_PATHS}"
+    for train_path in "${train_pool_path_array[@]}"; do
+      train_path="${train_path//[[:space:]]/}"
+      if [[ -n "${train_path}" ]]; then
+        train_pool_prep_args+=("--source" "${train_path}")
+      fi
+    done
+  fi
+  if [[ -n "${TRAIN_PATHS_EXTRA}" ]]; then
+    local train_path_extra
+    local train_pool_path_extra_array=()
+    IFS=',' read -r -a train_pool_path_extra_array <<< "${TRAIN_PATHS_EXTRA}"
+    for train_path_extra in "${train_pool_path_extra_array[@]}"; do
+      train_path_extra="${train_path_extra//[[:space:]]/}"
+      if [[ -n "${train_path_extra}" ]]; then
+        train_pool_prep_args+=("--source-extra" "${train_path_extra}")
+      fi
+    done
+  fi
+  if [[ -n "${TRAIN_MANIFEST}" ]]; then
+    train_pool_prep_args+=("--manifest" "${TRAIN_MANIFEST}")
   fi
 
   python3 "${SCRIPT_DIR}/prepare_multidomain_v2_data.py" \
@@ -416,6 +472,46 @@ prepare_training_source_list() {
 }
 
 prepare_eval_data() {
+  rm -f "${CUSTOM_EVAL_PROMPT_DATA_FILE}"
+  if [[ -n "${EVAL_DATASETS}" || -n "${EVAL_DATASETS_EXTRA}" || -n "${EVAL_PATHS}" || -n "${EVAL_PATHS_EXTRA}" ]]; then
+    : > "${CUSTOM_EVAL_PROMPT_DATA_FILE}"
+    while IFS=$'\t' read -r name source_path sample_count; do
+      [[ -n "${name}" ]] || continue
+      local_dest="${RUNTIME_DATA_DIR}/${name}_eval.normalized.jsonl"
+      python3 "${SCRIPT_DIR}/../materialize_eval_dataset.py" \
+        --pool-root "${TRAIN_POOL_ROOT}" \
+        --source "${source_path}" \
+        --dest "${local_dest}" \
+        --max-samples "${sample_count}"
+      filter_jsonl_by_prompt_budget "${local_dest}" "${name}_eval"
+      printf '%s\t%s\n' "${name}_eval" "${local_dest}" >> "${CUSTOM_EVAL_PROMPT_DATA_FILE}"
+    done < <(
+      PYTHONPATH="${SCRIPT_DIR}:${SCRIPT_DIR}/..:${PYTHONPATH:-}" python3 - "${TRAIN_POOL_ROOT}" "${EVAL_DATASETS}" "${EVAL_DATASETS_EXTRA}" "${EVAL_PATHS}" "${EVAL_PATHS_EXTRA}" <<'PY'
+import sys
+from pathlib import Path
+
+from dataset_selection import resolve_eval_datasets
+
+pool_root = Path(sys.argv[1])
+datasets = [item.strip() for item in sys.argv[2].split(",") if item.strip()]
+dataset_extras = [item.strip() for item in sys.argv[3].split(",") if item.strip()]
+paths = [item.strip() for item in sys.argv[4].split(",") if item.strip()]
+path_extras = [item.strip() for item in sys.argv[5].split(",") if item.strip()]
+
+resolved = resolve_eval_datasets(
+    pool_root=pool_root,
+    datasets=datasets or None,
+    dataset_extras=dataset_extras or None,
+    paths=paths or None,
+    path_extras=path_extras or None,
+)
+for item in resolved:
+    print(f"{item.name}\t{item.source}\t{item.n_samples_per_eval_prompt}")
+PY
+    )
+    return 0
+  fi
+
   if (( EVAL_IFEVAL_SAMPLES > 0 )); then
     python3 "${SCRIPT_DIR}/prepare_multidomain_v2_data.py" \
       --source "${EVAL_STRUCTURED_IFEVAL}" \
@@ -538,20 +634,27 @@ submit_ray_job() {
 
   EVAL_ARGS=()
   EVAL_PROMPT_DATA_ARGS=()
-  if (( EVAL_IFEVAL_SAMPLES > 0 )); then
-    EVAL_PROMPT_DATA_ARGS+=(ifeval_eval "${IFEVAL_EVAL}")
-  fi
-  if (( EVAL_JSONSCHEMABENCH_SAMPLES > 0 )); then
-    EVAL_PROMPT_DATA_ARGS+=(jsonschemabench_eval "${JSONSCHEMABENCH_EVAL}")
-  fi
-  if (( EVAL_IFBENCH_TEST_SAMPLES > 0 )); then
-    EVAL_PROMPT_DATA_ARGS+=(ifbench_test_eval "${IFBENCH_TEST_EVAL}")
-  fi
-  if (( EVAL_MMLU_PRO_SAMPLES > 0 )); then
-    EVAL_PROMPT_DATA_ARGS+=(mmlu_pro_eval "${MMLU_PRO_EVAL}")
-  fi
-  if (( EVAL_GPQA_MAIN_SAMPLES > 0 )); then
-    EVAL_PROMPT_DATA_ARGS+=(gpqa_main_eval "${GPQA_MAIN_EVAL}")
+  if [[ -s "${CUSTOM_EVAL_PROMPT_DATA_FILE}" ]]; then
+    while IFS=$'\t' read -r eval_name eval_path; do
+      [[ -n "${eval_name}" ]] || continue
+      EVAL_PROMPT_DATA_ARGS+=("${eval_name}" "${eval_path}")
+    done < "${CUSTOM_EVAL_PROMPT_DATA_FILE}"
+  else
+    if (( EVAL_IFEVAL_SAMPLES > 0 )); then
+      EVAL_PROMPT_DATA_ARGS+=(ifeval_eval "${IFEVAL_EVAL}")
+    fi
+    if (( EVAL_JSONSCHEMABENCH_SAMPLES > 0 )); then
+      EVAL_PROMPT_DATA_ARGS+=(jsonschemabench_eval "${JSONSCHEMABENCH_EVAL}")
+    fi
+    if (( EVAL_IFBENCH_TEST_SAMPLES > 0 )); then
+      EVAL_PROMPT_DATA_ARGS+=(ifbench_test_eval "${IFBENCH_TEST_EVAL}")
+    fi
+    if (( EVAL_MMLU_PRO_SAMPLES > 0 )); then
+      EVAL_PROMPT_DATA_ARGS+=(mmlu_pro_eval "${MMLU_PRO_EVAL}")
+    fi
+    if (( EVAL_GPQA_MAIN_SAMPLES > 0 )); then
+      EVAL_PROMPT_DATA_ARGS+=(gpqa_main_eval "${GPQA_MAIN_EVAL}")
+    fi
   fi
   if [[ "${#EVAL_PROMPT_DATA_ARGS[@]}" -gt 0 ]]; then
     EVAL_ARGS+=(

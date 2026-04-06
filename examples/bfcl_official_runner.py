@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-DEFAULT_BFCL_MODEL_NAME = "qwen3-30b-a3b-instruct-2507"
+DEFAULT_BFCL_MODEL_NAME = "Qwen/Qwen3-30B-A3B-Instruct-2507-FC"
 
 
 def _load_bfcl_backend() -> dict[str, Any]:
@@ -107,22 +107,19 @@ def build_bfcl_result_entries(rows: list[dict[str, Any]], outputs: list[Any], *,
         raise ValueError(f"rows and outputs must have the same length, got {len(rows)} and {len(outputs)}")
     backend = backend or _load_bfcl_backend()
 
-    multi_turn_missing_ids = [
-        idx
-        for idx, row in enumerate(rows)
-        if _bfcl_dataset_name(row) == "bfcl_v3_multi_turn_base" and not _row_native_id(row)
-    ]
+    multi_turn_indices = [idx for idx, row in enumerate(rows) if _bfcl_dataset_name(row) == "bfcl_v3_multi_turn_base"]
     resolved_multi_turn_ids: dict[int, str] = {}
-    if multi_turn_missing_ids:
-        assigned = _multi_turn_prompt_ids([rows[idx] for idx in multi_turn_missing_ids], backend)
-        resolved_multi_turn_ids = dict(zip(multi_turn_missing_ids, assigned))
+    if multi_turn_indices:
+        assigned = _multi_turn_prompt_ids([rows[idx] for idx in multi_turn_indices], backend)
+        resolved_multi_turn_ids = dict(zip(multi_turn_indices, assigned))
 
     entries: list[dict[str, Any]] = []
     for idx, (row, output) in enumerate(zip(rows, outputs)):
         dataset_name = _bfcl_dataset_name(row)
-        entry_id = _row_native_id(row)
-        if not entry_id:
+        if dataset_name == "bfcl_v3_multi_turn_base":
             entry_id = resolved_multi_turn_ids.get(idx, "")
+        else:
+            entry_id = _row_native_id(row)
         if not entry_id:
             raise RuntimeError(f"Missing BFCL entry id for dataset {dataset_name}")
 

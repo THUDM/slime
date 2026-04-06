@@ -1,7 +1,3 @@
-import asyncio
-import logging
-import os
-
 import aiohttp
 import torch
 
@@ -9,23 +5,10 @@ from slime.rollout.sglang_rollout import get_model_url
 from slime.utils.processing_utils import encode_image_for_rollout_engine
 from slime.utils.types import Sample
 
-logger = logging.getLogger(__name__)
 
-_RETRY_MAX = int(os.getenv("OPD_RETRY_MAX", "3"))
-_RETRY_BACKOFF = float(os.getenv("OPD_RETRY_BACKOFF", "1.0"))
-
-
-def _raise_request_failure(url, exc, model_name=None):
-    model_prefix = f"teacher {model_name} " if model_name else "teacher "
-    if isinstance(exc, aiohttp.ClientResponseError):
-        raise RuntimeError(
-            f"OPD {model_prefix}request failed with HTTP {exc.status} for {url}: {exc.message}"
-        ) from None
-    raise RuntimeError(f"OPD {model_prefix}request failed for {url}: {exc}") from None
-
-
-def _build_payload(sample):
+async def reward_func(args, sample, **kwargs):
     payload = {
+        # "text": sample.prompt + sample.response,
         "input_ids": sample.tokens,
         "sampling_params": {
             "temperature": 0,
@@ -40,99 +23,11 @@ def _build_payload(sample):
         image_data = sample.multimodal_inputs["images"]
         payload["image_data"] = [encode_image_for_rollout_engine(image) for image in image_data]
 
-    return payload
-
-
-def _parse_domain_model_map():
-    raw = os.getenv("OPD_DOMAIN_MODEL_MAP", "")
-    mapping = {}
-    for item in raw.split(","):
-        item = item.strip()
-        if not item or ":" not in item:
-            continue
-        domain, model_name = item.split(":", 1)
-        domain = domain.strip()
-        model_name = model_name.strip()
-        if domain and model_name:
-            mapping[domain] = model_name
-    return mapping
-
-
-def _get_model_url(args, model_name):
-    routers = getattr(args, "sglang_model_routers", None) or {}
-    if model_name in routers:
-        ip, port = routers[model_name]
-        return f"http://{ip}:{port}/generate"
-    return f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
-
-
-_RM_TYPE_TO_DOMAIN = {
-    "code_execution": "code",
-    "math": "math",
-}
-
-
-def _resolve_teacher_model(args, sample):
-    metadata = sample.metadata if isinstance(sample.metadata, dict) else {}
-    domain = metadata.get("domain")
-    if not isinstance(domain, str):
-        rm_type = metadata.get("rm_type")
-        if isinstance(rm_type, str) and rm_type in _RM_TYPE_TO_DOMAIN:
-            domain = _RM_TYPE_TO_DOMAIN[rm_type]
-    mapping = _parse_domain_model_map()
-    if isinstance(domain, str) and domain in mapping:
-        return mapping[domain]
-    if isinstance(domain, str):
-        return domain
-    return "tool"
-
-
-async def reward_func(args, sample, **kwargs):
-    payload = _build_payload(sample)
-    last_exc = None
-    for attempt in range(_RETRY_MAX + 1):
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(args.rm_url, json=payload) as resp:
-                    resp.raise_for_status()
-                    return await resp.json()
-        except (aiohttp.ClientResponseError, aiohttp.ClientConnectionError) as exc:
-            last_exc = exc
-            is_server_error = isinstance(exc, aiohttp.ClientResponseError) and exc.status >= 500
-            is_conn_error = isinstance(exc, aiohttp.ClientConnectionError)
-            if (is_server_error or is_conn_error) and attempt < _RETRY_MAX:
-                delay = _RETRY_BACKOFF * (2 ** attempt)
-                logger.warning("OPD teacher attempt %d/%d failed (%s), retrying in %.1fs",
-                               attempt + 1, _RETRY_MAX + 1, exc, delay)
-                await asyncio.sleep(delay)
-                continue
-            _raise_request_failure(args.rm_url, exc)
-    _raise_request_failure(args.rm_url, last_exc)
-
-
-async def reward_func_route_by_domain(args, sample, **kwargs):
-    payload = _build_payload(sample)
-    model_name = _resolve_teacher_model(args, sample)
-    url = _get_model_url(args, model_name)
-    last_exc = None
-    for attempt in range(_RETRY_MAX + 1):
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload) as resp:
-                    resp.raise_for_status()
-                    return await resp.json()
-        except (aiohttp.ClientResponseError, aiohttp.ClientConnectionError) as exc:
-            last_exc = exc
-            is_server_error = isinstance(exc, aiohttp.ClientResponseError) and exc.status >= 500
-            is_conn_error = isinstance(exc, aiohttp.ClientConnectionError)
-            if (is_server_error or is_conn_error) and attempt < _RETRY_MAX:
-                delay = _RETRY_BACKOFF * (2 ** attempt)
-                logger.warning("OPD teacher %s attempt %d/%d failed (%s), retrying in %.1fs",
-                               model_name, attempt + 1, _RETRY_MAX + 1, exc, delay)
-                await asyncio.sleep(delay)
-                continue
-            _raise_request_failure(url, exc, model_name=model_name)
-    _raise_request_failure(url, last_exc, model_name=model_name)
+    session_kwargs = {}
+    async with aiohttp.ClientSession(**session_kwargs) as session:
+        async with session.post(args.rm_url, json=payload) as resp:
+            resp.raise_for_status()
+            return await resp.json()
 
 
 async def reward_func_route_by_domain(args, sample, **kwargs):

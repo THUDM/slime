@@ -12,6 +12,7 @@ import asyncio
 import importlib
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -99,6 +100,10 @@ def _is_bfcl_multi_turn_eval(eval_samples: list[dict[str, Any]]) -> bool:
 
 def apply_chat_template(tokenizer, sample: dict[str, Any]) -> str:
     messages = sample.get("prompt", [])
+    if not messages:
+        question = str(sample.get("question") or "").strip()
+        if question:
+            messages = [{"role": "user", "content": question}]
     if isinstance(messages, str):
         messages = [{"role": "user", "content": messages}]
     tools = sample.get("tools") or None
@@ -195,11 +200,23 @@ class MockSample:
     class Status:
         TRUNCATED = "truncated"
         COMPLETED = "completed"
+        ABORTED = "aborted"
+        FAILED = "failed"
 
-    def __init__(self, response: str, metadata: dict, prompt: str = "", status: str = "completed"):
+    def __init__(
+        self,
+        response: str,
+        metadata: dict,
+        prompt: str = "",
+        label: Any = "",
+        tools: list[dict[str, Any]] | None = None,
+        status: str = "completed",
+    ):
         self.response = response
         self.metadata = metadata
         self.prompt = prompt
+        self.label = label
+        self.tools = tools or []
         self.status = status
         self.reward = None
         self.effective_response_length = len(response)
@@ -212,7 +229,13 @@ async def compute_rewards(reward_func, eval_samples, responses):
         prompt = sample_data.get("prompt", "")
         if isinstance(prompt, list):
             prompt = json.dumps(prompt)
-        mock = MockSample(response=response, metadata=metadata, prompt=prompt)
+        mock = MockSample(
+            response=response,
+            metadata=metadata,
+            prompt=prompt,
+            label=sample_data.get("label", ""),
+            tools=sample_data.get("tools") or [],
+        )
         try:
             reward = await reward_func(None, mock)
         except Exception as exc:
@@ -265,12 +288,16 @@ def log_to_wandb(wandb_run_id, wandb_project, wandb_entity, wandb_host, wandb_ke
             login_kwargs["host"] = wandb_host
         wandb.login(**login_kwargs)
 
+    mode = os.getenv("WANDB_MODE", "").strip().lower()
+    if mode not in {"offline", "disabled"}:
+        mode = "shared" if wandb_key or os.getenv("WANDB_API_KEY") else "disabled"
+
     init_kwargs: dict[str, Any] = {
         "id": wandb_run_id,
         "project": wandb_project,
         "resume": "allow",
         "reinit": True,
-        "settings": wandb.Settings(mode="shared"),
+        "settings": wandb.Settings(mode=mode),
     }
     if wandb_entity:
         init_kwargs["entity"] = wandb_entity
@@ -451,7 +478,7 @@ def main():
             wandb_host=args.wandb_host,
             wandb_key=args.wandb_key,
             wandb_group=args.wandb_group,
-            wandb_run_name=args.wandb_run_name,
+            wandb_run_name=getattr(args, "wandb_run_name", ""),
             step=args.rollout_id,
             metrics=all_metrics,
         )
