@@ -419,6 +419,51 @@ def test_align_row_to_v1_shape_materializes_train_function_call_family_from_top_
     assert aligned["prompt"][1:] == [{"role": "user", "content": "check weather"}]
 
 
+def test_align_row_to_v1_shape_is_near_noop_for_final_contract_tool_train_row():
+    row = {
+        "dataset_name": "xlam_function_calling_60k",
+        "domain": "tool",
+        "record_id": "row-1",
+        "supervision_family": "function_call_single",
+        "prompt": [{"role": "user", "content": "check weather"}],
+        "messages": [
+            {"role": "user", "content": "check weather"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {"name": "weather", "arguments": '{"city":"Paris"}'},
+                        "type": "function",
+                    }
+                ],
+            },
+        ],
+        "metadata": {
+            "dataset_name": "xlam_function_calling_60k",
+            "domain": "tool",
+            "record_id": "row-1",
+            "supervision_family": "function_call_single",
+            "reward_type": "function_call_single",
+            "ground_truth": [
+                {
+                    "name": "weather",
+                    "arguments": {"city": "Paris"},
+                    "function": {"name": "weather", "arguments": {"city": "Paris"}},
+                }
+            ],
+        },
+        "tools": [{"type": "function", "function": {"name": "weather", "description": "", "parameters": {}}}],
+    }
+
+    aligned = prepare_multidomain_v2.align_row_to_v1_normalized_shape(row)
+
+    assert aligned["metadata"]["reward_type"] == "function_call_single"
+    assert aligned["metadata"]["ground_truth"] == row["metadata"]["ground_truth"]
+    assert aligned["tools"] == row["tools"]
+    assert aligned["prompt"][1:] == row["prompt"]
+
+
 def test_align_row_to_v1_shape_keeps_tools_top_level_only():
     row = {
         "prompt": [{"role": "user", "content": "Use the tool"}],
