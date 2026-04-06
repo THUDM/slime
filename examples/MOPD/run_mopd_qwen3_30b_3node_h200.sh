@@ -18,6 +18,11 @@ PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 AVALANCHE_ROOT="$(cd -- "${PROJECT_ROOT}/.." && pwd)"
 
 # shellcheck source=/dev/null
+if [[ -f "${AVALANCHE_ROOT}/login.sh" ]]; then
+  source "${AVALANCHE_ROOT}/login.sh"
+fi
+
+# shellcheck source=/dev/null
 source "${SCRIPT_DIR}/../_shared/ray_bootstrap_utils.sh"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/../_shared/data_cache_reuse_utils.sh"
@@ -58,9 +63,11 @@ TRAIN_DATASETS_EXTRA=${TRAIN_DATASETS_EXTRA:-}
 TRAIN_PATHS=${TRAIN_PATHS:-}
 TRAIN_PATHS_EXTRA=${TRAIN_PATHS_EXTRA:-}
 TRAIN_MANIFEST=${TRAIN_MANIFEST:-}
+MOPD_STEM_TRAIN_DATASETS=${MOPD_STEM_TRAIN_DATASETS:-nemotron_knowledge_mcqa}
+MOPD_STRUCTURED_TRAIN_DATASETS=${MOPD_STRUCTURED_TRAIN_DATASETS:-nemotron_structured_outputs}
 MOPD_MATH_TRAIN_DATASETS=${MOPD_MATH_TRAIN_DATASETS:-deepmath,dapo,bigmath}
 MOPD_CODE_TRAIN_DATASETS=${MOPD_CODE_TRAIN_DATASETS:-apps,code_contests,taco,codeforces}
-TRAIN_POOL_EXCLUDE_PATTERNS=${TRAIN_POOL_EXCLUDE_PATTERNS:-stem/train/openbookqa,stem/train/scienceqa,stem/train/sciq,stem/train/ai2_arc,stem/train/aqua_rat,stem/train/mmlu_auxiliary,tool/train/xlam_function_calling_60k,structured/train/nemotron_structured_outputs,stem/train/medmcqa_data_,structured/train/jsonschemabench_train-}
+TRAIN_POOL_EXCLUDE_PATTERNS=${TRAIN_POOL_EXCLUDE_PATTERNS:-stem/train/openbookqa,stem/train/scienceqa,stem/train/sciq,stem/train/ai2_arc,stem/train/aqua_rat,stem/train/mmlu_auxiliary,tool/train/xlam_function_calling_60k,stem/train/medmcqa_data_,structured/train/jsonschemabench_train-}
 TRAIN_SOURCE_LIST_BASENAME=${TRAIN_SOURCE_LIST_BASENAME:-mopd_train_sources.list}
 
 # ---- Eval ----
@@ -436,6 +443,8 @@ prepare_training_source_list() {
     "${TRAIN_SOURCE_LIST}"
     "${TRAIN_POOL_INCLUDE_DOMAINS}"
     "${TRAIN_POOL_EXCLUDE_PATTERNS}"
+    --stem-train-datasets "${MOPD_STEM_TRAIN_DATASETS}"
+    --structured-train-datasets "${MOPD_STRUCTURED_TRAIN_DATASETS}"
     --math-train-datasets "${MOPD_MATH_TRAIN_DATASETS}"
     --code-train-datasets "${MOPD_CODE_TRAIN_DATASETS}"
   )

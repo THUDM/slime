@@ -40,6 +40,9 @@ submit_inspire_job() {
   if [[ -n "${IMAGE:-}" ]]; then
     cmd+=(--image "${IMAGE}")
   fi
+  if [[ -n "${LOCATION:-}" ]]; then
+    cmd+=(--location "${LOCATION}")
+  fi
   if [[ -n "${WORKSPACE_ID:-}" ]]; then
     cmd+=(--workspace-id "${WORKSPACE_ID}")
   fi
