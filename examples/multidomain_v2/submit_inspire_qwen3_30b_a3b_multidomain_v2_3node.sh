@@ -79,6 +79,6 @@ FORWARDED_ENV_VARS=(
 )
 
 # shellcheck source=/dev/null
-source "${SCRIPT_DIR}/../_shared/submit_inspire_utils.sh"
+source "${SCRIPT_DIR}/../common/submit_inspire_utils.sh"
 
 submit_inspire_job

@@ -191,3 +191,70 @@ def test_main_routes_bfcl_multi_turn_eval_with_expected_signature(monkeypatch, t
     assert callable(called["multi_turn"]["generate_one"])
     assert called["run_bfcl"] == 1
     assert called["log"] == {"eval/bfcl_v3_multi_turn_eval": 0.5}
+
+
+def test_main_logs_teacher_step0_metrics_once_after_accumulating_all_eval_sets(monkeypatch, tmp_path: Path):
+    called = {"log_calls": 0, "metrics": None}
+
+    args = SimpleNamespace(
+        migrate_full_run=False,
+        migrate_eval_history=False,
+        sglang_url="http://localhost:30000",
+        eval_data=["aime24_eval:/tmp/aime24.jsonl", "gpqa_eval:/tmp/gpqa.jsonl"],
+        rollout_id=0,
+        wandb_run_id="run-id",
+        wandb_project="proj",
+        wandb_entity="",
+        wandb_host="",
+        wandb_key="",
+        wandb_group="group",
+        target_wandb_run_id="",
+        target_wandb_run_name="",
+        runtime_data_dir=str(tmp_path / "runtime"),
+        dry_run=False,
+        model_path="/tmp/model",
+        max_context_len=32768,
+        max_tokens=256,
+        batch_size=8,
+        bfcl_model_name="",
+        reward_module="multidomain_shared.reward_func",
+    )
+
+    monkeypatch.setattr(eval_backfill, "parse_args", lambda: args)
+    monkeypatch.setattr(eval_backfill, "load_reward_func", lambda _module: object())
+    monkeypatch.setattr(eval_backfill, "wait_for_sglang", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(eval_backfill, "get_tokenizer", lambda _path: SimpleNamespace(apply_chat_template=lambda *a, **k: "prompt"))
+    monkeypatch.setattr(eval_backfill, "filter_long_prompts", lambda tokenizer, samples, prompts, max_len: (samples, prompts))
+    monkeypatch.setattr(eval_backfill, "generate_batch", lambda **kwargs: ["response"])
+
+    def _load_eval_data(path: str):
+        dataset_name = "aime24" if "aime24" in path else "gpqa"
+        domain = "math" if dataset_name == "aime24" else "stem"
+        return [
+            {
+                "prompt": [{"role": "user", "content": f"Question for {dataset_name}"}],
+                "label": "A",
+                "metadata": {
+                    "dataset_name": dataset_name,
+                    "domain": domain,
+                },
+            }
+        ]
+
+    async def _compute_rewards(_reward_func, _eval_samples, _responses):
+        return [1.0]
+
+    monkeypatch.setattr(eval_backfill, "load_eval_data", _load_eval_data)
+    monkeypatch.setattr(eval_backfill, "compute_rewards", _compute_rewards)
+
+    def _log_to_wandb(**kwargs):
+        called["log_calls"] += 1
+        called["metrics"] = kwargs["metrics"]
+
+    monkeypatch.setattr(eval_backfill, "log_to_wandb", _log_to_wandb)
+
+    eval_backfill.main()
+
+    assert called["log_calls"] == 1
+    assert called["metrics"]["eval/aime24_eval"] == 1.0
+    assert called["metrics"]["eval/gpqa_eval"] == 1.0

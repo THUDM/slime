@@ -23,9 +23,9 @@ if [[ -f "${AVALANCHE_ROOT}/login.sh" ]]; then
 fi
 
 # shellcheck source=/dev/null
-source "${SCRIPT_DIR}/../_shared/ray_bootstrap_utils.sh"
+source "${SCRIPT_DIR}/../common/ray_bootstrap_utils.sh"
 # shellcheck source=/dev/null
-source "${SCRIPT_DIR}/../_shared/data_cache_reuse_utils.sh"
+source "${SCRIPT_DIR}/../common/data_cache_reuse_utils.sh"
 
 # ---- Cluster layout ----
 NUM_NODES=${NUM_NODES:-3}
@@ -662,6 +662,7 @@ run_teacher_step0_eval() {
   local mem_fraction="$5"
   local run_id
   local run_name
+  local wandb_group
   local log_file="${LOG_DIR}/${label}_step0_eval.log"
   local eval_args=()
 
@@ -674,7 +675,8 @@ import uuid
 print(uuid.uuid4().hex[:8])
 INNERPY
 )"
-  run_name="${TOOL_CALL_WANDB_GROUP}-${label}-step0"
+  wandb_group="$(normalize_wandb_group_name "${TOOL_CALL_WANDB_GROUP}")"
+  run_name="${wandb_group}-${label}-step0"
 
   start_local_sglang_eval_server "${label}" "${hf_dir}" "${port}" "${tp_size}" "${mem_fraction}"
   PYTHONPATH="${SCRIPT_DIR}:${SLIME_DIR}/examples:${SLIME_DIR}:${PYTHONPATH:-}" \
@@ -688,7 +690,7 @@ INNERPY
       --wandb-run-id "${run_id}" \
       --wandb-run-name "${run_name}" \
       --wandb-project "${TOOL_CALL_WANDB_PROJECT}" \
-      --wandb-group "${TOOL_CALL_WANDB_GROUP}" \
+      --wandb-group "${wandb_group}" \
       --wandb-host "${WANDB_BASE_URL:-}" \
       --wandb-key "${WANDB_API_KEY:-}" \
       --max-context-len "${TOOLCALL_MAX_PROMPT_TOKENS}" \
