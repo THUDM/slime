@@ -99,3 +99,25 @@ def test_materialize_runtime_pool_row_injects_agent_next_action_prompt():
     system_text = materialized["prompt"][0]["content"].lower()
     assert "next tool call" in system_text or "next action" in system_text
     assert materialized["prompt"][1:] == [{"role": "user", "content": "Find Italian restaurants"}]
+
+
+def test_materialize_runtime_pool_row_reads_stem_answer_from_label():
+    row = {
+        "dataset_name": "gpqa",
+        "domain": "stem",
+        "record_id": "stem-1",
+        "prompt": [{"role": "user", "content": "Question: ..."}],
+        "label": "C",
+        "metadata": {
+            "dataset_name": "gpqa",
+            "domain": "stem",
+            "record_id": "stem-1",
+            "reward_type": "stem_mcqa",
+        },
+    }
+
+    materialized = pool_runtime_semantics.materialize_runtime_pool_row(row)
+
+    assert materialized is not None
+    assert materialized["metadata"]["answer"] == "C"
+    assert materialized["label"] == "C"
