@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 
-import os
-import json
-from pathlib import Path
-import sys
+from prepare_pool_data import main
 
-# Script goes here
+
+if __name__ == "__main__":
+    main()
