@@ -26,6 +26,21 @@ STEM_SYSTEM_PROMPTS = [
     "You are an expert science and quantitative reasoning assistant. Reason carefully, avoid unsupported assumptions, and give the final answer clearly. If this is multiple choice, state the correct option explicitly.",
 ]
 
+API_CALL_CODEGEN_SYSTEM_PROMPTS = [
+    "You are an API-calling code assistant. Return exactly one Python API call expression that solves the request. Do not add explanation, markdown, or extra text.",
+    "You write Python API call completions. Output only the single best Python API call expression for the request, with valid arguments and no surrounding commentary.",
+]
+
+FUNCTION_CALL_SINGLE_SYSTEM_PROMPTS = [
+    "You are a function-calling assistant. Choose the correct function, keep arguments valid for the provided schema, and do not fabricate tool results.",
+    "You can call the provided functions. Emit the best tool call with schema-valid JSON arguments when a tool is needed, and avoid extra narrative.",
+]
+
+NEXT_ACTION_TOOL_CALL_SYSTEM_PROMPTS = [
+    "You are continuing an agent workflow. Produce only the next tool call that best advances the task using the current conversation state and available tools.",
+    "You are deciding the next action in a tool-using trace. Return the next valid tool call only, without a final answer or extra commentary.",
+]
+
 TOOL_SYSTEM_PROMPTS = [
     "You are a tool-using assistant. Use the provided tools precisely when they are useful, keep tool calls valid, and ground the final answer in the observed results.",
     "You are an assistant with access to external tools. Plan briefly, call tools only when needed, and produce a final answer that is consistent with the tool outputs.",
@@ -43,6 +58,9 @@ INSTRUCTION_FOLLOWING_SYSTEM_PROMPTS = [
 
 PROMPT_FAMILY_TO_OPTIONS: dict[str, list[str]] = {
     "stem": STEM_SYSTEM_PROMPTS,
+    "api_call_codegen": API_CALL_CODEGEN_SYSTEM_PROMPTS,
+    "function_call_single": FUNCTION_CALL_SINGLE_SYSTEM_PROMPTS,
+    "next_action_tool_call": NEXT_ACTION_TOOL_CALL_SYSTEM_PROMPTS,
     "tool": TOOL_SYSTEM_PROMPTS,
     "structured": STRUCTURED_SYSTEM_PROMPTS,
     "instruction_following": INSTRUCTION_FOLLOWING_SYSTEM_PROMPTS,
@@ -91,10 +109,13 @@ def _has_system_message(prompt: list[dict[str, Any]]) -> bool:
 
 def infer_prompt_family(payload: dict[str, Any]) -> str | None:
     metadata = payload.get("metadata") or {}
+    prompt_family = str(metadata.get("prompt_family") or "").strip().lower()
     reward_type = str(metadata.get("reward_type") or "").strip().lower()
     dataset_name = str(metadata.get("dataset_name") or "").strip().lower()
     domain = str(metadata.get("domain") or "").strip().lower()
 
+    if prompt_family in PROMPT_FAMILY_TO_OPTIONS:
+        return prompt_family
     if reward_type in {"instruction_following_soft", "instruction_following_strict", "ifeval"}:
         return "instruction_following"
     if dataset_name in {"ifbench_test", "ifeval"} or domain == "ifrl":
@@ -109,13 +130,15 @@ def infer_prompt_family(payload: dict[str, Any]) -> str | None:
         return "structured"
     if reward_type == "stem_mcqa" or domain == "stem":
         return "stem"
+    if reward_type == "api_call_text":
+        return "api_call_codegen"
+    if reward_type == "function_call_single":
+        return "function_call_single"
     if reward_type in {
         "tool_call_soft",
         "tool_call_strict",
         "tool_call",
         "tool_selection_strict",
-        "function_call_single",
-        "api_call_text",
     } or domain == "tool":
         return "tool"
     if domain == "structured":
@@ -251,7 +274,7 @@ def _runtime_metadata_from_train_row(
         metadata["source_record_fields"] = source_record_fields
 
     if supervision_family == "function_call_single":
-        ground_truth = row.get("ground_truth") or []
+        ground_truth = row.get("ground_truth") or metadata.get("ground_truth") or []
         if not ground_truth:
             ground_truth = _extract_ground_truth_from_tool_calls(
                 next(
@@ -265,12 +288,20 @@ def _runtime_metadata_from_train_row(
             )
         if not ground_truth and row.get("api_call") not in (None, ""):
             ground_truth = _extract_python_call_ground_truth(row.get("api_call"))
+        if not ground_truth and metadata.get("raw_api_call") not in (None, ""):
+            ground_truth = _extract_python_call_ground_truth(metadata.get("raw_api_call"))
         if not ground_truth:
             return None
-        metadata["reward_type"] = "api_call_text" if row.get("api_call") not in (None, "") else "function_call_single"
+        reward_type = str(metadata.get("reward_type") or "").strip()
+        if reward_type not in {"api_call_text", "function_call_single"}:
+            reward_type = "api_call_text" if row.get("api_call") not in (None, "") else "function_call_single"
+        metadata["reward_type"] = reward_type
         metadata["ground_truth"] = ground_truth
-        if row.get("api_call") not in (None, ""):
-            metadata["raw_api_call"] = str(row.get("api_call"))
+        raw_api_call = row.get("api_call")
+        if raw_api_call in (None, ""):
+            raw_api_call = metadata.get("raw_api_call")
+        if raw_api_call not in (None, ""):
+            metadata["raw_api_call"] = str(raw_api_call)
         if row.get("provider") not in (None, ""):
             metadata["provider"] = row.get("provider")
         return metadata

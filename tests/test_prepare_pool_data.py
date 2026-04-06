@@ -48,6 +48,8 @@ def test_convert_xlam_row_for_pool_preserves_raw_fields_without_native_wrapper()
     assert sample["domain"] == "tool"
     assert sample["record_id"] == "7"
     assert sample["supervision_family"] == "function_call_single"
+    assert sample["label"] == ""
+    assert sample["prompt"] == [{"role": "user", "content": "Where can I find beta giveaways?"}]
     assert sample["messages"] == row["messages"]
     assert isinstance(sample["tools"], list)
     assert sample["extra"] == {"id": 7}
@@ -56,6 +58,15 @@ def test_convert_xlam_row_for_pool_preserves_raw_fields_without_native_wrapper()
         "dataset_name": "xlam_function_calling_60k",
         "domain": "tool",
         "record_id": "7",
+        "reward_type": "function_call_single",
+        "prompt_family": "function_call_single",
+        "ground_truth": [
+            {
+                "name": "live_giveaways_by_type",
+                "arguments": {"type": "beta"},
+                "function": {"name": "live_giveaways_by_type", "arguments": {"type": "beta"}},
+            }
+        ],
         "supervision_family": "function_call_single",
         "source_fields": {"extra": {"id": 7}},
     }
@@ -75,11 +86,17 @@ def test_convert_apibench_row_for_pool_preserves_api_bench_shape():
     sample = samples[0]
     assert sample["dataset_name"] == "apibench_huggingface"
     assert sample["supervision_family"] == "function_call_single"
+    assert sample["label"] == ""
+    assert sample["prompt"] == [{"role": "user", "content": row["code"]}]
+    assert sample["tools"] == []
     assert sample["code"] == row["code"]
     assert sample["api_call"] == row["api_call"]
     assert sample["provider"] == row["provider"]
     assert sample["api_data"] == row["api_data"]
     assert "native" not in sample
+    assert sample["metadata"]["reward_type"] == "api_call_text"
+    assert sample["metadata"]["prompt_family"] == "api_call_codegen"
+    assert sample["metadata"]["raw_api_call"] == row["api_call"]
 
 
 def test_convert_row_for_pool_rejects_removed_apigen_train_dataset():
@@ -128,9 +145,11 @@ def test_convert_agent_row_for_pool_preserves_trace_item_fields():
     sample = samples[0]
     assert sample["dataset_name"] == "agent_function_calling_open_dataset"
     assert sample["supervision_family"] == "function_call_single"
+    assert sample["label"] == ""
     assert sample["trace_id"] == "trace-1"
     assert sample["model"] == "qwen3-plus"
     assert sample["session_id"] == "TEMP_SESSION_123"
+    assert sample["prompt"] == [{"role": "user", "content": "Italian restaurants in New York"}]
     assert sample["messages"] == row["function_calls"][0]["messages"]
     assert sample["tools"] == row["function_calls"][0]["tools"]
     assert "native" not in sample
@@ -138,6 +157,36 @@ def test_convert_agent_row_for_pool_preserves_trace_item_fields():
         "model": "qwen3-plus",
         "session_id": "TEMP_SESSION_123",
     }
+    assert sample["metadata"]["reward_type"] == "function_call_single"
+    assert sample["metadata"]["prompt_family"] == "next_action_tool_call"
+    assert sample["metadata"]["ground_truth"] == [
+        {
+            "name": "maps_text_search",
+            "arguments": {"keywords": "Italian Restaurants", "city": "New York"},
+            "function": {"name": "maps_text_search", "arguments": {"keywords": "Italian Restaurants", "city": "New York"}},
+        }
+    ]
+
+
+def test_convert_agent_row_for_pool_drops_items_without_tool_calls():
+    row = {
+        "trace_id": "trace-2",
+        "model": "qwen3-plus",
+        "session_id": "TEMP_SESSION_456",
+        "function_calls": [
+            {
+                "messages": [
+                    {"role": "user", "content": "Just answer directly"},
+                    {"role": "assistant", "content": "<p>No More Tool Calls Needed</p>"},
+                ],
+                "tools": [{"type": "function", "function": {"name": "maps_text_search"}}],
+            }
+        ],
+    }
+
+    samples = prepare_pool_data.convert_row_for_pool(row, "agent_function_calling_open_dataset")
+
+    assert samples == []
 
 
 def test_convert_row_for_pool_rejects_removed_toolbench_train_dataset():
