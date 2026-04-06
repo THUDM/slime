@@ -32,6 +32,17 @@ def train(args):
         if args.check_weight_update_equal:
             ray.get(rollout_manager.check_weights.remote(action="compare"))
 
+    # Keep async training aligned with train.py semantics:
+    # support eval-only mode and an explicit step-0 eval before the first rollout.
+    if args.num_rollout == 0 and args.eval_interval is not None:
+        ray.get(rollout_manager.eval.remote(rollout_id=0))
+        ray.get(rollout_manager.dispose.remote())
+        finish_tracking(args)
+        return
+
+    if args.eval_interval is not None and args.start_rollout_id == 0 and not args.skip_eval_before_train:
+        ray.get(rollout_manager.eval.remote(rollout_id=0))
+
     # async train loop.
     rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
