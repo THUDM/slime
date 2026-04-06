@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# shellcheck source=/dev/null
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/checkpoint_utils.sh"
+
 discover_eval_data_dir() {
   local experiment_dir="$1"
   local mode="${2:-glob}"
@@ -87,23 +90,6 @@ start_sglang_eval_server() {
   return 1
 }
 
-convert_checkpoint_to_hf() {
-  local iter_dir="$1"
-  local hf_out="$2"
-
-  if [[ -f "${hf_out}/config.json" ]]; then
-    echo "  HF checkpoint already exists: ${hf_out}"
-    return 0
-  fi
-
-  echo "  Converting torch_dist -> HF: ${iter_dir} -> ${hf_out}"
-  python3 "${PROJECT_ROOT}/slime/tools/convert_torch_dist_to_hf.py" \
-    --input-dir "${iter_dir}" \
-    --output-dir "${hf_out}" \
-    --origin-hf-dir "${MODEL_DIR}" \
-    --force
-}
-
 run_eval_backfill_for_checkpoint() {
   local hf_dir="$1"
   local rollout_id="$2"
@@ -182,25 +168,19 @@ run_eval_backfill_main() {
   mkdir -p "${HF_CACHE}" "${EXPERIMENT_DIR}/logs"
 
   local iterations=()
-  local iter_dir=""
-  for iter_dir in "${CKPT_DIR}"/iter_*; do
-    [[ -d "${iter_dir}" ]] || continue
-    local iter_name
-    iter_name="$(basename "${iter_dir}")"
-    local iter_num="${iter_name#iter_}"
-    iterations+=("$((10#${iter_num}))")
-  done
+  local iter_num=""
+  while IFS= read -r iter_num; do
+    [[ -n "${iter_num}" ]] || continue
+    iterations+=("${iter_num}")
+  done < <(list_checkpoint_iterations "${CKPT_DIR}")
   if [[ ${#iterations[@]} -eq 0 ]]; then
     echo "ERROR: no checkpoints found under ${CKPT_DIR}" >&2
     return 1
   fi
-  IFS=$'\n' iterations=($(sort -n <<< "${iterations[*]}"))
-  unset IFS
 
   echo "Found ${#iterations[@]} checkpoints: ${iterations[*]}"
 
   local prev_hf_dir=""
-  local iter_num=""
   for iter_num in "${iterations[@]}"; do
     local iter_name
     iter_name="$(printf 'iter_%07d' "${iter_num}")"
@@ -209,7 +189,7 @@ run_eval_backfill_main() {
     echo ""
     echo "====== Checkpoint ${iter_name} (rollout_id=${iter_num}) ======"
 
-    convert_checkpoint_to_hf "${CKPT_DIR}/${iter_name}" "${hf_dir}"
+    convert_torch_dist_checkpoint_to_hf "${CKPT_DIR}/${iter_name}" "${hf_dir}"
     start_sglang_eval_server "${hf_dir}"
     run_eval_backfill_for_checkpoint "${hf_dir}" "${iter_num}"
     cleanup_sglang_eval_server

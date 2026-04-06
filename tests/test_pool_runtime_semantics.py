@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def _load_runtime_module():
-    module_path = Path(__file__).resolve().parents[1] / "examples" / "pool_runtime_semantics.py"
+    module_path = Path(__file__).resolve().parents[1] / "examples" / "common" / "pool_runtime_semantics.py"
     spec = importlib.util.spec_from_file_location("pool_runtime_semantics_test_module", module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

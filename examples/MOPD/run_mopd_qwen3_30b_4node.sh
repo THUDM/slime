@@ -628,15 +628,15 @@ submit_ray_job() {
   EVAL_ARGS=(
     --eval-interval "${EVAL_INTERVAL}"
     --eval-config "${EVAL_CONFIG_PATH}"
-    --eval-function-path examples.MOPD.mopd_eval.generate_rollout
+    --eval-function-path examples.MOPD.reward_mopd_eval_router.generate_eval_rollout
   )
 
   # ---- Reward: OPD route-by-domain ----
   CUSTOM_ARGS=(
     --custom-rm-path examples.MOPD.reward_func_mopd.reward_func_route_by_domain
     --custom-reward-post-process-path slime.rollout.on_policy_distillation.post_process_rewards
-    --custom-rollout-log-function-path examples.MOPD.log_mopd_rollout.log_rollout_data
-    --custom-eval-rollout-log-function-path examples.MOPD.log_mopd_rollout.log_eval_rollout_data
+    --custom-rollout-log-function-path log_rollout.log_rollout_data
+    --custom-eval-rollout-log-function-path log_rollout.log_eval_rollout_data
   )
 
   # ---- W&B ----
