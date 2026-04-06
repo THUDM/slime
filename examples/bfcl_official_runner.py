@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 
 DEFAULT_BFCL_MODEL_NAME = "Qwen/Qwen3-30B-A3B-Instruct-2507-FC"
+LEGACY_DEFAULT_BFCL_MODEL_NAME = "qwen3-30b-a3b-instruct-2507"
 
 
 def _load_bfcl_backend() -> dict[str, Any]:
@@ -132,16 +133,22 @@ def build_bfcl_result_entries(rows: list[dict[str, Any]], outputs: list[Any], *,
 
 
 def _instantiate_handler(model_name: str, backend: dict[str, Any]):
+    resolved_model_name = model_name
     config = backend["MODEL_CONFIG_MAPPING"].get(model_name)
+    if config is None and model_name == DEFAULT_BFCL_MODEL_NAME:
+        config = backend["MODEL_CONFIG_MAPPING"].get(LEGACY_DEFAULT_BFCL_MODEL_NAME)
+        if config is not None:
+            resolved_model_name = LEGACY_DEFAULT_BFCL_MODEL_NAME
     if config is None:
         supported = ", ".join(sorted(backend["MODEL_CONFIG_MAPPING"]))
-        raise RuntimeError(f"Unsupported BFCL model '{model_name}'. Supported models: {supported}")
-    return config.model_handler(
+        raise RuntimeError(f"Unsupported BFCL model '{resolved_model_name}'. Supported models: {supported}")
+    handler = config.model_handler(
         model_name=config.model_name,
         temperature=0,
-        registry_name=model_name,
+        registry_name=resolved_model_name,
         is_fc_model=config.is_fc_model,
     )
+    return handler, resolved_model_name
 
 
 def _score_file_headers(score_dir: Path, model_name: str, test_categories: list[str], *, version_prefix: str) -> dict[str, dict[str, Any]]:
@@ -207,12 +214,12 @@ def run_bfcl_official_eval(
     result_dir.mkdir(parents=True, exist_ok=True)
     score_dir.mkdir(parents=True, exist_ok=True)
 
-    handler = _instantiate_handler(model_name, backend)
+    handler, resolved_model_name = _instantiate_handler(model_name, backend)
     handler.write(entries, result_dir, update_mode=False)
-    backend["runner"]([model_name], test_categories, result_dir, score_dir, allow_missing=allow_missing)
-    headers = _score_file_headers(score_dir, model_name, test_categories, version_prefix=backend["VERSION_PREFIX"])
+    backend["runner"]([resolved_model_name], test_categories, result_dir, score_dir, allow_missing=allow_missing)
+    headers = _score_file_headers(score_dir, resolved_model_name, test_categories, version_prefix=backend["VERSION_PREFIX"])
     summary = summarize_bfcl_scores(headers)
-    summary["model_name"] = model_name
+    summary["model_name"] = resolved_model_name
     summary["result_dir"] = str(result_dir)
     summary["score_dir"] = str(score_dir)
 

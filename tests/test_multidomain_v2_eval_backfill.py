@@ -102,3 +102,92 @@ def test_main_routes_bfcl_eval_to_official_runner(monkeypatch, tmp_path: Path):
     assert called["generate_batch"] == 1
     assert called["run_bfcl"] == 1
     assert called["log"] == {"eval/bfcl_v3_eval": 1.0}
+
+
+def test_main_routes_bfcl_multi_turn_eval_with_expected_signature(monkeypatch, tmp_path: Path):
+    called = {"multi_turn": None, "run_bfcl": 0, "log": None}
+
+    args = SimpleNamespace(
+        migrate_full_run=False,
+        migrate_eval_history=False,
+        sglang_url="http://localhost:30000",
+        eval_data=["bfcl_v3_multi_turn_eval:/tmp/bfcl_multi.jsonl"],
+        rollout_id=3,
+        wandb_run_id="run-id",
+        wandb_project="proj",
+        wandb_entity="",
+        wandb_host="",
+        wandb_key="",
+        wandb_group="",
+        target_wandb_run_id="",
+        target_wandb_run_name="",
+        runtime_data_dir=str(tmp_path / "runtime"),
+        dry_run=False,
+        model_path="/tmp/model",
+        max_context_len=4096,
+        max_tokens=128,
+        batch_size=4,
+        bfcl_model_name="",
+        reward_module="multidomain_shared.reward_func",
+    )
+
+    monkeypatch.setattr(eval_backfill, "parse_args", lambda: args)
+    monkeypatch.setattr(eval_backfill, "load_reward_func", lambda _module: object())
+    monkeypatch.setattr(eval_backfill, "wait_for_sglang", lambda *_args, **_kwargs: None)
+    fake_tokenizer = SimpleNamespace(apply_chat_template=lambda *a, **k: "prompt")
+    monkeypatch.setattr(eval_backfill, "get_tokenizer", lambda _path: fake_tokenizer)
+    monkeypatch.setattr(
+        eval_backfill,
+        "load_eval_data",
+        lambda _path: [
+            {
+                "dataset_name": "bfcl_v3_multi_turn_base",
+                "prompt": [{"role": "user", "content": "Question"}],
+                "tools": [],
+                "ground_truth": ["call"],
+                "metadata": {
+                    "dataset_name": "bfcl_v3_multi_turn_base",
+                    "domain": "tool",
+                    "reward_type": "bfcl_official",
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(eval_backfill, "filter_long_prompts", lambda tokenizer, samples, prompts, max_len: (samples, prompts))
+    monkeypatch.setattr(eval_backfill, "generate_batch", lambda **kwargs: (_ for _ in ()).throw(AssertionError("single-turn path should not run")))
+
+    def _generate_multi_turn_outputs(*, rows, tokenizer, generate_one, max_prompt_tokens):
+        called["multi_turn"] = {
+            "rows": rows,
+            "tokenizer": tokenizer,
+            "generate_one": generate_one,
+            "max_prompt_tokens": max_prompt_tokens,
+        }
+        assert tokenizer is fake_tokenizer
+        assert max_prompt_tokens == 4096
+        return [[["tool call"]]]
+
+    def _run_bfcl(eval_samples, outputs, **kwargs):
+        called["run_bfcl"] += 1
+        assert eval_samples[0]["dataset_name"] == "bfcl_v3_multi_turn_base"
+        assert outputs == [[["tool call"]]]
+        return {"overall_accuracy": 0.5, "categories": {}}
+
+    monkeypatch.setattr(
+        eval_backfill,
+        "_load_bfcl_runner",
+        lambda: {
+            "DEFAULT_BFCL_MODEL_NAME": "Qwen/Qwen3-30B-A3B-Instruct-2507-FC",
+            "generate_bfcl_multi_turn_outputs": _generate_multi_turn_outputs,
+            "run_bfcl_official_eval": _run_bfcl,
+            "summary_to_metrics": lambda eval_name, summary: {f"eval/{eval_name}": summary["overall_accuracy"]},
+        },
+    )
+    monkeypatch.setattr(eval_backfill, "log_to_wandb", lambda **kwargs: called.__setitem__("log", kwargs["metrics"]))
+
+    eval_backfill.main()
+
+    assert called["multi_turn"] is not None
+    assert callable(called["multi_turn"]["generate_one"])
+    assert called["run_bfcl"] == 1
+    assert called["log"] == {"eval/bfcl_v3_multi_turn_eval": 0.5}
