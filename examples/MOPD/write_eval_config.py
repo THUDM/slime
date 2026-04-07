@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Generate eval config YAML for MOPD from pool directory structure.
-
-Also pre-processes eval JSONL files to ensure system prompts are present.
-For samples lacking a system message, a diverse system prompt is injected
-deterministically (based on sample content hash) from per-domain candidates.
-Processed files are saved to {output_dir}/eval/ and the config points there.
-"""
+"""Generate MOPD eval config and materialized eval JSONL files."""
 from __future__ import annotations
 
 import argparse
@@ -21,43 +15,16 @@ if str(EXAMPLES_DIR) not in sys.path:
 
 from common.dataset_selection import resolve_eval_datasets
 from common.eval_prep_utils import (
-    build_code_eval_row as _build_code_eval_row_shared,
-    build_math_eval_row as _build_math_eval_row_shared,
+    build_code_eval_row as _build_code_eval_row,
+    build_math_eval_row as _build_math_eval_row,
     materialize_eval_dataset as materialize_eval_dataset_shared,
     preprocess_pool_eval_jsonl,
 )
 from multidomain_shared import GENERIC_EVAL_DATASETS, OFFICIAL_EVAL_DATASETS
 
 
-def _infer_domain_from_pool_rel(rel: str) -> str:
-    return rel.split("/", 1)[0]
-
-
-def _preprocess_eval_jsonl(src: Path, dst: Path, domain: str, row_filter=None) -> int:
-    """Copy eval JSONL from pool to data_cache, materializing runtime prompt semantics.
-
-    Args:
-        row_filter: optional callable(dict) -> bool applied after materialization.
-                    Rows returning False are dropped.
-    """
+def _preprocess_eval_jsonl(src: Path, dst: Path, _domain: str | None = None, row_filter=None) -> int:
     return preprocess_pool_eval_jsonl(src, dst, row_filter=row_filter)
-
-
-def _rewrite_eval_jsonl(src: Path, dst: Path, row_builder) -> int:
-    runtime_mode = "pool"
-    if row_builder is _build_math_eval_row:
-        runtime_mode = "math"
-    elif row_builder is _build_code_eval_row:
-        runtime_mode = "code"
-    return materialize_eval_dataset_shared(src, dst, runtime_mode=runtime_mode)
-
-
-def _build_math_eval_row(row: dict) -> dict | None:
-    return _build_math_eval_row_shared(row)
-
-
-def _build_code_eval_row(row: dict) -> dict | None:
-    return _build_code_eval_row_shared(row)
 
 
 def _bfcl_single_turn_filter(row: dict) -> bool:
@@ -114,25 +81,15 @@ def main():
 
         if domain == "pool":
             row_filter = _DATASET_FILTERS.get(name)
-            try:
-                rel = src_path.relative_to(pool).as_posix()
-            except ValueError:
-                rel = src_path.name
-            count = _preprocess_eval_jsonl(src_path, dst_path, _infer_domain_from_pool_rel(rel), row_filter=row_filter)
+            count = _preprocess_eval_jsonl(src_path, dst_path, row_filter=row_filter)
             if count == 0:
                 print(f"  SKIP {name}: no valid samples after preprocessing")
                 continue
             data_path = str(dst_path)
-        elif domain == "math":
-            count = _rewrite_eval_jsonl(src_path, dst_path, _build_math_eval_row)
+        elif domain in {"math", "code"}:
+            count = materialize_eval_dataset_shared(src_path, dst_path, runtime_mode=domain)
             if count == 0:
-                print(f"  SKIP {name}: no valid math samples after runtime conversion")
-                continue
-            data_path = str(dst_path)
-        elif domain == "code":
-            count = _rewrite_eval_jsonl(src_path, dst_path, _build_code_eval_row)
-            if count == 0:
-                print(f"  SKIP {name}: no valid code samples after runtime conversion")
+                print(f"  SKIP {name}: no valid {domain} samples after runtime conversion")
                 continue
             data_path = str(dst_path)
         else:

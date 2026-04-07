@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Any, Iterator, Sequence
@@ -12,7 +13,6 @@ if str(EXAMPLES_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLES_DIR))
 
 from common.dataset_selection import (
-    ResolvedEvalDataset,
     discover_train_sources,
     resolve_eval_datasets,
     resolve_named_datasets as resolve_named_datasets_from_registry,
@@ -25,10 +25,6 @@ from common.pool_runtime_semantics import materialize_runtime_pool_row
 
 def discover_sources(pool_root: Path) -> list[Path]:
     return discover_train_sources(pool_root)
-
-
-def iter_rows(path: Path) -> Iterator[dict]:
-    yield from iter_json_object_rows(path)
 
 
 def align_row_to_v1_normalized_shape(row: dict[str, Any]) -> dict[str, Any] | None:
@@ -47,7 +43,7 @@ def iter_selected_rows(
     seen = 0
     yielded = 0
     for source in sources:
-        for row in iter_rows(source):
+        for row in iter_json_object_rows(source):
             if seen < skip_samples:
                 seen += 1
                 continue
@@ -70,8 +66,6 @@ def write_dataset(
             row = align_row_to_v1_normalized_shape(row)
             if row is None:
                 continue
-            import json
-
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
             written += 1
     return written
@@ -79,35 +73,6 @@ def write_dataset(
 
 def write_source_manifest(sources: Sequence[Path], dest: Path) -> int:
     return write_source_manifest_shared(sources, dest)
-
-
-def resolve_train_data_sources(args: argparse.Namespace) -> list[Path]:
-    pool_root = Path(args.pool_root) if args.pool_root else None
-    if pool_root is None:
-        if args.source:
-            return [Path(source) for source in args.source]
-        raise ValueError("Provide --pool-root when using dataset-based train resolution.")
-    return resolve_train_sources(
-        pool_root=pool_root,
-        profile=args.profile,
-        datasets=args.dataset,
-        dataset_extras=args.dataset_extra,
-        paths=args.source,
-        path_extras=args.source_extra,
-        manifest=args.manifest,
-    )
-
-
-def resolve_eval_data_source(args: argparse.Namespace) -> ResolvedEvalDataset:
-    resolved = resolve_eval_datasets(
-        pool_root=Path(args.pool_root),
-        profile=args.profile,
-        datasets=[args.dataset] if args.dataset else None,
-        paths=[args.source] if args.source else None,
-    )
-    if len(resolved) != 1:
-        raise ValueError("Expected exactly one eval dataset to resolve.")
-    return resolved[0]
 
 
 def materialize_eval_data(
@@ -118,17 +83,18 @@ def materialize_eval_data(
     source: Path | None = None,
     profile: str | None = None,
 ) -> int:
-    args = argparse.Namespace(
-        pool_root=str(pool_root),
-        dataset=dataset_name,
-        source=str(source) if source is not None else None,
+    resolved = resolve_eval_datasets(
+        pool_root=pool_root,
         profile=profile,
+        datasets=[dataset_name] if dataset_name else None,
+        paths=[source] if source is not None else None,
     )
-    resolved = resolve_eval_data_source(args)
+    if len(resolved) != 1:
+        raise ValueError("Expected exactly one eval dataset to resolve.")
     return materialize_eval_dataset_shared(
-        resolved.source,
+        resolved[0].source,
         dest,
-        runtime_mode=resolved.runtime_mode,
+        runtime_mode=resolved[0].runtime_mode,
         max_samples=max_samples,
     )
 
@@ -166,7 +132,22 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "train":
-        sources = resolve_train_data_sources(args)
+        pool_root = Path(args.pool_root) if args.pool_root else None
+        if pool_root is None:
+            if args.source:
+                sources = [Path(source) for source in args.source]
+            else:
+                raise SystemExit("Provide --pool-root when using dataset-based train resolution.")
+        else:
+            sources = resolve_train_sources(
+                pool_root=pool_root,
+                profile=args.profile,
+                datasets=args.dataset,
+                dataset_extras=args.dataset_extra,
+                paths=args.source,
+                path_extras=args.source_extra,
+                manifest=args.manifest,
+            )
         if not sources:
             raise SystemExit("No normalized pool sources were found.")
         if args.print_sources:

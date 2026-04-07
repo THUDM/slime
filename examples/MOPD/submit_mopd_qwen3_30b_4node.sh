@@ -1,11 +1,4 @@
 #!/usr/bin/env bash
-# Submit MOPD 4-node job to Inspire.
-#
-# Usage:
-#   bash slime/examples/MOPD/submit_mopd_qwen3_30b_4node.sh
-#
-# Override env vars as needed:
-#   JOB_NAME=mopd-test RESOURCE=8xH100 bash slime/examples/MOPD/submit_mopd_qwen3_30b_4node.sh
 
 set -euo pipefail
 

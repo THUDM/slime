@@ -19,11 +19,6 @@ def _load_write_eval_config_module():
 write_eval_config = _load_write_eval_config_module()
 
 
-def test_infer_domain_from_pool_rel():
-    assert write_eval_config._infer_domain_from_pool_rel("tool/eval/bfcl_v3.jsonl") == "tool"
-    assert write_eval_config._infer_domain_from_pool_rel("structured/eval/ifeval.jsonl") == "structured"
-
-
 def test_preprocess_eval_jsonl_uses_instruction_following_prompt_for_ifbench(tmp_path: Path):
     src = tmp_path / "ifbench.jsonl"
     dst = tmp_path / "out.jsonl"

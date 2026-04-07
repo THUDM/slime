@@ -1,6 +1,4 @@
 #!/bin/bash
-# MOPD eval backfill: run official benchmark evals on existing checkpoints.
-# Reuses shared examples/eval_backfill.py with MOPD's reward router.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"

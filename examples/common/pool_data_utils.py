@@ -54,12 +54,6 @@ def transform_jsonl(
     return count
 
 
-def file_has_supervision_family(src: Path) -> bool:
-    for row in iter_json_object_rows(src, skip_invalid_json=True, open_errors="replace"):
-        return bool(row.get("supervision_family"))
-    return False
-
-
 def write_source_manifest(sources: Sequence[Path], dest: Path) -> int:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with dest.open("w", encoding="utf-8") as handle:

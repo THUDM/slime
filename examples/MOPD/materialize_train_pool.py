@@ -1,26 +1,10 @@
-"""Pre-materialize pool/train data so that downstream consumers
-can read the prompt and metadata in the runtime shape expected by training.
-
-New-format pool rows carry supervision in top-level family-specific fields
-plus ``supervision_family`` instead of ``metadata.ground_truth``. 
-``materialize_runtime_pool_row`` bridges the gap, but
-``slime/slime/utils/data.py`` does not call it during training.
-
-For MOPD this is still useful even though the reward comes from the teacher
-model: materialization injects the runtime prompt shape and family-specific
-metadata before the generic data loader reads the files.
-
-This script reads pool JSONL files, runs materialization, and writes the result
-to a cache directory.  The output ``.list`` file points to the materialized
-files so the training pipeline can load them transparently.
-"""
+"""Materialize MOPD training sources into runtime JSONL files when needed."""
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
 
-# Allow importing from examples/
 _examples_dir = Path(__file__).resolve().parent.parent
 if str(_examples_dir) not in sys.path:
     sys.path.insert(0, str(_examples_dir))
@@ -30,11 +14,6 @@ JL_MOPD_DIR = AVALANCHE_ROOT / "jl_workspace" / "experiment" / "mopd"
 if str(JL_MOPD_DIR) not in sys.path:
     sys.path.insert(0, str(JL_MOPD_DIR))
 
-from common.pool_data_utils import (
-    file_has_supervision_family,
-    transform_jsonl,
-)
-from common.pool_runtime_semantics import materialize_runtime_pool_row  # noqa: E402
 from build_mopd_runtime_data import (  # type: ignore  # noqa: E402
     DEFAULT_CODE_TRAIN_DATASETS,
     DEFAULT_MATH_TRAIN_DATASETS,
@@ -44,7 +23,6 @@ from build_mopd_runtime_data import (  # type: ignore  # noqa: E402
     parse_code_names,
 )
 from common.dataset_selection import (
-    legacy_train_sources,
     materialize_training_sources,
     resolve_train_sources,
     write_training_manifest,
@@ -53,21 +31,6 @@ from common.dataset_selection import (
 
 def _split_csv(text: str) -> list[str]:
     return [item.strip() for item in text.split(",") if item.strip()]
-
-
-def materialize_file(src: Path, dst: Path) -> int:
-    """Materialize a single pool JSONL file.  Returns number of rows written."""
-    return transform_jsonl(
-        src,
-        dst,
-        row_builder=materialize_runtime_pool_row,
-        skip_invalid_json=True,
-        open_errors="replace",
-    )
-
-
-def _file_needs_materialize(src: Path) -> bool:
-    return file_has_supervision_family(src)
 
 
 def _build_jl_runtime_train(

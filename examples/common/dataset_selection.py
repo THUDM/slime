@@ -1,12 +1,9 @@
 from __future__ import annotations
-
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
 from common.dataset_registry import (
-    EVAL_DATASET_SPECS,
     TRAIN_DATASET_DOMAIN_MAP,
     TRAIN_DATASET_GROUP_MAP,
     TRAIN_DATASET_SOURCE_MAP,
@@ -14,7 +11,7 @@ from common.dataset_registry import (
     default_train_datasets_for_profile,
     eval_dataset_spec,
 )
-from common.pool_data_utils import file_has_supervision_family, transform_jsonl, write_source_manifest
+from common.pool_data_utils import transform_jsonl, write_source_manifest
 from common.pool_runtime_semantics import materialize_runtime_pool_row
 
 
@@ -211,10 +208,6 @@ def materialize_file(src: Path, dst: Path) -> int:
     )
 
 
-def training_file_needs_materialize(src: Path) -> bool:
-    return file_has_supervision_family(src)
-
-
 def materialize_training_sources(
     *,
     sources: Sequence[Path],
@@ -225,14 +218,6 @@ def materialize_training_sources(
     cache_dir.mkdir(parents=True, exist_ok=True)
     for src_path in sources:
         src_path = src_path.resolve()
-        needs_materialize = False
-        try:
-            needs_materialize = training_file_needs_materialize(src_path)
-        except Exception:
-            needs_materialize = False
-        if not needs_materialize:
-            materialized_paths.append(src_path)
-            continue
         try:
             rel = src_path.relative_to(pool_root)
         except ValueError:
@@ -338,20 +323,3 @@ def train_groups_for_datasets(dataset_names: Sequence[str]) -> tuple[str, ...]:
         if group not in groups:
             groups.append(group)
     return tuple(groups)
-
-
-def json_dumps(obj: object) -> str:
-    return json.dumps(obj, ensure_ascii=False)
-
-
-def parse_csv_env(value: str | None) -> list[str]:
-    return _split_csv(value)
-
-
-def eval_name_map(include_official: bool = True) -> dict[str, str]:
-    names: dict[str, str] = {}
-    for spec in EVAL_DATASET_SPECS.values():
-        if spec.official and not include_official:
-            continue
-        names[spec.name] = spec.relpath
-    return names
