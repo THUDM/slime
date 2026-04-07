@@ -1,31 +1,66 @@
-diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
-index f0bd3eb..c1bfd1f 100644
---- a/python/sglang/srt/model_executor/model_runner.py
-+++ b/python/sglang/srt/model_executor/model_runner.py
-@@ -13,6 +13,8 @@
+diff -urN tmp_sglang_orig/python/sglang/srt/managers/io_struct.py tmp_sglang_mod/python/sglang/srt/managers/io_struct.py
+--- tmp_sglang_orig/python/sglang/srt/managers/io_struct.py	2026-04-07 01:29:33.170989783 +0000
++++ tmp_sglang_mod/python/sglang/srt/managers/io_struct.py	2026-04-07 01:30:22.328323959 +0000
+@@ -1362,6 +1362,7 @@
+     names: List[str]
+     dtypes: List[str]
+     shapes: List[List[int]]
++    sparse_metadata: Optional[List[Dict[str, Any]]] = None
+     # The group name
+     group_name: str = "weight_update_group"
+     # Whether to flush the cache after updating weights
+diff -urN tmp_sglang_orig/python/sglang/srt/managers/tp_worker.py tmp_sglang_mod/python/sglang/srt/managers/tp_worker.py
+--- tmp_sglang_orig/python/sglang/srt/managers/tp_worker.py	2026-04-07 01:29:33.368983074 +0000
++++ tmp_sglang_mod/python/sglang/srt/managers/tp_worker.py	2026-04-07 01:30:32.446981062 +0000
+@@ -148,6 +148,7 @@
+             recv_req.names,
+             recv_req.dtypes,
+             recv_req.shapes,
++            recv_req.sparse_metadata,
+             recv_req.group_name,
+             recv_req.load_format,
+         )
+diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_sglang_mod/python/sglang/srt/model_executor/model_runner.py
+--- tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py	2026-04-07 01:29:33.592975483 +0000
++++ tmp_sglang_mod/python/sglang/srt/model_executor/model_runner.py	2026-04-07 01:31:33.304918738 +0000
+@@ -13,6 +13,7 @@
  # ==============================================================================
  """ModelRunner runs the forward passes of the models."""
  
 +import contextlib
-+
  import datetime
  import gc
  import inspect
-@@ -248,6 +250,10 @@ UNBALANCED_MODEL_LOADING_TIMEOUT_S = 480  # leave more time for post data proces
- logger = logging.getLogger(__name__)
+@@ -247,6 +248,9 @@
  
+ logger = logging.getLogger(__name__)
  
 +_ORIGINAL_TENSOR_COPY = torch.Tensor.copy_
 +_ORIGINAL_TENSOR_FILL = torch.Tensor.fill_
 +
-+
+ 
  def resolve_language_model(model: nn.Module) -> nn.Module:
      model_cls_name = model.__class__.__name__
-     if model_cls_name == "Qwen3OmniMoeForConditionalGeneration":
-@@ -1363,6 +1369,10 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -1341,6 +1345,7 @@
+         names,
+         dtypes,
+         shapes,
++        sparse_metadata,
+         group_name,
+         load_format: Optional[str] = None,
+     ):
+@@ -1363,6 +1368,18 @@
              return self._update_bucketed_weights_from_distributed(
                  names, dtypes, shapes, group_name
              )
++        if load_format == "distributed_delta_sparse_indices":
++            return self._apply_sparse_delta_weights_from_distributed(
++                dtypes, shapes, sparse_metadata, group_name, transport="sparse_indices"
++            )
++        if load_format == "distributed_delta_sparse_bitmask":
++            return self._apply_sparse_delta_weights_from_distributed(
++                dtypes, shapes, sparse_metadata, group_name, transport="sparse_bitmask"
++            )
 +        if load_format == "distributed_delta":
 +            return self._apply_delta_weights_from_distributed(
 +                names, dtypes, shapes, group_name
@@ -33,20 +68,9 @@ index f0bd3eb..c1bfd1f 100644
          try:
              weights = []
              handles = []
-@@ -1437,6 +1447,10 @@ class ModelRunner(ModelRunnerKVCacheMixin):
-             return self._update_weights_from_flattened_bucket(
-                 flattened_tensor_bucket_dict=named_tensors
-             )
-+        if load_format == "flattened_bucket_delta":
-+            return self._apply_weight_deltas_from_flattened_bucket(
-+                flattened_tensor_bucket_dict=named_tensors
-+            )
- 
-         # We need to get device after patch otherwise the device would be wrong
-         self.device_module = torch.get_device_module(self.device)
-@@ -1489,6 +1503,72 @@ class ModelRunner(ModelRunnerKVCacheMixin):
- 
-         return True, "Success"
+@@ -1395,6 +1412,138 @@
+             logger.error(error_msg)
+             return False, error_msg
  
 +    def _apply_delta_weights_from_distributed(
 +        self, names, dtypes, shapes, group_name
@@ -70,7 +94,6 @@ index f0bd3eb..c1bfd1f 100644
 +                weights.append((name, weight))
 +            for handle in handles:
 +                handle.wait()
-+
 +            with _additive_weight_copy_context():
 +                with _wrap_post_load_weights_with_original_copy_context(self.model):
 +                    self.model.load_weights(weights)
@@ -85,6 +108,120 @@ index f0bd3eb..c1bfd1f 100644
 +            logger.error(error_msg)
 +            return False, error_msg
 +
++    def _apply_sparse_delta_weights_from_distributed(
++        self, dtypes, shapes, sparse_metadata, group_name, transport
++    ):
++        try:
++            encoded_tensors = []
++            handles = []
++            for dtype, shape in zip(dtypes, shapes):
++                target_dtype = (
++                    dtype if isinstance(dtype, torch.dtype) else getattr(torch, dtype)
++                )
++                encoded_tensor = torch.empty(shape, dtype=target_dtype, device=self.device)
++                handles.append(
++                    torch.distributed.broadcast(
++                        encoded_tensor,
++                        src=0,
++                        group=self._model_update_group[group_name],
++                        async_op=True,
++                    )
++                )
++                encoded_tensors.append(encoded_tensor)
++            for handle in handles:
++                handle.wait()
++            weights = []
++            scratch_buffer = None
++            scratch_numel = 0
++            if transport == "sparse_indices":
++                packed_indices = encoded_tensors[0].to(dtype=torch.long)
++                packed_values = encoded_tensors[1]
++                for meta in sparse_metadata:
++                    target_dtype = getattr(torch, meta["dtype"])
++                    target_shape = tuple(meta["shape"])
++                    numel = int(meta["numel"])
++                    if (
++                        scratch_buffer is None
++                        or scratch_buffer.dtype != target_dtype
++                        or scratch_numel < numel
++                    ):
++                        scratch_buffer = torch.empty(
++                            numel, dtype=target_dtype, device=self.device
++                        )
++                        scratch_numel = numel
++                    decoded_flat = scratch_buffer[:numel]
++                    decoded_flat.zero_()
++                    index_start = int(meta["index_start"])
++                    index_end = int(meta["index_end"])
++                    value_start = int(meta["value_start"])
++                    value_end = int(meta["value_end"])
++                    if index_end > index_start:
++                        decoded_flat.index_copy_(
++                            0,
++                            packed_indices[index_start:index_end],
++                            packed_values[value_start:value_end],
++                        )
++                    weights.append((meta["name"], decoded_flat.view(target_shape)))
++            elif transport == "sparse_bitmask":
++                packed_masks = encoded_tensors[0]
++                packed_values = encoded_tensors[1]
++                for meta in sparse_metadata:
++                    target_dtype = getattr(torch, meta["dtype"])
++                    target_shape = tuple(meta["shape"])
++                    numel = int(meta["numel"])
++                    if (
++                        scratch_buffer is None
++                        or scratch_buffer.dtype != target_dtype
++                        or scratch_numel < numel
++                    ):
++                        scratch_buffer = torch.empty(
++                            numel, dtype=target_dtype, device=self.device
++                        )
++                        scratch_numel = numel
++                    decoded_flat = scratch_buffer[:numel]
++                    decoded_flat.zero_()
++                    mask_start = int(meta["mask_start"])
++                    mask_end = int(meta["mask_end"])
++                    value_start = int(meta["value_start"])
++                    value_end = int(meta["value_end"])
++                    unpacked_mask = _unpack_bitmask(
++                        packed_masks[mask_start:mask_end], numel, self.device
++                    )
++                    decoded_flat[unpacked_mask] = packed_values[value_start:value_end]
++                    weights.append((meta["name"], decoded_flat.view(target_shape)))
++            else:
++                raise ValueError(f"Unsupported sparse delta transport: {transport}")
++            with _additive_weight_copy_context():
++                with _wrap_post_load_weights_with_original_copy_context(self.model):
++                    self.model.load_weights(weights)
++            return True, "Succeeded to apply sparse weight deltas online."
++        except Exception as e:
++            error_msg = (
++                f"Failed to apply sparse weight deltas online: {e}. "
++                f"The model weights may be in an inconsistent state. "
++                f"Please discard the whole weights."
++            )
++            logger.error(error_msg)
++            return False, error_msg
++
+     def _update_bucketed_weights_from_distributed(
+         self, names, dtypes, shapes, group_name
+     ):
+@@ -1437,6 +1586,10 @@
+             return self._update_weights_from_flattened_bucket(
+                 flattened_tensor_bucket_dict=named_tensors
+             )
++        if load_format == "flattened_bucket_delta":
++            return self._apply_weight_deltas_from_flattened_bucket(
++                flattened_tensor_bucket_dict=named_tensors
++            )
+ 
+         # We need to get device after patch otherwise the device would be wrong
+         self.device_module = torch.get_device_module(self.device)
+@@ -1489,6 +1642,35 @@
+ 
+         return True, "Success"
+ 
 +    def _apply_weight_deltas_from_flattened_bucket(
 +        self,
 +        flattened_tensor_bucket_dict,
@@ -117,7 +254,7 @@ index f0bd3eb..c1bfd1f 100644
      def get_weights_by_name(
          self, name: str, truncate_size: int = 100
      ) -> Optional[torch.Tensor]:
-@@ -2718,6 +2798,60 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -2718,6 +2900,67 @@
          return True, "Success"
  
  
@@ -173,6 +310,13 @@ index f0bd3eb..c1bfd1f 100644
 +        torch.Tensor.copy_ = original_copy_
 +        torch.Tensor.fill_ = original_fill_
 +
++
++def _unpack_bitmask(packed, numel, device):
++    if numel == 0:
++        return torch.empty(0, dtype=torch.bool, device=device)
++    shifts = torch.arange(8, dtype=torch.uint8, device=device)
++    expanded = ((packed.unsqueeze(1) >> shifts) & 1).reshape(-1)
++    return expanded[:numel].to(dtype=torch.bool)
 +
 +
  def _model_load_weights_direct(model, named_tensors: List[Tuple[str, torch.Tensor]]):

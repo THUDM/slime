@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import queue
 import threading
@@ -35,6 +36,13 @@ class PreparedChunk:
     is_delta: bool
     tensors: list[tuple[str, torch.Tensor]]
     commit_state: DeltaCompressionCommitState
+
+
+@dataclass
+class MaterializedDeltaTransport:
+    tensors: list[tuple[str, torch.Tensor]]
+    sparse_metadata: list[dict] | None
+    load_format: str
 
 
 class DeltaArtifactWriter:
@@ -87,6 +95,7 @@ class DeltaCompressionTracker:
 
     def commit_chunk(self, commit_state: DeltaCompressionCommitState, *, weight_version: int) -> None:
         baseline_updates = commit_state.baseline_updates
+        self._ensure_stats()
         # baseline_updates holds (name, current_gpu_tensor) references.
         # Save to pinned CPU async, one sync at end — same pattern as TensorBackuper.backup().
         for name, tensor in baseline_updates:
@@ -128,25 +137,11 @@ class DeltaCompressionTracker:
         baseline_updates = []
         input_tensor_count = 0
         sent_tensor_count = 0
-        exact_zero_tensor_count = 0
-        total_elements = 0
-        nonzero_elements = 0
-        max_abs = 0.0
         for (name, tensor), prev_gpu in zip(tensors, prev_gpu_tensors, strict=True):
             delta = (tensor - prev_gpu).to(self.delta_dtype)
             input_tensor_count += 1
-            total_elements += delta.numel()
 
             baseline_updates.append((name, tensor))
-
-            abs_max = float(delta.abs().max().item()) if delta.numel() > 0 else 0.0
-            max_abs = max(max_abs, abs_max)
-            nonzero_elements += int(delta.count_nonzero().item()) if delta.numel() > 0 else 0
-
-            if delta.numel() == 0 or abs_max == 0.0:
-                exact_zero_tensor_count += 1
-                continue
-
             delta_tensors.append((name, delta))
             sent_tensor_count += 1
             if self.artifact_writer is not None:
@@ -155,11 +150,7 @@ class DeltaCompressionTracker:
         self._stats["delta_chunks"] += 1
         self._stats["delta_input_tensors"] += input_tensor_count
         self._stats["delta_sent_tensors"] += sent_tensor_count
-        self._stats["delta_exact_zero_tensors"] += exact_zero_tensor_count
-        self._stats["delta_total_elements"] += total_elements
-        self._stats["delta_nonzero_elements"] += nonzero_elements
         self._stats["delta_sent_bytes"] += sum(t.numel() * t.element_size() for _, t in delta_tensors)
-        self._stats["delta_max_abs"] = max(self._stats["delta_max_abs"], max_abs)
 
         return PreparedChunk(
             is_delta=True,
@@ -179,37 +170,195 @@ class DeltaCompressionTracker:
                 "delta_chunks": 0,
                 "delta_input_tensors": 0,
                 "delta_sent_tensors": 0,
-                "delta_exact_zero_tensors": 0,
-                "delta_total_elements": 0,
-                "delta_nonzero_elements": 0,
                 "delta_sent_bytes": 0,
-                "delta_max_abs": 0.0,
             }
 
     def _log_stats(self) -> None:
         if self._stats is None:
             return
 
-        total_elements = self._stats["delta_total_elements"]
-        delta_nonzero_ratio = self._stats["delta_nonzero_elements"] / total_elements if total_elements else 0.0
-        delta_exact_zero_tensor_ratio = (
-            self._stats["delta_exact_zero_tensors"] / self._stats["delta_input_tensors"]
-            if self._stats["delta_input_tensors"]
-            else 0.0
-        )
         logger.info(
-            "delta_sync_summary full_chunks=%s full_tensors=%s full_bytes=%s delta_chunks=%s "
-            "delta_input_tensors=%s delta_sent_tensors=%s delta_exact_zero_tensors=%s "
-            "delta_exact_zero_tensor_ratio=%.4f delta_nonzero_ratio=%.6f delta_sent_bytes=%s delta_max_abs=%.6g",
+            "delta_weight_update_summary full_chunks=%s full_tensors=%s full_bytes=%s delta_chunks=%s "
+            "delta_input_tensors=%s delta_sent_tensors=%s delta_sent_bytes=%s",
             self._stats["full_chunks"],
             self._stats["full_tensors"],
             self._stats["full_bytes"],
             self._stats["delta_chunks"],
             self._stats["delta_input_tensors"],
             self._stats["delta_sent_tensors"],
-            self._stats["delta_exact_zero_tensors"],
-            delta_exact_zero_tensor_ratio,
-            delta_nonzero_ratio,
             self._stats["delta_sent_bytes"],
-            self._stats["delta_max_abs"],
         )
+
+
+def get_delta_load_format(transport: str) -> str:
+    if transport == "dense":
+        return "distributed_delta"
+    if transport == "sparse_indices":
+        return "distributed_delta_sparse_indices"
+    if transport == "sparse_bitmask":
+        return "distributed_delta_sparse_bitmask"
+    raise ValueError(f"Unsupported delta compression transport: {transport}")
+
+
+def estimate_delta_transport_byte_size(
+    tensors: list[tuple[str, torch.Tensor]],
+    transport: str,
+) -> int:
+    if transport == "dense":
+        return sum(tensor.numel() * tensor.element_size() for _, tensor in tensors)
+
+    total_bytes = 0
+    for _, tensor in tensors:
+        flat = tensor.contiguous().view(-1)
+        nnz = int(torch.count_nonzero(flat).item())
+        value_bytes = nnz * tensor.element_size()
+        if transport == "sparse_indices":
+            total_bytes += nnz * torch.tensor([], dtype=torch.int32).element_size() + value_bytes
+            continue
+        if transport == "sparse_bitmask":
+            total_bytes += int(math.ceil(flat.numel() / 8)) + value_bytes
+            continue
+        raise ValueError(f"Unsupported delta compression transport: {transport}")
+    return total_bytes
+
+
+def materialize_delta_transport(
+    tensors: list[tuple[str, torch.Tensor]],
+    transport: str,
+) -> MaterializedDeltaTransport:
+    if transport == "dense":
+        return MaterializedDeltaTransport(
+            tensors=list(tensors),
+            sparse_metadata=None,
+            load_format="distributed_delta",
+        )
+
+    if transport == "sparse_indices":
+        return _materialize_sparse_indices_transport(tensors)
+
+    if transport == "sparse_bitmask":
+        return _materialize_sparse_bitmask_transport(tensors)
+
+    raise ValueError(f"Unsupported delta compression transport: {transport}")
+
+
+def _materialize_sparse_indices_transport(
+    tensors: list[tuple[str, torch.Tensor]],
+) -> MaterializedDeltaTransport:
+    if not tensors:
+        return MaterializedDeltaTransport(
+            tensors=[],
+            sparse_metadata=None,
+            load_format="distributed_delta_sparse_indices",
+        )
+
+    all_indices = []
+    all_values = []
+    sparse_metadata: list[dict] = []
+    index_offset = 0
+    value_offset = 0
+    for name, tensor in tensors:
+        flat = tensor.contiguous().view(-1)
+        indices_long = torch.nonzero(flat, as_tuple=False).view(-1)
+        values = flat[indices_long]
+        indices = indices_long.to(dtype=torch.int32)
+        nnz = int(indices.numel())
+        sparse_metadata.append(
+            {
+                "name": name,
+                "dtype": str(tensor.dtype).replace("torch.", ""),
+                "shape": list(tensor.shape),
+                "numel": flat.numel(),
+                "nnz": nnz,
+                "index_start": index_offset,
+                "index_end": index_offset + nnz,
+                "value_start": value_offset,
+                "value_end": value_offset + nnz,
+            }
+        )
+        all_indices.append(indices)
+        all_values.append(values)
+        index_offset += nnz
+        value_offset += nnz
+
+    device = tensors[0][1].device
+    value_dtype = tensors[0][1].dtype
+    packed_indices = torch.cat(all_indices, dim=0) if all_indices else torch.empty(0, dtype=torch.int32, device=device)
+    packed_values = torch.cat(all_values, dim=0) if all_values else torch.empty(0, dtype=value_dtype, device=device)
+    return MaterializedDeltaTransport(
+        tensors=[
+            ("__packed_indices__", packed_indices),
+            ("__packed_values__", packed_values),
+        ],
+        sparse_metadata=sparse_metadata,
+        load_format="distributed_delta_sparse_indices",
+    )
+
+
+def _materialize_sparse_bitmask_transport(
+    tensors: list[tuple[str, torch.Tensor]],
+) -> MaterializedDeltaTransport:
+    if not tensors:
+        return MaterializedDeltaTransport(
+            tensors=[],
+            sparse_metadata=None,
+            load_format="distributed_delta_sparse_bitmask",
+        )
+
+    all_masks = []
+    all_values = []
+    sparse_metadata: list[dict] = []
+    mask_offset = 0
+    value_offset = 0
+    for name, tensor in tensors:
+        flat = tensor.contiguous().view(-1)
+        mask = flat != 0
+        packed_mask = _pack_bitmask(mask)
+        values = flat[mask]
+        nnz = int(values.numel())
+        mask_numel = int(packed_mask.numel())
+        sparse_metadata.append(
+            {
+                "name": name,
+                "dtype": str(tensor.dtype).replace("torch.", ""),
+                "shape": list(tensor.shape),
+                "numel": flat.numel(),
+                "nnz": nnz,
+                "mask_start": mask_offset,
+                "mask_end": mask_offset + mask_numel,
+                "value_start": value_offset,
+                "value_end": value_offset + nnz,
+            }
+        )
+        all_masks.append(packed_mask)
+        all_values.append(values)
+        mask_offset += mask_numel
+        value_offset += nnz
+
+    device = tensors[0][1].device
+    value_dtype = tensors[0][1].dtype
+    packed_masks = torch.cat(all_masks, dim=0) if all_masks else torch.empty(0, dtype=torch.uint8, device=device)
+    packed_values = torch.cat(all_values, dim=0) if all_values else torch.empty(0, dtype=value_dtype, device=device)
+    return MaterializedDeltaTransport(
+        tensors=[
+            ("__packed_masks__", packed_masks),
+            ("__packed_values__", packed_values),
+        ],
+        sparse_metadata=sparse_metadata,
+        load_format="distributed_delta_sparse_bitmask",
+    )
+
+
+def _pack_bitmask(mask: torch.Tensor) -> torch.Tensor:
+    if mask.numel() == 0:
+        return torch.empty(0, dtype=torch.uint8, device=mask.device)
+    mask_u8 = mask.to(dtype=torch.uint8)
+    pad = (-mask_u8.numel()) % 8
+    if pad:
+        mask_u8 = torch.cat(
+            [mask_u8, torch.zeros(pad, dtype=torch.uint8, device=mask_u8.device)],
+            dim=0,
+        )
+    bits = mask_u8.view(-1, 8)
+    weights = (2 ** torch.arange(8, dtype=torch.uint8, device=mask_u8.device)).view(1, 8)
+    return torch.sum(bits * weights, dim=1, dtype=torch.uint8)

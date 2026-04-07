@@ -16,7 +16,12 @@ from slime.utils.distributed_utils import get_gloo_group, init_process_group
 
 from ..megatron_to_hf import convert_to_hf
 from .common import HFUpdate, PendingHFUpdateBucket, all_gather_param, named_params_and_buffers
-from .delta_sync import DeltaCompressionTracker
+from .delta_weight_update import (
+    DeltaCompressionTracker,
+    estimate_delta_transport_byte_size,
+    get_delta_load_format,
+    materialize_delta_transport,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -137,15 +142,28 @@ class UpdateWeightFromDistributed:
 
         buffer_size = 0
         named_tensors = []
+        expert_bucket = PendingHFUpdateBucket.empty() if self.delta_tracker is not None else None
         for name, param in named_params_and_buffers(self.args, self.model):
             if ".experts." not in name:
                 continue
             buffer_size = self._update_expert_weight_from_distributed(
-                name, param, named_tensors, buffer_size, pbar=pbar
+                name,
+                param,
+                named_tensors,
+                buffer_size,
+                pending_bucket=expert_bucket,
+                pbar=pbar,
             )
 
         if named_tensors:
-            self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
+            self._update_expert_bucket_weights_from_distributed(
+                named_tensors,
+                pending_bucket=expert_bucket,
+                pbar=pbar,
+            )
+
+        if expert_bucket is not None:
+            self._flush_hf_update_bucket_from_distributed(expert_bucket, pbar=pbar)
 
         dist.barrier(group=get_gloo_group())
         if self._is_pp_src_rank and self.delta_tracker is not None:
@@ -191,6 +209,7 @@ class UpdateWeightFromDistributed:
         param: torch.nn.Parameter,
         named_tensors: list[tuple[str, torch.Tensor]],
         buffer_size: int,
+        pending_bucket: PendingHFUpdateBucket | None = None,
         pbar: tqdm | None = None,
     ) -> int:
         """
@@ -202,7 +221,11 @@ class UpdateWeightFromDistributed:
         if (
             buffer_size + param_size
         ) * mpu.get_expert_model_parallel_world_size() > self.args.update_weight_buffer_size:
-            self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
+            self._update_expert_bucket_weights_from_distributed(
+                named_tensors,
+                pending_bucket=pending_bucket,
+                pbar=pbar,
+            )
             buffer_size = 0
 
         named_tensors.append((name, param))
@@ -210,7 +233,10 @@ class UpdateWeightFromDistributed:
         return buffer_size
 
     def _update_expert_bucket_weights_from_distributed(
-        self, named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
+        self,
+        named_tensors: list[tuple[str, torch.Tensor]],
+        pending_bucket: PendingHFUpdateBucket | None = None,
+        pbar: tqdm | None = None,
     ) -> None:
         """
         Gather EP → HF → broadcast. Clears buffer.
@@ -245,7 +271,14 @@ class UpdateWeightFromDistributed:
         for name, param in all_gathered_params:
             converted_hf_tensors += convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
 
-        self._update_bucket_weights_from_distributed(converted_hf_tensors, pbar)
+        if self.delta_tracker is None or pending_bucket is None:
+            self._update_bucket_weights_from_distributed(converted_hf_tensors, pbar)
+        else:
+            self._enqueue_delta_chunk_for_send(
+                self._prepare_hf_chunk_for_send(converted_hf_tensors),
+                pending_bucket,
+                pbar=pbar,
+            )
 
     def _update_weight_from_distributed_with_delta(
         self,
@@ -258,17 +291,12 @@ class UpdateWeightFromDistributed:
         if not self._is_pp_src_rank:
             return
 
-        chunk_update = self._prepare_hf_chunk_for_send(
-            convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
+        hf_named_tensors = convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
+        self._enqueue_delta_chunk_for_send(
+            self._prepare_hf_chunk_for_send(hf_named_tensors),
+            pending_bucket,
+            pbar=pbar,
         )
-        if chunk_update.commit_state is not None and not chunk_update.should_send:
-            self._finalize_sent_chunk(chunk_update.commit_state)
-            return
-
-        if pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
-            self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
-
-        pending_bucket.add(chunk_update)
 
     def _update_bucket_weights_from_distributed(
         self, converted_named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
@@ -285,22 +313,8 @@ class UpdateWeightFromDistributed:
                 pbar.update(1)
             converted_named_tensors.clear()
             return
-
-        while not ray.get(self.rollout_engine_lock.acquire.remote()):
-            time.sleep(0.1)
-
-        refs = update_weights_from_distributed(
-            self._group_name,
-            self._model_update_groups,
-            self.weight_version,
-            self.rollout_engines,
-            chunk_update.tensors,
-            load_format=chunk_update.load_format,
-        )
-
-        ray.get(refs)
+        self._send_hf_update(chunk_update.tensors, chunk_update.load_format)
         converted_named_tensors.clear()
-        ray.get(self.rollout_engine_lock.release.remote())
         self._finalize_sent_chunk(chunk_update.commit_state)
         if pbar is not None:
             pbar.update(1)
@@ -311,15 +325,20 @@ class UpdateWeightFromDistributed:
     ) -> HFUpdate:
         if self.delta_tracker is None:
             return HFUpdate(tensors=list(hf_named_tensors), load_format=None, commit_state=None)
-
-        prepared = self.delta_tracker.prepare_chunk(hf_named_tensors)
-        if not prepared.is_delta:
-            return HFUpdate(tensors=prepared.tensors, load_format=None, commit_state=prepared.commit_state)
-        return HFUpdate(
-            tensors=prepared.tensors,
-            load_format="distributed_delta",
-            commit_state=prepared.commit_state,
-        )
+        else:
+            prepared = self.delta_tracker.prepare_chunk(hf_named_tensors)
+            if not prepared.is_delta:
+                return HFUpdate(tensors=prepared.tensors, load_format=None, commit_state=prepared.commit_state)
+            else:
+                return HFUpdate(
+                    tensors=prepared.tensors,
+                    load_format=get_delta_load_format(self.args.delta_compression_transport),
+                    commit_state=prepared.commit_state,
+                    transport_byte_size=estimate_delta_transport_byte_size(
+                        prepared.tensors,
+                        self.args.delta_compression_transport,
+                    ),
+                )
 
     def _finalize_sent_chunk(self, commit_state) -> None:
         if self.delta_tracker is None:
@@ -328,13 +347,33 @@ class UpdateWeightFromDistributed:
         assert commit_state is not None
         self.delta_tracker.commit_chunk(commit_state, weight_version=self.weight_version)
 
-    def _flush_hf_update_bucket_from_distributed(
+    def _enqueue_delta_chunk_for_send(
         self,
+        chunk_update: HFUpdate,
         pending_bucket: PendingHFUpdateBucket,
         pbar: tqdm | None = None,
     ) -> None:
-        if not pending_bucket.has_updates:
+        if chunk_update.commit_state is not None and not chunk_update.should_send:
+            self._finalize_sent_chunk(chunk_update.commit_state)
             return
+
+        if pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
+            self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
+        pending_bucket.add(chunk_update)
+
+    def _send_hf_update(
+        self,
+        tensors: list[tuple[str, torch.Tensor]],
+        load_format: str | None,
+    ) -> None:
+        if load_format is None:
+            send_tensors = tensors
+            sparse_metadata = None
+        else:
+            materialized = materialize_delta_transport(tensors, self.args.delta_compression_transport)
+            send_tensors = materialized.tensors
+            sparse_metadata = materialized.sparse_metadata
+            load_format = materialized.load_format
 
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
             time.sleep(0.1)
@@ -345,12 +384,26 @@ class UpdateWeightFromDistributed:
                 self._model_update_groups,
                 self.weight_version,
                 self.rollout_engines,
-                pending_bucket.tensors,
-                load_format=pending_bucket.load_format,
+                send_tensors,
+                load_format=load_format,
+                sparse_metadata=sparse_metadata,
             )
             ray.get(refs)
         finally:
             ray.get(self.rollout_engine_lock.release.remote())
+
+    def _flush_hf_update_bucket_from_distributed(
+        self,
+        pending_bucket: PendingHFUpdateBucket,
+        pbar: tqdm | None = None,
+    ) -> None:
+        if not pending_bucket.has_updates:
+            return
+
+        self._send_hf_update(
+            pending_bucket.tensors,
+            pending_bucket.load_format,
+        )
 
         for commit_state in pending_bucket.commit_states:
             self._finalize_sent_chunk(commit_state)
@@ -424,6 +477,7 @@ def update_weights_from_distributed(
     rollout_engines: Sequence[ActorHandle],
     converted_named_tensors: Sequence[tuple[str, torch.Tensor]],
     load_format: str | None = None,
+    sparse_metadata: list[dict] | None = None,
 ) -> list[ObjectRef]:
     """
     Send metadata (Ray), broadcast tensors (NCCL rank 0 → engines).
@@ -436,16 +490,15 @@ def update_weights_from_distributed(
             group_name=group_name,
             weight_version=str(weight_version),
             **({"load_format": load_format} if load_format is not None else {}),
+            **({"sparse_metadata": sparse_metadata} if sparse_metadata is not None else {}),
         )
         for engine in rollout_engines
     ]
-
     handles = []
     for _, param in converted_named_tensors:
         handles.append(dist.broadcast(param.data, 0, group=group, async_op=True))
     for handle in handles:
         handle.wait()
-
     return refs
 
 

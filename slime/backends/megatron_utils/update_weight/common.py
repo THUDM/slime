@@ -11,7 +11,7 @@ from megatron.core.transformer.transformer_layer import get_transformer_layer_of
 
 from slime.backends.megatron_utils.misc_utils import strip_param_name_prefix
 from slime.utils.types import ParamInfo
-from .delta_sync import DeltaCompressionCommitState
+from .delta_weight_update import DeltaCompressionCommitState
 
 
 @dataclass
@@ -19,6 +19,7 @@ class HFUpdate:
     tensors: list[tuple[str, torch.Tensor]]
     load_format: str | None
     commit_state: DeltaCompressionCommitState | None
+    transport_byte_size: int | None = None
 
     @property
     def should_send(self) -> bool:
@@ -26,6 +27,8 @@ class HFUpdate:
 
     @property
     def byte_size(self) -> int:
+        if self.transport_byte_size is not None:
+            return self.transport_byte_size
         return sum(tensor.numel() * tensor.element_size() for _, tensor in self.tensors)
 
 

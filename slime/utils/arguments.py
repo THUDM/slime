@@ -163,6 +163,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Dtype used for transmitted delta tensors.",
             )
             parser.add_argument(
+                "--delta-compression-transport",
+                choices=["dense", "sparse_indices", "sparse_bitmask"],
+                default="dense",
+                help="Transport encoding used for distributed delta sync.",
+            )
+            parser.add_argument(
                 "--custom-model-provider-path",
                 type=str,
                 default=None,

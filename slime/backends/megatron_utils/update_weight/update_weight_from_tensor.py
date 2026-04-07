@@ -13,7 +13,7 @@ from slime.utils.distributed_utils import get_gloo_group
 
 from ..sglang import FlattenedTensorBucket, MultiprocessingSerializer
 from .common import HFUpdate, PendingHFUpdateBucket
-from .delta_sync import DeltaCompressionTracker
+from .delta_weight_update import DeltaCompressionTracker
 from .hf_weight_iterator_base import HfWeightIteratorBase
 from .update_weight_from_distributed import (
     connect_rollout_engines_from_distributed,
@@ -44,6 +44,12 @@ class UpdateWeightFromTensor:
         Compute param buckets.  IPC Gloo groups are created later in
         ``connect_rollout_engines`` once ``engine_gpu_counts`` is known.
         """
+        if args.enable_delta_compression and args.delta_compression_transport != "dense":
+            raise ValueError(
+                "UpdateWeightFromTensor only supports --delta-compression-transport=dense, "
+                "because the tensor path uses exact CUDA IPC copies."
+            )
+
         self.args = args
         self.model = model
         self.weights_getter = weights_getter
@@ -255,7 +261,7 @@ class UpdateWeightFromTensor:
         all_refs.extend(refs_colocated)
 
         if self.use_distribute and self._is_distributed_src_rank:
-            refs_distributed = update_weights_from_distributed(
+            refs_distributed, _ = update_weights_from_distributed(
                 self._group_name,
                 self._model_update_groups,
                 self.weight_version,
