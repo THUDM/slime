@@ -12,16 +12,23 @@ DATASET_LOCAL_NAME = "geo3k_imgurl"
 NUM_GPUS = 8
 ACTOR_NUM_GPUS = 4
 ROLLOUT_NUM_GPUS = 4
+TORCH_DIST_CKPT = f"/root/{MODEL_NAME}_torch_dist"
 
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
+    U.convert_checkpoint(
+        model_name=MODEL_NAME,
+        megatron_model_type=MODEL_TYPE,
+        num_gpus_per_node=ACTOR_NUM_GPUS,
+        hf_checkpoint=f"/root/models/{MODEL_NAME}",
+    )
     U.hf_download_dataset(DATASET_NAME)
 
 
 def execute():
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} " f"--load /root/models/{MODEL_NAME} "
+    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} " f"--load {TORCH_DIST_CKPT} "
 
     rollout_args = (
         f"--prompt-data /root/datasets/{DATASET_LOCAL_NAME}/train.parquet "
@@ -92,7 +99,6 @@ def execute():
         "--accumulate-allreduce-grads-in-fp32 "
         "--attention-softmax-in-fp32 "
         "--attention-backend flash "
-        "--megatron-to-hf-mode bridge "
     )
 
     ci_args = "--ci-test "
