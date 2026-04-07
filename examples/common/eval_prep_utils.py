@@ -5,8 +5,8 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from common.pool_data_utils import transform_jsonl
-from common.pool_runtime_semantics import materialize_runtime_pool_row
+from examples.common.pool_data_utils import transform_jsonl
+from examples.common.pool_runtime_semantics import materialize_runtime_pool_row
 
 
 AVALANCHE_ROOT = Path(__file__).resolve().parents[4]

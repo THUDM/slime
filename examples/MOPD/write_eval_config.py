@@ -9,18 +9,18 @@ import sys
 
 import yaml
 
-EXAMPLES_DIR = Path(__file__).resolve().parents[1]
-if str(EXAMPLES_DIR) not in sys.path:
-    sys.path.insert(0, str(EXAMPLES_DIR))
+SLIME_ROOT = Path(__file__).resolve().parents[2]
+if str(SLIME_ROOT) not in sys.path:
+    sys.path.insert(0, str(SLIME_ROOT))
 
-from common.dataset_selection import resolve_eval_datasets
-from common.eval_prep_utils import (
+from examples.common.dataset_selection import resolve_eval_datasets
+from examples.common.eval_prep_utils import (
     build_code_eval_row as _build_code_eval_row,
     build_math_eval_row as _build_math_eval_row,
     materialize_eval_dataset as materialize_eval_dataset_shared,
     preprocess_pool_eval_jsonl,
 )
-from multidomain_shared import GENERIC_EVAL_DATASETS, OFFICIAL_EVAL_DATASETS
+from examples.multidomain_shared import GENERIC_EVAL_DATASETS, OFFICIAL_EVAL_DATASETS
 
 
 def _preprocess_eval_jsonl(src: Path, dst: Path, _domain: str | None = None, row_filter=None) -> int:

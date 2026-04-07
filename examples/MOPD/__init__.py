@@ -1,0 +1,1 @@
+"""MOPD example package."""

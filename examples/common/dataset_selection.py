@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from common.dataset_registry import (
+from examples.common.dataset_registry import (
     TRAIN_DATASET_DOMAIN_MAP,
     TRAIN_DATASET_GROUP_MAP,
     TRAIN_DATASET_SOURCE_MAP,
@@ -11,8 +11,8 @@ from common.dataset_registry import (
     default_train_datasets_for_profile,
     eval_dataset_spec,
 )
-from common.pool_data_utils import transform_jsonl, write_source_manifest
-from common.pool_runtime_semantics import materialize_runtime_pool_row
+from examples.common.pool_data_utils import transform_jsonl, write_source_manifest
+from examples.common.pool_runtime_semantics import materialize_runtime_pool_row
 
 
 @dataclass(frozen=True)
