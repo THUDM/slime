@@ -155,7 +155,7 @@ BACKEND_ARGS=(
    --tensor-model-parallel-size 2
    --sequence-parallel
    --pipeline-model-parallel-size 1
-   --context-parallel-size 1
+   --context-parallel-size ${SLIME_SCRIPT_CP_SIZE:-1}
    --expert-model-parallel-size 8
    --expert-tensor-parallel-size 1
    --recompute-granularity full

@@ -42,7 +42,7 @@ MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1 --no-build-isolation
 
 pip install git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c --no-deps
 pip install --no-build-isolation "transformer_engine[pytorch]==2.10.0"
-pip install flash-linear-attention==0.4.1
+pip install git+https://github.com/fla-org/flash-linear-attention.git@606851e90a5b3f26fcc818391f1303faa703de30
 NVCC_APPEND_FLAGS="--threads 4" \
   pip -v install --disable-pip-version-check --no-cache-dir \
   --no-build-isolation \
