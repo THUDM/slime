@@ -144,10 +144,10 @@ export MULTIDOMAIN_V1_TRACE_MAX_SAMPLES="${TRACE_MAX_SAMPLES}"
 mkdir -p "${DATA_CACHE_DIR}" "${LOG_DIR}" "${SAVE_DIR}" "${TRACE_DIR}"
 
 MOPD_DOMAIN_SIGNATURE="$(
-  PYTHONPATH="${SLIME_DIR}/examples:${PYTHONPATH:-}" python3 - "${TRAIN_POOL_INCLUDE_DOMAINS}" <<'PY'
+  PYTHONPATH="${SLIME_DIR}:${PYTHONPATH:-}" python3 - "${TRAIN_POOL_INCLUDE_DOMAINS}" <<'PY'
 import sys
 
-from multidomain_shared import domain_signature
+from examples.multidomain_shared import domain_signature
 
 domains = [item.strip() for item in sys.argv[1].split(",") if item.strip()]
 print(domain_signature(domains))

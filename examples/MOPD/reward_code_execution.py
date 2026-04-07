@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from code_verifier import compute_score
+from examples.MOPD.code_verifier import compute_score
 
 
 async def reward_func(args, sample, **kwargs):

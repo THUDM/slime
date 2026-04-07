@@ -10,7 +10,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from common.dataset_registry import (
+SLIME_ROOT = Path(__file__).resolve().parents[1]
+if str(SLIME_ROOT) not in sys.path:
+    sys.path.insert(0, str(SLIME_ROOT))
+
+from examples.common.dataset_registry import (
     DEFAULT_TRAIN_DATASETS_BY_DOMAIN,
     DEFAULT_TRAIN_DATASETS_BY_GROUP,
     EVAL_DATASET_SPECS,
@@ -18,7 +22,7 @@ from common.dataset_registry import (
     TRAIN_DATASET_GROUP_MAP,
     TRAIN_DATASET_SOURCE_MAP,
 )
-from common.dataset_selection import (
+from examples.common.dataset_selection import (
     discover_canonical_train_sources as discover_canonical_train_sources_shared,
     resolve_named_datasets as resolve_named_datasets_shared,
     train_domains_for_datasets as train_domains_for_datasets_shared,
