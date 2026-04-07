@@ -78,6 +78,9 @@ class DeltaArtifactWriter:
 class DeltaCompressionTracker:
     def __init__(self, args) -> None:
         self.delta_dtype = _DELTA_DTYPE_MAP[args.delta_compression_dtype]
+        self.full_sync_interval = args.delta_compression_full_sync_interval
+        if self.full_sync_interval < 1:
+            raise ValueError("--delta-compression-full-sync-interval must be >= 1")
         self.baseline: dict[str, torch.Tensor] = {}  # pinned CPU tensors
         self.committed_syncs = 0
         self.chunk_idx = 0
@@ -89,8 +92,8 @@ class DeltaCompressionTracker:
         self._stats = None
 
     def prepare_chunk(self, tensors: list[tuple[str, torch.Tensor]]) -> PreparedChunk:
-        if self.committed_syncs == 0:
-            return self._prepare_initial_full_chunk(tensors)
+        if self._should_send_full_chunk():
+            return self._prepare_full_chunk(tensors)
         return self._prepare_delta_chunk(tensors)
 
     def commit_chunk(self, commit_state: DeltaCompressionCommitState, *, weight_version: int) -> None:
@@ -112,7 +115,7 @@ class DeltaCompressionTracker:
         self.committed_syncs += 1
         self._log_stats()
 
-    def _prepare_initial_full_chunk(self, tensors: list[tuple[str, torch.Tensor]]) -> PreparedChunk:
+    def _prepare_full_chunk(self, tensors: list[tuple[str, torch.Tensor]]) -> PreparedChunk:
         self._ensure_stats()
         self._stats["full_chunks"] += 1
         self._stats["full_tensors"] += len(tensors)
@@ -160,6 +163,9 @@ class DeltaCompressionTracker:
                 artifact_tensors=artifact_tensors,
             ),
         )
+
+    def _should_send_full_chunk(self) -> bool:
+        return self.committed_syncs == 0 or self.committed_syncs % self.full_sync_interval == 0
 
     def _ensure_stats(self) -> None:
         if self._stats is None:

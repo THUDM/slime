@@ -169,6 +169,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Transport encoding used for distributed delta sync.",
             )
             parser.add_argument(
+                "--delta-compression-full-sync-interval",
+                type=int,
+                default=20,
+                help=(
+                    "Run a full weight sync every N successful delta-compression syncs. "
+                    "The first sync is always full."
+                ),
+            )
+            parser.add_argument(
                 "--custom-model-provider-path",
                 type=str,
                 default=None,
