@@ -5,9 +5,9 @@ import argparse
 import sys
 from pathlib import Path
 
-_examples_dir = Path(__file__).resolve().parent.parent
-if str(_examples_dir) not in sys.path:
-    sys.path.insert(0, str(_examples_dir))
+_slime_root = Path(__file__).resolve().parents[2]
+if str(_slime_root) not in sys.path:
+    sys.path.insert(0, str(_slime_root))
 
 AVALANCHE_ROOT = Path(__file__).resolve().parents[4]
 JL_MOPD_DIR = AVALANCHE_ROOT / "jl_workspace" / "experiment" / "mopd"
@@ -22,7 +22,7 @@ from build_mopd_runtime_data import (  # type: ignore  # noqa: E402
     normalize_math_names,
     parse_code_names,
 )
-from common.dataset_selection import (
+from examples.common.dataset_selection import (
     materialize_training_sources,
     resolve_train_sources,
     write_training_manifest,

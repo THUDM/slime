@@ -7,15 +7,13 @@ from pathlib import Path
 from slime.rollout.sglang_rollout import generate_rollout as default_generate_rollout
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_EXAMPLES_DIR = _SCRIPT_DIR.parent
-if str(_SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPT_DIR))
-if str(_EXAMPLES_DIR) not in sys.path:
-    sys.path.insert(0, str(_EXAMPLES_DIR))
+_SLIME_ROOT = _SCRIPT_DIR.parents[1]
+if str(_SLIME_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SLIME_ROOT))
 
-from reward_code_execution import reward_func as _code_reward  # noqa: E402
-from reward_deepmath_mathverify import reward_func as _math_reward  # noqa: E402
-from multidomain_shared import reward_func as _shared_reward  # noqa: E402
+from examples.MOPD.reward_code_execution import reward_func as _code_reward  # noqa: E402
+from examples.MOPD.reward_deepmath_mathverify import reward_func as _math_reward  # noqa: E402
+from examples.multidomain_shared import reward_func as _shared_reward  # noqa: E402
 
 
 def _infer_domain(sample) -> str:

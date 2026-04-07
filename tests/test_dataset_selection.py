@@ -4,11 +4,11 @@ import sys
 from pathlib import Path
 
 
-EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
-if str(EXAMPLES_DIR) not in sys.path:
-    sys.path.insert(0, str(EXAMPLES_DIR))
+SLIME_ROOT = Path(__file__).resolve().parents[1]
+if str(SLIME_ROOT) not in sys.path:
+    sys.path.insert(0, str(SLIME_ROOT))
 
-from common.dataset_selection import resolve_eval_datasets, resolve_train_sources
+from examples.common.dataset_selection import resolve_eval_datasets, resolve_train_sources
 
 
 def test_resolve_train_sources_supports_named_datasets_extras_and_paths(tmp_path: Path) -> None:

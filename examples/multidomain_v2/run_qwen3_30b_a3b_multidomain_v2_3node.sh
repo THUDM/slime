@@ -108,10 +108,10 @@ mkdir -p "${LOG_DIR}" "${SAVE_DIR}" "${RUNTIME_DATA_DIR}" "${TRACE_DIR}"
 
 if [[ -z "${TRAIN_POOL_DATASETS}" ]]; then
   TRAIN_POOL_DATASETS="$(
-    PYTHONPATH="${SCRIPT_DIR}:${SCRIPT_DIR}/..:${PYTHONPATH:-}" python3 - "${TRAIN_POOL_GROUP}" <<'PY'
+    PYTHONPATH="${SCRIPT_DIR}/../..:${PYTHONPATH:-}" python3 - "${TRAIN_POOL_GROUP}" <<'PY'
 import sys
 
-from multidomain_shared import default_train_datasets_for_group
+from examples.multidomain_shared import default_train_datasets_for_group
 
 print(",".join(default_train_datasets_for_group(sys.argv[1])))
 PY
@@ -123,10 +123,10 @@ if [[ -z "${TRAIN_DATASETS}" ]]; then
 fi
 
 TRAIN_GROUP_SIGNATURE="$(
-  PYTHONPATH="${SCRIPT_DIR}:${SCRIPT_DIR}/..:${PYTHONPATH:-}" python3 - "${TRAIN_DATASETS}" "${TRAIN_DATASETS_EXTRA}" "${TRAIN_PATHS}" "${TRAIN_PATHS_EXTRA}" <<'PY'
+  PYTHONPATH="${SCRIPT_DIR}/../..:${PYTHONPATH:-}" python3 - "${TRAIN_DATASETS}" "${TRAIN_DATASETS_EXTRA}" "${TRAIN_PATHS}" "${TRAIN_PATHS_EXTRA}" <<'PY'
 import sys
 
-from multidomain_shared import group_signature_for_train_datasets
+from examples.multidomain_shared import group_signature_for_train_datasets
 
 dataset_names = [item.strip() for item in ",".join(sys.argv[1:3]).split(",") if item.strip()]
 path_names = [item.strip() for item in ",".join(sys.argv[3:]).split(",") if item.strip()]
@@ -232,11 +232,11 @@ prepare_eval_data() {
       filter_jsonl_by_prompt_budget "${local_dest}" "${name}_eval"
       printf '%s\t%s\n' "${name}_eval" "${local_dest}" >> "${CUSTOM_EVAL_PROMPT_DATA_FILE}"
     done < <(
-      PYTHONPATH="${SCRIPT_DIR}:${SCRIPT_DIR}/..:${PYTHONPATH:-}" python3 - "${TRAIN_POOL_ROOT}" "${EVAL_DATASETS}" "${EVAL_DATASETS_EXTRA}" "${EVAL_PATHS}" "${EVAL_PATHS_EXTRA}" <<'PY'
+      PYTHONPATH="${SCRIPT_DIR}/../..:${PYTHONPATH:-}" python3 - "${TRAIN_POOL_ROOT}" "${EVAL_DATASETS}" "${EVAL_DATASETS_EXTRA}" "${EVAL_PATHS}" "${EVAL_PATHS_EXTRA}" <<'PY'
 import sys
 from pathlib import Path
 
-from common.dataset_selection import resolve_eval_datasets
+from examples.common.dataset_selection import resolve_eval_datasets
 
 pool_root = Path(sys.argv[1])
 datasets = [item.strip() for item in sys.argv[2].split(",") if item.strip()]
