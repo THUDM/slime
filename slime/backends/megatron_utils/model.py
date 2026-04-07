@@ -226,6 +226,7 @@ def forward_only(
         response_lengths = batch["response_lengths"]
         forward_kwargs = {
             "input_ids": tokens,
+            "position_ids": None,
             "attention_mask": None,
             "labels": None,
             "packed_seq_params": packed_seq_params,
