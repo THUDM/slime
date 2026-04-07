@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -184,6 +183,3 @@ def eval_dataset_spec(name: str) -> EvalDatasetSpec:
         supported = ", ".join(sorted(EVAL_DATASET_SPECS))
         raise ValueError(f"Unsupported eval dataset '{name}'. Supported datasets: {supported}") from exc
 
-
-def eval_dataset_path(pool_root: Path, name: str) -> Path:
-    return pool_root / eval_dataset_spec(name).relpath

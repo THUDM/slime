@@ -1,8 +1,4 @@
-"""Shared rollout & eval logging for multidomain experiments.
-
-Provides per-source and per-domain metrics (reward, response length, truncation)
-plus optional rollout trace JSONL output. Self-contained, no v0/v1 dependencies.
-"""
+"""Shared rollout and eval logging."""
 from __future__ import annotations
 
 import json
@@ -30,10 +26,6 @@ class _LoggingUtils:
 
 logging_utils = _LoggingUtils()
 
-
-# ---------------------------------------------------------------------------
-# Sample field accessors
-# ---------------------------------------------------------------------------
 
 def _compute_rollout_step(args, rollout_id: int) -> int:
     if getattr(args, "wandb_always_use_train_step", False):
@@ -85,10 +77,6 @@ def _group_samples(samples: list[Any], key: str) -> dict[str, list[Any]]:
     return dict(grouped)
 
 
-# ---------------------------------------------------------------------------
-# Statistics
-# ---------------------------------------------------------------------------
-
 def _compute_statistics(values: list[float]) -> dict[str, float]:
     if not values:
         return {}
@@ -103,10 +91,6 @@ def _compute_statistics(values: list[float]) -> dict[str, float]:
         "min": min(sorted_values),
     }
 
-
-# ---------------------------------------------------------------------------
-# Metrics builders
-# ---------------------------------------------------------------------------
 
 def _build_split_metrics(
     *,
@@ -165,10 +149,6 @@ def _build_perf_metrics(*, samples: list[Any], args, rollout_time: float) -> dic
         metrics["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / rollout_num_gpus
     return metrics
 
-
-# ---------------------------------------------------------------------------
-# Trace output
-# ---------------------------------------------------------------------------
 
 def _trace_dir(args) -> str:
     value = getattr(args, "multidomain_v1_trace_dir", "") or os.getenv("MULTIDOMAIN_V1_TRACE_DIR", "")
@@ -234,10 +214,6 @@ def _write_rollout_trace(*, rollout_id: int, args, samples: list[Any]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
 
 
-# ---------------------------------------------------------------------------
-# Public API (slime framework interface)
-# ---------------------------------------------------------------------------
-
 def log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_time) -> bool:
     rollout_samples = list(samples)
     _write_rollout_trace(rollout_id=rollout_id, args=args, samples=rollout_samples)
@@ -261,5 +237,4 @@ def log_eval_rollout_data(rollout_id, args, data, extra_metrics) -> bool:
     metrics.update(_build_split_metrics(samples=samples, args=args, prefix="eval", score_name="score"))
     metrics["eval/step"] = _compute_rollout_step(args, rollout_id)
     logging_utils.log(args, metrics, step_key="eval/step")
-    # Return False to keep default eval logging (per-dataset scores like eval/aime24).
     return False

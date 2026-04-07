@@ -24,8 +24,7 @@ import wandb
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-EXAMPLES_DIR = SCRIPT_DIR
+EXAMPLES_DIR = Path(__file__).resolve().parent
 
 _tokenizer = None
 
@@ -46,22 +45,13 @@ def load_reward_func(module_path: str = "multidomain_shared.reward_func"):
     parts = module_path.rsplit(".", 1)
     if len(parts) != 2:
         raise ValueError(f"--reward-module must be 'module.attr', got: {module_path}")
-    mod = importlib.import_module(parts[0])
-    return getattr(mod, parts[1])
-
-
-def _normalize_eval_sample_for_backfill(sample: dict[str, Any]) -> dict[str, Any]:
-    return sample
+    module = importlib.import_module(parts[0])
+    return getattr(module, parts[1])
 
 
 def load_eval_data(path: str) -> list[dict[str, Any]]:
-    samples = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                samples.append(_normalize_eval_sample_for_backfill(json.loads(line)))
-    return samples
+    with open(path, "r", encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle if line.strip()]
 
 
 def _load_bfcl_runner():

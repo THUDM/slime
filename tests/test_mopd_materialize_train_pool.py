@@ -60,7 +60,6 @@ def test_main_uses_jl_runtime_builders_for_math_and_code(tmp_path: Path, monkeyp
         return {domain: 1}
 
     monkeypatch.setattr(materialize_train_pool, "build_mopd_train", fake_build_mopd_train)
-    monkeypatch.setattr(materialize_train_pool, "_file_needs_materialize", lambda src: False)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -90,7 +89,7 @@ def test_main_uses_jl_runtime_builders_for_math_and_code(tmp_path: Path, monkeyp
     assert manifest_paths == [
         cache_dir / "math" / "mopd_math_train.normalized.jsonl",
         cache_dir / "code" / "mopd_code_train.normalized.jsonl",
-        stem_src.resolve(),
+        cache_dir / "stem" / "train" / "stem.jsonl",
     ]
 
 
@@ -132,7 +131,6 @@ def test_main_defaults_stem_and_structured_to_nemotron_datasets(tmp_path: Path, 
         return {domain: 1}
 
     monkeypatch.setattr(materialize_train_pool, "build_mopd_train", fake_build_mopd_train)
-    monkeypatch.setattr(materialize_train_pool, "_file_needs_materialize", lambda src: False)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -152,6 +150,6 @@ def test_main_defaults_stem_and_structured_to_nemotron_datasets(tmp_path: Path, 
     assert manifest_paths == [
         cache_dir / "math" / "mopd_math_train.normalized.jsonl",
         cache_dir / "code" / "mopd_code_train.normalized.jsonl",
-        *(path.resolve() for path in stem_keep_paths),
-        structured_keep.resolve(),
+        *(cache_dir / "stem" / "train" / path.name for path in stem_keep_paths),
+        cache_dir / "structured" / "train" / structured_keep.name,
     ]
