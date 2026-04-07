@@ -226,6 +226,7 @@ def forward_only(
         response_lengths = batch["response_lengths"]
         forward_kwargs = {
             "input_ids": tokens,
+            "position_ids": None,
             "attention_mask": None,
             "labels": None,
             "packed_seq_params": packed_seq_params,
@@ -431,6 +432,7 @@ def train_one_step(
     )
 
     valid_step = True
+    grad_norm = float("nan")
     if not getattr(args, "check_for_nan_in_loss_and_grad", True):
         found_inf_flag = optimizer.prepare_grads()
         if found_inf_flag:
