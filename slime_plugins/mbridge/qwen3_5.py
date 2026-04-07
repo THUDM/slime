@@ -21,13 +21,6 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
         "output_layer.weight": "lm_head.weight",
     }
 
-    def _weight_name_mapping_mcore_to_hf(self, mcore_weights_name: str) -> list[str]:
-        if mcore_weights_name == "output_layer.weight":
-            text_config = self._get_text_config()
-            if getattr(text_config, "tie_word_embeddings", False):
-                return ["model.language_model.embed_tokens.weight"]
-        return super()._weight_name_mapping_mcore_to_hf(mcore_weights_name)
-
     _ATTENTION_MAPPING = {
         "self_attention.linear_proj.weight": ["model.language_model.layers.{layer_number}.self_attn.o_proj.weight"],
         "self_attention.linear_qkv.layer_norm_weight": [
@@ -198,7 +191,15 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
         return convert_names
 
     def _weight_name_mapping_mcore_to_hf(self, mcore_weights_name: str) -> list[str]:
-        """Override to handle MTP layer mappings."""
+        """Override to handle MTP layer mappings and tied output weights."""
+        if mcore_weights_name == "output_layer.weight":
+            if getattr(self.hf_config, "tie_word_embeddings", False):
+                return ["model.language_model.embed_tokens.weight"]
+
+            text_config = self._get_text_config()
+            if getattr(text_config, "tie_word_embeddings", False):
+                return ["model.language_model.embed_tokens.weight"]
+
         if "mtp" in mcore_weights_name:
             return self._convert_mtp_param(mcore_weights_name)
         return super()._weight_name_mapping_mcore_to_hf(mcore_weights_name)
