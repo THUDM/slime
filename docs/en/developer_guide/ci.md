@@ -20,7 +20,7 @@ Add a label to your PR to trigger the corresponding test suite:
 | Label | Job | Description |
 |---|---|---|
 | `run-ci-short` | `e2e-test-short` | Lightweight smoke tests with Qwen2.5-0.5B (4 GPUs). Fast feedback loop. |
-| `run-ci-megatron` | `e2e-test-megatron` | Core Megatron training tests covering dense, MoE, PPO, MTP, OPD, etc. |
+| `run-ci-megatron` | `e2e-test-megatron` | Core Megatron training tests covering dense, MoE, PPO, VLM, MTP, OPD, etc. |
 | `run-ci-precision` | `e2e-test-precision` | Numerical precision validation (parallel check). |
 | `run-ci-ckpt` | `e2e-test-ckpt` | Checkpoint save/load correctness (sync and async-save). |
 | `run-ci-image` | `e2e-test-image` | Full test suite run on `slimerl/slime-test:latest` image (for image validation). |
@@ -56,6 +56,7 @@ Since this includes every test, it consumes significant GPU time — use it spar
 This is the primary label for validating Megatron-backend changes. It covers:
 
 - Dense models: GLM4-9B, Qwen3-4B (PPO)
+- VLM models: Qwen3.5-4B on Geo3K
 - MoE models: Qwen3-30B-A3B (with/without DeepEP + FP8), Moonlight-16B-A3B
 - Specialized: MiMo-7B MTP, Qwen2.5-0.5B debug rollout-then-train, OPD with sglang teacher
 
