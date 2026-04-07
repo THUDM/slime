@@ -421,6 +421,7 @@ class DSAMLASelfAttention(DSAMultiLatentAttention):
         assert hidden_states.ndim == 3, f"hidden_states should be 3D, [s, b, n*h], got {hidden_states.ndim}D"
         assert packed_seq_params is not None
 
+        packed_seq = packed_seq_params is not None and packed_seq_params.qkv_format == 'thd'
         # =========================================
         # Prepare RoPE and seqlen related params
         # =========================================
@@ -428,7 +429,7 @@ class DSAMLASelfAttention(DSAMultiLatentAttention):
             inference_context, None, hidden_states, self.config, packed_seq_params
         )
         # TODO: support apply_rope_fusion
-        rotary_pos_emb, mscale = self.rotary_pos_emb(rotary_seq_len, packed_seq_params=packed_seq_params)
+        rotary_pos_emb, mscale = self.rotary_pos_emb(rotary_seq_len, packed_seq=packed_seq)
 
         cu_seqlens_q = packed_seq_params.cu_seqlens_q
         cu_seqlens_kv = packed_seq_params.cu_seqlens_kv
