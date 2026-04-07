@@ -25,7 +25,7 @@
         {'test_file': 'test_qwen3_30B_A3B_r3.py', 'num_gpus': 8, 'enable_eval': '0'},
         {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_4B_ppo_train_critic_only.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_5_4B_geo3k_vlm.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_5_4B_geo3k_vlm.py', 'num_gpus': 8, 'extra_pip_packages': 'transformers>=5.0'},
         {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8},
         {'test_file': 'test_moonlight_16B_A3B_r3.py', 'num_gpus': 8, 'enable_eval': '0'},
         {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
@@ -68,7 +68,7 @@
         {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_5_4B_geo3k_vlm.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_5_4B_geo3k_vlm.py', 'num_gpus': 8, 'extra_pip_packages': 'transformers>=5.0'},
         {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8},
         {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
@@ -165,11 +165,20 @@ jobs:
       - name: Install
         shell: bash
         run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps
+      - name: Install extra Python packages
+        if: ${{ matrix.info.extra_pip_packages != null && matrix.info.extra_pip_packages != '' }}
+        shell: bash
+        run: python -m pip install --upgrade "${{ matrix.info.extra_pip_packages }}"
 <% else %>
 
       - name: Install
         shell: bash
         run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
+
+      - name: Install extra Python packages
+        if: ${{ matrix.info.extra_pip_packages != null && matrix.info.extra_pip_packages != '' }}
+        shell: bash
+        run: python -m pip install --upgrade --break-system-packages "${{ matrix.info.extra_pip_packages }}"
 <% endif %>
 
       - name: Execute
@@ -226,8 +235,12 @@ jobs:
               # Extract NUM_GPUS from the test file, default to 8
               NGPU=$(grep -oP '^NUM_GPUS\s*=\s*\K\d+' "$filepath" | head -1)
               NGPU=${NGPU:-8}
+              EXTRA_FIELDS=""
+              if [ "$filepath" = "tests/test_qwen3_5_4B_geo3k_vlm.py" ]; then
+                EXTRA_FIELDS=',"extra_pip_packages":"transformers>=5.0"'
+              fi
               if [ "$FIRST" = true ]; then FIRST=false; else MATRIX+=","; fi
-              MATRIX+="{\"test_file\":\"$filepath\",\"num_gpus\":$NGPU}"
+              MATRIX+="{\"test_file\":\"$filepath\",\"num_gpus\":$NGPU$EXTRA_FIELDS}"
             done
             MATRIX+="]"
             echo "has_tests=true" >> $GITHUB_OUTPUT
@@ -277,6 +290,11 @@ jobs:
       - name: Install
         shell: bash
         run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
+
+      - name: Install extra Python packages
+        if: ${{ matrix.info.extra_pip_packages != null && matrix.info.extra_pip_packages != '' }}
+        shell: bash
+        run: python -m pip install --upgrade --break-system-packages "${{ matrix.info.extra_pip_packages }}"
 
       - name: Execute
         shell: bash

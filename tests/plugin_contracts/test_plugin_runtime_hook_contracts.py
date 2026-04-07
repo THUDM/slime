@@ -69,8 +69,10 @@ def reference_convert_samples_to_train_data(args, samples):
     }
 
 
-def reference_rollout_data_postprocess(args) -> None:
+def reference_rollout_data_postprocess(args, rollout_id, rollout_data) -> None:
     args.rollout_data_postprocess_called = True
+    args.rollout_data_postprocess_rollout_id = rollout_id
+    args.rollout_data_postprocess_data = rollout_data
 
 
 def make_sample(index: int, reward: float = 1.0) -> Sample:
@@ -124,8 +126,11 @@ def invoke_convert_samples_to_train_data(fn):
 
 def invoke_rollout_data_postprocess(fn):
     args = type("Args", (), {})()
-    assert fn(args) is None
+    rollout_data = {"sample_indices": [0], "rewards": [1.0]}
+    assert fn(args, 7, rollout_data) is None
     assert args.rollout_data_postprocess_called is True
+    assert args.rollout_data_postprocess_rollout_id == 7
+    assert args.rollout_data_postprocess_data == rollout_data
 
 
 HOOK_CASES = [
@@ -170,8 +175,8 @@ HOOK_CASES = [
         "ROLLOUT_DATA_POSTPROCESS_PATH",
         "plugin_contracts.test_plugin_runtime_hook_contracts.reference_rollout_data_postprocess",
         "slime/backends/megatron_utils/actor.py",
-        "self.rollout_data_postprocess(self.args)",
-        ("args",),
+        "self.rollout_data_postprocess(self.args, rollout_id, rollout_data)",
+        ("args", "rollout_id", "rollout_data"),
         invoke_rollout_data_postprocess,
     ),
 ]
