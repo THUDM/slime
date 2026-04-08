@@ -34,6 +34,11 @@ def validate_args(args):
         assert not args.use_distributed_optimizer, "Muon does not support distributed optimizer."
         assert not getattr(args, 'fp16', False), "Muon does not support fp16, use bf16 instead."
 
+    # Roo optimizer checks
+    if getattr(args, 'optimizer', 'adam') == 'roo':
+        assert not args.use_distributed_optimizer, "Roo does not support distributed optimizer."
+        assert not getattr(args, 'fp16', False), "Roo does not support fp16, use bf16 instead."
+
 
 def _hf_validate_args(args, hf_config):
     def equal(x, y):
@@ -82,8 +87,8 @@ def _hf_validate_args(args, hf_config):
 
 
 def _set_default_megatron_args(args):
-    # Muon does not support distributed optimizer; for all other optimizers use ZeRO.
-    if 'muon' in getattr(args, 'optimizer', 'adam'):
+    # Muon/Roo do not support distributed optimizer; for all other optimizers use ZeRO.
+    if 'muon' in getattr(args, 'optimizer', 'adam') or getattr(args, 'optimizer', 'adam') == 'roo':
         args.use_distributed_optimizer = False
     else:
         args.use_distributed_optimizer = True

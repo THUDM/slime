@@ -23,6 +23,13 @@ try:
     HAVE_MUON = True
 except ImportError:
     HAVE_MUON = False
+
+try:
+    from megatron.core.optimizer.roo import get_megatron_roo_optimizer
+
+    HAVE_ROO = True
+except ImportError:
+    HAVE_ROO = False
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.core.utils import get_model_config
@@ -124,8 +131,17 @@ def setup_model_and_optimizer(
     config = OptimizerConfig(**kwargs)
     config.timers = None
 
-    if 'muon' not in config.optimizer:
+    if 'muon' not in config.optimizer and config.optimizer != 'roo':
         optimizer = get_megatron_optimizer(
+            config=config,
+            model_chunks=model,
+            use_gloo_process_groups=args.enable_gloo_process_groups,
+        )
+    elif config.optimizer == 'roo':
+        assert HAVE_ROO, (
+            "Roo optimizer requires megatron.core.optimizer.roo module."
+        )
+        optimizer = get_megatron_roo_optimizer(
             config=config,
             model_chunks=model,
             use_gloo_process_groups=args.enable_gloo_process_groups,
