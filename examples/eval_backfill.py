@@ -262,6 +262,43 @@ def compute_eval_metrics(eval_name, eval_samples, rewards, responses):
     return metrics
 
 
+def _ensure_wandb_run(
+    *,
+    run_id: str,
+    project: str,
+    entity: str = "",
+    host: str = "",
+    key: str = "",
+    group: str = "",
+    run_name: str = "",
+) -> bool:
+    """Initialize the wandb run once per process. Subsequent calls are no-ops."""
+    if wandb.run is not None:
+        return True
+    if host:
+        os.environ["WANDB_BASE_URL"] = host
+    if key:
+        os.environ["WANDB_API_KEY"] = key
+    try:
+        if key:
+            wandb.login(key=key, host=host or None)
+        wandb.init(
+            project=project,
+            entity=entity or None,
+            id=run_id,
+            resume="allow",
+            group=group or None,
+            name=run_name or None,
+            settings=wandb.Settings(mode="shared", init_timeout=300),
+        )
+        wandb.define_metric("eval/step", overwrite=True)
+        wandb.define_metric("eval/*", step_metric="eval/step", overwrite=True)
+        return True
+    except Exception as exc:
+        logger.warning("W&B initialization failed: %s", exc)
+        return False
+
+
 def log_to_wandb(
     *,
     metrics: dict[str, float],
@@ -278,34 +315,19 @@ def log_to_wandb(
         logger.info("No eval metrics to log to W&B for rollout %s", rollout_id)
         return False
 
-    if host:
-        os.environ["WANDB_BASE_URL"] = host
-    if key:
-        os.environ["WANDB_API_KEY"] = key
+    if not _ensure_wandb_run(
+        run_id=run_id, project=project, entity=entity,
+        host=host, key=key, group=group, run_name=run_name,
+    ):
+        return False
 
     try:
-        wandb.init(
-            project=project,
-            entity=entity or None,
-            id=run_id,
-            resume="allow",
-            reinit=True,
-            group=group or None,
-            name=run_name or None,
-        )
-        wandb.define_metric("eval/step", overwrite=True)
-        wandb.define_metric("eval/*", step_metric="eval/step", overwrite=True)
         wandb.log({"eval/step": rollout_id, **metrics})
+        logger.info("Logged %d metrics to wandb run %s at step %s", len(metrics), run_id, rollout_id)
         return True
     except Exception as exc:
-        logger.warning("Skipping W&B logging because initialization or upload failed: %s", exc)
+        logger.warning("Skipping W&B logging because upload failed: %s", exc)
         return False
-    finally:
-        try:
-            if wandb.run is not None:
-                wandb.finish()
-        except Exception as exc:
-            logger.warning("Failed to finish W&B run cleanly: %s", exc)
 
 
 def wait_for_sglang(base_url: str, timeout_seconds: int = 300):
@@ -354,6 +376,7 @@ def main():
     tokenizer = get_tokenizer(args.model_path)
     reward_func = load_reward_func(args.reward_module)
     combined_metrics: dict[str, float] = {}
+    logged_datasets = 0
 
     for spec in args.eval_data:
         eval_name, eval_path = spec.split(":", 1)
@@ -404,21 +427,41 @@ def main():
         if overlap:
             logger.warning("Eval metrics for %s overwrite existing keys: %s", eval_name, sorted(overlap))
         combined_metrics.update(metrics)
+        if log_to_wandb(
+            metrics=metrics,
+            rollout_id=args.rollout_id,
+            run_id=args.wandb_run_id,
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            host=args.wandb_host,
+            key=args.wandb_key,
+            group=args.wandb_group,
+            run_name=getattr(args, "wandb_run_name", ""),
+        ):
+            logged_datasets += 1
 
     if args.dry_run:
         return
 
-    log_to_wandb(
-        metrics=combined_metrics,
-        rollout_id=args.rollout_id,
-        run_id=args.wandb_run_id,
-        project=args.wandb_project,
-        entity=args.wandb_entity,
-        host=args.wandb_host,
-        key=args.wandb_key,
-        group=args.wandb_group,
-        run_name=getattr(args, "wandb_run_name", ""),
-    )
+    if logged_datasets < len(args.eval_data):
+        log_to_wandb(
+            metrics=combined_metrics,
+            rollout_id=args.rollout_id,
+            run_id=args.wandb_run_id,
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            host=args.wandb_host,
+            key=args.wandb_key,
+            group=args.wandb_group,
+            run_name=getattr(args, "wandb_run_name", ""),
+        )
+
+    # Finish the single shared wandb session opened during this eval run.
+    try:
+        if wandb.run is not None:
+            wandb.finish(exit_code=0, quiet=False)
+    except Exception as exc:
+        logger.warning("Failed to finish W&B run cleanly: %s", exc)
 
 
 if __name__ == "__main__":

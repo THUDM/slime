@@ -10,6 +10,7 @@ import os
 import pickle
 import re
 import sys
+import textwrap
 import traceback
 import zlib
 from collections.abc import Iterable
@@ -23,6 +24,21 @@ _PRELUDE = """
 import sys
 sys.setrecursionlimit(6 * 10 ** 5)
 """
+
+_TEST_CODE_HARNESS_RE = re.compile(
+    r"(?P<prelude>.*)\n"
+    r"for\s+i,\s*(?P<target>.+?)\s+in\s+enumerate\((?P<iter>.+?)\):\s*\n"
+    r"(?P<body>(?:    .*\n?)*)\s*$",
+    flags=re.DOTALL,
+)
+_CHECK_FUNCTION_HARNESS_RE = re.compile(
+    r"(?P<prelude>.*)\n"
+    r"def\s+check\((?P<candidate>\w+)\):\s*\n"
+    r"(?P<setup>(?:    .*\n)*?)"
+    r"    for\s+i,\s*(?P<target>.+?)\s+in\s+enumerate\((?P<iter>.+?)\):\s*\n"
+    r"(?P<body>(?:        .*\n?)*)\s*$",
+    flags=re.DOTALL,
+)
 
 
 def extract_python_code(completion: str) -> str:
@@ -125,6 +141,42 @@ def resolve_timeout_seconds(metadata: dict[str, Any]) -> float:
     if isinstance(candidate, (int, float)) and math.isfinite(candidate):
         return max(2.0, min(MAX_TIMEOUT_SECONDS, float(candidate) * 2.0 + 1.0))
     return DEFAULT_TIMEOUT_SECONDS
+
+
+def parse_test_code_harness(test_code: str) -> dict[str, str] | None:
+    text = str(test_code or "").strip()
+    if not text:
+        return None
+    match = _TEST_CODE_HARNESS_RE.match(text)
+    if match is not None:
+        body = textwrap.dedent(match.group("body")).strip()
+        if not body:
+            return None
+        return {
+            "kind": "top_level_loop",
+            "prelude": match.group("prelude").rstrip(),
+            "setup_code": "",
+            "loop_target": match.group("target").strip(),
+            "loop_iter": match.group("iter").strip(),
+            "loop_body": body,
+            "candidate_param": "",
+        }
+
+    match = _CHECK_FUNCTION_HARNESS_RE.match(text)
+    if match is None:
+        return None
+    body = textwrap.dedent(match.group("body")).strip()
+    if not body:
+        return None
+    return {
+        "kind": "check_function",
+        "prelude": match.group("prelude").rstrip(),
+        "setup_code": textwrap.dedent(match.group("setup")).strip(),
+        "loop_target": match.group("target").strip(),
+        "loop_iter": match.group("iter").strip(),
+        "loop_body": body,
+        "candidate_param": match.group("candidate").strip(),
+    }
 
 
 def decode_livecodebench_private_tests(payload_text: str, payload_format: str | None = None) -> list[dict[str, Any]]:
@@ -349,6 +401,103 @@ def check_correctness(
     return result_holder[0], list(metadata_holder)
 
 
+def run_test_code_harness(
+    harness: dict[str, str],
+    generation: str,
+    *,
+    metadata: dict[str, Any] | None = None,
+    limit: int | None = None,
+) -> tuple[list[bool | int], dict[str, Any]]:
+    namespace: dict[str, Any] = {"__name__": "__main__"}
+    exec(_PRELUDE + "\n" + harness["prelude"] + "\n" + generation, namespace, namespace)
+
+    if harness.get("kind") == "check_function":
+        metadata = metadata or {}
+        entry_point = str(metadata.get("entry_point") or metadata.get("fn_name") or "").strip()
+        if not entry_point:
+            return [], {"error_message": "Missing entry point for check(candidate) harness"}
+        namespace[harness["candidate_param"]] = _resolve_callable(namespace, entry_point)
+        setup_code = harness.get("setup_code", "").strip()
+        if setup_code:
+            exec(setup_code, namespace, namespace)
+
+    iterator = eval(harness["loop_iter"], namespace, namespace)
+    if not isinstance(iterator, Iterable):
+        return [], {"error_message": "Harness iterator is not iterable"}
+
+    results: list[bool | int] = []
+    last_metadata: dict[str, Any] = {}
+    for i, case_item in enumerate(iterator):
+        if limit is not None and i >= limit:
+            break
+        try:
+            namespace["i"] = i
+            namespace["__case_item__"] = case_item
+            exec(f"{harness['loop_target']} = __case_item__", namespace, namespace)
+            exec(harness["loop_body"], namespace, namespace)
+            results.append(True)
+            last_metadata = {"mode": "test_code", "case_index": i, "error_message": None}
+        except AssertionError:
+            last_metadata = {"mode": "test_code", "case_index": i, "error_message": "Wrong Answer"}
+            results.append(False)
+            return results, last_metadata
+        except Exception as exc:
+            last_metadata = {
+                "mode": "test_code",
+                "case_index": i,
+                "error": repr(exc),
+                "traceback": traceback.format_exc(limit=10),
+            }
+            results.append(-1)
+            return results, last_metadata
+
+    return results, last_metadata
+
+
+def _check_test_code_harness_worker(
+    harness: dict[str, str],
+    generation: str,
+    metadata: dict[str, Any] | None,
+    limit: int | None,
+    result_holder,
+    metadata_holder,
+) -> None:
+    with open(os.devnull, "w", encoding="utf-8") as devnull:
+        sys.stdout = devnull
+        sys.stderr = devnull
+        try:
+            results, details = run_test_code_harness(harness, generation, metadata=metadata, limit=limit)
+            result_holder.append(results)
+            metadata_holder.append(details)
+        except Exception:
+            result_holder.append([-1])
+            metadata_holder.append({"traceback": traceback.format_exc(limit=10)})
+
+
+def check_test_code_harness_correctness(
+    harness: dict[str, str],
+    generation: str,
+    *,
+    timeout: float,
+    metadata: dict[str, Any] | None = None,
+    limit: int | None = None,
+) -> tuple[list[bool | int], list[dict[str, Any]]]:
+    manager = multiprocessing.Manager()
+    result_holder = manager.list()
+    metadata_holder = manager.list()
+    process = multiprocessing.Process(
+        target=_check_test_code_harness_worker,
+        args=(harness, generation, metadata, limit, result_holder, metadata_holder),
+    )
+    process.start()
+    process.join(timeout + 1.0)
+    if process.is_alive():
+        process.kill()
+    if not result_holder:
+        return ([-1], [{"error_message": "Global timeout"}])
+    return result_holder[0], list(metadata_holder)
+
+
 def compute_score(
     completion: str,
     metadata: dict[str, Any],
@@ -360,13 +509,39 @@ def compute_score(
     if not solution:
         return 0.0, [{"error_message": "No code extracted"}]
 
+    timeout = resolve_timeout_seconds(metadata)
+    harness = parse_test_code_harness(str(metadata.get("test_code") or ""))
+    if harness is not None:
+        full_results, full_metadata = check_test_code_harness_correctness(
+            harness,
+            solution,
+            timeout=timeout,
+            metadata=metadata,
+        )
+        if full_results and all(item is True for item in full_results):
+            return 1.0, full_metadata
+
+        if not continuous:
+            return 0.0, full_metadata
+
+        partial_results, partial_metadata = check_test_code_harness_correctness(
+            harness,
+            solution,
+            timeout=max(timeout, 10.0),
+            metadata=metadata,
+            limit=max_partial_cases,
+        )
+        if not partial_results:
+            return 0.0, partial_metadata
+        passed = sum(1 for item in partial_results if item is True)
+        return passed / max(1, len(partial_results)), partial_metadata
+
     verifier = build_verifier_from_metadata(metadata, include_private=True)
     inputs = list(verifier.get("inputs") or [])
     outputs = list(verifier.get("outputs") or [])
     if not inputs or len(inputs) != len(outputs):
         return 0.0, [{"error_message": "Empty or invalid verifier"}]
 
-    timeout = resolve_timeout_seconds(metadata)
     full_results, full_metadata = check_correctness(verifier, solution, timeout=timeout)
     if full_results and all(item is True for item in full_results):
         return 1.0, full_metadata

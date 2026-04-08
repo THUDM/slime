@@ -1,31 +1,16 @@
 #!/usr/bin/env bash
 
+COMMON_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+SCRIPT_QUERIES_PY="${SCRIPT_QUERIES_PY:-${COMMON_DIR}/script_queries.py}"
+
 resolve_hostname_to_ip() {
   local host="$1"
-  python3 - "$host" <<'PY'
-import socket
-import sys
-
-host = sys.argv[1]
-try:
-    print(socket.gethostbyname(host))
-except OSError:
-    sys.exit(1)
-PY
+  python3 "${SCRIPT_QUERIES_PY}" resolve-hostname-to-ip --host "${host}"
 }
 
 is_ip_address() {
   local candidate="$1"
-  python3 - "$candidate" <<'PY'
-import ipaddress
-import sys
-
-candidate = sys.argv[1]
-try:
-    ipaddress.ip_address(candidate)
-except ValueError:
-    sys.exit(1)
-PY
+  python3 "${SCRIPT_QUERIES_PY}" is-ip-address --candidate "${candidate}"
 }
 
 normalize_master_addr() {

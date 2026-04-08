@@ -33,19 +33,37 @@ def _compute_rollout_step(args, rollout_id: int) -> int:
     return rollout_id
 
 
-def _sample_reward(sample: Any, args) -> float:
-    if hasattr(sample, "get_reward_value"):
-        return float(sample.get_reward_value(args))
-    reward = getattr(sample, "reward", 0.0)
-    if isinstance(reward, dict):
+def _extract_reward_scalar(value: Any, args) -> float:
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, dict):
         reward_key = getattr(args, "reward_key", None)
         if reward_key:
-            return float(reward.get(reward_key, 0.0))
-        for value in reward.values():
-            if isinstance(value, (int, float)):
-                return float(value)
+            reward_value = value.get(reward_key)
+            if isinstance(reward_value, (bool, int, float)):
+                return float(reward_value)
+
+        for key in ("reward", "score", "scalar_reward", "value"):
+            reward_value = value.get(key)
+            if isinstance(reward_value, (bool, int, float)):
+                return float(reward_value)
+
+        # Pure OPD teacher responses carry logprob meta info plus telemetry such as
+        # token counts. Those are not task rewards and should not be logged as such.
+        if isinstance(value.get("meta_info"), dict):
+            return 0.0
+
         return 0.0
-    return float(reward or 0.0)
+    return float(value or 0.0)
+
+
+def _sample_reward(sample: Any, args) -> float:
+    if hasattr(sample, "get_reward_value"):
+        return _extract_reward_scalar(sample.get_reward_value(args), args)
+    reward = getattr(sample, "reward", 0.0)
+    return _extract_reward_scalar(reward, args)
 
 
 def _sample_response_length(sample: Any) -> int:
