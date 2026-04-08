@@ -6,15 +6,15 @@ from pathlib import Path
 
 
 def _load_module():
-    module_path = Path(__file__).resolve().parents[1] / "examples" / "bfcl_official_runner.py"
-    spec = importlib.util.spec_from_file_location("bfcl_official_runner_test_module", module_path)
+    module_path = Path(__file__).resolve().parents[1] / "slime" / "rollout" / "rm_hub" / "bfcl.py"
+    spec = importlib.util.spec_from_file_location("bfcl_test_module", module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-bfcl_official_runner = _load_module()
+bfcl = _load_module()
 
 
 def test_build_bfcl_result_entries_uses_top_level_id_for_single_turn():
@@ -26,7 +26,7 @@ def test_build_bfcl_result_entries_uses_top_level_id_for_single_turn():
             "prompt": [{"role": "user", "content": "Question"}],
         }
     ]
-    entries = bfcl_official_runner.build_bfcl_result_entries(
+    entries = bfcl.build_bfcl_result_entries(
         rows,
         ["I will not call a tool."],
         backend={"load_dataset_entry": lambda *args, **kwargs: []},
@@ -53,7 +53,7 @@ def test_build_bfcl_result_entries_assigns_multi_turn_ids_from_official_prompt_o
             {"id": "multi_turn_base_1"},
         ]
     }
-    entries = bfcl_official_runner.build_bfcl_result_entries(
+    entries = bfcl.build_bfcl_result_entries(
         rows,
         [["step-1", "step-2"], ["step-3"]],
         backend=backend,
@@ -98,10 +98,10 @@ def test_run_bfcl_official_eval_writes_entries_and_reads_score_headers(tmp_path:
         "runner": _fake_runner,
     }
 
-    original_loader = bfcl_official_runner._load_bfcl_backend
-    bfcl_official_runner._load_bfcl_backend = lambda: backend
+    original_loader = bfcl.load_bfcl_backend
+    bfcl.load_bfcl_backend = lambda: backend
     try:
-        summary = bfcl_official_runner.run_bfcl_official_eval(
+        summary = bfcl.run_bfcl_official_eval(
             [
                 {
                     "dataset_name": "bfcl_v3",
@@ -115,7 +115,7 @@ def test_run_bfcl_official_eval_writes_entries_and_reads_score_headers(tmp_path:
             score_dir=tmp_path / "score",
         )
     finally:
-        bfcl_official_runner._load_bfcl_backend = original_loader
+        bfcl.load_bfcl_backend = original_loader
 
     assert written == [
         ([{"id": "irrelevance_0", "result": "No tool call."}], tmp_path / "result"),

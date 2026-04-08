@@ -7,7 +7,7 @@ import sys
 
 
 def _load_materialize_train_pool_module():
-    module_path = Path(__file__).resolve().parents[1] / "examples" / "MOPD" / "materialize_train_pool.py"
+    module_path = Path(__file__).resolve().parents[1] / "examples" / "prepare_runtime_dataset.py"
     spec = importlib.util.spec_from_file_location("materialize_train_pool_test_module", module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -39,36 +39,41 @@ def test_main_uses_jl_runtime_builders_for_math_and_code(tmp_path: Path, monkeyp
 
     calls: list[tuple[list[str], list[str], Path]] = []
 
-    def fake_build_mopd_train(*, math_pool_root, code_pool_root, math_dataset_names, code_dataset_names, dest, math_system_prompt):
-        del math_pool_root, code_pool_root, math_system_prompt
-        calls.append((list(math_dataset_names), list(code_dataset_names), Path(dest)))
-        dest = Path(dest)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        domain = "math" if math_dataset_names else "code"
-        dest.write_text(
-            json.dumps(
-                {
-                    "prompt": [{"role": "user", "content": domain}],
-                    "label": "x",
-                    "metadata": {"domain": domain},
-                },
-                ensure_ascii=False,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        return {domain: 1}
+    def fake_build_mopd_runtime_train_sources(*, pool_root, cache_dir, include_domains, math_train_datasets, code_train_datasets):
+        del pool_root
+        outputs: list[Path] = []
+        if "math" in include_domains:
+            math_dest = cache_dir / "math" / "mopd_math_train.normalized.jsonl"
+            calls.append((["deepmath", "bigmath"], [], math_dest))
+            math_dest.parent.mkdir(parents=True, exist_ok=True)
+            math_dest.write_text('{"prompt":[{"role":"user","content":"math"}],"label":"x","metadata":{"domain":"math"}}\n', encoding="utf-8")
+            outputs.append(math_dest)
+        if "code" in include_domains:
+            code_dest = cache_dir / "code" / "mopd_code_train.normalized.jsonl"
+            calls.append(([], ["apps", "taco"], code_dest))
+            code_dest.parent.mkdir(parents=True, exist_ok=True)
+            code_dest.write_text('{"prompt":[{"role":"user","content":"code"}],"label":"x","metadata":{"domain":"code"}}\n', encoding="utf-8")
+            outputs.append(code_dest)
+        assert math_train_datasets == "deepmath,bigmath"
+        assert code_train_datasets == "apps,taco"
+        return outputs
 
-    monkeypatch.setattr(materialize_train_pool, "build_mopd_train", fake_build_mopd_train)
+    monkeypatch.setattr(materialize_train_pool, "build_mopd_runtime_train_sources", fake_build_mopd_runtime_train_sources)
     monkeypatch.setattr(
         sys,
         "argv",
         [
-            "materialize_train_pool.py",
+            "prepare_runtime_dataset.py",
+            "train",
+            "--pool-root",
             str(pool_root),
+            "--cache-dir",
             str(cache_dir),
+            "--manifest-output",
             str(dest_list),
+            "--include-domains",
             "stem,code,math",
+            "--exclude-patterns",
             "",
             "--stem-train-datasets",
             "",
@@ -111,35 +116,45 @@ def test_main_defaults_stem_and_structured_to_nemotron_datasets(tmp_path: Path, 
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("{}\n", encoding="utf-8")
 
-    def fake_build_mopd_train(*, math_pool_root, code_pool_root, math_dataset_names, code_dataset_names, dest, math_system_prompt):
-        del math_pool_root, code_pool_root, math_system_prompt
-        dest = Path(dest)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        domain = "math" if math_dataset_names else "code"
-        dest.write_text(
-            json.dumps(
-                {
-                    "prompt": [{"role": "user", "content": domain}],
-                    "label": "x",
-                    "metadata": {"domain": domain},
-                },
-                ensure_ascii=False,
+    def fake_build_mopd_runtime_train_sources(*, pool_root, cache_dir, include_domains, math_train_datasets, code_train_datasets):
+        del pool_root, math_train_datasets, code_train_datasets
+        outputs: list[Path] = []
+        for domain in ("math", "code"):
+            if domain not in include_domains:
+                continue
+            dest = cache_dir / domain / f"mopd_{domain}_train.normalized.jsonl"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(
+                json.dumps(
+                    {
+                        "prompt": [{"role": "user", "content": domain}],
+                        "label": "x",
+                        "metadata": {"domain": domain},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
             )
-            + "\n",
-            encoding="utf-8",
-        )
-        return {domain: 1}
+            outputs.append(dest)
+        return outputs
 
-    monkeypatch.setattr(materialize_train_pool, "build_mopd_train", fake_build_mopd_train)
+    monkeypatch.setattr(materialize_train_pool, "build_mopd_runtime_train_sources", fake_build_mopd_runtime_train_sources)
     monkeypatch.setattr(
         sys,
         "argv",
         [
-            "materialize_train_pool.py",
+            "prepare_runtime_dataset.py",
+            "train",
+            "--pool-root",
             str(pool_root),
+            "--cache-dir",
             str(cache_dir),
+            "--manifest-output",
             str(dest_list),
+            "--include-domains",
             "stem,structured,code,math",
+            "--exclude-patterns",
             "",
         ],
     )
