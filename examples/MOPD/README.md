@@ -9,6 +9,8 @@ This folder mirrors the experimental OPD multidomain setup under `exp/opd/`, wit
 | `sglang_opd_multimodel.yaml` | Declares every SGLang model server slime starts for rollout + teacher scoring. |
 | `run-opd-multidomain.sh` | Starts Ray, submits `train_async.py` with OPD + multimodel SGLang flags. |
 
+Auxiliary one-off scripts and maintenance utilities live under [`examples/scripts/adhoc`](/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/jy_workspace/slime/examples/scripts/adhoc) and [`examples/scripts/maintenance`](/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/jy_workspace/slime/examples/scripts/maintenance), not in this example directory.
+
 ## 1. Multimodel YAML (`sglang_opd_multimodel.yaml`)
 
 Slime reads this file via `--sglang-config` and launches one SGLang stack per top-level entry under `sglang`.

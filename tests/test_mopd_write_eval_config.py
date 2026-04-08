@@ -7,8 +7,17 @@ import sys
 
 import yaml
 
-def _load_write_eval_config_module():
-    module_path = Path(__file__).resolve().parents[1] / "examples" / "MOPD" / "write_eval_config.py"
+def _load_runtime_prep_module():
+    module_path = Path(__file__).resolve().parents[1] / "examples" / "prepare_runtime_dataset.py"
+    spec = importlib.util.spec_from_file_location("prepare_runtime_dataset_test_module", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_eval_prep_utils_module():
+    module_path = Path(__file__).resolve().parents[1] / "examples" / "common" / "eval_prep_utils.py"
     spec = importlib.util.spec_from_file_location("write_eval_config_test_module", module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -16,10 +25,11 @@ def _load_write_eval_config_module():
     return module
 
 
-write_eval_config = _load_write_eval_config_module()
+runtime_prep = _load_runtime_prep_module()
+eval_prep_utils = _load_eval_prep_utils_module()
 
 
-def test_preprocess_eval_jsonl_uses_instruction_following_prompt_for_ifbench(tmp_path: Path):
+def test_materialize_eval_dataset_uses_instruction_following_prompt_for_ifbench(tmp_path: Path):
     src = tmp_path / "ifbench.jsonl"
     dst = tmp_path / "out.jsonl"
     src.write_text(
@@ -40,7 +50,7 @@ def test_preprocess_eval_jsonl_uses_instruction_following_prompt_for_ifbench(tmp
         encoding="utf-8",
     )
 
-    count = write_eval_config._preprocess_eval_jsonl(src, dst, "structured")
+    count = eval_prep_utils.materialize_eval_dataset(src, dst, runtime_mode="pool")
 
     row = json.loads(dst.read_text(encoding="utf-8").strip())
     assert count == 1
@@ -49,7 +59,7 @@ def test_preprocess_eval_jsonl_uses_instruction_following_prompt_for_ifbench(tmp
     assert row["prompt"][1:] == [{"role": "user", "content": "Do the task"}]
 
 
-def test_preprocess_eval_jsonl_keeps_structured_prompt_for_json_schema(tmp_path: Path):
+def test_materialize_eval_dataset_keeps_structured_prompt_for_json_schema(tmp_path: Path):
     src = tmp_path / "jsonschema.jsonl"
     dst = tmp_path / "out.jsonl"
     src.write_text(
@@ -70,7 +80,7 @@ def test_preprocess_eval_jsonl_keeps_structured_prompt_for_json_schema(tmp_path:
         encoding="utf-8",
     )
 
-    write_eval_config._preprocess_eval_jsonl(src, dst, "structured")
+    eval_prep_utils.materialize_eval_dataset(src, dst, runtime_mode="pool")
 
     row = json.loads(dst.read_text(encoding="utf-8").strip())
     assert row["prompt"][0]["role"] == "system"
@@ -80,7 +90,7 @@ def test_preprocess_eval_jsonl_keeps_structured_prompt_for_json_schema(tmp_path:
     )
 
 
-def test_preprocess_eval_jsonl_materializes_top_level_ifbench_payload(tmp_path: Path):
+def test_materialize_eval_dataset_materializes_top_level_ifbench_payload(tmp_path: Path):
     src = tmp_path / "ifbench.jsonl"
     dst = tmp_path / "out.jsonl"
     src.write_text(
@@ -106,7 +116,7 @@ def test_preprocess_eval_jsonl_materializes_top_level_ifbench_payload(tmp_path: 
         encoding="utf-8",
     )
 
-    write_eval_config._preprocess_eval_jsonl(src, dst, "structured")
+    eval_prep_utils.materialize_eval_dataset(src, dst, runtime_mode="pool")
 
     row = json.loads(dst.read_text(encoding="utf-8").strip())
     assert row["metadata"]["reward_type"] == "instruction_following_soft"
@@ -114,7 +124,7 @@ def test_preprocess_eval_jsonl_materializes_top_level_ifbench_payload(tmp_path: 
 
 
 def test_build_math_eval_row_converts_question_to_runtime_prompt():
-    row = write_eval_config._build_math_eval_row(
+    row = eval_prep_utils.build_math_eval_row(
         {
             "id": 7,
             "question": "What is 1+1?",
@@ -133,7 +143,7 @@ def test_build_math_eval_row_converts_question_to_runtime_prompt():
 
 
 def test_build_code_eval_row_converts_question_to_runtime_prompt():
-    row = write_eval_config._build_code_eval_row(
+    row = eval_prep_utils.build_code_eval_row(
         {
             "id": "code-1",
             "question": "Write a function that returns 42.",
@@ -199,21 +209,23 @@ def test_main_ignores_official_only_datasets_when_writing_generic_eval_config(
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(write_eval_config, "EVAL_DATASETS", [("ifeval", "structured/eval/ifeval_ifeval_input_data.jsonl", 1)])
     output = tmp_path / "config" / "eval.yaml"
     monkeypatch.setattr(
         sys,
         "argv",
         [
-            "write_eval_config.py",
+            "prepare_runtime_dataset.py",
+            "eval-config",
             "--pool-root",
             str(pool_root),
             "--output",
             str(output),
+            "--dataset",
+            "ifeval",
         ],
     )
 
-    write_eval_config.main()
+    runtime_prep.main()
 
     config = yaml.safe_load(output.read_text(encoding="utf-8"))
     assert [dataset["name"] for dataset in config["eval"]["datasets"]] == ["ifeval"]
@@ -283,24 +295,26 @@ def test_main_writes_official_manifest_when_requested(tmp_path: Path, monkeypatc
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(write_eval_config, "EVAL_DATASETS", [("ifeval", "structured/eval/ifeval_ifeval_input_data.jsonl", 1)])
     output = tmp_path / "config" / "eval.yaml"
     manifest = tmp_path / "config" / "official.json"
     monkeypatch.setattr(
         sys,
         "argv",
         [
-            "write_eval_config.py",
+            "prepare_runtime_dataset.py",
+            "eval-config",
             "--pool-root",
             str(pool_root),
             "--output",
             str(output),
+            "--dataset",
+            "ifeval",
             "--official-manifest-output",
             str(manifest),
         ],
     )
 
-    write_eval_config.main()
+    runtime_prep.main()
 
     config = yaml.safe_load(output.read_text(encoding="utf-8"))
     payload = json.loads(manifest.read_text(encoding="utf-8"))

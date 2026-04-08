@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def _load_module():
-    module_path = Path(__file__).resolve().parents[1] / "examples" / "MOPD" / "code_verifier.py"
+    module_path = Path(__file__).resolve().parents[1] / "slime" / "rollout" / "rm_hub" / "code_verifier.py"
     spec = importlib.util.spec_from_file_location("mopd_code_verifier_test_module", module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

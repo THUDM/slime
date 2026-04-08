@@ -5,12 +5,11 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
-
 DEFAULT_BFCL_MODEL_NAME = "Qwen/Qwen3-30B-A3B-Instruct-2507-FC"
 LEGACY_DEFAULT_BFCL_MODEL_NAME = "qwen3-30b-a3b-instruct-2507"
 
 
-def _load_bfcl_backend() -> dict[str, Any]:
+def load_bfcl_backend() -> dict[str, Any]:
     try:
         from bfcl_eval.constants.category_mapping import VERSION_PREFIX
         from bfcl_eval.constants.model_config import MODEL_CONFIG_MAPPING
@@ -28,7 +27,7 @@ def _load_bfcl_backend() -> dict[str, Any]:
     }
 
 
-def _coerce_prompt_messages(prompt: Any) -> list[dict[str, Any]]:
+def coerce_prompt_messages(prompt: Any) -> list[dict[str, Any]]:
     if isinstance(prompt, list):
         return [dict(item) for item in prompt if isinstance(item, dict)]
     if isinstance(prompt, str) and prompt.strip():
@@ -36,28 +35,21 @@ def _coerce_prompt_messages(prompt: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _prompt_user_text(row: dict[str, Any]) -> str:
-    for message in _coerce_prompt_messages(row.get("prompt")):
-        if str(message.get("role", "")).lower() == "user":
-            return str(message.get("content", "")).strip()
-    return ""
-
-
-def _bfcl_dataset_name(row: dict[str, Any]) -> str:
+def bfcl_dataset_name(row: dict[str, Any]) -> str:
     metadata = row.get("metadata") or {}
     return str(row.get("dataset_name") or metadata.get("dataset_name") or "").strip()
 
 
-def _bfcl_test_category(row: dict[str, Any]) -> str:
+def bfcl_test_category(row: dict[str, Any]) -> str:
     if row.get("test_category"):
         return str(row["test_category"]).strip()
-    dataset_name = _bfcl_dataset_name(row)
+    dataset_name = bfcl_dataset_name(row)
     if dataset_name == "bfcl_v3_multi_turn_base":
         return "multi_turn_base"
     raise RuntimeError(f"Unable to infer BFCL test category for row: dataset_name={dataset_name!r}")
 
 
-def _row_native_id(row: dict[str, Any]) -> str:
+def row_native_id(row: dict[str, Any]) -> str:
     if row.get("id") not in (None, ""):
         return str(row["id"])
     record_id = row.get("record_id")
@@ -66,7 +58,7 @@ def _row_native_id(row: dict[str, Any]) -> str:
     return ""
 
 
-def _multi_turn_prompt_ids(rows: list[dict[str, Any]], backend: dict[str, Any]) -> list[str]:
+def multi_turn_prompt_ids(rows: list[dict[str, Any]], backend: dict[str, Any]) -> list[str]:
     prompt_entries = backend["load_dataset_entry"](
         "multi_turn_base",
         include_prereq=False,
@@ -85,7 +77,6 @@ def normalize_multi_turn_result(raw_result: Any) -> list[list[str]]:
         return [[text]] if text else []
     if not isinstance(raw_result, list):
         return []
-
     if all(isinstance(item, str) for item in raw_result):
         return [[item] for item in raw_result if str(item).strip()]
 
@@ -106,33 +97,26 @@ def normalize_multi_turn_result(raw_result: Any) -> list[list[str]]:
 def build_bfcl_result_entries(rows: list[dict[str, Any]], outputs: list[Any], *, backend: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     if len(rows) != len(outputs):
         raise ValueError(f"rows and outputs must have the same length, got {len(rows)} and {len(outputs)}")
-    backend = backend or _load_bfcl_backend()
+    backend = backend or load_bfcl_backend()
 
-    multi_turn_indices = [idx for idx, row in enumerate(rows) if _bfcl_dataset_name(row) == "bfcl_v3_multi_turn_base"]
+    multi_turn_indices = [idx for idx, row in enumerate(rows) if bfcl_dataset_name(row) == "bfcl_v3_multi_turn_base"]
     resolved_multi_turn_ids: dict[int, str] = {}
     if multi_turn_indices:
-        assigned = _multi_turn_prompt_ids([rows[idx] for idx in multi_turn_indices], backend)
+        assigned = multi_turn_prompt_ids([rows[idx] for idx in multi_turn_indices], backend)
         resolved_multi_turn_ids = dict(zip(multi_turn_indices, assigned))
 
     entries: list[dict[str, Any]] = []
     for idx, (row, output) in enumerate(zip(rows, outputs)):
-        dataset_name = _bfcl_dataset_name(row)
-        if dataset_name == "bfcl_v3_multi_turn_base":
-            entry_id = resolved_multi_turn_ids.get(idx, "")
-        else:
-            entry_id = _row_native_id(row)
+        dataset_name = bfcl_dataset_name(row)
+        entry_id = resolved_multi_turn_ids.get(idx, "") if dataset_name == "bfcl_v3_multi_turn_base" else row_native_id(row)
         if not entry_id:
             raise RuntimeError(f"Missing BFCL entry id for dataset {dataset_name}")
-
-        if dataset_name == "bfcl_v3_multi_turn_base":
-            result = normalize_multi_turn_result(output)
-        else:
-            result = "" if output is None else str(output)
+        result = normalize_multi_turn_result(output) if dataset_name == "bfcl_v3_multi_turn_base" else ("" if output is None else str(output))
         entries.append({"id": entry_id, "result": result})
     return entries
 
 
-def _instantiate_handler(model_name: str, backend: dict[str, Any]):
+def instantiate_handler(model_name: str, backend: dict[str, Any]):
     resolved_model_name = model_name
     config = backend["MODEL_CONFIG_MAPPING"].get(model_name)
     if config is None and model_name == DEFAULT_BFCL_MODEL_NAME:
@@ -151,7 +135,7 @@ def _instantiate_handler(model_name: str, backend: dict[str, Any]):
     return handler, resolved_model_name
 
 
-def _score_file_headers(score_dir: Path, model_name: str, test_categories: list[str], *, version_prefix: str) -> dict[str, dict[str, Any]]:
+def score_file_headers(score_dir: Path, model_name: str, test_categories: list[str], *, version_prefix: str) -> dict[str, dict[str, Any]]:
     headers: dict[str, dict[str, Any]] = {}
     model_score_dir = score_dir / model_name
     if not model_score_dir.exists():
@@ -198,9 +182,9 @@ def run_bfcl_official_eval(
     if not rows:
         return {"overall_accuracy": 0.0, "total_count": 0, "categories": {}}
 
-    backend = _load_bfcl_backend()
+    backend = load_bfcl_backend()
     entries = build_bfcl_result_entries(rows, outputs, backend=backend)
-    test_categories = sorted({_bfcl_test_category(row) for row in rows})
+    test_categories = sorted({bfcl_test_category(row) for row in rows})
 
     own_tmpdir = None
     if result_dir is None or score_dir is None:
@@ -214,15 +198,14 @@ def run_bfcl_official_eval(
     result_dir.mkdir(parents=True, exist_ok=True)
     score_dir.mkdir(parents=True, exist_ok=True)
 
-    handler, resolved_model_name = _instantiate_handler(model_name, backend)
+    handler, resolved_model_name = instantiate_handler(model_name, backend)
     handler.write(entries, result_dir, update_mode=False)
     backend["runner"]([resolved_model_name], test_categories, result_dir, score_dir, allow_missing=allow_missing)
-    headers = _score_file_headers(score_dir, resolved_model_name, test_categories, version_prefix=backend["VERSION_PREFIX"])
+    headers = score_file_headers(score_dir, resolved_model_name, test_categories, version_prefix=backend["VERSION_PREFIX"])
     summary = summarize_bfcl_scores(headers)
     summary["model_name"] = resolved_model_name
     summary["result_dir"] = str(result_dir)
     summary["score_dir"] = str(score_dir)
-
     if own_tmpdir is not None:
         summary["_tmpdir"] = own_tmpdir
     return summary
@@ -237,7 +220,7 @@ def generate_bfcl_multi_turn_outputs(
 ) -> list[list[list[str]]]:
     outputs: list[list[list[str]]] = []
     for row in rows:
-        messages = _coerce_prompt_messages(row.get("messages") or row.get("prompt"))
+        messages = coerce_prompt_messages(row.get("messages") or row.get("prompt"))
         tools = list(row.get("tools") or [])
         ground_truth = list(row.get("ground_truth") or [])
         sample_outputs: list[list[str]] = []

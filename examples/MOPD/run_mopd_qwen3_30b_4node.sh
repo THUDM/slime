@@ -137,49 +137,24 @@ prepare_training_source_list() {
     return 1
   fi
 
-  local materialize_args=(
-    "${TRAIN_POOL_ROOT}"
-    "${DATA_CACHE_DIR}/materialized_train"
-    "${TRAIN_SOURCE_LIST}"
-    "${TRAIN_POOL_INCLUDE_DOMAINS}"
-    "${TRAIN_POOL_EXCLUDE_PATTERNS}"
-  )
-  local item
-  IFS=',' read -r -a _train_datasets <<< "${TRAIN_DATASETS}"
-  for item in "${_train_datasets[@]}"; do
-    item="${item//[[:space:]]/}"
-    if [[ -n "${item}" ]]; then
-      materialize_args+=(--dataset "${item}")
-    fi
-  done
-  IFS=',' read -r -a _train_dataset_extras <<< "${TRAIN_DATASETS_EXTRA}"
-  for item in "${_train_dataset_extras[@]}"; do
-    item="${item//[[:space:]]/}"
-    if [[ -n "${item}" ]]; then
-      materialize_args+=(--dataset-extra "${item}")
-    fi
-  done
-  IFS=',' read -r -a _train_paths <<< "${TRAIN_PATHS}"
-  for item in "${_train_paths[@]}"; do
-    item="${item//[[:space:]]/}"
-    if [[ -n "${item}" ]]; then
-      materialize_args+=(--source "${item}")
-    fi
-  done
-  IFS=',' read -r -a _train_path_extras <<< "${TRAIN_PATHS_EXTRA}"
-  for item in "${_train_path_extras[@]}"; do
-    item="${item//[[:space:]]/}"
-    if [[ -n "${item}" ]]; then
-      materialize_args+=(--source-extra "${item}")
-    fi
-  done
+  local materialize_args=(--profile "mopd")
+  parse_csv_to_args "${TRAIN_DATASETS}" --dataset materialize_args
+  parse_csv_to_args "${TRAIN_DATASETS_EXTRA}" --dataset-extra materialize_args
+  parse_csv_to_args "${TRAIN_PATHS}" --source materialize_args
+  parse_csv_to_args "${TRAIN_PATHS_EXTRA}" --source-extra materialize_args
   if [[ -n "${TRAIN_MANIFEST}" ]]; then
     materialize_args+=(--manifest "${TRAIN_MANIFEST}")
   fi
 
   # Materialize pool data: bridge top-level supervision_family fields -> metadata.ground_truth/reward_type
   # so that downstream reward functions can consume the data directly.
-  PYTHONPATH="${SLIME_DIR}:${PYTHONPATH:-}" python3 "${SCRIPT_DIR}/materialize_train_pool.py" "${materialize_args[@]}"
+  PYTHONPATH="${SLIME_DIR}:${PYTHONPATH:-}" python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" train \
+    --pool-root "${TRAIN_POOL_ROOT}" \
+    --cache-dir "${DATA_CACHE_DIR}/materialized_train" \
+    --manifest-output "${TRAIN_SOURCE_LIST}" \
+    --include-domains "${TRAIN_POOL_INCLUDE_DOMAINS}" \
+    --exclude-patterns "${TRAIN_POOL_EXCLUDE_PATTERNS}" \
+    "${materialize_args[@]}"
 
   ensure_nonempty_file "${TRAIN_SOURCE_LIST}" "Training source manifest"
 }
@@ -190,59 +165,12 @@ write_eval_config() {
     --output "${EVAL_CONFIG_PATH}"
     --max-response-len "${TOOLCALL_MAX_RESPONSE_LEN}"
   )
-  local item
-  IFS=',' read -r -a _eval_datasets <<< "${EVAL_DATASETS}"
-  for item in "${_eval_datasets[@]}"; do
-    item="${item//[[:space:]]/}"
-    if [[ -n "${item}" ]]; then
-      eval_args+=(--dataset "${item}")
-    fi
-  done
-  IFS=',' read -r -a _eval_dataset_extras <<< "${EVAL_DATASETS_EXTRA}"
-  for item in "${_eval_dataset_extras[@]}"; do
-    item="${item//[[:space:]]/}"
-    if [[ -n "${item}" ]]; then
-      eval_args+=(--dataset-extra "${item}")
-    fi
-  done
-  IFS=',' read -r -a _eval_paths <<< "${EVAL_PATHS}"
-  for item in "${_eval_paths[@]}"; do
-    item="${item//[[:space:]]/}"
-    if [[ -n "${item}" ]]; then
-      eval_args+=(--source "${item}")
-    fi
-  done
-  IFS=',' read -r -a _eval_path_extras <<< "${EVAL_PATHS_EXTRA}"
-  for item in "${_eval_path_extras[@]}"; do
-    item="${item//[[:space:]]/}"
-    if [[ -n "${item}" ]]; then
-      eval_args+=(--source-extra "${item}")
-    fi
-  done
+  parse_csv_to_args "${EVAL_DATASETS}" --dataset eval_args
+  parse_csv_to_args "${EVAL_DATASETS_EXTRA}" --dataset-extra eval_args
+  parse_csv_to_args "${EVAL_PATHS}" --source eval_args
+  parse_csv_to_args "${EVAL_PATHS_EXTRA}" --source-extra eval_args
 
-  python3 "${SCRIPT_DIR}/write_eval_config.py" "${eval_args[@]}"
-}
-
-# ---- Checkpoint ----
-
-ensure_torch_dist_checkpoint() {
-  if [ -f "${TORCH_DIST_DIR}/latest_checkpointed_iteration.txt" ]; then
-    echo "Found torch_dist checkpoint at ${TORCH_DIST_DIR}"
-    return 0
-  fi
-  if [ -f "${TORCH_DIST_DIR}/common.pt" ] && [ -f "${TORCH_DIST_DIR}/metadata.json" ]; then
-    echo "Found torch_dist iteration checkpoint at ${TORCH_DIST_DIR}"
-    return 0
-  fi
-
-  cd "${SLIME_DIR}"
-  source "${SLIME_DIR}/scripts/models/qwen3-30B-A3B.sh"
-  PYTHONPATH="${MEGATRON_PATH}:${SLIME_DIR}" torchrun \
-    --nproc-per-node "${NUM_GPUS_PER_NODE}" \
-    "${SLIME_DIR}/tools/convert_hf_to_torch_dist.py" \
-    "${MODEL_ARGS[@]}" \
-    --hf-checkpoint "${MODEL_DIR}" \
-    --save "${TORCH_DIST_DIR}"
+  python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" eval-config "${eval_args[@]}"
 }
 
 # ---- Submit Ray job ----
@@ -251,12 +179,7 @@ submit_ray_job() {
   cd "${SLIME_DIR}"
   source "${SLIME_DIR}/scripts/models/qwen3-30B-A3B.sh"
 
-  NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l || true)
-  if [ "${NVLINK_COUNT}" -gt 0 ]; then
-    HAS_NVLINK=1
-  else
-    HAS_NVLINK=0
-  fi
+  HAS_NVLINK="$(detect_nvlink)"
 
   # ---- Load args: resume from student checkpoint ----
   LOAD_ARGS=(
@@ -373,6 +296,7 @@ submit_ray_job() {
       --wandb-group "${WANDB_GROUP_NAME}"
       --wandb-key "${WANDB_API_KEY}"
       --disable-wandb-random-suffix
+      --wandb-dir "${WORK_ROOT}/wandb"
     )
   fi
 
