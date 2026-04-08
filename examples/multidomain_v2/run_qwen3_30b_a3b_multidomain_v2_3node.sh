@@ -35,6 +35,7 @@ EVAL_PATHS=${EVAL_PATHS:-}
 EVAL_PATHS_EXTRA=${EVAL_PATHS_EXTRA:-}
 
 SLIME_DIR=${SLIME_DIR:-${PROJECT_ROOT}/slime}
+SCRIPT_QUERIES_PY="${SLIME_DIR}/examples/common/script_queries.py"
 MEGATRON_PATH=${MEGATRON_PATH:-/root/Megatron-LM}
 
 EVAL_TOOL_BFCL_V3=${EVAL_TOOL_BFCL_V3:-${TRAIN_POOL_ROOT}/tool/eval/bfcl_v3_train-00000-of-00001.jsonl}
@@ -107,15 +108,7 @@ RAY_HEAD_LOCK_DIR="${WORK_ROOT}/ray_head_lock"
 mkdir -p "${LOG_DIR}" "${SAVE_DIR}" "${RUNTIME_DATA_DIR}" "${TRACE_DIR}"
 
 if [[ -z "${TRAIN_POOL_DATASETS}" ]]; then
-  TRAIN_POOL_DATASETS="$(
-    PYTHONPATH="${SCRIPT_DIR}/../..:${PYTHONPATH:-}" python3 - "${TRAIN_POOL_GROUP}" <<'PY'
-import sys
-
-from examples.multidomain_shared import default_train_datasets_for_group
-
-print(",".join(default_train_datasets_for_group(sys.argv[1])))
-PY
-  )"
+  TRAIN_POOL_DATASETS="$(python3 "${SCRIPT_QUERIES_PY}" default-train-datasets-for-group --group "${TRAIN_POOL_GROUP}")"
 fi
 
 if [[ -z "${TRAIN_DATASETS}" ]]; then
@@ -123,20 +116,11 @@ if [[ -z "${TRAIN_DATASETS}" ]]; then
 fi
 
 TRAIN_GROUP_SIGNATURE="$(
-  PYTHONPATH="${SCRIPT_DIR}/../..:${PYTHONPATH:-}" python3 - "${TRAIN_DATASETS}" "${TRAIN_DATASETS_EXTRA}" "${TRAIN_PATHS}" "${TRAIN_PATHS_EXTRA}" <<'PY'
-import sys
-
-from examples.multidomain_shared import group_signature_for_train_datasets
-
-dataset_names = [item.strip() for item in ",".join(sys.argv[1:3]).split(",") if item.strip()]
-path_names = [item.strip() for item in ",".join(sys.argv[3:]).split(",") if item.strip()]
-if dataset_names:
-    print(group_signature_for_train_datasets(dataset_names))
-elif path_names:
-    print("custom")
-else:
-    print("unknown")
-PY
+  python3 "${SCRIPT_QUERIES_PY}" group-signature \
+    --datasets "${TRAIN_DATASETS}" \
+    --dataset-extras "${TRAIN_DATASETS_EXTRA}" \
+    --paths "${TRAIN_PATHS}" \
+    --path-extras "${TRAIN_PATHS_EXTRA}"
 )"
 
 DEFAULT_WANDB_GROUP_FROM_DOMAINS="qwen3-30b-a3b-mdv2-3node-${TRAIN_GROUP_SIGNATURE}"
@@ -232,28 +216,12 @@ prepare_eval_data() {
       filter_jsonl_by_prompt_budget "${local_dest}" "${name}_eval"
       printf '%s\t%s\n' "${name}_eval" "${local_dest}" >> "${CUSTOM_EVAL_PROMPT_DATA_FILE}"
     done < <(
-      PYTHONPATH="${SCRIPT_DIR}/../..:${PYTHONPATH:-}" python3 - "${TRAIN_POOL_ROOT}" "${EVAL_DATASETS}" "${EVAL_DATASETS_EXTRA}" "${EVAL_PATHS}" "${EVAL_PATHS_EXTRA}" <<'PY'
-import sys
-from pathlib import Path
-
-from examples.common.dataset_selection import resolve_eval_datasets
-
-pool_root = Path(sys.argv[1])
-datasets = [item.strip() for item in sys.argv[2].split(",") if item.strip()]
-dataset_extras = [item.strip() for item in sys.argv[3].split(",") if item.strip()]
-paths = [item.strip() for item in sys.argv[4].split(",") if item.strip()]
-path_extras = [item.strip() for item in sys.argv[5].split(",") if item.strip()]
-
-resolved = resolve_eval_datasets(
-    pool_root=pool_root,
-    datasets=datasets or None,
-    dataset_extras=dataset_extras or None,
-    paths=paths or None,
-    path_extras=path_extras or None,
-)
-for item in resolved:
-    print(f"{item.name}\t{item.source}\t{item.n_samples_per_eval_prompt}")
-PY
+      python3 "${SCRIPT_QUERIES_PY}" resolve-eval-datasets \
+        --pool-root "${TRAIN_POOL_ROOT}" \
+        --datasets "${EVAL_DATASETS}" \
+        --dataset-extras "${EVAL_DATASETS_EXTRA}" \
+        --paths "${EVAL_PATHS}" \
+        --path-extras "${EVAL_PATHS_EXTRA}"
     )
     return 0
   fi

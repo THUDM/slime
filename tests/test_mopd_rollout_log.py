@@ -14,6 +14,7 @@ def _args(trace_dir: Path):
     return SimpleNamespace(
         use_wandb=False,
         wandb_always_use_train_step=False,
+        reward_key=None,
         rollout_batch_size=32,
         n_samples_per_prompt=16,
         global_batch_size=512,
@@ -58,6 +59,39 @@ def test_mopd_rollout_log_handles_dict_reward_and_bypasses_core_logging(tmp_path
     assert row["reward_has_meta_info"] is True
 
 
+def test_mopd_rollout_log_handles_dict_reward_from_get_reward_value(tmp_path: Path):
+    args = _args(tmp_path)
+    captured: list[tuple[dict, str]] = []
+
+    sample = SimpleNamespace(
+        prompt=[{"role": "system", "content": "sys"}, {"role": "user", "content": "question"}],
+        response="answer",
+        label="label",
+        reward={"meta_info": {"input_token_logprobs": [[0.0, 1, None]]}, "completion_tokens": 123},
+        response_length=12,
+        effective_response_length=12,
+        status=SimpleNamespace(value="completed"),
+        metadata={"domain": "tool", "dataset_name": "toolbench", "record_id": "r1"},
+        get_reward_value=lambda _args: {"meta_info": {"input_token_logprobs": [[0.0, 1, None]]}, "completion_tokens": 123},
+    )
+
+    original_logging_utils = log_rollout.logging_utils
+    log_rollout.logging_utils = SimpleNamespace(
+        log=lambda _args, metrics, step_key: captured.append((metrics, step_key))
+    )
+    try:
+        handled = log_rollout.log_rollout_data(1, args, [sample], {}, 1.0)
+    finally:
+        log_rollout.logging_utils = original_logging_utils
+
+    assert handled is True
+    assert len(captured) == 1
+    metrics, step_key = captured[0]
+    assert step_key == "rollout/step"
+    assert metrics["rollout_by_domain/tool/reward_mean"] == 0.0
+    assert metrics["rollout_by_source/toolbench/reward_mean"] == 0.0
+
+
 def test_mopd_rollout_log_preserves_scalar_reward_in_trace(tmp_path: Path):
     args = _args(tmp_path)
     samples = [_sample(reward=0.75, domain="tool", dataset_name="toolbench")]
@@ -69,6 +103,39 @@ def test_mopd_rollout_log_preserves_scalar_reward_in_trace(tmp_path: Path):
     assert row["reward_type"] == "float"
     assert row["reward_scalar"] == 0.75
     assert row["domain"] == "tool"
+
+
+def test_mopd_rollout_log_prefers_explicit_scalar_reward_in_dict(tmp_path: Path):
+    args = _args(tmp_path)
+    captured: list[tuple[dict, str]] = []
+
+    sample = SimpleNamespace(
+        prompt=[{"role": "system", "content": "sys"}, {"role": "user", "content": "question"}],
+        response="answer",
+        label="label",
+        reward={"reward": 0.25, "meta_info": {"input_token_logprobs": [[0.0, 1, None]]}},
+        response_length=12,
+        effective_response_length=12,
+        status=SimpleNamespace(value="completed"),
+        metadata={"domain": "tool", "dataset_name": "toolbench", "record_id": "r1"},
+        get_reward_value=lambda _args: {"reward": 0.25, "meta_info": {"input_token_logprobs": [[0.0, 1, None]]}},
+    )
+
+    original_logging_utils = log_rollout.logging_utils
+    log_rollout.logging_utils = SimpleNamespace(
+        log=lambda _args, metrics, step_key: captured.append((metrics, step_key))
+    )
+    try:
+        handled = log_rollout.log_rollout_data(2, args, [sample], {}, 1.0)
+    finally:
+        log_rollout.logging_utils = original_logging_utils
+
+    assert handled is True
+    assert len(captured) == 1
+    metrics, step_key = captured[0]
+    assert step_key == "rollout/step"
+    assert metrics["rollout_by_domain/tool/reward_mean"] == 0.25
+    assert metrics["rollout_by_source/toolbench/reward_mean"] == 0.25
 
 
 def test_mopd_run_script_wires_custom_eval_wandb_logging():

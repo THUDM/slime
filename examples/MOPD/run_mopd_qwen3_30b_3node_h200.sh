@@ -115,6 +115,7 @@ TOOL_CALL_WANDB_PROJECT=${TOOL_CALL_WANDB_PROJECT:-slime-mopd}
 
 # ---- Misc ----
 SLIME_DIR=${SLIME_DIR:-${PROJECT_ROOT}/slime}
+SCRIPT_QUERIES_PY="${SLIME_DIR}/examples/common/script_queries.py"
 MEGATRON_PATH=${MEGATRON_PATH:-/root/Megatron-LM}
 
 RAY_CLUSTER_WAIT_MAX_ATTEMPTS=${RAY_CLUSTER_WAIT_MAX_ATTEMPTS:-240}
@@ -143,16 +144,7 @@ export MULTIDOMAIN_V1_TRACE_MAX_SAMPLES="${TRACE_MAX_SAMPLES}"
 
 mkdir -p "${DATA_CACHE_DIR}" "${LOG_DIR}" "${SAVE_DIR}" "${TRACE_DIR}"
 
-MOPD_DOMAIN_SIGNATURE="$(
-  PYTHONPATH="${SLIME_DIR}:${PYTHONPATH:-}" python3 - "${TRAIN_POOL_INCLUDE_DOMAINS}" <<'PY'
-import sys
-
-from examples.multidomain_shared import domain_signature
-
-domains = [item.strip() for item in sys.argv[1].split(",") if item.strip()]
-print(domain_signature(domains))
-PY
-)"
+MOPD_DOMAIN_SIGNATURE="$(python3 "${SCRIPT_QUERIES_PY}" domain-signature --domains "${TRAIN_POOL_INCLUDE_DOMAINS}")"
 TOOL_CALL_WANDB_GROUP=${TOOL_CALL_WANDB_GROUP:-mopd-qwen3-30b-a3b-3node-h200-${MOPD_DOMAIN_SIGNATURE}}
 
 BOOTSTRAP_NODE_ID="${WORKER_ID:-${HOSTNAME:-node-${NODE_RANK:-unknown}}}"
@@ -312,30 +304,12 @@ ensure_tool_teacher_hf_checkpoint() {
 
 load_eval_data_specs() {
   mapfile -t EVAL_DATA_SPECS < <(
-    python3 - "${EVAL_CONFIG_PATH}" <<'INNERPY'
-import sys
-import yaml
-
-with open(sys.argv[1], 'r', encoding='utf-8') as handle:
-    cfg = yaml.safe_load(handle)
-
-for dataset in (cfg.get('eval') or {}).get('datasets', []):
-    print(f"{dataset['name']}:{dataset['path']}")
-INNERPY
+    python3 "${SCRIPT_QUERIES_PY}" load-eval-config --path "${EVAL_CONFIG_PATH}"
   )
 
   if [[ "${TEACHER_STEP0_INCLUDE_BFCL}" == "1" ]] && [[ -f "${OFFICIAL_EVAL_MANIFEST_PATH}" ]]; then
     mapfile -t official_specs < <(
-      python3 - "${OFFICIAL_EVAL_MANIFEST_PATH}" <<'INNERPY'
-import json
-import sys
-
-with open(sys.argv[1], 'r', encoding='utf-8') as handle:
-    manifest = json.load(handle)
-
-for dataset in manifest.get('datasets', []):
-    print(f"{dataset['name']}:{dataset['path']}")
-INNERPY
+      python3 "${SCRIPT_QUERIES_PY}" load-json-manifest --path "${OFFICIAL_EVAL_MANIFEST_PATH}"
     )
     if [[ ${#official_specs[@]} -gt 0 ]]; then
       EVAL_DATA_SPECS+=("${official_specs[@]}")
@@ -402,11 +376,7 @@ run_teacher_step0_eval() {
     eval_args+=(--eval-data "${spec}")
   done
 
-  run_id="$(python3 - <<'INNERPY'
-import uuid
-print(uuid.uuid4().hex[:8])
-INNERPY
-)"
+  run_id="$(python3 "${SCRIPT_QUERIES_PY}" random-run-id)"
   wandb_group="$(normalize_wandb_group_name "${TOOL_CALL_WANDB_GROUP}")"
   run_name="${wandb_group}-${label}-step0"
 

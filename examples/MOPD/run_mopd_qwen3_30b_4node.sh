@@ -91,6 +91,7 @@ TOOL_CALL_WANDB_PROJECT=${TOOL_CALL_WANDB_PROJECT:-slime-mopd}
 
 # ---- Misc ----
 SLIME_DIR=${SLIME_DIR:-${PROJECT_ROOT}/slime}
+SCRIPT_QUERIES_PY="${SLIME_DIR}/examples/common/script_queries.py"
 MEGATRON_PATH=${MEGATRON_PATH:-/root/Megatron-LM}
 
 RAY_CLUSTER_WAIT_MAX_ATTEMPTS=${RAY_CLUSTER_WAIT_MAX_ATTEMPTS:-240}
@@ -119,16 +120,7 @@ export MULTIDOMAIN_V1_TRACE_MAX_SAMPLES="${TRACE_MAX_SAMPLES}"
 
 mkdir -p "${DATA_CACHE_DIR}" "${LOG_DIR}" "${SAVE_DIR}" "${TRACE_DIR}"
 
-MOPD_DOMAIN_SIGNATURE="$(
-  PYTHONPATH="${SLIME_DIR}:${PYTHONPATH:-}" python3 - "${TRAIN_POOL_INCLUDE_DOMAINS}" <<'PY'
-import sys
-
-from examples.multidomain_shared import domain_signature
-
-domains = [item.strip() for item in sys.argv[1].split(",") if item.strip()]
-print(domain_signature(domains))
-PY
-)"
+MOPD_DOMAIN_SIGNATURE="$(python3 "${SCRIPT_QUERIES_PY}" domain-signature --domains "${TRAIN_POOL_INCLUDE_DOMAINS}")"
 TOOL_CALL_WANDB_GROUP=${TOOL_CALL_WANDB_GROUP:-mopd-qwen3-30b-a3b-4node-${MOPD_DOMAIN_SIGNATURE}}
 
 BOOTSTRAP_NODE_ID="${WORKER_ID:-${HOSTNAME:-node-${NODE_RANK:-unknown}}}"
