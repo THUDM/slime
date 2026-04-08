@@ -67,8 +67,9 @@ generate_eval_specs_from_mopd_config() {
   local avalanche_root="${AVALANCHE_ROOT:-$(cd -- "${PROJECT_ROOT}/.." && pwd)}"
   local pool_root="${POOL_ROOT:-${avalanche_root}/data/pool}"
   local eval_config_path="${EVAL_CONFIG_PATH:-${EXPERIMENT_DIR}/data_cache/eval_config.backfill.yaml}"
-  local write_eval_config_py="${PROJECT_ROOT}/slime/examples/MOPD/write_eval_config.py"
+  local runtime_prep_py="${PROJECT_ROOT}/slime/examples/prepare_runtime_dataset.py"
   local eval_args=(
+    eval-config
     --pool-root "${pool_root}"
     --output "${eval_config_path}"
     --max-response-len "${MAX_TOKENS}"
@@ -105,7 +106,7 @@ generate_eval_specs_from_mopd_config() {
   done
 
   PYTHONPATH="${PROJECT_ROOT}/slime/examples:${PROJECT_ROOT}/slime:${PYTHONPATH:-}" \
-    python3 "${write_eval_config_py}" "${eval_args[@]}" >&2
+    python3 "${runtime_prep_py}" "${eval_args[@]}" >&2
 
   load_eval_specs_from_config "${eval_config_path}"
 }

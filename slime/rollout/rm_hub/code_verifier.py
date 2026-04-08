@@ -459,19 +459,16 @@ def _check_test_code_harness_worker(
     generation: str,
     metadata: dict[str, Any] | None,
     limit: int | None,
-    result_holder,
-    metadata_holder,
+    result_queue,
 ) -> None:
     with open(os.devnull, "w", encoding="utf-8") as devnull:
         sys.stdout = devnull
         sys.stderr = devnull
         try:
             results, details = run_test_code_harness(harness, generation, metadata=metadata, limit=limit)
-            result_holder.append(results)
-            metadata_holder.append(details)
+            result_queue.put((results, [details]))
         except Exception:
-            result_holder.append([-1])
-            metadata_holder.append({"traceback": traceback.format_exc(limit=10)})
+            result_queue.put(([-1], [{"traceback": traceback.format_exc(limit=10)}]))
 
 
 def check_test_code_harness_correctness(
@@ -482,20 +479,19 @@ def check_test_code_harness_correctness(
     metadata: dict[str, Any] | None = None,
     limit: int | None = None,
 ) -> tuple[list[bool | int], list[dict[str, Any]]]:
-    manager = multiprocessing.Manager()
-    result_holder = manager.list()
-    metadata_holder = manager.list()
+    result_queue: multiprocessing.Queue = multiprocessing.Queue(maxsize=1)
     process = multiprocessing.Process(
         target=_check_test_code_harness_worker,
-        args=(harness, generation, metadata, limit, result_holder, metadata_holder),
+        args=(harness, generation, metadata, limit, result_queue),
     )
     process.start()
     process.join(timeout + 1.0)
     if process.is_alive():
         process.kill()
-    if not result_holder:
+    if result_queue.empty():
         return ([-1], [{"error_message": "Global timeout"}])
-    return result_holder[0], list(metadata_holder)
+    results, details = result_queue.get()
+    return results, details
 
 
 def compute_score(

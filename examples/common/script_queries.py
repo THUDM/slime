@@ -16,11 +16,11 @@ SLIME_ROOT = Path(__file__).resolve().parents[2]
 if str(SLIME_ROOT) not in sys.path:
     sys.path.insert(0, str(SLIME_ROOT))
 
-from examples.common.dataset_selection import resolve_eval_datasets
-from examples.common.profile_utils import (
-    default_train_datasets_for_group,
+from examples.common.dataset_registry import default_train_datasets_for_group
+from examples.common.dataset_selection import (
     domain_signature,
     group_signature_for_train_datasets,
+    resolve_eval_datasets,
 )
 
 

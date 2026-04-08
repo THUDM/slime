@@ -16,7 +16,8 @@ set -euo pipefail
 # ── Paths ─────────────────────────────────────────────────────────────
 AVALANCHE_ROOT="/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche"
 SLIME_DIR="${AVALANCHE_ROOT}/jy_workspace/slime"
-SCRIPT_DIR="${SLIME_DIR}/examples/MOPD"
+EXAMPLES_DIR="${SLIME_DIR}/examples"
+MOPD_DIR="${EXAMPLES_DIR}/MOPD"
 
 STUDENT_EXP_DIR="${AVALANCHE_ROOT}/experiments/qwen3_30b_a3b_mdv1_3node_tool45_struct25_stem30_resume0219_0331-1803-fix-cachefix-iter219-cachedatafix-waitfix"
 STUDENT_HF_DIR="${STUDENT_HF_DIR:-${STUDENT_EXP_DIR}/hf_cache/iter_0000479_hf}"
@@ -103,7 +104,7 @@ done
 
 # ── Run eval_backfill.py ──────────────────────────────────────────────
 echo "Running student step0 eval → wandb run ${WANDB_RUN_ID}..."
-PYTHONPATH="${SCRIPT_DIR}:${SLIME_DIR}/examples:${SLIME_DIR}:${PYTHONPATH:-}" \
+PYTHONPATH="${MOPD_DIR}:${EXAMPLES_DIR}:${SLIME_DIR}:${PYTHONPATH:-}" \
     python3 "${SLIME_DIR}/examples/eval_backfill.py" \
         --sglang-url "http://127.0.0.1:${PORT}" \
         --model-path "${STUDENT_HF_DIR}" \

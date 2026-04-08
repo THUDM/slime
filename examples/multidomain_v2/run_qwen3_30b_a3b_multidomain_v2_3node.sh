@@ -144,48 +144,16 @@ prepare_training_source_list() {
 
   local train_pool_prep_args=("--pool-root" "${TRAIN_POOL_ROOT}")
   if [[ -n "${TRAIN_DATASETS}" ]]; then
-    local dataset_name
-    local train_pool_dataset_array=()
-    IFS=',' read -r -a train_pool_dataset_array <<< "${TRAIN_DATASETS}"
-    for dataset_name in "${train_pool_dataset_array[@]}"; do
-      dataset_name="${dataset_name//[[:space:]]/}"
-      if [[ -n "${dataset_name}" ]]; then
-        train_pool_prep_args+=("--dataset" "${dataset_name}")
-      fi
-    done
+    parse_csv_to_args "${TRAIN_DATASETS}" --dataset train_pool_prep_args
   fi
   if [[ -n "${TRAIN_DATASETS_EXTRA}" ]]; then
-    local dataset_extra
-    local train_pool_dataset_extra_array=()
-    IFS=',' read -r -a train_pool_dataset_extra_array <<< "${TRAIN_DATASETS_EXTRA}"
-    for dataset_extra in "${train_pool_dataset_extra_array[@]}"; do
-      dataset_extra="${dataset_extra//[[:space:]]/}"
-      if [[ -n "${dataset_extra}" ]]; then
-        train_pool_prep_args+=("--dataset-extra" "${dataset_extra}")
-      fi
-    done
+    parse_csv_to_args "${TRAIN_DATASETS_EXTRA}" --dataset-extra train_pool_prep_args
   fi
   if [[ -n "${TRAIN_PATHS}" ]]; then
-    local train_path
-    local train_pool_path_array=()
-    IFS=',' read -r -a train_pool_path_array <<< "${TRAIN_PATHS}"
-    for train_path in "${train_pool_path_array[@]}"; do
-      train_path="${train_path//[[:space:]]/}"
-      if [[ -n "${train_path}" ]]; then
-        train_pool_prep_args+=("--source" "${train_path}")
-      fi
-    done
+    parse_csv_to_args "${TRAIN_PATHS}" --source train_pool_prep_args
   fi
   if [[ -n "${TRAIN_PATHS_EXTRA}" ]]; then
-    local train_path_extra
-    local train_pool_path_extra_array=()
-    IFS=',' read -r -a train_pool_path_extra_array <<< "${TRAIN_PATHS_EXTRA}"
-    for train_path_extra in "${train_pool_path_extra_array[@]}"; do
-      train_path_extra="${train_path_extra//[[:space:]]/}"
-      if [[ -n "${train_path_extra}" ]]; then
-        train_pool_prep_args+=("--source-extra" "${train_path_extra}")
-      fi
-    done
+    parse_csv_to_args "${TRAIN_PATHS_EXTRA}" --source-extra train_pool_prep_args
   fi
   if [[ -n "${TRAIN_MANIFEST}" ]]; then
     train_pool_prep_args+=("--manifest" "${TRAIN_MANIFEST}")
@@ -272,36 +240,11 @@ prepare_eval_data() {
   fi
 }
 
-ensure_torch_dist_checkpoint() {
-  if [ -f "${TORCH_DIST_DIR}/latest_checkpointed_iteration.txt" ]; then
-    echo "Found torch_dist checkpoint at ${TORCH_DIST_DIR}"
-    return 0
-  fi
-  if [ -f "${TORCH_DIST_DIR}/common.pt" ] && [ -f "${TORCH_DIST_DIR}/metadata.json" ]; then
-    echo "Found torch_dist iteration checkpoint at ${TORCH_DIST_DIR}"
-    return 0
-  fi
-
-  cd "${SLIME_DIR}"
-  source "${SLIME_DIR}/scripts/models/qwen3-30B-A3B.sh"
-  PYTHONPATH="${MEGATRON_PATH}:${SLIME_DIR}" torchrun \
-    --nproc-per-node "${NUM_GPUS_PER_NODE}" \
-    "${SLIME_DIR}/tools/convert_hf_to_torch_dist.py" \
-    "${MODEL_ARGS[@]}" \
-    --hf-checkpoint "${MODEL_DIR}" \
-    --save "${TORCH_DIST_DIR}"
-}
-
 submit_ray_job() {
   cd "${SLIME_DIR}"
   source "${SLIME_DIR}/scripts/models/qwen3-30B-A3B.sh"
 
-  NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l || true)
-  if [ "${NVLINK_COUNT}" -gt 0 ]; then
-    HAS_NVLINK=1
-  else
-    HAS_NVLINK=0
-  fi
+  HAS_NVLINK="$(detect_nvlink)"
 
   LOAD_ARGS=()
   if [[ "${TOOLCALL_RESUME_TRAINING}" == "1" ]] && [[ -n "${TOOL_CALL_LOAD_DIR}" ]]; then
@@ -457,6 +400,7 @@ submit_ray_job() {
       --wandb-group "${WANDB_GROUP_NAME}"
       --wandb-key "${WANDB_API_KEY}"
       --disable-wandb-random-suffix
+      --wandb-dir "${WORK_ROOT}/wandb"
     )
   fi
 

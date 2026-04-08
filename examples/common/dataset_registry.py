@@ -160,6 +160,22 @@ PROFILE_DEFAULT_EVAL_DATASETS: dict[str, tuple[str, ...]] = {
 }
 
 
+def default_train_datasets_for_domain(domain: str) -> tuple[str, ...]:
+    try:
+        return DEFAULT_TRAIN_DATASETS_BY_DOMAIN[domain]
+    except KeyError as exc:
+        supported = ", ".join(sorted(DEFAULT_TRAIN_DATASETS_BY_DOMAIN))
+        raise ValueError(f"Unsupported train domain '{domain}'. Supported domains: {supported}") from exc
+
+
+def default_train_datasets_for_group(group: str) -> tuple[str, ...]:
+    try:
+        return DEFAULT_TRAIN_DATASETS_BY_GROUP[group]
+    except KeyError as exc:
+        supported = ", ".join(sorted(DEFAULT_TRAIN_DATASETS_BY_GROUP))
+        raise ValueError(f"Unsupported train group '{group}'. Supported groups: {supported}") from exc
+
+
 def default_train_datasets_for_profile(profile: str) -> tuple[str, ...]:
     try:
         return PROFILE_DEFAULT_TRAIN_DATASETS[profile]
@@ -176,10 +192,17 @@ def default_eval_datasets_for_profile(profile: str) -> tuple[str, ...]:
         raise ValueError(f"Unsupported profile '{profile}'. Supported profiles: {supported}") from exc
 
 
+def generic_eval_dataset_names() -> tuple[str, ...]:
+    return tuple(spec.name for spec in _EVAL_DATASETS if not spec.official)
+
+
+def official_eval_dataset_names() -> tuple[str, ...]:
+    return tuple(spec.name for spec in _EVAL_DATASETS if spec.official)
+
+
 def eval_dataset_spec(name: str) -> EvalDatasetSpec:
     try:
         return EVAL_DATASET_SPECS[name]
     except KeyError as exc:
         supported = ", ".join(sorted(EVAL_DATASET_SPECS))
         raise ValueError(f"Unsupported eval dataset '{name}'. Supported datasets: {supported}") from exc
-

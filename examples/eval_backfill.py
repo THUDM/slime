@@ -21,6 +21,13 @@ from typing import Any
 import requests
 import wandb
 
+from slime.rollout.rm_hub.bfcl import (
+    DEFAULT_BFCL_MODEL_NAME,
+    generate_bfcl_multi_turn_outputs,
+    run_bfcl_official_eval,
+    summary_to_metrics,
+)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -55,15 +62,6 @@ def load_eval_data(path: str) -> list[dict[str, Any]]:
 
 
 def _load_bfcl_runner():
-    if str(EXAMPLES_DIR) not in sys.path:
-        sys.path.insert(0, str(EXAMPLES_DIR))
-    from bfcl_official_runner import (
-        DEFAULT_BFCL_MODEL_NAME,
-        generate_bfcl_multi_turn_outputs,
-        run_bfcl_official_eval,
-        summary_to_metrics,
-    )
-
     return {
         "DEFAULT_BFCL_MODEL_NAME": DEFAULT_BFCL_MODEL_NAME,
         "generate_bfcl_multi_turn_outputs": generate_bfcl_multi_turn_outputs,
@@ -376,7 +374,7 @@ def main():
     tokenizer = get_tokenizer(args.model_path)
     reward_func = load_reward_func(args.reward_module)
     combined_metrics: dict[str, float] = {}
-    logged_datasets = 0
+    should_log_once = args.rollout_id == 0
 
     for spec in args.eval_data:
         eval_name, eval_path = spec.split(":", 1)
@@ -427,23 +425,23 @@ def main():
         if overlap:
             logger.warning("Eval metrics for %s overwrite existing keys: %s", eval_name, sorted(overlap))
         combined_metrics.update(metrics)
-        if log_to_wandb(
-            metrics=metrics,
-            rollout_id=args.rollout_id,
-            run_id=args.wandb_run_id,
-            project=args.wandb_project,
-            entity=args.wandb_entity,
-            host=args.wandb_host,
-            key=args.wandb_key,
-            group=args.wandb_group,
-            run_name=getattr(args, "wandb_run_name", ""),
-        ):
-            logged_datasets += 1
+        if not should_log_once:
+            log_to_wandb(
+                metrics=metrics,
+                rollout_id=args.rollout_id,
+                run_id=args.wandb_run_id,
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                host=args.wandb_host,
+                key=args.wandb_key,
+                group=args.wandb_group,
+                run_name=getattr(args, "wandb_run_name", ""),
+            )
 
     if args.dry_run:
         return
 
-    if logged_datasets < len(args.eval_data):
+    if should_log_once:
         log_to_wandb(
             metrics=combined_metrics,
             rollout_id=args.rollout_id,

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import re
 
-from math_verify import StringExtractionConfig, parse as math_parse, verify as math_verify_fn  # noqa: E402
-from slime.rollout.rm_hub.math_utils import extract_answer  # noqa: E402
+from math_verify import StringExtractionConfig, parse as math_parse, verify as math_verify_fn
+
+from .math_utils import extract_answer
 
 
 def _normalize_text_answer(text: str) -> str:
@@ -39,21 +40,15 @@ def _parse_math_text(raw: str):
     return []
 
 
-async def reward_func(args, sample, **kwargs):
-    if sample.status == sample.Status.TRUNCATED:
-        return 0.0
-
-    response = sample.response or ""
-    label = sample.label
+def compute_math_verify_reward(response: str, label: str) -> float:
     if not label:
         return 0.0
 
-    predicted_answer = extract_answer(response)
+    predicted_answer = extract_answer(response or "")
     if predicted_answer is None:
         return 0.0
 
     gold_answer = str(label).strip()
-
     parsed_pred = _parse_math_text(predicted_answer)
     parsed_gold = _parse_math_text(gold_answer)
 
@@ -63,5 +58,4 @@ async def reward_func(args, sample, **kwargs):
         except Exception:
             pass
 
-    # Fallback only for plain text answers that math-verify cannot parse, e.g. Yes/No.
     return 1.0 if _normalize_text_answer(predicted_answer) == _normalize_text_answer(gold_answer) else 0.0

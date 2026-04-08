@@ -3,6 +3,12 @@ set -euo pipefail
 
 export PYTHONUNBUFFERED=1
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../common/ray_bootstrap_utils.sh"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../common/training_runner_utils.sh"
+
 NUM_NODES=${NUM_NODES:-3}
 NUM_GPUS_PER_NODE=${NUM_GPUS_PER_NODE:-8}
 ACTOR_NUM_NODES=${ACTOR_NUM_NODES:-2}
@@ -16,7 +22,7 @@ WORK_ROOT=${WORK_ROOT:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/pu
 
 SLIME_DIR=${SLIME_DIR:-/root/slime}
 MEGATRON_PATH=${MEGATRON_PATH:-/root/Megatron-LM}
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+SCRIPT_QUERIES_PY="${SLIME_DIR}/examples/common/script_queries.py"
 
 DATA_CACHE_DIR="${WORK_ROOT}/data_cache"
 LOG_DIR="${WORK_ROOT}/logs"
@@ -52,6 +58,7 @@ IFRL_WANDB_PROJECT=${IFRL_WANDB_PROJECT:-slime-ifrl}
 IFRL_WANDB_GROUP=${IFRL_WANDB_GROUP:-qwen3-30b-a3b-ifrl-3node}
 RAY_CLUSTER_WAIT_MAX_ATTEMPTS=${RAY_CLUSTER_WAIT_MAX_ATTEMPTS:-240}
 RAY_CLUSTER_WAIT_SLEEP_SECONDS=${RAY_CLUSTER_WAIT_SLEEP_SECONDS:-15}
+RAY_CLUSTER_STATUS_TIMEOUT_SECONDS=${RAY_CLUSTER_STATUS_TIMEOUT_SECONDS:-30}
 RAY_WORKER_JOIN_MAX_ATTEMPTS=${RAY_WORKER_JOIN_MAX_ATTEMPTS:-180}
 RAY_WORKER_JOIN_RETRY_SLEEP_SECONDS=${RAY_WORKER_JOIN_RETRY_SLEEP_SECONDS:-15}
 RAY_GCS_RPC_SERVER_RECONNECT_TIMEOUT_SECONDS=${RAY_GCS_RPC_SERVER_RECONNECT_TIMEOUT_SECONDS:-1800}
@@ -59,97 +66,10 @@ export RAY_gcs_rpc_server_reconnect_timeout_s="${RAY_gcs_rpc_server_reconnect_ti
 
 mkdir -p "${DATA_CACHE_DIR}" "${LOG_DIR}" "${SAVE_DIR}"
 
-cleanup_local_processes() {
-  pkill -9 sglang 2>/dev/null || true
-  ray stop --force 2>/dev/null || true
-  pkill -9 ray 2>/dev/null || true
-}
-
 get_local_ip() {
   hostname -I | awk '{print $1}'
 }
-
-wait_for_full_ray_cluster() {
-  local expected_gpus=$(( NUM_NODES * NUM_GPUS_PER_NODE ))
-  local expected_nodes=${NUM_NODES}
-  local attempt
-
-  for attempt in $(seq 1 "${RAY_CLUSTER_WAIT_MAX_ATTEMPTS}"); do
-    if python3 - <<PY
-import json
-import sys
-import urllib.request
-
-expected_gpus = ${expected_gpus}
-expected_nodes = ${expected_nodes}
-
-try:
-    with urllib.request.urlopen("http://127.0.0.1:8265/api/cluster_status", timeout=5) as response:
-        payload = json.load(response)
-except Exception:
-    sys.exit(1)
-
-report = payload.get("data", {}).get("clusterStatus", {}).get("autoscalerReport", {})
-active_nodes = report.get("activeNodes") or {}
-usage = payload.get("data", {}).get("clusterStatus", {}).get("loadMetricsReport", {}).get("usage", {})
-gpu_total = (usage.get("GPU") or [0.0, 0.0])[1]
-
-if len(active_nodes) >= expected_nodes and gpu_total >= expected_gpus:
-    sys.exit(0)
-
-sys.exit(1)
-PY
-    then
-      echo "Ray cluster is ready with ${expected_nodes} nodes and ${expected_gpus} GPUs."
-      return 0
-    fi
-
-    echo "Waiting for Ray workers to join (${attempt}/${RAY_CLUSTER_WAIT_MAX_ATTEMPTS})..."
-    sleep "${RAY_CLUSTER_WAIT_SLEEP_SECONDS}"
-  done
-
-  echo "Ray workers did not join the cluster in time." >&2
-  ray status --address="${MASTER_ADDR}:6379" || true
-  return 1
-}
-
-start_ray_worker_with_retry() {
-  local attempt
-  local rc
-  local node_name="${WORKER_ID:-${HOSTNAME:-worker-${NODE_RANK}}}"
-
-  for attempt in $(seq 1 "${RAY_WORKER_JOIN_MAX_ATTEMPTS}"); do
-    set +e
-    ray start \
-      --address="${MASTER_ADDR}:${MASTER_PORT}" \
-      --num-gpus "${NUM_GPUS_PER_NODE}" \
-      --node-ip-address "${NODE_IP}" \
-      --node-name "${node_name}" \
-      --dashboard-port="${DASHBOARD_PORT}" \
-      --disable-usage-stats
-    rc=$?
-    set -e
-
-    if [ "${rc}" -eq 0 ]; then
-      echo "Ray worker joined on attempt ${attempt}."
-      return 0
-    fi
-
-    echo "Ray worker join failed on attempt ${attempt}, retrying..."
-    ray stop --force 2>/dev/null || true
-    sleep "${RAY_WORKER_JOIN_RETRY_SLEEP_SECONDS}"
-  done
-
-  echo "Ray worker failed to join cluster after retries." >&2
-  return 1
-}
-
-NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l || true)
-if [ "${NVLINK_COUNT}" -gt 0 ]; then
-  HAS_NVLINK=1
-else
-  HAS_NVLINK=0
-fi
+HAS_NVLINK="$(detect_nvlink)"
 
 ROLLOUT_ARGS=(
   --prompt-data "${NORMALIZED_DATA}"
@@ -232,6 +152,7 @@ if [[ -n "${WANDB_API_KEY:-}" ]]; then
     --wandb-group "${IFRL_WANDB_GROUP}"
     --wandb-key "${WANDB_API_KEY}"
     --disable-wandb-random-suffix
+    --wandb-dir "${WORK_ROOT}/wandb"
   )
 fi
 
@@ -239,24 +160,6 @@ prepare_data() {
   python3 "${SCRIPT_DIR}/prepare_ifrl_data.py" \
     --source "${RAW_DATA}" \
     --dest "${NORMALIZED_DATA}"
-}
-
-ensure_torch_dist_checkpoint() {
-  if [ -f "${TORCH_DIST_DIR}/latest_checkpointed_iteration.txt" ]; then
-    echo "Found torch_dist checkpoint at ${TORCH_DIST_DIR}"
-    return 0
-  fi
-
-  echo "Converting ${MODEL_DIR} -> ${TORCH_DIST_DIR}"
-  cd "${SLIME_DIR}"
-  # shellcheck disable=SC1091
-  source "${SLIME_DIR}/scripts/models/qwen3-30B-A3B.sh"
-  PYTHONPATH="${MEGATRON_PATH}:${SLIME_DIR}" torchrun \
-    --nproc-per-node "${NUM_GPUS_PER_NODE}" \
-    "${SLIME_DIR}/tools/convert_hf_to_torch_dist.py" \
-    "${MODEL_ARGS[@]}" \
-    --hf-checkpoint "${MODEL_DIR}" \
-    --save "${TORCH_DIST_DIR}"
 }
 
 submit_ray_job() {
@@ -279,7 +182,7 @@ submit_ray_job() {
 
   RUNTIME_ENV_JSON="{
     \"env_vars\": {
-      \"PYTHONPATH\": \"${SCRIPT_DIR}:${SCRIPT_DIR}/offline_ifbench:${MEGATRON_PATH}:${SLIME_DIR}\",
+      \"PYTHONPATH\": \"${SCRIPT_DIR}:${MEGATRON_PATH}:${SLIME_DIR}\",
       \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
       \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
       \"MASTER_ADDR\": \"${MASTER_ADDR}\",

@@ -67,16 +67,12 @@ def _ensure_ifbench_dependencies(repo_path: Path) -> None:
 
 
 def _load_evaluation_lib():
-    repo_path = _ensure_ifbench_repo()
     try:
         return importlib.import_module("evaluation_lib")
     except ImportError:
+        repo_path = _ensure_ifbench_repo()
         _ensure_ifbench_dependencies(repo_path)
         return importlib.import_module("evaluation_lib")
-
-
-evaluation_lib = _load_evaluation_lib()
-InputExample = evaluation_lib.InputExample
 
 
 JsonDict = dict[str, Any]
@@ -128,7 +124,7 @@ def _coerce_kwargs_list(
     return sanitized
 
 
-def _build_input_example(metadata: JsonDict) -> InputExample | None:
+def _build_input_example(metadata: JsonDict) -> Any | None:
     instruction_ids = _normalize_instruction_ids(metadata.get("instruction_id_list") or [])
     if not instruction_ids:
         logger.debug("Missing instruction identifiers in metadata: %s", metadata)
@@ -143,12 +139,37 @@ def _build_input_example(metadata: JsonDict) -> InputExample | None:
     raw_kwargs = metadata.get("kwargs")
     kwargs_list = _coerce_kwargs_list(raw_kwargs, len(instruction_ids))
 
-    return InputExample(
+    evaluation_lib = _load_evaluation_lib()
+    return evaluation_lib.InputExample(
         key=int(metadata.get("record_id") or 0),
         instruction_id_list=instruction_ids,
         prompt=prompt_text,
         kwargs=kwargs_list,
     )
+
+
+def compute_ifbench_rule_scores(
+    metadata: JsonDict,
+    response: str,
+    *,
+    strict: bool,
+) -> list[float] | None:
+    if response is None:
+        return None
+    inp = _build_input_example(metadata)
+    if inp is None:
+        return []
+    evaluation_lib = _load_evaluation_lib()
+    prompt_to_response = {inp.prompt: str(response or "")}
+    verifier = evaluation_lib.test_instruction_following_strict if strict else evaluation_lib.test_instruction_following_loose
+    try:
+        result = verifier(inp, prompt_to_response)
+    except Exception:
+        return None
+    follow_list = getattr(result, "follow_instruction_list", None)
+    if not isinstance(follow_list, list):
+        return None
+    return [1.0 if bool(item) else 0.0 for item in follow_list]
 
 
 def compute_ifbench_reward(response: str, label: Any, metadata: JsonDict | None = None) -> float:
@@ -161,10 +182,7 @@ def compute_ifbench_reward(response: str, label: Any, metadata: JsonDict | None 
     if response is None:
         return 0.0
 
-    inp = _build_input_example(metadata)
-    if inp is None:
+    scores = compute_ifbench_rule_scores(metadata, str(response or ""), strict=True)
+    if not scores:
         return 0.0
-
-    prompt_to_response = {inp.prompt: str(response or "")}
-    output = evaluation_lib.test_instruction_following_strict(inp, prompt_to_response)
-    return 1.0 if output.follow_all_instructions else 0.0
+    return 1.0 if all(score == 1.0 for score in scores) else 0.0

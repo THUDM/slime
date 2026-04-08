@@ -299,6 +299,25 @@ def resolve_eval_datasets(
     return resolved
 
 
+def domain_signature(domains: Sequence[str]) -> str:
+    ordered = tuple(dict.fromkeys(domains))
+    if not ordered:
+        return "unknown"
+    if len(ordered) == 1:
+        return ordered[0]
+    return "mixed-" + "+".join(ordered)
+
+
+def group_signature(groups: Sequence[str]) -> str:
+    ordered = tuple(dict.fromkeys(groups))
+    if not ordered:
+        return "unknown"
+    formatted = tuple(group.replace("_", "-") for group in ordered)
+    if len(formatted) == 1:
+        return formatted[0]
+    return "mixed-" + "+".join(formatted)
+
+
 def train_domains_for_datasets(dataset_names: Sequence[str]) -> tuple[str, ...]:
     domains: list[str] = []
     for dataset_name in dataset_names:
@@ -323,3 +342,11 @@ def train_groups_for_datasets(dataset_names: Sequence[str]) -> tuple[str, ...]:
         if group not in groups:
             groups.append(group)
     return tuple(groups)
+
+
+def domain_signature_for_train_datasets(dataset_names: Sequence[str]) -> str:
+    return domain_signature(train_domains_for_datasets(dataset_names))
+
+
+def group_signature_for_train_datasets(dataset_names: Sequence[str]) -> str:
+    return group_signature(train_groups_for_datasets(dataset_names))

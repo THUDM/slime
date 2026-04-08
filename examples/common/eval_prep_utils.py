@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 from typing import Callable
@@ -28,36 +27,6 @@ from build_code_runtime_data import (  # type: ignore  # noqa: E402
     build_prompt as build_code_prompt,
     ensure_code_metadata,
 )
-
-
-def preprocess_pool_eval_jsonl(src: Path, dst: Path, row_filter=None) -> int:
-    return transform_jsonl(
-        src,
-        dst,
-        row_builder=materialize_runtime_pool_row,
-        row_filter=row_filter,
-        skip_invalid_json=True,
-    )
-
-
-def rewrite_eval_jsonl(src: Path, dst: Path, row_builder: Callable[[dict], dict | None], max_samples: int | None = None) -> int:
-    written = 0
-
-    def _bounded_row_builder(row: dict) -> dict | None:
-        nonlocal written
-        if max_samples is not None and written >= max_samples:
-            return None
-        payload = row_builder(row)
-        if payload is not None:
-            written += 1
-        return payload
-
-    return transform_jsonl(
-        src,
-        dst,
-        row_builder=_bounded_row_builder,
-        skip_invalid_json=True,
-    )
 
 
 def build_math_eval_row(row: dict) -> dict | None:
@@ -123,24 +92,25 @@ def materialize_eval_dataset(
     row_filter=None,
 ) -> int:
     dst.parent.mkdir(parents=True, exist_ok=True)
-    if runtime_mode == "pool":
-        written = 0
-        with src.open("r", encoding="utf-8") as in_handle, dst.open("w", encoding="utf-8") as out_handle:
-            for line in in_handle:
-                if max_samples is not None and written >= max_samples:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                payload = json.loads(line)
-                if not isinstance(payload, dict):
-                    continue
-                payload = materialize_runtime_pool_row(payload)
-                if payload is None:
-                    continue
-                if row_filter is not None and not row_filter(payload):
-                    continue
-                out_handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
-                written += 1
-        return written
-    return rewrite_eval_jsonl(src, dst, runtime_row_builder_for_mode(runtime_mode), max_samples=max_samples)
+    row_builder = runtime_row_builder_for_mode(runtime_mode)
+    written = 0
+
+    def _bounded_row_builder(row: dict) -> dict | None:
+        nonlocal written
+        if max_samples is not None and written >= max_samples:
+            return None
+        payload = row_builder(row)
+        if payload is None:
+            return None
+        if row_filter is not None and not row_filter(payload):
+            return None
+        written += 1
+        return payload
+
+    transform_jsonl(
+        src,
+        dst,
+        row_builder=_bounded_row_builder,
+        skip_invalid_json=True,
+    )
+    return written
