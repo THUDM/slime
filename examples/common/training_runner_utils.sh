@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+COMMON_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+SCRIPT_QUERIES_PY="${SCRIPT_QUERIES_PY:-${COMMON_DIR}/script_queries.py}"
+
 cleanup_local_processes() {
   pkill -9 sglang 2>/dev/null || true
   ray stop --force 2>/dev/null || true
@@ -13,13 +16,7 @@ normalize_wandb_group_name() {
     printf '%s\n' "${candidate}"
     return 0
   fi
-  suffix=$(python3 - "$candidate" <<'PY'
-import hashlib
-import sys
-
-print(hashlib.sha1(sys.argv[1].encode("utf-8")).hexdigest()[:8])
-PY
-)
+  suffix=$(python3 "${SCRIPT_QUERIES_PY}" short-sha1 --text "${candidate}")
   printf '%.119s-%s\n' "$candidate" "$suffix"
 }
 
@@ -66,30 +63,11 @@ wait_for_full_ray_cluster() {
   local attempt
 
   for attempt in $(seq 1 "${RAY_CLUSTER_WAIT_MAX_ATTEMPTS}"); do
-    if python3 - <<PY
-import json
-import sys
-import urllib.request
-
-expected_gpus = ${expected_gpus}
-expected_nodes = ${expected_nodes}
-
-try:
-    with urllib.request.urlopen("http://127.0.0.1:${DASHBOARD_PORT}/api/cluster_status", timeout=${RAY_CLUSTER_STATUS_TIMEOUT_SECONDS}) as response:
-        payload = json.load(response)
-except Exception:
-    sys.exit(1)
-
-report = payload.get("data", {}).get("clusterStatus", {}).get("autoscalerReport", {})
-active_nodes = report.get("activeNodes") or {}
-usage = payload.get("data", {}).get("clusterStatus", {}).get("loadMetricsReport", {}).get("usage", {})
-gpu_total = (usage.get("GPU") or [0.0, 0.0])[1]
-
-if len(active_nodes) >= expected_nodes and gpu_total >= expected_gpus:
-    sys.exit(0)
-
-sys.exit(1)
-PY
+    if python3 "${SCRIPT_QUERIES_PY}" ray-cluster-ready \
+      --dashboard-port "${DASHBOARD_PORT}" \
+      --timeout-seconds "${RAY_CLUSTER_STATUS_TIMEOUT_SECONDS}" \
+      --expected-gpus "${expected_gpus}" \
+      --expected-nodes "${expected_nodes}"
     then
       echo "Ray cluster is ready with ${expected_nodes} nodes and ${expected_gpus} GPUs."
       return 0
@@ -111,66 +89,11 @@ filter_jsonl_by_prompt_budget() {
     return 0
   fi
 
-  python3 - "${input_path}" "${label}" "${MODEL_DIR}" "${TOOLCALL_MAX_PROMPT_TOKENS}" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-from transformers import AutoTokenizer
-
-path = Path(sys.argv[1])
-label = sys.argv[2]
-model_dir = sys.argv[3]
-max_prompt_tokens = int(sys.argv[4])
-
-tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
-tmp_path = path.with_suffix(path.suffix + ".tmp")
-kept = 0
-skipped = 0
-worst_tokens = -1
-worst_record = ""
-
-with path.open("r", encoding="utf-8") as fin, tmp_path.open("w", encoding="utf-8") as fout:
-    for line in fin:
-        if not line.strip():
-            continue
-        sample = json.loads(line)
-        prompt_messages = sample.get("prompt")
-        tools = sample.get("tools")
-        if isinstance(prompt_messages, list):
-            prompt_text = tokenizer.apply_chat_template(
-                prompt_messages,
-                tools=tools if tools else None,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-        elif isinstance(prompt_messages, str):
-            prompt_text = prompt_messages
-        else:
-            prompt_text = json.dumps(prompt_messages, ensure_ascii=False)
-        prompt_tokens = len(tokenizer.encode(prompt_text, add_special_tokens=False))
-        if prompt_tokens <= max_prompt_tokens:
-            fout.write(json.dumps(sample, ensure_ascii=False) + "\n")
-            kept += 1
-            continue
-        skipped += 1
-        if prompt_tokens > worst_tokens:
-            metadata = sample.get("metadata") or {}
-            worst_tokens = prompt_tokens
-            worst_record = str(metadata.get("dataset_name") or metadata.get("record_id") or "")
-
-if kept == 0:
-    tmp_path.unlink(missing_ok=True)
-    raise SystemExit(
-        f"Filtered every sample from {label} for exceeding {max_prompt_tokens} prompt tokens"
-    )
-
-tmp_path.replace(path)
-print(
-    f"Filtered {skipped} samples exceeding {max_prompt_tokens} prompt tokens for {label}: "
-    f"kept={kept} worst_tokens={worst_tokens} worst_record={worst_record}"
-)
-PY
+  python3 "${SCRIPT_QUERIES_PY}" filter-jsonl-by-prompt-budget \
+    --input "${input_path}" \
+    --label "${label}" \
+    --model-dir "${MODEL_DIR}" \
+    --max-prompt-tokens "${TOOLCALL_MAX_PROMPT_TOKENS}"
 }
 
 start_ray_worker_with_retry() {
@@ -238,26 +161,7 @@ start_ray_head_and_persist_addr() {
     return "${rc}"
   fi
 
-  detected_addr="$(
-    RAY_START_OUTPUT="${output}" python3 - <<'PY'
-import os
-import re
-
-text = os.environ["RAY_START_OUTPUT"]
-patterns = [
-    r"--address='([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):[0-9]+'",
-    r"ray\.init\(_node_ip_address='([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)'\)",
-    r"http://([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):8265",
-    r"Local node IP.*?([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)",
-]
-for pattern in patterns:
-    match = re.search(pattern, text)
-    if match:
-        print(match.group(1))
-        raise SystemExit(0)
-raise SystemExit(1)
-PY
-  )" || true
+  detected_addr="$(python3 "${SCRIPT_QUERIES_PY}" extract-ray-head-addr --text "${output}")" || true
 
   if [[ -z "${detected_addr}" ]]; then
     echo "Failed to determine Ray head IP from ray start output." >&2

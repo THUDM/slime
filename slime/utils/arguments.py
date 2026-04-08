@@ -545,8 +545,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "e.g. '/data/train.jsonl@[0:1000]'.\n"
                     "If --apply-chat-template is set, the --input-key value should be a list of\n"
                     "message dicts (OpenAI format), e.g. [{'role': 'user', 'content': '...'}].\n"
-                    "For multidomain pool data, pre-materialize with\n"
-                    "examples/MOPD/materialize_train_pool.py before passing here."
                 ),
             )
             parser.add_argument("--apply-chat-template", action="store_true", default=False)

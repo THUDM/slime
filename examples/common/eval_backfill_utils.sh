@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 
+COMMON_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+SCRIPT_QUERIES_PY="${SCRIPT_QUERIES_PY:-${COMMON_DIR}/script_queries.py}"
+
 # shellcheck source=/dev/null
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)/checkpoint_utils.sh"
+source "${COMMON_DIR}/checkpoint_utils.sh"
 
 discover_eval_data_dir() {
   local experiment_dir="$1"
@@ -55,6 +58,58 @@ discover_eval_datasets() {
   done
 }
 
+load_eval_specs_from_config() {
+  local eval_config_path="$1"
+  python3 "${SCRIPT_QUERIES_PY}" load-eval-config --path "${eval_config_path}"
+}
+
+generate_eval_specs_from_mopd_config() {
+  local avalanche_root="${AVALANCHE_ROOT:-$(cd -- "${PROJECT_ROOT}/.." && pwd)}"
+  local pool_root="${POOL_ROOT:-${avalanche_root}/data/pool}"
+  local eval_config_path="${EVAL_CONFIG_PATH:-${EXPERIMENT_DIR}/data_cache/eval_config.backfill.yaml}"
+  local write_eval_config_py="${PROJECT_ROOT}/slime/examples/MOPD/write_eval_config.py"
+  local eval_args=(
+    --pool-root "${pool_root}"
+    --output "${eval_config_path}"
+    --max-response-len "${MAX_TOKENS}"
+  )
+  local item=""
+
+  IFS=',' read -r -a _eval_datasets <<< "${EVAL_DATASETS:-}"
+  for item in "${_eval_datasets[@]}"; do
+    item="${item//[[:space:]]/}"
+    if [[ -n "${item}" ]]; then
+      eval_args+=(--dataset "${item}")
+    fi
+  done
+  IFS=',' read -r -a _eval_dataset_extras <<< "${EVAL_DATASETS_EXTRA:-}"
+  for item in "${_eval_dataset_extras[@]}"; do
+    item="${item//[[:space:]]/}"
+    if [[ -n "${item}" ]]; then
+      eval_args+=(--dataset-extra "${item}")
+    fi
+  done
+  IFS=',' read -r -a _eval_paths <<< "${EVAL_PATHS:-}"
+  for item in "${_eval_paths[@]}"; do
+    item="${item//[[:space:]]/}"
+    if [[ -n "${item}" ]]; then
+      eval_args+=(--source "${item}")
+    fi
+  done
+  IFS=',' read -r -a _eval_path_extras <<< "${EVAL_PATHS_EXTRA:-}"
+  for item in "${_eval_path_extras[@]}"; do
+    item="${item//[[:space:]]/}"
+    if [[ -n "${item}" ]]; then
+      eval_args+=(--source-extra "${item}")
+    fi
+  done
+
+  PYTHONPATH="${PROJECT_ROOT}/slime/examples:${PROJECT_ROOT}/slime:${PYTHONPATH:-}" \
+    python3 "${write_eval_config_py}" "${eval_args[@]}" >&2
+
+  load_eval_specs_from_config "${eval_config_path}"
+}
+
 cleanup_sglang_eval_server() {
   pkill -f "sglang.launch_server" 2>/dev/null || true
   sleep "${SGLANG_CLEANUP_SLEEP_SECONDS:-3}"
@@ -64,6 +119,7 @@ cleanup_sglang_eval_server() {
 start_sglang_eval_server() {
   local hf_dir="$1"
   cleanup_sglang_eval_server
+  local sglang_log_path="${SGLANG_LOG_PATH:-${EXPERIMENT_DIR}/logs/sglang_eval.log}"
 
   echo "Starting sglang server for ${hf_dir} ..."
   python3 -m sglang.launch_server \
@@ -74,7 +130,7 @@ start_sglang_eval_server() {
     --trust-remote-code \
     --disable-radix-cache \
     --mem-fraction-static "${SGLANG_MEM_FRACTION_STATIC:-0.85}" \
-    &>"${EXPERIMENT_DIR}/logs/sglang_eval.log" &
+    &>"${sglang_log_path}" &
 
   local deadline=$((SECONDS + ${SGLANG_START_TIMEOUT_SECONDS:-600}))
   while (( SECONDS < deadline )); do
@@ -86,7 +142,7 @@ start_sglang_eval_server() {
   done
 
   echo "ERROR: sglang did not start in ${SGLANG_START_TIMEOUT_SECONDS:-600}s" >&2
-  tail -50 "${EXPERIMENT_DIR}/logs/sglang_eval.log" || true
+  tail -50 "${sglang_log_path}" || true
   return 1
 }
 
@@ -124,6 +180,22 @@ run_eval_backfill_for_checkpoint() {
     --batch-size "${BATCH_SIZE}"
 }
 
+should_run_iteration() {
+  local iter_num="$1"
+  [[ -z "${ONLY_ITERATIONS:-}" ]] && return 0
+
+  local item=""
+  IFS=',' read -r -a selected <<< "${ONLY_ITERATIONS}"
+  for item in "${selected[@]}"; do
+    item="${item//[[:space:]]/}"
+    [[ -n "${item}" ]] || continue
+    if [[ "$((10#${item}))" -eq "${iter_num}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 run_eval_backfill_main() {
   export PYTHONUNBUFFERED=1
 
@@ -141,18 +213,23 @@ run_eval_backfill_main() {
   CKPT_DIR="${CKPT_DIR:-${EXPERIMENT_DIR}/checkpoints}"
   HF_CACHE="${HF_CACHE:-${EXPERIMENT_DIR}/hf_cache}"
 
-  local data_cache
-  data_cache="$(discover_eval_data_dir "${EXPERIMENT_DIR}" "${EVAL_DATASET_DISCOVERY_MODE:-canonical}")" || {
-    echo "ERROR: No eval data found in data_cache or runtime_data" >&2
-    return 1
-  }
-  echo "Using eval data from: ${data_cache}"
+  local data_cache=""
+  if [[ -n "${EVAL_DATASETS:-}" || -n "${EVAL_DATASETS_EXTRA:-}" || -n "${EVAL_PATHS:-}" || -n "${EVAL_PATHS_EXTRA:-}" ]]; then
+    echo "Using MOPD-style eval dataset selection: ${EVAL_DATASETS:-<custom>}"
+    EVAL_DATASETS_TEXT="$(generate_eval_specs_from_mopd_config)"
+  else
+    data_cache="$(discover_eval_data_dir "${EXPERIMENT_DIR}" "${EVAL_DATASET_DISCOVERY_MODE:-canonical}")" || {
+      echo "ERROR: No eval data found in data_cache or runtime_data" >&2
+      return 1
+    }
+    echo "Using eval data from: ${data_cache}"
 
-  EVAL_DATASETS_TEXT="$(
-    discover_eval_datasets "${data_cache}" "${EVAL_DATASET_DISCOVERY_MODE:-canonical}"
-  )"
+    EVAL_DATASETS_TEXT="$(
+      discover_eval_datasets "${data_cache}" "${EVAL_DATASET_DISCOVERY_MODE:-canonical}"
+    )"
+  fi
   if [[ -z "${EVAL_DATASETS_TEXT}" ]]; then
-    echo "ERROR: No eval datasets found in ${data_cache}" >&2
+    echo "ERROR: No eval datasets resolved" >&2
     return 1
   fi
 
@@ -182,6 +259,10 @@ run_eval_backfill_main() {
 
   local prev_hf_dir=""
   for iter_num in "${iterations[@]}"; do
+    if ! should_run_iteration "${iter_num}"; then
+      continue
+    fi
+
     local iter_name
     iter_name="$(printf 'iter_%07d' "${iter_num}")"
     local hf_dir="${HF_CACHE}/${iter_name}_hf"
@@ -194,14 +275,14 @@ run_eval_backfill_main() {
     run_eval_backfill_for_checkpoint "${hf_dir}" "${iter_num}"
     cleanup_sglang_eval_server
 
-    if [[ -n "${prev_hf_dir}" ]] && [[ -d "${prev_hf_dir}" ]]; then
+    if [[ "${KEEP_HF_CACHE:-0}" != "1" ]] && [[ -n "${prev_hf_dir}" ]] && [[ -d "${prev_hf_dir}" ]]; then
       echo "  Cleaning up previous HF cache: ${prev_hf_dir}"
       rm -rf "${prev_hf_dir}"
     fi
     prev_hf_dir="${hf_dir}"
   done
 
-  if [[ -n "${prev_hf_dir}" ]] && [[ -d "${prev_hf_dir}" ]]; then
+  if [[ "${KEEP_HF_CACHE:-0}" != "1" ]] && [[ -n "${prev_hf_dir}" ]] && [[ -d "${prev_hf_dir}" ]]; then
     rm -rf "${prev_hf_dir}"
   fi
 
