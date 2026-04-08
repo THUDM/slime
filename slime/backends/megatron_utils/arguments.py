@@ -87,8 +87,9 @@ def _hf_validate_args(args, hf_config):
 
 
 def _set_default_megatron_args(args):
-    # Muon/Roo do not support distributed optimizer; for all other optimizers use ZeRO.
-    if 'muon' in getattr(args, 'optimizer', 'adam') or getattr(args, 'optimizer', 'adam') == 'roo':
+    # Muon/Roo/SGD do not support distributed optimizer; for all other optimizers use ZeRO.
+    opt = getattr(args, 'optimizer', 'adam')
+    if 'muon' in opt or opt in ('roo', 'sgd'):
         args.use_distributed_optimizer = False
     else:
         args.use_distributed_optimizer = True
