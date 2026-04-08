@@ -156,7 +156,7 @@ class ServerGroup:
         else:
             # Compute base_port from the maximum cursor across all nodes that
             # this group's engines may land on (conservative: just use global max).
-            base_port = max(port_cursors.values()) if port_cursors else 15000
+            base_port = max(port_cursors.values()) if port_cursors else 15000 + random.randint(0, 20000)
             addr_and_ports, port_cursors = _allocate_rollout_engine_addr_and_ports_normal(
                 args=self.args,
                 rollout_engines=rollout_engines,
@@ -864,7 +864,9 @@ def _allocate_rollout_engine_addr_and_ports_normal(
                         consecutive=consecutive,
                     )
                 )
-                start_port = port + consecutive
+                # Advance cursor past the allocated range with a safety gap
+                # to reduce TOCTOU collisions with other processes.
+                start_port = port + consecutive + 5
                 node_port_cursor[node_idx] = start_port
                 return port
 
