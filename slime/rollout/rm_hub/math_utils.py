@@ -484,10 +484,16 @@ def extract_answer(passage: str) -> str:
 def grade_answer_verl(solution_str, ground_truth):
     if not ground_truth:
         return False
+    if solution_str is None:
+        return False
     ground_truth = str(ground_truth)
     if "\\boxed" in ground_truth:
         ground_truth = extract_answer(ground_truth)
+        if ground_truth is None:
+            return False
     given_answer = extract_answer(solution_str)
     if given_answer is None:
-        return False
+        given_answer = str(solution_str).strip()
+        if not given_answer:
+            return False
     return grade_answer_mathd(given_answer, ground_truth) or grade_answer_sympy(given_answer, ground_truth)
