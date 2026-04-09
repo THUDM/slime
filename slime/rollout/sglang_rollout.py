@@ -5,6 +5,7 @@ import logging
 import uuid
 from argparse import Namespace
 from collections.abc import Callable
+from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
@@ -34,6 +35,30 @@ from .rm_hub import async_rm, batched_async_rm
 __all__ = ["generate_rollout", "get_model_url"]
 
 logger = logging.getLogger(__name__)
+
+_PROCESSOR_PROMPT_KEYS = {"input_ids", "attention_mask"}
+
+
+def _prepare_prompt_ids(sample: Sample, tokenizer, processor: Any) -> list[int]:
+    raw_multimodal_inputs = sample.multimodal_inputs or {}
+    has_multimodal_inputs = any(value is not None for value in raw_multimodal_inputs.values())
+    reuse_existing_input_ids = bool(sample.tokens) and (
+        sample.multimodal_train_inputs is not None or not has_multimodal_inputs
+    )
+
+    if processor and has_multimodal_inputs and not reuse_existing_input_ids:
+        processor_output = processor(text=sample.prompt, **build_processor_kwargs(raw_multimodal_inputs))
+        prompt_ids = processor_output["input_ids"][0]
+        if sample.multimodal_train_inputs is None:
+            sample.multimodal_train_inputs = {
+                k: v for k, v in processor_output.items() if k not in _PROCESSOR_PROMPT_KEYS
+            } or None
+        return prompt_ids
+
+    if reuse_existing_input_ids:
+        return sample.tokens
+
+    return tokenizer.encode(sample.prompt, add_special_tokens=False)
 
 
 def get_model_url(args: Namespace, model_name: str, endpoint: str = "/generate") -> str:
@@ -85,7 +110,23 @@ class GenerateState(metaclass=SingletonMeta):
             sampling_seed_base = args.rollout_seed
             self.group_sampling_seeds = [sampling_seed_base + i for i in range(args.n_samples_per_prompt)]
 
+        # dp rank balancing
+        self.dp_counts = [0] * (args.sglang_dp_size or 1)
+        self.dp_rank = 0
+
         self.reset()
+
+    @contextmanager
+    def dp_rank_context(self):
+        candidates = [i for i, count in enumerate(self.dp_counts) if count == min(self.dp_counts)]
+        dp_rank = int(np.random.choice(candidates))
+        self.dp_counts[dp_rank] += 1
+        self.dp_rank = dp_rank
+        try:
+            yield dp_rank
+        finally:
+            self.dp_counts[dp_rank] -= 1
+            assert self.dp_counts[dp_rank] >= 0
 
     def reset(self) -> None:
         self.remaining_batch_size = 0
@@ -120,18 +161,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
     ), f"Sample status is {sample.status}"
 
-    if state.processor and sample.multimodal_inputs and any(v is not None for v in sample.multimodal_inputs.values()):
-        processor_kwargs = build_processor_kwargs(sample.multimodal_inputs)
-        processor_output = state.processor(text=sample.prompt, **processor_kwargs)
-        prompt_ids = processor_output["input_ids"][0]
-        sample.multimodal_train_inputs = {
-            k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]
-        } or None
-    else:
-        prompt_ids = state.tokenizer.encode(sample.prompt, add_special_tokens=False)
-
-    if len(sample.response) > 0:
-        sampling_params["max_new_tokens"] -= len(sample.tokens) - len(prompt_ids)
+    prompt_ids = _prepare_prompt_ids(sample, state.tokenizer, state.processor)
 
     assert (
         sampling_params["max_new_tokens"] >= 0
@@ -149,25 +179,17 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
 
-    has_multimodal = sample.multimodal_inputs and sample.multimodal_inputs.get("images")
-    if has_multimodal:
-        image_data = sample.multimodal_inputs["images"]
-        payload["image_data"] = [encode_image_for_rollout_engine(image) for image in image_data]
-
-    # Use existing tokens for multi-turn or tokenize the new prompt
-    if len(sample.response) > 0:
-        payload["input_ids"] = sample.tokens
-    elif has_multimodal:
-        # For multimodal first-turn: send text so SGLang handles image token
-        # expansion internally (the processor-expanded input_ids have N patch
-        # tokens per image which would mismatch the image_data count).
+    images = sample.multimodal_inputs.get("images") if sample.multimodal_inputs else None
+    if images:
+        payload["image_data"] = [encode_image_for_rollout_engine(image) for image in images]
+        # For single-turn multimodal requests, send text so SGLang expands the
+        # image placeholders with its own processor rules.
         payload["text"] = sample.prompt
-        if not sample.tokens:
-            sample.tokens = prompt_ids
     else:
         payload["input_ids"] = prompt_ids
-        if not sample.tokens:  # Initialize sample.tokens for the first turn
-            sample.tokens = prompt_ids
+
+    if not sample.tokens:
+        sample.tokens = prompt_ids
 
     # Use session_id for consistent hashing routing (SGLang Model Gateway)
     headers = None
@@ -240,30 +262,29 @@ async def generate_and_rm(
             sample.status = Sample.Status.ABORTED
             return sample
 
-        # Check sample.generate_function_path for per-sample custom_generate_function_path (e.g., from eval dataset config)
-        custom_func_path = getattr(sample, "generate_function_path", None) or args.custom_generate_function_path
+        with state.dp_rank_context() as _:
+            # Check sample.generate_function_path for per-sample custom_generate_function_path (e.g., from eval dataset config)
+            custom_func_path = getattr(sample, "generate_function_path", None) or args.custom_generate_function_path
 
-        if custom_func_path is not None:
-            custom_generate_func = load_function(custom_func_path)
-            # if signature has evaluation, pass evaluation
-            if "evaluation" in inspect.signature(custom_generate_func).parameters:
-                sample = await custom_generate_func(args, sample, sampling_params, evaluation=evaluation)
+            if custom_func_path is not None:
+                custom_generate_func = load_function(custom_func_path)
+                # if signature has evaluation, pass evaluation
+                if "evaluation" in inspect.signature(custom_generate_func).parameters:
+                    sample = await custom_generate_func(args, sample, sampling_params, evaluation=evaluation)
+                else:
+                    sample = await custom_generate_func(args, sample, sampling_params)
             else:
-                sample = await custom_generate_func(args, sample, sampling_params)
-        else:
-            sample = await generate(args, sample, sampling_params)
+                sample = await generate(args, sample, sampling_params)
 
     # for the rm that need the whole group, we will not do the rm here
     if args.group_rm:
         return sample
 
-    # multi samples
     if isinstance(sample, list):
         samples = sample
-        if any([sample.status == Sample.Status.ABORTED for sample in samples]):
+        if any(sample.status == Sample.Status.ABORTED for sample in samples):
             return samples
 
-        # for multi agent system, the reward of some sample is calculated during generation.
         samples_need_reward = [sample for sample in samples if sample.reward is None]
         with trace_span(samples_need_reward, "reward_model"):
             rewards = await batched_async_rm(args, samples_need_reward)
@@ -273,7 +294,7 @@ async def generate_and_rm(
     else:
         if sample.status == Sample.Status.ABORTED:
             return sample
-        # for multi-turn environment, a reward could be assigned to the agent.
+        # Some custom generate paths may have already filled the reward.
         if sample.reward is None:
             with trace_span(sample, "reward_model"):
                 sample.reward = await async_rm(args, sample)
@@ -597,5 +618,6 @@ def generate_rollout(
         return output
 
     output, aborted_samples = run(generate_rollout_async(args, rollout_id, data_source.get_samples))
-    data_source.add_samples(aborted_samples)
+    if aborted_samples:
+        data_source.add_samples(aborted_samples)
     return output

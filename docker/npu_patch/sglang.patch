@@ -1,0 +1,610 @@
+diff --git a/python/sglang/srt/hardware_backend/npu/attention/ascend_backend.py b/python/sglang/srt/hardware_backend/npu/attention/ascend_backend.py
+index 8a343d43b..3e49dddb0 100644
+--- a/python/sglang/srt/hardware_backend/npu/attention/ascend_backend.py
++++ b/python/sglang/srt/hardware_backend/npu/attention/ascend_backend.py
+@@ -1050,93 +1050,36 @@ class AscendAttnBackend(AttentionBackend):
+                 )
+ 
+         if not self.use_mla:
+-            num_tokens = q.shape[0]
+-            """PA will support bs<tp in the later version of CANN"""
+-            if num_tokens < get_attention_tp_size():
+-                k_cache = forward_batch.token_to_kv_pool.get_key_buffer(
+-                    layer.layer_id
+-                ).view(-1, self.page_size, layer.tp_k_head_num * layer.qk_head_dim)
+-                v_cache = forward_batch.token_to_kv_pool.get_value_buffer(
+-                    layer.layer_id
+-                ).view(-1, self.page_size, layer.tp_v_head_num * layer.v_head_dim)
+-                query = q.reshape(-1, 1, layer.tp_q_head_num * layer.qk_head_dim)
+-                if self.forward_metadata.seq_lens_cpu_int is None:
+-                    actual_seq_len_kv = self.forward_metadata.seq_lens_cpu_list
+-                else:
+-                    actual_seq_len_kv = (
+-                        self.forward_metadata.seq_lens_cpu_int.cpu().int().tolist()
+-                    )
+-                num_tokens = query.shape[0]
+-                workspace = (
+-                    torch_npu._npu_fused_infer_attention_score_get_max_workspace(
+-                        query,
+-                        k_cache,
+-                        v_cache,
+-                        block_table=self.forward_metadata.block_tables,
+-                        block_size=self.page_size,
+-                        num_heads=layer.tp_q_head_num,
+-                        num_key_value_heads=layer.tp_k_head_num,
+-                        input_layout="BSH",
+-                        scale=layer.scaling,
+-                        actual_seq_lengths_kv=actual_seq_len_kv,
+-                    )
+-                )
+-                output = torch.empty(
+-                    (num_tokens, 1, layer.tp_q_head_num * layer.v_head_dim),
+-                    dtype=q.dtype,
+-                    device=q.device,
+-                )
+-                softmax_lse = torch.empty(1, dtype=q.dtype, device=q.device)
+-                torch_npu.npu_fused_infer_attention_score.out(
+-                    query,
+-                    k_cache,
+-                    v_cache,
+-                    block_table=self.forward_metadata.block_tables,
+-                    block_size=self.page_size,
+-                    num_heads=layer.tp_q_head_num,
+-                    num_key_value_heads=layer.tp_k_head_num,
+-                    input_layout="BSH",
+-                    scale=layer.scaling,
+-                    actual_seq_lengths_kv=actual_seq_len_kv,
+-                    workspace=workspace,
+-                    out=[output, softmax_lse],
+-                )
+-                return output.view(num_tokens, layer.tp_q_head_num * layer.v_head_dim)
++            k_cache = forward_batch.token_to_kv_pool.get_key_buffer(
++                layer.layer_id
++            ).view(-1, self.page_size, layer.tp_k_head_num * layer.qk_head_dim)
++            v_cache = forward_batch.token_to_kv_pool.get_value_buffer(
++                layer.layer_id
++            ).view(-1, self.page_size, layer.tp_v_head_num * layer.v_head_dim)
++            query = q.reshape(-1, layer.tp_q_head_num, layer.qk_head_dim)
++            num_tokens = query.shape[0]
++            if self.forward_metadata.seq_lens_cpu_int is None:
++                actual_seq_len_kv = self.forward_metadata.seq_lens_cpu_list
+             else:
+-                k_cache = forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id)
+-                v_cache = forward_batch.token_to_kv_pool.get_value_buffer(
+-                    layer.layer_id
+-                )
+-                query = q.reshape(-1, layer.tp_q_head_num, layer.qk_head_dim)
+-                num_tokens = query.shape[0]
+-                attn_output = torch.empty(
+-                    (num_tokens, layer.tp_q_head_num, layer.v_head_dim),
+-                    dtype=query.dtype,
+-                    device=query.device,
+-                )
+-                if self.forward_metadata.seq_lens_cpu_int is None:
+-                    actual_seq_len_kv = torch.from_numpy(
+-                        np.array(self.forward_metadata.seq_lens_cpu_list).astype(
+-                            np.int32
+-                        )
+-                    )
+-                else:
+-                    actual_seq_len_kv = self.forward_metadata.seq_lens_cpu_int
+-
+-                torch_npu._npu_paged_attention(
+-                    query=query,
+-                    key_cache=k_cache,
+-                    value_cache=v_cache,
+-                    num_heads=layer.tp_q_head_num,
+-                    num_kv_heads=layer.tp_k_head_num,
+-                    scale_value=layer.scaling,
+-                    block_table=self.forward_metadata.block_tables,
+-                    context_lens=actual_seq_len_kv,
+-                    out=attn_output,
+-                )
+-                return attn_output.view(
+-                    num_tokens, layer.tp_q_head_num * layer.v_head_dim
++                actual_seq_len_kv = (
++                    self.forward_metadata.seq_lens_cpu_int.cpu().int().tolist()
+                 )
++            actual_seq_lengths = np.arange(1, num_tokens + 1)
++            attn_output, _ = torch.ops.npu.npu_fused_infer_attention_score(
++                query,
++                k_cache,
++                v_cache,
++                block_table=self.forward_metadata.block_tables,
++                block_size=self.page_size,
++                num_heads=layer.tp_q_head_num,
++                num_key_value_heads=layer.tp_k_head_num,
++                input_layout="TND",
++                scale=layer.scaling,
++                actual_seq_lengths=actual_seq_lengths,
++                actual_seq_lengths_kv=actual_seq_len_kv,
++                sparse_mode=0,
++            )
++            return attn_output.view(num_tokens, layer.tp_q_head_num * layer.v_head_dim)
+         else:
+             c_kv, k_rope = forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id)
+             if is_fia_nz():
+diff --git a/python/sglang/srt/hardware_backend/npu/graph_runner/npu_graph_runner.py b/python/sglang/srt/hardware_backend/npu/graph_runner/npu_graph_runner.py
+index d089fcc63..ce19d2cd0 100644
+--- a/python/sglang/srt/hardware_backend/npu/graph_runner/npu_graph_runner.py
++++ b/python/sglang/srt/hardware_backend/npu/graph_runner/npu_graph_runner.py
+@@ -29,6 +29,7 @@ import sglang
+ from sglang.srt.configs.model_config import AttentionArch, is_deepseek_nsa
+ from sglang.srt.distributed.parallel_state import GroupCoordinator
+ from sglang.srt.layers.dp_attention import get_attention_tp_size
++from sglang.srt.environ import envs
+ from sglang.srt.model_executor.cuda_graph_runner import CudaGraphRunner
+ from sglang.srt.utils import (
+     empty_context,
+@@ -111,23 +112,15 @@ class NPUGraphRunner(CudaGraphRunner):
+             out = run_once_fn()
+         return out
+ 
+-    def _get_update_attr_name(self, model_runner, forward_batch):
+-        if (
+-            self.bs < get_attention_tp_size()
+-            or forward_batch.forward_mode.is_target_verify()
+-            or self.use_fia
+-        ):
+-            return self.attr_name[AttentionArch.MLA]
+-        return self.attr_name[model_runner.model_config.attention_arch]
+-
+-    def _get_update_attr_type(self, model_runner, forward_batch):
+-        if (
+-            self.bs < get_attention_tp_size()
+-            or forward_batch.forward_mode.is_target_verify()
+-            or self.use_fia
+-        ):
+-            return self.attr_type[AttentionArch.MLA]
+-        return self.attr_type[model_runner.model_config.attention_arch]
++    def _get_update_attr_name(self):
++        # if envs.SGLANG_USE_PAGED_ATTENTION.get():
++        #     return self.attr_name[AttentionArch.MHA]
++        return self.attr_name[AttentionArch.MLA]
++
++    def _get_update_attr_type(self):
++        # if envs.SGLANG_USE_PAGED_ATTENTION.get():
++        #     return self.attr_type[AttentionArch.MHA]
++        return self.attr_type[AttentionArch.MLA]
+ 
+     def _update_inputs(self, seq_lens):
+         if isinstance(self.update_attr_type, torch.Tensor):
+@@ -144,6 +137,10 @@ class NPUGraphRunner(CudaGraphRunner):
+         output_dir = os.path.join(
+             os.getenv("SGLANG_TORCH_PROFILER_DIR", "/tmp"), "graph_capture_profile"
+         )
++        if ".." in output_dir:
++            raise ValueError(
++                "Output directory path contains '..', which is not allowed."
++            )
+         if not Path(output_dir).exists():
+             Path(output_dir).mkdir(parents=True, exist_ok=True)
+         logger.info(
+@@ -181,12 +178,8 @@ class NPUGraphRunner(CudaGraphRunner):
+             self.buffers.input_ids[: self.raw_num_token].copy_(forward_batch.input_ids)
+             self.buffers.positions[: self.raw_num_token].copy_(forward_batch.positions)
+ 
+-        self.update_attr_name = self._get_update_attr_name(
+-            self.model_runner, forward_batch
+-        )
+-        self.update_attr_type = self._get_update_attr_type(
+-            self.model_runner, forward_batch
+-        )
++        self.update_attr_name = self._get_update_attr_name()
++        self.update_attr_type = self._get_update_attr_type()
+         # Replay
+         if not is_deepseek_nsa(self.model_runner.model_config.hf_config):
+             if forward_batch.forward_mode.is_target_verify():
+diff --git a/python/sglang/srt/layers/rotary_embedding.py b/python/sglang/srt/layers/rotary_embedding.py
+index dd8ca7d4f..92be78315 100644
+--- a/python/sglang/srt/layers/rotary_embedding.py
++++ b/python/sglang/srt/layers/rotary_embedding.py
+@@ -115,9 +115,10 @@ class RotaryEmbedding(MultiPlatformOp):
+             cache = cache.to(dtype)
+ 
+         if (
+-            (not (_is_cuda or _is_npu) or self.head_size not in [64, 128, 256, 512])
++            (not (_is_cuda) or self.head_size not in [64, 128, 256, 512])
+             and not (_is_cpu and _is_cpu_amx_available)
+             and not (_is_xpu)
++            and not (_is_npu)
+         ):
+             if _is_cuda or _is_hip:
+                 from sgl_kernel import rotary_embedding
+@@ -292,8 +293,8 @@ class RotaryEmbedding(MultiPlatformOp):
+         assert (
+             fused_set_kv_buffer_arg is None
+         ), "fused_set_kv_buffer_arg is not supported for npu implementation"
+-
+-        rotary_mode = "half"
++        if query.dtype == torch.bfloat16 and self.cos_sin_cache.dtype == torch.float:
++            return self.forward_native(positions, query, key, offsets)
+         if self.is_neox_style:
+             rotary_mode = "half"
+         else:
+diff --git a/python/sglang/srt/layers/vocab_parallel_embedding.py b/python/sglang/srt/layers/vocab_parallel_embedding.py
+index f171a15f2..192970904 100644
+--- a/python/sglang/srt/layers/vocab_parallel_embedding.py
++++ b/python/sglang/srt/layers/vocab_parallel_embedding.py
+@@ -31,6 +31,7 @@ from sglang.srt.utils import (
+     cpu_has_amx_support,
+     get_compiler_backend,
+     is_cpu,
++    is_npu,
+     set_weight_attrs,
+ )
+ 
+@@ -38,6 +39,7 @@ DEFAULT_VOCAB_PADDING_SIZE = 64
+ 
+ _is_cpu_amx_available = cpu_has_amx_support()
+ _is_cpu = is_cpu()
++_is_npu = is_npu()
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -123,7 +125,7 @@ class VocabParallelEmbeddingShardIndices:
+         assert self.num_added_elements <= self.num_added_elements_padded
+ 
+ 
+-@torch.compile(dynamic=True, backend=get_compiler_backend())
++@torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_npu)
+ def get_masked_input_and_mask(
+     input_: torch.Tensor,
+     org_vocab_start_index: int,
+diff --git a/python/sglang/srt/models/llama.py b/python/sglang/srt/models/llama.py
+index 4176af28d..ffcf73d46 100644
+--- a/python/sglang/srt/models/llama.py
++++ b/python/sglang/srt/models/llama.py
+@@ -52,10 +52,14 @@ from sglang.srt.model_loader.weight_utils import (
+     maybe_remap_kv_scale_name,
+ )
+ from sglang.srt.server_args import get_global_server_args
+-from sglang.srt.utils import add_prefix, make_layers
++from sglang.srt.utils import add_prefix, is_npu, make_layers
+ from sglang.utils import get_exception_traceback
+ 
+ logger = logging.getLogger(__name__)
++_is_npu = is_npu()
++
++if _is_npu:
++    from sgl_kernel_npu.norm.split_qkv_rmsnorm_rope import split_qkv_rmsnorm_rope
+ 
+ 
+ class LlamaMLP(nn.Module):
+@@ -185,15 +189,44 @@ class LlamaAttention(nn.Module):
+             prefix=add_prefix("attn", prefix),
+         )
+ 
++    def forward_prepare_native(self, positions, hidden_states):
++        qkv, _ = self.qkv_proj(hidden_states)
++        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
++        q, k = self.rotary_emb(positions, q, k)
++        return q, k, v
++
++    def forward_prepare_npu(self, positions, hidden_states, forward_batch):
++        qkv, _ = self.qkv_proj(hidden_states)
++        if self.attn.layer_id == forward_batch.token_to_kv_pool.start_layer:
++            self.rotary_emb.get_cos_sin_with_position(positions)
++        q, k, v = split_qkv_rmsnorm_rope(
++            qkv,
++            self.rotary_emb.position_sin,
++            self.rotary_emb.position_cos,
++            self.q_size,
++            self.kv_size,
++            self.head_dim,
++        )
++        return q, k, v
++
+     def forward(
+         self,
+         positions: torch.Tensor,
+         hidden_states: torch.Tensor,
+         forward_batch: ForwardBatch,
+     ) -> torch.Tensor:
+-        qkv, _ = self.qkv_proj(hidden_states)
+-        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+-        q, k = self.rotary_emb(positions, q, k)
++        if not _is_npu or not hasattr(self.rotary_emb, "get_cos_sin_with_position"):
++            q, k, v = self.forward_prepare_native(
++                positions=positions,
++                hidden_states=hidden_states,
++            )
++        else:
++            q, k, v = self.forward_prepare_npu(
++                positions=positions,
++                hidden_states=hidden_states,
++                forward_batch=forward_batch,
++            )
++
+         attn_output = self.attn(q, k, v, forward_batch)
+         output, _ = self.o_proj(attn_output)
+         return output
+diff --git a/python/sglang/srt/models/qwen3.py b/python/sglang/srt/models/qwen3.py
+index 47a1a4e4c..2cdbf8906 100644
+--- a/python/sglang/srt/models/qwen3.py
++++ b/python/sglang/srt/models/qwen3.py
+@@ -161,12 +161,12 @@ class Qwen3Attention(nn.Module):
+             qkv,
+             self.rotary_emb.position_sin,
+             self.rotary_emb.position_cos,
+-            self.q_norm.weight,
+-            self.k_norm.weight,
+             self.q_size,
+             self.kv_size,
+             self.head_dim,
+-            self.q_norm.variance_epsilon,
++            eps=self.q_norm.variance_epsilon,
++            q_weight=self.q_norm.weight,
++            k_weight=self.k_norm.weight,
+             q_bias=getattr(self.q_norm, "bias", None),
+             k_bias=getattr(self.k_norm, "bias", None),
+         )
+@@ -370,6 +370,7 @@ class Qwen3ForCausalLM(nn.Module):
+                     config.vocab_size,
+                     config.hidden_size,
+                     quant_config=quant_config,
++                    use_attn_tp_group=get_global_server_args().enable_dp_lm_head,
+                     prefix=add_prefix("lm_head", prefix),
+                 )
+         else:
+diff --git a/python/sglang/srt/models/qwen3_moe.py b/python/sglang/srt/models/qwen3_moe.py
+index e277d46f2..9e49156da 100644
+--- a/python/sglang/srt/models/qwen3_moe.py
++++ b/python/sglang/srt/models/qwen3_moe.py
+@@ -549,12 +549,12 @@ class Qwen3MoeAttention(nn.Module):
+             qkv,
+             self.rotary_emb.position_sin,
+             self.rotary_emb.position_cos,
+-            self.q_norm.weight,
+-            self.k_norm.weight,
+             self.q_size,
+             self.kv_size,
+             self.head_dim,
+-            self.q_norm.variance_epsilon,
++            eps=self.q_norm.variance_epsilon,
++            q_weight=self.q_norm.weight,
++            k_weight=self.k_norm.weight,
+             q_bias=getattr(self.q_norm, "bias", None),
+             k_bias=getattr(self.k_norm, "bias", None),
+         )
+diff --git a/python/sglang/srt/models/qwen3_vl.py b/python/sglang/srt/models/qwen3_vl.py
+index 218e32362..9f3141ce2 100644
+--- a/python/sglang/srt/models/qwen3_vl.py
++++ b/python/sglang/srt/models/qwen3_vl.py
+@@ -19,6 +19,7 @@ import re
+ from functools import lru_cache, partial
+ from typing import Callable, Iterable, List, Optional, Tuple, Union
+ 
++import numpy as np
+ import torch
+ import torch.nn as nn
+ from einops import rearrange
+@@ -397,70 +398,89 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
+         return cos_combined, sin_combined
+ 
+     def fast_pos_embed_interpolate(self, grid_thw):
+-        grid_ts, grid_hs, grid_ws = grid_thw[:, 0], grid_thw[:, 1], grid_thw[:, 2]
+         num_grid_per_side = int(self.num_position_embeddings**0.5)
+-        device = self.pos_embed.weight.device
+ 
+         idx_list = [[] for _ in range(4)]
+         weight_list = [[] for _ in range(4)]
+ 
+-        for t, h, w in zip(grid_ts, grid_hs, grid_ws):
+-            h_idxs = torch.linspace(0, num_grid_per_side - 1, h)
+-            w_idxs = torch.linspace(0, num_grid_per_side - 1, w)
++        # TODO: use torch instand of np
++        for t, h, w in grid_thw:
++            h_idxs = np.linspace(0, num_grid_per_side - 1, h)
++            w_idxs = np.linspace(0, num_grid_per_side - 1, w)
+ 
+-            h_idxs_floor = h_idxs.int()
+-            w_idxs_floor = w_idxs.int()
+-            h_idxs_ceil = (h_idxs.int() + 1).clip(max=num_grid_per_side - 1)
+-            w_idxs_ceil = (w_idxs.int() + 1).clip(max=num_grid_per_side - 1)
++            h_idxs_floor = h_idxs.astype(int)
++            w_idxs_floor = w_idxs.astype(int)
++            h_idxs_ceil = (h_idxs.astype(int) + 1).clip(max=num_grid_per_side - 1)
++            w_idxs_ceil = (w_idxs.astype(int) + 1).clip(max=num_grid_per_side - 1)
+ 
+             dh = h_idxs - h_idxs_floor
+             dw = w_idxs - w_idxs_floor
+ 
+-            base_h = h_idxs_floor * num_grid_per_side
+-            base_h_ceil = h_idxs_ceil * num_grid_per_side
+-
+-            indices = [
+-                (base_h[None].T + w_idxs_floor[None]).flatten(),
+-                (base_h[None].T + w_idxs_ceil[None]).flatten(),
+-                (base_h_ceil[None].T + w_idxs_floor[None]).flatten(),
+-                (base_h_ceil[None].T + w_idxs_ceil[None]).flatten(),
+-            ]
++            idx_list[0].extend(
++                ((h_idxs_floor * num_grid_per_side)[None].T + w_idxs_floor[None])
++                .flatten()
++                .tolist()
++                * t
++            )
++            idx_list[1].extend(
++                ((h_idxs_floor * num_grid_per_side)[None].T + w_idxs_ceil[None])
++                .flatten()
++                .tolist()
++                * t
++            )
++            idx_list[2].extend(
++                ((h_idxs_ceil * num_grid_per_side)[None].T + w_idxs_floor[None])
++                .flatten()
++                .tolist()
++                * t
++            )
++            idx_list[3].extend(
++                ((h_idxs_ceil * num_grid_per_side)[None].T + w_idxs_ceil[None])
++                .flatten()
++                .tolist()
++                * t
++            )
+ 
+-            weights = [
+-                ((1 - dh)[None].T * (1 - dw)[None]).flatten(),
+-                ((1 - dh)[None].T * dw[None]).flatten(),
+-                (dh[None].T * (1 - dw)[None]).flatten(),
+-                (dh[None].T * dw[None]).flatten(),
+-            ]
++            weight_list[0].extend(
++                ((1 - dh)[None].T * (1 - dw)[None]).flatten().tolist() * t
++            )
++            weight_list[1].extend(((1 - dh)[None].T * dw[None]).flatten().tolist() * t)
++            weight_list[2].extend((dh[None].T * (1 - dw)[None]).flatten().tolist() * t)
++            weight_list[3].extend((dh[None].T * dw[None]).flatten().tolist() * t)
+ 
+-            for i in range(4):
+-                idx_list[i].extend(indices[i].tolist())
+-                weight_list[i].extend(weights[i].tolist())
++        device = self.pos_embed.weight.device
++        dtype = self.pos_embed.weight.dtype
+ 
+-        idx_tensor = torch.tensor(idx_list, dtype=torch.long, device=device)
+-        weight_tensor = torch.tensor(
+-            weight_list, dtype=self.pos_embed.weight.dtype, device=device
++        p0 = (
++            self.pos_embed(torch.tensor(idx_list[0], dtype=torch.long, device=device))
++            * torch.tensor(weight_list[0], dtype=dtype, device=device)[:, None]
+         )
+-        pos_embeds = self.pos_embed(idx_tensor).to(device) * weight_tensor[:, :, None]
+-        patch_pos_embeds = pos_embeds[0] + pos_embeds[1] + pos_embeds[2] + pos_embeds[3]
+-
+-        patch_pos_embeds = patch_pos_embeds.split(
+-            [h * w for h, w in zip(grid_hs, grid_ws)]
++        p1 = (
++            self.pos_embed(torch.tensor(idx_list[1], dtype=torch.long, device=device))
++            * torch.tensor(weight_list[1], dtype=dtype, device=device)[:, None]
++        )
++        p2 = (
++            self.pos_embed(torch.tensor(idx_list[2], dtype=torch.long, device=device))
++            * torch.tensor(weight_list[2], dtype=dtype, device=device)[:, None]
++        )
++        p3 = (
++            self.pos_embed(torch.tensor(idx_list[3], dtype=torch.long, device=device))
++            * torch.tensor(weight_list[3], dtype=dtype, device=device)[:, None]
+         )
+ 
++        patch_pos_embeds = p0 + p1 + p2 + p3
++        patch_pos_embeds = patch_pos_embeds.split([t * h * w for t, h, w in grid_thw])
+         patch_pos_embeds_permute = []
+-        merge_size = self.spatial_merge_size
+-        for pos_embed, t, h, w in zip(patch_pos_embeds, grid_ts, grid_hs, grid_ws):
+-            pos_embed = pos_embed.repeat(t, 1)
++        m_size = self.spatial_merge_size
++        for pos_embed, (t, h, w) in zip(patch_pos_embeds, grid_thw):
+             pos_embed = (
+-                pos_embed.view(
+-                    t, h // merge_size, merge_size, w // merge_size, merge_size, -1
+-                )
++                pos_embed.view(t, h // m_size, m_size, w // m_size, m_size, -1)
+                 .permute(0, 1, 3, 2, 4, 5)
+                 .flatten(0, 4)
+             )
+             patch_pos_embeds_permute.append(pos_embed)
+-        return torch.cat(patch_pos_embeds_permute)
++        patch_pos_embeds = torch.cat(patch_pos_embeds_permute)
++        return patch_pos_embeds
+ 
+     def forward(
+         self,
+@@ -650,31 +670,20 @@ class Qwen3LLMModel(Qwen3Model):
+                     hidden_states + residual if residual is not None else hidden_states
+                 )
+ 
+-            deepstack_embeds = None
+-            if input_deepstack_embeds is not None:
+-                prev_layer_idx = layer_idx - 1
+-                if prev_layer_idx in self.deepstack_embed_to_decoder_layer:
+-                    sep = self.hidden_size * prev_layer_idx
+-                    deepstack_embeds = input_deepstack_embeds[
+-                        :, sep : sep + self.hidden_size
+-                    ]
+-
+-            # SGLang applies residual at the START of the next layer, not at the END like HuggingFace.
+-            # See: https://github.com/huggingface/transformers/blob/v5.0.0rc0/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L549
+-            # To match HF behavior, deepstack must be added AFTER residual: (hidden_states + residual) + deepstack
+-            # The order matters because addition with different tensors is not associative in practice.
+             hidden_states, residual = layer(
+                 positions,
+                 hidden_states,
+                 forward_batch,
+                 residual,
+-                post_residual_addition=deepstack_embeds,
+             )
++            # process deepstack
++            if (
++                input_deepstack_embeds is not None
++                and layer_idx in self.deepstack_embed_to_decoder_layer
++            ):
+ 
+-        # Handle deepstack for the last processed layer if it exists.
+-        last_deepstack = self.get_deepstack_embeds(
+-            self.end_layer - 1, input_deepstack_embeds
+-        )
++                sep = self.hidden_size * layer_idx
++                hidden_states += input_deepstack_embeds[:, sep : sep + self.hidden_size]
+ 
+         if not self.pp_group.is_last_rank:
+             return PPProxyTensors(
+@@ -688,9 +697,7 @@ class Qwen3LLMModel(Qwen3Model):
+                 if residual is None:
+                     hidden_states = self.norm(hidden_states)
+                 else:
+-                    hidden_states, _ = self.norm(
+-                        hidden_states, residual, post_residual_addition=last_deepstack
+-                    )
++                    hidden_states, _ = self.norm(hidden_states, residual)
+ 
+         if len(aux_hidden_states) == 0:
+             return hidden_states
+@@ -805,15 +812,15 @@ class Qwen3VLForConditionalGeneration(nn.Module):
+         max_images_per_call = get_int_env_var("SGLANG_VLM_MAX_IMAGES_PER_VIT", 0)
+ 
+         if max_patches_per_call == 0 and max_images_per_call == 0:
+-            if self.use_data_parallel:
+-                return run_dp_sharded_mrope_vision_model(
+-                    self.visual,
+-                    pixel_values,
+-                    image_grid_thw.tolist(),
+-                    rope_type="rope_3d",
+-                )
+-            else:
+-                return self.visual(pixel_values, grid_thw=image_grid_thw)
++            # if self.use_data_parallel:
++            #     return run_dp_sharded_mrope_vision_model(
++            #         self.visual,
++            #         pixel_values,
++            #         image_grid_thw.tolist(),
++            #         rope_type="rope_3d",
++            #     )
++            # else:
++            return self.visual(pixel_values, grid_thw=image_grid_thw)
+ 
+         # compute the number of patches per image and the slice positions in pixel_values
+         grid_thw_list = (
+@@ -995,7 +1002,7 @@ class Qwen3VLForConditionalGeneration(nn.Module):
+                 name = name.replace(r"model.language_model.", r"model.")
+             layer_id = get_layer_id(name)
+ 
+-            if self.pp_group.is_last_rank and "model.embed_tokens.weight" in name:
++            if self.pp_group.is_last_rank and "model.embed_tokens.weight" in name and self.config.tie_word_embeddings:
+                 if "lm_head.weight" in params_dict:
+                     lm_head_param = params_dict["lm_head.weight"]
+                     weight_loader = getattr(
+diff --git a/scripts/ci/npu_ci_install_dependency.sh b/scripts/ci/npu_ci_install_dependency.sh
+index 6172db3b4..8cc8fbf39 100755
+--- a/scripts/ci/npu_ci_install_dependency.sh
++++ b/scripts/ci/npu_ci_install_dependency.sh
+@@ -49,7 +49,7 @@ wget -O "${BISHENG_NAME}" "${BISHENG_URL}" && chmod a+x "${BISHENG_NAME}" && "./
+ 
+ 
+ ### Install sgl-kernel-npu
+-SGL_KERNEL_NPU_TAG="20251206"
++SGL_KERNEL_NPU_TAG="2025.12.31"
+ git clone --depth 1 https://github.com/sgl-project/sgl-kernel-npu.git --branch ${SGL_KERNEL_NPU_TAG}
+ (cd sgl-kernel-npu && bash ./build.sh && ${PIP_INSTALL} output/deep_ep*.whl output/sgl_kernel_npu*.whl && cd "$(python3 -m pip show deep-ep | grep -E '^Location:' | awk '{print $2}')" && ln -s deep_ep/deep_ep_cpp*.so)
+ 
