@@ -287,6 +287,28 @@ class DataIterator:
         return self
 
 
+def _get_capped_partitions(seqlen_list: Sequence[int], num_partitions: int, max_tokens: int) -> list[list[int]]:
+    """First-fit partitioning that respects a per-partition token cap.
+
+    Uses the same first-fit algorithm as ``get_minimum_num_micro_batch_size``
+    so that when ``num_partitions >= get_minimum_num_micro_batch_size(...)``,
+    every partition is guaranteed to stay within *max_tokens*.
+    """
+    partitions: list[list[int]] = [[] for _ in range(num_partitions)]
+    sums = [0] * num_partitions
+
+    for idx, length in enumerate(seqlen_list):
+        for i in range(num_partitions):
+            if sums[i] + length <= max_tokens:
+                partitions[i].append(idx)
+                sums[i] += length
+                break
+        else:
+            raise AssertionError("This should never happen.")
+
+    return [sorted(p) for p in partitions]
+
+
 def get_data_iterator(
     args: Namespace,
     model: torch.nn.Module | Sequence[torch.nn.Module],
@@ -354,9 +376,11 @@ def get_data_iterator(
         dist.all_reduce(num_microbatches, op=dist.ReduceOp.MAX, group=dp_group)
 
         if vpp_size > 1:
-            # vpp requies the number of microbatches to be divisible by vpp_size
+            # VPP requires the number of microbatches to align to the per-stage group size.
             num_microbatches = torch.clamp(
-                num_microbatches // microbatch_group_size_per_vp_stage * microbatch_group_size_per_vp_stage,
+                (num_microbatches + microbatch_group_size_per_vp_stage - 1)
+                // microbatch_group_size_per_vp_stage
+                * microbatch_group_size_per_vp_stage,
                 min=1,
             )
 
@@ -364,12 +388,20 @@ def get_data_iterator(
 
         # balance the each micro batch
         samples = rollout_data["total_lengths"]
+        max_tokens = args.max_tokens_per_gpu * cp_size
         # balance the number of mirobatches across steps
         micro_batch_indices = []
         for i, num_mbs in enumerate(num_microbatches):
             start, end = i * num_local_gbs, (i + 1) * num_local_gbs
             samples = rollout_data["total_lengths"][start:end]
             partitions = get_seqlen_balanced_partitions(samples, num_mbs, equal_size=False)
+            # Fallback: if any partition exceeds the token budget, use cap-aware partitioning
+            if any(sum(samples[idx] for idx in part) > max_tokens for part in partitions):
+                logger.warning(
+                    f"Step {i}: balanced partitioning produced a partition exceeding "
+                    f"max_tokens_per_gpu * cp_size = {max_tokens}, falling back to cap-aware partitioning"
+                )
+                partitions = _get_capped_partitions(samples, num_mbs, max_tokens)
             for j in range(num_mbs):
                 for k in range(len(partitions[j])):
                     partitions[j][k] += start
