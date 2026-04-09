@@ -174,6 +174,15 @@ def _allgather_cp_redistribute(
     chunk_end = chunk_start + logits_local_len
 
     for key, values in res.items():
+        # Skip keys where all values are None (e.g. entropy when not computed)
+        if all(v is None for v in values):
+            continue
+
+        # Determine reference dtype/device from first non-None value
+        ref_value = next(v for v in values if v is not None)
+        ref_dtype = ref_value.dtype
+        ref_device = ref_value.device
+
         # Reconstruct full response tensors with each rank's contiguous contribution
         full_resps = []
         seq_start = 0
@@ -185,12 +194,12 @@ def _allgather_cp_redistribute(
             s = max(logit_global_start, chunk_start)
             e = min(logit_global_end, chunk_end)
 
-            if e <= s:
+            if value is None or e <= s:
                 # This rank has no response logprobs for this sample
                 full_resp = torch.zeros(
                     response_length,
-                    dtype=value.dtype,
-                    device=value.device,
+                    dtype=ref_dtype,
+                    device=ref_device,
                     requires_grad=True,
                 )
             else:
@@ -421,7 +430,6 @@ def get_log_probs_and_entropy(
     device = logits.device
     tp_group = mpu.get_tensor_model_parallel_group()
     chunk_size = args.log_probs_chunk_size
-    need_entropy_grad = with_entropy and args.entropy_coef != 0
 
     # --- build full shifted-token target tensor ---
     full_tokens = _build_shifted_tokens(
@@ -435,7 +443,6 @@ def get_log_probs_and_entropy(
         tp_group,
         with_entropy=with_entropy,
         chunk_size=chunk_size,
-        need_entropy_grad=need_entropy_grad,
     )
     log_prob_full = log_prob_full.squeeze(-1)  # [T, 1] -> [T]
 
