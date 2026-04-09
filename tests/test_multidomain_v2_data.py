@@ -8,7 +8,7 @@ import types
 
 
 def _load_prepare_module():
-    module_path = Path(__file__).resolve().parents[1] / "examples" / "prepare_runtime_dataset.py"
+    module_path = Path(__file__).resolve().parents[1] / "examples" / "common" / "prepare_runtime_dataset.py"
     spec = importlib.util.spec_from_file_location("prepare_runtime_dataset_test_module", module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -109,7 +109,7 @@ def test_write_dataset_preserves_normalized_rows_without_rewriting_fields(tmp_pa
         ],
     )
 
-    dest = tmp_path / "multidomain_v2_train.jsonl"
+    dest = tmp_path / "multidomain_train.jsonl"
     written = prepare_runtime_dataset.write_dataset(
         [source_a, source_b],
         dest,
@@ -146,7 +146,7 @@ def test_write_dataset_aligns_missing_tools_to_v1_shape(tmp_path: Path):
         ],
     )
 
-    dest = tmp_path / "multidomain_v2_train.jsonl"
+    dest = tmp_path / "multidomain_train.jsonl"
     written = prepare_runtime_dataset.write_dataset([source], dest)
     rows = _read_jsonl(dest)
 
@@ -486,8 +486,8 @@ def test_v2_run_script_is_not_a_v1_wrapper_anymore():
     script_path = (
         Path(__file__).resolve().parents[1]
         / "examples"
-        / "multidomain_v2"
-        / "run_qwen3_30b_a3b_multidomain_v2_3node.sh"
+        / "multidomain"
+        / "run_qwen3_30b_a3b_multidomain_3node.sh"
     )
     script_text = script_path.read_text(encoding="utf-8")
 
@@ -499,8 +499,8 @@ def test_v2_run_script_keeps_bfcl_eval_on_soft_reward():
     script_path = (
         Path(__file__).resolve().parents[1]
         / "examples"
-        / "multidomain_v2"
-        / "run_qwen3_30b_a3b_multidomain_v2_3node.sh"
+        / "multidomain"
+        / "run_qwen3_30b_a3b_multidomain_3node.sh"
     )
     script_text = script_path.read_text(encoding="utf-8")
 
@@ -512,8 +512,8 @@ def test_v2_run_script_no_longer_routes_tool_trajectory_to_custom_generate():
     script_path = (
         Path(__file__).resolve().parents[1]
         / "examples"
-        / "multidomain_v2"
-        / "run_qwen3_30b_a3b_multidomain_v2_3node.sh"
+        / "multidomain"
+        / "run_qwen3_30b_a3b_multidomain_3node.sh"
     )
     script_text = script_path.read_text(encoding="utf-8")
 
@@ -526,8 +526,8 @@ def test_v2_run_script_no_longer_references_deleted_v1_prepare_helper():
     script_path = (
         Path(__file__).resolve().parents[1]
         / "examples"
-        / "multidomain_v2"
-        / "run_qwen3_30b_a3b_multidomain_v2_3node.sh"
+        / "multidomain"
+        / "run_qwen3_30b_a3b_multidomain_3node.sh"
     )
     script_text = script_path.read_text(encoding="utf-8")
 
@@ -538,8 +538,8 @@ def test_v2_run_script_no_longer_references_toolbench_eval():
     script_path = (
         Path(__file__).resolve().parents[1]
         / "examples"
-        / "multidomain_v2"
-        / "run_qwen3_30b_a3b_multidomain_v2_3node.sh"
+        / "multidomain"
+        / "run_qwen3_30b_a3b_multidomain_3node.sh"
     )
     script_text = script_path.read_text(encoding="utf-8")
 

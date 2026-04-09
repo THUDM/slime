@@ -8,7 +8,7 @@ import sys
 import yaml
 
 def _load_runtime_prep_module():
-    module_path = Path(__file__).resolve().parents[1] / "examples" / "prepare_runtime_dataset.py"
+    module_path = Path(__file__).resolve().parents[1] / "examples" / "common" / "prepare_runtime_dataset.py"
     spec = importlib.util.spec_from_file_location("prepare_runtime_dataset_test_module", module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -214,7 +214,7 @@ def test_main_ignores_official_only_datasets_when_writing_generic_eval_config(
         sys,
         "argv",
         [
-            "prepare_runtime_dataset.py",
+            "common/prepare_runtime_dataset.py",
             "eval-config",
             "--pool-root",
             str(pool_root),
@@ -301,7 +301,7 @@ def test_main_writes_official_manifest_when_requested(tmp_path: Path, monkeypatc
         sys,
         "argv",
         [
-            "prepare_runtime_dataset.py",
+            "common/prepare_runtime_dataset.py",
             "eval-config",
             "--pool-root",
             str(pool_root),

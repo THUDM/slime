@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from examples import log_rollout
+from examples.common import log_rollout
 
 
 def _args(trace_dir: Path):
@@ -142,7 +142,7 @@ def test_mopd_run_script_wires_custom_eval_wandb_logging():
     script_path = Path(__file__).resolve().parents[1] / "examples" / "MOPD" / "run_mopd_qwen3_30b_4node.sh"
     script_text = script_path.read_text(encoding="utf-8")
 
-    assert "--custom-eval-rollout-log-function-path log_rollout.log_eval_rollout_data" in script_text
+    assert "--custom-eval-rollout-log-function-path examples.common.log_rollout.log_eval_rollout_data" in script_text
 
 
 def test_mopd_eval_log_adds_domain_metrics_without_skipping_default_logging(tmp_path: Path):

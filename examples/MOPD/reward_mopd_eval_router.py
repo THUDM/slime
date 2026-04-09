@@ -12,7 +12,7 @@ _SLIME_ROOT = _SCRIPT_DIR.parents[1]
 if str(_SLIME_ROOT) not in sys.path:
     sys.path.insert(0, str(_SLIME_ROOT))
 
-from examples.multidomain_shared import reward_func as _shared_reward  # noqa: E402
+from examples.common.multidomain_shared import reward_func as _shared_reward  # noqa: E402
 from slime.rollout.rm_hub.code_verifier import compute_score as _compute_code_score
 
 

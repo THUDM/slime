@@ -8,7 +8,7 @@ SLIME_ROOT = Path(__file__).resolve().parents[1]
 if str(SLIME_ROOT) not in sys.path:
     sys.path.insert(0, str(SLIME_ROOT))
 
-from examples.multidomain_shared import GENERIC_EVAL_DATASETS, OFFICIAL_EVAL_DATASETS
+from examples.common.multidomain_shared import GENERIC_EVAL_DATASETS, OFFICIAL_EVAL_DATASETS
 
 
 def test_generic_eval_registry_includes_ifbench_test() -> None:

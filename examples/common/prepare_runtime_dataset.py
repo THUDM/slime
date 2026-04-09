@@ -10,7 +10,7 @@ from typing import Any, Iterator, Sequence
 
 import yaml
 
-SLIME_ROOT = Path(__file__).resolve().parents[1]
+SLIME_ROOT = Path(__file__).resolve().parents[2]
 if str(SLIME_ROOT) not in sys.path:
     sys.path.insert(0, str(SLIME_ROOT))
 

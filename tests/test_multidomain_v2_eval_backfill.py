@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 
 def _load_module():
-    module_path = Path(__file__).resolve().parents[1] / "examples" / "eval_backfill.py"
+    module_path = Path(__file__).resolve().parents[1] / "examples" / "scripts" / "maintenance" / "eval_backfill.py"
     spec = importlib.util.spec_from_file_location("eval_backfill_test_module", module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -41,7 +41,7 @@ def test_main_routes_bfcl_eval_to_official_runner(monkeypatch, tmp_path: Path):
         max_tokens=256,
         batch_size=8,
         bfcl_model_name="qwen3-30b-a3b-instruct-2507",
-        reward_module="multidomain_shared.reward_func",
+        reward_module="examples.common.multidomain_shared.reward_func",
     )
 
     monkeypatch.setattr(eval_backfill, "parse_args", lambda: args)
@@ -128,7 +128,7 @@ def test_main_routes_bfcl_multi_turn_eval_with_expected_signature(monkeypatch, t
         max_tokens=128,
         batch_size=4,
         bfcl_model_name="",
-        reward_module="multidomain_shared.reward_func",
+        reward_module="examples.common.multidomain_shared.reward_func",
     )
 
     monkeypatch.setattr(eval_backfill, "parse_args", lambda: args)
@@ -217,7 +217,7 @@ def test_main_logs_teacher_step0_metrics_once_after_accumulating_all_eval_sets(m
         max_tokens=256,
         batch_size=8,
         bfcl_model_name="",
-        reward_module="multidomain_shared.reward_func",
+        reward_module="examples.common.multidomain_shared.reward_func",
     )
 
     monkeypatch.setattr(eval_backfill, "parse_args", lambda: args)

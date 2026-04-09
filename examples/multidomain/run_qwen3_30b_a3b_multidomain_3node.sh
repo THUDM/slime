@@ -10,6 +10,8 @@ AVALANCHE_ROOT="$(cd -- "${PROJECT_ROOT}/.." && pwd)"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/../common/ray_bootstrap_utils.sh"
 # shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../common/training_prep_utils.sh"
+# shellcheck source=/dev/null
 source "${SCRIPT_DIR}/../common/training_runner_utils.sh"
 
 NUM_NODES=${NUM_NODES:-3}
@@ -35,7 +37,7 @@ EVAL_PATHS=${EVAL_PATHS:-}
 EVAL_PATHS_EXTRA=${EVAL_PATHS_EXTRA:-}
 
 SLIME_DIR=${SLIME_DIR:-${PROJECT_ROOT}/slime}
-SCRIPT_QUERIES_PY="${SLIME_DIR}/examples/common/script_queries.py"
+DATASET_QUERIES_PY="${SLIME_DIR}/examples/common/dataset_queries.py"
 MEGATRON_PATH=${MEGATRON_PATH:-/root/Megatron-LM}
 
 EVAL_TOOL_BFCL_V3=${EVAL_TOOL_BFCL_V3:-${TRAIN_POOL_ROOT}/tool/eval/bfcl_v3_train-00000-of-00001.jsonl}
@@ -108,7 +110,7 @@ RAY_HEAD_LOCK_DIR="${WORK_ROOT}/ray_head_lock"
 mkdir -p "${LOG_DIR}" "${SAVE_DIR}" "${RUNTIME_DATA_DIR}" "${TRACE_DIR}"
 
 if [[ -z "${TRAIN_POOL_DATASETS}" ]]; then
-  TRAIN_POOL_DATASETS="$(python3 "${SCRIPT_QUERIES_PY}" default-train-datasets-for-group --group "${TRAIN_POOL_GROUP}")"
+  TRAIN_POOL_DATASETS="$(python3 "${DATASET_QUERIES_PY}" default-train-datasets-for-group --group "${TRAIN_POOL_GROUP}")"
 fi
 
 if [[ -z "${TRAIN_DATASETS}" ]]; then
@@ -116,7 +118,7 @@ if [[ -z "${TRAIN_DATASETS}" ]]; then
 fi
 
 TRAIN_GROUP_SIGNATURE="$(
-  python3 "${SCRIPT_QUERIES_PY}" group-signature \
+  python3 "${DATASET_QUERIES_PY}" group-signature \
     --datasets "${TRAIN_DATASETS}" \
     --dataset-extras "${TRAIN_DATASETS_EXTRA}" \
     --paths "${TRAIN_PATHS}" \
@@ -159,7 +161,7 @@ prepare_training_source_list() {
     train_pool_prep_args+=("--manifest" "${TRAIN_MANIFEST}")
   fi
 
-  python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" train \
+  python3 "${SCRIPT_DIR}/../common/prepare_runtime_dataset.py" train \
     "${train_pool_prep_args[@]}" \
     --dest /dev/null \
     --print-sources > "${TRAIN_SOURCE_LIST}"
@@ -176,7 +178,7 @@ prepare_eval_data() {
     while IFS=$'\t' read -r name source_path sample_count; do
       [[ -n "${name}" ]] || continue
       local_dest="${RUNTIME_DATA_DIR}/${name}_eval.normalized.jsonl"
-      python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" eval \
+      python3 "${SCRIPT_DIR}/../common/prepare_runtime_dataset.py" eval \
         --pool-root "${TRAIN_POOL_ROOT}" \
         --source "${source_path}" \
         --dest "${local_dest}" \
@@ -184,7 +186,7 @@ prepare_eval_data() {
       filter_jsonl_by_prompt_budget "${local_dest}" "${name}_eval"
       printf '%s\t%s\n' "${name}_eval" "${local_dest}" >> "${CUSTOM_EVAL_PROMPT_DATA_FILE}"
     done < <(
-      python3 "${SCRIPT_QUERIES_PY}" resolve-eval-datasets \
+      python3 "${DATASET_QUERIES_PY}" resolve-eval-datasets \
         --pool-root "${TRAIN_POOL_ROOT}" \
         --datasets "${EVAL_DATASETS}" \
         --dataset-extras "${EVAL_DATASETS_EXTRA}" \
@@ -195,7 +197,7 @@ prepare_eval_data() {
   fi
 
   if (( EVAL_IFEVAL_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" eval \
+    python3 "${SCRIPT_DIR}/../common/prepare_runtime_dataset.py" eval \
       --pool-root "${TRAIN_POOL_ROOT}" \
       --source "${EVAL_STRUCTURED_IFEVAL}" \
       --dest "${IFEVAL_EVAL}" \
@@ -204,7 +206,7 @@ prepare_eval_data() {
   fi
 
   if (( EVAL_JSONSCHEMABENCH_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" eval \
+    python3 "${SCRIPT_DIR}/../common/prepare_runtime_dataset.py" eval \
       --pool-root "${TRAIN_POOL_ROOT}" \
       --source "${EVAL_STRUCTURED_JSONSCHEMABENCH}" \
       --dest "${JSONSCHEMABENCH_EVAL}" \
@@ -213,7 +215,7 @@ prepare_eval_data() {
   fi
 
   if (( EVAL_IFBENCH_TEST_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" eval \
+    python3 "${SCRIPT_DIR}/../common/prepare_runtime_dataset.py" eval \
       --pool-root "${TRAIN_POOL_ROOT}" \
       --source "${EVAL_STRUCTURED_IFBENCH_TEST}" \
       --dest "${IFBENCH_TEST_EVAL}" \
@@ -222,7 +224,7 @@ prepare_eval_data() {
   fi
 
   if (( EVAL_MMLU_PRO_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" eval \
+    python3 "${SCRIPT_DIR}/../common/prepare_runtime_dataset.py" eval \
       --pool-root "${TRAIN_POOL_ROOT}" \
       --source "${EVAL_STEM_MMLU_PRO}" \
       --dest "${MMLU_PRO_EVAL}" \
@@ -231,7 +233,7 @@ prepare_eval_data() {
   fi
 
   if (( EVAL_GPQA_MAIN_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" eval \
+    python3 "${SCRIPT_DIR}/../common/prepare_runtime_dataset.py" eval \
       --pool-root "${TRAIN_POOL_ROOT}" \
       --source "${EVAL_STEM_GPQA_MAIN}" \
       --dest "${GPQA_MAIN_EVAL}" \
@@ -385,9 +387,9 @@ submit_ray_job() {
   fi
 
   CUSTOM_ARGS=(
-    --custom-rm-path "multidomain_shared.reward_func"
-    --custom-rollout-log-function-path log_rollout.log_rollout_data
-    --custom-eval-rollout-log-function-path log_rollout.log_eval_rollout_data
+    --custom-rm-path "examples.common.multidomain_shared.reward_func"
+    --custom-rollout-log-function-path examples.common.log_rollout.log_rollout_data
+    --custom-eval-rollout-log-function-path examples.common.log_rollout.log_eval_rollout_data
   )
 
   WANDB_ARGS=()
@@ -404,7 +406,7 @@ submit_ray_job() {
     )
   fi
 
-  RUNTIME_ENV_JSON="{\"env_vars\":{\"PYTHONPATH\":\"${SCRIPT_DIR}:${SCRIPT_DIR}/..:${MEGATRON_PATH}:${SLIME_DIR}\",\"CUDA_DEVICE_MAX_CONNECTIONS\":\"1\",\"NCCL_NVLS_ENABLE\":\"${HAS_NVLINK}\",\"MASTER_ADDR\":\"${MASTER_ADDR}\",\"WANDB_API_KEY\":\"${WANDB_API_KEY:-}\",\"WANDB_BASE_URL\":\"${WANDB_BASE_URL:-}\",\"MULTIDOMAIN_V1_TRACE_DIR\":\"${MULTIDOMAIN_V1_TRACE_DIR}\",\"MULTIDOMAIN_V1_TRACE_MAX_SAMPLES\":\"${MULTIDOMAIN_V1_TRACE_MAX_SAMPLES}\"}}"
+  RUNTIME_ENV_JSON="{\"env_vars\":{\"PYTHONPATH\":\"${SCRIPT_DIR}:${SCRIPT_DIR}/..:${SCRIPT_DIR}/../common:${MEGATRON_PATH}:${SLIME_DIR}\",\"CUDA_DEVICE_MAX_CONNECTIONS\":\"1\",\"NCCL_NVLS_ENABLE\":\"${HAS_NVLINK}\",\"MASTER_ADDR\":\"${MASTER_ADDR}\",\"WANDB_API_KEY\":\"${WANDB_API_KEY:-}\",\"WANDB_BASE_URL\":\"${WANDB_BASE_URL:-}\",\"MULTIDOMAIN_V1_TRACE_DIR\":\"${MULTIDOMAIN_V1_TRACE_DIR}\",\"MULTIDOMAIN_V1_TRACE_MAX_SAMPLES\":\"${MULTIDOMAIN_V1_TRACE_MAX_SAMPLES}\"}}"
 
   TRAINING_RESOURCE_ARGS=(
     --actor-num-nodes "${ACTOR_NUM_NODES}"
@@ -437,41 +439,10 @@ submit_ray_job() {
     "${CUSTOM_ARGS[@]}"
 }
 
-NODE_RANK=${NODE_RANK:-${RANK:-${MLP_ROLE_INDEX:-0}}}
-MASTER_ADDR="${MASTER_ADDR:-}"
-MASTER_PORT=${MASTER_PORT:-6379}
-DASHBOARD_PORT=${DASHBOARD_PORT:-8265}
-IS_RAY_HEAD=0
-
-elect_ray_head_role
-
-if [[ "${IS_RAY_HEAD}" -eq 1 ]]; then
-  rm -f "${RAY_HEAD_ADDR_FILE}"
-else
-  MASTER_ADDR="$(resolve_worker_master_addr "${MASTER_ADDR}" "${RAY_HEAD_ADDR_FILE}" 2>/dev/null || true)"
-  if [[ -z "${MASTER_ADDR}" ]]; then
-    echo "Failed to determine Ray head address for worker rank ${NODE_RANK}." >&2
-    exit 1
-  fi
-fi
-
-export MASTER_ADDR
-export no_proxy="127.0.0.1,${MASTER_ADDR}"
-
-cleanup_local_processes
-
-if [[ "${IS_RAY_HEAD}" -eq 1 ]]; then
-  start_ray_head_and_persist_addr
+head_prepare() {
   prepare_training_source_list
   prepare_eval_data
   ensure_torch_dist_checkpoint
-  wait_for_full_ray_cluster
-  submit_ray_job
-  ray stop --force || true
-else
-  sleep 5
-  start_ray_worker_with_retry
-  while ray status --address="${MASTER_ADDR}:${MASTER_PORT}" >/dev/null 2>&1; do
-    sleep 60
-  done
-fi
+}
+
+run_head_worker_loop head_prepare
