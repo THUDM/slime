@@ -26,17 +26,21 @@ def find_available_port(base_port: int):
 
 
 def is_port_available(port):
-    """Return whether a port is available."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    """Return whether a port is available.
+
+    Checks both IPv4 and IPv6 to avoid false positives from SO_REUSEADDR.
+    Does NOT set SO_REUSEADDR so the check reflects actual availability.
+    """
+    for family in (socket.AF_INET, socket.AF_INET6):
         try:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(("", port))
-            s.listen(1)
-            return True
+            with socket.socket(family, socket.SOCK_STREAM) as s:
+                s.bind(("" if family == socket.AF_INET else "::", port))
+                s.listen(1)
         except OSError:
             return False
         except OverflowError:
             return False
+    return True
 
 
 def get_host_info():
