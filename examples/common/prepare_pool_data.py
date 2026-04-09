@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 
-AVALANCHE_ROOT = Path(__file__).resolve().parents[3]
+AVALANCHE_ROOT = Path(__file__).resolve().parents[4]
 OPEN_DATA_ROOT = AVALANCHE_ROOT / "data" / "open_data"
 POOL_ROOT = AVALANCHE_ROOT / "data" / "pool"
 
@@ -212,11 +212,6 @@ DATASET_SPECS.update(
             "output": POOL_ROOT / "stem" / "eval" / "aqua_rat_validation-00000-of-00001.jsonl",
             "reader": "parquet",
         },
-        "mmlu_auxiliary_train": {
-            "source": OPEN_DATA_ROOT / "stem" / "mmlu" / "auxiliary_train" / "train-00000-of-00001.parquet",
-            "output": POOL_ROOT / "stem" / "train" / "mmlu_auxiliary_train-00000-of-00001.jsonl",
-            "reader": "parquet",
-        },
         "mmlu_dev": {
             "source": OPEN_DATA_ROOT / "stem" / "mmlu" / "all" / "dev-00000-of-00001.parquet",
             "output": POOL_ROOT / "stem" / "eval" / "mmlu_dev-00000-of-00001.jsonl",
@@ -403,6 +398,40 @@ def _stable_record_id(prefix: str, payload: Any) -> str:
 
 def _tool_metadata(dataset_name: str, record_id: Any, supervision_family: str, **extra: Any) -> dict[str, Any]:
     return _base_metadata(dataset_name, "tool", record_id, supervision_family=supervision_family, **extra)
+
+
+def _stem_mcqa_sample(
+    dataset_name: str,
+    record_id: str,
+    prompt: list[dict[str, Any]],
+    label: str,
+    *,
+    question: str | None = None,
+    options: list[str] | None = None,
+    source_fields: dict[str, Any] | None = None,
+    **extra_fields: Any,
+) -> dict[str, Any]:
+    sample: dict[str, Any] = {
+        "dataset_name": dataset_name,
+        "domain": "stem",
+        "record_id": record_id,
+        "prompt": prompt,
+        "label": label,
+        "metadata": _base_metadata(
+            dataset_name,
+            "stem",
+            record_id,
+            reward_type="stem_mcqa",
+            answer=label,
+            source_fields=source_fields,
+        ),
+    }
+    if question is not None:
+        sample["question"] = question
+    if options is not None:
+        sample["options"] = options
+    sample.update({key: _json_ready(value) for key, value in extra_fields.items() if value is not None})
+    return sample
 
 
 def _ensure_message_prompt(prompt: Any) -> list[dict[str, Any]]:
@@ -711,25 +740,18 @@ def _convert_gpqa_row(row: dict[str, Any], dataset_name: str) -> list[dict[str, 
     ]
     shuffled = _stable_shuffle(answers, record_id)
     answer_letter = chr(ord("A") + shuffled.index(str(row.get("Correct Answer") or "").strip()))
-    sample = {
-        "dataset_name": dataset_name,
-        "domain": "stem",
-        "record_id": record_id,
-        "prompt": [{"role": "user", "content": _format_mcqa_prompt(question, shuffled)}],
-        "question": question,
-        "options": shuffled,
-        "answer": answer_letter,
-        "metadata": _base_metadata(
-            dataset_name,
-            "stem",
-            record_id,
-            reward_type="stem_mcqa",
-            source_fields={
-                "high_level_domain": row.get("High-level domain"),
-                "subdomain": row.get("Subdomain"),
-            },
-        ),
-    }
+    sample = _stem_mcqa_sample(
+        dataset_name,
+        record_id,
+        [{"role": "user", "content": _format_mcqa_prompt(question, shuffled)}],
+        answer_letter,
+        question=question,
+        options=shuffled,
+        source_fields={
+            "high_level_domain": row.get("High-level domain"),
+            "subdomain": row.get("Subdomain"),
+        },
+    )
     return [sample]
 
 
@@ -739,26 +761,19 @@ def _convert_mmlu_pro_row(row: dict[str, Any], dataset_name: str) -> list[dict[s
     options = [str(option) for option in _json_ready(row.get("options") or row.get("choices") or [])]
     answer_raw = row.get("answer")
     answer = _answer_index_to_letter(answer_raw) if isinstance(answer_raw, int) else str(answer_raw or "").strip().upper()
-    sample = {
-        "dataset_name": dataset_name,
-        "domain": "stem",
-        "record_id": record_id,
-        "prompt": [{"role": "user", "content": _format_mcqa_prompt(question, options)}],
-        "question": question,
-        "options": options,
-        "answer": answer,
-        "metadata": _base_metadata(
-            dataset_name,
-            "stem",
-            record_id,
-            reward_type="stem_mcqa",
-            source_fields={
-                "category": row.get("category"),
-                "src": row.get("src"),
-                "cot_content": row.get("cot_content"),
-            },
-        ),
-    }
+    sample = _stem_mcqa_sample(
+        dataset_name,
+        record_id,
+        [{"role": "user", "content": _format_mcqa_prompt(question, options)}],
+        answer,
+        question=question,
+        options=options,
+        source_fields={
+            "category": row.get("category"),
+            "src": row.get("src"),
+            "cot_content": row.get("cot_content"),
+        },
+    )
     return [sample]
 
 
@@ -772,22 +787,15 @@ def _convert_choice_dict_mcqa_row(
     record_id = str(row.get("id") or _stable_record_id(dataset_name, row))
     question = _question_with_optional_passage(row.get(question_field) or "", row.get("passage"))
     options = _choices_dict_to_options(row.get("choices"))
-    sample = {
-        "dataset_name": dataset_name,
-        "domain": "stem",
-        "record_id": record_id,
-        "prompt": [{"role": "user", "content": _format_mcqa_prompt(question, options)}],
-        "question": question,
-        "options": options,
-        "answer": str(row.get(answer_field) or "").strip().upper(),
-        "metadata": _base_metadata(
-            dataset_name,
-            "stem",
-            record_id,
-            reward_type="stem_mcqa",
-            source_fields={"subset": subset} if subset else None,
-        ),
-    }
+    sample = _stem_mcqa_sample(
+        dataset_name,
+        record_id,
+        [{"role": "user", "content": _format_mcqa_prompt(question, options)}],
+        str(row.get(answer_field) or "").strip().upper(),
+        question=question,
+        options=options,
+        source_fields={"subset": subset} if subset else None,
+    )
     return [sample]
 
 
@@ -795,22 +803,15 @@ def _convert_aqua_rat_row(row: dict[str, Any], dataset_name: str) -> list[dict[s
     record_id = _stable_record_id(dataset_name, row.get("question"))
     question = str(row.get("question") or "").strip()
     options = [str(option) for option in _json_ready(row.get("options") or [])]
-    sample = {
-        "dataset_name": dataset_name,
-        "domain": "stem",
-        "record_id": record_id,
-        "prompt": [{"role": "user", "content": _format_mcqa_prompt(question, options)}],
-        "question": question,
-        "options": options,
-        "answer": str(row.get("correct") or "").strip().upper(),
-        "metadata": _base_metadata(
-            dataset_name,
-            "stem",
-            record_id,
-            reward_type="stem_mcqa",
-            source_fields={"rationale": row.get("rationale")},
-        ),
-    }
+    sample = _stem_mcqa_sample(
+        dataset_name,
+        record_id,
+        [{"role": "user", "content": _format_mcqa_prompt(question, options)}],
+        str(row.get("correct") or "").strip().upper(),
+        question=question,
+        options=options,
+        source_fields={"rationale": row.get("rationale")},
+    )
     return [sample]
 
 
@@ -818,33 +819,26 @@ def _convert_scienceqa_row(row: dict[str, Any], dataset_name: str) -> list[dict[
     record_id = _stable_record_id(dataset_name, row.get("question"))
     question = str(row.get("question") or "").strip()
     options = [str(choice) for choice in _json_ready(row.get("choices") or [])]
-    sample = {
-        "dataset_name": dataset_name,
-        "domain": "stem",
-        "record_id": record_id,
-        "prompt": [{"role": "user", "content": _format_mcqa_prompt(question, options)}],
-        "question": question,
-        "options": options,
-        "answer": _answer_index_to_letter(row.get("answer")),
-        "metadata": _base_metadata(
-            dataset_name,
-            "stem",
-            record_id,
-            reward_type="stem_mcqa",
-            source_fields={
-                "hint": row.get("hint"),
-                "image": _json_ready(row.get("image")),
-                "lecture": row.get("lecture"),
-                "solution": row.get("solution"),
-                "subject": row.get("subject"),
-                "task": row.get("task"),
-                "topic": row.get("topic"),
-                "category": row.get("category"),
-                "grade": row.get("grade"),
-                "skill": row.get("skill"),
-            },
-        ),
-    }
+    sample = _stem_mcqa_sample(
+        dataset_name,
+        record_id,
+        [{"role": "user", "content": _format_mcqa_prompt(question, options)}],
+        _answer_index_to_letter(row.get("answer")),
+        question=question,
+        options=options,
+        source_fields={
+            "hint": row.get("hint"),
+            "image": _json_ready(row.get("image")),
+            "lecture": row.get("lecture"),
+            "solution": row.get("solution"),
+            "subject": row.get("subject"),
+            "task": row.get("task"),
+            "topic": row.get("topic"),
+            "category": row.get("category"),
+            "grade": row.get("grade"),
+            "skill": row.get("skill"),
+        },
+    )
     return [sample]
 
 
@@ -861,22 +855,15 @@ def _convert_sciq_row(row: dict[str, Any], dataset_name: str) -> list[dict[str, 
         record_id,
     )
     answer = chr(ord("A") + options.index(str(row.get("correct_answer") or "").strip()))
-    sample = {
-        "dataset_name": dataset_name,
-        "domain": "stem",
-        "record_id": record_id,
-        "prompt": [{"role": "user", "content": _format_mcqa_prompt(question, options)}],
-        "question": question,
-        "options": options,
-        "answer": answer,
-        "metadata": _base_metadata(
-            dataset_name,
-            "stem",
-            record_id,
-            reward_type="stem_mcqa",
-            source_fields={"support": row.get("support")},
-        ),
-    }
+    sample = _stem_mcqa_sample(
+        dataset_name,
+        record_id,
+        [{"role": "user", "content": _format_mcqa_prompt(question, options)}],
+        answer,
+        question=question,
+        options=options,
+        source_fields={"support": row.get("support")},
+    )
     return [sample]
 
 
@@ -884,25 +871,18 @@ def _convert_agieval_row(row: dict[str, Any], dataset_name: str) -> list[dict[st
     record_id = _stable_record_id(dataset_name, {"question": row.get("question"), "label": row.get("label")})
     question = _question_with_optional_passage(row.get("question") or "", row.get("passage"))
     options = [str(option) for option in _json_ready(row.get("options") or [])]
-    sample = {
-        "dataset_name": dataset_name,
-        "domain": "stem",
-        "record_id": record_id,
-        "prompt": [{"role": "user", "content": _format_mcqa_prompt(question, options)}],
-        "question": question,
-        "options": options,
-        "answer": str(row.get("label") or "").strip().upper(),
-        "metadata": _base_metadata(
-            dataset_name,
-            "stem",
-            record_id,
-            reward_type="stem_mcqa",
-            source_fields={
-                "explanation": row.get("explanation"),
-                "other": _json_ready(row.get("other")),
-            },
-        ),
-    }
+    sample = _stem_mcqa_sample(
+        dataset_name,
+        record_id,
+        [{"role": "user", "content": _format_mcqa_prompt(question, options)}],
+        str(row.get("label") or "").strip().upper(),
+        question=question,
+        options=options,
+        source_fields={
+            "explanation": row.get("explanation"),
+            "other": _json_ready(row.get("other")),
+        },
+    )
     return [sample]
 
 
@@ -912,27 +892,20 @@ def _convert_medmcqa_row(row: dict[str, Any], dataset_name: str) -> list[dict[st
     options = [str(row.get(key) or "") for key in ("opa", "opb", "opc", "opd")]
     answer_index = int(row.get("cop", 0))
     answer = chr(ord("A") + answer_index)
-    sample = {
-        "dataset_name": dataset_name,
-        "domain": "stem",
-        "record_id": record_id,
-        "prompt": [{"role": "user", "content": _format_mcqa_prompt(question, options)}],
-        "question": question,
-        "options": options,
-        "answer": answer,
-        "metadata": _base_metadata(
-            dataset_name,
-            "stem",
-            record_id,
-            reward_type="stem_mcqa",
-            source_fields={
-                "choice_type": row.get("choice_type"),
-                "subject_name": row.get("subject_name"),
-                "topic_name": row.get("topic_name"),
-                "exp": row.get("exp"),
-            },
-        ),
-    }
+    sample = _stem_mcqa_sample(
+        dataset_name,
+        record_id,
+        [{"role": "user", "content": _format_mcqa_prompt(question, options)}],
+        answer,
+        question=question,
+        options=options,
+        source_fields={
+            "choice_type": row.get("choice_type"),
+            "subject_name": row.get("subject_name"),
+            "topic_name": row.get("topic_name"),
+            "exp": row.get("exp"),
+        },
+    )
     return [sample]
 
 
@@ -945,18 +918,16 @@ def _extract_nemotron_mcqa_prompt(prompt: Any) -> list[dict[str, Any]]:
 def _convert_nemotron_knowledge_mcqa_row(row: dict[str, Any], dataset_name: str) -> list[dict[str, Any]]:
     record_id = str(row.get("uuid") or _stable_record_id(dataset_name, row))
     prompt = _extract_nemotron_mcqa_prompt(row.get("responses_create_params"))
-    sample = {
-        "dataset_name": dataset_name,
-        "domain": "stem",
-        "record_id": record_id,
-        "prompt": prompt,
-        "answer": str(row.get("expected_answer") or "").strip().upper(),
-        "options": _json_ready(row.get("options") or []),
-        "responses_create_params": _json_ready(row.get("responses_create_params") or {}),
-        "template_metadata": _json_ready(row.get("template_metadata") or {}),
-        "reward_profiles": _json_ready(row.get("reward_profiles") or []),
-        "metadata": _base_metadata(dataset_name, "stem", record_id, reward_type="stem_mcqa"),
-    }
+    sample = _stem_mcqa_sample(
+        dataset_name,
+        record_id,
+        prompt,
+        str(row.get("expected_answer") or "").strip().upper(),
+        options=_json_ready(row.get("options") or []),
+        responses_create_params=row.get("responses_create_params") or {},
+        template_metadata=row.get("template_metadata") or {},
+        reward_profiles=row.get("reward_profiles") or [],
+    )
     return [sample]
 
 

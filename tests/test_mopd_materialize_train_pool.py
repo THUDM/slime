@@ -7,7 +7,7 @@ import sys
 
 
 def _load_materialize_train_pool_module():
-    module_path = Path(__file__).resolve().parents[1] / "examples" / "prepare_runtime_dataset.py"
+    module_path = Path(__file__).resolve().parents[1] / "examples" / "common" / "prepare_runtime_dataset.py"
     spec = importlib.util.spec_from_file_location("materialize_train_pool_test_module", module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -63,7 +63,7 @@ def test_main_uses_jl_runtime_builders_for_math_and_code(tmp_path: Path, monkeyp
         sys,
         "argv",
         [
-            "prepare_runtime_dataset.py",
+            "common/prepare_runtime_dataset.py",
             "train",
             "--pool-root",
             str(pool_root),
@@ -144,7 +144,7 @@ def test_main_defaults_stem_and_structured_to_nemotron_datasets(tmp_path: Path, 
         sys,
         "argv",
         [
-            "prepare_runtime_dataset.py",
+            "common/prepare_runtime_dataset.py",
             "train",
             "--pool-root",
             str(pool_root),

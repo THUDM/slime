@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 COMMON_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-SCRIPT_QUERIES_PY="${SCRIPT_QUERIES_PY:-${COMMON_DIR}/script_queries.py}"
+SCRIPT_QUERIES_PY="${SCRIPT_QUERIES_PY:-${COMMON_DIR}/system_queries.py}"
 
 resolve_hostname_to_ip() {
   local host="$1"

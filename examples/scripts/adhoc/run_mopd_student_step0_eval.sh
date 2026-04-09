@@ -105,7 +105,7 @@ done
 # ── Run eval_backfill.py ──────────────────────────────────────────────
 echo "Running student step0 eval → wandb run ${WANDB_RUN_ID}..."
 PYTHONPATH="${MOPD_DIR}:${EXAMPLES_DIR}:${SLIME_DIR}:${PYTHONPATH:-}" \
-    python3 "${SLIME_DIR}/examples/eval_backfill.py" \
+    python3 "${SLIME_DIR}/examples/scripts/maintenance/eval_backfill.py" \
         --sglang-url "http://127.0.0.1:${PORT}" \
         --model-path "${STUDENT_HF_DIR}" \
         --reward-module reward_mopd_eval_router.reward_func \
