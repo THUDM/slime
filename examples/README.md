@@ -4,9 +4,17 @@ Concrete example workflows built on top of `slime`.
 
 ## Directory Structure
 
+## Boundaries
+
+- `common/` only contains shared training and data-preparation code.
+- `scripts/` contains submit, maintenance, and ad hoc operational tooling.
+- `slime/rollout/rm_hub/` contains framework-level reward backends.
+
+- Root `examples/`: package root plus top-level example directories only.
 - **[common](./common)**: Shared helpers used by the multidomain and MOPD examples.
+- **[scripts](./scripts)**: Ad hoc, maintenance, and submit utilities that are intentionally kept out of example main paths.
 - **[MOPD](./MOPD)**: Multi-objective policy distillation examples.
-- **[multidomain_v2](./multidomain_v2)**: Multidomain RL training and submit entrypoints.
+- **[multidomain](./multidomain)**: Multidomain RL training and submit entrypoints.
 - **[eval_multi_task](./eval_multi_task)**: Example for supporting evaluation multiple tasks with different configs.
 - **[fully_async](./fully_async)**: Demonstrates fully asynchronous rollout generation for higher efficiency.
 - **[geo3k_vlm](./geo3k_vlm)**: Training VLMs on a single-turn reasoning task using GRPO on the GEO3K dataset.

@@ -25,7 +25,7 @@ fi
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/../common/ray_bootstrap_utils.sh"
 # shellcheck source=/dev/null
-source "${SCRIPT_DIR}/../common/data_cache_reuse_utils.sh"
+source "${SCRIPT_DIR}/../common/training_prep_utils.sh"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/../common/training_runner_utils.sh"
 
@@ -115,7 +115,8 @@ TOOL_CALL_WANDB_PROJECT=${TOOL_CALL_WANDB_PROJECT:-slime-mopd}
 
 # ---- Misc ----
 SLIME_DIR=${SLIME_DIR:-${PROJECT_ROOT}/slime}
-SCRIPT_QUERIES_PY="${SLIME_DIR}/examples/common/script_queries.py"
+DATASET_QUERIES_PY="${SLIME_DIR}/examples/common/dataset_queries.py"
+SYSTEM_QUERIES_PY="${SLIME_DIR}/examples/common/system_queries.py"
 MEGATRON_PATH=${MEGATRON_PATH:-/root/Megatron-LM}
 
 RAY_CLUSTER_WAIT_MAX_ATTEMPTS=${RAY_CLUSTER_WAIT_MAX_ATTEMPTS:-240}
@@ -144,7 +145,7 @@ export MULTIDOMAIN_V1_TRACE_MAX_SAMPLES="${TRACE_MAX_SAMPLES}"
 
 mkdir -p "${DATA_CACHE_DIR}" "${LOG_DIR}" "${SAVE_DIR}" "${TRACE_DIR}"
 
-MOPD_DOMAIN_SIGNATURE="$(python3 "${SCRIPT_QUERIES_PY}" domain-signature --domains "${TRAIN_POOL_INCLUDE_DOMAINS}")"
+MOPD_DOMAIN_SIGNATURE="$(python3 "${DATASET_QUERIES_PY}" domain-signature --domains "${TRAIN_POOL_INCLUDE_DOMAINS}")"
 TOOL_CALL_WANDB_GROUP=${TOOL_CALL_WANDB_GROUP:-mopd-qwen3-30b-a3b-3node-h200-${MOPD_DOMAIN_SIGNATURE}}
 
 BOOTSTRAP_NODE_ID="${WORKER_ID:-${HOSTNAME:-node-${NODE_RANK:-unknown}}}"
@@ -178,7 +179,7 @@ prepare_training_source_list() {
 
   # Materialize pool data: bridge top-level supervision_family fields -> metadata.ground_truth/reward_type
   # so that downstream reward functions can consume the data directly.
-  PYTHONPATH="${SLIME_DIR}:${PYTHONPATH:-}" python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" train \
+  PYTHONPATH="${SLIME_DIR}:${PYTHONPATH:-}" python3 "${SCRIPT_DIR}/../common/prepare_runtime_dataset.py" train \
     --pool-root "${TRAIN_POOL_ROOT}" \
     --cache-dir "${DATA_CACHE_DIR}/materialized_train" \
     --manifest-output "${TRAIN_SOURCE_LIST}" \
@@ -201,7 +202,7 @@ write_eval_config() {
   parse_csv_to_args "${EVAL_PATHS}" --source eval_args
   parse_csv_to_args "${EVAL_PATHS_EXTRA}" --source-extra eval_args
 
-  python3 "${SCRIPT_DIR}/../prepare_runtime_dataset.py" eval-config "${eval_args[@]}"
+  python3 "${SCRIPT_DIR}/../common/prepare_runtime_dataset.py" eval-config "${eval_args[@]}"
 }
 
 ensure_hf_checkpoint_from_torch_dist() {
@@ -234,12 +235,12 @@ ensure_tool_teacher_hf_checkpoint() {
 
 load_eval_data_specs() {
   mapfile -t EVAL_DATA_SPECS < <(
-    python3 "${SCRIPT_QUERIES_PY}" load-eval-config --path "${EVAL_CONFIG_PATH}"
+    python3 "${DATASET_QUERIES_PY}" load-eval-config --path "${EVAL_CONFIG_PATH}"
   )
 
   if [[ "${TEACHER_STEP0_INCLUDE_BFCL}" == "1" ]] && [[ -f "${OFFICIAL_EVAL_MANIFEST_PATH}" ]]; then
     mapfile -t official_specs < <(
-      python3 "${SCRIPT_QUERIES_PY}" load-json-manifest --path "${OFFICIAL_EVAL_MANIFEST_PATH}"
+      python3 "${DATASET_QUERIES_PY}" load-json-manifest --path "${OFFICIAL_EVAL_MANIFEST_PATH}"
     )
     if [[ ${#official_specs[@]} -gt 0 ]]; then
       EVAL_DATA_SPECS+=("${official_specs[@]}")
@@ -306,13 +307,13 @@ run_teacher_step0_eval() {
     eval_args+=(--eval-data "${spec}")
   done
 
-  run_id="$(python3 "${SCRIPT_QUERIES_PY}" random-run-id)"
+  run_id="$(python3 "${SYSTEM_QUERIES_PY}" random-run-id)"
   wandb_group="$(normalize_wandb_group_name "${TOOL_CALL_WANDB_GROUP}")"
   run_name="${wandb_group}-${label}-step0"
 
   start_local_sglang_eval_server "${label}" "${hf_dir}" "${port}" "${tp_size}" "${mem_fraction}"
   PYTHONPATH="${SCRIPT_DIR}:${SLIME_DIR}/examples:${SLIME_DIR}:${PYTHONPATH:-}" \
-    python3 "${SLIME_DIR}/examples/eval_backfill.py" \
+    python3 "${SLIME_DIR}/examples/scripts/maintenance/eval_backfill.py" \
       --sglang-url "http://127.0.0.1:${port}" \
       --model-path "${hf_dir}" \
       --reward-module reward_mopd_eval_router.reward_func \
@@ -462,8 +463,8 @@ submit_ray_job() {
   CUSTOM_ARGS=(
     --custom-rm-path examples.MOPD.reward_func_mopd.reward_func_route_by_domain
     --custom-reward-post-process-path slime.rollout.on_policy_distillation.post_process_rewards
-    --custom-rollout-log-function-path log_rollout.log_rollout_data
-    --custom-eval-rollout-log-function-path log_rollout.log_eval_rollout_data
+    --custom-rollout-log-function-path examples.common.log_rollout.log_rollout_data
+    --custom-eval-rollout-log-function-path examples.common.log_rollout.log_eval_rollout_data
   )
 
   # ---- W&B ----
@@ -482,7 +483,7 @@ submit_ray_job() {
   fi
 
   MOPD_DIR="${SLIME_DIR}/examples/MOPD"
-  RUNTIME_ENV_JSON="{\"env_vars\":{\"PYTHONPATH\":\"${MOPD_DIR}:${SLIME_DIR}/examples:${MEGATRON_PATH}:${SLIME_DIR}\",\"CUDA_DEVICE_MAX_CONNECTIONS\":\"1\",\"NCCL_NVLS_ENABLE\":\"${HAS_NVLINK}\",\"MASTER_ADDR\":\"${MASTER_ADDR}\",\"WANDB_API_KEY\":\"${WANDB_API_KEY:-}\",\"WANDB_BASE_URL\":\"${WANDB_BASE_URL:-}\",\"MULTIDOMAIN_V1_TRACE_DIR\":\"${MULTIDOMAIN_V1_TRACE_DIR}\",\"MULTIDOMAIN_V1_TRACE_MAX_SAMPLES\":\"${MULTIDOMAIN_V1_TRACE_MAX_SAMPLES}\",\"OPD_DOMAIN_MODEL_MAP\":\"${OPD_DOMAIN_MODEL_MAP}\"}}"
+  RUNTIME_ENV_JSON="{\"env_vars\":{\"PYTHONPATH\":\"${MOPD_DIR}:${SLIME_DIR}/examples:${SLIME_DIR}/examples/common:${MEGATRON_PATH}:${SLIME_DIR}\",\"CUDA_DEVICE_MAX_CONNECTIONS\":\"1\",\"NCCL_NVLS_ENABLE\":\"${HAS_NVLINK}\",\"MASTER_ADDR\":\"${MASTER_ADDR}\",\"WANDB_API_KEY\":\"${WANDB_API_KEY:-}\",\"WANDB_BASE_URL\":\"${WANDB_BASE_URL:-}\",\"MULTIDOMAIN_V1_TRACE_DIR\":\"${MULTIDOMAIN_V1_TRACE_DIR}\",\"MULTIDOMAIN_V1_TRACE_MAX_SAMPLES\":\"${MULTIDOMAIN_V1_TRACE_MAX_SAMPLES}\",\"OPD_DOMAIN_MODEL_MAP\":\"${OPD_DOMAIN_MODEL_MAP}\"}}"
 
   TRAINING_RESOURCE_ARGS=(
     --actor-num-nodes "${ACTOR_NUM_NODES}"
@@ -513,53 +514,11 @@ submit_ray_job() {
 
 # ---- Main orchestration ----
 
-NODE_RANK=${NODE_RANK:-${RANK:-${MLP_ROLE_INDEX:-0}}}
-MASTER_ADDR="${MASTER_ADDR:-}"
-MASTER_PORT=${MASTER_PORT:-6379}
-DASHBOARD_PORT=${DASHBOARD_PORT:-8265}
-IS_RAY_HEAD=0
-
-# Clean stale ray_head_lock/addr from previous runs so head election succeeds.
-# Only rank 0 cleans to avoid a race where one node removes another's fresh lock.
-if [[ "${NODE_RANK}" -eq 0 ]]; then
-  if [[ -d "${RAY_HEAD_LOCK_DIR}" ]]; then
-    echo "Rank 0: cleaning stale ray_head_lock from previous run."
-    rm -rf "${RAY_HEAD_LOCK_DIR}"
-  fi
-  rm -f "${RAY_HEAD_ADDR_FILE}"
-fi
-sleep 3  # let rank 0 finish cleanup before all nodes race to elect
-
-elect_ray_head_role
-
-if [[ "${IS_RAY_HEAD}" -eq 1 ]]; then
-  rm -f "${RAY_HEAD_ADDR_FILE}"
-else
-  MASTER_ADDR="$(resolve_worker_master_addr "${MASTER_ADDR}" "${RAY_HEAD_ADDR_FILE}" 2>/dev/null || true)"
-  if [[ -z "${MASTER_ADDR}" ]]; then
-    echo "Failed to determine Ray head address for worker rank ${NODE_RANK}." >&2
-    exit 1
-  fi
-fi
-
-export MASTER_ADDR
-export no_proxy="127.0.0.1,${MASTER_ADDR}"
-
-cleanup_local_processes
-
-if [[ "${IS_RAY_HEAD}" -eq 1 ]]; then
-  start_ray_head_and_persist_addr
+head_prepare() {
   prepare_training_source_list
   write_eval_config
   ensure_torch_dist_checkpoint
   run_teacher_step0_evals
-  wait_for_full_ray_cluster
-  submit_ray_job
-  ray stop --force || true
-else
-  sleep 5
-  start_ray_worker_with_retry
-  while ray status --address="${MASTER_ADDR}:${MASTER_PORT}" >/dev/null 2>&1; do
-    sleep 60
-  done
-fi
+}
+
+run_head_worker_loop head_prepare

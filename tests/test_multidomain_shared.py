@@ -9,7 +9,7 @@ import pytest
 
 
 def _load_shared_module():
-    module_path = Path(__file__).resolve().parents[1] / "examples" / "multidomain_shared.py"
+    module_path = Path(__file__).resolve().parents[1] / "examples" / "common" / "multidomain_shared.py"
     spec = importlib.util.spec_from_file_location("multidomain_shared_test_module", module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

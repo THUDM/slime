@@ -198,3 +198,6 @@ _examples_synced/
 **/._*
 .sii
 __pycache__/
+
+# Example scripts are operational tooling, not core library code.
+examples/scripts/

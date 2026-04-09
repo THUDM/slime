@@ -7,6 +7,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/../common/ray_bootstrap_utils.sh"
 # shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../common/training_prep_utils.sh"
+# shellcheck source=/dev/null
 source "${SCRIPT_DIR}/../common/training_runner_utils.sh"
 
 NUM_NODES=${NUM_NODES:-3}
@@ -22,8 +24,6 @@ WORK_ROOT=${WORK_ROOT:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/pu
 
 SLIME_DIR=${SLIME_DIR:-/root/slime}
 MEGATRON_PATH=${MEGATRON_PATH:-/root/Megatron-LM}
-SCRIPT_QUERIES_PY="${SLIME_DIR}/examples/common/script_queries.py"
-
 DATA_CACHE_DIR="${WORK_ROOT}/data_cache"
 LOG_DIR="${WORK_ROOT}/logs"
 SAVE_DIR="${WORK_ROOT}/checkpoints"
