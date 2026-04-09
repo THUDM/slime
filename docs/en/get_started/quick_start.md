@@ -147,6 +147,7 @@ CKPT_ARGS=(
    --save /root/GLM-Z1-9B-0414_slime/
    # Model save interval (steps)
    --save-interval 20
+   # --max-actor-ckpt-to-keep 5  # Keep only the 5 most recent actor checkpoints
 )
 ```
 

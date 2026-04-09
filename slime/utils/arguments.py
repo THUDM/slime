@@ -745,6 +745,29 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "The model will be saved to `save_hf.format(rollout_id)`. "
                 ),
             )
+            parser.add_argument(
+                "--max-actor-ckpt-to-keep",
+                type=int,
+                default=None,
+                help=(
+                    "Maximum number of actor checkpoints to keep on disk. "
+                    "When exceeded after saving, the oldest checkpoints are deleted. "
+                    "Applies to Megatron checkpoints (--save) and HF checkpoints (--save-hf). "
+                    "Default: None (unlimited)."
+                ),
+            )
+            parser.add_argument(
+                "--checkpoint-storage-type",
+                type=str,
+                default="shared",
+                choices=["shared", "local"],
+                help=(
+                    "Checkpoint storage type. 'shared' (default): all ranks share a "
+                    "filesystem (e.g. FSx) — cleanup runs on global rank 0 only. "
+                    "'local': each node has its own disk (e.g. NVMe) — cleanup runs "
+                    "on local rank 0 of each node."
+                ),
+            )
             reset_arg(parser, "--seed", type=int, default=1234)
             reset_arg(parser, "--clip-grad", type=float, default=1.0)
             reset_arg(parser, "--calculate-per-token-loss", action="store_true")
@@ -753,6 +776,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--num-critic-only-steps", type=int, default=0, help="Number of critic only steps")
             parser.add_argument("--critic-load", type=str, default=None, help="The checkpoint for critic model.")
             parser.add_argument("--critic-save", type=str, default=None, help="The checkpoint for critic model.")
+            parser.add_argument(
+                "--max-critic-ckpt-to-keep",
+                type=int,
+                default=None,
+                help=(
+                    "Maximum number of critic checkpoints to keep on disk. "
+                    "When exceeded after saving, the oldest checkpoints are deleted. "
+                    "Applies to critic Megatron checkpoints (--critic-save). "
+                    "Default: None (unlimited)."
+                ),
+            )
             parser.add_argument("--critic-lr", type=float, default=None, help="The lr for critic model")
             parser.add_argument("--critic-train-only", action="store_true", default=False, help="Only train critic")
             parser.add_argument(
@@ -1578,6 +1612,13 @@ def slime_validate_args(args):
 
     if args.save_interval is not None:
         assert args.save is not None, "'--save' is required when save_interval is set."
+
+    if args.max_actor_ckpt_to_keep is not None:
+        assert args.max_actor_ckpt_to_keep >= 1, "'--max-actor-ckpt-to-keep' must be >= 1."
+        assert args.save_interval is not None, "'--save-interval' is required when '--max-actor-ckpt-to-keep' is set."
+    if args.max_critic_ckpt_to_keep is not None:
+        assert args.max_critic_ckpt_to_keep >= 1, "'--max-critic-ckpt-to-keep' must be >= 1."
+        assert args.save_interval is not None, "'--save-interval' is required when '--max-critic-ckpt-to-keep' is set."
 
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 
