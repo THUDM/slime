@@ -578,5 +578,5 @@ ray job submit --address="http://127.0.0.1:8265" \
 slime 针对大规模混合专家（MoE）模型的分布式训练进行了深度优化。我们提供了一些端到端的训练案例以供参考：
 
 - [示例：8xH100 训练 GLM-4.7-Flash](../examples/glm4.7-30B-A3B.md)
-- [示例：64xH100 训练 GLM-4.5](../examples/glm4.5-355B-A32B.md)
+- [示例：64xH100 训练 GLM-4.7](../examples/glm4.7-355B-A32B.md)
 - [示例：128xH100 训练 DeepSeek-R1](../examples/deepseek-r1.md)

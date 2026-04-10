@@ -51,18 +51,24 @@ def _to_local_gpu_id(physical_gpu_id: int) -> int:
 
 
 def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
-    if server_args.encoder_only:
-        from sglang.srt.disaggregation.encode_server import launch_server
-    else:
-        from sglang.srt.entrypoints.http_server import launch_server
+    if getattr(server_args, "encoder_only", False):
+        from sglang.srt.disaggregation.encode_server import launch_server_process as sglang_launch_server_process
+
+        return sglang_launch_server_process(
+            server_args,
+            start_method="spawn",
+            wait_for_server=True,
+        )
+
+    from sglang.srt.entrypoints.http_server import launch_server
 
     multiprocessing.set_start_method("spawn", force=True)
     server_args.host = server_args.host.strip("[]")
     p = multiprocessing.Process(target=launch_server, args=(server_args,))
     p.start()
 
-    if server_args.node_rank != 0:
-        return
+    if getattr(server_args, "node_rank", 0) != 0:
+        return p
 
     _wait_server_healthy(
         base_url=server_args.url(),
@@ -195,12 +201,10 @@ class SGLangEngine(RayActor):
             return
 
         if self.node_rank == 0 and self.router_ip and self.router_port:
-            if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
-                assert (
-                    self.worker_type == "regular"
-                ), "pd disaggregation is not supported in old router or slime router."
+            if parse(sglang_router.__version__) <= parse("0.2.1"):
+                assert self.worker_type == "regular", "pd disaggregation is not supported in old router."
                 response = requests.post(
-                    f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}"
+                    f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}",
                 )
             else:
                 payload = {
@@ -252,13 +256,12 @@ class SGLangEngine(RayActor):
         if self.node_rank != 0:
             return True
 
-        url = f"http://{self.server_host}:{self.server_port}/health_generate"
-        try:
-            response = requests.get(url, timeout=timeout)
-            response.raise_for_status()
-            return True
-        except requests.RequestException:
-            raise
+        response = requests.get(
+            f"http://{self.server_host}:{self.server_port}/health_generate",
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return True
 
     def update_weights_from_tensor(
         self,
@@ -317,7 +320,7 @@ class SGLangEngine(RayActor):
         if self.worker_type != "encoder" and self.node_rank == 0:
             worker_url = f"http://{self.server_host}:{self.server_port}"
             response = None
-            if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
+            if parse(sglang_router.__version__) <= parse("0.2.1"):
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
                 )
@@ -537,11 +540,14 @@ def _compute_server_args(
         "skip_server_warmup": True,
         # always enable draft weights cpu backup so that we run training without mtp weights.
         "enable_draft_weights_cpu_backup": True,
+        # Always enable Prometheus metrics so the /engine_metrics endpoint is
+        # available for W&B scraping (regardless of --sglang-enable-metrics).
+        "enable_metrics": True,
     }
 
     if worker_type == "prefill":
         kwargs["disaggregation_mode"] = "prefill"
-        kwargs["load_balance_method"] = "round_robin"
+        kwargs["load_balance_method"] = "follow_bootstrap_room"
         assert (
             disaggregation_bootstrap_port is not None
         ), "disaggregation_bootstrap_port must be set for prefill worker"
@@ -605,5 +611,6 @@ _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS = [
     "dist_init_addr",
     "skip_server_warmup",
     "enable_draft_weights_cpu_backup",
+    "enable_metrics",
     "mem_fraction_static",
 ]

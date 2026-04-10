@@ -2,7 +2,7 @@ import re
 import string
 from collections.abc import Iterable
 
-DEFAULT_VALID_LETTERS = list(string.ascii_uppercase[:8])
+DEFAULT_VALID_LETTERS = list(string.ascii_uppercase[:10])
 
 
 def _strip_chain_of_thought(text: str) -> str:

@@ -47,6 +47,10 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
         tools = sample.metadata.get("tools", None)
 
         token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages, tools=tools)
+        if len(token_ids) != len(loss_mask):
+            raise ValueError(
+                f"SFT rollout produced mismatched token_ids/loss_mask lengths: {len(token_ids)=}, {len(loss_mask)=}"
+            )
 
         response_length = MASK_GENERATOR.get_response_lengths([loss_mask])[0]
 

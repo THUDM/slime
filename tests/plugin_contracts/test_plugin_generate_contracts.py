@@ -173,5 +173,29 @@ def test_custom_generate_function_path_supports_user_override(patch_generate_sta
     assert_sample_contract(result)
 
 
+def test_generate_and_rm_group_rm_accepts_list_result_from_custom_generate(patch_generate_state, monkeypatch):
+    sglang_rollout = patch_generate_state
+
+    async def custom_generate_list(args, sample: Sample, sampling_params: dict):
+        sample.status = Sample.Status.COMPLETED
+        sibling = Sample(index=1, prompt="prompt-1", status=Sample.Status.COMPLETED)
+        return [sample, sibling]
+
+    monkeypatch.setattr(sglang_rollout, "load_function", lambda _path: custom_generate_list)
+
+    result = asyncio.run(
+        generate_and_rm(
+            make_args(custom_generate_function_path="plugin_contracts.fake_generate", group_rm=True),
+            Sample(index=0, prompt="prompt-0"),
+            sampling_params={"temperature": 0.3},
+            evaluation=False,
+        )
+    )
+
+    assert isinstance(result, list)
+    assert len(result) == 2
+    assert all(isinstance(sample, Sample) for sample in result)
+
+
 if __name__ == "__main__":
     run_contract_test_file()

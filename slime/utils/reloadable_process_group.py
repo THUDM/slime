@@ -296,7 +296,7 @@ def reload_process_groups():
 def _wrap_low_level_call():
     try:
         mem_info = available_memory()
-        if mem_info["free_GB"] < 5:
+        if mem_info["free_GB"] < 3:
             clear_memory()
         yield
     except Exception as e:

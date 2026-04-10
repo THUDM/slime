@@ -145,7 +145,7 @@ def get_responses(
 def _allgather_cp_redistribute(
     res: dict[str, list[torch.Tensor]],
     *,
-    logits: torch.Tensor,
+    logits_local_len: int,
     args: Namespace,
     total_lengths: list[int],
     response_lengths: list[int],
@@ -162,8 +162,7 @@ def _allgather_cp_redistribute(
 
     Args:
         res: Dict mapping metric names to lists of per-sample tensors.
-        logits: Model output used only to determine the local sequence length
-            (``logits.size(1)``).
+        logits_local_len: Local sequence length on this rank.
         args: Configuration (needs ``qkv_format``).
         total_lengths: Total sequence lengths (prompt + response) per sample.
         response_lengths: Response segment lengths per sample.
@@ -171,12 +170,19 @@ def _allgather_cp_redistribute(
     """
     cp_group = mpu.get_context_parallel_group()
     cp_rank = mpu.get_context_parallel_rank()
-
-    logits_local_len = logits.size(1)  # logits shape: [1, T_local, ...]
     chunk_start = cp_rank * logits_local_len
     chunk_end = chunk_start + logits_local_len
 
     for key, values in res.items():
+        # Skip keys where all values are None (e.g. entropy when not computed)
+        if all(v is None for v in values):
+            continue
+
+        # Determine reference dtype/device from first non-None value
+        ref_value = next(v for v in values if v is not None)
+        ref_dtype = ref_value.dtype
+        ref_device = ref_value.device
+
         # Reconstruct full response tensors with each rank's contiguous contribution
         full_resps = []
         seq_start = 0
@@ -188,12 +194,12 @@ def _allgather_cp_redistribute(
             s = max(logit_global_start, chunk_start)
             e = min(logit_global_end, chunk_end)
 
-            if e <= s:
+            if value is None or e <= s:
                 # This rank has no response logprobs for this sample
                 full_resp = torch.zeros(
                     response_length,
-                    dtype=value.dtype,
-                    device=value.device,
+                    dtype=ref_dtype,
+                    device=ref_device,
                     requires_grad=True,
                 )
             else:
@@ -222,6 +228,166 @@ def _allgather_cp_redistribute(
         res[key] = new_values
 
 
+def _build_shifted_tokens(
+    T: int,
+    device: torch.device,
+    unconcat_tokens: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+    qkv_format: str,
+    max_seq_lens: list[int] | None,
+    allgather_cp: bool,
+) -> torch.Tensor:
+    """Build shifted target tokens for the full packed/padded logits."""
+    cp_size = mpu.get_context_parallel_world_size()
+
+    # --- zigzag CP: completely different layout ---
+    if cp_size > 1 and not allgather_cp:
+        full_tokens = torch.zeros(T, dtype=torch.long, device=device)
+        end = 0
+        for i, (tokens, total_length, response_length) in enumerate(
+            zip(unconcat_tokens, total_lengths, response_lengths, strict=False)
+        ):
+            max_seq_len = max_seq_lens[i] if max_seq_lens is not None else None
+            chunk_size_cp, chunks_offset, logits_offset, tokens_offset = get_logits_and_tokens_offset_with_cp(
+                total_length, response_length, qkv_format, max_seq_len
+            )
+            for half, base in ((0, end), (1, end + chunk_size_cp)):
+                lo = logits_offset[half][0] - chunks_offset[half][0]
+                hi = logits_offset[half][1] - chunks_offset[half][0]
+                full_tokens[base + lo : base + hi] = tokens[tokens_offset[half][0] : tokens_offset[half][1]]
+            end += 2 * chunk_size_cp
+        return full_tokens
+
+    # --- cp1 and allgather-CP both build global shifted tokens the same way ---
+    T_global = sum(total_lengths) if allgather_cp else T
+    full_tokens = torch.zeros(T_global, dtype=torch.long, device=device)
+
+    if qkv_format == "thd" or allgather_cp:
+        offset = 0
+        for tokens, total_length in zip(unconcat_tokens, total_lengths, strict=False):
+            full_tokens[offset : offset + total_length - 1] = tokens[1:total_length]
+            offset += total_length
+    else:  # bshd, cp1
+        for i, (tokens, total_length) in enumerate(zip(unconcat_tokens, total_lengths, strict=False)):
+            seq_start = max_seq_lens[i] * i
+            full_tokens[seq_start : seq_start + total_length - 1] = tokens[1:total_length]
+
+    # allgather-CP: slice to local chunk
+    if allgather_cp:
+        cp_rank = mpu.get_context_parallel_rank()
+        chunk_start = cp_rank * T
+        chunk_end = chunk_start + T
+        if chunk_end <= T_global:
+            return full_tokens[chunk_start:chunk_end].contiguous()
+        local = torch.zeros(T, dtype=torch.long, device=device)
+        valid = T_global - chunk_start
+        if valid > 0:
+            local[:valid] = full_tokens[chunk_start:]
+        return local
+
+    return full_tokens
+
+
+def _extract_per_sample(
+    log_prob_full: torch.Tensor,
+    entropy_full: torch.Tensor | None,
+    unconcat_tokens: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+    qkv_format: str,
+    max_seq_lens: list[int] | None,
+    allgather_cp: bool,
+) -> tuple[list[torch.Tensor], list[torch.Tensor | None]]:
+    """Slice per-sample response log-probs/entropy from full-length 1-D tensors."""
+    cp_size = mpu.get_context_parallel_world_size()
+    log_probs_list: list[torch.Tensor] = []
+    entropy_list: list[torch.Tensor | None] = []
+
+    def _append(lp: torch.Tensor) -> None:
+        log_probs_list.append(lp)
+        entropy_list.append(None)
+
+    def _append_with_entropy(lp: torch.Tensor, start: int, end: int) -> None:
+        log_probs_list.append(lp)
+        entropy_list.append(entropy_full[start:end] if entropy_full is not None else None)
+
+    if cp_size > 1 and not allgather_cp:
+        # zigzag CP
+        pos = 0
+        for i, (_tokens, total_length, response_length) in enumerate(
+            zip(unconcat_tokens, total_lengths, response_lengths, strict=False)
+        ):
+            max_seq_len = max_seq_lens[i] if max_seq_lens is not None else None
+            chunk_size_cp, chunks_offset, logits_offset, _tokens_offset = get_logits_and_tokens_offset_with_cp(
+                total_length, response_length, qkv_format, max_seq_len
+            )
+            lo0 = logits_offset[0][0] - chunks_offset[0][0]
+            hi0 = logits_offset[0][1] - chunks_offset[0][0]
+            lo1 = logits_offset[1][0] - chunks_offset[1][0]
+            hi1 = logits_offset[1][1] - chunks_offset[1][0]
+
+            lp = torch.cat(
+                [
+                    log_prob_full[pos + lo0 : pos + hi0],
+                    log_prob_full[pos + chunk_size_cp + lo1 : pos + chunk_size_cp + hi1],
+                ],
+                dim=0,
+            )
+            log_probs_list.append(lp)
+            if entropy_full is not None:
+                ent = torch.cat(
+                    [
+                        entropy_full[pos + lo0 : pos + hi0],
+                        entropy_full[pos + chunk_size_cp + lo1 : pos + chunk_size_cp + hi1],
+                    ],
+                    dim=0,
+                )
+                entropy_list.append(ent)
+            else:
+                entropy_list.append(None)
+            pos += 2 * chunk_size_cp
+
+    elif allgather_cp:
+        cp_rank = mpu.get_context_parallel_rank()
+        local_len = log_prob_full.size(0)
+        chunk_start = cp_rank * local_len
+        chunk_end = chunk_start + local_len
+
+        seq_start = 0
+        for total_length, response_length in zip(total_lengths, response_lengths, strict=False):
+            prompt_length = total_length - response_length
+            logit_global_start = seq_start + prompt_length - 1
+            logit_global_end = seq_start + total_length - 1
+
+            s = max(logit_global_start, chunk_start)
+            e = min(logit_global_end, chunk_end)
+            if e <= s:
+                _append(log_prob_full[0:0])
+            else:
+                _append_with_entropy(
+                    log_prob_full[s - chunk_start : e - chunk_start], s - chunk_start, e - chunk_start
+                )
+            seq_start += total_length
+
+    else:
+        # cp1
+        if qkv_format == "thd":
+            offset = 0
+            for total_length, response_length in zip(total_lengths, response_lengths, strict=False):
+                end = offset + total_length
+                start = end - response_length
+                _append_with_entropy(log_prob_full[start - 1 : end - 1], start - 1, end - 1)
+                offset += total_length
+        else:  # bshd
+            for i, (total_length, response_length) in enumerate(zip(total_lengths, response_lengths, strict=False)):
+                end = max_seq_lens[i] * i + total_length
+                start = end - response_length
+                _append_with_entropy(log_prob_full[start - 1 : end - 1], start - 1, end - 1)
+
+    return log_probs_list, entropy_list
+
+
 def get_log_probs_and_entropy(
     logits: torch.Tensor,
     *,
@@ -235,51 +401,64 @@ def get_log_probs_and_entropy(
 ) -> dict[str, list[torch.Tensor]]:
     """Compute per-token log-probabilities (and optionally entropy) on responses.
 
-    For each sample, extracts response-aligned logits and tokens, then computes
-    log-probabilities via softmax across the tensor-parallel group. Log-probs
-    are squeezed from `[R, 1]` to `[R]`. Entropy values are always appended
-    (even when `with_entropy=False`), but only included in the result dict
-    when requested.
+    Computes on the **full** logits ``[T, V]`` tensor at once (instead of
+    per-sample slicing) so backward traverses ``[T, V]`` only once, then
+    extracts per-sample response portions.
 
-    Args:
-        logits: Policy logits with shape `[1, T, V]`.
-        args: Configuration (temperature applied in `get_responses`).
-        unconcat_tokens: List of token tensors per sample.
-        total_lengths: Total sequence lengths per sample.
-        response_lengths: Response segment lengths per sample.
-        with_entropy: If True, include "entropy" key in result.
-        non_loss_data: Unused; kept for API compatibility.
-
-    Returns:
-        Dict with key "log_probs" mapping to a list of `[R]` tensors per
-        sample. If `with_entropy` is True, also includes "entropy" key with
-        a list of `[R]` tensors.
+    When ``entropy_coef == 0``, entropy is computed under ``torch.no_grad()``
+    to avoid retaining the computation graph and to skip cloning.
     """
     assert non_loss_data
-    log_probs_list = []
-    entropy_list = []
-    for logits_chunk, tokens_chunk in get_responses(
+    qkv_format = args.qkv_format
+
+    assert logits.dtype == torch.float32, f"{logits.dtype}"
+    assert len(logits.shape) == 3, f"{logits.shape}"
+
+    if qkv_format == "thd":
+        assert logits.size(0) == 1, f"{logits.shape}"
+        logits = logits.squeeze(0)
+    else:
+        assert max_seq_lens is not None
+        logits = logits.view(-1, logits.size(-1))
+
+    # Apply rollout temperature scaling to logits to match rollout-time log-probs.
+    rollout_temperature = getattr(args, "rollout_temperature", 1.0)
+    if rollout_temperature != 1.0:
+        logits = logits / rollout_temperature
+    logits = logits.contiguous()
+    T = logits.size(0)
+    device = logits.device
+    tp_group = mpu.get_tensor_model_parallel_group()
+    chunk_size = args.log_probs_chunk_size
+
+    # --- build full shifted-token target tensor ---
+    full_tokens = _build_shifted_tokens(
+        T, device, unconcat_tokens, total_lengths, response_lengths, qkv_format, max_seq_lens, args.allgather_cp
+    )
+
+    # --- compute on full [T,V] logits at once via calculate_log_probs_and_entropy ---
+    log_prob_full, entropy_full = calculate_log_probs_and_entropy(
         logits,
-        args=args,
-        unconcat_tokens=unconcat_tokens,
-        total_lengths=total_lengths,
-        response_lengths=response_lengths,
-        max_seq_lens=max_seq_lens,
-    ):
-        log_prob, entropy = calculate_log_probs_and_entropy(
-            logits_chunk,
-            tokens_chunk,
-            mpu.get_tensor_model_parallel_group(),
-            with_entropy=with_entropy,
-            chunk_size=args.log_probs_chunk_size,
-        )
+        full_tokens,
+        tp_group,
+        with_entropy=with_entropy,
+        chunk_size=chunk_size,
+    )
+    log_prob_full = log_prob_full.squeeze(-1)  # [T, 1] -> [T]
 
-        log_probs_list.append(log_prob.squeeze(-1))
-        entropy_list.append(entropy)
+    # --- extract per-sample response portions ---
+    log_probs_list, entropy_list = _extract_per_sample(
+        log_prob_full,
+        entropy_full,
+        unconcat_tokens,
+        total_lengths,
+        response_lengths,
+        qkv_format,
+        max_seq_lens,
+        args.allgather_cp,
+    )
 
-    res = {
-        "log_probs": log_probs_list,
-    }
+    res = {"log_probs": log_probs_list}
     if with_entropy:
         res["entropy"] = entropy_list
 
@@ -287,14 +466,14 @@ def get_log_probs_and_entropy(
     if args.allgather_cp:
         _allgather_cp_redistribute(
             res,
-            logits=logits,
+            logits_local_len=T,
             args=args,
             total_lengths=total_lengths,
             response_lengths=response_lengths,
             max_seq_lens=max_seq_lens,
         )
 
-    return torch.empty((0,), device=logits.device), res
+    return torch.empty((0,), device=device), res
 
 
 def get_values(
@@ -346,7 +525,7 @@ def get_values(
     if args.allgather_cp:
         _allgather_cp_redistribute(
             res,
-            logits=logits,
+            logits_local_len=logits.size(1),
             args=args,
             total_lengths=total_lengths,
             response_lengths=response_lengths,
@@ -994,7 +1173,7 @@ def loss_function(
             raise ValueError(f"Unknown loss type: {args.loss_type}")
 
     if args.recompute_loss_function:
-        loss, log = checkpoint(func, args, batch, logits, sum_of_sample_mean)
+        loss, log = checkpoint(func, args, batch, logits, sum_of_sample_mean, use_reentrant=False)
     else:
         loss, log = func(args, batch, logits, sum_of_sample_mean)
 
