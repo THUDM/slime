@@ -428,7 +428,8 @@ def log_rollout_data(
     - Tensor-valued lists are concatenated and averaged. For token-level metrics
       like log-probs/returns/advantages/values, computes a CP-correct sample mean
       using `loss_masks` and total/response lengths.
-    - Non-tensor lists are averaged elementwise.
+    - Non-tensor lists are averaged elementwise. ``sampling_token_ids`` is
+      summarized by average candidate count per position.
     - Scalars are converted to Python numbers.
     """
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
@@ -454,6 +455,8 @@ def log_rollout_data(
             # There are the following assumptions:
             # - Each dp rank has the same number of samples
             if isinstance(val, (list, tuple)):
+                if len(val) == 0:
+                    continue
                 if isinstance(val[0], torch.Tensor):
                     # NOTE: Here we have to do the clone().detach(), otherwise the tensor will be
                     # modified in place and will cause problem for the next rollout.
@@ -479,6 +482,19 @@ def log_rollout_data(
                     else:
                         val = torch.cat(val).clone().detach()
                         val = val.mean() * cp_size
+                elif key == "sampling_token_ids":
+                    num_positions = sum(len(sample) for sample in val)
+                    val = (
+                        sum(len(token_ids) for sample in val for token_ids in sample) / num_positions
+                        if num_positions > 0
+                        else 0.0
+                    )
+                elif key == "sampling_logprob_sum":
+                    # Per-token tensor; skip generic aggregation — already
+                    # summarized indirectly via sampling_token_ids metrics.
+                    continue
+                elif isinstance(val[0], (list, tuple)):
+                    continue
                 else:
                     val = sum(val) / len(val)
             elif isinstance(val, torch.Tensor):

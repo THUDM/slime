@@ -61,6 +61,121 @@ def _prepare_prompt_ids(sample: Sample, tokenizer, processor: Any) -> list[int]:
     return tokenizer.encode(sample.prompt, add_special_tokens=False)
 
 
+def _logsumexp(values: np.ndarray) -> float:
+    """Numerically stable log-sum-exp for a 1-D numpy array."""
+    if values.size == 0:
+        return 0.0
+    max_v = values.max()
+    return float(max_v + np.log(np.sum(np.exp(values - max_v))))
+
+
+def _extract_top_p_candidates(meta_info: dict[str, Any]) -> list[list[tuple[int, float]]] | None:
+    """Extract top-p candidates from sglang response (base64 or list format).
+
+    Returns per-position list of ``(token_id, logprob)`` pairs, or ``None``.
+    """
+    # Base64 variable-length format
+    val_b64 = meta_info.get("output_top_p_logprobs_val_base64")
+    idx_b64 = meta_info.get("output_top_p_logprobs_idx_base64")
+    lengths = meta_info.get("output_top_p_logprobs_lengths")
+    if val_b64 and idx_b64 and lengths:
+        flat_vals = np.frombuffer(pybase64.b64decode(val_b64), dtype=np.float32)
+        flat_idxs = np.frombuffer(pybase64.b64decode(idx_b64), dtype=np.int32)
+        result: list[list[tuple[int, float]]] = []
+        offset = 0
+        for length in lengths:
+            if length <= 0:
+                result.append([])
+            else:
+                result.append(
+                    list(
+                        zip(
+                            flat_idxs[offset : offset + length].tolist(),
+                            flat_vals[offset : offset + length].tolist(),
+                            strict=True,
+                        )
+                    )
+                )
+                offset += length
+        return result
+
+    # List format: [(logprob, token_id, text), ...] per position
+    top_p_logprobs = meta_info.get("output_top_p_logprobs")
+    if top_p_logprobs:
+        return [[(tid, lp) for lp, tid, *_ in entries] for entries in top_p_logprobs]
+
+    return None
+
+
+def _extract_topk_candidates(meta_info: dict[str, Any], top_k: int) -> list[list[tuple[int, float]]] | None:
+    """Extract top-k candidates from sglang response (base64 or list format).
+
+    Returns per-position list of ``(token_id, logprob)`` pairs, or ``None``.
+    """
+    # Base64 fixed-length format (present when return_logprobs_in_base64=True)
+    val_b64 = meta_info.get("output_top_logprobs_val_base64")
+    idx_b64 = meta_info.get("output_top_logprobs_idx_base64")
+    shape = meta_info.get("output_top_logprobs_shape")
+    if val_b64 and idx_b64 and shape:
+        vals = np.frombuffer(pybase64.b64decode(val_b64), dtype=np.float32).reshape(shape)
+        idxs = np.frombuffer(pybase64.b64decode(idx_b64), dtype=np.int32).reshape(shape)
+        k = min(top_k, shape[1])
+        return [list(zip(idxs[i, :k].tolist(), vals[i, :k].tolist(), strict=True)) for i in range(shape[0])]
+
+    # List format: [(logprob, token_id, text), ...] per position
+    top_logprobs = meta_info.get("output_top_logprobs")
+    if not top_logprobs:
+        return None
+    return [
+        [(tid, lp) for lp, tid, *_ in sorted(entries, key=lambda x: x[0], reverse=True)[:top_k]]
+        for entries in top_logprobs
+    ]
+
+
+def append_sampling_mask_to_sample(
+    sample: Sample,
+    *,
+    meta_info: dict[str, Any],
+    args: Namespace,
+) -> None:
+    use_topp = getattr(args, "use_topp_mask", False)
+    use_topk = getattr(args, "use_topk_mask", False)
+    if not use_topp and not use_topk:
+        return
+
+    topp_candidates = _extract_top_p_candidates(meta_info) if use_topp else None
+    topk_candidates = _extract_topk_candidates(meta_info, args.rollout_top_k) if use_topk else None
+
+    if topp_candidates is not None and topk_candidates is not None:
+        # Both enabled — take intersection per position
+        candidates: list[list[tuple[int, float]]] = []
+        for topp_pos, topk_pos in zip(topp_candidates, topk_candidates, strict=True):
+            topk_set = {tid for tid, _ in topk_pos}
+            candidates.append([(tid, lp) for tid, lp in topp_pos if tid in topk_set])
+    elif topp_candidates is not None:
+        candidates = topp_candidates
+    elif topk_candidates is not None:
+        candidates = topk_candidates
+    else:
+        return
+
+    # Build token_ids and logsumexp per position
+    new_token_ids: list[list[int]] = []
+    new_logprob_sums: list[float] = []
+    for pos in candidates:
+        ids = [tid for tid, _ in pos]
+        lps = np.array([lp for _, lp in pos], dtype=np.float32)
+        new_token_ids.append(ids)
+        new_logprob_sums.append(_logsumexp(lps))
+
+    if sample.sampling_token_ids is None:
+        sample.sampling_token_ids = []
+    if sample.sampling_logprob_sum is None:
+        sample.sampling_logprob_sum = []
+    sample.sampling_token_ids += new_token_ids
+    sample.sampling_logprob_sum += new_logprob_sums
+
+
 def get_model_url(args: Namespace, model_name: str, endpoint: str = "/generate") -> str:
     """Return the router URL for a named model.
 
@@ -176,6 +291,13 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         "return_logprob": True,
     }
 
+    if getattr(args, "use_topp_mask", False) or getattr(args, "use_topk_mask", False):
+        payload["return_logprobs_in_base64"] = True
+        if getattr(args, "use_topk_mask", False):
+            payload["top_logprobs_num"] = args.rollout_top_k
+        if getattr(args, "use_topp_mask", False):
+            payload["top_logprobs_p"] = args.rollout_top_p
+
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
 
@@ -220,6 +342,9 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if sample.rollout_log_probs is None:
         sample.rollout_log_probs = []
     sample.rollout_log_probs += new_response_log_probs
+
+    # Record the exact rollout candidate set so training can reuse the same normalization domain.
+    append_sampling_mask_to_sample(sample, meta_info=output["meta_info"], args=args)
 
     if "routed_experts" in output["meta_info"]:
         sample.rollout_routed_experts = np.frombuffer(
