@@ -1,0 +1,133 @@
+ARG SGLANG_IMAGE_TAG=v0.5.9
+FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
+
+# ======================================== Arguments =============================================
+
+ARG PATCH_VERSION=v0.5.9.a100
+ARG MEGATRON_COMMIT=3714d81d418c9f1bca4594fc35f9e8289f652862
+ARG DEEPEP_COMMIT=main
+
+# A100 = SM80. No Hopper features (FA3, FlashMLA, DeepEP NVSHMEM low-latency).
+ARG TORCH_CUDA_ARCH_LIST="8.0"
+ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
+
+# ======================================== Setup =============================================
+
+WORKDIR /root/
+
+# ======================================== Apt dependencies =============================================
+
+RUN apt update
+RUN apt install -y nvtop rsync dnsutils patch
+
+# ====================================== Python dependencies ============================================
+
+# The compilation is slow, thus should be put at top.
+# TransformerEngine does not support too high FA2.
+RUN MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1 --no-build-isolation
+
+# Note: FlashAttention 3 (Hopper-only) is intentionally skipped on A100.
+
+RUN pip install git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c --no-deps
+
+RUN pip install flash-linear-attention==0.4.1
+
+RUN pip -v install --no-build-isolation "transformer_engine[pytorch]==2.10.0"
+
+RUN NVCC_APPEND_FLAGS="--threads 4" \
+  pip -v install --disable-pip-version-check --no-cache-dir \
+  --no-build-isolation \
+  --config-settings "--build-option=--cpp_ext --cuda_ext --parallel 8" git+https://github.com/NVIDIA/apex.git@10417aceddd7d5d05d7cbf7b0fc2daad1105f8b4
+
+RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
+    cd Megatron-LM && git checkout ${MEGATRON_COMMIT} && \
+    pip install -e .
+
+RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@dc6876905830430b5054325fa4211ff302169c6b --no-cache-dir --force-reinstall
+RUN pip install git+https://github.com/fzyzcjy/Megatron-Bridge.git@dev_rl --no-build-isolation
+RUN pip install nvidia-modelopt[torch]>=0.37.0 --no-build-isolation
+
+# ====================================== DeepEP (A100 / SM80, no NVSHMEM) ============================================
+
+# A100 cannot use SM90 features or NVSHMEM low-latency mode. torch may pull
+# nvidia-nvshmem-cu12 which triggers a false detection in setup.py, so we
+# force disable_nvshmem and DISABLE_SM90_FEATURES.
+RUN git clone https://github.com/deepseek-ai/DeepEP.git /root/DeepEP && \
+    cd /root/DeepEP && \
+    git checkout ${DEEPEP_COMMIT}
+
+COPY docker/patch/${PATCH_VERSION}/deep_ep.patch /root/DeepEP/
+RUN cd /root/DeepEP && \
+    git apply deep_ep.patch && \
+    rm deep_ep.patch && \
+    sed -i 's/    disable_nvshmem = False/    disable_nvshmem = True/' setup.py && \
+    DISABLE_SM90_FEATURES=1 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
+      python setup.py install && \
+    cd /root && rm -rf /root/DeepEP
+
+# ====================================== Misc deps ============================================
+
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install -r /tmp/requirements.txt
+
+# https://github.com/pytorch/pytorch/issues/168167
+RUN pip install nvidia-cudnn-cu12==9.16.0.29
+
+# reinstall numpy 1.x for megatron
+RUN pip install "numpy<2"
+
+RUN pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-5f8d397/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
+RUN python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
+
+RUN rm -rf /root/.cache/pip
+
+# ====================================== Patches ============================================
+
+COPY docker/patch/${PATCH_VERSION}/megatron.patch /root/Megatron-LM/
+RUN cd Megatron-LM && \
+    git update-index --refresh && \
+    git apply megatron.patch --3way && \
+    if grep -R -n '^<<<<<<< ' .; then \
+      echo "Patch failed to apply cleanly. Please resolve conflicts." && \
+      exit 1; \
+    fi && \
+    rm megatron.patch
+
+ARG ENABLE_SGLANG_PATCH=1
+COPY docker/patch/${PATCH_VERSION}/sglang.patch /sgl-workspace/sglang/
+RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
+  cd /sgl-workspace/sglang && \
+  git update-index --refresh && \
+  git apply sglang.patch --3way && \
+  if grep -R -n '^<<<<<<< ' .; then \
+    echo "Patch failed to apply cleanly. Please resolve conflicts." && \
+    exit 1; \
+  fi && \
+  rm sglang.patch; \
+fi
+
+# transformer_engine.patch — applied to installed site-packages.
+COPY docker/patch/${PATCH_VERSION}/transformer_engine.patch /tmp/transformer_engine.patch
+RUN TE_SITE_DIR=$(python -c "import transformer_engine, os; print(os.path.dirname(transformer_engine.__path__[0]))") && \
+    patch -p1 -d "$TE_SITE_DIR" < /tmp/transformer_engine.patch && \
+    rm /tmp/transformer_engine.patch
+
+# ====================================== Install main package ============================================
+
+ARG SLIME_COMMIT=main
+RUN git clone https://github.com/THUDM/slime.git /root/slime && \
+    cd /root/slime && \
+    git checkout ${SLIME_COMMIT} && \
+    pip install -e . --no-deps
+
+# slime.patch — applied to the cloned slime source (editable install picks it up).
+RUN cd /root/slime && \
+    git update-index --refresh && \
+    git apply docker/patch/${PATCH_VERSION}/slime.patch --3way && \
+    if grep -R -n '^<<<<<<< ' .; then \
+      echo "slime.patch failed to apply cleanly." && \
+      exit 1; \
+    fi
+
+RUN cd /root/slime/slime/backends/megatron_utils/kernels/int4_qat && \
+    pip install . --no-build-isolation
