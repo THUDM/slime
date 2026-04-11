@@ -8,17 +8,18 @@
 set -ex
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MAMBA_BIN="${HOME}/.local/bin"
 
-# install micromamba from bundled installer
+# Hardcoded to /root to match the previous build_conda.sh (Docker HOME=/root)
+MAMBA_BIN="/root/.local/bin"
+MAMBA_ROOT="/root/micromamba"
+export MAMBA_ROOT_PREFIX="$MAMBA_ROOT"
+
 if ! command -v micromamba &>/dev/null; then
-  BIN_FOLDER="$MAMBA_BIN" INIT_YES=no CONDA_FORGE_YES=no \
+  BIN_FOLDER="$MAMBA_BIN" INIT_YES=yes CONDA_FORGE_YES=yes \
+    PREFIX_LOCATION="$MAMBA_ROOT" \
     bash "$SCRIPT_DIR/.downloads/mamba_install.sh" < /dev/null
 fi
 export PATH="$MAMBA_BIN:$PATH"
-
-# Restore full conda environment (envs + package cache) built on the network machine
-MAMBA_ROOT="${MAMBA_ROOT_PREFIX:-$HOME/micromamba}"
 ENV_TARBALL="$SCRIPT_DIR/.downloads/conda-env.tar.gz"
 if [ -f "$ENV_TARBALL" ]; then
   echo "Restoring conda environment to $MAMBA_ROOT ..."

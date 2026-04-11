@@ -3,7 +3,7 @@
 #SBATCH --nodelist=ib-a100-cluster-a-n[001-256]
 #SBATCH -N 1
 #SBATCH --cpus-per-task=64
-#SBATCH --mem=256G
+#SBATCH --mem=512G
 #SBATCH --gres=gpu:1
 #SBATCH --output=build_log/build_conda_%j.log
 #SBATCH --error=build_log/build_conda_%j.log

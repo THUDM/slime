@@ -3,17 +3,19 @@
 set -ex
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MAMBA_BIN="${HOME}/.local/bin"
 
-# install micromamba if not present
+# Hardcoded to /root to match the previous build_conda.sh (Docker HOME=/root)
+MAMBA_BIN="/root/.local/bin"
+MAMBA_ROOT="/root/micromamba"
+export MAMBA_ROOT_PREFIX="$MAMBA_ROOT"
+
 if ! command -v micromamba &>/dev/null; then
-  BIN_FOLDER="$MAMBA_BIN" INIT_YES=no CONDA_FORGE_YES=no \
+  BIN_FOLDER="$MAMBA_BIN" INIT_YES=yes CONDA_FORGE_YES=yes \
+    PREFIX_LOCATION="$MAMBA_ROOT" \
     bash "$SCRIPT_DIR/.downloads/mamba_install.sh" < /dev/null
 fi
 export PATH="$MAMBA_BIN:$PATH"
 eval "$(micromamba shell hook -s bash)"
-
-MAMBA_ROOT="${MAMBA_ROOT_PREFIX:-$HOME/micromamba}"
 
 # If slime env was already restored by custom_proxy.sh, skip conda setup
 if [ -d "$MAMBA_ROOT/envs/slime" ]; then
@@ -37,7 +39,7 @@ fi
 export CUDA_HOME="$CONDA_PREFIX"
 export SGLANG_COMMIT="bbe9c7eeb520b0a67e92d133dfc137a3688dc7f2"
 export MEGATRON_COMMIT="3714d81d418c9f1bca4594fc35f9e8289f652862"
-export DEEPEP_COMMIT="${DEEPEP_COMMIT:-main}"
+export DEEPEP_COMMIT="${DEEPEP_COMMIT:-1d3963d}"
 
 # Patch set selector. Supported:
 #   v0.5.9       - upstream default (sglang + megatron patches only)
@@ -80,7 +82,7 @@ if [ "$BUILD_A100" = "1" ]; then
   # Note: SLIME_DIR is not set yet at this point, locate the patch via the running script's repo.
   DEEPEP_PATCH="$SCRIPT_DIR/docker/patch/${PATCH_VERSION}/deep_ep.patch"
   if [ -f "$DEEPEP_PATCH" ]; then
-    git apply "$DEEPEP_PATCH"
+    git apply --reject "$DEEPEP_PATCH" || echo "WARNING: deep_ep.patch had rejected hunks (see *.rej), continuing."
   fi
   if [ "${GPU_ARCH}" -ge 90 ] 2>/dev/null; then
     echo "GPU SM${GPU_ARCH} detected, installing DeepEP with NVSHMEM..."
@@ -119,7 +121,7 @@ if [ "$BUILD_A100" = "1" ]; then
   if patch -R -p1 -d "$TE_SITE_DIR" --dry-run < "$TE_PATCH" >/dev/null 2>&1; then
     echo "transformer_engine.patch already applied, skipping."
   else
-    patch -p1 -d "$TE_SITE_DIR" < "$TE_PATCH"
+    patch -p1 -d "$TE_SITE_DIR" < "$TE_PATCH" || echo "WARNING: transformer_engine.patch failed to apply, continuing."
   fi
 fi
 pip install flash-linear-attention==0.4.1
@@ -159,14 +161,14 @@ fi
 pip install nvidia-cudnn-cu12==9.16.0.29
 pip install "numpy<2"
 
-# apply patch
+# apply patch (use --reject so non-conflicting hunks still land; failures leave *.rej)
 cd $BASE_DIR/sglang
-git apply $SLIME_DIR/docker/patch/${PATCH_VERSION}/sglang.patch
+git apply --reject $SLIME_DIR/docker/patch/${PATCH_VERSION}/sglang.patch || echo "WARNING: sglang.patch had rejected hunks (see *.rej), continuing."
 cd $BASE_DIR/Megatron-LM
-git apply $SLIME_DIR/docker/patch/${PATCH_VERSION}/megatron.patch
+git apply --reject $SLIME_DIR/docker/patch/${PATCH_VERSION}/megatron.patch || echo "WARNING: megatron.patch had rejected hunks (see *.rej), continuing."
 if [ "$BUILD_A100" = "1" ]; then
   cd $SLIME_DIR
-  git apply $SLIME_DIR/docker/patch/${PATCH_VERSION}/slime.patch
+  git apply --reject $SLIME_DIR/docker/patch/${PATCH_VERSION}/slime.patch || echo "WARNING: slime.patch had rejected hunks (see *.rej), continuing."
 fi
 
 # final verification

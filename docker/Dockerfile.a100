@@ -5,7 +5,7 @@ FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 ARG PATCH_VERSION=v0.5.9.a100
 ARG MEGATRON_COMMIT=3714d81d418c9f1bca4594fc35f9e8289f652862
-ARG DEEPEP_COMMIT=main
+ARG DEEPEP_COMMIT=1d3963d
 
 # A100 = SM80. No Hopper features (FA3, FlashMLA, DeepEP NVSHMEM low-latency).
 ARG TORCH_CUDA_ARCH_LIST="8.0"
@@ -131,3 +131,13 @@ RUN cd /root/slime && \
 
 RUN cd /root/slime/slime/backends/megatron_utils/kernels/int4_qat && \
     pip install . --no-build-isolation
+
+# ====================================== Final verification ============================================
+
+RUN python -c "\
+import torch; print(f'torch CUDA: {torch.version.cuda}'); \
+import fused_weight_gradient_mlp_cuda; print('gradient_accumulation_fusion OK'); \
+import amp_C; print('amp_C OK'); \
+import transformer_engine; print(f'TE {transformer_engine.__version__}'); \
+import deep_ep; print('DeepEP OK')\
+"
