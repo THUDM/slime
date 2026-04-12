@@ -22,8 +22,7 @@ cd $BASE_DIR
 micromamba install -n slime cuda cuda-nvtx cuda-nvtx-dev nccl -c nvidia/label/cuda-12.9.1 -y
 micromamba install -n slime -c conda-forge cudnn -y
 
-# prevent installing cuda 13.0 for sglang
-pip install cuda-python==13.1.0
+pip install cuda-python==12.9
 pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cu129
 
 # install sglang
