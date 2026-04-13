@@ -128,7 +128,7 @@ def save_tensors(args, model_name, state_dict, output_dir, chunk_size, vocab_siz
     if origin_hf_dir is not None:
         safetensors_files = [f for f in os.listdir(origin_hf_dir) if f.endswith(".safetensors")]
         for filename in safetensors_files:
-            with safetensors.safe_open(os.path.join(origin_hf_dir, filename), framework="pt", device="cuda") as f:
+            with safetensors.safe_open(os.path.join(origin_hf_dir, filename), framework="pt", device="cpu") as f:
                 for k in f.keys():
                     if k not in converted_names:
                         converted_name = k
