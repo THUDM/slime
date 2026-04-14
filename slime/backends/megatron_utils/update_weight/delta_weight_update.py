@@ -275,6 +275,8 @@ def estimate_delta_transport_byte_size(
     for _, tensor in tensors:
         flat = tensor.contiguous().view(-1)
         nnz = int(torch.count_nonzero(flat).item())
+        if nnz == 0:
+            continue  # zero-delta tensors are skipped in materialization
         value_bytes = nnz * tensor.element_size()
         if transport == "sparse_indices":
             total_bytes += nnz * torch.tensor([], dtype=torch.int32).element_size() + value_bytes
@@ -328,12 +330,16 @@ def _materialize_sparse_indices_transport(
     sparse_metadata: list[dict] = []
     index_offset = 0
     value_offset = 0
+    skipped_zero = 0
     for name, tensor in tensors:
         flat = tensor.contiguous().view(-1)
         indices_long = torch.nonzero(flat, as_tuple=False).view(-1)
+        nnz = int(indices_long.numel())
+        if nnz == 0:
+            skipped_zero += 1
+            continue
         values = flat[indices_long]
         indices = indices_long.to(dtype=torch.int32)
-        nnz = int(indices.numel())
         sparse_metadata.append(
             {
                 "name": name,
@@ -351,6 +357,12 @@ def _materialize_sparse_indices_transport(
         all_values.append(values)
         index_offset += nnz
         value_offset += nnz
+    if skipped_zero:
+        logger.info(
+            "delta_profile: sparse_indices_materialize skipped_zero=%s total=%s",
+            skipped_zero,
+            len(tensors),
+        )
 
     device = tensors[0][1].device
     value_dtype = tensors[0][1].dtype
@@ -381,12 +393,16 @@ def _materialize_sparse_bitmask_transport(
     sparse_metadata: list[dict] = []
     mask_offset = 0
     value_offset = 0
+    skipped_zero = 0
     for name, tensor in tensors:
         flat = tensor.contiguous().view(-1)
         mask = flat != 0
-        packed_mask = _pack_bitmask(mask)
         values = flat[mask]
         nnz = int(values.numel())
+        if nnz == 0:
+            skipped_zero += 1
+            continue
+        packed_mask = _pack_bitmask(mask)
         mask_numel = int(packed_mask.numel())
         sparse_metadata.append(
             {
@@ -405,6 +421,12 @@ def _materialize_sparse_bitmask_transport(
         all_values.append(values)
         mask_offset += mask_numel
         value_offset += nnz
+    if skipped_zero:
+        logger.info(
+            "delta_profile: sparse_bitmask_materialize skipped_zero=%s total=%s",
+            skipped_zero,
+            len(tensors),
+        )
 
     device = tensors[0][1].device
     value_dtype = tensors[0][1].dtype
