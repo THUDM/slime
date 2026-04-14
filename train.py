@@ -95,6 +95,10 @@ def train(args):
             ray.get(rollout_manager.onload_weights.remote())
         if not args.critic_train_only:
             actor_model.update_weights()
+
+            if args.check_weight_update_equal:
+                ray.get(rollout_manager.check_weights.remote(action="compare"))
+
         if args.offload_rollout:
             ray.get(rollout_manager.onload_kv.remote())
 

@@ -72,6 +72,9 @@ def train(args):
             if not args.critic_train_only:
                 actor_model.update_weights()
 
+                if args.check_weight_update_equal:
+                    ray.get(rollout_manager.check_weights.remote(action="compare"))
+
         if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
             ray.get(rollout_manager.eval.remote(rollout_id))
 

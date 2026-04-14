@@ -188,13 +188,13 @@ class UpdateWeightFromDistributed:
         dist.barrier(group=get_gloo_group())
         if self._is_pp_src_rank and self.delta_tracker is not None:
             self.delta_tracker.on_sync_succeeded()
-        if self._is_pp_src_rank:
-            peak_mem_gb = torch.cuda.max_memory_allocated() / (1024**3)
-            logger.info(
-                "delta_profile: update_weights_total=%.3fs peak_memory_gb=%.2f",
-                time.monotonic() - t_update_start,
-                peak_mem_gb,
-            )
+        peak_mem_gb = torch.cuda.max_memory_allocated() / (1024**3)
+        logger.info(
+            "delta_profile: update_weights_total=%.3fs peak_memory_gb=%.2f rank=%s",
+            time.monotonic() - t_update_start,
+            peak_mem_gb,
+            dist.get_rank(),
+        )
         if dist.get_rank() == 0:
             # int4/fp4 post_process
             if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
