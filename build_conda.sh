@@ -37,6 +37,16 @@ else
 fi
 
 export CUDA_HOME="$CONDA_PREFIX"
+
+# flashinfer JIT (and some other consumers) look for libcudart in $CUDA_HOME/lib64,
+# but conda's nvidia/cuda-12.9 packages place them under lib/. Mirror lib/ entries
+# into lib64/ so the resulting sqsh image works on every node without per-host fixup.
+mkdir -p "$CONDA_PREFIX/lib64"
+for f in "$CONDA_PREFIX"/lib/libcudart.so* "$CONDA_PREFIX"/lib/libcudart_static.a; do
+  [ -e "$f" ] || continue
+  ln -sf "../lib/$(basename "$f")" "$CONDA_PREFIX/lib64/$(basename "$f")"
+done
+
 export SGLANG_COMMIT="bbe9c7eeb520b0a67e92d133dfc137a3688dc7f2"
 export MEGATRON_COMMIT="3714d81d418c9f1bca4594fc35f9e8289f652862"
 export DEEPEP_COMMIT="${DEEPEP_COMMIT:-1d3963d}"
@@ -170,6 +180,49 @@ if [ "$BUILD_A100" = "1" ]; then
   cd $SLIME_DIR
   git apply --reject $SLIME_DIR/docker/patch/${PATCH_VERSION}/slime.patch || echo "WARNING: slime.patch had rejected hunks (see *.rej), continuing."
 fi
+
+# Persist slime env activation so future container launches pick it up automatically.
+# We avoid relying on micromamba being on PATH (the binary may not be present in the
+# exported sqsh) and just prepend the env's bin to PATH directly.
+SLIME_ENV_SH=/etc/profile.d/slime_env.sh
+cat > "$SLIME_ENV_SH" <<'EOF'
+# Auto-activate slime conda env (written by build_conda.sh)
+# Force HOME to /root so any user (e.g. deploy) sees the same env layout
+# (~/.bashrc, ~/.cache, micromamba root) regardless of host UID mapping.
+export HOME=/root
+cd "$HOME" 2>/dev/null || true
+export MAMBA_ROOT_PREFIX=/root/micromamba
+if [ -d "$MAMBA_ROOT_PREFIX/envs/slime" ]; then
+  export CONDA_PREFIX="$MAMBA_ROOT_PREFIX/envs/slime"
+  export CUDA_HOME="$CONDA_PREFIX"
+  case ":$PATH:" in
+    *":$CONDA_PREFIX/bin:"*) ;;
+    *) export PATH="$CONDA_PREFIX/bin:$PATH" ;;
+  esac
+fi
+EOF
+chmod 0644 "$SLIME_ENV_SH"
+
+# /etc/profile.d/*.sh only runs for login shells. Source it from bashrc for
+# interactive non-login shells too (covers `enroot start` default shell).
+# On Ubuntu/Debian (sglang base), bash sources /etc/bash.bashrc for any
+# interactive shell regardless of which user — so this covers both `root`
+# and `deploy` (whose HOME is /home/deploy, not /root).
+# Create the file if it doesn't exist; touch existing user rc files we know about.
+RC_FILES="/etc/bash.bashrc /root/.bashrc /home/deploy/.bashrc"
+for rc in $RC_FILES; do
+  # Skip user rc files that don't exist (don't create homes we don't own),
+  # but always ensure /etc/bash.bashrc exists.
+  if [ ! -f "$rc" ]; then
+    case "$rc" in
+      /etc/bash.bashrc) : > "$rc" ;;
+      *) continue ;;
+    esac
+  fi
+  if ! grep -q "slime_env.sh" "$rc"; then
+    printf '\n[ -f %s ] && . %s\n' "$SLIME_ENV_SH" "$SLIME_ENV_SH" >> "$rc"
+  fi
+done
 
 # final verification
 python -c "

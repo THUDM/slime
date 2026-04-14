@@ -193,3 +193,9 @@ glm/
 _examples_synced/
 .env
 .DS_Store
+
+
+.envs
+.*log/
+.downloads/conda*
+.downloads/pip*
