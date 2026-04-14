@@ -1,3 +1,5 @@
+# Copyright (c) Kanana LLM Team - Kakao Corp.
+
 EP=4
 ATTENTION_BACKEND=${ATTENTION_BACKEND:-flash}
 

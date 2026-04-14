@@ -1,3 +1,5 @@
+# Copyright (c) Kanana LLM Team - Kakao Corp.
+
 #!/bin/bash
 #SBATCH --job-name=slime-kanana-2-30b-a3b-thinking-2601
 #SBATCH --nodes=32

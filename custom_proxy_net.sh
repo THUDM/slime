@@ -1,3 +1,5 @@
+# Copyright (c) Kanana LLM Team - Kakao Corp.
+
 #!/bin/bash
 # Run this on a machine with network access to download conda packages
 # for offline installation on the target machine.

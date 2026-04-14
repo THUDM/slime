@@ -1,3 +1,5 @@
+# Copyright (c) Kanana LLM Team - Kakao Corp.
+
 #!/bin/bash
 
 set -ex

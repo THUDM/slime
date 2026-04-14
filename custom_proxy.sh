@@ -1,3 +1,5 @@
+# Copyright (c) Kanana LLM Team - Kakao Corp.
+
 #!/bin/bash
 # Run this on the target machine (no network required).
 # Installs micromamba and restores the conda package cache

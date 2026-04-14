@@ -1,3 +1,5 @@
+# Copyright (c) Kanana LLM Team @Kakao Corp.
+
 #!/bin/bash
 # ── Cluster: ib-a100 (A100 80GB, SM80) ──────────────────────────────────────
 

@@ -1,3 +1,5 @@
+# Copyright (c) Kanana LLM Team - Kakao Corp.
+
 ARG SGLANG_IMAGE_TAG=v0.5.9
 FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
