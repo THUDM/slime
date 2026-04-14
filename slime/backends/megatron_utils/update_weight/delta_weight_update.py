@@ -147,22 +147,35 @@ class DeltaCompressionTracker:
         baseline_updates = []
         input_tensor_count = 0
         sent_tensor_count = 0
-        chunk_elements = 0
-        chunk_nonzeros = 0
         for (name, tensor), prev_gpu in zip(tensors, prev_gpu_tensors, strict=True):
             delta = (tensor - prev_gpu).to(self.delta_dtype)
             input_tensor_count += 1
-            numel = delta.numel()
-            nnz = int(torch.count_nonzero(delta).item())
-            chunk_elements += numel
-            chunk_nonzeros += nnz
-
             baseline_updates.append((name, tensor))
             delta_tensors.append((name, delta))
             sent_tensor_count += 1
             if self.artifact_writer is not None:
                 artifact_tensors.append((name, delta.cpu()))
         self._stats["profile_delta_compute_s"] += time.monotonic() - t_compute_start
+
+        t_sparsity_start = time.monotonic()
+        chunk_elements = 0
+        chunk_nonzeros = 0
+        chunk_idx = self._stats["delta_chunks"]
+        for name, delta in delta_tensors:
+            numel = delta.numel()
+            nnz = int(torch.count_nonzero(delta).item())
+            chunk_elements += numel
+            chunk_nonzeros += nnz
+            density = nnz / numel if numel > 0 else 0.0
+            logger.info(
+                "delta_profile: per_tensor name=%s numel=%s nnz=%s density=%.6f chunk=%s",
+                name,
+                numel,
+                nnz,
+                density,
+                chunk_idx,
+            )
+        self._stats["profile_sparsity_scan_s"] += time.monotonic() - t_sparsity_start
         self._stats["profile_sparsity_total_elements"] += chunk_elements
         self._stats["profile_sparsity_total_nonzeros"] += chunk_nonzeros
 
@@ -196,6 +209,7 @@ class DeltaCompressionTracker:
                 # -- profiling (temporary) --
                 "profile_baseline_h2d_s": 0.0,
                 "profile_delta_compute_s": 0.0,
+                "profile_sparsity_scan_s": 0.0,
                 "profile_baseline_commit_s": 0.0,
                 "profile_sparsity_total_elements": 0,
                 "profile_sparsity_total_nonzeros": 0,
@@ -220,10 +234,11 @@ class DeltaCompressionTracker:
         total_nnz = self._stats["profile_sparsity_total_nonzeros"]
         density = total_nnz / total_elem if total_elem > 0 else 0.0
         logger.info(
-            "delta_profile: baseline_h2d=%.3fs delta_compute=%.3fs baseline_commit=%.3fs "
-            "sparsity_elements=%s sparsity_nonzeros=%s density=%.6f",
+            "delta_profile: baseline_h2d=%.3fs delta_compute=%.3fs sparsity_scan=%.3fs "
+            "baseline_commit=%.3fs sparsity_elements=%s sparsity_nonzeros=%s density=%.6f",
             self._stats["profile_baseline_h2d_s"],
             self._stats["profile_delta_compute_s"],
+            self._stats["profile_sparsity_scan_s"],
             self._stats["profile_baseline_commit_s"],
             total_elem,
             total_nnz,
