@@ -92,26 +92,14 @@ index 290b1fcd..f86e1ee3 100644
          while True:
              try:
                  response = session.get(f"{base_url}/health_generate", headers=headers)
-@@ -88,6 +90,9 @@ def _wait_server_healthy(base_url, api_key, is_process_alive):
+@@ -88,4 +90,7 @@ def _wait_server_healthy(base_url, api_key, is_process_alive):
              if not is_process_alive():
                  raise Exception("Server process terminated unexpectedly.")
- 
+
 +            if time.monotonic() > deadline:
 +                raise TimeoutError(f"Server at {base_url} did not become healthy within {timeout}s.")
 +
              time.sleep(2)
- 
-         # use flush_cache to make sure the working queue is empty, so that we can do offload
-@@ -103,6 +108,9 @@ def _wait_server_healthy(base_url, api_key, is_process_alive):
-             if not is_process_alive():
-                 raise Exception("Server process terminated unexpectedly.")
- 
-+            if time.monotonic() > deadline:
-+                raise TimeoutError(f"Server at {base_url} did not flush cache within {timeout}s.")
-+
-             time.sleep(2)
- 
- 
 @@ -135,6 +143,11 @@ class SGLangEngine(RayActor):
      ):
          self.router_ip = router_ip if router_ip is not None else self.args.sglang_router_ip
@@ -133,27 +121,23 @@ index 290b1fcd..f86e1ee3 100644
              response.raise_for_status()
              return response.json()
  
-@@ -204,12 +217,17 @@ class SGLangEngine(RayActor):
-         self.process = launch_server_process(ServerArgs(**server_args_dict))
- 
+@@ -203,19 +220,25 @@ class SGLangEngine(RayActor):
          if self.node_rank == 0 and self.router_ip and self.router_port:
 +            router_headers = {}
 +            if self.router_api_key:
 +                router_headers["Authorization"] = f"Bearer {self.router_api_key}"
 +
-             if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
-                 assert (
-                     self.worker_type == "regular"
-                 ), "pd disaggregation is not supported in old router or slime router."
+             if parse(sglang_router.__version__) <= parse("0.2.1"):
+                 assert self.worker_type == "regular", "pd disaggregation is not supported in old router."
 -                response = requests.post(
--                    f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}"
 +                response = self._session.post(
-+                    f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}",
+                     f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}",
 +                    headers=router_headers,
                  )
              else:
                  payload = {
-@@ -218,9 +236,10 @@ class SGLangEngine(RayActor):
+                     "url": f"http://{self.server_host}:{self.server_port}",
+                     "worker_type": self.worker_type,
                  }
                  if self.worker_type == "prefill":
                      payload["bootstrap_port"] = server_args_dict["disaggregation_bootstrap_port"]
@@ -192,28 +176,41 @@ index 290b1fcd..f86e1ee3 100644
                  if response.status_code == 200:
                      break
              except NewConnectionError as e:
-@@ -321,19 +340,19 @@ class SGLangEngine(RayActor):
+@@ -321,19 +340,30 @@ class SGLangEngine(RayActor):
              worker_url = f"http://{self.server_host}:{self.server_port}"
++            router_headers = {}
++            if self.router_api_key:
++                router_headers["Authorization"] = f"Bearer {self.router_api_key}"
              response = None
-             if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
+             if parse(sglang_router.__version__) <= parse("0.2.1"):
 -                response = requests.post(
+-                    f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
 +                response = self._session.post(
-                     f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
++                    f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}",
++                    headers=router_headers,
                  )
              elif parse(sglang_router.__version__) < parse("0.3.0"):
                  worker_url = quote(worker_url, safe="")
 -                response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}")
-+                response = self._session.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}")
++                response = self._session.delete(
++                    f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}",
++                    headers=router_headers,
++                )
              else:
                  try:
 -                    all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
-+                    all_workers = self._session.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
++                    all_workers = self._session.get(
++                        f"http://{self.router_ip}:{self.router_port}/workers",
++                        headers=router_headers,
++                    ).json()["workers"]
                      for worker in all_workers:
                          if worker["url"] == worker_url:
                              worker_id = worker["id"]
 -                            response = requests.delete(
+-                                f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}"
 +                            response = self._session.delete(
-                                 f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}"
++                                f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}",
++                                headers=router_headers,
                              )
                              break
 @@ -350,7 +369,7 @@ class SGLangEngine(RayActor):
@@ -292,22 +289,6 @@ index d7807f3b..39d57210 100644
      try:
          from sglang_router.launch_router import launch_router
  
-@@ -209,6 +219,7 @@ def init_http_client(args):
-         _http_client = httpx.AsyncClient(
-             limits=httpx.Limits(max_connections=_client_concurrency),
-             timeout=httpx.Timeout(None),
-+            trust_env=False,
-         )
- 
-     # Optionally initialize distributed POST via Ray without changing interfaces
-@@ -243,6 +254,7 @@ def _init_ray_distributed_post(args):
-             self._client = httpx.AsyncClient(
-                 limits=httpx.Limits(max_connections=max(1, concurrency)),
-                 timeout=httpx.Timeout(None),
-+                trust_env=False,
-             )
- 
-         async def do_post(self, url, payload, max_retries=60, headers=None):
 diff --git a/slime/utils/memory_utils.py b/slime/utils/memory_utils.py
 index c12f3cd0..0bd50870 100644
 --- a/slime/utils/memory_utils.py
