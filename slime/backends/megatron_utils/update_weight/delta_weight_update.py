@@ -117,6 +117,7 @@ class DeltaCompressionTracker:
     def on_sync_succeeded(self) -> None:
         self.committed_syncs += 1
         self._log_stats()
+        self._stats = None  # reset for next sync so profiling is per-sync
 
     def _prepare_full_chunk(self, tensors: list[tuple[str, torch.Tensor]]) -> PreparedChunk:
         self._ensure_stats()
@@ -246,7 +247,14 @@ def estimate_delta_transport_byte_size(
 ) -> int:
     t_start = time.monotonic()
     if transport == "dense":
-        return sum(tensor.numel() * tensor.element_size() for _, tensor in tensors)
+        total = sum(tensor.numel() * tensor.element_size() for _, tensor in tensors)
+        logger.info(
+            "delta_profile: estimate_byte_size=%.3fs tensors=%s transport=dense estimated_bytes=%s",
+            time.monotonic() - t_start,
+            len(tensors),
+            total,
+        )
+        return total
 
     total_bytes = 0
     for _, tensor in tensors:

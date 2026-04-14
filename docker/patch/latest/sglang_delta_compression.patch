@@ -141,16 +141,18 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
 +            for handle in handles:
 +                handle.wait()
 +            _t_recv = _time_module.monotonic() - _t_total
-+            _t_decode_start = _time_module.monotonic()
 +            scratch_buffer = None
 +            scratch_numel = 0
 +            tensor_count = 0
++            _t_decode_accum = 0.0
++            _t_load_accum = 0.0
 +            with _additive_weight_copy_context():
 +                with _wrap_post_load_weights_with_original_copy_context(self.model):
 +                    if transport == "sparse_indices":
 +                        packed_indices = encoded_tensors[0].to(dtype=torch.long)
 +                        packed_values = encoded_tensors[1]
 +                        for meta in sparse_metadata:
++                            _t_dec = _time_module.monotonic()
 +                            target_dtype = getattr(torch, meta["dtype"])
 +                            target_shape = tuple(meta["shape"])
 +                            numel = int(meta["numel"])
@@ -176,12 +178,16 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
 +                                    packed_values[value_start:value_end],
 +                                )
 +                            decoded_weight = decoded_flat.view(target_shape)
++                            _t_decode_accum += _time_module.monotonic() - _t_dec
++                            _t_ld = _time_module.monotonic()
 +                            self.model.load_weights([(meta["name"], decoded_weight)])
++                            _t_load_accum += _time_module.monotonic() - _t_ld
 +                            tensor_count += 1
 +                    elif transport == "sparse_bitmask":
 +                        packed_masks = encoded_tensors[0]
 +                        packed_values = encoded_tensors[1]
 +                        for meta in sparse_metadata:
++                            _t_dec = _time_module.monotonic()
 +                            target_dtype = getattr(torch, meta["dtype"])
 +                            target_shape = tuple(meta["shape"])
 +                            numel = int(meta["numel"])
@@ -205,21 +211,23 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
 +                            )
 +                            decoded_flat[unpacked_mask] = packed_values[value_start:value_end]
 +                            decoded_weight = decoded_flat.view(target_shape)
++                            _t_decode_accum += _time_module.monotonic() - _t_dec
++                            _t_ld = _time_module.monotonic()
 +                            self.model.load_weights([(meta["name"], decoded_weight)])
++                            _t_load_accum += _time_module.monotonic() - _t_ld
 +                            tensor_count += 1
 +                    else:
 +                        raise ValueError(
 +                            f"Unsupported sparse delta transport: {transport}"
 +                        )
-+            _t_decode = _time_module.monotonic() - _t_decode_start
 +            logger.info(
 +                "distributed_delta_apply_summary transport=%s apply_mode=per_tensor tensor_count=%s",
 +                transport,
 +                tensor_count,
 +            )
 +            logger.info(
-+                "delta_profile: sparse_delta recv=%.3fs decode=%.3fs total=%.3fs transport=%s tensors=%s",
-+                _t_recv, _t_decode, _time_module.monotonic() - _t_total, transport, tensor_count,
++                "delta_profile: sparse_delta recv=%.3fs decode=%.3fs load_weights=%.3fs total=%.3fs transport=%s tensors=%s",
++                _t_recv, _t_decode_accum, _t_load_accum, _time_module.monotonic() - _t_total, transport, tensor_count,
 +            )
 +            return True, "Succeeded to apply sparse weight deltas online."
 +        except Exception as e:

@@ -126,18 +126,33 @@ class UpdateWeightFromDistributed:
                 self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
         else:
             pending_bucket = PendingHFUpdateBucket.empty()
+            _t_gather_total = 0.0
+            _t_convert_total = 0.0
 
             for name, param in named_params_and_buffers(self.args, self.model):
                 if ".experts." in name:
                     continue
-                self._update_weight_from_distributed_with_delta(
-                    name,
-                    param,
+                _t0 = time.monotonic()
+                param = all_gather_param(name, param)
+                _t_gather_total += time.monotonic() - _t0
+                if not self._is_pp_src_rank:
+                    continue
+                _t1 = time.monotonic()
+                hf_named_tensors = convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
+                _t_convert_total += time.monotonic() - _t1
+                self._enqueue_delta_chunk_for_send(
+                    self._prepare_hf_chunk_for_send(hf_named_tensors),
                     pending_bucket,
                     pbar=pbar,
                 )
 
             self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
+            if self._is_pp_src_rank:
+                logger.info(
+                    "delta_profile: non_expert tp_gather=%.3fs hf_convert=%.3fs",
+                    _t_gather_total,
+                    _t_convert_total,
+                )
 
         dist.barrier(group=get_gloo_group())
 
@@ -244,6 +259,7 @@ class UpdateWeightFromDistributed:
         """
         Gather EP → HF → broadcast. Clears buffer.
         """
+        _t_ep_gather_start = time.monotonic()
         names = [name for name, _ in named_tensors]
         all_names = [None] * mpu.get_expert_model_parallel_world_size()
         dist.all_gather_object(all_names, names, group=mpu.get_expert_model_parallel_group())
@@ -264,15 +280,24 @@ class UpdateWeightFromDistributed:
                 all_gathered_params[ep_rank].append((names[i], params[ep_rank]))
         for handle in handles:
             handle.wait()
+        _t_ep_gather = time.monotonic() - _t_ep_gather_start
 
         named_tensors.clear()
         if not self._is_pp_src_rank:
             return
 
+        _t_convert_start = time.monotonic()
         all_gathered_params = sum(all_gathered_params, [])
         converted_hf_tensors = []
         for name, param in all_gathered_params:
             converted_hf_tensors += convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
+        _t_convert = time.monotonic() - _t_convert_start
+        logger.info(
+            "delta_profile: expert_bucket ep_gather=%.3fs hf_convert=%.3fs tensors=%s",
+            _t_ep_gather,
+            _t_convert,
+            len(converted_hf_tensors),
+        )
 
         if self.delta_tracker is None or pending_bucket is None:
             self._update_bucket_weights_from_distributed(converted_hf_tensors, pbar)
@@ -401,16 +426,22 @@ class UpdateWeightFromDistributed:
         finally:
             ray.get(self.rollout_engine_lock.release.remote())
 
-        tensor_count = len(send_tensors)
-        total_bytes = sum(t.numel() * t.element_size() for _, t in send_tensors)
+        original_tensor_count = len(tensors)
+        dense_bytes = sum(t.numel() * t.element_size() for _, t in tensors)
+        encoded_bytes = sum(t.numel() * t.element_size() for _, t in send_tensors)
+        zero_nnz_count = 0
+        if sparse_metadata is not None:
+            zero_nnz_count = sum(1 for m in sparse_metadata if m.get("nnz", 1) == 0)
         logger.info(
             "delta_profile: send_hf_update materialize=%.3fs lock=%.3fs broadcast=%.3fs "
-            "tensors=%s bytes=%s format=%s",
+            "original_tensors=%s zero_nnz_tensors=%s dense_bytes=%s encoded_bytes=%s format=%s",
             t_materialize,
             t_lock,
             t_broadcast,
-            tensor_count,
-            total_bytes,
+            original_tensor_count,
+            zero_nnz_count,
+            dense_bytes,
+            encoded_bytes,
             load_format,
         )
 
