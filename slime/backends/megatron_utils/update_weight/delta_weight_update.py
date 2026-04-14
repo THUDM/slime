@@ -44,6 +44,7 @@ class MaterializedDeltaTransport:
     tensors: list[tuple[str, torch.Tensor]]
     sparse_metadata: list[dict] | None
     load_format: str
+    skipped_zero: int = 0
 
 
 class DeltaArtifactWriter:
@@ -272,11 +273,15 @@ def estimate_delta_transport_byte_size(
         return total
 
     total_bytes = 0
-    for _, tensor in tensors:
+    nonzero_tensor_count = 0
+    # ~200 bytes per sparse metadata entry (name, dtype, shape, offsets)
+    _METADATA_BYTES_PER_TENSOR = 200
+    for _name, tensor in tensors:
         flat = tensor.contiguous().view(-1)
         nnz = int(torch.count_nonzero(flat).item())
         if nnz == 0:
             continue  # zero-delta tensors are skipped in materialization
+        nonzero_tensor_count += 1
         value_bytes = nnz * tensor.element_size()
         if transport == "sparse_indices":
             total_bytes += nnz * torch.tensor([], dtype=torch.int32).element_size() + value_bytes
@@ -285,6 +290,7 @@ def estimate_delta_transport_byte_size(
             total_bytes += int(math.ceil(flat.numel() / 8)) + value_bytes
             continue
         raise ValueError(f"Unsupported delta compression transport: {transport}")
+    total_bytes += nonzero_tensor_count * _METADATA_BYTES_PER_TENSOR
     logger.info(
         "delta_profile: estimate_byte_size=%.3fs tensors=%s transport=%s estimated_bytes=%s",
         time.monotonic() - t_start,
@@ -375,6 +381,7 @@ def _materialize_sparse_indices_transport(
         ],
         sparse_metadata=sparse_metadata,
         load_format="distributed_delta_sparse_indices",
+        skipped_zero=skipped_zero,
     )
 
 
@@ -439,6 +446,7 @@ def _materialize_sparse_bitmask_transport(
         ],
         sparse_metadata=sparse_metadata,
         load_format="distributed_delta_sparse_bitmask",
+        skipped_zero=skipped_zero,
     )
 
 

@@ -396,6 +396,7 @@ class UpdateWeightFromDistributed:
         load_format: str | None,
     ) -> None:
         t_materialize_start = time.monotonic()
+        skipped_zero = 0
         if load_format is None:
             send_tensors = tensors
             sparse_metadata = None
@@ -404,6 +405,7 @@ class UpdateWeightFromDistributed:
             send_tensors = materialized.tensors
             sparse_metadata = materialized.sparse_metadata
             load_format = materialized.load_format
+            skipped_zero = materialized.skipped_zero
         t_materialize = time.monotonic() - t_materialize_start
 
         t_lock_start = time.monotonic()
@@ -430,21 +432,18 @@ class UpdateWeightFromDistributed:
         original_tensor_count = len(tensors)
         dense_bytes = sum(t.numel() * t.element_size() for _, t in tensors)
         encoded_bytes = sum(t.numel() * t.element_size() for _, t in send_tensors)
-        zero_nnz_count = 0
         metadata_bytes = 0
         if sparse_metadata is not None:
-            zero_nnz_count = sum(1 for m in sparse_metadata if m.get("nnz", 1) == 0)
-            # Estimate metadata control-plane cost (JSON-serialized per rollout engine)
             metadata_bytes = len(json.dumps(sparse_metadata).encode())
         logger.info(
             "delta_profile: send_hf_update materialize=%.3fs lock=%.3fs broadcast=%.3fs "
-            "original_tensors=%s zero_nnz_tensors=%s dense_bytes=%s encoded_bytes=%s "
+            "original_tensors=%s skipped_zero=%s dense_bytes=%s encoded_bytes=%s "
             "metadata_bytes=%s format=%s",
             t_materialize,
             t_lock,
             t_broadcast,
             original_tensor_count,
-            zero_nnz_count,
+            skipped_zero,
             dense_bytes,
             encoded_bytes,
             metadata_bytes,
