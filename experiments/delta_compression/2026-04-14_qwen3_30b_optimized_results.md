@@ -1,7 +1,7 @@
 # Qwen3-30B-A3B Optimized Delta Compression Results
 
 **Config**: `qwen3_dapo_noncolocate_delta_compression_indices_profile`
-**Commit**: `1ca456eb` (delta-compression-feature branch, with optimizations)
+**Commit**: `1ca456eb` (delta-compression-feature branch, optimized)
 **Transport**: `sparse_indices`
 **Model**: Qwen3-30B-A3B (MoE, 30B total, 3B active)
 **Infrastructure**: 4 nodes x 8 H200 GPUs (32 total: 16 actor + 16 rollout)
@@ -10,47 +10,62 @@
 
 ## Optimizations Applied
 
-1. **Sender: skip zero-delta tensors** — Tensors with all-zero deltas are excluded from sparse metadata, packed values, and receiver work. Still tracked in baseline_updates for correctness.
-
-2. **Receiver: batched load_weights** — Decoded tensors accumulated into 32 MiB mini-batches, then applied with a single `load_weights()` call per batch. Reduces Python/framework call overhead.
+1. **Skip zero-delta tensors** (sender): Zero-delta tensors excluded from sparse metadata and packed tensors. Still tracked in baseline_updates for correctness.
+2. **Batched load_weights** (receiver): Per-tensor `load_weights()` calls replaced with mini-batches (32 MiB cap). Reduces Python/framework overhead per call.
 
 ## Results Comparison
 
-| Metric | Pre-Optimization | Optimized | Improvement |
-|--------|-----------------|-----------|-------------|
-| **Delta update_weights_total** | 7.2s | **6.4s** | 11% faster |
-| Full sync update_weights_total | 17.8s | 17.0s | ~same |
-| Receiver non-expert total | 0.029s | 0.012s | 2.4x |
-| Receiver expert total | 0.972s | **0.376s** | **2.6x** |
-| Non-expert tensors processed | 217 | 149 (skipped 75) | 34% fewer |
-| Expert tensors processed | 9216 | 8945 (skipped 271) | 3% fewer |
-| Non-expert load_calls | 217 | 41 | 5.3x fewer |
-| Expert load_calls | 9216 | 895 | 10.3x fewer |
+| Metric | Baseline (pre-opt) | Optimized | Change |
+|--------|-------------------|-----------|--------|
+| **update_weights_total** | **7.24s** | **5.97s** | **-17.5%** |
+| Receiver total (expert) | 0.972s | 0.330s | **-66%** |
+| Receiver load_weights | 0.784s | 0.177s | **-77%** |
+| Receiver decode | 0.183s | 0.143s | -22% |
+| Receiver load_calls | 9,216 | 742 | -92% |
+| Sender materialize | 0.647s | 0.450s | -30% |
+| Sender broadcast | 1.116s | 0.441s | -60% |
+| Density | 0.58% | 0.75% | (different step) |
 
-## Detailed Profiling (Step 1 - Delta Sync)
+## Step 1: Delta Sync (Optimized)
 
-### Sender Side (PP rank 0)
-- update_weights_total: **6.418s**
-- Non-expert chunk: materialize=0.037s, broadcast=0.241s, encoded_bytes=30.5MB (from 1.54GB dense)
-- Expert chunk: materialize=0.652s, broadcast=0.547s, encoded_bytes=513MB (from 29GB dense)
-- skipped_zero: 75/218 non-expert (34.4%), 271/9216 expert (2.9%)
-- metadata_bytes: 32KB non-expert, 2.07MB expert
+- **update_weights_total**: 5.967s (PP rank 0), 5.968s (PP rank 1)
+- delta_chunks=225, delta_sent_tensors=9,433
 
-### Receiver Side (all DP ranks consistent)
-- Non-expert batch: 149 tensors, 41 load_calls, decode=0.005s, load_weights=0.006s, total=**0.012s**
-- Expert batch: 8945 tensors, 895 load_calls, decode=0.157s, load_weights=0.209s, total=**0.376s**
-- apply_mode: **batched** (confirmed)
+### Sender-Side Breakdown
+
+| Phase | Time |
+|-------|------|
+| baseline_h2d (CPU->GPU) | 0.671s |
+| delta_compute (subtract + cast) | 0.424s |
+| sparsity_scan (count_nonzero) | 0.725s |
+| baseline_commit (GPU->CPU) | 0.590s |
+| **Sender subtotal** | **~2.4s** |
+
+### Zero-Tensor Skip Stats
+
+- Non-expert chunk: skipped_zero=73 out of 217 tensors (33.6%)
+- Expert buckets: skipped_zero=22-31 out of 1640 per bucket (~1.5%)
+- Fewer tensors in metadata = less NCCL data + less receiver work
+
+### Receiver-Side (SGLang, batched mode)
+
+**Expert batch** (dominant):
+- tensor_count=7,417 (down from 9,216 due to zero-skip)
+- load_calls=742 (down from 9,216 per-tensor calls)
+- recv=0.000s, decode=0.143s, load_weights=0.177s, **total=0.330s**
 
 ### Sparsity Statistics
-- Density: ~0.58% (consistent with pre-optimization)
-- Per-tensor: layernorm weights often zero (density=0), attention/expert weights 1-3% density, lm_head 0.04% density
 
-## Conclusions
+- total_elements: 15,266,060,288
+- total_nonzeros: 114,527,445
+- density: 0.75%
 
-1. **Batched load_weights is the bigger win**: Reducing from 9216 to 895 calls saved 0.6s on receiver (0.972s → 0.376s). This scales well to 355B.
+## Key Takeaways
 
-2. **Zero-skip helps moderately**: 34% of non-expert tensors skipped. Expert tensors are rarely all-zero (only 3%), so the savings are smaller there.
+1. **Batched load_weights is the biggest win**: Reducing from 9,216 individual calls to 742 batched calls cut receiver load_weights time by 77% (0.784s -> 0.177s).
 
-3. **Overall improvement**: 6.4s vs 7.2s = 11% faster. At 355B scale (10x more parameters), the savings should be proportionally larger since the overhead being eliminated grows with tensor count.
+2. **Zero-skip helps proportionally**: 33.6% of non-expert tensors skipped. Saves NCCL bandwidth and receiver decode/apply work.
 
-4. **355B extrapolation**: If the current 355B ~120s is dominated by sender phases that scale with parameter count, and receiver apply takes ~10s at 355B scale, the batching optimization alone could save ~6s on the receiver (bringing 120s → ~114s). Combined with sender improvements and the zero-skip, a more significant reduction is expected. The 355B experiment needs to run to get actual numbers.
+3. **Overall 17.5% improvement** on Qwen3-30B (7.24s -> 5.97s). Receiver improvement is 66% but sender still dominates total time.
+
+4. **355B extrapolation**: At 355B where current delta step is ~120s, the receiver side is a larger fraction. 66% receiver speedup + reduced NCCL from zero-skip should translate to meaningful improvement.
