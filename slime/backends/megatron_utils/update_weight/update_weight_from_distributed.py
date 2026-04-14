@@ -1,7 +1,5 @@
-import json
 import logging
 import socket
-import time
 from argparse import Namespace
 from collections.abc import Callable, Mapping, Sequence
 
@@ -94,10 +92,6 @@ class UpdateWeightFromDistributed:
         """
         Pause → flush → non-expert (TP) → expert (EP) → continue. Progress on PP source.
         """
-        import torch.cuda
-
-        torch.cuda.reset_peak_memory_stats()
-        t_update_start = time.monotonic()
         self.weight_version += 1
 
         if dist.get_rank() == 0:
@@ -130,20 +124,14 @@ class UpdateWeightFromDistributed:
                 self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
         else:
             pending_bucket = PendingHFUpdateBucket.empty()
-            _t_gather_total = 0.0
-            _t_convert_total = 0.0
 
             for name, param in named_params_and_buffers(self.args, self.model):
                 if ".experts." in name:
                     continue
-                _t0 = time.monotonic()
                 param = all_gather_param(name, param)
-                _t_gather_total += time.monotonic() - _t0
                 if not self._is_pp_src_rank:
                     continue
-                _t1 = time.monotonic()
                 hf_named_tensors = convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
-                _t_convert_total += time.monotonic() - _t1
                 self._enqueue_delta_chunk_for_send(
                     self._prepare_hf_chunk_for_send(hf_named_tensors),
                     pending_bucket,
@@ -151,12 +139,6 @@ class UpdateWeightFromDistributed:
                 )
 
             self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
-            if self._is_pp_src_rank:
-                logger.info(
-                    "delta_profile: non_expert tp_gather=%.3fs hf_convert=%.3fs",
-                    _t_gather_total,
-                    _t_convert_total,
-                )
 
         dist.barrier(group=get_gloo_group())
 
@@ -188,13 +170,6 @@ class UpdateWeightFromDistributed:
         dist.barrier(group=get_gloo_group())
         if self._is_pp_src_rank and self.delta_tracker is not None:
             self.delta_tracker.on_sync_succeeded()
-        peak_mem_gb = torch.cuda.max_memory_allocated() / (1024**3)
-        logger.info(
-            "delta_profile: update_weights_total=%.3fs peak_memory_gb=%.2f rank=%s",
-            time.monotonic() - t_update_start,
-            peak_mem_gb,
-            dist.get_rank(),
-        )
         if dist.get_rank() == 0:
             # int4/fp4 post_process
             if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
@@ -268,7 +243,6 @@ class UpdateWeightFromDistributed:
         """
         Gather EP → HF → broadcast. Clears buffer.
         """
-        _t_ep_gather_start = time.monotonic()
         names = [name for name, _ in named_tensors]
         all_names = [None] * mpu.get_expert_model_parallel_world_size()
         dist.all_gather_object(all_names, names, group=mpu.get_expert_model_parallel_group())
@@ -289,24 +263,15 @@ class UpdateWeightFromDistributed:
                 all_gathered_params[ep_rank].append((names[i], params[ep_rank]))
         for handle in handles:
             handle.wait()
-        _t_ep_gather = time.monotonic() - _t_ep_gather_start
 
         named_tensors.clear()
         if not self._is_pp_src_rank:
             return
 
-        _t_convert_start = time.monotonic()
         all_gathered_params = sum(all_gathered_params, [])
         converted_hf_tensors = []
         for name, param in all_gathered_params:
             converted_hf_tensors += convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
-        _t_convert = time.monotonic() - _t_convert_start
-        logger.info(
-            "delta_profile: expert_bucket ep_gather=%.3fs hf_convert=%.3fs tensors=%s",
-            _t_ep_gather,
-            _t_convert,
-            len(converted_hf_tensors),
-        )
 
         if self.delta_tracker is None or pending_bucket is None:
             self._update_bucket_weights_from_distributed(converted_hf_tensors, pbar)
@@ -403,8 +368,6 @@ class UpdateWeightFromDistributed:
         tensors: list[tuple[str, torch.Tensor]],
         load_format: str | None,
     ) -> None:
-        t_materialize_start = time.monotonic()
-        skipped_zero = 0
         if load_format is None:
             send_tensors = tensors
             sparse_metadata = None
@@ -413,16 +376,11 @@ class UpdateWeightFromDistributed:
             send_tensors = materialized.tensors
             sparse_metadata = materialized.sparse_metadata
             load_format = materialized.load_format
-            skipped_zero = materialized.skipped_zero
-        t_materialize = time.monotonic() - t_materialize_start
 
-        t_lock_start = time.monotonic()
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
-            time.sleep(0.1)
-        t_lock = time.monotonic() - t_lock_start
+            pass
 
         try:
-            t_broadcast_start = time.monotonic()
             refs = update_weights_from_distributed(
                 self._group_name,
                 self._model_update_groups,
@@ -433,30 +391,8 @@ class UpdateWeightFromDistributed:
                 sparse_metadata=sparse_metadata,
             )
             ray.get(refs)
-            t_broadcast = time.monotonic() - t_broadcast_start
         finally:
             ray.get(self.rollout_engine_lock.release.remote())
-
-        original_tensor_count = len(tensors)
-        dense_bytes = sum(t.numel() * t.element_size() for _, t in tensors)
-        encoded_bytes = sum(t.numel() * t.element_size() for _, t in send_tensors)
-        metadata_bytes = 0
-        if sparse_metadata is not None:
-            metadata_bytes = len(json.dumps(sparse_metadata).encode())
-        logger.info(
-            "delta_profile: send_hf_update materialize=%.3fs lock=%.3fs broadcast=%.3fs "
-            "original_tensors=%s skipped_zero=%s dense_bytes=%s encoded_bytes=%s "
-            "metadata_bytes=%s format=%s",
-            t_materialize,
-            t_lock,
-            t_broadcast,
-            original_tensor_count,
-            skipped_zero,
-            dense_bytes,
-            encoded_bytes,
-            metadata_bytes,
-            load_format,
-        )
 
     def _flush_hf_update_bucket_from_distributed(
         self,
