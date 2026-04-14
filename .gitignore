@@ -194,3 +194,6 @@ _examples_synced/
 .env
 .DS_Store
 .codex
+.humanize*
+.claude/
+profiling_*.log
