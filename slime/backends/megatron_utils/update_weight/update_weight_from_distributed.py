@@ -359,7 +359,20 @@ class UpdateWeightFromDistributed:
             self._finalize_sent_chunk(chunk_update.commit_state)
             return
 
-        if pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
+        # For delta sparse transports, use a much larger bucket to reduce the
+        # number of lock-broadcast-unlock cycles. At 355B with 598 small flushes,
+        # per-chunk lock contention dominated (60s). We cap at 10 GB of dense
+        # delta bytes to limit GPU memory pressure while producing ~5-10 flushes
+        # instead of hundreds.
+        if chunk_update.load_format is not None:
+            _DELTA_DENSE_BYTE_LIMIT = 10 * 1024 * 1024 * 1024  # 10 GB
+            dense_add = sum(t.numel() * t.element_size() for _, t in chunk_update.tensors)
+            dense_current = sum(t.numel() * t.element_size() for _, t in pending_bucket.tensors)
+            if pending_bucket.has_updates and pending_bucket.load_format != chunk_update.load_format:
+                self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
+            elif pending_bucket.has_updates and dense_current + dense_add > _DELTA_DENSE_BYTE_LIMIT:
+                self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
+        elif pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
             self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
         pending_bucket.add(chunk_update)
 
