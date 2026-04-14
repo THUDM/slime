@@ -365,7 +365,7 @@ class UpdateWeightFromDistributed:
         # delta bytes to limit GPU memory pressure while producing ~5-10 flushes
         # instead of hundreds.
         if chunk_update.load_format is not None:
-            _DELTA_DENSE_BYTE_LIMIT = 10 * 1024 * 1024 * 1024  # 10 GB
+            _DELTA_DENSE_BYTE_LIMIT = 20 * 1024 * 1024 * 1024  # 20 GB
             dense_add = sum(t.numel() * t.element_size() for _, t in chunk_update.tensors)
             dense_current = sum(t.numel() * t.element_size() for _, t in pending_bucket.tensors)
             if pending_bucket.has_updates and pending_bucket.load_format != chunk_update.load_format:
