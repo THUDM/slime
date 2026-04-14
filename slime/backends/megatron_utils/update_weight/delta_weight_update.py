@@ -5,6 +5,7 @@ import math
 import os
 import queue
 import threading
+import time
 from dataclasses import dataclass, field
 
 import torch
@@ -99,6 +100,7 @@ class DeltaCompressionTracker:
     def commit_chunk(self, commit_state: DeltaCompressionCommitState, *, weight_version: int) -> None:
         baseline_updates = commit_state.baseline_updates
         self._ensure_stats()
+        t_commit_start = time.monotonic()
         # baseline_updates holds (name, current_gpu_tensor) references.
         # Save to pinned CPU async, one sync at end — same pattern as TensorBackuper.backup().
         for name, tensor in baseline_updates:
@@ -106,6 +108,7 @@ class DeltaCompressionTracker:
                 self.baseline[name] = torch.empty_like(tensor, device=torch.device("cpu"), pin_memory=True)
             self.baseline[name].copy_(tensor.detach(), non_blocking=True)
         torch.cuda.synchronize()
+        self._stats["profile_baseline_commit_s"] += time.monotonic() - t_commit_start
 
         if self.artifact_writer is not None:
             self.artifact_writer.enqueue(weight_version, self.chunk_idx, commit_state.artifact_tensors)
@@ -128,27 +131,39 @@ class DeltaCompressionTracker:
 
     def _prepare_delta_chunk(self, tensors: list[tuple[str, torch.Tensor]]) -> PreparedChunk:
         self._ensure_stats()
+        t_h2d_start = time.monotonic()
         prev_gpu_tensors = []
         for name, tensor in tensors:
             if name not in self.baseline:
                 raise KeyError(f"delta baseline missing tensor {name!r}; run a full sync before delta sync resumes")
             prev_gpu_tensors.append(self.baseline[name].to(device=tensor.device, non_blocking=True))
         torch.cuda.synchronize()
+        self._stats["profile_baseline_h2d_s"] += time.monotonic() - t_h2d_start
 
+        t_compute_start = time.monotonic()
         delta_tensors = []
         artifact_tensors = []
         baseline_updates = []
         input_tensor_count = 0
         sent_tensor_count = 0
+        chunk_elements = 0
+        chunk_nonzeros = 0
         for (name, tensor), prev_gpu in zip(tensors, prev_gpu_tensors, strict=True):
             delta = (tensor - prev_gpu).to(self.delta_dtype)
             input_tensor_count += 1
+            numel = delta.numel()
+            nnz = int(torch.count_nonzero(delta).item())
+            chunk_elements += numel
+            chunk_nonzeros += nnz
 
             baseline_updates.append((name, tensor))
             delta_tensors.append((name, delta))
             sent_tensor_count += 1
             if self.artifact_writer is not None:
                 artifact_tensors.append((name, delta.cpu()))
+        self._stats["profile_delta_compute_s"] += time.monotonic() - t_compute_start
+        self._stats["profile_sparsity_total_elements"] += chunk_elements
+        self._stats["profile_sparsity_total_nonzeros"] += chunk_nonzeros
 
         self._stats["delta_chunks"] += 1
         self._stats["delta_input_tensors"] += input_tensor_count
@@ -177,6 +192,12 @@ class DeltaCompressionTracker:
                 "delta_input_tensors": 0,
                 "delta_sent_tensors": 0,
                 "delta_sent_bytes": 0,
+                # -- profiling (temporary) --
+                "profile_baseline_h2d_s": 0.0,
+                "profile_delta_compute_s": 0.0,
+                "profile_baseline_commit_s": 0.0,
+                "profile_sparsity_total_elements": 0,
+                "profile_sparsity_total_nonzeros": 0,
             }
 
     def _log_stats(self) -> None:
@@ -194,6 +215,19 @@ class DeltaCompressionTracker:
             self._stats["delta_sent_tensors"],
             self._stats["delta_sent_bytes"],
         )
+        total_elem = self._stats["profile_sparsity_total_elements"]
+        total_nnz = self._stats["profile_sparsity_total_nonzeros"]
+        density = total_nnz / total_elem if total_elem > 0 else 0.0
+        logger.info(
+            "delta_profile: baseline_h2d=%.3fs delta_compute=%.3fs baseline_commit=%.3fs "
+            "sparsity_elements=%s sparsity_nonzeros=%s density=%.6f",
+            self._stats["profile_baseline_h2d_s"],
+            self._stats["profile_delta_compute_s"],
+            self._stats["profile_baseline_commit_s"],
+            total_elem,
+            total_nnz,
+            density,
+        )
 
 
 def get_delta_load_format(transport: str) -> str:
@@ -210,6 +244,7 @@ def estimate_delta_transport_byte_size(
     tensors: list[tuple[str, torch.Tensor]],
     transport: str,
 ) -> int:
+    t_start = time.monotonic()
     if transport == "dense":
         return sum(tensor.numel() * tensor.element_size() for _, tensor in tensors)
 
@@ -225,6 +260,13 @@ def estimate_delta_transport_byte_size(
             total_bytes += int(math.ceil(flat.numel() / 8)) + value_bytes
             continue
         raise ValueError(f"Unsupported delta compression transport: {transport}")
+    logger.info(
+        "delta_profile: estimate_byte_size=%.3fs tensors=%s transport=%s estimated_bytes=%s",
+        time.monotonic() - t_start,
+        len(tensors),
+        transport,
+        total_bytes,
+    )
     return total_bytes
 
 

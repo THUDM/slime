@@ -93,6 +93,7 @@ class UpdateWeightFromDistributed:
         """
         Pause → flush → non-expert (TP) → expert (EP) → continue. Progress on PP source.
         """
+        t_update_start = time.monotonic()
         self.weight_version += 1
 
         if dist.get_rank() == 0:
@@ -168,6 +169,8 @@ class UpdateWeightFromDistributed:
         dist.barrier(group=get_gloo_group())
         if self._is_pp_src_rank and self.delta_tracker is not None:
             self.delta_tracker.on_sync_succeeded()
+        if self._is_pp_src_rank:
+            logger.info("delta_profile: update_weights_total=%.3fs", time.monotonic() - t_update_start)
         if dist.get_rank() == 0:
             # int4/fp4 post_process
             if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
@@ -366,6 +369,7 @@ class UpdateWeightFromDistributed:
         tensors: list[tuple[str, torch.Tensor]],
         load_format: str | None,
     ) -> None:
+        t_materialize_start = time.monotonic()
         if load_format is None:
             send_tensors = tensors
             sparse_metadata = None
@@ -374,11 +378,15 @@ class UpdateWeightFromDistributed:
             send_tensors = materialized.tensors
             sparse_metadata = materialized.sparse_metadata
             load_format = materialized.load_format
+        t_materialize = time.monotonic() - t_materialize_start
 
+        t_lock_start = time.monotonic()
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
             time.sleep(0.1)
+        t_lock = time.monotonic() - t_lock_start
 
         try:
+            t_broadcast_start = time.monotonic()
             refs = update_weights_from_distributed(
                 self._group_name,
                 self._model_update_groups,
@@ -389,8 +397,22 @@ class UpdateWeightFromDistributed:
                 sparse_metadata=sparse_metadata,
             )
             ray.get(refs)
+            t_broadcast = time.monotonic() - t_broadcast_start
         finally:
             ray.get(self.rollout_engine_lock.release.remote())
+
+        tensor_count = len(send_tensors)
+        total_bytes = sum(t.numel() * t.element_size() for _, t in send_tensors)
+        logger.info(
+            "delta_profile: send_hf_update materialize=%.3fs lock=%.3fs broadcast=%.3fs "
+            "tensors=%s bytes=%s format=%s",
+            t_materialize,
+            t_lock,
+            t_broadcast,
+            tensor_count,
+            total_bytes,
+            load_format,
+        )
 
     def _flush_hf_update_bucket_from_distributed(
         self,
