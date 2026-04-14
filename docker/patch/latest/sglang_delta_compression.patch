@@ -23,10 +23,10 @@ diff -urN tmp_sglang_orig/python/sglang/srt/managers/tp_worker.py tmp_sglang_mod
 diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_sglang_mod/python/sglang/srt/model_executor/model_runner.py
 --- tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py	2026-04-07 01:29:33.592975483 +0000
 +++ tmp_sglang_mod/python/sglang/srt/model_executor/model_runner.py	2026-04-07 01:31:33.304918738 +0000
-@@ -13,6 +13,7 @@
+@@ -13,6 +13,8 @@
  # ==============================================================================
  """ModelRunner runs the forward passes of the models."""
- 
+
 +import contextlib
 +import time as _time_module
  import datetime
@@ -69,7 +69,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
          try:
              weights = []
              handles = []
-@@ -1395,6 +1412,148 @@
+@@ -1395,6 +1412,172 @@
              logger.error(error_msg)
              return False, error_msg
  
