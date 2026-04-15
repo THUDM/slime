@@ -333,13 +333,16 @@ class UpdateWeightFromDistributed:
             if not prepared.is_delta:
                 return HFUpdate(tensors=prepared.tensors, load_format=None, commit_state=prepared.commit_state)
             else:
-                # Skip estimate_delta_transport_byte_size — it does a full
-                # count_nonzero pass over all tensors, but the delta bucket
-                # flush uses dense byte size, not the sparse estimate.
+                # Cheap transport size estimate: assume ~5% density to avoid
+                # the expensive count_nonzero pass in estimate_delta_transport_byte_size.
+                # This is only used for bucket flush decisions, not exact accounting.
+                dense_bytes = sum(t.numel() * t.element_size() for _, t in prepared.tensors)
+                approx_transport_bytes = int(dense_bytes * 0.05)
                 return HFUpdate(
                     tensors=prepared.tensors,
                     load_format=get_delta_load_format(self.args.delta_compression_transport),
                     commit_state=prepared.commit_state,
+                    transport_byte_size=approx_transport_bytes,
                 )
 
     def _finalize_sent_chunk(self, commit_state) -> None:
@@ -359,18 +362,11 @@ class UpdateWeightFromDistributed:
             self._finalize_sent_chunk(chunk_update.commit_state)
             return
 
-        # For delta sparse transports, use a much larger bucket to reduce the
-        # number of lock-broadcast-unlock cycles. At 355B with 598 small flushes,
-        # per-chunk lock contention dominated (60s). We cap at 10 GB of dense
-        # delta bytes to limit GPU memory pressure while producing ~5-10 flushes
-        # instead of hundreds.
+        # For delta sparse transports, use a larger bucket (1 GB of estimated
+        # sparse bytes ≈ 20 GB dense at ~5% density) to reduce flush count.
         if chunk_update.load_format is not None:
-            _DELTA_DENSE_BYTE_LIMIT = 20 * 1024 * 1024 * 1024  # 20 GB
-            dense_add = sum(t.numel() * t.element_size() for _, t in chunk_update.tensors)
-            dense_current = sum(t.numel() * t.element_size() for _, t in pending_bucket.tensors)
-            if pending_bucket.has_updates and pending_bucket.load_format != chunk_update.load_format:
-                self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
-            elif pending_bucket.has_updates and dense_current + dense_add > _DELTA_DENSE_BYTE_LIMIT:
+            _DELTA_SPARSE_BYTE_LIMIT = 1 * 1024 * 1024 * 1024  # 1 GB sparse
+            if pending_bucket.should_flush_before_add(chunk_update, _DELTA_SPARSE_BYTE_LIMIT):
                 self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
         elif pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
             self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
