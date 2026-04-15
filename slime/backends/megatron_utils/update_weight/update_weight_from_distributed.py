@@ -106,10 +106,6 @@ class UpdateWeightFromDistributed:
                     rollout_engines=self.rollout_engines,
                 )
 
-            # Session-scoped lock: acquire once for entire delta sync instead
-            # of per-flush lock/unlock, eliminating lock contention between PP ranks.
-            if self.delta_tracker is not None:
-                ray.get(self.rollout_engine_lock.acquire.remote())
         dist.barrier(group=get_gloo_group())
 
         buffer_size = 0
@@ -176,10 +172,6 @@ class UpdateWeightFromDistributed:
         if self._is_pp_src_rank and self.delta_tracker is not None:
             self.delta_tracker.on_sync_succeeded()
         if dist.get_rank() == 0:
-            # Release session-scoped lock before resuming generation.
-            if self.delta_tracker is not None:
-                ray.get(self.rollout_engine_lock.release.remote())
-
             # int4/fp4 post_process
             if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
                 post_process_weights(
@@ -399,13 +391,8 @@ class UpdateWeightFromDistributed:
             sparse_metadata = materialized.sparse_metadata
             load_format = materialized.load_format
 
-        # Delta mode uses a session-scoped lock acquired in update_weights(),
-        # so skip per-flush lock acquire/release.
-        use_session_lock = self.delta_tracker is not None
-
-        if not use_session_lock:
-            while not ray.get(self.rollout_engine_lock.acquire.remote()):
-                pass
+        while not ray.get(self.rollout_engine_lock.acquire.remote()):
+            pass
 
         try:
             refs = update_weights_from_distributed(
@@ -419,8 +406,7 @@ class UpdateWeightFromDistributed:
             )
             ray.get(refs)
         finally:
-            if not use_session_lock:
-                ray.get(self.rollout_engine_lock.release.remote())
+            ray.get(self.rollout_engine_lock.release.remote())
 
     def _flush_hf_update_bucket_from_distributed(
         self,
