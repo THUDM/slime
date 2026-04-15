@@ -90,7 +90,24 @@ storing GPU refs in baseline_updates.
 |---|---|---|---|---|---|---|
 | Eager sparse + inline D2H | sparse | 1 GB | 16 | 90.9s | No | `15d53c00` |
 | Eager sparse + inline D2H | sparse | 5 GB | 3 | 70.4s | No | `507c7742` |
-| Dense + inline D2H + materialize-at-flush | dense | 10 GB | ~18 | TBD | TBD | `8bf1a5ef` |
+| Dense + inline D2H + materialize-at-flush | dense | 10 GB | ~18 | 64.0s | No | `8bf1a5ef` |
+| Dense + inline D2H + materialize-at-flush | dense | 20 GB | ~10 | 66.9s | No | `45e9dc0c` |
+
+### Inline D2H Overhead Analysis
+The 20 GB dense bucket with inline D2H (66.9s) is 14.4s slower than without
+inline D2H (52.5s). The inline D2H adds ~170 GB of GPU→CPU copies interleaved
+with delta computation on the CUDA stream. At 12 GB/s PCIe, this is ~14s of
+extra stream work.
+
+The original non-inline D2H deferred baseline commit to `commit_chunk()`
+after the broadcast, batching all D2H copies together. This approach was
+fast but stored GPU tensor references in `baseline_updates`, which pinned
+EP-gathered buffers (~84 GB) causing OOM on step 2.
+
+### Next Step: Deferred D2H on separate stream
+Use a secondary CUDA stream for baseline D2H copies. The main stream handles
+gather/convert/delta without PCIe interference. flush_baseline() synchronizes
+the secondary stream before the next H2D read.
 
 ### Key Finding: Eager materialization is counterproductive
 With eager materialization, the bucket accumulates sparse-encoded data.
