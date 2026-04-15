@@ -150,6 +150,8 @@ class DeltaCompressionTracker:
         # landed before we read baselines back to GPU.
         _t0 = _t.monotonic()
         self.flush_baseline()
+        # Release fragmented GPU memory from training step before delta compute.
+        torch.cuda.empty_cache()
         _t_flush = _t.monotonic() - _t0
 
         _t0 = _t.monotonic()
