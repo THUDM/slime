@@ -15,7 +15,7 @@
 |---|---|---|---|
 | 512 MB sparse-est (default) | ~598 | 60.5s | `1ca456eb` |
 | 10 GB dense | ~18 | 52.5s | `946bbb51` |
-| 20 GB dense | TBD | TBD | `f2dacc52` |
+| 20 GB dense | ~10 | 52.8s | `f2dacc52` |
 
 ## Per-Flush Overhead Analysis (10 GB bucket)
 
