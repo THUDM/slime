@@ -91,28 +91,42 @@ class DeltaCompressionTracker:
             else None
         )
         self._stats = None
+        self._baseline_dirty = False  # True when async D2H copies are in-flight
 
     def prepare_chunk(self, tensors: list[tuple[str, torch.Tensor]]) -> PreparedChunk:
         if self._should_send_full_chunk():
             return self._prepare_full_chunk(tensors)
         return self._prepare_delta_chunk(tensors)
 
+    def flush_baseline(self) -> None:
+        """Synchronize any in-flight baseline D2H copies.
+
+        Called before the next H2D transfer (in _prepare_delta_chunk) or at the
+        end of a sync to ensure baselines are consistent before reuse.
+        """
+        if self._baseline_dirty:
+            torch.cuda.synchronize()
+            self._baseline_dirty = False
+
     def commit_chunk(self, commit_state: DeltaCompressionCommitState, *, weight_version: int) -> None:
         baseline_updates = commit_state.baseline_updates
         self._ensure_stats()
         # baseline_updates holds (name, current_gpu_tensor) references.
-        # Save to pinned CPU async, one sync at end — same pattern as TensorBackuper.backup().
+        # Save to pinned CPU async — synchronize is deferred to flush_baseline()
+        # which runs before the next H2D transfer or at sync end, avoiding a
+        # per-chunk cuda synchronize that serializes the pipeline.
         for name, tensor in baseline_updates:
             if name not in self.baseline:
                 self.baseline[name] = torch.empty_like(tensor, device=torch.device("cpu"), pin_memory=True)
             self.baseline[name].copy_(tensor.detach(), non_blocking=True)
-        torch.cuda.synchronize()
+        self._baseline_dirty = True
 
         if self.artifact_writer is not None:
             self.artifact_writer.enqueue(weight_version, self.chunk_idx, commit_state.artifact_tensors)
         self.chunk_idx += 1
 
     def on_sync_succeeded(self) -> None:
+        self.flush_baseline()  # ensure all D2H copies are complete before next sync
         self.committed_syncs += 1
         self._log_stats()
         self._stats = None  # reset for next sync so profiling is per-sync
@@ -130,6 +144,9 @@ class DeltaCompressionTracker:
 
     def _prepare_delta_chunk(self, tensors: list[tuple[str, torch.Tensor]]) -> PreparedChunk:
         self._ensure_stats()
+        # Ensure any in-flight baseline D2H copies from commit_chunk() have
+        # landed before we read baselines back to GPU.
+        self.flush_baseline()
         prev_gpu_tensors = []
         for name, tensor in tensors:
             if name not in self.baseline:

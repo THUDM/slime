@@ -2,6 +2,7 @@ import logging
 import socket
 from argparse import Namespace
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 
 import ray
 import torch
@@ -50,6 +51,8 @@ class UpdateWeightFromDistributed:
         self.weight_version = 0
         self._model_update_groups = None
         self.delta_tracker = DeltaCompressionTracker(args) if args.enable_delta_compression else None
+        self._send_executor = ThreadPoolExecutor(max_workers=1) if self.delta_tracker is not None else None
+        self._pending_send: Future | None = None
 
     def connect_rollout_engines(
         self,
@@ -105,6 +108,11 @@ class UpdateWeightFromDistributed:
                     post_process_quantization=False,
                     rollout_engines=self.rollout_engines,
                 )
+
+            # Session-scoped lock: acquire once for entire delta sync instead
+            # of per-flush lock/unlock, eliminating lock contention between PP ranks.
+            if self.delta_tracker is not None:
+                ray.get(self.rollout_engine_lock.acquire.remote())
         dist.barrier(group=get_gloo_group())
 
         buffer_size = 0
@@ -139,6 +147,7 @@ class UpdateWeightFromDistributed:
                 )
 
             self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
+            self._wait_pending_send()
 
         dist.barrier(group=get_gloo_group())
 
@@ -166,11 +175,16 @@ class UpdateWeightFromDistributed:
 
         if expert_bucket is not None:
             self._flush_hf_update_bucket_from_distributed(expert_bucket, pbar=pbar)
+            self._wait_pending_send()
 
         dist.barrier(group=get_gloo_group())
         if self._is_pp_src_rank and self.delta_tracker is not None:
             self.delta_tracker.on_sync_succeeded()
         if dist.get_rank() == 0:
+            # Release session-scoped lock before resuming generation.
+            if self.delta_tracker is not None:
+                ray.get(self.rollout_engine_lock.release.remote())
+
             # int4/fp4 post_process
             if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
                 post_process_weights(
@@ -342,6 +356,11 @@ class UpdateWeightFromDistributed:
                     ),
                 )
 
+    def _wait_pending_send(self) -> None:
+        if self._pending_send is not None:
+            self._pending_send.result()
+            self._pending_send = None
+
     def _finalize_sent_chunk(self, commit_state) -> None:
         if self.delta_tracker is None:
             return
@@ -390,8 +409,13 @@ class UpdateWeightFromDistributed:
             sparse_metadata = materialized.sparse_metadata
             load_format = materialized.load_format
 
-        while not ray.get(self.rollout_engine_lock.acquire.remote()):
-            pass
+        # Delta mode uses a session-scoped lock acquired in update_weights(),
+        # so skip per-flush lock acquire/release.
+        use_session_lock = self.delta_tracker is not None
+
+        if not use_session_lock:
+            while not ray.get(self.rollout_engine_lock.acquire.remote()):
+                pass
 
         try:
             refs = update_weights_from_distributed(
@@ -405,7 +429,8 @@ class UpdateWeightFromDistributed:
             )
             ray.get(refs)
         finally:
-            ray.get(self.rollout_engine_lock.release.remote())
+            if not use_session_lock:
+                ray.get(self.rollout_engine_lock.release.remote())
 
     def _flush_hf_update_bucket_from_distributed(
         self,
@@ -415,13 +440,33 @@ class UpdateWeightFromDistributed:
         if not pending_bucket.has_updates:
             return
 
-        self._send_hf_update(
-            pending_bucket.tensors,
-            pending_bucket.load_format,
-        )
+        if self._send_executor is not None and pending_bucket.load_format is not None:
+            # Async double-buffer: wait for previous send to finish (including
+            # its finalization), then submit the new send to the background thread
+            # so the main thread can continue computing deltas for the next bucket.
+            self._wait_pending_send()
 
-        for commit_state in pending_bucket.commit_states:
-            self._finalize_sent_chunk(commit_state)
+            # Capture bucket state before clear — the background thread needs
+            # its own references since the bucket will be reused.
+            send_tensors = list(pending_bucket.tensors)
+            send_load_format = pending_bucket.load_format
+            send_commit_states = list(pending_bucket.commit_states)
+
+            def _bg_send_and_finalize():
+                self._send_hf_update(send_tensors, send_load_format)
+                for cs in send_commit_states:
+                    self._finalize_sent_chunk(cs)
+
+            self._pending_send = self._send_executor.submit(_bg_send_and_finalize)
+        else:
+            self._send_hf_update(
+                pending_bucket.tensors,
+                pending_bucket.load_format,
+            )
+
+            for commit_state in pending_bucket.commit_states:
+                self._finalize_sent_chunk(commit_state)
+
         pending_bucket.clear()
         if pbar is not None:
             pbar.update(1)
