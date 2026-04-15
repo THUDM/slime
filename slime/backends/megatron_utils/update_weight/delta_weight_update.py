@@ -164,21 +164,25 @@ class DeltaCompressionTracker:
 
         delta_tensors = []
         artifact_tensors = []
-        baseline_updates = []
         input_tensor_count = 0
         sent_tensor_count = 0
         for (name, tensor), prev_gpu in zip(tensors, prev_gpu_tensors, strict=True):
             delta = (tensor - prev_gpu).to(self.delta_dtype)
             del prev_gpu
             input_tensor_count += 1
-            # Clone to break view chain to EP-gathered buffers. Without this,
-            # baseline_updates pins ~84 GB of gathered data alive via HF tensor
-            # views (chunk/split/reshape aliases), causing OOM on later steps.
-            baseline_updates.append((name, tensor.detach().clone()))
+            # Commit baseline inline with async D2H: copy current weight to
+            # CPU pinned immediately so we don't store GPU tensor refs in
+            # baseline_updates (which would pin EP-gathered buffers → OOM).
+            # The D2H copy is non-blocking; flush_baseline() will synchronize
+            # before the next H2D read.
+            if name not in self.baseline:
+                self.baseline[name] = torch.empty_like(tensor, device=torch.device("cpu"), pin_memory=True)
+            self.baseline[name].copy_(tensor.detach(), non_blocking=True)
             delta_tensors.append((name, delta))
             sent_tensor_count += 1
             if self.artifact_writer is not None:
                 artifact_tensors.append((name, delta.cpu()))
+        self._baseline_dirty = True
         _t_subtract = _t.monotonic() - _t0
 
         logger.info(
@@ -197,7 +201,7 @@ class DeltaCompressionTracker:
             is_delta=True,
             tensors=delta_tensors,
             commit_state=DeltaCompressionCommitState(
-                baseline_updates=baseline_updates,  # cloned to break gathered buffer refs
+                baseline_updates=[],  # committed inline above, no GPU refs stored
                 artifact_tensors=artifact_tensors,
             ),
         )
