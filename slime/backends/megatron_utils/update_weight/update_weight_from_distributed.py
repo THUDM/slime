@@ -360,11 +360,10 @@ class UpdateWeightFromDistributed:
             self._finalize_sent_chunk(chunk_update.commit_state)
             return
 
-        # For delta sparse transports, use a very large bucket. Each PP rank's
-        # total sparse data is ~1.5 GB (5.9 GB / 4 PP), so 5 GB fits everything
-        # in one flush per section — eliminating most lock contention.
+        # For delta sparse transports, use a larger bucket to reduce flush count.
+        # 1 GB sparse ≈ 20 GB dense at ~5% density, safe for GPU memory.
         if chunk_update.load_format is not None:
-            _DELTA_SPARSE_BYTE_LIMIT = 5 * 1024 * 1024 * 1024  # 5 GB sparse
+            _DELTA_SPARSE_BYTE_LIMIT = 1 * 1024 * 1024 * 1024  # 1 GB sparse
             if pending_bucket.should_flush_before_add(chunk_update, _DELTA_SPARSE_BYTE_LIMIT):
                 self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
         elif pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
