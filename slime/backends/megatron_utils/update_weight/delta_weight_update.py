@@ -155,28 +155,27 @@ class DeltaCompressionTracker:
         _t_flush = _t.monotonic() - _t0
 
         _t0 = _t.monotonic()
-        prev_gpu_tensors = []
-        for name, tensor in tensors:
-            if name not in self.baseline:
-                raise KeyError(f"delta baseline missing tensor {name!r}; run a full sync before delta sync resumes")
-            prev_gpu_tensors.append(self.baseline[name].to(device=tensor.device, non_blocking=True))
-        torch.cuda.synchronize()
-        _t_h2d = _t.monotonic() - _t0
-
-        _t0 = _t.monotonic()
         delta_tensors = []
         artifact_tensors = []
         baseline_updates = []
         input_tensor_count = 0
         sent_tensor_count = 0
-        for (name, tensor), prev_gpu in zip(tensors, prev_gpu_tensors, strict=True):
+        # Process per-tensor to avoid triple-buffering the entire chunk:
+        # loading all baselines to GPU + all deltas at once would OOM for
+        # large expert chunks (~28 GB each × 3 = 84 GB on top of model).
+        for name, tensor in tensors:
+            if name not in self.baseline:
+                raise KeyError(f"delta baseline missing tensor {name!r}; run a full sync before delta sync resumes")
+            prev_gpu = self.baseline[name].to(device=tensor.device, non_blocking=False)
             delta = (tensor - prev_gpu).to(self.delta_dtype)
+            del prev_gpu  # free baseline copy immediately
             input_tensor_count += 1
             baseline_updates.append((name, tensor))
             delta_tensors.append((name, delta))
             sent_tensor_count += 1
             if self.artifact_writer is not None:
                 artifact_tensors.append((name, delta.cpu()))
+        _t_h2d = 0.0  # h2d now interleaved with subtract
         _t_subtract = _t.monotonic() - _t0
 
         logger.info(
