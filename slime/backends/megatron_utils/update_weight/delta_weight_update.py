@@ -159,27 +159,49 @@ class DeltaCompressionTracker:
         artifact_tensors = []
         input_tensor_count = 0
         sent_tensor_count = 0
-        # Process per-tensor: load baseline, compute delta, commit baseline
-        # immediately, then free all references to the current/gathered tensor.
-        # This prevents commit_state.baseline_updates from pinning large
-        # EP-gathered buffers alive across the entire chunk.
+        # Sub-batched async H2D: load baselines in small groups with
+        # non_blocking=True, synchronize per sub-batch, compute deltas,
+        # commit baselines inline (to free EP-gathered refs). The sub-batch
+        # cap limits peak memory while recovering H2D parallelism.
+        _MAX_STAGE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB
+        stage_names = []
+        stage_tensors = []
+        stage_prevs = []
+        stage_bytes = 0
+
+        def _flush_stage():
+            nonlocal stage_bytes
+            if not stage_names:
+                return
+            torch.cuda.synchronize()
+            for sn, st, sp in zip(stage_names, stage_tensors, stage_prevs, strict=True):
+                delta = (st - sp).to(self.delta_dtype)
+                del sp
+                if sn not in self.baseline:
+                    self.baseline[sn] = torch.empty_like(st, device=torch.device("cpu"), pin_memory=True)
+                self.baseline[sn].copy_(st.detach(), non_blocking=True)
+                delta_tensors.append((sn, delta))
+                if self.artifact_writer is not None:
+                    artifact_tensors.append((sn, delta.cpu()))
+            stage_names.clear()
+            stage_tensors.clear()
+            stage_prevs.clear()
+            stage_bytes = 0
+
         for name, tensor in tensors:
             if name not in self.baseline:
                 raise KeyError(f"delta baseline missing tensor {name!r}; run a full sync before delta sync resumes")
-            prev_gpu = self.baseline[name].to(device=tensor.device, non_blocking=False)
-            delta = (tensor - prev_gpu).to(self.delta_dtype)
-            del prev_gpu
-            # Commit baseline immediately: copy current weight to CPU pinned
-            # so the reference to `tensor` (which may alias an EP-gathered
-            # buffer) can be freed when the caller drops it.
-            if name not in self.baseline:
-                self.baseline[name] = torch.empty_like(tensor, device=torch.device("cpu"), pin_memory=True)
-            self.baseline[name].copy_(tensor.detach(), non_blocking=True)
+            prev_gpu = self.baseline[name].to(device=tensor.device, non_blocking=True)
+            tbytes = tensor.numel() * tensor.element_size()
+            stage_names.append(name)
+            stage_tensors.append(tensor)
+            stage_prevs.append(prev_gpu)
+            stage_bytes += tbytes
             input_tensor_count += 1
-            delta_tensors.append((name, delta))
             sent_tensor_count += 1
-            if self.artifact_writer is not None:
-                artifact_tensors.append((name, delta.cpu()))
+            if stage_bytes >= _MAX_STAGE_BYTES:
+                _flush_stage()
+        _flush_stage()
         self._baseline_dirty = True
         _t_subtract = _t.monotonic() - _t0
 
