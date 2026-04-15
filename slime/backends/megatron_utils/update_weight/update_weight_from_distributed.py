@@ -15,7 +15,7 @@ from slime.utils.distributed_utils import get_gloo_group, init_process_group
 
 from ..megatron_to_hf import convert_to_hf
 from .common import HFUpdate, PendingHFUpdateBucket, all_gather_param, named_params_and_buffers
-from .delta_weight_update import DeltaCompressionTracker, get_delta_load_format, materialize_delta_transport
+from .delta_weight_update import DeltaCompressionTracker, materialize_delta_transport
 
 logger = logging.getLogger(__name__)
 
@@ -333,14 +333,17 @@ class UpdateWeightFromDistributed:
             if not prepared.is_delta:
                 return HFUpdate(tensors=prepared.tensors, load_format=None, commit_state=prepared.commit_state)
             else:
-                # Use cheap ~5% density estimate to avoid the expensive
-                # count_nonzero scan. Only used for bucket flush decisions.
-                dense_bytes = sum(t.numel() * t.element_size() for _, t in prepared.tensors)
+                # Eagerly sparse-encode: materialize now so the bucket holds
+                # tiny sparse tensors instead of huge dense deltas. This frees
+                # GPU memory immediately, enabling far fewer flushes without OOM.
+                materialized = materialize_delta_transport(prepared.tensors, self.args.delta_compression_transport)
+                sparse_bytes = sum(t.numel() * t.element_size() for _, t in materialized.tensors)
                 return HFUpdate(
-                    tensors=prepared.tensors,
-                    load_format=get_delta_load_format(self.args.delta_compression_transport),
+                    tensors=materialized.tensors,
+                    load_format=materialized.load_format,
                     commit_state=prepared.commit_state,
-                    transport_byte_size=int(dense_bytes * 0.05),
+                    transport_byte_size=sparse_bytes,
+                    sparse_metadata=materialized.sparse_metadata,
                 )
 
     def _finalize_sent_chunk(self, commit_state) -> None:
@@ -360,10 +363,11 @@ class UpdateWeightFromDistributed:
             self._finalize_sent_chunk(chunk_update.commit_state)
             return
 
-        # For delta sparse transports, use a larger bucket to reduce flush count.
-        # 1 GB sparse ≈ 20 GB dense at ~5% density, safe for GPU memory.
+        # With eager materialization, the bucket holds sparse-encoded data (tiny),
+        # not dense deltas (huge). Safe to use a very large limit — each PP rank's
+        # total sparse data is ~1.5 GB, so 5 GB fits everything in one flush.
         if chunk_update.load_format is not None:
-            _DELTA_SPARSE_BYTE_LIMIT = 1 * 1024 * 1024 * 1024  # 1 GB sparse
+            _DELTA_SPARSE_BYTE_LIMIT = 5 * 1024 * 1024 * 1024  # 5 GB sparse
             if pending_bucket.should_flush_before_add(chunk_update, _DELTA_SPARSE_BYTE_LIMIT):
                 self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
         elif pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
@@ -374,6 +378,7 @@ class UpdateWeightFromDistributed:
         self,
         tensors: list[tuple[str, torch.Tensor]],
         load_format: str | None,
+        pre_sparse_metadata: list[dict] | None = None,
     ) -> None:
         import time as _t
 
@@ -381,6 +386,10 @@ class UpdateWeightFromDistributed:
         if load_format is None:
             send_tensors = tensors
             sparse_metadata = None
+        elif pre_sparse_metadata is not None:
+            # Eagerly materialized: tensors are already sparse-encoded packed
+            # tensors. Consolidate multiple chunks' packed buffers into one pair.
+            send_tensors, sparse_metadata = _consolidate_sparse_tensors(tensors, pre_sparse_metadata, load_format)
         else:
             materialized = materialize_delta_transport(tensors, self.args.delta_compression_transport)
             send_tensors = materialized.tensors
@@ -428,6 +437,7 @@ class UpdateWeightFromDistributed:
         self._send_hf_update(
             pending_bucket.tensors,
             pending_bucket.load_format,
+            pre_sparse_metadata=pending_bucket.sparse_metadata,
         )
 
         for commit_state in pending_bucket.commit_states:
@@ -436,6 +446,67 @@ class UpdateWeightFromDistributed:
         pending_bucket.clear()
         if pbar is not None:
             pbar.update(1)
+
+
+def _consolidate_sparse_tensors(
+    tensors: list[tuple[str, torch.Tensor]],
+    sparse_metadata: list[dict],
+    load_format: str,
+) -> tuple[list[tuple[str, torch.Tensor]], list[dict]]:
+    """Consolidate multiple eagerly-materialized sparse chunks into one broadcast.
+
+    Each chunk produced its own packed buffer pair with metadata referencing
+    local offsets. Concatenate all chunks' packed buffers and shift metadata
+    offsets so the receiver sees one contiguous broadcast.
+    """
+    if "sparse_indices" in load_format:
+        key_a, key_b = "__packed_indices__", "__packed_values__"
+        off_a, off_b = "index_start", "value_start"
+        end_a, end_b = "index_end", "value_end"
+    elif "sparse_bitmask" in load_format:
+        key_a, key_b = "__packed_masks__", "__packed_values__"
+        off_a, off_b = "mask_start", "value_start"
+        end_a, end_b = "mask_end", "value_end"
+    else:
+        return tensors, sparse_metadata
+
+    bufs_a = [t for name, t in tensors if name == key_a]
+    bufs_b = [t for name, t in tensors if name == key_b]
+
+    if len(bufs_a) <= 1:
+        # Single chunk — no consolidation needed
+        return tensors, sparse_metadata
+
+    # Build cumulative offset table: chunk i starts at cum_a[i], cum_b[i]
+    cum_a = [0]
+    cum_b = [0]
+    for a, b in zip(bufs_a, bufs_b, strict=True):
+        cum_a.append(cum_a[-1] + a.numel())
+        cum_b.append(cum_b[-1] + b.numel())
+
+    # Assign each metadata entry to its chunk by checking which chunk's
+    # offset range contains it (entries within a chunk have local offsets)
+    adjusted = []
+    mi = 0  # metadata index
+    for ci in range(len(bufs_a)):
+        chunk_end_a = bufs_a[ci].numel()
+        shift_a = cum_a[ci]
+        shift_b = cum_b[ci]
+        while mi < len(sparse_metadata):
+            meta = sparse_metadata[mi]
+            if meta[end_a] > chunk_end_a:
+                break  # belongs to next chunk
+            adj = dict(meta)
+            adj[off_a] += shift_a
+            adj[end_a] += shift_a
+            adj[off_b] += shift_b
+            adj[end_b] += shift_b
+            adjusted.append(adj)
+            mi += 1
+
+    packed_a = torch.cat(bufs_a, dim=0)
+    packed_b = torch.cat(bufs_b, dim=0)
+    return [(key_a, packed_a), (key_b, packed_b)], adjusted
 
 
 def connect_rollout_engines_from_distributed(
