@@ -21,6 +21,7 @@ class HFUpdate:
     commit_state: DeltaCompressionCommitState | None
     transport_byte_size: int | None = None
     sparse_metadata: list[dict] | None = None  # pre-materialized sparse metadata
+    sparse_metadata_count: int | None = None  # number of metadata entries in this chunk
 
     @property
     def should_send(self) -> bool:
@@ -40,6 +41,7 @@ class PendingHFUpdateBucket:
     load_format: str | None
     byte_size: int = 0
     sparse_metadata: list[dict] | None = None  # accumulated sparse metadata
+    sparse_metadata_counts: list[int] | None = None  # metadata entries per sparse chunk
 
     @classmethod
     def empty(cls) -> "PendingHFUpdateBucket":
@@ -64,7 +66,14 @@ class PendingHFUpdateBucket:
         if update.sparse_metadata is not None:
             if self.sparse_metadata is None:
                 self.sparse_metadata = []
+            if self.sparse_metadata_counts is None:
+                self.sparse_metadata_counts = []
             self.sparse_metadata.extend(update.sparse_metadata)
+            self.sparse_metadata_counts.append(
+                update.sparse_metadata_count
+                if update.sparse_metadata_count is not None
+                else len(update.sparse_metadata)
+            )
 
     def clear(self) -> None:
         self.tensors.clear()
@@ -72,6 +81,7 @@ class PendingHFUpdateBucket:
         self.load_format = None
         self.byte_size = 0
         self.sparse_metadata = None
+        self.sparse_metadata_counts = None
 
 
 def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:

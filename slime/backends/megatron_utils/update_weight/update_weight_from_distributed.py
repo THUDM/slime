@@ -344,6 +344,7 @@ class UpdateWeightFromDistributed:
                     commit_state=prepared.commit_state,
                     transport_byte_size=sparse_bytes,
                     sparse_metadata=materialized.sparse_metadata,
+                    sparse_metadata_count=len(materialized.sparse_metadata or []),
                 )
 
     def _finalize_sent_chunk(self, commit_state) -> None:
@@ -379,6 +380,7 @@ class UpdateWeightFromDistributed:
         tensors: list[tuple[str, torch.Tensor]],
         load_format: str | None,
         pre_sparse_metadata: list[dict] | None = None,
+        pre_sparse_metadata_counts: list[int] | None = None,
     ) -> None:
         import time as _t
 
@@ -389,7 +391,12 @@ class UpdateWeightFromDistributed:
         elif pre_sparse_metadata is not None:
             # Eagerly materialized: tensors are already sparse-encoded packed
             # tensors. Consolidate multiple chunks' packed buffers into one pair.
-            send_tensors, sparse_metadata = _consolidate_sparse_tensors(tensors, pre_sparse_metadata, load_format)
+            send_tensors, sparse_metadata = _consolidate_sparse_tensors(
+                tensors,
+                pre_sparse_metadata,
+                pre_sparse_metadata_counts,
+                load_format,
+            )
         else:
             materialized = materialize_delta_transport(tensors, self.args.delta_compression_transport)
             send_tensors = materialized.tensors
@@ -438,6 +445,7 @@ class UpdateWeightFromDistributed:
             pending_bucket.tensors,
             pending_bucket.load_format,
             pre_sparse_metadata=pending_bucket.sparse_metadata,
+            pre_sparse_metadata_counts=pending_bucket.sparse_metadata_counts,
         )
 
         for commit_state in pending_bucket.commit_states:
@@ -451,6 +459,7 @@ class UpdateWeightFromDistributed:
 def _consolidate_sparse_tensors(
     tensors: list[tuple[str, torch.Tensor]],
     sparse_metadata: list[dict],
+    sparse_metadata_counts: list[int] | None,
     load_format: str,
 ) -> tuple[list[tuple[str, torch.Tensor]], list[dict]]:
     """Consolidate multiple eagerly-materialized sparse chunks into one broadcast.
@@ -477,6 +486,16 @@ def _consolidate_sparse_tensors(
         # Single chunk — no consolidation needed
         return tensors, sparse_metadata
 
+    if len(bufs_a) != len(bufs_b):
+        raise ValueError(f"Mismatched sparse packed buffer counts: {len(bufs_a)=} {len(bufs_b)=} for {load_format=}")
+    if sparse_metadata_counts is None:
+        raise ValueError("Missing sparse metadata chunk boundaries for consolidation")
+    if len(sparse_metadata_counts) != len(bufs_a):
+        raise ValueError(
+            "Sparse metadata chunk boundary count does not match packed buffer pairs: "
+            f"{len(sparse_metadata_counts)=} {len(bufs_a)=}"
+        )
+
     # Build cumulative offset table: chunk i starts at cum_a[i], cum_b[i]
     cum_a = [0]
     cum_b = [0]
@@ -484,25 +503,25 @@ def _consolidate_sparse_tensors(
         cum_a.append(cum_a[-1] + a.numel())
         cum_b.append(cum_b[-1] + b.numel())
 
-    # Assign each metadata entry to its chunk by checking which chunk's
-    # offset range contains it (entries within a chunk have local offsets)
     adjusted = []
-    mi = 0  # metadata index
-    for ci in range(len(bufs_a)):
-        chunk_end_a = bufs_a[ci].numel()
+    mi = 0
+    for ci, meta_count in enumerate(sparse_metadata_counts):
         shift_a = cum_a[ci]
         shift_b = cum_b[ci]
-        while mi < len(sparse_metadata):
-            meta = sparse_metadata[mi]
-            if meta[end_a] > chunk_end_a:
-                break  # belongs to next chunk
+        for meta in sparse_metadata[mi : mi + meta_count]:
             adj = dict(meta)
             adj[off_a] += shift_a
             adj[end_a] += shift_a
             adj[off_b] += shift_b
             adj[end_b] += shift_b
             adjusted.append(adj)
-            mi += 1
+        mi += meta_count
+
+    if mi != len(sparse_metadata):
+        raise ValueError(
+            "Sparse metadata chunk boundaries did not consume the full metadata list: "
+            f"{mi=} {len(sparse_metadata)=}"
+        )
 
     packed_a = torch.cat(bufs_a, dim=0)
     packed_b = torch.cat(bufs_b, dim=0)
