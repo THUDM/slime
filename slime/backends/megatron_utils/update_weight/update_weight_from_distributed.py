@@ -15,12 +15,7 @@ from slime.utils.distributed_utils import get_gloo_group, init_process_group
 
 from ..megatron_to_hf import convert_to_hf
 from .common import HFUpdate, PendingHFUpdateBucket, all_gather_param, named_params_and_buffers
-from .delta_weight_update import (
-    DeltaCompressionTracker,
-    estimate_delta_transport_byte_size,
-    get_delta_load_format,
-    materialize_delta_transport,
-)
+from .delta_weight_update import DeltaCompressionTracker, get_delta_load_format, materialize_delta_transport
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +87,9 @@ class UpdateWeightFromDistributed:
         """
         Pause → flush → non-expert (TP) → expert (EP) → continue. Progress on PP source.
         """
+        import time as _t
+
+        _t_update_start = _t.monotonic()
         self.weight_version += 1
 
         if dist.get_rank() == 0:
@@ -171,6 +169,8 @@ class UpdateWeightFromDistributed:
         dist.barrier(group=get_gloo_group())
         if self._is_pp_src_rank and self.delta_tracker is not None:
             self.delta_tracker.on_sync_succeeded()
+        if self._is_pp_src_rank:
+            logger.info("delta_profile: update_weights_total=%.3fs", _t.monotonic() - _t_update_start)
         if dist.get_rank() == 0:
             # int4/fp4 post_process
             if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
@@ -333,14 +333,13 @@ class UpdateWeightFromDistributed:
             if not prepared.is_delta:
                 return HFUpdate(tensors=prepared.tensors, load_format=None, commit_state=prepared.commit_state)
             else:
+                # Skip estimate_delta_transport_byte_size — it does a full
+                # count_nonzero pass over all tensors, but the delta bucket
+                # flush uses dense byte size, not the sparse estimate.
                 return HFUpdate(
                     tensors=prepared.tensors,
                     load_format=get_delta_load_format(self.args.delta_compression_transport),
                     commit_state=prepared.commit_state,
-                    transport_byte_size=estimate_delta_transport_byte_size(
-                        prepared.tensors,
-                        self.args.delta_compression_transport,
-                    ),
                 )
 
     def _finalize_sent_chunk(self, commit_state) -> None:
@@ -382,6 +381,9 @@ class UpdateWeightFromDistributed:
         tensors: list[tuple[str, torch.Tensor]],
         load_format: str | None,
     ) -> None:
+        import time as _t
+
+        _t0 = _t.monotonic()
         if load_format is None:
             send_tensors = tensors
             sparse_metadata = None
@@ -390,10 +392,14 @@ class UpdateWeightFromDistributed:
             send_tensors = materialized.tensors
             sparse_metadata = materialized.sparse_metadata
             load_format = materialized.load_format
+        _t_materialize = _t.monotonic() - _t0
 
+        _t0 = _t.monotonic()
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
             pass
+        _t_lock = _t.monotonic() - _t0
 
+        _t0 = _t.monotonic()
         try:
             refs = update_weights_from_distributed(
                 self._group_name,
@@ -407,6 +413,15 @@ class UpdateWeightFromDistributed:
             ray.get(refs)
         finally:
             ray.get(self.rollout_engine_lock.release.remote())
+        _t_broadcast = _t.monotonic() - _t0
+        if load_format is not None:
+            logger.info(
+                "delta_profile: send_hf_update materialize=%.3fs lock=%.3fs broadcast=%.3fs format=%s",
+                _t_materialize,
+                _t_lock,
+                _t_broadcast,
+                load_format,
+            )
 
     def _flush_hf_update_bucket_from_distributed(
         self,

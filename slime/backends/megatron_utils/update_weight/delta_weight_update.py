@@ -143,17 +143,25 @@ class DeltaCompressionTracker:
         )
 
     def _prepare_delta_chunk(self, tensors: list[tuple[str, torch.Tensor]]) -> PreparedChunk:
+        import time as _t
+
         self._ensure_stats()
         # Ensure any in-flight baseline D2H copies from commit_chunk() have
         # landed before we read baselines back to GPU.
+        _t0 = _t.monotonic()
         self.flush_baseline()
+        _t_flush = _t.monotonic() - _t0
+
+        _t0 = _t.monotonic()
         prev_gpu_tensors = []
         for name, tensor in tensors:
             if name not in self.baseline:
                 raise KeyError(f"delta baseline missing tensor {name!r}; run a full sync before delta sync resumes")
             prev_gpu_tensors.append(self.baseline[name].to(device=tensor.device, non_blocking=True))
         torch.cuda.synchronize()
+        _t_h2d = _t.monotonic() - _t0
 
+        _t0 = _t.monotonic()
         delta_tensors = []
         artifact_tensors = []
         baseline_updates = []
@@ -167,6 +175,15 @@ class DeltaCompressionTracker:
             sent_tensor_count += 1
             if self.artifact_writer is not None:
                 artifact_tensors.append((name, delta.cpu()))
+        _t_subtract = _t.monotonic() - _t0
+
+        logger.info(
+            "delta_profile: prepare_chunk flush_baseline=%.3fs h2d=%.3fs subtract=%.3fs tensors=%s",
+            _t_flush,
+            _t_h2d,
+            _t_subtract,
+            input_tensor_count,
+        )
 
         self._stats["delta_chunks"] += 1
         self._stats["delta_input_tensors"] += input_tensor_count
