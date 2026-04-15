@@ -78,3 +78,27 @@ To truly beat the non-delta baseline (50s), we need to eliminate the per-flush l
 - Transfer deltas while rollout is running (before lock acquire)
 - Only hold lock briefly for the final apply signal
 - Most applicable for the disaggregated trainer/rollout future
+
+## Inline D2H Commit + Bucket Architecture Results (2026-04-15)
+
+### Context
+Inline D2H baseline commit: copy current weight to CPU pinned per-tensor
+during delta compute (non_blocking). Prevents gathered buffer OOM by not
+storing GPU refs in baseline_updates.
+
+| Config | Bucket Type | Bucket Limit | Flushes/PP | Delta Sync | OOM? | Commit |
+|---|---|---|---|---|---|---|
+| Eager sparse + inline D2H | sparse | 1 GB | 16 | 90.9s | No | `15d53c00` |
+| Eager sparse + inline D2H | sparse | 5 GB | 3 | 70.4s | No | `507c7742` |
+| Dense + inline D2H + materialize-at-flush | dense | 10 GB | ~18 | TBD | TBD | `8bf1a5ef` |
+
+### Key Finding: Eager materialization is counterproductive
+With eager materialization, the bucket accumulates sparse-encoded data.
+A 5 GB sparse bucket broadcasts ~2 GB per flush at 3-10s each.
+Per-flush profiling (5 GB sparse, 70.4s total):
+- materialize=0.003-0.021s (consolidation only, already encoded)
+- lock=0.003-6.5s (PP rank contention)
+- broadcast=0.3-9.7s (**broadcasting GB of sparse data is slow**)
+
+Without eager materialization, the bucket holds dense deltas. At flush:
+10 GB dense → ~500 MB sparse → broadcast 0.5s. Much faster per-flush.
