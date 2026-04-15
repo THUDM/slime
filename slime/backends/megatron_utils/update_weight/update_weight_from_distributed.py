@@ -333,19 +333,19 @@ class UpdateWeightFromDistributed:
             if not prepared.is_delta:
                 return HFUpdate(tensors=prepared.tensors, load_format=None, commit_state=prepared.commit_state)
             else:
-                # Eagerly sparse-encode: keeps bucket small (~2 GB sparse vs
-                # 20 GB dense), which is critical for low memory pressure.
-                # Low memory pressure avoids slow empty_cache and allocation
-                # overhead that dominated the 50-67s results.
-                materialized = materialize_delta_transport(prepared.tensors, self.args.delta_compression_transport)
-                sparse_bytes = sum(t.numel() * t.element_size() for _, t in materialized.tensors)
+                # Keep dense deltas in bucket. Materialize at flush time.
+                # Use the same small bucket size as non-delta so flushes are
+                # interleaved with gather/convert — this prevents the
+                # thundering-herd lock contention that happens with large
+                # buckets (all PP ranks finish compute at once and fight for
+                # the lock).  Each flush sparse-encodes ~512 MB dense →
+                # ~25 MB sparse → broadcasts 28x less than non-delta.
+                from .delta_weight_update import get_delta_load_format
+
                 return HFUpdate(
-                    tensors=materialized.tensors,
-                    load_format=materialized.load_format,
+                    tensors=prepared.tensors,
+                    load_format=get_delta_load_format(self.args.delta_compression_transport),
                     commit_state=prepared.commit_state,
-                    transport_byte_size=sparse_bytes,
-                    sparse_metadata=materialized.sparse_metadata,
-                    sparse_metadata_count=len(materialized.sparse_metadata or []),
                 )
 
     def _finalize_sent_chunk(self, commit_state) -> None:
@@ -365,14 +365,11 @@ class UpdateWeightFromDistributed:
             self._finalize_sent_chunk(chunk_update.commit_state)
             return
 
-        # Eager sparse bucket: accumulate sparse-encoded data.  5 GB gives
-        # ~3 flushes/PP, each broadcasting ~2 GB.  Low memory pressure is
-        # critical — the 22.6s architecture relies on it.
-        if chunk_update.load_format is not None:
-            _DELTA_SPARSE_BYTE_LIMIT = 5 * 1024 * 1024 * 1024  # 5 GB sparse
-            if pending_bucket.should_flush_before_add(chunk_update, _DELTA_SPARSE_BYTE_LIMIT):
-                self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
-        elif pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
+        # Use the same buffer size as non-delta (default 512 MB).  Many
+        # small flushes interleave with gather/convert so PP ranks don't
+        # pile up on the lock.  Each flush sparse-encodes a small bucket
+        # (~25 MB sparse) and broadcasts much less than non-delta.
+        if pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
             self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
         pending_bucket.add(chunk_update)
 
