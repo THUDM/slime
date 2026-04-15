@@ -150,14 +150,12 @@ class DeltaCompressionTracker:
         import time as _t
 
         self._ensure_stats()
-        # Ensure any in-flight baseline D2H copies from commit_chunk() have
-        # landed before we read baselines back to GPU.
+        # Ensure any in-flight D2H copies have landed before we read baselines.
         _t0 = _t.monotonic()
         self.flush_baseline()
-        # Release fragmented GPU memory from training step before delta compute.
-        torch.cuda.empty_cache()
         _t_flush = _t.monotonic() - _t0
 
+        # Batch H2D: load all baselines to GPU with non_blocking, one sync.
         _t0 = _t.monotonic()
         prev_gpu_tensors = []
         for name, tensor in tensors:
@@ -165,13 +163,15 @@ class DeltaCompressionTracker:
                 raise KeyError(f"delta baseline missing tensor {name!r}; run a full sync before delta sync resumes")
             prev_gpu_tensors.append(self.baseline[name].to(device=tensor.device, non_blocking=True))
         torch.cuda.synchronize()
+        _t_h2d = _t.monotonic() - _t0
 
         # Lazy-init a secondary CUDA stream for D2H baseline copies.
         # D2H on a separate stream runs concurrently with delta compute on
-        # the default stream, avoiding ~14s of PCIe serialization at 355B.
+        # the default stream, keeping the fast 22.6s pipeline intact.
         if self._d2h_stream is None:
             self._d2h_stream = torch.cuda.Stream()
 
+        _t0 = _t.monotonic()
         delta_tensors = []
         artifact_tensors = []
         input_tensor_count = 0
@@ -180,10 +180,11 @@ class DeltaCompressionTracker:
             delta = (tensor - prev_gpu).to(self.delta_dtype)
             del prev_gpu
             input_tensor_count += 1
-            # Commit baseline via D2H on secondary stream: the copy runs
-            # concurrently with subsequent delta compute on the default stream.
-            # Record an event so the D2H stream waits for this tensor's compute
-            # to finish, and the memory allocator knows the tensor is still live.
+            # Commit baseline via D2H on secondary stream so it runs
+            # concurrently with subsequent delta compute on the default
+            # stream. The event ensures correct ordering and keeps the
+            # storage alive until the D2H finishes — no GPU refs needed
+            # in baseline_updates, so gathered buffers are freed promptly.
             if name not in self.baseline:
                 self.baseline[name] = torch.empty_like(tensor, device=torch.device("cpu"), pin_memory=True)
             event = torch.cuda.current_stream().record_event()
@@ -198,8 +199,9 @@ class DeltaCompressionTracker:
         _t_subtract = _t.monotonic() - _t0
 
         logger.info(
-            "delta_profile: prepare_chunk flush_baseline=%.3fs compute=%.3fs tensors=%s",
+            "delta_profile: prepare_chunk flush=%.3fs h2d=%.3fs subtract=%.3fs tensors=%s",
             _t_flush,
+            _t_h2d,
             _t_subtract,
             input_tensor_count,
         )
