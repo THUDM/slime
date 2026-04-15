@@ -20,6 +20,7 @@ class HFUpdate:
     load_format: str | None
     commit_state: DeltaCompressionCommitState | None
     transport_byte_size: int | None = None
+    sparse_metadata: list[dict] | None = None  # pre-materialized sparse metadata
 
     @property
     def should_send(self) -> bool:
@@ -38,6 +39,7 @@ class PendingHFUpdateBucket:
     commit_states: list[DeltaCompressionCommitState | None]
     load_format: str | None
     byte_size: int = 0
+    sparse_metadata: list[dict] | None = None  # accumulated sparse metadata
 
     @classmethod
     def empty(cls) -> "PendingHFUpdateBucket":
@@ -59,12 +61,17 @@ class PendingHFUpdateBucket:
         self.commit_states.append(update.commit_state)
         self.load_format = update.load_format
         self.byte_size += update.byte_size
+        if update.sparse_metadata is not None:
+            if self.sparse_metadata is None:
+                self.sparse_metadata = []
+            self.sparse_metadata.extend(update.sparse_metadata)
 
     def clear(self) -> None:
         self.tensors.clear()
         self.commit_states.clear()
         self.load_format = None
         self.byte_size = 0
+        self.sparse_metadata = None
 
 
 def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:

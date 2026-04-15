@@ -333,16 +333,14 @@ class UpdateWeightFromDistributed:
             if not prepared.is_delta:
                 return HFUpdate(tensors=prepared.tensors, load_format=None, commit_state=prepared.commit_state)
             else:
-                # Cheap transport size estimate: assume ~5% density to avoid
-                # the expensive count_nonzero pass in estimate_delta_transport_byte_size.
-                # This is only used for bucket flush decisions, not exact accounting.
+                # Use cheap ~5% density estimate to avoid the expensive
+                # count_nonzero scan. Only used for bucket flush decisions.
                 dense_bytes = sum(t.numel() * t.element_size() for _, t in prepared.tensors)
-                approx_transport_bytes = int(dense_bytes * 0.05)
                 return HFUpdate(
                     tensors=prepared.tensors,
                     load_format=get_delta_load_format(self.args.delta_compression_transport),
                     commit_state=prepared.commit_state,
-                    transport_byte_size=approx_transport_bytes,
+                    transport_byte_size=int(dense_bytes * 0.05),
                 )
 
     def _finalize_sent_chunk(self, commit_state) -> None:
@@ -362,10 +360,11 @@ class UpdateWeightFromDistributed:
             self._finalize_sent_chunk(chunk_update.commit_state)
             return
 
-        # For delta sparse transports, use a larger bucket (1 GB of estimated
-        # sparse bytes ≈ 20 GB dense at ~5% density) to reduce flush count.
+        # For delta sparse transports, use a very large bucket. Each PP rank's
+        # total sparse data is ~1.5 GB (5.9 GB / 4 PP), so 5 GB fits everything
+        # in one flush per section — eliminating most lock contention.
         if chunk_update.load_format is not None:
-            _DELTA_SPARSE_BYTE_LIMIT = 1 * 1024 * 1024 * 1024  # 1 GB sparse
+            _DELTA_SPARSE_BYTE_LIMIT = 5 * 1024 * 1024 * 1024  # 5 GB sparse
             if pending_bucket.should_flush_before_add(chunk_update, _DELTA_SPARSE_BYTE_LIMIT):
                 self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
         elif pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
