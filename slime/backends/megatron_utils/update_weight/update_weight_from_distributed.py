@@ -333,18 +333,16 @@ class UpdateWeightFromDistributed:
             if not prepared.is_delta:
                 return HFUpdate(tensors=prepared.tensors, load_format=None, commit_state=prepared.commit_state)
             else:
-                # Eagerly sparse-encode: materialize now so the bucket holds
-                # tiny sparse tensors instead of huge dense deltas. This frees
-                # GPU memory immediately, enabling far fewer flushes without OOM.
-                materialized = materialize_delta_transport(prepared.tensors, self.args.delta_compression_transport)
-                sparse_bytes = sum(t.numel() * t.element_size() for _, t in materialized.tensors)
+                # Keep dense deltas in bucket; materialize (sparse-encode) at
+                # flush time.  This way each flush broadcasts ~500 MB of sparse
+                # data instead of accumulating GB of sparse in the bucket which
+                # then requires a slow, large NCCL broadcast.
+                from .delta_weight_update import get_delta_load_format
+
                 return HFUpdate(
-                    tensors=materialized.tensors,
-                    load_format=materialized.load_format,
+                    tensors=prepared.tensors,
+                    load_format=get_delta_load_format(self.args.delta_compression_transport),
                     commit_state=prepared.commit_state,
-                    transport_byte_size=sparse_bytes,
-                    sparse_metadata=materialized.sparse_metadata,
-                    sparse_metadata_count=len(materialized.sparse_metadata or []),
                 )
 
     def _finalize_sent_chunk(self, commit_state) -> None:
@@ -364,12 +362,12 @@ class UpdateWeightFromDistributed:
             self._finalize_sent_chunk(chunk_update.commit_state)
             return
 
-        # With eager materialization, the bucket holds sparse-encoded data.
-        # 1 GB sparse gives ~3-5 expert flushes per PP rank — moderate
-        # broadcast size (~1s each) with low lock contention.
+        # Dense delta bucket: accumulate dense deltas up to 10 GB, then
+        # flush (sparse-encode + broadcast ~500 MB).  Fewer flushes with
+        # small broadcasts beats many flushes with large sparse data.
         if chunk_update.load_format is not None:
-            _DELTA_SPARSE_BYTE_LIMIT = 5 * 1024 * 1024 * 1024  # 5 GB sparse
-            if pending_bucket.should_flush_before_add(chunk_update, _DELTA_SPARSE_BYTE_LIMIT):
+            _DELTA_DENSE_BYTE_LIMIT = 10 * 1024 * 1024 * 1024  # 10 GB dense
+            if pending_bucket.should_flush_before_add(chunk_update, _DELTA_DENSE_BYTE_LIMIT):
                 self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
         elif pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
             self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
