@@ -366,7 +366,7 @@ class UpdateWeightFromDistributed:
         # flush (sparse-encode + broadcast ~500 MB).  Fewer flushes with
         # small broadcasts beats many flushes with large sparse data.
         if chunk_update.load_format is not None:
-            _DELTA_DENSE_BYTE_LIMIT = 10 * 1024 * 1024 * 1024  # 10 GB dense
+            _DELTA_DENSE_BYTE_LIMIT = 20 * 1024 * 1024 * 1024  # 20 GB dense
             if pending_bucket.should_flush_before_add(chunk_update, _DELTA_DENSE_BYTE_LIMIT):
                 self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
         elif pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
