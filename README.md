@@ -51,6 +51,10 @@ We also provide examples for some use cases not covered in the quick start guide
 
 slime has powered several novel research projects and production systems. Here are some notable examples:
 
+### 🌈 Relax: Asynchronous RL Engine for Omni-Modal Agentic Training
+
+[**Relax**](https://github.com/redai-infra/Relax) (Reinforcement Engine Leveraging Agentic X-modality) is an omni-modal agentic RL framework open-sourced by the RedAI Infra team, built upon the slime infrastructure stack that combines Ray, Megatron-LM, and SGLang. Relax adopts a service-oriented architecture on Ray Serve with Megatron-LM and SGLang as training/inference backends. It uses [TransferQueue](https://github.com/Ascend/TransferQueue) to fully decouple Actor, Rollout, ActorFwd, Reference, and Advantage computation onto independent GPU clusters, and introduces **DCS (Distributed Checkpoint Service)** — an NCCL-broadcast weight-sync engine that streams updated Actor weights to Rollout/ActorFwd/Reference asynchronously and overlaps the transfer with the next training step, enabling fully-async training at configurable staleness. Relax supports end-to-end RL for text, vision, and audio (including Qwen3-Omni) and agentic multi-turn rollouts.
+
 ### 🦞 OpenClaw-RL: Train a Personalized Clawbot Simply by Talking to It
 
 [**OpenClaw-RL**](https://github.com/Gen-Verse/OpenClaw-RL) is an RL server for personalized OpenClaw agents. It hosts the OpenClaw model and improves it from prior conversations across deployments, while slime's asynchronous RL infrastructure prevents training from interfering with API serving. It supports two automatic optimization methods: GRPO with binary feedback inferred from subsequent states, and on-policy distillation that extracts hindsight hints from later feedback for the current policy.
