@@ -155,54 +155,30 @@ class DeltaCompressionTracker:
         _t_flush = _t.monotonic() - _t0
 
         _t0 = _t.monotonic()
-        delta_tensors = []
-        artifact_tensors = []
-        input_tensor_count = 0
-        sent_tensor_count = 0
-        # Sub-batched async H2D: load baselines in small groups with
-        # non_blocking=True, synchronize per sub-batch, compute deltas,
-        # commit baselines inline (to free EP-gathered refs). The sub-batch
-        # cap limits peak memory while recovering H2D parallelism.
-        _MAX_STAGE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB
-        stage_names = []
-        stage_tensors = []
-        stage_prevs = []
-        stage_bytes = 0
-
-        def _flush_stage():
-            nonlocal stage_bytes
-            if not stage_names:
-                return
-            torch.cuda.synchronize()
-            for sn, st, sp in zip(stage_names, stage_tensors, stage_prevs, strict=True):
-                delta = (st - sp).to(self.delta_dtype)
-                del sp
-                if sn not in self.baseline:
-                    self.baseline[sn] = torch.empty_like(st, device=torch.device("cpu"), pin_memory=True)
-                self.baseline[sn].copy_(st.detach(), non_blocking=True)
-                delta_tensors.append((sn, delta))
-                if self.artifact_writer is not None:
-                    artifact_tensors.append((sn, delta.cpu()))
-            stage_names.clear()
-            stage_tensors.clear()
-            stage_prevs.clear()
-            stage_bytes = 0
-
+        prev_gpu_tensors = []
         for name, tensor in tensors:
             if name not in self.baseline:
                 raise KeyError(f"delta baseline missing tensor {name!r}; run a full sync before delta sync resumes")
-            prev_gpu = self.baseline[name].to(device=tensor.device, non_blocking=True)
-            tbytes = tensor.numel() * tensor.element_size()
-            stage_names.append(name)
-            stage_tensors.append(tensor)
-            stage_prevs.append(prev_gpu)
-            stage_bytes += tbytes
+            prev_gpu_tensors.append(self.baseline[name].to(device=tensor.device, non_blocking=True))
+        torch.cuda.synchronize()
+
+        delta_tensors = []
+        artifact_tensors = []
+        baseline_updates = []
+        input_tensor_count = 0
+        sent_tensor_count = 0
+        for (name, tensor), prev_gpu in zip(tensors, prev_gpu_tensors, strict=True):
+            delta = (tensor - prev_gpu).to(self.delta_dtype)
+            del prev_gpu
             input_tensor_count += 1
+            # Clone to break view chain to EP-gathered buffers. Without this,
+            # baseline_updates pins ~84 GB of gathered data alive via HF tensor
+            # views (chunk/split/reshape aliases), causing OOM on later steps.
+            baseline_updates.append((name, tensor.detach().clone()))
+            delta_tensors.append((name, delta))
             sent_tensor_count += 1
-            if stage_bytes >= _MAX_STAGE_BYTES:
-                _flush_stage()
-        _flush_stage()
-        self._baseline_dirty = True
+            if self.artifact_writer is not None:
+                artifact_tensors.append((name, delta.cpu()))
         _t_subtract = _t.monotonic() - _t0
 
         logger.info(
@@ -221,7 +197,7 @@ class DeltaCompressionTracker:
             is_delta=True,
             tensors=delta_tensors,
             commit_state=DeltaCompressionCommitState(
-                baseline_updates=[],  # already committed inline above
+                baseline_updates=baseline_updates,  # cloned to break gathered buffer refs
                 artifact_tensors=artifact_tensors,
             ),
         )

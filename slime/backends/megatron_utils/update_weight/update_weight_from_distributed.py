@@ -365,10 +365,10 @@ class UpdateWeightFromDistributed:
             return
 
         # With eager materialization, the bucket holds sparse-encoded data.
-        # 500 MB sparse balances broadcast speed vs flush count. Too large
-        # (5 GB) causes huge NCCL broadcasts (6-9s) + lock contention (16s).
+        # 1 GB sparse gives ~3-5 expert flushes per PP rank — moderate
+        # broadcast size (~1s each) with low lock contention.
         if chunk_update.load_format is not None:
-            _DELTA_SPARSE_BYTE_LIMIT = 500 * 1024 * 1024  # 500 MB sparse
+            _DELTA_SPARSE_BYTE_LIMIT = 1 * 1024 * 1024 * 1024  # 1 GB sparse
             if pending_bucket.should_flush_before_add(chunk_update, _DELTA_SPARSE_BYTE_LIMIT):
                 self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
         elif pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
