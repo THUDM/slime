@@ -157,31 +157,35 @@ class DeltaCompressionTracker:
         _t0 = _t.monotonic()
         delta_tensors = []
         artifact_tensors = []
-        baseline_updates = []
         input_tensor_count = 0
         sent_tensor_count = 0
-        # Process per-tensor to avoid triple-buffering the entire chunk:
-        # loading all baselines to GPU + all deltas at once would OOM for
-        # large expert chunks (~28 GB each × 3 = 84 GB on top of model).
+        # Process per-tensor: load baseline, compute delta, commit baseline
+        # immediately, then free all references to the current/gathered tensor.
+        # This prevents commit_state.baseline_updates from pinning large
+        # EP-gathered buffers alive across the entire chunk.
         for name, tensor in tensors:
             if name not in self.baseline:
                 raise KeyError(f"delta baseline missing tensor {name!r}; run a full sync before delta sync resumes")
             prev_gpu = self.baseline[name].to(device=tensor.device, non_blocking=False)
             delta = (tensor - prev_gpu).to(self.delta_dtype)
-            del prev_gpu  # free baseline copy immediately
+            del prev_gpu
+            # Commit baseline immediately: copy current weight to CPU pinned
+            # so the reference to `tensor` (which may alias an EP-gathered
+            # buffer) can be freed when the caller drops it.
+            if name not in self.baseline:
+                self.baseline[name] = torch.empty_like(tensor, device=torch.device("cpu"), pin_memory=True)
+            self.baseline[name].copy_(tensor.detach(), non_blocking=True)
             input_tensor_count += 1
-            baseline_updates.append((name, tensor))
             delta_tensors.append((name, delta))
             sent_tensor_count += 1
             if self.artifact_writer is not None:
                 artifact_tensors.append((name, delta.cpu()))
-        _t_h2d = 0.0  # h2d now interleaved with subtract
+        self._baseline_dirty = True
         _t_subtract = _t.monotonic() - _t0
 
         logger.info(
-            "delta_profile: prepare_chunk flush_baseline=%.3fs h2d=%.3fs subtract=%.3fs tensors=%s",
+            "delta_profile: prepare_chunk flush_baseline=%.3fs compute=%.3fs tensors=%s",
             _t_flush,
-            _t_h2d,
             _t_subtract,
             input_tensor_count,
         )
@@ -195,7 +199,7 @@ class DeltaCompressionTracker:
             is_delta=True,
             tensors=delta_tensors,
             commit_state=DeltaCompressionCommitState(
-                baseline_updates=baseline_updates,
+                baseline_updates=[],  # already committed inline above
                 artifact_tensors=artifact_tensors,
             ),
         )
