@@ -333,17 +333,12 @@ class UpdateWeightFromDistributed:
             if not prepared.is_delta:
                 return HFUpdate(tensors=prepared.tensors, load_format=None, commit_state=prepared.commit_state)
             else:
-                # Eagerly sparse-encode so bucket stays small (~2 GB sparse).
-                # Few flushes minimize per-flush overhead (lock+Ray+NCCL setup).
-                materialized = materialize_delta_transport(prepared.tensors, self.args.delta_compression_transport)
-                sparse_bytes = sum(t.numel() * t.element_size() for _, t in materialized.tensors)
+                from .delta_weight_update import get_delta_load_format
+
                 return HFUpdate(
-                    tensors=materialized.tensors,
-                    load_format=materialized.load_format,
+                    tensors=prepared.tensors,
+                    load_format=get_delta_load_format(self.args.delta_compression_transport),
                     commit_state=prepared.commit_state,
-                    transport_byte_size=sparse_bytes,
-                    sparse_metadata=materialized.sparse_metadata,
-                    sparse_metadata_count=len(materialized.sparse_metadata or []),
                 )
 
     def _finalize_sent_chunk(self, commit_state) -> None:
@@ -363,13 +358,11 @@ class UpdateWeightFromDistributed:
             self._finalize_sent_chunk(chunk_update.commit_state)
             return
 
-        # 5 GB sparse bucket with eager materialization: ~2 flushes per PP
-        # rank.  Fewer flushes = less per-flush overhead (lock+Ray+NCCL setup).
-        # Framed transport splits the packed buffers into 16 MiB frames for
-        # NCCL pipelining, recovering 10+ GB/s effective bandwidth.
+        # 10 GB dense bucket: ~18 flushes per PP rank.  Each flush
+        # sparse-encodes 10 GB → ~500 MB → broadcasts ~500 MB.
         if chunk_update.load_format is not None:
-            _DELTA_SPARSE_BYTE_LIMIT = 5 * 1024 * 1024 * 1024  # 5 GB sparse
-            if pending_bucket.should_flush_before_add(chunk_update, _DELTA_SPARSE_BYTE_LIMIT):
+            _DELTA_DENSE_BYTE_LIMIT = 10 * 1024 * 1024 * 1024  # 10 GB dense
+            if pending_bucket.should_flush_before_add(chunk_update, _DELTA_DENSE_BYTE_LIMIT):
                 self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
         elif pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
             self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
@@ -397,13 +390,9 @@ class UpdateWeightFromDistributed:
                 pre_sparse_metadata_counts,
                 load_format,
             )
-            # Frame for NCCL pipelining: split large packed tensors into
-            # ~16 MiB chunks.  NCCL pipelines many small async broadcasts
-            # at 10+ GB/s vs 0.2 GB/s for 2 monolithic tensors.
-            send_tensors = _frame_sparse_tensors(send_tensors)
         else:
             materialized = materialize_delta_transport(tensors, self.args.delta_compression_transport)
-            send_tensors = _frame_sparse_tensors(materialized.tensors)
+            send_tensors = materialized.tensors
             sparse_metadata = materialized.sparse_metadata
             load_format = materialized.load_format
         _t_materialize = _t.monotonic() - _t0
