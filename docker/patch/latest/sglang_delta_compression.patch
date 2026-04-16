@@ -111,11 +111,11 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
 +    def _apply_sparse_delta_weights_from_distributed(
 +        self, dtypes, shapes, sparse_metadata, group_name, transport
 +    ):
-+        # Adaptive batch cap: 512 MiB ceiling, capped by 25% of free VRAM.
++        # Adaptive batch cap: 1024 MiB ceiling, capped by 25% of free VRAM.
 +        # Larger batches amortize load_weights overhead (~2ms per call regardless
 +        # of batch size — Python + name resolution overhead dominates).
 +        free_vram, _ = torch.cuda.mem_get_info()
-+        _BATCH_BYTE_CAP = min(512 * 1024 * 1024, free_vram // 4)
++        _BATCH_BYTE_CAP = min(1024 * 1024 * 1024, free_vram // 4)
 +        try:
 +            import time as _t
 +            _t0 = _t.monotonic()
