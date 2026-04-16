@@ -392,6 +392,16 @@ class UpdateWeightFromDistributed:
             send_tensors = materialized.tensors
             sparse_metadata = materialized.sparse_metadata
             load_format = materialized.load_format
+        # Move sparse_metadata from Ray to NCCL: encode as JSON bytes tensor.
+        # This eliminates per-flush Ray serialization of Python dicts to 64
+        # engines (~0.03s overhead per flush × 2400 flushes = 72s total).
+        if sparse_metadata is not None:
+            import json
+
+            meta_bytes = json.dumps(sparse_metadata).encode()
+            meta_tensor = torch.frombuffer(bytearray(meta_bytes), dtype=torch.uint8).cuda()
+            send_tensors = [("__sparse_meta__", meta_tensor)] + list(send_tensors)
+            sparse_metadata = None  # don't send via Ray
         _t_materialize = _t.monotonic() - _t0
 
         _t0 = _t.monotonic()
