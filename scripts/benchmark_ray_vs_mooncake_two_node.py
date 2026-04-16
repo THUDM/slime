@@ -48,12 +48,15 @@ class DataGenerator:
         data_size_mb: float,
         mount_segment_size: int | None,
         mooncake_master: str = "",
+        use_memcpy_for_local: bool = False,
     ):
         os.environ["MOONCAKE_PROTOCOL"] = os.environ.get("MOONCAKE_PROTOCOL", "rdma")
         os.environ["MOONCAKE_MASTER"] = mooncake_master or os.environ.get("MOONCAKE_MASTER", "")
         os.environ["MOONCAKE_LOCAL_HOSTNAME"] = ray.util.get_node_ip_address()
         os.environ.setdefault("MOONCAKE_TE_META_DATA_SERVER", "P2PHANDSHAKE")
-        os.environ.setdefault("MC_STORE_MEMCPY", "0")
+        os.environ["MC_STORE_MEMCPY"] = "1" if use_memcpy_for_local else "0"
+        os.environ.setdefault("SLIME_PACK_DIRECT_TO_BUFFER", "1")
+        os.environ.setdefault("SLIME_USE_PUT_POOL", "1")
         if mount_segment_size is not None:
             os.environ["MOONCAKE_MOUNT_SEGMENT_SIZE"] = str(mount_segment_size)
         self.data, self.actual_mb, self.batch, self.seq = self._make_rollout(data_size_mb)
@@ -118,12 +121,13 @@ class DataConsumer:
         self,
         mount_segment_size: int | None,
         mooncake_master: str = "",
+        use_memcpy_for_local: bool = False,
     ):
         os.environ["MOONCAKE_PROTOCOL"] = os.environ.get("MOONCAKE_PROTOCOL", "rdma")
         os.environ["MOONCAKE_MASTER"] = mooncake_master or os.environ.get("MOONCAKE_MASTER", "")
         os.environ["MOONCAKE_LOCAL_HOSTNAME"] = ray.util.get_node_ip_address()
         os.environ.setdefault("MOONCAKE_TE_META_DATA_SERVER", "P2PHANDSHAKE")
-        os.environ.setdefault("MC_STORE_MEMCPY", "0")
+        os.environ["MC_STORE_MEMCPY"] = "1" if use_memcpy_for_local else "0"
         if mount_segment_size is not None:
             os.environ["MOONCAKE_MOUNT_SEGMENT_SIZE"] = str(mount_segment_size)
         print(f"Consumer initialized on node {ray.util.get_node_ip_address()}")
@@ -220,7 +224,12 @@ def main():
         dest="isolate_backends",
         help="Run both backends in same process (may increase Ray variance)",
     )
-    ap.add_argument("--mooncake-segment-size-gb", type=float, default=None)
+    ap.add_argument(
+        "--mooncake-segment-size-gb",
+        type=float,
+        default=None,
+        help="Mooncake segment size in GB. Auto-computed if unset: (num_rounds+discard_first)*data_size_mb*1.2",
+    )
     ap.add_argument(
         "--trim-fraction",
         type=float,
@@ -313,12 +322,25 @@ def main():
     os.environ.setdefault("MOONCAKE_PROTOCOL", "rdma")
     os.environ.setdefault("MOONCAKE_TE_META_DATA_SERVER", "P2PHANDSHAKE")
     os.environ.setdefault("MC_STORE_MEMCPY", "0")
+    os.environ.setdefault("SLIME_PACK_DIRECT_TO_BUFFER", "1")
+    os.environ.setdefault("SLIME_USE_PUT_POOL", "1")
 
     overrides = {}
     if args.mooncake_segment_size_gb is not None:
         overrides["mount_segment_size"] = int(
             args.mooncake_segment_size_gb * 1024 * 1024 * 1024
         )
+    else:
+        # Auto-compute: segment_size >= (num_rounds + discard_first) * data_size * 1.2
+        # Avoids -200 (insufficient space) for large payloads
+        required_gb = (
+            (args.num_rounds + args.discard_first)
+            * args.data_size_mb
+            / 1024.0
+            * 1.2
+        )
+        min_gb = max(4.0, required_gb)
+        overrides["mount_segment_size"] = int(min_gb * 1024 * 1024 * 1024)
     cfg = MooncakeStoreConfig.load_from_env(
         overrides=overrides if overrides else None
     )
@@ -331,32 +353,37 @@ def main():
 
     nodes = [n["NodeManagerAddress"] for n in ray.nodes() if n.get("Alive")]
     log(f"Active Ray nodes: {nodes}")
-    if len(nodes) < 2:
-        raise RuntimeError("Need at least 2 Ray nodes for cross-machine benchmark")
+    if len(nodes) < 1:
+        raise RuntimeError("Need at least 1 Ray node")
 
     put_node = args.put_node or nodes[0]
-    get_node = args.get_node or nodes[1]
+    get_node = args.get_node or (nodes[1] if len(nodes) >= 2 else nodes[0])
     put_node_id = _resolve_node_id(put_node)
     get_node_id = _resolve_node_id(get_node)
     if put_node_id is None:
         raise RuntimeError(f"Put node {put_node} not found in ray.nodes()")
     if get_node_id is None:
         raise RuntimeError(f"Get node {get_node} not found in ray.nodes()")
+    # Single-node: enable MC_STORE_MEMCPY for local put (faster; requires mooncake_memcpy_fix.patch for cross-node safety)
+    if put_node == get_node:
+        os.environ["MC_STORE_MEMCPY"] = "1"
+        log("Single-node mode: MC_STORE_MEMCPY=1 for local put")
     log(f"Generator -> {put_node}, Consumer -> {get_node}")
 
     from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
     mooncake_master = os.environ.get("MOONCAKE_MASTER", f"{put_node}:50051")
+    use_memcpy = put_node == get_node
     gen = DataGenerator.options(
         scheduling_strategy=NodeAffinitySchedulingStrategy(
             node_id=put_node_id, soft=False
         ),
-    ).remote(args.data_size_mb, mount_segment_size, mooncake_master)
+    ).remote(args.data_size_mb, mount_segment_size, mooncake_master, use_memcpy)
     con = DataConsumer.options(
         scheduling_strategy=NodeAffinitySchedulingStrategy(
             node_id=get_node_id, soft=False
         ),
-    ).remote(mount_segment_size, mooncake_master)
+    ).remote(mount_segment_size, mooncake_master, use_memcpy)
 
     info = ray.get(gen.get_info.remote())
     log(

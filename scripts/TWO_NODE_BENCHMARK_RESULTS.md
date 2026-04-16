@@ -11,6 +11,8 @@
 - **拓扑**: DataGenerator 在 70（Put），DataConsumer 在 72（Get），handle 经 Ray 传递
 - **时序**: Put = dict→handle 全流程；Get = handle→dict 全流程；E2E = Put + Get
 - **稳定化**: `--isolate-backends` 各 backend 独立进程；warmup=24、discard-first=5、trim=15% 降低 Ray 方差
+- **Segment 自动计算**: 未指定 `--mooncake-segment-size-gb` 时，按 `(num_rounds+discard_first)*data_size_mb*1.2` 自动设置，避免 -200（空间不足）
+- **-800 错误**: 若出现 conflicting mooncake processes，先运行 `scripts/clean_mooncake_both_nodes.sh`
 
 ---
 
@@ -40,11 +42,11 @@
 
 | Backend | Put (ms) | Get (ms) | E2E (ms) |
 |---------|----------|----------|----------|
-| **ray** | 104.18 ± 9.42 | 208.60 ± 6.15 | 315.39 ± 10.89 |
-| **mooncake** | 170.58 ± 1.12 | **83.82 ± 2.31** | **254.92 ± 2.13** |
+| **ray** | 104.02 ± 11.24 | 210.73 ± 6.34 | 316.86 ± 11.68 |
+| **mooncake** | 170.30 ± 1.97 | **81.89 ± 2.89** | **252.65 ± 3.22** |
 
-- 实际数据量: ~507 MB，30 轮，`--mooncake-segment-size-gb 16`
-- Mooncake E2E 约快 19%，Get 约快 2.5×
+- 实际数据量: ~501 MB，30 轮，segment 自动计算（约 21 GB）
+- Mooncake E2E 约快 20%，Get 约快 2.6×
 
 ### 2.4 1000 MB
 
@@ -78,11 +80,11 @@ python scripts/benchmark_ray_vs_mooncake_two_node.py \
   --data-size-mb 200 --num-rounds 30 --warm-up-rounds 24 \
   --backends ray mooncake --mooncake-segment-size-gb 8
 
-# 500 MB
+# 500 MB（segment 自动计算，无需手动指定）
 python scripts/benchmark_ray_vs_mooncake_two_node.py \
   --put-node $PUT_NODE --get-node $GET_NODE \
   --data-size-mb 500 --num-rounds 30 --warm-up-rounds 24 \
-  --backends ray mooncake --mooncake-segment-size-gb 16
+  --backends ray mooncake
 
 # 1000 MB（segment ≥ 16GB，因 8+5 rounds × 1GB）
 python scripts/benchmark_ray_vs_mooncake_two_node.py \

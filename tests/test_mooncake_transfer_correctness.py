@@ -12,6 +12,7 @@ Prerequisites:
 Run: pytest tests/test_mooncake_transfer_correctness.py -v
 Or:  python tests/test_mooncake_transfer_correctness.py
 """
+
 import copy
 import os
 import sys
@@ -38,12 +39,12 @@ def _assert_equal_recursive(orig, new, path: str = "root") -> None:
     elif isinstance(orig, list):
         assert isinstance(new, list), f"Type mismatch at {path}: expected list, got {type(new)}"
         assert len(orig) == len(new), f"Length mismatch at {path}: {len(orig)} vs {len(new)}"
-        for i, (o, n) in enumerate(zip(orig, new)):
+        for i, (o, n) in enumerate(zip(orig, new, strict=False)):
             _assert_equal_recursive(o, n, f"{path}[{i}]")
     elif isinstance(orig, tuple):
         assert isinstance(new, tuple), f"Type mismatch at {path}: expected tuple, got {type(new)}"
         assert len(orig) == len(new), f"Length mismatch at {path}"
-        for i, (o, n) in enumerate(zip(orig, new)):
+        for i, (o, n) in enumerate(zip(orig, new, strict=False)):
             _assert_equal_recursive(o, n, f"{path}[{i}]")
     elif isinstance(orig, np.ndarray):
         assert isinstance(new, np.ndarray), f"Type mismatch at {path}: expected ndarray, got {type(new)}"
@@ -52,7 +53,7 @@ def _assert_equal_recursive(orig, new, path: str = "root") -> None:
         assert isinstance(new, torch.Tensor), f"Type mismatch at {path}: expected Tensor, got {type(new)}"
         torch.testing.assert_close(orig, new, msg=f"Tensor mismatch at {path}")
     else:
-        assert type(orig) == type(new), f"Type mismatch at {path}: {type(orig)} vs {type(new)}"
+        assert isinstance(new, type(orig)), f"Type mismatch at {path}: {type(orig)} vs {type(new)}"
         assert orig == new, f"Value mismatch at {path}: {orig} vs {new}"
 
 
@@ -64,13 +65,35 @@ def test_mooncake_hybrid_rollout_transfer_correctness():
     os.environ.setdefault("MOONCAKE_TE_META_DATA_SERVER", "http://127.0.0.1:8080/metadata")
     os.environ.setdefault("MC_STORE_MEMCPY", "1")
 
-    data = make_mock_rollout_data(batch_size=8, seq_len=512, use_routing_replay=True)
+    num_layers = 64
+    moe_router_topk = 2
+    data = make_mock_rollout_data(
+        batch_size=8,
+        seq_len=512,
+        use_routing_replay=True,
+        num_layers=num_layers,
+        moe_router_topk=moe_router_topk,
+    )
+    assert "rollout_routed_experts" in data
+    expected = copy.deepcopy(data)
     xfer = MooncakeHybridRolloutTransfer(tensor_min_bytes=1024 * 1024, enable_auto_cleanup=False)
 
     handle = xfer.put_rollout(data)
     received = xfer.get_rollout(handle, return_packed=False)
 
-    _assert_equal_recursive(data, received)
+    assert "rollout_routed_experts" in received
+    assert len(expected["rollout_routed_experts"]) == len(received["rollout_routed_experts"])
+    for i, (orig, new) in enumerate(
+        zip(expected["rollout_routed_experts"], received["rollout_routed_experts"], strict=False)
+    ):
+        expected_token_steps = expected["total_lengths"][i] - 1
+        assert orig.dtype == np.int32
+        assert new.dtype == np.int32
+        assert orig.shape == (expected_token_steps, num_layers, moe_router_topk)
+        assert new.shape == (expected_token_steps, num_layers, moe_router_topk)
+        assert new.shape[0] == len(received["tokens"][i]) - 1
+
+    _assert_equal_recursive(expected, received)
     xfer.cleanup(handle)
 
 

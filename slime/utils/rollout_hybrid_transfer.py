@@ -8,6 +8,9 @@ Design:
 - put/get: DataTransferBackend adapters
 - Pickle 5 OOB: extract tensor buffers, zero-copy deserialize
 """
+
+import copyreg
+import logging
 import os
 import pickle
 import queue
@@ -15,9 +18,7 @@ import struct
 import threading
 import time
 import uuid
-import copyreg
 import weakref
-import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -26,6 +27,56 @@ import torch
 from slime.utils.data_transfer import MooncakeStoreConfig
 
 logger = logging.getLogger(__name__)
+
+# ReplicateConfig for put to local replica (prefer_alloc_in_same_node)
+_PUT_LOCAL_REPLICA_CONFIG: object | None = None
+_PUT_LOCAL_REPLICA_CONFIG_INITIALIZED = False
+_BATCH_PUT_SUPPORTS_CONFIG: bool | None = None
+
+
+def _get_put_replicate_config():
+    """Return ReplicateConfig when available, otherwise None."""
+    global _PUT_LOCAL_REPLICA_CONFIG, _PUT_LOCAL_REPLICA_CONFIG_INITIALIZED
+    if not _PUT_LOCAL_REPLICA_CONFIG_INITIALIZED:
+        _PUT_LOCAL_REPLICA_CONFIG_INITIALIZED = True
+        try:
+            from mooncake.store import ReplicateConfig
+        except ImportError:
+            return None
+
+        cfg = ReplicateConfig()
+        cfg.prefer_alloc_in_same_node = os.environ.get("SLIME_PUT_LOCAL_REPLICA", "1").lower() in ("1", "true", "yes")
+        _PUT_LOCAL_REPLICA_CONFIG = cfg
+    return _PUT_LOCAL_REPLICA_CONFIG
+
+
+def _batch_put_from_multi_buffers(store, keys, ptrs_list, sizes_list):
+    """Call batch_put_from_multi_buffers with optional config compatibility fallback."""
+    global _BATCH_PUT_SUPPORTS_CONFIG
+    config = _get_put_replicate_config()
+    if _BATCH_PUT_SUPPORTS_CONFIG is not False and config is not None:
+        try:
+            ret = store.batch_put_from_multi_buffers(keys, ptrs_list, sizes_list, config=config)
+        except TypeError:
+            _BATCH_PUT_SUPPORTS_CONFIG = False
+        else:
+            _BATCH_PUT_SUPPORTS_CONFIG = True
+            return ret
+    return store.batch_put_from_multi_buffers(keys, ptrs_list, sizes_list)
+
+
+def _batch_put_error_hint(ret) -> str:
+    """Return hint for Mooncake batch_put error codes."""
+    if ret and isinstance(ret, (list, tuple)):
+        r = ret[0] if ret else 0
+    else:
+        r = ret
+    if r == -200:
+        return " (insufficient space: increase --mooncake-segment-size-gb or MOONCAKE_MOUNT_SEGMENT_SIZE)"
+    if r == -800:
+        return " (conflicting mooncake processes: run scripts/clean_mooncake_both_nodes.sh first)"
+    return ""
+
 
 DTYPE_MAP = {
     torch.float32: 0,
@@ -131,6 +182,15 @@ def _unpack_ragged(data: dict) -> dict:
             data["rollout_log_probs"]["flat"],
             data["rollout_log_probs"]["offsets"],
         )
+    if (
+        "rollout_routed_experts" in data
+        and isinstance(data["rollout_routed_experts"], dict)
+        and data["rollout_routed_experts"].get("__ragged_type__") == "3d_per_sample_int32"
+    ):
+        data["rollout_routed_experts"] = _unpack_ragged_3d_per_sample_int32(
+            data["rollout_routed_experts"]["flat"],
+            data["rollout_routed_experts"]["shapes"],
+        )
     return data
 
 
@@ -165,14 +225,16 @@ def _serialize_rollout_meta_numpy(rollout: dict) -> bytes:
     loss_masks = rollout.get("loss_masks", [])
     loss_lengths = np.array([len(m) for m in loss_masks], dtype=np.int32)
     loss_packed = np.array([x for m in loss_masks for x in m], dtype=np.int32)
-    parts.extend([
-        partition.tobytes(),
-        response_lengths.tobytes(),
-        rewards.tobytes(),
-        total_lengths.tobytes(),
-        loss_lengths.tobytes(),
-        loss_packed.tobytes(),
-    ])
+    parts.extend(
+        [
+            partition.tobytes(),
+            response_lengths.tobytes(),
+            rewards.tobytes(),
+            total_lengths.tobytes(),
+            loss_lengths.tobytes(),
+            loss_packed.tobytes(),
+        ]
+    )
     raw_reward = rollout.get("raw_reward")
     if raw_reward is not None:
         parts.append(np.array(raw_reward, dtype=np.float32).tobytes())
@@ -238,9 +300,7 @@ def _deserialize_rollout_meta_numpy(
     return data
 
 
-def _prepare_rollout_for_numpy(
-    rollout: dict, profile_out: dict | None = None
-) -> tuple[bytes, list[torch.Tensor]]:
+def _prepare_rollout_for_numpy(rollout: dict, profile_out: dict | None = None) -> tuple[bytes, list[torch.Tensor]]:
     """Pack ragged arrays, serialize meta with numpy format, return (meta_bytes, tensor_buffers).
     Tensor order: tokens_flat, tokens_off, log_probs_flat, log_probs_off, [labels_flat, labels_off], [routed_i...]
     """
@@ -269,9 +329,7 @@ def _prepare_rollout_for_numpy(
     return meta_bytes, tensors
 
 
-def _prepare_rollout_for_pickle(
-    rollout: dict, profile_out: dict | None = None
-) -> tuple[bytes, list[torch.Tensor]]:
+def _prepare_rollout_for_pickle(rollout: dict, profile_out: dict | None = None) -> tuple[bytes, list[torch.Tensor]]:
     """Pack ragged arrays, pickle with OOB, return (meta_bytes, tensor_buffers)."""
     t0 = time.perf_counter()
     data = rollout.copy()
@@ -308,9 +366,7 @@ def _pad8(x: int) -> int:
     return (x + 7) // 8 * 8
 
 
-def _pack_ragged_1d_int32_into(
-    buf: np.ndarray, offset: int, list_of_arrays: list[np.ndarray]
-) -> tuple[int, int, int]:
+def _pack_ragged_1d_int32_into(buf: np.ndarray, offset: int, list_of_arrays: list[np.ndarray]) -> tuple[int, int, int]:
     """Pack list of int32 arrays into buf at offset. Returns (flat_bytes, offsets_bytes, total_bytes).
     Flat is padded to 8-byte boundary so offsets (int64) are aligned."""
     lengths = np.array([a.shape[0] for a in list_of_arrays], dtype=np.int64)
@@ -392,16 +448,61 @@ def _pack_ragged_1d_float32_into(
     return flat_bytes, n_off * 8, flat_padded + n_off * 8
 
 
+def _pack_routed_experts_into(buf: np.ndarray, offset: int, list_of_arrays: list[np.ndarray]) -> tuple[int, int, int]:
+    """Pack list of 3D int32 arrays (e.g. rollout_routed_experts) into buf at offset.
+    Layout: flat_data (padded to 8B) | shapes (n, 3) int64.
+    Returns (flat_bytes, shapes_bytes, total_bytes)."""
+    n = len(list_of_arrays)
+    if n == 0:
+        return 0, 0, 0
+    # Write directly to buffer to avoid np.concatenate allocation
+    flat_view = buf.view(np.int32)
+    flat_offset = offset // 4
+    pos = 0
+    shapes_list = []
+    for arr in list_of_arrays:
+        a = np.asarray(arr, dtype=np.int32)
+        shapes_list.append(a.shape)
+        a_flat = a.reshape(-1)
+        nelem = a_flat.size
+        flat_view[flat_offset + pos : flat_offset + pos + nelem] = a_flat
+        pos += nelem
+    flat_bytes = pos * 4
+    flat_padded = _pad8(flat_bytes)
+    shapes_bytes = n * 3 * 8
+    total = flat_padded + shapes_bytes
+    shapes = np.array(shapes_list, dtype=np.int64)
+    shapes_view = buf.view(np.uint8)[offset + flat_padded : offset + total].view(np.int64)
+    shapes_view[:] = shapes.reshape(-1)
+    return flat_bytes, shapes_bytes, total
+
+
+def _unpack_ragged_3d_per_sample_int32(flat: torch.Tensor, shapes: torch.Tensor) -> list[np.ndarray]:
+    """Unpack flat + shapes back to list of 3D int32 arrays."""
+    flat_np = flat.cpu().numpy().astype(np.int32, copy=False)
+    shapes_np = shapes.cpu().numpy().astype(np.int64, copy=False).reshape(-1, 3)
+    out = []
+    pos = 0
+    for i in range(len(shapes_np)):
+        d0, d1, d2 = int(shapes_np[i, 0]), int(shapes_np[i, 1]), int(shapes_np[i, 2])
+        nelem = d0 * d1 * d2
+        out.append(flat_np[pos : pos + nelem].reshape(d0, d1, d2).copy())
+        pos += nelem
+    return out
+
+
 def _prepare_rollout_direct_pack(
     rollout: dict,
     store,
     profile_out: dict | None = None,
+    put_pool: tuple[torch.Tensor, int] | None = None,
 ) -> tuple[bytes, list[torch.Tensor], tuple[int, int] | None, object]:
     """
     Scheme C: Pack directly into a single buffer, no intermediate tensor allocation.
     Returns (meta_bytes, tensor_views, registered_range, buffer_holder).
     registered_range=(ptr, size) if buffer was registered; None if from alloc_from_mem_pool.
     buffer_holder keeps the buffer alive.
+    put_pool: optional (buf, size) pre-registered buffer to use (simulates alloc_from_mem_pool).
     """
     import ctypes
 
@@ -425,18 +526,29 @@ def _prepare_rollout_direct_pack(
         n_flat = sum(len(x) for x in data["rollout_log_probs"])
         n_off = len(data["rollout_log_probs"]) + 1
         sizes.append(_pad64(_pad8(n_flat * 4) + n_off * 8))
+    if "rollout_routed_experts" in data and isinstance(data["rollout_routed_experts"], list):
+        arrs = data["rollout_routed_experts"]
+        flat_bytes = sum(int(np.asarray(a, dtype=np.int32).size) * 4 for a in arrs)
+        n = len(arrs)
+        shapes_bytes = n * 3 * 8
+        sizes.append(_pad64(_pad8(flat_bytes) + shapes_bytes))
 
     total = sum(sizes)
     if total == 0:
         meta_bytes, tensors = _prepare_rollout_for_pickle(rollout, profile_out)
         return meta_bytes, tensors, None, None
 
-    # Allocate: try alloc_from_mem_pool first, fallback to torch.empty
+    # Allocate: alloc_from_mem_pool > put_pool > torch.empty+register
     ptr = 0
     buf_holder: object = None
     registered_range: tuple[int, int] | None = None
     if hasattr(store, "alloc_from_mem_pool"):
         ptr = store.alloc_from_mem_pool(total)
+    if ptr == 0 and put_pool is not None:
+        pool_buf, pool_size = put_pool
+        if pool_size >= total:
+            ptr = pool_buf.data_ptr()
+            buf_holder = pool_buf
     if ptr == 0:
         buf = torch.empty(total, dtype=torch.uint8)
         ptr = buf.data_ptr()
@@ -479,6 +591,18 @@ def _prepare_rollout_direct_pack(
         flat = torch.from_numpy(flat_np)
         off = torch.from_numpy(off_np)
         data["rollout_log_probs"] = {"__ragged_type__": "1d_float32", "flat": flat, "offsets": off}
+        cur += _pad64(sz)
+
+    if "rollout_routed_experts" in data and isinstance(data["rollout_routed_experts"], list):
+        flat_b, shapes_b, sz = _pack_routed_experts_into(buf_np, cur, data["rollout_routed_experts"])
+        flat_padded = _pad8(flat_b)
+        n = len(data["rollout_routed_experts"])
+        flat_np = buf_np.view(np.int32)[cur // 4 : (cur + flat_b) // 4]
+        shapes_np = buf_np.view(np.int64)[(cur + flat_padded) // 8 : (cur + flat_padded + shapes_b) // 8]
+        flat = torch.from_numpy(flat_np)
+        shapes = torch.from_numpy(shapes_np.reshape(n, 3))
+        data["rollout_routed_experts"] = {"__ragged_type__": "3d_per_sample_int32", "flat": flat, "shapes": shapes}
+        cur += _pad64(sz)
 
     buffers = []
 
@@ -519,9 +643,7 @@ class MooncakeHybridRolloutTransfer:
         self.cleanup_delay_seconds = cleanup_delay_seconds
         self.cleanup_batch_size = cleanup_batch_size
         if ring_buffer_size is None:
-            ring_buffer_size = int(
-                os.environ.get("SLIME_RING_BUFFER_SIZE_MB", "2048")
-            ) * 1024 * 1024
+            ring_buffer_size = int(os.environ.get("SLIME_RING_BUFFER_SIZE_MB", "2048")) * 1024 * 1024
         self._ring_buffer_size = ring_buffer_size
         self._ring_buffer_count = ring_buffer_count
         if use_legacy_path is None:
@@ -578,6 +700,18 @@ class MooncakeHybridRolloutTransfer:
         self._header_buf = torch.empty(self._header_cap, dtype=torch.uint8)
         self._store.register_buffer(self._meta_buf.data_ptr(), self._meta_cap)
         self._store.register_buffer(self._header_buf.data_ptr(), self._header_cap)
+
+        # Put pool: pre-registered buffer for Direct Pack (simulates alloc_from_mem_pool)
+        # Saves per-put register_buffer overhead when Mooncake's alloc_from_mem_pool returns 0
+        self._put_pool: tuple[torch.Tensor, int] | None = None
+        use_put_pool = os.environ.get("SLIME_USE_PUT_POOL", "1").lower() in ("1", "true", "yes")
+        if use_put_pool and os.environ.get("SLIME_PACK_DIRECT_TO_BUFFER", "").lower() in ("1", "true"):
+            pool_mb = int(os.environ.get("SLIME_PUT_POOL_SIZE_MB", "2048"))
+            pool_size = pool_mb * 1024 * 1024
+            pool_buf = torch.empty(pool_size, dtype=torch.uint8)
+            self._store.register_buffer(pool_buf.data_ptr(), pool_size)
+            self._put_pool = (pool_buf, pool_size)
+            logger.info("Put pool: %d MB (simulates alloc_from_mem_pool)", pool_mb)
 
         # Async cleanup: delayed deletion after get_rollout (like MooncakeDataTransfer)
         self._pending_deletion = queue.PriorityQueue()
@@ -644,17 +778,10 @@ class MooncakeHybridRolloutTransfer:
     def get(self, handle: HybridRolloutHandle, auto_cleanup: bool | None = None) -> dict:
         return self.get_rollout(handle, auto_cleanup=auto_cleanup)
 
-    def _alloc_get_buffer(
-        self, size: int, profile: dict | None = None, use_ring: bool = True
-    ) -> torch.Tensor:
+    def _alloc_get_buffer(self, size: int, profile: dict | None = None, use_ring: bool = True) -> torch.Tensor:
         t0 = time.perf_counter() if profile is not None else None
         # 1. Ring: single-key path, size fits, slot available
-        if (
-            use_ring
-            and self._ring_slots
-            and size <= self._ring_slots[0].numel()
-            and self._ring_available
-        ):
+        if use_ring and self._ring_slots and size <= self._ring_slots[0].numel() and self._ring_available:
             idx = self._ring_available.pop()
             buf = self._ring_slots[idx]
             self._buffer_origin[buf.data_ptr()] = idx
@@ -714,9 +841,7 @@ class MooncakeHybridRolloutTransfer:
             self._put_buffers[idx] = buf
         return self._put_buffers[idx]
 
-    def put_rollout(
-        self, rollout: dict, profile_out: dict | None = None
-    ) -> HybridRolloutHandle:
+    def put_rollout(self, rollout: dict, profile_out: dict | None = None) -> HybridRolloutHandle:
         t0 = time.perf_counter()
         use_numpy_meta = os.environ.get("SLIME_USE_NUMPY_META", "").lower() in ("1", "true")
         use_direct_pack = os.environ.get("SLIME_PACK_DIRECT_TO_BUFFER", "").lower() in ("1", "true")
@@ -725,7 +850,7 @@ class MooncakeHybridRolloutTransfer:
             registered_range = None
         elif use_direct_pack and not self._use_legacy:
             meta_bytes, tensors, registered_range, _buf_holder = _prepare_rollout_direct_pack(
-                rollout, self._store, profile_out
+                rollout, self._store, profile_out, put_pool=self._put_pool
             )
         else:
             meta_bytes, tensors = _prepare_rollout_for_pickle(rollout, profile_out)
@@ -736,16 +861,16 @@ class MooncakeHybridRolloutTransfer:
 
         use_split_keys = os.environ.get("SLIME_META_TENSOR_SPLIT_KEYS", "").lower() in ("1", "true")
         if self._use_legacy:
-            handle = self._put_legacy(
-                rid, meta_bytes, meta_size, tensors, profile_out
-            )
+            handle = self._put_legacy(rid, meta_bytes, meta_size, tensors, profile_out)
         elif use_split_keys and not use_numpy_meta:
-            handle = self._put_two_key(
-                rid, meta_bytes, meta_size, tensors, profile_out
-            )
+            handle = self._put_two_key(rid, meta_bytes, meta_size, tensors, profile_out)
         else:
             handle = self._put_single_key(
-                rid, meta_bytes, meta_size, tensors, profile_out,
+                rid,
+                meta_bytes,
+                meta_size,
+                tensors,
+                profile_out,
                 registered_range=registered_range,
             )
 
@@ -753,9 +878,7 @@ class MooncakeHybridRolloutTransfer:
             profile_out["prepare_ms"] = t_prepare
             profile_out["prepare_bytes"] = meta_size
             profile_out["num_tensors"] = len(tensors)
-            profile_out["total_bytes"] = meta_size + sum(
-                t.numel() * t.element_size() for t in tensors
-            )
+            profile_out["total_bytes"] = meta_size + sum(t.numel() * t.element_size() for t in tensors)
             profile_out["put_total_ms"] = (time.perf_counter() - t0) * 1000
         return handle
 
@@ -809,13 +932,13 @@ class MooncakeHybridRolloutTransfer:
             tensor_sizes.append(size)
 
         t_before_put = time.perf_counter()
-        ret = self._store.batch_put_from_multi_buffers(keys, ptrs_list, sizes_list)
+        ret = _batch_put_from_multi_buffers(self._store, keys, ptrs_list, sizes_list)
         if profile_out is not None:
             profile_out["buffer_prep_ms"] = (t_before_put - t0) * 1000
             profile_out["batch_put_ms"] = (time.perf_counter() - t_before_put) * 1000
         for r in ret:
             if r != 0:
-                raise RuntimeError(f"batch_put_from_multi_buffers failed: {ret}")
+                raise RuntimeError(f"batch_put_from_multi_buffers failed: {ret}{_batch_put_error_hint(ret)}")
 
         return HybridRolloutHandle(
             meta_key=keys[0],
@@ -847,7 +970,6 @@ class MooncakeHybridRolloutTransfer:
 
         ptrs_list = []
         sizes_list = []
-        tensor_sizes = []
 
         meta_ptrs = [self._header_buf.data_ptr(), self._meta_buf.data_ptr()]
         meta_sizes = [40, meta_size]
@@ -873,13 +995,13 @@ class MooncakeHybridRolloutTransfer:
 
         keys = [meta_key, tensor_key]
         t_before_put = time.perf_counter()
-        ret = self._store.batch_put_from_multi_buffers(keys, ptrs_list, sizes_list)
+        ret = _batch_put_from_multi_buffers(self._store, keys, ptrs_list, sizes_list)
         if profile_out is not None:
             profile_out["buffer_prep_ms"] = (t_before_put - t0) * 1000
             profile_out["batch_put_ms"] = (time.perf_counter() - t_before_put) * 1000
         for r in ret:
             if r != 0:
-                raise RuntimeError(f"batch_put_from_multi_buffers failed: {ret}")
+                raise RuntimeError(f"batch_put_from_multi_buffers failed: {ret}{_batch_put_error_hint(ret)}")
 
         return HybridRolloutHandle(
             meta_key=meta_key,
@@ -964,12 +1086,14 @@ class MooncakeHybridRolloutTransfer:
             total_sz = sum(sizes)
             logger.info(
                 "[MC_DEBUG] batch_put_from_multi_buffers: key=%s num_slices=%d total_bytes=%d ptrs=%s",
-                key, len(ptrs), total_sz,
-                [(hex(p), s) for p, s in zip(ptrs, sizes)][:6],
+                key,
+                len(ptrs),
+                total_sz,
+                [(hex(ptr), size) for ptr, size in zip(ptrs, sizes, strict=False)][:6],
             )
             if len(ptrs) > 6:
                 logger.info("[MC_DEBUG]   ... and %d more slices", len(ptrs) - 6)
-        ret = self._store.batch_put_from_multi_buffers([key], [ptrs], [sizes])
+        ret = _batch_put_from_multi_buffers(self._store, [key], [ptrs], [sizes])
         if profile_out is not None:
             profile_out["buffer_prep_ms"] = (t_before_put - t0) * 1000
             profile_out["meta_copy_ms"] = (t_after_meta - t_meta) * 1000
@@ -978,7 +1102,7 @@ class MooncakeHybridRolloutTransfer:
             profile_out["batch_put_ms"] = (time.perf_counter() - t_before_put) * 1000
         for r in ret:
             if r != 0:
-                raise RuntimeError(f"batch_put_from_multi_buffers failed: {ret}")
+                raise RuntimeError(f"batch_put_from_multi_buffers failed: {ret}{_batch_put_error_hint(ret)}")
         for ptr in temp_registered:
             self._registered_ptrs.discard(ptr)
             try:
@@ -1015,9 +1139,7 @@ class MooncakeHybridRolloutTransfer:
                 self._schedule_handle_deletion(handle)
         return data
 
-    def _get_two_key(
-        self, handle: HybridRolloutHandle, return_packed: bool, profile_out: list | None = None
-    ) -> dict:
+    def _get_two_key(self, handle: HybridRolloutHandle, return_packed: bool, profile_out: list | None = None) -> dict:
         """Two-key: meta in one key, concatenated tensors in another (pickle OOB only)."""
         profile = {} if profile_out is not None else None
         meta_size = handle.meta_size
@@ -1163,9 +1285,7 @@ class MooncakeHybridRolloutTransfer:
             profile_out.append(profile)
         return data
 
-    def _get_legacy(
-        self, handle: HybridRolloutHandle, return_packed: bool, profile_out: list | None = None
-    ) -> dict:
+    def _get_legacy(self, handle: HybridRolloutHandle, return_packed: bool, profile_out: list | None = None) -> dict:
         profile = {} if profile_out is not None else None
         keys = [handle.meta_key] + handle.tensor_keys
         sizes = [handle.meta_size] + handle.tensor_sizes

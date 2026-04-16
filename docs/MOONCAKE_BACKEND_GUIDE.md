@@ -66,6 +66,7 @@ This document covers configuration, data flow, storage modes, and troubleshootin
 | `SLIME_UNSAFE_PICKLE` | `0` | `1` to disable restricted unpickler (trusted env only) |
 | `MC_STORE_MEMCPY` | `0` | **Must be 0 for cross-node**; can be 1 for same-node |
 | `SLIME_PACK_DIRECT_TO_BUFFER` | `0` | `1` to enable Direct Pack optimization |
+| `SLIME_PUT_LOCAL_REPLICA` | `1` | `1` to use `ReplicateConfig.prefer_alloc_in_same_node` (Put to local replica) |
 | `SLIME_REGISTER_PICKLE_BUFFERS` | `0` | `1` to try zero-copy Put via register |
 | `SLIME_META_TENSOR_SPLIT_KEYS` | `0` | `1` to enable Two-Key mode |
 | `SLIME_USE_NUMPY_META` | `0` | `1` to use numpy-format meta |
@@ -101,13 +102,14 @@ python -m slime.train --transfer-backend mooncake ...
 
 1. Mooncake installation and cluster (master + clients on each node)
 2. For RDMA multi-node: InfiniBand or RoCE configured correctly
-3. For large payloads (500MB+): consider increasing `MOONCAKE_MOUNT_SEGMENT_SIZE`
+3. For large payloads (500MB+): benchmark auto-computes segment size; or set `--mooncake-segment-size-gb` / `MOONCAKE_MOUNT_SEGMENT_SIZE`
 
 ### 3.3 Best Practices
 
 - Use RDMA for multi-node: `MOONCAKE_PROTOCOL=rdma`
-- `MC_STORE_MEMCPY=1` only when Put and Get are on the same node
-- Segment size: `segment_size ≥ num_rounds × data_size` when batching (benchmark puts all rounds before get)
+- `MC_STORE_MEMCPY=1` only when Put and Get are on the same node (apply `scripts/mooncake_memcpy_fix.patch` and rebuild; see `scripts/install_mooncake_memcpy_fix.sh`)
+- `SLIME_PUT_LOCAL_REPLICA=1` (default): Master allocates replica on Put node; reduces Put latency when Put is local
+- Segment size: `segment_size ≥ (num_rounds + discard_first) × data_size` when batching; benchmark auto-computes if unset
 - `SLIME_UNSAFE_PICKLE=1` only in trusted environments
 
 ---

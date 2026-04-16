@@ -21,11 +21,11 @@ def make_mock_rollout_data(
         min(np.random.randint(100, 500), tot - 1) for tot in total_lengths
     ]
 
-    tokens = [np.random.randint(0, 32000, size=l, dtype=np.int32) for l in total_lengths]
+    tokens = [np.random.randint(0, 32000, size=total_len, dtype=np.int32) for total_len in total_lengths]
     loss_masks = [[1] * (resp_len - 50) + [0] * 50 for resp_len in response_lengths]
     rollout_log_probs = [
         np.random.randn(tot_len - resp_len).astype(np.float32).tolist()
-        for tot_len, resp_len in zip(total_lengths, response_lengths)
+        for tot_len, resp_len in zip(total_lengths, response_lengths, strict=False)
     ]
 
     data = {

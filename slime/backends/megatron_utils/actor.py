@@ -190,12 +190,15 @@ class MegatronTrainRayActor(TrainRayActor):
     def _get_rollout_data(self, rollout_data_ref: Box) -> RolloutBatch:
         # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
         # Both first pp stage and the last pp stage will receive the data.
+        transfer_backend = None
+        if self.args.transfer_backend in ("mooncake", "mooncake_legacy"):
+            transfer_backend = self.transfer_backend
         rollout_data = process_rollout_data(
             self.args,
             rollout_data_ref,
             mpu.get_data_parallel_rank(with_context_parallel=False),
             mpu.get_data_parallel_world_size(with_context_parallel=False),
-            transfer_backend=self.transfer_backend,
+            transfer_backend=transfer_backend,
         )
         # TODO: this is ugly, move to somewhere else?
         # move tokens to GPU in advance
