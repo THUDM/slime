@@ -358,13 +358,10 @@ class UpdateWeightFromDistributed:
             self._finalize_sent_chunk(chunk_update.commit_state)
             return
 
-        # 10 GB dense bucket: ~18 flushes per PP rank.  Each flush
-        # sparse-encodes 10 GB → ~500 MB → broadcasts ~500 MB.
-        if chunk_update.load_format is not None:
-            _DELTA_DENSE_BYTE_LIMIT = 10 * 1024 * 1024 * 1024  # 10 GB dense
-            if pending_bucket.should_flush_before_add(chunk_update, _DELTA_DENSE_BYTE_LIMIT):
-                self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
-        elif pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
+        # Same bucket size as non-delta (512 MB).  With dense transport,
+        # this gives the identical flush pattern as baseline — same number
+        # of flushes, same tensor count per flush, same NCCL pipelining.
+        if pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
             self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
         pending_bucket.add(chunk_update)
 
