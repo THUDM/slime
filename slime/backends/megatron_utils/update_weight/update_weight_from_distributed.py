@@ -417,14 +417,17 @@ class UpdateWeightFromDistributed:
         finally:
             ray.get(self.rollout_engine_lock.release.remote())
         _t_broadcast = _t.monotonic() - _t0
-        if load_format is not None:
-            logger.info(
-                "delta_profile: send_hf_update materialize=%.3fs lock=%.3fs broadcast=%.3fs format=%s",
-                _t_materialize,
-                _t_lock,
-                _t_broadcast,
-                load_format,
-            )
+        _send_bytes = sum(t.numel() * t.element_size() for _, t in send_tensors)
+        _n_tensors = len(send_tensors)
+        logger.info(
+            "delta_profile: send_hf_update materialize=%.3fs lock=%.3fs broadcast=%.3fs bytes=%d tensors=%d format=%s",
+            _t_materialize,
+            _t_lock,
+            _t_broadcast,
+            _send_bytes,
+            _n_tensors,
+            load_format or "full_weights",
+        )
 
     def _flush_hf_update_bucket_from_distributed(
         self,
