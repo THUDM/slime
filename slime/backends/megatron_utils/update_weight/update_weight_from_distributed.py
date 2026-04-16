@@ -333,12 +333,19 @@ class UpdateWeightFromDistributed:
             if not prepared.is_delta:
                 return HFUpdate(tensors=prepared.tensors, load_format=None, commit_state=prepared.commit_state)
             else:
-                from .delta_weight_update import get_delta_load_format
-
+                # Eagerly sparse-encode: keeps bucket small (~2 GB sparse vs
+                # 20 GB dense), which is critical for low memory pressure.
+                # Low memory pressure avoids slow empty_cache and allocation
+                # overhead that dominated the 50-67s results.
+                materialized = materialize_delta_transport(prepared.tensors, self.args.delta_compression_transport)
+                sparse_bytes = sum(t.numel() * t.element_size() for _, t in materialized.tensors)
                 return HFUpdate(
-                    tensors=prepared.tensors,
-                    load_format=get_delta_load_format(self.args.delta_compression_transport),
+                    tensors=materialized.tensors,
+                    load_format=materialized.load_format,
                     commit_state=prepared.commit_state,
+                    transport_byte_size=sparse_bytes,
+                    sparse_metadata=materialized.sparse_metadata,
+                    sparse_metadata_count=len(materialized.sparse_metadata or []),
                 )
 
     def _finalize_sent_chunk(self, commit_state) -> None:
@@ -358,10 +365,14 @@ class UpdateWeightFromDistributed:
             self._finalize_sent_chunk(chunk_update.commit_state)
             return
 
-        # Same bucket size as non-delta (512 MB).  With dense transport,
-        # this gives the identical flush pattern as baseline — same number
-        # of flushes, same tensor count per flush, same NCCL pipelining.
-        if pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
+        # Eager sparse bucket: accumulate sparse-encoded data.  5 GB gives
+        # ~3 flushes/PP, each broadcasting ~2 GB.  Low memory pressure is
+        # critical — the 22.6s architecture relies on it.
+        if chunk_update.load_format is not None:
+            _DELTA_SPARSE_BYTE_LIMIT = 5 * 1024 * 1024 * 1024  # 5 GB sparse
+            if pending_bucket.should_flush_before_add(chunk_update, _DELTA_SPARSE_BYTE_LIMIT):
+                self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
+        elif pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
             self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
         pending_bucket.add(chunk_update)
 
@@ -392,16 +403,6 @@ class UpdateWeightFromDistributed:
             send_tensors = materialized.tensors
             sparse_metadata = materialized.sparse_metadata
             load_format = materialized.load_format
-        # Move sparse_metadata from Ray to NCCL: encode as JSON bytes tensor.
-        # This eliminates per-flush Ray serialization of Python dicts to 64
-        # engines (~0.03s overhead per flush × 2400 flushes = 72s total).
-        if sparse_metadata is not None:
-            import json
-
-            meta_bytes = json.dumps(sparse_metadata).encode()
-            meta_tensor = torch.frombuffer(bytearray(meta_bytes), dtype=torch.uint8).cuda()
-            send_tensors = [("__sparse_meta__", meta_tensor)] + list(send_tensors)
-            sparse_metadata = None  # don't send via Ray
         _t_materialize = _t.monotonic() - _t0
 
         _t0 = _t.monotonic()
@@ -420,19 +421,23 @@ class UpdateWeightFromDistributed:
                 load_format=load_format,
                 sparse_metadata=sparse_metadata,
             )
-            ray.get(refs)
+            _t_nccl_done = _t.monotonic() - _t0  # Ray dispatch + NCCL send
+            _t1 = _t.monotonic()
+            ray.get(refs)  # wait for engines to finish receive + apply
+            _t_engine = _t.monotonic() - _t1
         finally:
             ray.get(self.rollout_engine_lock.release.remote())
         _t_broadcast = _t.monotonic() - _t0
         _send_bytes = sum(t.numel() * t.element_size() for _, t in send_tensors)
-        _n_tensors = len(send_tensors)
         logger.info(
-            "delta_profile: send_hf_update materialize=%.3fs lock=%.3fs broadcast=%.3fs bytes=%d tensors=%d format=%s",
+            "delta_profile: send_hf_update materialize=%.3fs lock=%.3fs nccl=%.3fs engine=%.3fs total=%.3fs bytes=%d tensors=%d format=%s",
             _t_materialize,
             _t_lock,
+            _t_nccl_done,
+            _t_engine,
             _t_broadcast,
             _send_bytes,
-            _n_tensors,
+            len(send_tensors),
             load_format or "full_weights",
         )
 
@@ -457,29 +462,6 @@ class UpdateWeightFromDistributed:
         pending_bucket.clear()
         if pbar is not None:
             pbar.update(1)
-
-
-def _frame_sparse_tensors(
-    tensors: list[tuple[str, torch.Tensor]],
-    frame_bytes: int = 16 * 1024 * 1024,
-) -> list[tuple[str, torch.Tensor]]:
-    """Split packed sparse tensors into NCCL-friendly frames.
-
-    NCCL pipelines many small async broadcasts at 10+ GB/s but only achieves
-    0.2-2.5 GB/s for single monolithic tensors.  Splitting ~1 GB packed
-    buffers into ~16 MiB frames recovers full pipelining bandwidth.
-
-    The receiver reassembles frames by dtype before decoding.
-    """
-    framed: list[tuple[str, torch.Tensor]] = []
-    for name, tensor in tensors:
-        if tensor.numel() == 0:
-            framed.append((name, tensor))
-            continue
-        frame_elems = max(1, frame_bytes // tensor.element_size())
-        for chunk in tensor.split(frame_elems):
-            framed.append((name, chunk))
-    return framed
 
 
 def _consolidate_sparse_tensors(

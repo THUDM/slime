@@ -68,7 +68,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
          try:
              weights = []
              handles = []
-@@ -1395,6 +1412,172 @@
+@@ -1395,6 +1412,144 @@
              logger.error(error_msg)
              return False, error_msg
  
@@ -113,8 +113,6 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
 +    ):
 +        _BATCH_BYTE_CAP = 32 * 1024 * 1024  # 32 MiB
 +        try:
-+            import time as _t
-+            _t0 = _t.monotonic()
 +            encoded_tensors = []
 +            handles = []
 +            for dtype, shape in zip(dtypes, shapes):
@@ -133,101 +131,75 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
 +                encoded_tensors.append(encoded_tensor)
 +            for handle in handles:
 +                handle.wait()
-+            _t_nccl = _t.monotonic() - _t0
-+            # Extract sparse_metadata from NCCL if sent as tensor (not Ray).
-+            if sparse_metadata is None and len(encoded_tensors) > 0 and encoded_tensors[0].dtype == torch.uint8:
-+                import json
-+                meta_bytes = encoded_tensors[0].cpu().numpy().tobytes()
-+                sparse_metadata = json.loads(meta_bytes.decode())
-+                encoded_tensors = encoded_tensors[1:]
-+            # Reassemble framed transport if needed.
-+            if len(encoded_tensors) > 2:
-+                int_tensors = [t for t in encoded_tensors if t.dtype in (torch.int32, torch.int64)]
-+                uint8_tensors = [t for t in encoded_tensors if t.dtype == torch.uint8]
-+                value_tensors = [t for t in encoded_tensors if t.dtype not in (torch.int32, torch.int64, torch.uint8)]
-+                if transport == "sparse_indices" and int_tensors and value_tensors:
-+                    encoded_tensors = [torch.cat(int_tensors), torch.cat(value_tensors)]
-+                elif transport == "sparse_bitmask" and uint8_tensors and value_tensors:
-+                    encoded_tensors = [torch.cat(uint8_tensors), torch.cat(value_tensors)]
-+            _t_apply = 0.0
-+            _n_params = 0
-+            # Single reusable scratch buffer with O(nnz) cleanup.
-+            # Process one param at a time to avoid buffer aliasing in batches.
-+            if not hasattr(self, "_sparse_scratch_buf"):
-+                self._sparse_scratch_buf = None
-+            if transport == "sparse_indices":
-+                packed_indices = encoded_tensors[0].to(dtype=torch.long)
-+                packed_values = encoded_tensors[1]
-+                _ta = _t.monotonic()
-+                with _additive_weight_copy_context():
-+                    with _wrap_post_load_weights_with_original_copy_context(self.model):
++            with _additive_weight_copy_context():
++                with _wrap_post_load_weights_with_original_copy_context(self.model):
++                    batch = []
++                    batch_bytes = 0
++
++                    def _flush_batch():
++                        nonlocal batch, batch_bytes
++                        if not batch:
++                            return
++                        self.model.load_weights(batch)
++                        batch = []
++                        batch_bytes = 0
++
++                    if transport == "sparse_indices":
++                        packed_indices = encoded_tensors[0].to(dtype=torch.long)
++                        packed_values = encoded_tensors[1]
 +                        for meta in sparse_metadata:
-+                            name = meta["name"]
 +                            target_dtype = getattr(torch, meta["dtype"])
 +                            target_shape = tuple(meta["shape"])
 +                            numel = int(meta["numel"])
++                            decoded_flat = torch.zeros(
++                                numel, dtype=target_dtype, device=self.device
++                            )
 +                            index_start = int(meta["index_start"])
 +                            index_end = int(meta["index_end"])
 +                            value_start = int(meta["value_start"])
 +                            value_end = int(meta["value_end"])
-+                            # Reuse scratch, grow if needed.
-+                            if self._sparse_scratch_buf is None or self._sparse_scratch_buf.numel() < numel or self._sparse_scratch_buf.dtype != target_dtype:
-+                                self._sparse_scratch_buf = torch.zeros(numel, dtype=target_dtype, device=self.device)
-+                            buf = self._sparse_scratch_buf[:numel]
-+                            # O(nnz) scatter + apply + cleanup.
 +                            if index_end > index_start:
-+                                idx = packed_indices[index_start:index_end]
-+                                vals = packed_values[value_start:value_end]
-+                                buf.index_copy_(0, idx, vals)
-+                                self.model.load_weights([(name, buf.view(target_shape))])
-+                                buf.index_fill_(0, idx, 0)  # O(nnz) cleanup
-+                            _n_params += 1
-+                _t_apply = _t.monotonic() - _ta
-+            elif transport == "sparse_bitmask":
-+                packed_masks = encoded_tensors[0]
-+                packed_values = encoded_tensors[1]
-+                bm_batch = []
-+                bm_bytes = 0
-+                for meta in sparse_metadata:
-+                    target_dtype = getattr(torch, meta["dtype"])
-+                    target_shape = tuple(meta["shape"])
-+                    numel = int(meta["numel"])
-+                    decoded_flat = torch.zeros(
-+                        numel, dtype=target_dtype, device=self.device
-+                    )
-+                    mask_start = int(meta["mask_start"])
-+                    mask_end = int(meta["mask_end"])
-+                    value_start = int(meta["value_start"])
-+                    value_end = int(meta["value_end"])
-+                    unpacked_mask = _unpack_bitmask(
-+                        packed_masks[mask_start:mask_end], numel, self.device
-+                    )
-+                    decoded_flat[unpacked_mask] = packed_values[value_start:value_end]
-+                    decoded_weight = decoded_flat.view(target_shape)
-+                    tensor_bytes = numel * decoded_flat.element_size()
-+                    if bm_bytes + tensor_bytes > _BATCH_BYTE_CAP and bm_batch:
-+                        with _additive_weight_copy_context():
-+                            with _wrap_post_load_weights_with_original_copy_context(self.model):
-+                                self.model.load_weights(bm_batch)
-+                        bm_batch = []
-+                        bm_bytes = 0
-+                    bm_batch.append((meta["name"], decoded_weight))
-+                    bm_bytes += tensor_bytes
-+                if bm_batch:
-+                    with _additive_weight_copy_context():
-+                        with _wrap_post_load_weights_with_original_copy_context(self.model):
-+                            self.model.load_weights(bm_batch)
-+            else:
-+                raise ValueError(
-+                    f"Unsupported sparse delta transport: {transport}"
-+                )
-+            _wire_bytes = sum(t.numel() * t.element_size() for t in encoded_tensors)
-+            logger.info(
-+                "delta_receiver: nccl=%.3fs apply=%.3fs params=%d "
-+                "wire_bytes=%d transport=%s",
-+                _t_nccl, _t_apply, _n_params,
-+                _wire_bytes, transport,
-+            )
++                                decoded_flat.index_copy_(
++                                    0,
++                                    packed_indices[index_start:index_end],
++                                    packed_values[value_start:value_end],
++                                )
++                            decoded_weight = decoded_flat.view(target_shape)
++                            tensor_bytes = numel * decoded_flat.element_size()
++                            if batch_bytes + tensor_bytes > _BATCH_BYTE_CAP and batch:
++                                _flush_batch()
++                            batch.append((meta["name"], decoded_weight))
++                            batch_bytes += tensor_bytes
++                        _flush_batch()
++                    elif transport == "sparse_bitmask":
++                        packed_masks = encoded_tensors[0]
++                        packed_values = encoded_tensors[1]
++                        for meta in sparse_metadata:
++                            target_dtype = getattr(torch, meta["dtype"])
++                            target_shape = tuple(meta["shape"])
++                            numel = int(meta["numel"])
++                            decoded_flat = torch.zeros(
++                                numel, dtype=target_dtype, device=self.device
++                            )
++                            mask_start = int(meta["mask_start"])
++                            mask_end = int(meta["mask_end"])
++                            value_start = int(meta["value_start"])
++                            value_end = int(meta["value_end"])
++                            unpacked_mask = _unpack_bitmask(
++                                packed_masks[mask_start:mask_end], numel, self.device
++                            )
++                            decoded_flat[unpacked_mask] = packed_values[value_start:value_end]
++                            decoded_weight = decoded_flat.view(target_shape)
++                            tensor_bytes = numel * decoded_flat.element_size()
++                            if batch_bytes + tensor_bytes > _BATCH_BYTE_CAP and batch:
++                                _flush_batch()
++                            batch.append((meta["name"], decoded_weight))
++                            batch_bytes += tensor_bytes
++                        _flush_batch()
++                    else:
++                        raise ValueError(
++                            f"Unsupported sparse delta transport: {transport}"
++                        )
 +            return True, "Succeeded to apply sparse weight deltas online."
 +        except Exception as e:
 +            error_msg = (
@@ -241,7 +213,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
      def _update_bucketed_weights_from_distributed(
          self, names, dtypes, shapes, group_name
      ):
-@@ -1437,6 +1620,10 @@
+@@ -1437,6 +1592,10 @@
              return self._update_weights_from_flattened_bucket(
                  flattened_tensor_bucket_dict=named_tensors
              )
@@ -252,7 +224,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
  
          # We need to get device after patch otherwise the device would be wrong
          self.device_module = torch.get_device_module(self.device)
-@@ -1489,6 +1676,35 @@
+@@ -1489,6 +1648,35 @@
  
          return True, "Success"
  
@@ -288,7 +260,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
      def get_weights_by_name(
          self, name: str, truncate_size: int = 100
      ) -> Optional[torch.Tensor]:
-@@ -2718,6 +2934,67 @@
+@@ -2718,6 +2906,67 @@
          return True, "Success"
  
  
