@@ -68,7 +68,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
          try:
              weights = []
              handles = []
-@@ -1395,6 +1412,144 @@
+@@ -1395,6 +1412,163 @@
              logger.error(error_msg)
              return False, error_msg
  
@@ -113,6 +113,8 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
 +    ):
 +        _BATCH_BYTE_CAP = 32 * 1024 * 1024  # 32 MiB
 +        try:
++            import time as _t
++            _t0 = _t.monotonic()
 +            encoded_tensors = []
 +            handles = []
 +            for dtype, shape in zip(dtypes, shapes):
@@ -131,22 +133,30 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
 +                encoded_tensors.append(encoded_tensor)
 +            for handle in handles:
 +                handle.wait()
++            _t_nccl = _t.monotonic() - _t0
++            _t_decode = 0.0
++            _t_load = 0.0
++            _n_load_calls = 0
 +            with _additive_weight_copy_context():
 +                with _wrap_post_load_weights_with_original_copy_context(self.model):
 +                    batch = []
 +                    batch_bytes = 0
 +
 +                    def _flush_batch():
-+                        nonlocal batch, batch_bytes
++                        nonlocal batch, batch_bytes, _t_load, _n_load_calls
 +                        if not batch:
 +                            return
++                        _tl = _t.monotonic()
 +                        self.model.load_weights(batch)
++                        _t_load += _t.monotonic() - _tl
++                        _n_load_calls += 1
 +                        batch = []
 +                        batch_bytes = 0
 +
 +                    if transport == "sparse_indices":
 +                        packed_indices = encoded_tensors[0].to(dtype=torch.long)
 +                        packed_values = encoded_tensors[1]
++                        _td0 = _t.monotonic()
 +                        for meta in sparse_metadata:
 +                            target_dtype = getattr(torch, meta["dtype"])
 +                            target_shape = tuple(meta["shape"])
@@ -170,6 +180,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
 +                                _flush_batch()
 +                            batch.append((meta["name"], decoded_weight))
 +                            batch_bytes += tensor_bytes
++                        _t_decode = _t.monotonic() - _td0 - _t_load  # decode excluding load_weights calls
 +                        _flush_batch()
 +                    elif transport == "sparse_bitmask":
 +                        packed_masks = encoded_tensors[0]
@@ -200,6 +211,14 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
 +                        raise ValueError(
 +                            f"Unsupported sparse delta transport: {transport}"
 +                        )
++            _n_meta = len(sparse_metadata) if sparse_metadata else 0
++            _wire_bytes = sum(t.numel() * t.element_size() for t in encoded_tensors)
++            logger.info(
++                "delta_receiver: nccl=%.3fs decode=%.3fs load=%.3fs load_calls=%d "
++                "params=%d wire_bytes=%d transport=%s",
++                _t_nccl, _t_decode, _t_load, _n_load_calls,
++                _n_meta, _wire_bytes, transport,
++            )
 +            return True, "Succeeded to apply sparse weight deltas online."
 +        except Exception as e:
 +            error_msg = (
@@ -213,7 +232,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
      def _update_bucketed_weights_from_distributed(
          self, names, dtypes, shapes, group_name
      ):
-@@ -1437,6 +1592,10 @@
+@@ -1437,6 +1611,10 @@
              return self._update_weights_from_flattened_bucket(
                  flattened_tensor_bucket_dict=named_tensors
              )
@@ -224,7 +243,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
  
          # We need to get device after patch otherwise the device would be wrong
          self.device_module = torch.get_device_module(self.device)
-@@ -1489,6 +1648,35 @@
+@@ -1489,6 +1667,35 @@
  
          return True, "Success"
  
@@ -260,7 +279,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
      def get_weights_by_name(
          self, name: str, truncate_size: int = 100
      ) -> Optional[torch.Tensor]:
-@@ -2718,6 +2906,67 @@
+@@ -2718,6 +2925,67 @@
          return True, "Success"
  
  
