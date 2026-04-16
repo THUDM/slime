@@ -365,11 +365,15 @@ class UpdateWeightFromDistributed:
             self._finalize_sent_chunk(chunk_update.commit_state)
             return
 
-        # Use the same buffer size as non-delta (default 512 MB).  Many
-        # small flushes interleave with gather/convert so PP ranks don't
-        # pile up on the lock.  Each flush sparse-encodes a small bucket
-        # (~25 MB sparse) and broadcasts much less than non-delta.
-        if pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
+        # 10 GB dense bucket: ~18 flushes per PP rank balances per-flush
+        # overhead (lock+Ray+NCCL setup, ~0.25s each) with broadcast data.
+        # 598 small flushes → 150s overhead.  18 flushes → 4.5s overhead.
+        # Each flush sparse-encodes 10 GB → ~500 MB → fast broadcast.
+        if chunk_update.load_format is not None:
+            _DELTA_DENSE_BYTE_LIMIT = 10 * 1024 * 1024 * 1024  # 10 GB dense
+            if pending_bucket.should_flush_before_add(chunk_update, _DELTA_DENSE_BYTE_LIMIT):
+                self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
+        elif pending_bucket.should_flush_before_add(chunk_update, self.args.update_weight_buffer_size):
             self._flush_hf_update_bucket_from_distributed(pending_bucket, pbar=pbar)
         pending_bucket.add(chunk_update)
 
