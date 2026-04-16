@@ -177,6 +177,15 @@ RUN pip install --no-deps --no-build-isolation \
 # with "Could not deserialize ATN with version 3 (expected 4)".
 RUN pip install --no-deps "antlr4-python3-runtime==4.9.3" omegaconf wandb
 
+# Megatron requires numpy 1.x; NGC ships 2.x.
+RUN PIP_CONSTRAINT= pip install --no-deps --force-reinstall "numpy<2"
+
+# Reward function runtime deps (grade_answer_verl / deepscaler math verifier)
+RUN pip install --no-deps pylatexenc math_verify word2number
+
+# Eval / data-prep runtime deps
+RUN pip install --no-deps pyarrow accelerate
+
 # =============================================================================
 # slime itself
 # =============================================================================
