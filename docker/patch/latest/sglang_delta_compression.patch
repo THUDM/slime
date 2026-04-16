@@ -68,7 +68,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
          try:
              weights = []
              handles = []
-@@ -1395,6 +1412,167 @@
+@@ -1395,6 +1412,166 @@
              logger.error(error_msg)
              return False, error_msg
  
@@ -111,11 +111,10 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
 +    def _apply_sparse_delta_weights_from_distributed(
 +        self, dtypes, shapes, sparse_metadata, group_name, transport
 +    ):
-+        # Adaptive batch cap: 1024 MiB ceiling, capped by 25% of free VRAM.
-+        # Larger batches amortize load_weights overhead (~2ms per call regardless
-+        # of batch size — Python + name resolution overhead dominates).
-+        free_vram, _ = torch.cuda.mem_get_info()
-+        _BATCH_BYTE_CAP = min(1024 * 1024 * 1024, free_vram // 4)
++        # Fixed 256 MiB batch cap. Larger batches amortize load_weights
++        # overhead (~2ms per call). Adaptive free_vram caps caused regression
++        # when VRAM tight on later flushes (batch_mib=0 → per-param calls).
++        _BATCH_BYTE_CAP = 256 * 1024 * 1024
 +        try:
 +            import time as _t
 +            _t0 = _t.monotonic()
@@ -236,7 +235,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
      def _update_bucketed_weights_from_distributed(
          self, names, dtypes, shapes, group_name
      ):
-@@ -1437,6 +1615,10 @@
+@@ -1437,6 +1614,10 @@
              return self._update_weights_from_flattened_bucket(
                  flattened_tensor_bucket_dict=named_tensors
              )
@@ -247,7 +246,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
  
          # We need to get device after patch otherwise the device would be wrong
          self.device_module = torch.get_device_module(self.device)
-@@ -1489,6 +1671,35 @@
+@@ -1489,6 +1670,35 @@
  
          return True, "Success"
  
@@ -283,7 +282,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
      def get_weights_by_name(
          self, name: str, truncate_size: int = 100
      ) -> Optional[torch.Tensor]:
-@@ -2718,6 +2929,67 @@
+@@ -2718,6 +2928,67 @@
          return True, "Success"
  
  
