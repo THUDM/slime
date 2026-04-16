@@ -131,6 +131,17 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
 +                encoded_tensors.append(encoded_tensor)
 +            for handle in handles:
 +                handle.wait()
++            # Reassemble framed transport: the sender splits packed sparse
++            # buffers into ~16 MiB frames for NCCL pipelining.  Cat frames
++            # by dtype to reconstruct the original packed buffers.
++            if len(encoded_tensors) > 2:
++                int_tensors = [t for t in encoded_tensors if t.dtype in (torch.int32, torch.int64)]
++                uint8_tensors = [t for t in encoded_tensors if t.dtype == torch.uint8]
++                value_tensors = [t for t in encoded_tensors if t.dtype not in (torch.int32, torch.int64, torch.uint8)]
++                if transport == "sparse_indices" and int_tensors and value_tensors:
++                    encoded_tensors = [torch.cat(int_tensors), torch.cat(value_tensors)]
++                elif transport == "sparse_bitmask" and uint8_tensors and value_tensors:
++                    encoded_tensors = [torch.cat(uint8_tensors), torch.cat(value_tensors)]
 +            with _additive_weight_copy_context():
 +                with _wrap_post_load_weights_with_original_copy_context(self.model):
 +                    batch = []
