@@ -111,8 +111,8 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
 +    def _apply_sparse_delta_weights_from_distributed(
 +        self, dtypes, shapes, sparse_metadata, group_name, transport
 +    ):
-+        # Fixed 96 MiB batch cap (for sweep comparison vs 512 MiB).
-+        _BATCH_BYTE_CAP = 96 * 1024 * 1024
++        # Fixed 512 MiB batch cap: amortizes load_weights overhead without OOM.
++        _BATCH_BYTE_CAP = 512 * 1024 * 1024
 +        try:
 +            import time as _t
 +            _t0 = _t.monotonic()
