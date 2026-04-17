@@ -111,10 +111,10 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
 +    def _apply_sparse_delta_weights_from_distributed(
 +        self, dtypes, shapes, sparse_metadata, group_name, transport
 +    ):
-+        # Fixed 256 MiB batch cap. Larger batches amortize load_weights
++        # Fixed 512 MiB batch cap. Larger batches amortize load_weights
 +        # overhead (~2ms per call). Adaptive free_vram caps caused regression
 +        # when VRAM tight on later flushes (batch_mib=0 → per-param calls).
-+        _BATCH_BYTE_CAP = 256 * 1024 * 1024
++        _BATCH_BYTE_CAP = 512 * 1024 * 1024
 +        try:
 +            import time as _t
 +            _t0 = _t.monotonic()
