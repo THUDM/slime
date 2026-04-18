@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DeltaCompressionCommitState:
-    baseline_updates: list[tuple[str, torch.Tensor]]
     artifact_tensors: list[tuple[str, torch.Tensor]] = field(default_factory=list)
 
 
@@ -113,21 +112,30 @@ class DeltaCompressionTracker:
             self._baseline_dirty = False
 
     def commit_chunk(self, commit_state: DeltaCompressionCommitState, *, weight_version: int) -> None:
-        baseline_updates = commit_state.baseline_updates
+        # Baseline D2H is issued inline during prepare_chunk on the secondary stream.
+        # commit_chunk only handles artifact writing and counter bookkeeping.
         self._ensure_stats()
-        # baseline_updates holds (name, current_gpu_tensor) references.
-        # Save to pinned CPU async — synchronize is deferred to flush_baseline()
-        # which runs before the next H2D transfer or at sync end, avoiding a
-        # per-chunk cuda synchronize that serializes the pipeline.
-        for name, tensor in baseline_updates:
-            if name not in self.baseline:
-                self.baseline[name] = torch.empty_like(tensor, device=torch.device("cpu"), pin_memory=True)
-            self.baseline[name].copy_(tensor.detach(), non_blocking=True)
-        self._baseline_dirty = True
-
         if self.artifact_writer is not None:
             self.artifact_writer.enqueue(weight_version, self.chunk_idx, commit_state.artifact_tensors)
         self.chunk_idx += 1
+
+    def _snapshot_baseline_async(self, tensors: list[tuple[str, torch.Tensor]]) -> None:
+        """D2H-copy tensors into the CPU baseline on the secondary stream.
+
+        Runs concurrently with downstream compute + NCCL broadcast on the default
+        stream, hiding the PCIe cost. Both full and delta paths call this so
+        gathered GPU buffers can be freed as soon as prepare_chunk returns.
+        """
+        if self._d2h_stream is None:
+            self._d2h_stream = torch.cuda.Stream()
+        event = torch.cuda.current_stream().record_event()
+        with torch.cuda.stream(self._d2h_stream):
+            self._d2h_stream.wait_event(event)
+            for name, tensor in tensors:
+                if name not in self.baseline:
+                    self.baseline[name] = torch.empty_like(tensor, device=torch.device("cpu"), pin_memory=True)
+                self.baseline[name].copy_(tensor.detach(), non_blocking=True)
+        self._baseline_dirty = True
 
     def on_sync_succeeded(self) -> None:
         self.flush_baseline()  # ensure all D2H copies are complete before next sync
@@ -140,10 +148,11 @@ class DeltaCompressionTracker:
         self._stats["full_chunks"] += 1
         self._stats["full_tensors"] += len(tensors)
         self._stats["full_bytes"] += sum(t.numel() * t.element_size() for _, t in tensors)
+        self._snapshot_baseline_async(tensors)
         return PreparedChunk(
             is_delta=False,
             tensors=tensors,
-            commit_state=DeltaCompressionCommitState(baseline_updates=list(tensors)),
+            commit_state=DeltaCompressionCommitState(),
         )
 
     def _prepare_delta_chunk(self, tensors: list[tuple[str, torch.Tensor]]) -> PreparedChunk:
@@ -165,37 +174,19 @@ class DeltaCompressionTracker:
         torch.cuda.synchronize()
         _t_h2d = _t.monotonic() - _t0
 
-        # Lazy-init a secondary CUDA stream for D2H baseline copies.
-        # D2H on a separate stream runs concurrently with delta compute on
-        # the default stream, keeping the fast 22.6s pipeline intact.
-        if self._d2h_stream is None:
-            self._d2h_stream = torch.cuda.Stream()
+        # Snapshot the new baseline asynchronously — D2H runs on the secondary
+        # stream, concurrent with the subtract/encode below on the default stream.
+        self._snapshot_baseline_async(tensors)
 
         _t0 = _t.monotonic()
         delta_tensors = []
         artifact_tensors = []
-        input_tensor_count = 0
-        sent_tensor_count = 0
         for (name, tensor), prev_gpu in zip(tensors, prev_gpu_tensors, strict=True):
             delta = (tensor - prev_gpu).to(self.delta_dtype)
             del prev_gpu
-            input_tensor_count += 1
-            # Commit baseline via D2H on secondary stream so it runs
-            # concurrently with subsequent delta compute on the default
-            # stream. The event ensures correct ordering and keeps the
-            # storage alive until the D2H finishes — no GPU refs needed
-            # in baseline_updates, so gathered buffers are freed promptly.
-            if name not in self.baseline:
-                self.baseline[name] = torch.empty_like(tensor, device=torch.device("cpu"), pin_memory=True)
-            event = torch.cuda.current_stream().record_event()
-            with torch.cuda.stream(self._d2h_stream):
-                self._d2h_stream.wait_event(event)
-                self.baseline[name].copy_(tensor.detach(), non_blocking=True)
             delta_tensors.append((name, delta))
-            sent_tensor_count += 1
             if self.artifact_writer is not None:
                 artifact_tensors.append((name, delta.cpu()))
-        self._baseline_dirty = True
         _t_subtract = _t.monotonic() - _t0
 
         logger.info(
@@ -203,21 +194,18 @@ class DeltaCompressionTracker:
             _t_flush,
             _t_h2d,
             _t_subtract,
-            input_tensor_count,
+            len(tensors),
         )
 
         self._stats["delta_chunks"] += 1
-        self._stats["delta_input_tensors"] += input_tensor_count
-        self._stats["delta_sent_tensors"] += sent_tensor_count
+        self._stats["delta_input_tensors"] += len(tensors)
+        self._stats["delta_sent_tensors"] += len(delta_tensors)
         self._stats["delta_sent_bytes"] += sum(t.numel() * t.element_size() for _, t in delta_tensors)
 
         return PreparedChunk(
             is_delta=True,
             tensors=delta_tensors,
-            commit_state=DeltaCompressionCommitState(
-                baseline_updates=[],  # committed inline above, no GPU refs stored
-                artifact_tensors=artifact_tensors,
-            ),
+            commit_state=DeltaCompressionCommitState(artifact_tensors=artifact_tensors),
         )
 
     def _should_send_full_chunk(self) -> bool:
