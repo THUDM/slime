@@ -195,6 +195,100 @@ class MultiTurnLossMaskGenerator:
 
         return token_ids, loss_mask
 
+    def gen_multi_turn_loss_mask_glm5(
+        self, messages: list[dict], tools: list[dict] = None
+    ) -> tuple[list[int], list[int]]:
+        rendered_text = self.tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, return_dict=False)
+        template_token_ids = self.tokenizer.apply_chat_template(
+            messages, tokenize=True, tools=tools, return_dict=False
+        )
+
+        stop_words = ("<|endoftext|>", "<|user|>", "<|observation|>")
+        final_stop = "<|user|>"
+        append_final_stop = (
+            bool(messages)
+            and messages[-1]["role"] == "assistant"
+            and messages[-1].get("step_loss_mask", 1) == 1
+            and not rendered_text.endswith(stop_words)
+        )
+        if append_final_stop:
+            rendered_text += final_stop
+
+        tokenized = self.tokenizer(rendered_text, add_special_tokens=False, return_offsets_mapping=True)
+        token_ids = tokenized["input_ids"]
+        offset_mapping = tokenized.get("offset_mapping")
+
+        if offset_mapping is None:
+            raise ValueError(
+                "GLM5 loss mask generation requires a fast tokenizer with `return_offsets_mapping` support."
+            )
+
+        if token_ids[: len(template_token_ids)] != template_token_ids:
+            raise ValueError(
+                "GLM5 rendered text tokenization does not match "
+                "`apply_chat_template(..., tokenize=True)` output."
+            )
+
+        assistant_header = "<|assistant|>"
+        stop_markers = ("<|endoftext|>", "<|user|>", "<|observation|>")
+        think_prefix = "<think>"
+        no_think_prefix = "</think>"
+
+        char_mask = [0] * len(rendered_text)
+        cursor = 0
+
+        for message in messages:
+            if message["role"] != "assistant":
+                continue
+
+            header_pos = rendered_text.find(assistant_header, cursor)
+            if header_pos < 0:
+                raise ValueError("Failed to locate assistant message in rendered GLM5 chat template output.")
+
+            content_start = header_pos + len(assistant_header)
+            next_stop = min(
+                (
+                    (marker_pos, marker)
+                    for marker in stop_markers
+                    if (marker_pos := rendered_text.find(marker, content_start)) >= 0
+                ),
+                default=None,
+            )
+            span_end = next_stop[0] if next_stop is not None else len(rendered_text)
+            cursor = span_end
+
+            if message.get("step_loss_mask", 1) != 1:
+                continue
+
+            mask_start = content_start
+            while mask_start < span_end and rendered_text[mask_start].isspace():
+                mask_start += 1
+
+            if rendered_text.startswith(think_prefix, mask_start):
+                mask_start += len(think_prefix)
+            elif rendered_text.startswith(no_think_prefix, mask_start):
+                mask_start += len(no_think_prefix)
+
+            for pos in range(mask_start, span_end):
+                char_mask[pos] = 1
+            if next_stop is not None:
+                stop_start, stop_marker = next_stop
+                for pos in range(stop_start, stop_start + len(stop_marker)):
+                    char_mask[pos] = 1
+
+        char_mask_prefix_sum = [0]
+        for value in char_mask:
+            char_mask_prefix_sum.append(char_mask_prefix_sum[-1] + value)
+
+        loss_mask = []
+        for start, end in offset_mapping:
+            if end <= start:
+                loss_mask.append(0)
+            else:
+                loss_mask.append(1 if char_mask_prefix_sum[end] - char_mask_prefix_sum[start] > 0 else 0)
+
+        return token_ids, loss_mask
+
     def gen_multi_turn_loss_mask_distill_qwen(
         self, messages: list[dict], tools: list[dict] = None
     ) -> tuple[list[int], list[int]]:
@@ -223,6 +317,8 @@ class MultiTurnLossMaskGenerator:
             return self.gen_multi_turn_loss_mask_qwen3(messages, tools)
         elif self.tokenizer_type == "qwen3_5":
             return self.gen_multi_turn_loss_mask_qwen3_5(messages, tools)
+        elif self.tokenizer_type == "glm5":
+            return self.gen_multi_turn_loss_mask_glm5(messages, tools)
         elif self.tokenizer_type == "distill_qwen":
             return self.gen_multi_turn_loss_mask_distill_qwen(messages, tools)
         else:
