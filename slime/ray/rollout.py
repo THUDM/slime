@@ -747,6 +747,12 @@ class RolloutManager:
         if samples[0].teacher_log_probs is not None:
             train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
 
+        if samples[0].sampling_token_ids is not None:
+            train_data["sampling_token_ids"] = [sample.sampling_token_ids for sample in samples]
+
+        if samples[0].sampling_logprob_sum is not None:
+            train_data["sampling_logprob_sum"] = [sample.sampling_logprob_sum for sample in samples]
+
         return train_data
 
     def set_train_parallel_config(self, config: dict):
@@ -786,6 +792,8 @@ class RolloutManager:
                 "rollout_routed_experts",
                 "prompt",
                 "teacher_log_probs",
+                "sampling_token_ids",
+                "sampling_logprob_sum",
             ]:
                 if key not in data:
                     continue
@@ -1206,6 +1214,7 @@ def compute_metrics_from_samples(args, samples):
     log_dict |= dict_add_prefix(compute_statistics(response_lengths), "response_len/")
     log_dict |= _compute_zero_std_metrics(args, samples)
     log_dict |= _compute_reward_cat_metrics(args, samples)
+
     log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
     log_dict["truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()
     return log_dict

@@ -27,6 +27,9 @@ class Sample:
     rollout_routed_experts: list[list[int]] | None = None  # Routed experts from rollout engine
     remove_sample: bool = False
     teacher_log_probs: list[float] | None = None  # Log probabilities from teacher model for OPD
+    # Sampling support used to reconstruct the rollout normalization domain during training.
+    sampling_token_ids: list[list[int]] | None = None
+    sampling_logprob_sum: list[float] | None = None
 
     class Status(Enum):
         PENDING = "pending"

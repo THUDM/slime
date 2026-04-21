@@ -374,6 +374,8 @@ def train_one_step(
                 "rollout_log_probs",
                 "max_seq_lens",
                 "teacher_log_probs",
+                "sampling_token_ids",
+                "sampling_logprob_sum",
             ],
             args.data_pad_size_multiplier,
             args.qkv_format,
