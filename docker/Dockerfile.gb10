@@ -1,0 +1,208 @@
+# Dockerfile for NVIDIA DGX Spark (GB10 / sm_121a, aarch64).
+#
+# slime's stock Dockerfile targets x86_64 + H100/B200/GB200 and does not work
+# on GB10 (ptxas in CUDA 12.9 lacks sm_121a; published sgl_kernel wheels have
+# no sm_121 variant and ABI-mismatch against NGC libtorch).
+#
+# This Dockerfile rebases on the NGC vLLM container which ships CUDA 13.2,
+# PyTorch 2.11.0a0 (compiled with compute_120 for Blackwell PTX forward-compat),
+# Triton 3.6.0, and flash-attn 2.7.4.post1 — all verified working on GB10.
+#
+# Digest-pinned for reproducibility. Update the digest together with the tag.
+# Companion notes: NOTES_GB10.md (15 resolved blockers documented).
+
+ARG BASE_IMAGE=nvcr.io/nvidia/vllm:26.03-py3
+ARG BASE_DIGEST=sha256:13e327dad79e6e417f6687fec2ba76b0386d597082ec0ee003c1e964ec6ad0e7
+FROM ${BASE_IMAGE}@${BASE_DIGEST}
+
+# =============================================================================
+# Common env: GB10 reports cc 12.1 but NGC torch only lists compute_120. PTX
+# forward-compat carries sm_120 PTX → sm_121 at runtime. Set the same for all
+# downstream compilation layers.
+# =============================================================================
+ENV TORCH_CUDA_ARCH_LIST="12.0+PTX"
+
+# =============================================================================
+# System packages missing from the NGC base but needed downstream:
+#  - libz3-dev : tilelang's Z3 SMT autoscheduler dlopens libz3.so
+# =============================================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libz3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# =============================================================================
+# Header shims for CUDA 13 / NVTX removal
+# =============================================================================
+# (1) NVTX3: CUDA 13 dropped bundled NVTX headers; the pypi placeholder is empty.
+# Clone the upstream NVIDIA/NVTX repo and install just the C include tree.
+RUN git clone --depth 1 https://github.com/NVIDIA/NVTX.git /tmp/nvtx_src \
+    && cp -r /tmp/nvtx_src/c/include/nvtx3 /usr/local/cuda/include/nvtx3 \
+    && rm -rf /tmp/nvtx_src
+
+# (2) cuda_profiler_api.h: CUDA 13 removed the public header; libcudart.so.13
+# still exports the two symbols. TE 2.10 only #includes the header without
+# actually calling the APIs in the affected TUs, so a tiny shim is sufficient.
+COPY docker/patch/gb10/cuda_profiler_api.h /usr/local/cuda/include/cuda_profiler_api.h
+
+# =============================================================================
+# cuDNN engines_precompiled library
+# =============================================================================
+# NGC deliberately ships only runtime-compiled cuDNN libs to save space, but
+# TE's bundled cudnn-frontend requires CUDNN::cudnn_engines_precompiled. The
+# pypi wheel nvidia-cudnn-cu13 9.20.0.48 contains the missing .so.
+RUN PIP_CONSTRAINT= pip install --no-deps nvidia-cudnn-cu13==9.20.0.48 \
+    && ln -sf /usr/local/lib/python3.12/dist-packages/nvidia/cudnn/lib/libcudnn_engines_precompiled.so.9 \
+              /usr/lib/aarch64-linux-gnu/libcudnn_engines_precompiled.so.9 \
+    && ln -sf /usr/lib/aarch64-linux-gnu/libcudnn_engines_precompiled.so.9 \
+              /usr/lib/aarch64-linux-gnu/libcudnn_engines_precompiled.so
+
+# =============================================================================
+# CMake 4.3.1: needed for CUDA 13 family-specific `f` arch suffix (120f/121f).
+# NGC's /etc/pip/constraint.txt pins cmake==3.31.6; we must clear PIP_CONSTRAINT
+# for this install. CMAKE_POLICY_VERSION_MINIMUM=3.5 lets CMake 4.x accept
+# bundled third-party CMakeLists that declare cmake_minimum_required < 3.5.
+# =============================================================================
+RUN PIP_CONSTRAINT= pip install --no-deps --ignore-installed --force-reinstall cmake==4.3.1
+ENV CMAKE_POLICY_VERSION_MINIMUM=3.5
+
+# =============================================================================
+# Build prerequisites for the source installs below
+# =============================================================================
+RUN pip install --no-deps pybind11 pathspec pyproject_metadata scikit-build-core
+
+# =============================================================================
+# sgl-kernel for sm_121a (SGLang's CUDA kernel library)
+# =============================================================================
+# The published sgl_kernel wheels are cu12x (libnvrtc.so.12 ABI), plus the cu130
+# arm64 wheel only has the sm_100 variant, not sm_121. Also ABI-mismatch against
+# NGC torch. Build from source with the GB10 arch whitelist patch.
+#
+# Patch: docker/patch/gb10/patch_sgl_kernel.py adds SGL_KERNEL_GB10_ONLY CMake
+# option that restricts gencode to sm_120a + sm_121a (skipping sm_90a/sm_100a/
+# sm_103a/sm_110a). This is essential — compiling all seven archs simultaneously
+# OOM-kills cicc on 128 GB Spark hosts.
+ARG SGLANG_COMMIT=v0.5.9
+RUN git clone --depth 1 --branch ${SGLANG_COMMIT} https://github.com/sgl-project/sglang.git /root/src/sglang
+COPY docker/patch/gb10/patch_sgl_kernel.py /tmp/patch_sgl_kernel.py
+RUN python3 /tmp/patch_sgl_kernel.py /root/src/sglang/sgl-kernel/CMakeLists.txt \
+    && rm /tmp/patch_sgl_kernel.py
+
+# Conservative parallelism (8 parallel × 2 nvcc-internal threads = 16 active)
+# keeps peak memory ~25 GB on the 128 GB Spark. ~25 minutes on 20-core GB10.
+RUN cd /root/src/sglang/sgl-kernel \
+    && CMAKE_BUILD_PARALLEL_LEVEL=8 \
+       CMAKE_ARGS="-DSGL_KERNEL_COMPILE_THREADS=2 -DSGL_KERNEL_GB10_ONLY=ON" \
+       pip wheel . --no-build-isolation --no-deps -w /tmp/wheels \
+    && pip install --no-deps /tmp/wheels/sgl_kernel-*.whl \
+    && rm -rf /tmp/wheels /root/.cache/pip
+
+# =============================================================================
+# SGLang runtime + the small pure-python deps it needs.
+# --no-deps preserves NGC torch / transformers / flashinfer / quack-kernels /
+# cutlass-dsl / xgrammar / outlines that were carefully pinned in the NGC base.
+# Pulling sglang's full dep set here would downgrade torch to 2.9.1+cu129 and
+# break everything.
+# =============================================================================
+RUN pip install --no-deps \
+        "sglang==0.5.9" \
+        "torch_memory_saver==0.0.9" \
+        IPython traitlets stack_data executing asttokens pure_eval prompt_toolkit wcwidth \
+        orjson hf_transfer modelscope litellm
+
+# SGLang router: zhuzilin's fork ships x86_64-only. Upstream 0.3.2 has an arm64
+# wheel that satisfies slime's version-parse comparisons (`<=0.2.1`, `<0.3.0`).
+# Only loss: the `'slime' in version` check in wandb_utils.py won't match,
+# which is a non-critical logging branch.
+RUN pip install --no-deps sglang-router==0.3.2
+
+# =============================================================================
+# TransformerEngine 2.10 for sm_121f
+# =============================================================================
+# GB10 needs the CUDA 13 "f" (family-specific) arch suffix — TE's ptx.cuh has
+# static_asserts that reject plain sm_120 / sm_121 in favor of sm_120f / sm_121f.
+# CMake 4 is required to pass this through CMAKE_CUDA_ARCHITECTURES.
+RUN TORCH_CUDA_ARCH_LIST="12.0+PTX" \
+    NVTE_CUDA_ARCHS="120f;121f" \
+    NVTE_FRAMEWORK=pytorch \
+    MAX_JOBS=8 CMAKE_BUILD_PARALLEL_LEVEL=8 \
+    pip install --no-build-isolation --no-deps \
+        "git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.10"
+
+# TE pytorch subpackage pulls onnxscript → onnx_ir → onnx → ml_dtypes at import
+# time (not setup time). Install the runtime chain so `import transformer_engine.pytorch` works.
+RUN pip install --no-deps onnxscript onnx_ir onnx ml_dtypes
+
+# =============================================================================
+# apex (NVIDIA fused optimizers / norms)
+# =============================================================================
+# Pinned commit matches slime upstream Dockerfile.
+RUN NVCC_APPEND_FLAGS="--threads 4" MAX_JOBS=8 \
+    pip install --no-cache-dir --no-build-isolation --no-deps \
+        --config-settings "--build-option=--cpp_ext --cuda_ext --parallel 8" \
+        "git+https://github.com/NVIDIA/apex.git@10417aceddd7d5d05d7cbf7b0fc2daad1105f8b4"
+
+# =============================================================================
+# Megatron-LM (+ slime's megatron.patch)
+# =============================================================================
+# slime pins Megatron commit 3714d81d...
+ARG MEGATRON_COMMIT=3714d81d418c9f1bca4594fc35f9e8289f652862
+RUN git clone https://github.com/NVIDIA/Megatron-LM.git /root/src/Megatron-LM \
+    && cd /root/src/Megatron-LM \
+    && git checkout ${MEGATRON_COMMIT}
+COPY docker/patch/latest/megatron.patch /tmp/megatron.patch
+RUN cd /root/src/Megatron-LM \
+    && git apply /tmp/megatron.patch --3way \
+    && ! grep -R -n '^<<<<<<< ' . \
+    && rm /tmp/megatron.patch \
+    && pip install --no-deps --no-build-isolation -e .
+
+# Megatron.training / .rl / .legacy are sibling dirs meant to be on PYTHONPATH
+# (slime's own docs confirm this).
+ENV PYTHONPATH="/root/src/Megatron-LM"
+
+# =============================================================================
+# Remaining slime deps: bridges, modelopt, FLA, tilelang, antlr, omegaconf chain
+# =============================================================================
+RUN pip install --no-deps \
+        "git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c" \
+        flash-linear-attention==0.4.1 \
+        tilelang==0.1.8
+
+RUN pip install --no-deps --no-build-isolation \
+        "git+https://github.com/fzyzcjy/Megatron-Bridge.git@dev_rl" \
+        "nvidia-modelopt>=0.37.0"
+
+# antlr4-python3-runtime must be pinned to 4.9.3 — omegaconf's bundled grammar
+# was generated with antlr 4.9 serialized format and runtime 4.13 breaks on it
+# with "Could not deserialize ATN with version 3 (expected 4)".
+RUN pip install --no-deps "antlr4-python3-runtime==4.9.3" omegaconf wandb
+
+# Megatron requires numpy 1.x; NGC ships 2.x.
+RUN PIP_CONSTRAINT= pip install --no-deps --force-reinstall "numpy<2"
+
+# Reward function runtime deps (grade_answer_verl / deepscaler math verifier)
+RUN pip install --no-deps pylatexenc math_verify word2number
+
+# Eval / data-prep runtime deps
+RUN pip install --no-deps pyarrow accelerate
+
+# =============================================================================
+# slime itself
+# =============================================================================
+COPY . /root/slime
+RUN cd /root/slime \
+    && pip install --no-deps --no-build-isolation -e .
+
+# slime's int4 QAT kernel (fused per-channel fake-quant + dequant)
+RUN cd /root/slime/slime/backends/megatron_utils/kernels/int4_qat \
+    && pip install --no-build-isolation --no-deps .
+
+WORKDIR /root/slime
+
+# Sanity: load the full arg parser on container build
+RUN python train.py --help > /tmp/help.txt \
+    && test $(wc -l < /tmp/help.txt) -gt 3000 \
+    && echo "slime train.py --help OK ($(wc -l < /tmp/help.txt) lines)" \
+    && rm /tmp/help.txt
+
+CMD ["/bin/bash"]
