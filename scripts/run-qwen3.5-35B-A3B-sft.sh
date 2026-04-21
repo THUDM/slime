@@ -46,6 +46,18 @@ CKPT_ARGS=(
    --save-interval 20
 )
 
+SFT_MAX_PROMPT_TOKENS=${SFT_MAX_PROMPT_TOKENS:-8192}
+MAX_TOKENS_PER_GPU=${MAX_TOKENS_PER_GPU:-8192}
+CP_SIZE=${CP_SIZE:-1}
+echo "SFT_MAX_PROMPT_TOKENS: ${SFT_MAX_PROMPT_TOKENS}"
+echo "MAX_TOKENS_PER_GPU: ${MAX_TOKENS_PER_GPU}"
+echo "CP_SIZE: ${CP_SIZE}"
+
+if (( SFT_MAX_PROMPT_TOKENS > MAX_TOKENS_PER_GPU * CP_SIZE )); then
+  echo "Invalid config: SFT_MAX_PROMPT_TOKENS (${SFT_MAX_PROMPT_TOKENS}) must be <= MAX_TOKENS_PER_GPU * CP_SIZE (${MAX_TOKENS_PER_GPU} * ${CP_SIZE} = $((MAX_TOKENS_PER_GPU * CP_SIZE)))."
+  exit 1
+fi
+
 SFT_ARGS=(
    --rollout-function-path slime.rollout.sft_rollout.generate_rollout
    --prompt-data ${BASE_FOLDER}/openhermes2_5.parquet
@@ -54,6 +66,7 @@ SFT_ARGS=(
    --num-epoch 3
    --rollout-batch-size 128
    --global-batch-size 128
+   --rollout-max-prompt-len ${SFT_MAX_PROMPT_TOKENS}
 
    --loss-type sft_loss
    --loss-mask-type qwen3_5
@@ -66,7 +79,7 @@ PERF_ARGS=(
    --tensor-model-parallel-size 2
    --sequence-parallel
    --pipeline-model-parallel-size 1
-   --context-parallel-size 1
+   --context-parallel-size ${CP_SIZE}
    --expert-model-parallel-size 8
    --expert-tensor-parallel-size 1
 
@@ -76,7 +89,7 @@ PERF_ARGS=(
 
    # --micro-batch-size 1
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 8192
+   --max-tokens-per-gpu ${MAX_TOKENS_PER_GPU}
 )
 
 OPTIMIZER_ARGS=(
@@ -88,7 +101,7 @@ OPTIMIZER_ARGS=(
    --weight-decay 0.1
    --adam-beta1 0.9
    --adam-beta2 0.98
-   
+
    --use-distributed-optimizer
    --optimizer-cpu-offload
    --overlap-cpu-optimizer-d2h-h2d

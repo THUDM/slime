@@ -82,13 +82,19 @@ def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_l
     if max_length is None:
         return origin_samples
 
-    if not isinstance(origin_samples[0].prompt, str):
+    # Keep filtering compatible with both text datasets and chat-message datasets used by SFT.
+    first_prompt = origin_samples[0].prompt
+    supports_text_prompt = isinstance(first_prompt, str)
+    supports_message_prompt = isinstance(first_prompt, list)
+    if not (supports_text_prompt or supports_message_prompt):
+        # Unknown prompt shapes are skipped to avoid breaking custom data pipelines.
         logger.warning(
-            "Skipping max_length check for list prompt. Set apply_chat_template=True to enable length filtering."
+            "Skipping max_length check for unsupported prompt type %s. Set apply_chat_template=True to enable length filtering.",
+            type(first_prompt),
         )
         return origin_samples
 
-    if processor:
+    if processor and supports_text_prompt:
         # Use processor only for samples with actual multimodal content; use batched tokenizer for text-only.
         text_only = []
         multimodal = []
@@ -113,7 +119,8 @@ def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_l
                 input_ids = processor_output["input_ids"][0]
                 if len(input_ids) <= max_length:
                     filtered_samples.append(sample)
-    else:
+    elif supports_text_prompt:
+        # Fast path for text-only prompts: tokenize in batch for throughput.
         prompts = [sample.prompt for sample in origin_samples]
         input_ids_list = tokenizer(prompts, add_special_tokens=False)["input_ids"]
         filtered_samples = [
@@ -121,6 +128,21 @@ def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_l
             for sample, input_ids in zip(origin_samples, input_ids_list, strict=True)
             if len(input_ids) <= max_length
         ]
+    else:
+        # `messages` datasets used by SFT rollout pass a list[dict] conversation as prompt.
+        # Use chat template tokenization to keep filtering behavior aligned with training tokenization.
+        filtered_samples = []
+        for sample in origin_samples:
+            tools = sample.metadata.get("tools") if isinstance(sample.metadata, dict) else None
+            input_ids = tokenizer.apply_chat_template(
+                sample.prompt,
+                tokenize=True,
+                add_generation_prompt=False,
+                tools=tools,
+                return_dict=False,
+            )
+            if len(input_ids) <= max_length:
+                filtered_samples.append(sample)
 
     logger.info(f"Filtered {len(origin_samples) - len(filtered_samples)} samples longer than max_length={max_length}.")
 
