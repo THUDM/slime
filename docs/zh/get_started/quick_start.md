@@ -145,6 +145,7 @@ CKPT_ARGS=(
    --save /root/GLM-Z1-9B-0414_slime/
    # 模型保存间隔（步数）
    --save-interval 20
+   # --max-actor-ckpt-to-keep 5  # 仅保留最近的 5 个 actor 检查点
 )
 ```
 

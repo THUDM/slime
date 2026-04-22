@@ -134,6 +134,9 @@ torch 格式是 megatron 的老存储格式，里面的结构大约是一些 `mp
 - `--ref-load`：reference model 用的 megatron ckpt；
 - `--load`：actor 用的 megatron ckpt，如果没有设置 `--load`，或者设置的目录不存在，目录中没有 `latest_checkpointed_iteration.txt`，都会直接从 `--ref-load` 的 ckpt 进行初始化；
 - `--save`：actor 保存的路径。
+- `--max-actor-ckpt-to-keep`：磁盘上保留的 actor 检查点最大数量。保存后超出限制时，最旧的检查点将被自动删除。适用于 Megatron 检查点（`--save`）和 HF 检查点（`--save-hf`）。默认值：`None`（不限制）。
+- `--max-critic-ckpt-to-keep`：磁盘上保留的 critic 检查点最大数量。保存后超出限制时，最旧的检查点将被自动删除。适用于 critic Megatron 检查点（`--critic-save`）。默认值：`None`（不限制）。
+- `--checkpoint-storage-type`：检查点存储类型。`shared`（默认）：所有 rank 共享同一个文件系统（如 FSx）——清理仅在全局 rank 0 上运行。`local`：每个节点有独立磁盘（如 NVMe）——清理在每个节点的 local rank 0 上运行。
 
 注意：
 
