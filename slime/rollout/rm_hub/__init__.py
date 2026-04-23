@@ -15,6 +15,7 @@ from .gpqa import compute_gpqa_reward
 from .math_dapo_utils import compute_score as compute_score_dapo
 from .math_utils import extract_answer as extract_boxed_answer
 from .math_utils import grade_answer_verl
+from .opencua_click import compute_opencua_reward
 
 _shared_session: aiohttp.ClientSession | None = None
 
@@ -85,6 +86,8 @@ async def async_rm(args, sample: Sample, **kwargs):
         return compute_ifbench_reward(response, label, metadata=metadata)
     elif rm_type == "random":
         return random.randint(0, 1)
+    elif rm_type == "opencua_click":
+        return compute_opencua_reward(response, label, metadata=metadata)
     elif rm_type:
         raise NotImplementedError(f"Rule-based RM for {rm_type} is not implemented.")
     else:
