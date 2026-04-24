@@ -1,4 +1,5 @@
 import argparse
+import copy
 import json
 import logging
 import os
@@ -38,12 +39,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--actor-num-nodes", type=int, default=1, help="Number of nodes for training actor")
             parser.add_argument(
                 "--actor-num-gpus-per-node", type=int, default=8, help="Number of gpus per node for training actor"
-            )
-            parser.add_argument(
-                "--critic-num-nodes", type=int, default=None, help="Number of nodes for training actor"
-            )
-            parser.add_argument(
-                "--critic-num-gpus-per-node", type=int, default=None, help="Number of gpus per node for training actor"
             )
 
             parser.add_argument(
@@ -750,16 +745,21 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             reset_arg(parser, "--calculate-per-token-loss", action="store_true")
             reset_arg(parser, "--lr", type=float, default=1e-6)
 
-            parser.add_argument("--num-critic-only-steps", type=int, default=0, help="Number of critic only steps")
-            parser.add_argument("--critic-load", type=str, default=None, help="The checkpoint for critic model.")
-            parser.add_argument("--critic-save", type=str, default=None, help="The checkpoint for critic model.")
-            parser.add_argument("--critic-lr", type=float, default=None, help="The lr for critic model")
-            parser.add_argument("--critic-train-only", action="store_true", default=False, help="Only train critic")
             parser.add_argument(
-                "--critic-lr-warmup-iters",
+                "--num-critic-only-steps",
                 type=int,
                 default=0,
-                help="number of iterations to linearly warmup for critic model.",
+                help="Number of initial rollout steps that train critic only; set >= num_rollout for critic-only runs",
+            )
+            parser.add_argument(
+                "--critic-config-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a structured YAML config for the critic model. The file should use "
+                    "a top-level 'critic' key, similar to --sglang-config style, and contain "
+                    "exactly one critic entry with Megatron/slime overrides."
+                ),
             )
 
             parser.add_argument("--eps-clip", type=float, default=0.2, help="PPO clip range")
@@ -827,6 +827,19 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Whether to disable computing advantages and returns. "
                     "If set, we will not compute the advantages and returns, "
                     "This is useful for sft or custom loss function."
+                ),
+            )
+            parser.add_argument(
+                "--custom-advantage-function-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a custom advantage/returns computation function. "
+                    "When set, this function replaces the built-in compute_advantages_and_returns. "
+                    "Signature: def custom_fn(args, rollout_data) -> None. "
+                    "The function should set rollout_data['advantages'] and rollout_data['returns'] in-place. "
+                    "Critic values are available in rollout_data['values']. "
+                    "(e.g., my_module.py:my_advantage_fn)."
                 ),
             )
             parser.add_argument(
@@ -1451,6 +1464,71 @@ def parse_args(add_custom_arguments=None):
     return args
 
 
+def parse_critic_args(actor_args, critic_config_path):
+    """Parse critic-specific arguments from a YAML config, inheriting from actor_args.
+
+    Creates an independent copy of actor_args and overrides with values from the YAML config.
+    This enables the critic to have a completely different parallel configuration (TP/PP/CP/EP),
+    micro batch size, global batch size, checkpoint path, etc.
+
+    Args:
+        actor_args: The parsed actor arguments namespace to inherit from.
+        critic_config_path: Path to a YAML file containing critic-specific overrides.
+
+    Returns:
+        A new Namespace with critic-specific configuration.
+    """
+    critic_args = copy.deepcopy(actor_args)
+
+    with open(critic_config_path) as f:
+        raw_config = yaml.safe_load(f) or {}
+
+    if "critic" in raw_config:
+        critic_entries = raw_config["critic"]
+        assert isinstance(critic_entries, list) and len(critic_entries) == 1, (
+            "critic config must contain exactly one entry under 'critic', e.g. "
+            "critic: [{name: default, overrides: {...}}]"
+        )
+        critic_entry = critic_entries[0]
+        critic_config = critic_entry.get("overrides") or critic_entry.get("args") or {}
+    else:
+        logger.warning(
+            "Legacy flat critic config detected. Please wrap overrides under "
+            "'critic: [{name: default, overrides: {...}}]'."
+        )
+        critic_config = raw_config
+
+    ignored_keys = {"num_nodes", "num_gpus_per_node"}
+
+    # Apply overrides from the YAML config.
+    # Unspecified keys inherit from actor_args via deepcopy.
+    for key, value in critic_config.items():
+        if key in ignored_keys:
+            logger.info(f"Ignoring critic config key '{key}'; critic GPU allocation always follows actor.")
+            continue
+        if not hasattr(critic_args, key):
+            logger.warning(f"Critic config key '{key}' is not a known argument, setting it anyway.")
+        else:
+            # YAML safe_load doesn't parse scientific notation (e.g. 1e-5) as float.
+            # Coerce the value to match the type of the existing attribute.
+            original = getattr(critic_args, key)
+            if original is not None and isinstance(value, str) and isinstance(original, (int, float)):
+                try:
+                    value = type(original)(value)
+                except (ValueError, TypeError):
+                    pass
+        setattr(critic_args, key, value)
+
+    # Critic-specific: disable features that only apply to actors
+    critic_args.kl_coef = 0
+    critic_args.use_opd = False
+    critic_args.custom_advantage_function_path = None
+    critic_args.untie_embeddings_and_output_weights = True
+    logger.info(f"Parsed critic config from {critic_config_path}: overrides = {list(critic_config.keys())}")
+
+    return critic_args
+
+
 def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
     """
     Build evaluation dataset configurations from either --eval-config or --eval-prompt-data.
@@ -1623,22 +1701,9 @@ def slime_validate_args(args):
         args.debug_train_only = True
 
     args.use_critic = args.advantage_estimator == "ppo"
-    if args.critic_train_only:
-        if not args.use_critic:
-            raise ValueError("--critic-train-only requires --use-critic (or --advantage-estimator ppo).")
-        if args.actor_num_nodes != 0 or args.actor_num_gpus_per_node != 0:
-            raise ValueError(
-                "--critic-train-only requires --actor-num-nodes 0 --actor-num-gpus-per-node 0, "
-                f"but got actor_num_nodes={args.actor_num_nodes}, actor_num_gpus_per_node={args.actor_num_gpus_per_node}."
-            )
-    if args.critic_num_gpus_per_node is None:
-        args.critic_num_gpus_per_node = args.actor_num_gpus_per_node
-    if args.critic_num_nodes is None:
-        args.critic_num_nodes = args.actor_num_nodes
-    if args.critic_load is None:
-        args.critic_load = args.load
-    if args.critic_lr is None:
-        args.critic_lr = args.lr
+    # Critic always uses the same GPU count as actor.
+    args.critic_num_gpus_per_node = args.actor_num_gpus_per_node
+    args.critic_num_nodes = args.actor_num_nodes
 
     if args.offload:
         args.offload_train = True
