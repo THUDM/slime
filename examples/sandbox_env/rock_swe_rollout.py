@@ -13,7 +13,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import types
 from pathlib import Path
 from typing import Any
 
@@ -76,19 +75,6 @@ def ensure_rebench_repo_on_path(rebench_repo_root: str) -> None:
         value = str(candidate)
         if value not in sys.path:
             sys.path.insert(0, value)
-
-
-def ensure_optional_rock_deps() -> None:
-    try:
-        import oss2  # noqa: F401
-    except ModuleNotFoundError:
-        dummy_oss2 = types.ModuleType("oss2")
-
-        class _DummyBucket:
-            pass
-
-        dummy_oss2.Bucket = _DummyBucket
-        sys.modules["oss2"] = dummy_oss2
 
 
 def can_curl_base_url(base_url: str, timeout_seconds: int = 10) -> bool:
@@ -1263,7 +1249,6 @@ async def _run_single_sample_once(
     log_root = _env_or_arg(args, "ROCK_SWE_LOG_ROOT", "swe_log_root", None)
 
     ensure_rock_root_on_path(str(rock_root))
-    ensure_optional_rock_deps()
     metadata = dict(sample.metadata or {})
     sandbox = None
     sample_log_dir = _build_sample_log_dir(log_root, rollout_id=rollout_id, sample_idx=sample_idx)
