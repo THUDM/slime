@@ -1524,42 +1524,7 @@ def parse_critic_args(actor_args, critic_config_path):
     critic_args.use_opd = False
     critic_args.normalize_advantages = False
     critic_args.custom_advantage_fn = None
-    # Force per-sample-mean loss normalization for critic.  With per-token-loss
-    # the raw sum goes to backward() un-divided, producing gradients that easily
-    # overflow Megatron's bf16 grad buffer (max 65504) after many microbatches.
-    critic_args.calculate_per_token_loss = False
-    # The critic replaces the output layer with LinearForLastLayer (a plain nn.Linear
-    # value head), which does NOT share weights with the embedding layer.  We must
-    # untie so that Megatron does not set zero_out_wgrad / shared-embedding attrs
-    # on the embedding weight (those attributes assume the original output layer is
-    # still weight-tied with the embedding, which is no longer true after replacement).
     critic_args.untie_embeddings_and_output_weights = True
-
-    # Auto-disable sequence parallelism if critic TP=1 (SP requires TP>1)
-    if getattr(critic_args, "tensor_model_parallel_size", 1) <= 1:
-        critic_args.sequence_parallel = False
-
-    # Enforce critic DP == actor DP. Critic always uses the same number of GPUs
-    # as the actor, so this reduces to: TP*PP*CP must match. Equal DP removes
-    # the need to reshard rollout data or fan-out values across DP groups.
-    def _dp(a):
-        return max(
-            1,
-            (a.actor_num_nodes * a.actor_num_gpus_per_node)
-            // (a.tensor_model_parallel_size * a.pipeline_model_parallel_size * a.context_parallel_size),
-        )
-
-    actor_dp = _dp(actor_args)
-    critic_dp = _dp(critic_args)
-    assert actor_dp == critic_dp, (
-        f"Critic DP ({critic_dp}) must equal actor DP ({actor_dp}). "
-        f"Actor (tp={actor_args.tensor_model_parallel_size}, pp={actor_args.pipeline_model_parallel_size}, "
-        f"cp={actor_args.context_parallel_size}), "
-        f"Critic (tp={critic_args.tensor_model_parallel_size}, pp={critic_args.pipeline_model_parallel_size}, "
-        f"cp={critic_args.context_parallel_size}). "
-        "Choose critic TP*PP*CP so that it yields the same DP size as the actor."
-    )
-
     logger.info(f"Parsed critic config from {critic_config_path}: overrides = {list(critic_config.keys())}")
 
     return critic_args
