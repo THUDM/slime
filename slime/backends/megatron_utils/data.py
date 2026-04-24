@@ -610,53 +610,32 @@ def log_perf_data(rollout_id: int, args: Namespace) -> None:
     )
 
 
-def sync_actor_critic_data(
-    args: Namespace,
-    rollout_data: RolloutBatch | None = None,
-    group: dist.ProcessGroup | None = None,
-) -> None:
+def tensors_to_cpu(tensor_list):
+    """Move a list of GPU tensors to CPU for Ray object store transfer.
+
+    Args:
+        tensor_list: List of GPU tensors, or None.
+
+    Returns:
+        List of CPU tensors (detached), or None if input is None.
     """
-    Broadcast `values` (from critic) and optionally `log_probs`/`ref_log_probs`
-    (from actor) across PP ranks to align data dependencies.
+    if tensor_list is None:
+        return None
+    return [t.detach().cpu() for t in tensor_list]
 
-    - Values are broadcast from src=1.
-    - Log-probs and ref-log-probs are broadcast from src=0 when KL is used.
-    Updates `rollout_data` in place with the synchronized tensors.
+
+def tensors_to_gpu(tensor_list, device=None):
+    """Move a list of CPU tensors back to GPU.
+
+    Args:
+        tensor_list: List of CPU tensors, or None.
+        device: Target CUDA device. If None, uses current device.
+
+    Returns:
+        List of GPU tensors, or None if input is None.
     """
-    log_probs_key = "log_probs" if not args.use_rollout_logprobs else "rollout_log_probs"
-    values, log_probs, ref_log_probs = map(rollout_data.get, ("values", log_probs_key, "ref_log_probs"))
-
-    # return when not the pp last stage
-    if not values and not log_probs:
-        return
-
-    handles = []
-
-    if not values:
-        values = [torch.empty_like(log_prob) for log_prob in log_probs]
-    for value in values:
-        handles.append(dist.broadcast(value, src=1, group=group, async_op=True))
-
-    if args.kl_coef != 0 or args.use_kl_loss:
-        if not log_probs:
-            log_probs = [torch.empty_like(value) for value in values]
-        if not ref_log_probs:
-            ref_log_probs = [torch.empty_like(value) for value in values]
-        for ref_log_prob, log_prob in zip(ref_log_probs, log_probs, strict=False):
-            handles.append(dist.broadcast(log_prob, src=0, group=group, async_op=True))
-            handles.append(dist.broadcast(ref_log_prob, src=0, group=group, async_op=True))
-
-    for handle in handles:
-        handle.wait()
-
-    rollout_data.update(
-        {
-            k: v
-            for k, v in {
-                "values": values,
-                log_probs_key: log_probs,
-                "ref_log_probs": ref_log_probs,
-            }.items()
-            if v is not None
-        }
-    )
+    if tensor_list is None:
+        return None
+    if device is None:
+        device = torch.cuda.current_device()
+    return [t.to(device=device, dtype=torch.float32) for t in tensor_list]

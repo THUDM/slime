@@ -108,9 +108,25 @@ class RayTrainGroup:
             for actor in self._actor_handlers
         ]
 
-    def async_train(self, rollout_id, rollout_data_ref):
-        """Do one rollout training"""
-        return [actor.train.remote(rollout_id, rollout_data_ref) for actor in self._actor_handlers]
+    def async_train(self, rollout_id, rollout_data_ref, external_data=None):
+        """Do one rollout training. Returns a list of Ray refs (one per worker).
+
+        For critics, each ref resolves to ``{"values": [cpu tensors...]}`` (or ``{}``
+        for non-last-PP-stage workers). Actor refs resolve to ``None``.
+
+        ``external_data`` may be a list (one item per worker) or a single dict
+        broadcast to all workers.
+        """
+        if isinstance(external_data, list):
+            assert len(external_data) == len(self._actor_handlers)
+            return [
+                actor.train.remote(rollout_id, rollout_data_ref, external_data=ed)
+                for actor, ed in zip(self._actor_handlers, external_data, strict=False)
+            ]
+        return [
+            actor.train.remote(rollout_id, rollout_data_ref, external_data=external_data)
+            for actor in self._actor_handlers
+        ]
 
     def save_model(self, rollout_id, force_sync=False):
         """Save actor model"""
@@ -129,13 +145,12 @@ class RayTrainGroup:
     def clear_memory(self):
         return ray.get([actor.clear_memory.remote() for actor in self._actor_handlers])
 
-    def connect(self, critic_group):
-        return ray.get(
-            [
-                actor.connect_actor_critic.remote(critic)
-                for actor, critic in zip(self._actor_handlers, critic_group._actor_handlers, strict=False)
-            ]
-        )
-
     def set_rollout_manager(self, rollout_manager):
         return ray.get([actor.set_rollout_manager.remote(rollout_manager) for actor in self._actor_handlers])
+
+    def get_parallel_value_info(self):
+        """Return value-shard identities for all workers in this group.
+
+        Each item is ``(dp_rank, cp_rank, dp_world_size, cp_world_size)``.
+        """
+        return ray.get([actor.get_parallel_value_info.remote() for actor in self._actor_handlers])

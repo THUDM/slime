@@ -581,6 +581,10 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
     Early returns if both `log_probs` and `values` are None (intermediate
     pipeline stages).
 
+    If ``args.custom_advantage_fn`` is set, it is called after KL computation
+    and must populate ``rollout_data["advantages"]`` and
+    ``rollout_data["returns"]``.
+
     Args:
         args: Configuration specifying estimator type, KL coefficient,
             normalization settings, and other hyperparameters.
@@ -615,8 +619,14 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
             )
             for i in range(len(log_probs))
         ]
+    rollout_data["kl"] = kl
 
-    if args.advantage_estimator in ["grpo", "gspo"]:
+    if args.custom_advantage_fn is not None:
+        custom_adv_fn = load_function(args.custom_advantage_fn)
+        custom_adv_fn(args, rollout_data)
+        advantages, returns = rollout_data["advantages"], rollout_data["returns"]
+
+    elif args.advantage_estimator in ["grpo", "gspo"]:
         rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
         returns = get_grpo_returns(rewards, kl)
         # TODO: is the copy necessary?

@@ -107,7 +107,7 @@ class TrainRayActor(RayActor):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def train(self, rollout_id, rollout_data_ref):
+    def train(self, rollout_id, rollout_data_ref, external_data=None):
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -119,10 +119,6 @@ class TrainRayActor(RayActor):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def connect_actor_critic(self, critic_group):
-        raise NotImplementedError
-
-    @abc.abstractmethod
     def _get_parallel_config(self):
         raise NotImplementedError
 
@@ -130,3 +126,16 @@ class TrainRayActor(RayActor):
         self.rollout_manager = rollout_manager
         if not self.args.debug_rollout_only and self.args.rank == 0:
             ray.get(self.rollout_manager.set_train_parallel_config.remote(self.train_parallel_config))
+
+    def get_parallel_value_info(self):
+        """Return value-shard identity for this worker.
+
+        Returns:
+            tuple[int, int, int, int]:
+                ``(dp_rank, cp_rank, dp_world_size, cp_world_size)``
+
+        Used to map per-worker critic value shards to actor workers. When CP is
+        enabled, values are CP-local shards rather than full per-sample value
+        sequences, so both DP rank and CP rank must align.
+        """
+        return self._dp_rank, self._cp_rank, self._dp_world_size, self._cp_world_size
