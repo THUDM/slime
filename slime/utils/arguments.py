@@ -830,7 +830,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--custom-advantage-fucnction-path",
+                "--custom-advantage-function-path",
                 type=str,
                 default=None,
                 help=(
