@@ -17,6 +17,10 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+try:
+    from .runtime_env_paths import expand_runtime_placeholders as _expand_runtime_placeholders
+except ImportError:
+    from runtime_env_paths import expand_runtime_placeholders as _expand_runtime_placeholders
 
 DEFAULT_SLIME_REPO_ROOT_BOOTSTRAP = str(Path(__file__).resolve().parents[2])
 if DEFAULT_SLIME_REPO_ROOT_BOOTSTRAP not in sys.path:
@@ -36,8 +40,6 @@ DEFAULT_SLIME_REPO_ROOT = str(Path(__file__).resolve().parents[2])
 DEFAULT_AGENT_CONFIG_PATH = str(
     Path(__file__).resolve().with_name("rock_agent_qwen_rebench_template.yaml")
 )
-AGENT_RUNTIME_ROOT = "/home/user/.rock/preinstalled/agent-runtime"
-MODEL_SERVICE_RUNTIME_ROOT = "/home/user/.rock/preinstalled/model-service-runtime"
 DEFAULT_REBENCH_REPO_ROOT = str(
     Path(__file__).resolve().parents[4] / "data" / "raw_data" / "single" / "swe_rebench_v2" / "SWE-rebench-V2"
 )
@@ -955,46 +957,6 @@ def _prepare_agent_config_for_sample(
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8") as f:
         yaml.safe_dump(config_payload, f, sort_keys=False)
         return f.name, Path(f.name)
-
-
-def _runtime_bin_dir(kind: str) -> str:
-    if kind == "agent":
-        return f"{AGENT_RUNTIME_ROOT}/runtime-env/bin"
-    if kind == "model_service":
-        return f"{MODEL_SERVICE_RUNTIME_ROOT}/runtime-env/bin"
-    raise ValueError(f"Unsupported runtime kind: {kind}")
-
-
-def _runtime_path_vars() -> dict[str, str]:
-    agent_bin = _runtime_bin_dir("agent")
-    model_bin = _runtime_bin_dir("model_service")
-    return {
-        "AGENT_RUNTIME_ROOT": AGENT_RUNTIME_ROOT,
-        "MODEL_SERVICE_RUNTIME_ROOT": MODEL_SERVICE_RUNTIME_ROOT,
-        "AGENT_RUNTIME_BIN_DIR": agent_bin,
-        "MODEL_SERVICE_RUNTIME_BIN_DIR": model_bin,
-        "AGENT_RUNTIME_NODE": f"{agent_bin}/node",
-        "AGENT_RUNTIME_NPM": f"{agent_bin}/npm",
-        "AGENT_RUNTIME_QWEN": f"{agent_bin}/qwen",
-        "AGENT_RUNTIME_IFLOW": f"{agent_bin}/iflow",
-        "MODEL_SERVICE_RUNTIME_PYTHON": f"{model_bin}/python",
-        "MODEL_SERVICE_RUNTIME_PIP": f"{model_bin}/pip",
-        "MODEL_SERVICE_RUNTIME_ROCK": f"{model_bin}/rock",
-    }
-
-
-def _expand_runtime_placeholders(value: Any) -> Any:
-    replacements = _runtime_path_vars()
-    if isinstance(value, str):
-        text = value
-        for key, replacement in replacements.items():
-            text = text.replace(f"${{{key}}}", replacement)
-        return text
-    if isinstance(value, list):
-        return [_expand_runtime_placeholders(item) for item in value]
-    if isinstance(value, dict):
-        return {k: _expand_runtime_placeholders(v) for k, v in value.items()}
-    return value
 
 
 async def _prepare_agent_run_wrapper_script(

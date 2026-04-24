@@ -24,6 +24,18 @@ from typing import Any
 import yaml
 
 from _inspire_sandbox_bootstrap import bootstrap_inspire_sandbox_path
+try:
+    from .runtime_env_paths import (
+        expand_runtime_placeholders as _expand_runtime_placeholders,
+        runtime_bin_dir as _runtime_bin_dir,
+        runtime_install_root as _runtime_install_root,
+    )
+except ImportError:
+    from runtime_env_paths import (
+        expand_runtime_placeholders as _expand_runtime_placeholders,
+        runtime_bin_dir as _runtime_bin_dir,
+        runtime_install_root as _runtime_install_root,
+    )
 
 bootstrap_inspire_sandbox_path()
 os.environ.setdefault("SBX_API_URL", "https://qz-sbx-api.sii.edu.cn")
@@ -40,8 +52,6 @@ DEFAULT_FAILURE = DEFAULT_OUT_DIR / "prefetch_image_template_failure.jsonl"
 DEFAULT_AGENT_CONFIG = Path(__file__).with_name("rock_agent_qwen_rebench_template.yaml")
 DEFAULT_LOG_DIR = Path(__file__).resolve().parent / "data_output"
 DEFAULT_SPEC = "G_C4"
-AGENT_RUNTIME_ROOT = "/home/user/.rock/preinstalled/agent-runtime"
-MODEL_SERVICE_RUNTIME_ROOT = "/home/user/.rock/preinstalled/model-service-runtime"
 ALIAS_PREFIX = "rebench-"
 POLL_INTERVAL_SECONDS = 5
 BUILD_TIMEOUT_SECONDS = 3600
@@ -178,50 +188,6 @@ def _load_agent_config(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"Expected a YAML object in {path}")
     return _expand_runtime_placeholders(payload)
-
-
-def _runtime_install_root(kind: str) -> str:
-    if kind == "agent":
-        return AGENT_RUNTIME_ROOT
-    if kind == "model_service":
-        return MODEL_SERVICE_RUNTIME_ROOT
-    raise ValueError(f"Unsupported runtime kind: {kind}")
-
-
-def _runtime_bin_dir(kind: str) -> str:
-    return f"{_runtime_install_root(kind)}/runtime-env/bin"
-
-
-def _runtime_path_vars() -> dict[str, str]:
-    agent_bin = _runtime_bin_dir("agent")
-    model_bin = _runtime_bin_dir("model_service")
-    return {
-        "AGENT_RUNTIME_ROOT": AGENT_RUNTIME_ROOT,
-        "MODEL_SERVICE_RUNTIME_ROOT": MODEL_SERVICE_RUNTIME_ROOT,
-        "AGENT_RUNTIME_BIN_DIR": agent_bin,
-        "MODEL_SERVICE_RUNTIME_BIN_DIR": model_bin,
-        "AGENT_RUNTIME_NODE": f"{agent_bin}/node",
-        "AGENT_RUNTIME_NPM": f"{agent_bin}/npm",
-        "AGENT_RUNTIME_QWEN": f"{agent_bin}/qwen",
-        "AGENT_RUNTIME_IFLOW": f"{agent_bin}/iflow",
-        "MODEL_SERVICE_RUNTIME_PYTHON": f"{model_bin}/python",
-        "MODEL_SERVICE_RUNTIME_PIP": f"{model_bin}/pip",
-        "MODEL_SERVICE_RUNTIME_ROCK": f"{model_bin}/rock",
-    }
-
-
-def _expand_runtime_placeholders(value: Any) -> Any:
-    replacements = _runtime_path_vars()
-    if isinstance(value, str):
-        text = value
-        for key, replacement in replacements.items():
-            text = text.replace(f"${{{key}}}", replacement)
-        return text
-    if isinstance(value, list):
-        return [_expand_runtime_placeholders(item) for item in value]
-    if isinstance(value, dict):
-        return {k: _expand_runtime_placeholders(v) for k, v in value.items()}
-    return value
 
 
 def _quote(value: str) -> str:
