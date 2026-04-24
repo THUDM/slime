@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import importlib
 import json
 import os
 import random
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,6 +19,40 @@ try:
     from .runtime_env_paths import expand_runtime_placeholders as _expand_runtime_placeholders
 except ImportError:
     from runtime_env_paths import expand_runtime_placeholders as _expand_runtime_placeholders
+try:
+    from .rebench_eval import (
+        evaluate_rebench_result,
+        remote_rebench_patch_path,
+        render_rebench_eval_script,
+        resolve_rebench_base_commit,
+        resolve_rebench_workdir,
+    )
+except ImportError:
+    from rebench_eval import (
+        evaluate_rebench_result,
+        remote_rebench_patch_path,
+        render_rebench_eval_script,
+        resolve_rebench_base_commit,
+        resolve_rebench_workdir,
+    )
+try:
+    from .rollout_logging import (
+        build_eval_log_path,
+        build_live_sandbox_log_path,
+        build_sample_log_dir,
+        prepare_batch_log_dir,
+        truncate_text,
+        write_sample_artifacts_snapshot,
+    )
+except ImportError:
+    from rollout_logging import (
+        build_eval_log_path,
+        build_live_sandbox_log_path,
+        build_sample_log_dir,
+        prepare_batch_log_dir,
+        truncate_text,
+        write_sample_artifacts_snapshot,
+    )
 
 DEFAULT_SLIME_REPO_ROOT_BOOTSTRAP = str(Path(__file__).resolve().parents[2])
 if DEFAULT_SLIME_REPO_ROOT_BOOTSTRAP not in sys.path:
@@ -40,9 +72,6 @@ DEFAULT_SLIME_REPO_ROOT = str(Path(__file__).resolve().parents[2])
 DEFAULT_AGENT_CONFIG_PATH = str(
     Path(__file__).resolve().with_name("rock_agent_qwen_rebench_template.yaml")
 )
-DEFAULT_REBENCH_REPO_ROOT = str(
-    Path(__file__).resolve().parents[4] / "data" / "raw_data" / "single" / "swe_rebench_v2" / "SWE-rebench-V2"
-)
 INSPIRE_SPEC_CPU_HINTS: dict[str, int] = {
     "G_C1": 1,
     "G_C2": 2,
@@ -50,12 +79,6 @@ INSPIRE_SPEC_CPU_HINTS: dict[str, int] = {
 }
 
 _ROLLOUT_STATE: dict[str, Any] = {}
-_REBENCH_LOG_PARSERS = None
-_REBENCH_TIMING_NORMALIZE_RES = [
-    re.compile(r"\s*\[\s*\d+(?:\.\d+)?\s*(?:ms|s)\s*\]\s*$", re.IGNORECASE),
-    re.compile(r"\s+in\s+\d+(?:\.\d+)?\s+(?:msec|sec)\b", re.IGNORECASE),
-    re.compile(r"\s*\(\s*\d+(?:\.\d+)?\s*(?:ms|s)\s*\)\s*$", re.IGNORECASE),
-]
 
 
 def ensure_rock_root_on_path(rock_root: str) -> None:
@@ -68,15 +91,6 @@ def ensure_workspace_root_on_path(workspace_root: str) -> None:
     workspace_root_path = str(Path(workspace_root).resolve())
     if workspace_root_path not in sys.path:
         sys.path.insert(0, workspace_root_path)
-
-
-def ensure_rebench_repo_on_path(rebench_repo_root: str) -> None:
-    repo_root = Path(rebench_repo_root).resolve()
-    lib_root = repo_root / "lib"
-    for candidate in (repo_root, lib_root):
-        value = str(candidate)
-        if value not in sys.path:
-            sys.path.insert(0, value)
 
 
 def can_curl_base_url(base_url: str, timeout_seconds: int = 10) -> bool:
@@ -111,41 +125,6 @@ def resolve_rock_base_url(base_url: str, retry_times: int = 10, retry_interval_s
     raise RuntimeError(
         f"ROCK base url is not reachable after {retry_times} attempts: {normalized_url}"
     )
-
-
-def _normalize_rebench_test_name(name: str) -> str:
-    normalized = str(name or "")
-    for pattern in _REBENCH_TIMING_NORMALIZE_RES:
-        normalized = pattern.sub("", normalized)
-    return normalized.strip()
-
-
-def _normalize_rebench_test_cmds(value: Any) -> list[str]:
-    if isinstance(value, str):
-        stripped = value.strip()
-        return [stripped] if stripped else []
-    if isinstance(value, list):
-        commands = [str(item).strip() for item in value if str(item).strip()]
-        return commands
-    return []
-
-
-def _resolve_rebench_workdir(metadata: dict[str, Any]) -> str:
-    workdir = str(metadata.get("repo_workdir") or "").strip()
-    if workdir:
-        return workdir
-    repo = str(metadata.get("repo") or "").strip()
-    parts = repo.split("/", 1)
-    if len(parts) == 2 and parts[1]:
-        return f"/{parts[1]}"
-    raise RuntimeError("rebench metadata missing repo_workdir/repo")
-
-
-def _resolve_rebench_base_commit(metadata: dict[str, Any]) -> str:
-    base_commit = str(metadata.get("base_commit") or "").strip()
-    if not base_commit:
-        raise RuntimeError("rebench metadata missing base_commit")
-    return base_commit
 
 
 def _resolve_sandbox_default_user(metadata: dict[str, Any]) -> str:
@@ -249,128 +228,6 @@ def _configure_sandbox_defaults(
     sandbox._sandbox_default_user = default_user
     sandbox._sandbox_image_env = image_env
     return default_user, image_env
-
-
-def _remote_rebench_patch_path(instance_id: str, kind: str) -> str:
-    safe_instance_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(instance_id or "task"))
-    return f"/tmp/{safe_instance_id}.{kind}.diff"
-
-
-def render_rebench_eval_script(
-    metadata: dict[str, Any],
-    *,
-    test_patch_file: str | None = None,
-) -> str:
-    install_config = metadata.get("install_config") or {}
-    if not isinstance(install_config, dict):
-        raise RuntimeError("rebench metadata.install_config must be an object")
-
-    test_cmds = _normalize_rebench_test_cmds(install_config.get("test_cmd"))
-    if not test_cmds:
-        raise RuntimeError("rebench metadata.install_config.test_cmd is empty")
-
-    workdir = _resolve_rebench_workdir(metadata)
-    instance_id = str(metadata.get("instance_id") or "task")
-    test_patch = str(metadata.get("test_patch") or "")
-    test_patch_file = test_patch_file or _remote_rebench_patch_path(instance_id, "test_patch")
-    lines = [
-        "set -e",
-        f"cd {shlex.quote(workdir)}",
-    ]
-
-    if test_patch:
-        lines.extend(
-            [
-                'echo "[stage] git_apply_test_patch"',
-                f"if git apply -v --3way --recount --ignore-space-change --whitespace=nowarn {shlex.quote(test_patch_file)}",
-                "then",
-                "  :",
-                "else",
-                '  apply_rc=$?',
-                "  exit ${apply_rc}",
-                "fi",
-            ]
-        )
-
-    for idx, test_cmd in enumerate(test_cmds, start=1):
-        lines.append(f"printf '%s\\n' {shlex.quote(f'[stage] test_cmd_{idx}: {test_cmd}')}")
-        lines.append(test_cmd)
-    return "\n".join(lines)
-
-
-def _get_rebench_log_parsers_module():
-    global _REBENCH_LOG_PARSERS
-    if _REBENCH_LOG_PARSERS is not None:
-        return _REBENCH_LOG_PARSERS
-    ensure_rebench_repo_on_path(os.environ.get("ROCK_SWE_REBENCH_REPO_ROOT", DEFAULT_REBENCH_REPO_ROOT))
-    _REBENCH_LOG_PARSERS = importlib.import_module("agent.log_parsers")
-    return _REBENCH_LOG_PARSERS
-
-
-def _get_rebench_log_parser(parser_name: str):
-    module = _get_rebench_log_parsers_module()
-    parser = getattr(module, "NAME_TO_PARSER", {}).get(parser_name)
-    if parser is None:
-        parser = getattr(module, parser_name, None)
-    if parser is None:
-        raise RuntimeError(f"Unknown SWE-rebench log parser: {parser_name}")
-    return parser
-
-
-def evaluate_rebench_result(
-    metadata: dict[str, Any],
-    *,
-    eval_exit_code: int | None,
-    eval_output: str,
-) -> dict[str, Any]:
-    install_config = metadata.get("install_config") or {}
-    if not isinstance(install_config, dict):
-        raise RuntimeError("rebench metadata.install_config must be an object")
-
-    parser_name = str(install_config.get("log_parser") or "").strip()
-    if not parser_name:
-        raise RuntimeError("rebench metadata.install_config.log_parser is missing")
-
-    parser = _get_rebench_log_parser(parser_name)
-    parsed = parser(eval_output or "")
-    normalized = {_normalize_rebench_test_name(name): status for name, status in parsed.items()}
-    passed_actual = sorted(name for name, status in normalized.items() if status == "PASSED")
-    failed_actual = sorted(name for name, status in normalized.items() if status in {"FAILED", "ERROR"})
-
-    fail_to_pass_expected = {
-        _normalize_rebench_test_name(name) for name in (metadata.get("FAIL_TO_PASS") or [])
-    }
-    pass_to_pass_expected = {
-        _normalize_rebench_test_name(name) for name in (metadata.get("PASS_TO_PASS") or [])
-    }
-    passed_actual_set = set(passed_actual)
-
-    from_fail_to_pass = sorted(passed_actual_set.intersection(fail_to_pass_expected))
-    failed_from_pass_to_pass = sorted(pass_to_pass_expected.difference(passed_actual_set))
-
-    fail_ratio = 1.0 if not fail_to_pass_expected else len(from_fail_to_pass) / len(fail_to_pass_expected)
-    pass_ratio = 1.0 if not pass_to_pass_expected else (
-        (len(pass_to_pass_expected) - len(failed_from_pass_to_pass)) / len(pass_to_pass_expected)
-    )
-    dense_reward = (fail_ratio + pass_ratio) / 2.0
-    solved = (
-        (eval_exit_code == 0)
-        and len(from_fail_to_pass) == len(fail_to_pass_expected)
-        and not failed_from_pass_to_pass
-    )
-
-    return {
-        "reward": 1.0 if solved else 0.0,
-        "dense_reward": dense_reward,
-        "solved": solved,
-        "parser_name": parser_name,
-        "passed_actual": passed_actual,
-        "failed_actual": failed_actual,
-        "from_fail_to_pass": from_fail_to_pass,
-        "failed_from_pass_to_pass": failed_from_pass_to_pass,
-        "fail_to_pass_expected": sorted(fail_to_pass_expected),
-        "pass_to_pass_expected": sorted(pass_to_pass_expected),
-    }
 
 def _env_or_arg(args, env_name: str, arg_name: str, default: Any) -> Any:
     if arg_name not in (None, ""):
@@ -790,7 +647,7 @@ async def _extract_rebench_candidate_patch(
     *,
     wait_timeout: int,
 ) -> str:
-    workdir = _resolve_rebench_workdir(metadata)
+    workdir = resolve_rebench_workdir(metadata)
     script = "\n".join(
         [
             "set -e",
@@ -813,8 +670,8 @@ async def _prepare_rebench_agent_workspace(
     *,
     wait_timeout: int,
 ) -> str:
-    workdir = _resolve_rebench_workdir(metadata)
-    base_commit = _resolve_rebench_base_commit(metadata)
+    workdir = resolve_rebench_workdir(metadata)
+    base_commit = resolve_rebench_base_commit(metadata)
     script = "\n".join(
         [
             "set -e",
@@ -847,102 +704,6 @@ async def _prepare_rebench_agent_workspace(
     return observation.output or ""
 
 
-def _build_batch_log_dir(log_root: str | None) -> Path | None:
-    if not log_root:
-        return None
-    return Path(log_root) / "current_batch"
-
-
-def _prepare_batch_log_dir(log_root: str | None) -> Path | None:
-    batch_log_dir = _build_batch_log_dir(log_root)
-    if batch_log_dir is None:
-        return None
-    shutil.rmtree(batch_log_dir, ignore_errors=True)
-    batch_log_dir.mkdir(parents=True, exist_ok=True)
-    return batch_log_dir
-
-
-def _build_sample_log_dir(log_root: str | None, *, rollout_id: int, sample_idx: int) -> Path | None:
-    if not log_root:
-        return None
-    del rollout_id
-    return _build_batch_log_dir(log_root) / f"sample_{sample_idx}"
-
-
-def _build_live_sandbox_log_path(
-    log_root: str | None,
-    *,
-    rollout_id: int,
-    sample_idx: int,
-) -> Path | None:
-    sample_log_dir = _build_sample_log_dir(log_root, rollout_id=rollout_id, sample_idx=sample_idx)
-    if sample_log_dir is None:
-        return None
-    sandbox_log_dir = sample_log_dir / "sandbox"
-    sandbox_log_dir.mkdir(parents=True, exist_ok=True)
-    return sandbox_log_dir / "agent_output.log"
-
-
-def _build_eval_log_path(
-    log_root: str | None,
-    *,
-    rollout_id: int,
-    sample_idx: int,
-) -> Path | None:
-    sample_log_dir = _build_sample_log_dir(log_root, rollout_id=rollout_id, sample_idx=sample_idx)
-    if sample_log_dir is None:
-        return None
-    sandbox_log_dir = sample_log_dir / "sandbox"
-    sandbox_log_dir.mkdir(parents=True, exist_ok=True)
-    return sandbox_log_dir / "eval_output.log"
-
-
-def _truncate_text(value: str | None, limit: int) -> str:
-    text = value or ""
-    if limit <= 0 or len(text) <= limit:
-        return text
-    return text[:limit]
-
-
-def _write_sample_artifacts_snapshot(
-    *,
-    log_root: str | None,
-    rollout_id: int,
-    sample_idx: int,
-    sample: Sample,
-    metadata: dict[str, Any],
-    extra_metadata: dict[str, Any],
-    turn_responses: list[str],
-    trajectory: list[dict[str, Any]],
-    final_messages: list[dict[str, Any]] | None,
-    last_response_payload: str | None,
-) -> str | None:
-    sample_log_dir = _build_sample_log_dir(log_root, rollout_id=rollout_id, sample_idx=sample_idx)
-    if sample_log_dir is None:
-        return None
-
-    sample_log_dir.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "rollout_id": rollout_id,
-        "sample_idx": sample_idx,
-        "sandbox_id": extra_metadata.get("sandbox_id"),
-        "instance_id": metadata.get("instance_id"),
-        "repo": metadata.get("repo"),
-        "local_image_name": metadata.get("local_image_name"),
-        "prompt": str(sample.prompt),
-        "extra_metadata": extra_metadata,
-        "turn_responses": turn_responses,
-        "trajectory": trajectory,
-        "final_messages": final_messages,
-        "last_response_payload": last_response_payload,
-    }
-    (sample_log_dir / "sample_artifacts.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return str(sample_log_dir)
-
-
 def _prepare_agent_config_for_sample(
     agent_config_path: str,
     metadata: dict[str, Any],
@@ -953,7 +714,7 @@ def _prepare_agent_config_for_sample(
         raise RuntimeError(f"Agent config must be a YAML object: {agent_config_path}")
 
     config_payload = _expand_runtime_placeholders(config_payload)
-    config_payload["project_path"] = _resolve_rebench_workdir(metadata)
+    config_payload["project_path"] = resolve_rebench_workdir(metadata)
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8") as f:
         yaml.safe_dump(config_payload, f, sort_keys=False)
         return f.name, Path(f.name)
@@ -1211,14 +972,14 @@ async def _run_single_sample_once(
     log_root = _env_or_arg(args, "ROCK_SWE_LOG_ROOT", "swe_log_root", None)
 
     ensure_rock_root_on_path(str(rock_root))
+    sample_prompt = str(sample.prompt)
     metadata = dict(sample.metadata or {})
     sandbox = None
-    sample_log_dir = _build_sample_log_dir(log_root, rollout_id=rollout_id, sample_idx=sample_idx)
+    sample_log_dir = build_sample_log_dir(log_root, sample_idx=sample_idx)
     if sample_log_dir is not None:
         sample_log_dir.mkdir(parents=True, exist_ok=True)
-    agent_live_sandbox_log_path = _build_live_sandbox_log_path(
+    agent_live_sandbox_log_path = build_live_sandbox_log_path(
         log_root,
-        rollout_id=rollout_id,
         sample_idx=sample_idx,
     )
 
@@ -1236,9 +997,8 @@ async def _run_single_sample_once(
         extra_metadata["sandbox_api_log_path"] = str(agent_live_sandbox_log_path)
         extra_metadata["agent_sandbox_api_log_path"] = str(agent_live_sandbox_log_path)
         persisted_log_files.append("sandbox/agent_output.log")
-    eval_log_path = _build_eval_log_path(
+    eval_log_path = build_eval_log_path(
         log_root,
-        rollout_id=rollout_id,
         sample_idx=sample_idx,
     )
     if eval_log_path is not None:
@@ -1254,6 +1014,21 @@ async def _run_single_sample_once(
     last_generation_finish_reason = ""
     reached_turn_limit = False
     temp_agent_config_path: Path | None = None
+
+    def _persist_sample_snapshot() -> None:
+        write_sample_artifacts_snapshot(
+            log_root=log_root,
+            rollout_id=rollout_id,
+            sample_idx=sample_idx,
+            sample_prompt=sample_prompt,
+            metadata=metadata,
+            extra_metadata=extra_metadata,
+            turn_responses=turn_responses,
+            trajectory=trajectory,
+            final_messages=final_messages,
+            last_response_payload=last_response_payload,
+        )
+
     async with sample_semaphore:
         try:
             if sandbox_backend == "inspire":
@@ -1304,7 +1079,7 @@ async def _run_single_sample_once(
                 metadata,
                 wait_timeout=wait_timeout,
             )
-            extra_metadata["workspace_prepare_preview"] = _truncate_text(
+            extra_metadata["workspace_prepare_preview"] = truncate_text(
                 workspace_prepare_output,
                 preview_limit,
             )
@@ -1325,19 +1100,8 @@ async def _run_single_sample_once(
                 return agent_run_cmd
 
             sandbox.agent._create_agent_run_cmd = _wrapped_create_agent_run_cmd
-            _write_sample_artifacts_snapshot(
-                log_root=log_root,
-                rollout_id=rollout_id,
-                sample_idx=sample_idx,
-                sample=sample,
-                metadata=metadata,
-                extra_metadata=extra_metadata,
-                turn_responses=turn_responses,
-                trajectory=trajectory,
-                final_messages=final_messages,
-                last_response_payload=last_response_payload,
-            )
-            agent_task = asyncio.create_task(sandbox.agent.run(str(sample.prompt)))
+            _persist_sample_snapshot()
+            agent_task = asyncio.create_task(sandbox.agent.run(sample_prompt))
 
             implicit_session_end_grace_timeout = 5.0
 
@@ -1359,7 +1123,7 @@ async def _run_single_sample_once(
                         try:
                             agent_result_cached = await agent_task
                             agent_exit_code = getattr(agent_result_cached, "exit_code", None)
-                            agent_output_preview = _truncate_text(
+                            agent_output_preview = truncate_text(
                                 getattr(agent_result_cached, "output", "") or "",
                                 preview_limit,
                             )
@@ -1381,7 +1145,7 @@ async def _run_single_sample_once(
                         try:
                             agent_result_cached = await agent_task
                             extra_metadata["agent_exit_code"] = getattr(agent_result_cached, "exit_code", None)
-                            extra_metadata["agent_output_preview"] = _truncate_text(
+                            extra_metadata["agent_output_preview"] = truncate_text(
                                 getattr(agent_result_cached, "output", "") or "",
                                 preview_limit,
                             )
@@ -1403,7 +1167,7 @@ async def _run_single_sample_once(
                             try:
                                 agent_result_cached = await agent_task
                                 extra_metadata["agent_exit_code"] = getattr(agent_result_cached, "exit_code", None)
-                                extra_metadata["agent_output_preview"] = _truncate_text(
+                                extra_metadata["agent_output_preview"] = truncate_text(
                                     getattr(agent_result_cached, "output", "") or "",
                                     preview_limit,
                                 )
@@ -1434,7 +1198,7 @@ async def _run_single_sample_once(
                                 try:
                                     agent_result_cached = await agent_task
                                     extra_metadata["agent_exit_code"] = getattr(agent_result_cached, "exit_code", None)
-                                    extra_metadata["agent_output_preview"] = _truncate_text(
+                                    extra_metadata["agent_output_preview"] = truncate_text(
                                         getattr(agent_result_cached, "output", "") or "",
                                         preview_limit,
                                     )
@@ -1442,7 +1206,7 @@ async def _run_single_sample_once(
                                     extra_metadata["agent_error"] = str(agent_exc)
                     else:
                         request_str = await anti_call_task
-                extra_metadata["last_anti_call_request_preview"] = _truncate_text(request_str, preview_limit)
+                extra_metadata["last_anti_call_request_preview"] = truncate_text(request_str, preview_limit)
                 request_str = request_str.strip()
                 if request_str == "SESSION_END":
                     break
@@ -1454,7 +1218,7 @@ async def _run_single_sample_once(
                 except json.JSONDecodeError as exc:
                     raise RuntimeError(
                         "anti_call_llm returned non-JSON response: "
-                        f"{_truncate_text(request_str, preview_limit)}"
+                        f"{truncate_text(request_str, preview_limit)}"
                     ) from exc
                 messages = [_sanitize_message(msg) for msg in (request_obj.get("messages") or [])]
                 tools = request_obj.get("tools") or []
@@ -1488,18 +1252,7 @@ async def _run_single_sample_once(
                         "tool_call_count": response_info["tool_call_count"],
                     }
                 )
-                _write_sample_artifacts_snapshot(
-                    log_root=log_root,
-                    rollout_id=rollout_id,
-                    sample_idx=sample_idx,
-                    sample=sample,
-                    metadata=metadata,
-                    extra_metadata=extra_metadata,
-                    turn_responses=turn_responses,
-                    trajectory=trajectory,
-                    final_messages=final_messages,
-                    last_response_payload=last_response_payload,
-                )
+                _persist_sample_snapshot()
 
                 index += 1
                 if index >= max_turns:
@@ -1527,7 +1280,7 @@ async def _run_single_sample_once(
                     else:
                         agent_result = agent_result_cached
                     extra_metadata["agent_exit_code"] = getattr(agent_result, "exit_code", None)
-                    extra_metadata["agent_output_preview"] = _truncate_text(
+                    extra_metadata["agent_output_preview"] = truncate_text(
                         getattr(agent_result, "output", "") or "",
                         preview_limit,
                     )
@@ -1578,12 +1331,12 @@ async def _run_single_sample_once(
             extra_metadata.update(
                 {
                     "eval_exit_code": eval_exit_code,
-                    "eval_output_preview": _truncate_text(eval_preview, preview_limit),
+                    "eval_output_preview": truncate_text(eval_preview, preview_limit),
                     "eval_script_path": f"/tmp/{metadata.get('instance_id', 'task')}.eval.sh",
-                    "eval_script_preview": _truncate_text(
+                    "eval_script_preview": truncate_text(
                         render_rebench_eval_script(
                             metadata,
-                            test_patch_file=_remote_rebench_patch_path(
+                            test_patch_file=remote_rebench_patch_path(
                                 str(metadata.get("instance_id") or "task"),
                                 "test_patch",
                             ),
@@ -1621,21 +1374,10 @@ async def _run_single_sample_once(
                     pass
             if temp_agent_config_path is not None:
                 temp_agent_config_path.unlink(missing_ok=True)
-            _write_sample_artifacts_snapshot(
-                log_root=log_root,
-                rollout_id=rollout_id,
-                sample_idx=sample_idx,
-                sample=sample,
-                metadata=metadata,
-                extra_metadata=extra_metadata,
-                turn_responses=turn_responses,
-                trajectory=trajectory,
-                final_messages=final_messages,
-                last_response_payload=last_response_payload,
-            )
+            _persist_sample_snapshot()
 
     if final_messages is None:
-        final_messages = _build_fallback_messages(str(sample.prompt), failure_reason or "Sandbox rollout failed.")
+        final_messages = _build_fallback_messages(sample_prompt, failure_reason or "Sandbox rollout failed.")
         final_tools = None
         if not turn_responses:
             turn_responses.append(failure_reason or "Sandbox rollout failed.")
@@ -1756,7 +1498,7 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
     )
     sample_semaphore = asyncio.Semaphore(sample_concurrency)
     log_root = _env_or_arg(args, "ROCK_SWE_LOG_ROOT", "swe_log_root", None)
-    _prepare_batch_log_dir(log_root)
+    prepare_batch_log_dir(log_root)
 
     async def _run_group_with_order(
         group_idx: int,
