@@ -830,7 +830,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--custom-advantage-fn",
+                "--custom-advantage-fucnction-path",
                 type=str,
                 default=None,
                 help=(
@@ -1522,8 +1522,7 @@ def parse_critic_args(actor_args, critic_config_path):
     # Critic-specific: disable features that only apply to actors
     critic_args.kl_coef = 0
     critic_args.use_opd = False
-    critic_args.normalize_advantages = False
-    critic_args.custom_advantage_fn = None
+    critic_args.custom_advantage_function_path = None
     critic_args.untie_embeddings_and_output_weights = True
     logger.info(f"Parsed critic config from {critic_config_path}: overrides = {list(critic_config.keys())}")
 

@@ -581,7 +581,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
     Early returns if both `log_probs` and `values` are None (intermediate
     pipeline stages).
 
-    If ``args.custom_advantage_fn`` is set, it is called after KL computation
+    If ``args.custom_advantage_function_path`` is set, it is called after KL computation
     and must populate ``rollout_data["advantages"]`` and
     ``rollout_data["returns"]``.
 
@@ -621,8 +621,8 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         ]
     rollout_data["kl"] = kl
 
-    if args.custom_advantage_fn is not None:
-        custom_adv_fn = load_function(args.custom_advantage_fn)
+    if args.custom_advantage_function_path is not None:
+        custom_adv_fn = load_function(args.custom_advantage_function_path)
         custom_adv_fn(args, rollout_data)
         advantages, returns = rollout_data["advantages"], rollout_data["returns"]
 

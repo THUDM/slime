@@ -103,13 +103,7 @@ def create_placement_groups(args):
         "rollout": (pg, rollout_pg_reordered_bundle_indices, rollout_pg_reordered_gpu_ids),
     }
 
-    if args.use_critic:
-        critic_num_gpus = args.critic_num_nodes * args.critic_num_gpus_per_node
-        logger.info(f"Creating critic placement group with {critic_num_gpus} GPUs...")
-        c_pg, c_bundle_indices, c_gpu_ids = _create_placement_group(critic_num_gpus)
-        result["critic"] = (c_pg, c_bundle_indices, c_gpu_ids)
-    else:
-        result["critic"] = None
+    result["critic"] = result["actor"] if args.use_critic else None
 
     return result
 

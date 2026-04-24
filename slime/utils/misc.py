@@ -94,21 +94,6 @@ def should_run_periodic_action(
     return (step % interval == 0) or (num_rollout_per_epoch is not None and step % num_rollout_per_epoch == 0)
 
 
-def critic_values_by_actor_worker(actor_model, critic_model, per_worker_values):
-    """Map critic value shards to actor workers by DP rank and CP rank.
-
-    When CP is enabled, each worker holds a CP-local shard of per-sample
-    values. Those shards must be aligned to the target actor worker's CP rank;
-    mapping by DP rank alone is insufficient and can overwrite shards.
-    """
-    shard_to_values = {
-        (dp, cp): value["values"]
-        for (dp, cp, _, _), value in zip(critic_model.get_parallel_value_info(), per_worker_values, strict=False)
-        if "values" in value
-    }
-    return [{"values": shard_to_values[(dp, cp)]} for dp, cp, _, _ in actor_model.get_parallel_value_info()]
-
-
 class Box:
     def __init__(self, inner):
         self._inner = inner

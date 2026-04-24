@@ -3,7 +3,7 @@ import ray
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.logging_utils import configure_logger, finish_tracking, init_tracking, update_tracking_open_metrics
-from slime.utils.misc import critic_values_by_actor_worker, should_run_periodic_action
+from slime.utils.misc import should_run_periodic_action
 
 
 # The framework supports other asynchronous approaches such as fully async (which is shown in examples/full_async).
@@ -44,17 +44,11 @@ def train(args):
 
         if args.use_critic:
             actor_trains_this_step = rollout_id >= args.num_critic_only_steps
+            value_refs = critic_model.async_train(rollout_id, rollout_data_curr_ref)
             if actor_trains_this_step:
-                value_refs = critic_model.async_compute_values(rollout_data_curr_ref)
-                per_worker_values = ray.get(value_refs)
+                ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref, external_data=value_refs))
             else:
-                per_worker_values = None
-
-            ray.get(critic_model.async_train(rollout_id, rollout_data_curr_ref, external_data=per_worker_values))
-
-            if actor_trains_this_step:
-                actor_external = critic_values_by_actor_worker(actor_model, critic_model, per_worker_values)
-                ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref, external_data=actor_external))
+                ray.get(value_refs)
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))
 

@@ -3,7 +3,7 @@ import ray
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.logging_utils import configure_logger, finish_tracking, init_tracking, update_tracking_open_metrics
-from slime.utils.misc import critic_values_by_actor_worker, should_run_periodic_action
+from slime.utils.misc import should_run_periodic_action
 
 
 def train(args):
@@ -76,14 +76,11 @@ def train(args):
         actor_trains_this_step = (not args.use_critic) or rollout_id >= args.num_critic_only_steps
 
         if args.use_critic:
-            # Sequential critic -> actor pipeline: critic trains and returns values,
-            # which become the old_values for the actor's advantage computation.
             value_refs = critic_model.async_train(rollout_id, rollout_data_ref)
-            per_worker_values = ray.get(value_refs)
-
             if actor_trains_this_step:
-                actor_external = critic_values_by_actor_worker(actor_model, critic_model, per_worker_values)
-                ray.get(actor_model.async_train(rollout_id, rollout_data_ref, external_data=actor_external))
+                ray.get(actor_model.async_train(rollout_id, rollout_data_ref, external_data=value_refs))
+            else:
+                ray.get(value_refs)
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
 
