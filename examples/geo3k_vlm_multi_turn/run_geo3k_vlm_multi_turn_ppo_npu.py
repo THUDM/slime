@@ -124,7 +124,7 @@ def execute():
 
     misc_args = (
         "--actor-num-nodes 1 "
-        "--actor-num-gpus-per-node 4 "
+        "--actor-num-gpus-per-node 8 "
         "--rollout-num-gpus 8 "
         "--no-gradient-accumulation-fusion "
         "--use-flash-attn "

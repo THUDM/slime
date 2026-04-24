@@ -1,6 +1,5 @@
 import os
 
-import slime.utils.misc as U
 from slime.utils.external_utils.command_utils import execute_train_npu
 
 MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-VL-2B-Instruct")
@@ -78,7 +77,6 @@ def execute():
         "--weight-decay 0.1 "
         "--adam-beta1 0.9 "
         "--adam-beta2 0.98 "
-
         "--optimizer-cpu-offload "
         "--overlap-cpu-optimizer-d2h-h2d "
         "--use-precision-aware-optimizer "
@@ -120,7 +118,9 @@ def execute():
     )
 
     misc_args = (
-        "--actor-num-nodes 1 " f"--actor-num-gpus-per-node 8 " f"--rollout-num-gpus 8 "
+        "--actor-num-nodes 1 "
+        "--actor-num-gpus-per-node 8 "
+        "--rollout-num-gpus 8 "
         "--no-gradient-accumulation-fusion "
         "--use-flash-attn "
     )
