@@ -147,10 +147,3 @@ class RayTrainGroup:
 
     def set_rollout_manager(self, rollout_manager):
         return ray.get([actor.set_rollout_manager.remote(rollout_manager) for actor in self._actor_handlers])
-
-    def get_parallel_value_info(self):
-        """Return value-shard identities for all workers in this group.
-
-        Each item is ``(dp_rank, cp_rank, dp_world_size, cp_world_size)``.
-        """
-        return ray.get([actor.get_parallel_value_info.remote() for actor in self._actor_handlers])

@@ -71,12 +71,8 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
             dist.barrier(group=get_gloo_group())
 
-        self._dp_rank = mpu.get_data_parallel_rank(with_context_parallel=False)
-        self._dp_world_size = mpu.get_data_parallel_world_size(with_context_parallel=False)
-        self._cp_rank = mpu.get_context_parallel_rank()
-        self._cp_world_size = mpu.get_context_parallel_world_size()
         self.train_parallel_config = {
-            "dp_size": self._dp_world_size,
+            "dp_size": mpu.get_data_parallel_world_size(with_context_parallel=False),
         }
         dist.barrier(group=get_gloo_group())
 
