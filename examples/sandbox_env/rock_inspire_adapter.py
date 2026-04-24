@@ -366,6 +366,7 @@ class InspireRockSandbox:
         self._model_service = None
         self._live_log_path: Path | None = None
         self._live_log_lock = threading.Lock()
+        self._stopping = False
         self.remote_user = LinuxRemoteUser(self)
         self.process = Process(self)
         self.network = Network(self)
@@ -437,6 +438,7 @@ class InspireRockSandbox:
             self._patch_anti_call_llm(svc)
 
     async def start(self) -> None:
+        self._stopping = False
         if self._template_name_override:
             self._template_name = self._template_name_override
             self._append_live_log(f"[template] using existing template={self._template_name}")
@@ -457,6 +459,7 @@ class InspireRockSandbox:
     async def stop(self) -> None:
         if self._sandbox is None:
             return
+        self._stopping = True
         try:
             self._append_live_log(f"[sandbox.stop] sandbox_id={self._sandbox_id}")
             await self._disconnect_background_handles()
@@ -709,6 +712,11 @@ class InspireRockSandbox:
     ) -> str:
         """CLI-free anti_call_llm via the local model-service log protocol."""
         if not svc.is_started:
+            if self._stopping or self._sandbox is None:
+                self._append_live_log(
+                    f"[anti_call_llm.shutdown_before_start] index={index} sandbox_id={self._sandbox_id}"
+                )
+                return "SESSION_END"
             raise RuntimeError(
                 f"[{self._sandbox_id}] Cannot execute anti-call LLM: ModelService is not started."
             )
@@ -748,6 +756,14 @@ class InspireRockSandbox:
                 message = f"{detail}; output={output}"
             else:
                 message = detail or output or f"exit_code={result.exit_code}"
+            lowered_message = message.lower()
+            if self._stopping and (
+                "sandbox not started" in lowered_message or "incomplete chunked read" in lowered_message
+            ):
+                self._append_live_log(
+                    f"[anti_call_llm.shutdown_after_stop] index={index} message={message}"
+                )
+                return "SESSION_END"
             raise RuntimeError(f"Anti-call LLM command failed: {message}")
         return result.output
 

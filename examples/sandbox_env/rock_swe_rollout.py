@@ -1657,6 +1657,12 @@ async def _run_single_sample_once(
         finally:
             had_empty_turn_responses = not bool(turn_responses)
             extra_metadata["turn_responses_empty"] = had_empty_turn_responses
+            if agent_task is not None and not agent_task.done():
+                agent_task.cancel()
+                try:
+                    await asyncio.gather(agent_task, return_exceptions=True)
+                except Exception as cancel_exc:
+                    extra_metadata["agent_cancel_error"] = str(cancel_exc)
             try:
                 await sandbox.stop()
             except Exception as stop_exc:
