@@ -157,16 +157,15 @@ def create_training_models(args, pgs, rollout_manager):
     )
     # TODO how to decide rollout start id when critic is involved? For now we just require user to specify it via args.
     if args.use_critic:
-        all_start_rollout_ids = list(actor_start_rollout_ids)
         critic_start_rollout_ids = ray.get(critic_init_handles)
-        all_start_rollout_ids.extend(critic_start_rollout_ids)
+        all_start_rollout_ids = critic_start_rollout_ids
     else:
         all_start_rollout_ids = actor_start_rollout_ids
 
     assert len(set(all_start_rollout_ids)) == 1
 
     if args.start_rollout_id is None:
-        args.start_rollout_id = actor_start_rollout_ids[0]
+        args.start_rollout_id = all_start_rollout_ids[0]
 
     actor_model.set_rollout_manager(rollout_manager)
     if args.use_critic:
