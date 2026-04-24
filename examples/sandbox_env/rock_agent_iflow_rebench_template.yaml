@@ -1,0 +1,58 @@
+run_cmd: "${AGENT_RUNTIME_NODE} ${AGENT_RUNTIME_IFLOW} -p ${prompt} --yolo"
+
+project_path: "/testbed"
+
+agent_run_timeout: 36000
+agent_install_timeout: 18000
+
+pre_init_cmds:
+  - command: "mkdir -p /root/.iflow ~/.iflow"
+    timeout_seconds: 600
+  - command: |
+      cat > /root/.iflow/settings.json <<'EOF'
+      {
+        "selectedAuthType": "openai-compatible",
+        "apiKey": "test",
+        "baseUrl": "http://localhost:8080/v1",
+        "modelName": "AVALANCHE",
+        "searchApiKey": "88888888",
+        "disableAutoUpdate": true,
+        "shellTimeout": 1800000,
+        "tokensLimit": 128000
+      }
+      EOF
+    timeout_seconds: 60
+  - command: "cp /root/.iflow/settings.json ~/.iflow/settings.json"
+    timeout_seconds: 60
+
+runtime_env_config:
+  type: node
+  installed: true
+  installed_bin_dir: "${AGENT_RUNTIME_BIN_DIR}"
+  npm_registry: "https://registry.npmmirror.com"
+  custom_install_cmd: 'mkdir -p "$PWD/runtime-env" && npm install -g --prefix "$PWD/runtime-env" @iflow-ai/iflow-cli@latest && test -x "$PWD/runtime-env/bin/iflow" && "${AGENT_RUNTIME_NODE}" "$PWD/runtime-env/bin/iflow" --version'
+
+model_service_config:
+  enabled: true
+  installed: true
+  type: "local"
+  install_timeout: 30000
+  runtime_env_config:
+    type: python
+    version: "3.11"
+    installed: true
+    installed_bin_dir: "${MODEL_SERVICE_RUNTIME_BIN_DIR}"
+  config_ini_cmd: >
+    ${MODEL_SERVICE_RUNTIME_PYTHON} -c "from pathlib import Path; import rock.sdk.model.server.api.local as local_mod; import rock.sdk.model.server.utils as utils_mod; p = Path(local_mod.__file__); s = p.read_text(encoding='utf-8'); helper = '''\n\ndef _stream_sse_line(payload: str) -> bytes:\n    return f\"data: {payload}\\\\n\\\\n\".encode(\"utf-8\")\n\n\ndef _extract_stream_payload(response_data: dict[str, Any]) -> tuple[str, list[dict[str, Any]], str, int]:\n    choices = response_data.get(\"choices\")\n    if isinstance(choices, list) and choices:\n        first_choice = choices[0] if isinstance(choices[0], dict) else {}\n        message = first_choice.get(\"message\") if isinstance(first_choice.get(\"message\"), dict) else {}\n        content = message.get(\"content\") or response_data.get(\"content\") or \"\"\n        tool_calls = message.get(\"tool_calls\") if isinstance(message.get(\"tool_calls\"), list) else []\n        finish_reason = first_choice.get(\"finish_reason\") or \"stop\"\n        index = int(first_choice.get(\"index\", 0))\n        return str(content), tool_calls, str(finish_reason), index\n\n    content = response_data.get(\"content\") or \"\"\n    return str(content), [], \"stop\", 0\n\n\ndef _build_streaming_response(response_data: dict[str, Any], *, request_id: str, body: dict[str, Any]) -> StreamingResponse:\n    model = str(response_data.get(\"model\") or body.get(\"model\") or \"\")\n    created = int(response_data.get(\"created\") or time.time())\n    content, tool_calls, finish_reason, index = _extract_stream_payload(response_data)\n\n    async def event_generator():\n        role_chunk = {\n            \"id\": request_id,\n            \"object\": \"chat.completion.chunk\",\n            \"created\": created,\n            \"model\": model,\n            \"choices\": [{\"index\": index, \"delta\": {\"role\": \"assistant\"}, \"finish_reason\": None}],\n        }\n        yield _stream_sse_line(json.dumps(role_chunk, ensure_ascii=False))\n\n        if content or tool_calls:\n            delta: dict[str, Any] = {}\n            if content:\n                delta[\"content\"] = content\n            if tool_calls:\n                delta[\"tool_calls\"] = tool_calls\n            content_chunk = {\n                \"id\": request_id,\n                \"object\": \"chat.completion.chunk\",\n                \"created\": created,\n                \"model\": model,\n                \"choices\": [{\"index\": index, \"delta\": delta, \"finish_reason\": None}],\n            }\n            yield _stream_sse_line(json.dumps(content_chunk, ensure_ascii=False))\n\n        finish_chunk = {\n            \"id\": request_id,\n            \"object\": \"chat.completion.chunk\",\n            \"created\": created,\n            \"model\": model,\n            \"choices\": [{\"index\": index, \"delta\": {}, \"finish_reason\": finish_reason}],\n        }\n        yield _stream_sse_line(json.dumps(finish_chunk, ensure_ascii=False))\n        yield b\"data: [DONE]\\\\n\\\\n\"\n\n    return StreamingResponse(event_generator(), media_type=\"text/event-stream\")\n'''; s = p.read_text(encoding='utf-8'); s = s.replace('import asyncio\\nimport uuid\\n', 'import asyncio\\nimport json\\nimport time\\nimport uuid\\n'); s = s.replace('from fastapi import APIRouter, HTTPException, Request, status\\n', 'from fastapi import APIRouter, HTTPException, Request, status\\nfrom fastapi.responses import StreamingResponse\\n'); needle = 'async def start_watch_agent(body: dict[str, Any], request: Request):'; s = s.replace(needle, helper + '\\n\\n' + needle) if '_build_streaming_response' not in s else s; s = s.replace('        # Return response data as-is from Roll, no transformation\\n        return response_data\\n', '        if body.get(\"stream\") is True:\\n            return _build_streaming_response(response_data, request_id=request_id, body=body)\\n\\n        # Return response data as-is from Roll, no transformation\\n        return response_data\\n'); p.write_text(s, encoding='utf-8'); up = Path(utils_mod.__file__); us = up.read_text(encoding='utf-8'); us = us.replace('from fastapi.responses import JSONResponse\\n', 'from fastapi.responses import JSONResponse, StreamingResponse\\n'); us = us.replace('        if isinstance(result, JSONResponse):\\n            response_data = json.loads(result.body)\\n        else:\\n            response_data = result\\n', '        if isinstance(result, JSONResponse):\\n            response_data = json.loads(result.body)\\n        elif isinstance(result, StreamingResponse):\\n            response_data = {\"stream\": True, \"media_type\": result.media_type}\\n        else:\\n            response_data = result\\n'); up.write_text(us, encoding='utf-8')"
+  install_cmd: "pip install rl_rock[model-service]"
+  start_cmd: "PYTHONWARNINGS=ignore ${MODEL_SERVICE_RUNTIME_ROCK} model-service start --type ${type} --request-timeout 0"
+  stop_cmd: "PYTHONWARNINGS=ignore ${MODEL_SERVICE_RUNTIME_ROCK} model-service stop"
+  watch_agent_cmd: "nohup PYTHONWARNINGS=ignore ${MODEL_SERVICE_RUNTIME_ROCK} model-service watch-agent --pid ${pid} > /tmp/watch_agent.log 2>&1 &"
+
+env:
+  IFLOW_API_KEY: "test"
+  IFLOW_BASE_URL: "http://localhost:8080/v1"
+  IFLOW_MODEL_NAME: "AVALANCHE"
+  IFLOW_disableAutoUpdate: "true"
+  IFLOW_tokensLimit: "128000"
+  IFLOW_shellTimeout: "1800000"
