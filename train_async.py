@@ -3,7 +3,7 @@ import ray
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.logging_utils import configure_logger, finish_tracking, init_tracking, update_tracking_open_metrics
-from slime.utils.misc import should_run_periodic_action
+from slime.utils.misc import critic_values_by_actor_worker, should_run_periodic_action
 
 
 # The framework supports other asynchronous approaches such as fully async (which is shown in examples/full_async).
@@ -25,12 +25,11 @@ def train(args):
     # create the actor and critic models
     actor_model, critic_model = create_training_models(args, pgs, rollout_manager)
 
-    # always update weight first so that sglang has the loaded weights from training.
-    if not args.critic_train_only:
-        actor_model.update_weights()
+    # Always push actor weights to rollout once weights are loaded.
+    actor_model.update_weights()
 
-        if args.check_weight_update_equal:
-            ray.get(rollout_manager.check_weights.remote(action="compare"))
+    if args.check_weight_update_equal:
+        ray.get(rollout_manager.check_weights.remote(action="compare"))
 
     # async train loop.
     rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)
@@ -44,15 +43,23 @@ def train(args):
             rollout_data_next_future = rollout_manager.generate.remote(rollout_id + 1)
 
         if args.use_critic:
-            critic_train_handle = critic_model.async_train(rollout_id, rollout_data_curr_ref)
-            if rollout_id >= args.num_critic_only_steps and not args.critic_train_only:
-                ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))
-            ray.get(critic_train_handle)
+            actor_trains_this_step = rollout_id >= args.num_critic_only_steps
+            if actor_trains_this_step:
+                value_refs = critic_model.async_compute_values(rollout_data_curr_ref)
+                per_worker_values = ray.get(value_refs)
+            else:
+                per_worker_values = None
+
+            ray.get(critic_model.async_train(rollout_id, rollout_data_curr_ref, external_data=per_worker_values))
+
+            if actor_trains_this_step:
+                actor_external = critic_values_by_actor_worker(actor_model, critic_model, per_worker_values)
+                ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref, external_data=actor_external))
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))
 
         if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
-            if not args.critic_train_only:
+            if (not args.use_critic) or rollout_id >= args.num_critic_only_steps:
                 actor_model.save_model(
                     rollout_id,
                     force_sync=rollout_id == args.num_rollout - 1,
@@ -69,8 +76,7 @@ def train(args):
             # sync generate before update weights to prevent update weight in the middle of generation
             rollout_data_curr_ref = ray.get(x) if (x := rollout_data_next_future) is not None else None
             rollout_data_next_future = None
-            if not args.critic_train_only:
-                actor_model.update_weights()
+            actor_model.update_weights()
 
         if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
             ray.get(rollout_manager.eval.remote(rollout_id))
