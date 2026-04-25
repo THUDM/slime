@@ -14,7 +14,6 @@ import shlex
 import subprocess
 import sys
 import time
-from pathlib import Path
 from typing import Any
 
 
@@ -23,14 +22,6 @@ INSPIRE_SPEC_CPU_HINTS: dict[str, int] = {
     "G_C2": 2,
     "G_C4": 4,
 }
-
-DEFAULT_SLIME_REPO_ROOT = str(Path(__file__).resolve().parents[2])
-
-
-def _ensure_workspace_root_on_path(workspace_root: str) -> None:
-    workspace_root_path = str(Path(workspace_root).resolve())
-    if workspace_root_path not in sys.path:
-        sys.path.insert(0, workspace_root_path)
 
 
 # ---------------------------------------------------------------------------
@@ -270,8 +261,7 @@ def _build_sandbox(
         remove_container=not keep_containers,
     )
     if sandbox_backend == "inspire":
-        _ensure_workspace_root_on_path(DEFAULT_SLIME_REPO_ROOT)
-        from examples.sandbox_env.rock_inspire_adapter import InspireRockSandbox
+        from .rock_inspire_adapter import InspireRockSandbox
 
         if template_name:
             sandbox = InspireRockSandbox(
