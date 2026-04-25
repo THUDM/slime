@@ -118,6 +118,11 @@ fi
 RUN_LOG_PATH="${LOG_DIR}/run.log"
 exec > >(tee "${RUN_LOG_PATH}") 2>&1
 
+die() {
+  echo "$*" >&2
+  exit 1
+}
+
 cleanup_local_processes() {
   pkill -9 sglang 2>/dev/null || true
   ray stop --force 2>/dev/null || true
@@ -290,103 +295,40 @@ validate_layout() {
   local hidden_size=2048
   local num_experts=256
 
-  if (( NUM_NODES <= 0 || NUM_GPUS_PER_NODE <= 0 )); then
-    echo "NUM_NODES and NUM_GPUS_PER_NODE must be positive." >&2
-    exit 1
-  fi
-  if (( ACTOR_NUM_NODES <= 0 || ACTOR_GPUS_PER_NODE <= 0 )); then
-    echo "ACTOR_NUM_NODES and ACTOR_GPUS_PER_NODE must be positive." >&2
-    exit 1
-  fi
-  if (( ROLLOUT_GPUS_TOTAL <= 0 )); then
-    echo "ROLLOUT_GPUS_TOTAL must be positive." >&2
-    exit 1
-  fi
-  if (( ACTOR_NUM_NODES > NUM_NODES )); then
-    echo "ACTOR_NUM_NODES cannot exceed NUM_NODES." >&2
-    exit 1
-  fi
-  if (( ACTOR_GPUS_PER_NODE > NUM_GPUS_PER_NODE )); then
-    echo "ACTOR_GPUS_PER_NODE cannot exceed NUM_GPUS_PER_NODE." >&2
-    exit 1
-  fi
-  if (( actor_total_gpus + ROLLOUT_GPUS_TOTAL > NUM_NODES * NUM_GPUS_PER_NODE )); then
-    echo "Actor GPUs plus rollout GPUs exceed the total cluster GPUs." >&2
-    exit 1
-  fi
-  if (( SWE_STEPS_PER_ROLLOUT <= 0 )); then
-    echo "SWE_STEPS_PER_ROLLOUT must be positive." >&2
-    exit 1
-  fi
-  if (( rollout_product % SWE_STEPS_PER_ROLLOUT != 0 )); then
-    echo "rollout_batch_size * n_samples_per_prompt must be divisible by num_steps_per_rollout." >&2
-    exit 1
-  fi
-  if (( tensor_model_parallel_size <= 0 || expert_model_parallel_size <= 0 )); then
-    echo "TP and EP must be positive." >&2
-    exit 1
-  fi
-  if (( num_query_groups % tensor_model_parallel_size != 0 )); then
-    echo "Qwen3.5-35B-A3B num_query_groups=2 must be divisible by TP." >&2
-    exit 1
-  fi
-  if (( hidden_size % tensor_model_parallel_size != 0 )); then
-    echo "Qwen3.5-35B-A3B hidden_size=2048 must be divisible by TP." >&2
-    exit 1
-  fi
-  if (( num_experts % expert_model_parallel_size != 0 )); then
-    echo "Qwen3.5-35B-A3B num_experts=256 must be divisible by EP." >&2
-    exit 1
-  fi
-  if (( actor_total_gpus % tensor_model_parallel_size != 0 )); then
-    echo "Actor GPU topology must be divisible by TP." >&2
-    exit 1
-  fi
-  if (( actor_total_gpus % SWE_CONTEXT_PARALLEL_SIZE != 0 )); then
-    echo "Actor GPU topology must be divisible by CP." >&2
-    exit 1
-  fi
-  if (( actor_total_gpus % (tensor_model_parallel_size * SWE_CONTEXT_PARALLEL_SIZE) != 0 )); then
-    echo "Actor GPU topology must be divisible by TP*CP." >&2
-    exit 1
-  fi
-  if (( actor_total_gpus % expert_model_parallel_size != 0 )); then
-    echo "Actor GPU topology must be divisible by EP." >&2
-    exit 1
-  fi
-  if (( ROLLOUT_GPUS_TOTAL % SWE_ROLLOUT_NUM_GPUS_PER_ENGINE != 0 )); then
-    echo "ROLLOUT_GPUS_TOTAL must be divisible by SWE_ROLLOUT_NUM_GPUS_PER_ENGINE." >&2
-    exit 1
-  fi
-  if (( SWE_ROLLOUT_NUM_GPUS_PER_ENGINE % SWE_SGLANG_EP_SIZE != 0 )); then
-    echo "SWE_ROLLOUT_NUM_GPUS_PER_ENGINE must be divisible by SWE_SGLANG_EP_SIZE." >&2
-    exit 1
-  fi
-  if (( num_experts % SWE_SGLANG_EP_SIZE != 0 )); then
-    echo "Qwen3.5-35B-A3B num_experts=256 must be divisible by SGLang EP." >&2
-    exit 1
-  fi
+  (( NUM_NODES > 0 && NUM_GPUS_PER_NODE > 0 )) || die "NUM_NODES and NUM_GPUS_PER_NODE must be positive."
+  (( ACTOR_NUM_NODES > 0 && ACTOR_GPUS_PER_NODE > 0 )) || die "ACTOR_NUM_NODES and ACTOR_GPUS_PER_NODE must be positive."
+  (( ROLLOUT_GPUS_TOTAL > 0 )) || die "ROLLOUT_GPUS_TOTAL must be positive."
+  (( ACTOR_NUM_NODES <= NUM_NODES )) || die "ACTOR_NUM_NODES cannot exceed NUM_NODES."
+  (( ACTOR_GPUS_PER_NODE <= NUM_GPUS_PER_NODE )) || die "ACTOR_GPUS_PER_NODE cannot exceed NUM_GPUS_PER_NODE."
+  (( actor_total_gpus + ROLLOUT_GPUS_TOTAL <= NUM_NODES * NUM_GPUS_PER_NODE )) || die "Actor GPUs plus rollout GPUs exceed the total cluster GPUs."
+  (( SWE_STEPS_PER_ROLLOUT > 0 )) || die "SWE_STEPS_PER_ROLLOUT must be positive."
+  (( rollout_product % SWE_STEPS_PER_ROLLOUT == 0 )) || die "rollout_batch_size * n_samples_per_prompt must be divisible by num_steps_per_rollout."
+  (( tensor_model_parallel_size > 0 && expert_model_parallel_size > 0 )) || die "TP and EP must be positive."
+  (( num_query_groups % tensor_model_parallel_size == 0 )) || die "Qwen3.5-35B-A3B num_query_groups=2 must be divisible by TP."
+  (( hidden_size % tensor_model_parallel_size == 0 )) || die "Qwen3.5-35B-A3B hidden_size=2048 must be divisible by TP."
+  (( num_experts % expert_model_parallel_size == 0 )) || die "Qwen3.5-35B-A3B num_experts=256 must be divisible by EP."
+  (( actor_total_gpus % tensor_model_parallel_size == 0 )) || die "Actor GPU topology must be divisible by TP."
+  (( actor_total_gpus % SWE_CONTEXT_PARALLEL_SIZE == 0 )) || die "Actor GPU topology must be divisible by CP."
+  (( actor_total_gpus % (tensor_model_parallel_size * SWE_CONTEXT_PARALLEL_SIZE) == 0 )) || die "Actor GPU topology must be divisible by TP*CP."
+  (( actor_total_gpus % expert_model_parallel_size == 0 )) || die "Actor GPU topology must be divisible by EP."
+  (( ROLLOUT_GPUS_TOTAL % SWE_ROLLOUT_NUM_GPUS_PER_ENGINE == 0 )) || die "ROLLOUT_GPUS_TOTAL must be divisible by SWE_ROLLOUT_NUM_GPUS_PER_ENGINE."
+  (( SWE_ROLLOUT_NUM_GPUS_PER_ENGINE % SWE_SGLANG_EP_SIZE == 0 )) || die "SWE_ROLLOUT_NUM_GPUS_PER_ENGINE must be divisible by SWE_SGLANG_EP_SIZE."
+  (( num_experts % SWE_SGLANG_EP_SIZE == 0 )) || die "Qwen3.5-35B-A3B num_experts=256 must be divisible by SGLang EP."
+
   if [[ -z "${SWE_GLOBAL_BATCH_SIZE}" ]]; then
     SWE_GLOBAL_BATCH_SIZE=$(( rollout_product / SWE_STEPS_PER_ROLLOUT ))
   fi
   local expected_global_batch_size=$(( rollout_product / SWE_STEPS_PER_ROLLOUT ))
-  if (( SWE_GLOBAL_BATCH_SIZE != expected_global_batch_size )); then
-    echo "SWE_GLOBAL_BATCH_SIZE=${SWE_GLOBAL_BATCH_SIZE} is inconsistent; expected ${expected_global_batch_size}." >&2
-    exit 1
-  fi
+  (( SWE_GLOBAL_BATCH_SIZE == expected_global_batch_size )) \
+    || die "SWE_GLOBAL_BATCH_SIZE=${SWE_GLOBAL_BATCH_SIZE} is inconsistent; expected ${expected_global_batch_size}."
+
   local actor_data_parallel_size=$(( actor_total_gpus / (tensor_model_parallel_size * SWE_CONTEXT_PARALLEL_SIZE) ))
-  if (( actor_data_parallel_size <= 0 || SWE_GLOBAL_BATCH_SIZE % actor_data_parallel_size != 0 )); then
-    echo "SWE_GLOBAL_BATCH_SIZE (${SWE_GLOBAL_BATCH_SIZE}) must be divisible by actor DP (${actor_data_parallel_size})." >&2
-    exit 1
-  fi
-  if (( ROCK_SWE_GROUP_CONCURRENCY <= 0 || ROCK_SWE_GROUP_CONCURRENCY > SWE_ROLLOUT_BATCH_SIZE )); then
-    echo "ROCK_SWE_GROUP_CONCURRENCY must be in (0, SWE_ROLLOUT_BATCH_SIZE]." >&2
-    exit 1
-  fi
-  if (( ROCK_SWE_SAMPLE_CONCURRENCY < SWE_SAMPLES_PER_PROMPT )); then
-    echo "ROCK_SWE_SAMPLE_CONCURRENCY must be >= SWE_SAMPLES_PER_PROMPT." >&2
-    exit 1
-  fi
+  (( actor_data_parallel_size > 0 && SWE_GLOBAL_BATCH_SIZE % actor_data_parallel_size == 0 )) \
+    || die "SWE_GLOBAL_BATCH_SIZE (${SWE_GLOBAL_BATCH_SIZE}) must be divisible by actor DP (${actor_data_parallel_size})."
+  (( ROCK_SWE_GROUP_CONCURRENCY > 0 && ROCK_SWE_GROUP_CONCURRENCY <= SWE_ROLLOUT_BATCH_SIZE )) \
+    || die "ROCK_SWE_GROUP_CONCURRENCY must be in (0, SWE_ROLLOUT_BATCH_SIZE]."
+  (( ROCK_SWE_SAMPLE_CONCURRENCY >= SWE_SAMPLES_PER_PROMPT )) \
+    || die "ROCK_SWE_SAMPLE_CONCURRENCY must be >= SWE_SAMPLES_PER_PROMPT."
 }
 
 submit_ray_job() {
@@ -502,7 +444,41 @@ submit_ray_job() {
     OFFLOAD_ARGS+=(--use-precision-aware-optimizer)
   fi
 
-  RUNTIME_ENV_JSON="{\"env_vars\":{\"PYTHONPATH\":\"${INSPIRE_SANDBOX_SITE_PACKAGES}:${WORKSPACE_ROOT}:${AVALANCHE_ROOT}:${MEGATRON_PATH}:${SLIME_DIR}:${ROCK_ROOT}\",\"CUDA_DEVICE_MAX_CONNECTIONS\":\"1\",\"NCCL_NVLS_ENABLE\":\"${has_nvlink}\",\"MASTER_ADDR\":\"${MASTER_ADDR}\",\"WANDB_API_KEY\":\"${WANDB_API_KEY:-}\",\"WANDB_BASE_URL\":\"${WANDB_BASE_URL:-}\",\"SBX_API_KEY\":\"${SBX_API_KEY:-}\",\"SBX_API_URL\":\"${SBX_API_URL:-}\",\"INSP_GITHUB_TOKEN\":\"${INSP_GITHUB_TOKEN:-}\",\"ROCK_SWE_SANDBOX_BACKEND\":\"${ROCK_SWE_SANDBOX_BACKEND}\",\"ROCK_SWE_AGENT_CONFIG_PATH\":\"${ROCK_SWE_AGENT_CONFIG_PATH:-${SCRIPT_DIR}/rock_agent_iflow_swe_train.yaml}\",\"ROCK_SWE_ROCK_ROOT\":\"${ROCK_SWE_ROCK_ROOT:-${ROCK_ROOT}}\",\"ROCK_SWE_MAX_TURNS\":\"${ROCK_SWE_MAX_TURNS:-80}\",\"ROCK_SWE_AGENT_FINISH_TIMEOUT\":\"${ROCK_SWE_AGENT_FINISH_TIMEOUT:-10800}\",\"ROCK_SWE_WAIT_TIMEOUT\":\"${ROCK_SWE_WAIT_TIMEOUT:-10800}\",\"ROCK_SWE_WAIT_INTERVAL\":\"${ROCK_SWE_WAIT_INTERVAL:-500}\",\"ROCK_SWE_KEEP_CONTAINERS\":\"${ROCK_SWE_KEEP_CONTAINERS:-0}\",\"ROCK_SWE_SANDBOX_START_RETRY_TIMES\":\"${ROCK_SWE_SANDBOX_START_RETRY_TIMES:-10}\",\"ROCK_SWE_SANDBOX_START_RETRY_INTERVAL\":\"${ROCK_SWE_SANDBOX_START_RETRY_INTERVAL:-5}\",\"ROCK_SWE_AGENT_INSTALL_RETRY_TIMES\":\"${ROCK_SWE_AGENT_INSTALL_RETRY_TIMES:-10}\",\"ROCK_SWE_AGENT_INSTALL_RETRY_INTERVAL\":\"${ROCK_SWE_AGENT_INSTALL_RETRY_INTERVAL:-1}\",\"ROCK_INSPIRE_TEMPLATE_WAIT_SECONDS\":\"${ROCK_INSPIRE_TEMPLATE_WAIT_SECONDS:-1800}\",\"ROCK_INSPIRE_SANDBOX_TIMEOUT\":\"${ROCK_INSPIRE_SANDBOX_TIMEOUT:-3600}\",\"ROCK_INSPIRE_SPEC\":\"${ROCK_INSPIRE_SPEC}\",\"ROCK_SWE_LOG_ROOT\":\"${ROCK_SWE_LOG_ROOT}\",\"ROCK_SWE_GROUP_CONCURRENCY\":\"${ROCK_SWE_GROUP_CONCURRENCY}\",\"ROCK_SWE_SAMPLE_CONCURRENCY\":\"${ROCK_SWE_SAMPLE_CONCURRENCY}\",\"ROCK_SWE_OVER_SAMPLING_BATCH_SIZE\":\"${ROCK_SWE_OVER_SAMPLING_BATCH_SIZE}\"}}"
+  RUNTIME_ENV_JSON=$(cat <<EOF
+{
+  "env_vars": {
+    "PYTHONPATH": "${INSPIRE_SANDBOX_SITE_PACKAGES}:${WORKSPACE_ROOT}:${AVALANCHE_ROOT}:${MEGATRON_PATH}:${SLIME_DIR}:${ROCK_ROOT}",
+    "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+    "NCCL_NVLS_ENABLE": "${has_nvlink}",
+    "MASTER_ADDR": "${MASTER_ADDR}",
+    "WANDB_API_KEY": "${WANDB_API_KEY:-}",
+    "WANDB_BASE_URL": "${WANDB_BASE_URL:-}",
+    "SBX_API_KEY": "${SBX_API_KEY:-}",
+    "SBX_API_URL": "${SBX_API_URL:-}",
+    "INSP_GITHUB_TOKEN": "${INSP_GITHUB_TOKEN:-}",
+    "ROCK_SWE_SANDBOX_BACKEND": "${ROCK_SWE_SANDBOX_BACKEND}",
+    "ROCK_SWE_AGENT_CONFIG_PATH": "${ROCK_SWE_AGENT_CONFIG_PATH:-${SCRIPT_DIR}/rock_agent_iflow_swe_train.yaml}",
+    "ROCK_SWE_ROCK_ROOT": "${ROCK_SWE_ROCK_ROOT:-${ROCK_ROOT}}",
+    "ROCK_SWE_MAX_TURNS": "${ROCK_SWE_MAX_TURNS:-80}",
+    "ROCK_SWE_AGENT_FINISH_TIMEOUT": "${ROCK_SWE_AGENT_FINISH_TIMEOUT:-10800}",
+    "ROCK_SWE_WAIT_TIMEOUT": "${ROCK_SWE_WAIT_TIMEOUT:-10800}",
+    "ROCK_SWE_WAIT_INTERVAL": "${ROCK_SWE_WAIT_INTERVAL:-500}",
+    "ROCK_SWE_KEEP_CONTAINERS": "${ROCK_SWE_KEEP_CONTAINERS:-0}",
+    "ROCK_SWE_SANDBOX_START_RETRY_TIMES": "${ROCK_SWE_SANDBOX_START_RETRY_TIMES:-10}",
+    "ROCK_SWE_SANDBOX_START_RETRY_INTERVAL": "${ROCK_SWE_SANDBOX_START_RETRY_INTERVAL:-5}",
+    "ROCK_SWE_AGENT_INSTALL_RETRY_TIMES": "${ROCK_SWE_AGENT_INSTALL_RETRY_TIMES:-10}",
+    "ROCK_SWE_AGENT_INSTALL_RETRY_INTERVAL": "${ROCK_SWE_AGENT_INSTALL_RETRY_INTERVAL:-1}",
+    "ROCK_INSPIRE_TEMPLATE_WAIT_SECONDS": "${ROCK_INSPIRE_TEMPLATE_WAIT_SECONDS:-1800}",
+    "ROCK_INSPIRE_SANDBOX_TIMEOUT": "${ROCK_INSPIRE_SANDBOX_TIMEOUT:-3600}",
+    "ROCK_INSPIRE_SPEC": "${ROCK_INSPIRE_SPEC}",
+    "ROCK_SWE_LOG_ROOT": "${ROCK_SWE_LOG_ROOT}",
+    "ROCK_SWE_GROUP_CONCURRENCY": "${ROCK_SWE_GROUP_CONCURRENCY}",
+    "ROCK_SWE_SAMPLE_CONCURRENCY": "${ROCK_SWE_SAMPLE_CONCURRENCY}",
+    "ROCK_SWE_OVER_SAMPLING_BATCH_SIZE": "${ROCK_SWE_OVER_SAMPLING_BATCH_SIZE}"
+  }
+}
+EOF
+)
 
   JOB_CMD=(
     python3 "${SLIME_DIR}/train_async.py"

@@ -43,9 +43,12 @@ from .sandbox_factory import (
     start_sandbox_with_retry,
 )
 
-DEFAULT_SLIME_REPO_ROOT_BOOTSTRAP = str(Path(__file__).resolve().parents[2])
-if DEFAULT_SLIME_REPO_ROOT_BOOTSTRAP not in sys.path:
-    sys.path.insert(0, DEFAULT_SLIME_REPO_ROOT_BOOTSTRAP)
+# slime is in this script's grandparent dir; the rollout entrypoint
+# (``--rollout-function-path examples.sandbox_env.rock_swe_rollout.generate_rollout``)
+# requires it on sys.path before the ``from slime.*`` imports below.
+_SLIME_REPO_ROOT = str(Path(__file__).resolve().parents[2])
+if _SLIME_REPO_ROOT not in sys.path:
+    sys.path.insert(0, _SLIME_REPO_ROOT)
 
 from slime.rollout.base_types import RolloutFnTrainOutput
 from slime.rollout.sglang_rollout import GenerateState, get_model_url
@@ -57,7 +60,6 @@ from slime.utils.types import Sample
 
 DEFAULT_SESSION_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 DEFAULT_ROCK_ROOT = str(Path(__file__).resolve().parents[4] / "ROCK")
-DEFAULT_SLIME_REPO_ROOT = str(Path(__file__).resolve().parents[2])
 DEFAULT_AGENT_CONFIG_PATH = str(
     Path(__file__).resolve().with_name("rock_agent_qwen_rebench_template.yaml")
 )
@@ -69,12 +71,6 @@ def ensure_rock_root_on_path(rock_root: str) -> None:
     rock_root_path = str(Path(rock_root).resolve())
     if rock_root_path not in sys.path:
         sys.path.insert(0, rock_root_path)
-
-
-def ensure_workspace_root_on_path(workspace_root: str) -> None:
-    workspace_root_path = str(Path(workspace_root).resolve())
-    if workspace_root_path not in sys.path:
-        sys.path.insert(0, workspace_root_path)
 
 
 def _env_or_arg(args, env_name: str, arg_name: str, default: Any) -> Any:
