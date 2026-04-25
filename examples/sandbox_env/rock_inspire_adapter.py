@@ -1084,10 +1084,10 @@ class InspireRockSandbox:
 
         ``inspire_sandbox.commands.run(envs=...)`` is additive on top of the
         user's default login env, so passing the entire login env back would
-        duplicate it.  We capture the login env, supplement it with
-        ``image_runtime_env`` for keys the login shell did not already define,
-        and return only that delta.  Callers that want to add their own vars
-        merge them on top of this result.
+        duplicate it.  We capture the login env and return just the
+        ``image_runtime_env`` keys that the login shell did not already define
+        (and that aren't volatile shell vars).  Callers add their own vars on
+        top of this result.
         """
         target_user = user or DEFAULT_SANDBOX_USER
         try:
@@ -1095,12 +1095,11 @@ class InspireRockSandbox:
         except Exception as exc:
             self._append_live_log(f"[command.env_capture_skip] user={target_user} error={exc!r}")
             login_env = {}
-        additive_env = self._supplement_with_image_runtime_env(login_env)
-        extra: dict[str, str] = {}
-        for key, value in additive_env.items():
-            if key not in login_env or login_env.get(key) in {None, ""}:
-                extra[key] = value
-        return extra
+        return {
+            key: value
+            for key, value in self._image_runtime_env.items()
+            if key not in VOLATILE_ENV_KEYS and login_env.get(key) in (None, "")
+        }
 
     def _best_effort_sandbox_ip(self) -> str | None:
         """Return the sandbox's own primary IP by running hostname -I inside it."""
