@@ -21,9 +21,9 @@ def execute():
     critic_config.write(
         """
 critic:
-  name: default
-  overrides:
-    lr: 1e-5
+  - name: default
+    overrides:
+      lr: 1e-5
 """
     )
     critic_config.close()
