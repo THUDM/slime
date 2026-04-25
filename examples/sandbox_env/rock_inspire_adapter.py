@@ -1075,7 +1075,7 @@ class InspireRockSandbox:
         for key, value in self._image_runtime_env.items():
             if key in VOLATILE_ENV_KEYS:
                 continue
-            if key not in merged or merged.get(key) in {None, ""}:
+            if merged.get(key) in (None, ""):
                 merged[key] = value
         return merged
 
