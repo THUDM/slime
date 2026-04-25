@@ -1080,7 +1080,15 @@ class InspireRockSandbox:
         return merged
 
     async def _build_command_env(self, *, user: str | None) -> dict[str, str]:
-        """Return only the env supplement missing from the target user's login env."""
+        """Return only the *supplement* the caller needs to layer on top of login env.
+
+        ``inspire_sandbox.commands.run(envs=...)`` is additive on top of the
+        user's default login env, so passing the entire login env back would
+        duplicate it.  We capture the login env, supplement it with
+        ``image_runtime_env`` for keys the login shell did not already define,
+        and return only that delta.  Callers that want to add their own vars
+        merge them on top of this result.
+        """
         target_user = user or DEFAULT_SANDBOX_USER
         try:
             login_env = await self._capture_login_env(target_user)
