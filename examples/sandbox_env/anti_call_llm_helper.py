@@ -135,14 +135,16 @@ try:
                 )
             if index > last_response_index:
                 append_response(payload, index)
+
+        # Try to satisfy the read from a request that's already on disk; otherwise
+        # tail-poll the log starting from the response we just appended.
+        result = None
         last_request_line = read_last_line_with_marker(REQUEST_START_MARKER)
         if last_request_line is not None:
             request_json, meta = parse_request_line(last_request_line)
             if meta.get("index") == index + 1:
                 result = request_json
-            else:
-                result = wait_for_request(index + 1, start_pos)
-        else:
+        if result is None:
             result = wait_for_request(index + 1, start_pos)
     if result is None:
         raise RuntimeError(f"anti_call_llm returned None at index={index}")

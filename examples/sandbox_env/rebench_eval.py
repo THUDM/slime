@@ -147,8 +147,8 @@ def evaluate_rebench_result(
     parser = _get_rebench_log_parser(parser_name)
     parsed = parser(eval_output or "")
     normalized = {normalize_rebench_test_name(name): status for name, status in parsed.items()}
-    passed_actual = sorted(name for name, status in normalized.items() if status == "PASSED")
-    failed_actual = sorted(name for name, status in normalized.items() if status in {"FAILED", "ERROR"})
+    passed = {name for name, status in normalized.items() if status == "PASSED"}
+    failed = {name for name, status in normalized.items() if status in {"FAILED", "ERROR"}}
 
     fail_to_pass_expected = {
         normalize_rebench_test_name(name) for name in (metadata.get("FAIL_TO_PASS") or [])
@@ -156,10 +156,9 @@ def evaluate_rebench_result(
     pass_to_pass_expected = {
         normalize_rebench_test_name(name) for name in (metadata.get("PASS_TO_PASS") or [])
     }
-    passed_actual_set = set(passed_actual)
 
-    from_fail_to_pass = sorted(passed_actual_set.intersection(fail_to_pass_expected))
-    failed_from_pass_to_pass = sorted(pass_to_pass_expected.difference(passed_actual_set))
+    from_fail_to_pass = passed & fail_to_pass_expected
+    failed_from_pass_to_pass = pass_to_pass_expected - passed
 
     fail_ratio = 1.0 if not fail_to_pass_expected else len(from_fail_to_pass) / len(fail_to_pass_expected)
     pass_ratio = 1.0 if not pass_to_pass_expected else (
@@ -167,7 +166,7 @@ def evaluate_rebench_result(
     )
     dense_reward = (fail_ratio + pass_ratio) / 2.0
     solved = (
-        (eval_exit_code == 0)
+        eval_exit_code == 0
         and len(from_fail_to_pass) == len(fail_to_pass_expected)
         and not failed_from_pass_to_pass
     )
@@ -177,10 +176,10 @@ def evaluate_rebench_result(
         "dense_reward": dense_reward,
         "solved": solved,
         "parser_name": parser_name,
-        "passed_actual": passed_actual,
-        "failed_actual": failed_actual,
-        "from_fail_to_pass": from_fail_to_pass,
-        "failed_from_pass_to_pass": failed_from_pass_to_pass,
+        "passed_actual": sorted(passed),
+        "failed_actual": sorted(failed),
+        "from_fail_to_pass": sorted(from_fail_to_pass),
+        "failed_from_pass_to_pass": sorted(failed_from_pass_to_pass),
         "fail_to_pass_expected": sorted(fail_to_pass_expected),
         "pass_to_pass_expected": sorted(pass_to_pass_expected),
     }

@@ -74,14 +74,11 @@ def ensure_rock_root_on_path(rock_root: str) -> None:
 
 
 def _env_or_arg(args, env_name: str, arg_name: str, default: Any) -> Any:
-    if arg_name not in (None, ""):
+    if arg_name:
         value = getattr(args, arg_name, None)
         if value not in (None, ""):
             return value
-    env_value = os.environ.get(env_name, None)
-    if env_value in (None, ""):
-        return default
-    return env_value
+    return os.environ.get(env_name) or default
 
 
 def _get_rollout_state(args) -> dict[str, Any]:
