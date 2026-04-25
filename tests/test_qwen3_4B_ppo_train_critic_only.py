@@ -23,7 +23,14 @@ def prepare():
 
 def execute():
     critic_config = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
-    critic_config.write("critic:\n  - name: default\n    overrides:\n      lr: 1e-5\n")
+    critic_config.write(
+        """
+critic:
+  - name: default
+    overrides:
+      lr: 1e-5
+"""
+    )
     critic_config.close()
 
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/{MODEL_NAME}_torch_dist "
@@ -106,6 +113,7 @@ def execute():
         "--attention-backend flash "
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 8 "
+        "--colocate "
     )
 
     train_args = (

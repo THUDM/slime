@@ -9,6 +9,7 @@ This patch wraps the non-GB10 gencode blocks in `if (NOT SGL_KERNEL_GB10_ONLY)`
 and adds a GB10-only branch that emits just sm_120a + sm_121a. Default OFF
 preserves upstream behavior.
 """
+
 import sys
 from pathlib import Path
 
