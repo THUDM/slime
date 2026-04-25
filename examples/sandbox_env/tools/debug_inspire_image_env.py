@@ -8,6 +8,9 @@ import sys
 import time
 from pathlib import Path
 
+# Make sandbox_env siblings importable when this script lives under tools/.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from _inspire_sandbox_bootstrap import bootstrap_inspire_sandbox_path
 
 bootstrap_inspire_sandbox_path()

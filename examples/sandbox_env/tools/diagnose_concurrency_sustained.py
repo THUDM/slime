@@ -29,6 +29,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from functools import lru_cache
+from pathlib import Path
+
+# Make sandbox_env siblings (rock_inspire_adapter, ...) importable when this
+# script lives under tools/.  Required for the lazy ``from rock_inspire_adapter
+# import ...`` deeper in the file.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 SITE_PACKAGES = os.environ.get(
     "INSPIRE_SANDBOX_SITE_PACKAGES",
