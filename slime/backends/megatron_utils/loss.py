@@ -884,7 +884,15 @@ def policy_loss_function(
         log_probs = torch.cat(log_probs, dim=0)
         ppo_kl = old_log_probs - log_probs
 
-    pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
+    pg_loss, pg_clipfrac, policy_loss_aux = compute_policy_loss(
+        ppo_kl=ppo_kl,
+        advantages=advantages,
+        eps_clip=args.eps_clip,
+        eps_clip_high=args.eps_clip_high,
+        policy_loss_type=args.policy_loss_type,
+        sapo_tau_pos=args.sapo_tau_pos,
+        sapo_tau_neg=args.sapo_tau_neg,
+    )
 
     if args.use_opsm:
         pg_loss = pg_loss * opsm_mask
@@ -944,6 +952,7 @@ def policy_loss_function(
 
     pg_loss = pg_loss_reducer(pg_loss)
     pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
+    policy_loss_aux = {key: sum_of_sample_mean(value) for key, value in policy_loss_aux.items()}
     ppo_kl = sum_of_sample_mean(ppo_kl)
 
     # entropy loss
@@ -988,6 +997,9 @@ def policy_loss_function(
 
     if train_rollout_logprob_abs_diff is not None:
         reported_loss["train_rollout_logprob_abs_diff"] = train_rollout_logprob_abs_diff.clone().detach()
+
+    for key, value in policy_loss_aux.items():
+        reported_loss[key] = value.clone().detach()
 
     if args.use_kl_loss:
         reported_loss["kl_loss"] = kl_loss.clone().detach()
