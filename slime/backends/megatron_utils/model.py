@@ -29,6 +29,7 @@ from .checkpoint import load_checkpoint, save_checkpoint
 from .data import DataIterator, get_batch
 from .loss import loss_function
 from .model_provider import get_model_provider_func, wrap_model_provider_with_freeze
+from .peft import log_lora_parameter_summary, lora_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,8 @@ def setup_model_and_optimizer(
     model = get_model(
         wrap_model_provider_with_freeze(get_model_provider_func(args, role), args), ModelType.encoder_or_decoder
     )
+    if role == "actor" and lora_enabled(args):
+        log_lora_parameter_summary(model)
 
     # Optimizer
     kwargs = {}

@@ -42,6 +42,7 @@ slime is the RL-framework behind GLM-4.7, GLM-4.6 and GLM-4.5. Apart from models
    :caption: Advanced Features
 
    advanced/on-policy-distillation.md
+   advanced/lora-grpo.md
    advanced/speculative-decoding.md
    advanced/low-precision.md
    advanced/reproducibility.md
