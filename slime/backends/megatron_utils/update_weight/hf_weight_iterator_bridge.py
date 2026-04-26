@@ -1,6 +1,10 @@
 import dataclasses
 
-
+from slime.backends.megatron_utils.peft import (
+    lora_enabled,
+    merge_lora_weights_for_export,
+    restore_model_from_named_tensors,
+)
 from slime.utils import megatron_bridge_utils
 from slime.utils.misc import chunk_named_params_by_size
 
@@ -48,6 +52,10 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
         _patch_bridge_expert_cache_to_cpu()
 
     def get_hf_weight_chunks(self, megatron_local_weights):
+        if lora_enabled(self.args):
+            yield from self._get_lora_hf_weight_chunks(megatron_local_weights)
+            return
+
         # TODO support quantization (e.g. modify megatron-bridge to provide megatron param name)
         renamed_megatron_local_weights = {strip_param_name_prefix(k): v for k, v in megatron_local_weights.items()}
         with megatron_bridge_utils.patch_megatron_model(self.model):
@@ -76,6 +84,43 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
             yield from chunk_named_params_by_size(
                 _streaming_quantized(), chunk_size=self.args.update_weight_buffer_size
             )
+
+    def _get_lora_hf_weight_chunks(self, megatron_local_weights):
+        # The normal bridge path substitutes per-task weights from TensorBackuper.
+        # For LoRA we need the effective actor (base + adapter deltas), so restore
+        # the actor backup into the live model, temporarily merge adapters, export
+        # through Megatron-Bridge, and always restore the unmerged actor backup.
+        restore_model_from_named_tensors(self.model, megatron_local_weights)
+        try:
+            merge_lora_weights_for_export(self.model)
+            with megatron_bridge_utils.patch_megatron_model(self.model):
+                conversion_tasks = self._bridge.get_conversion_tasks(self.model)
+                named_weights = self._bridge.export_hf_weights(
+                    self.model, cpu=False, conversion_tasks=conversion_tasks
+                )
+
+                def _streaming_quantized():
+                    for hf_param_name, weight, megatron_param_name in named_weights:
+                        processed_weight = postprocess_hf_param(
+                            args=self.args,
+                            megatron_param_name=megatron_param_name,
+                            hf_param_name=hf_param_name,
+                            param=weight,
+                        )
+                        converted_named_params = [(hf_param_name, processed_weight)]
+                        quantized_batch = quantize_params(
+                            args=self.args,
+                            megatron_name=megatron_param_name,
+                            converted_named_params=converted_named_params,
+                            quantization_config=self.quantization_config,
+                        )
+                        yield from quantized_batch
+
+                yield from chunk_named_params_by_size(
+                    _streaming_quantized(), chunk_size=self.args.update_weight_buffer_size
+                )
+        finally:
+            restore_model_from_named_tensors(self.model, megatron_local_weights)
 
 
 def _process_conversion_tasks(vanilla_conversion_tasks, new_weight_dict):

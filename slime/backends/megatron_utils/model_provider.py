@@ -19,6 +19,8 @@ from megatron.training.arguments import core_transformer_config_from_args
 
 from slime.utils.misc import load_function
 
+from .peft import maybe_apply_lora
+
 
 # Adapt from https://github.com/volcengine/verl/blob/c3b20575d2bc815fcccd84bddb4c0401fc4b632b/verl/models/llama/megatron/layers/parallel_linear.py#L82
 class LinearForLastLayer(torch.nn.Linear):
@@ -116,7 +118,11 @@ def get_model_provider_func(
 
             return _critic_provide
 
-        return provider.provide
+        def _actor_provide(pre_process=True, post_process=True, vp_stage=None):
+            model = provider.provide(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
+            return maybe_apply_lora(model, args, role)
+
+        return _actor_provide
 
     def model_provider(pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None) -> GPTModel:
         """Builds the model.

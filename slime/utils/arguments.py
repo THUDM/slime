@@ -149,6 +149,43 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--enable-lora",
+                action="store_true",
+                default=False,
+                help=(
+                    "Enable Megatron-Bridge LoRA for GRPO actor training. "
+                    "The initial supported path requires bridge mode and colocated rollout."
+                ),
+            )
+            parser.add_argument(
+                "--lora-target-modules",
+                type=str,
+                nargs="*",
+                default=None,
+                help=(
+                    "Megatron-Bridge LoRA target modules. If unset, use Megatron-Bridge defaults "
+                    "(typically linear_qkv, linear_proj, linear_fc1, linear_fc2)."
+                ),
+            )
+            parser.add_argument(
+                "--lora-rank",
+                type=int,
+                default=16,
+                help="LoRA adapter rank passed to Megatron-Bridge LoRA(dim=...).",
+            )
+            parser.add_argument(
+                "--lora-alpha",
+                type=int,
+                default=32,
+                help="LoRA alpha passed to Megatron-Bridge LoRA(alpha=...).",
+            )
+            parser.add_argument(
+                "--lora-dropout",
+                type=float,
+                default=0.0,
+                help="LoRA dropout passed to Megatron-Bridge LoRA(dropout=...).",
+            )
+            parser.add_argument(
                 "--recompute-loss-function",
                 action="store_true",
                 help="Whether to disable recompute loss function to save memory during training.",
@@ -1704,6 +1741,10 @@ def slime_validate_args(args):
     # Critic always uses the same GPU count as actor.
     args.critic_num_gpus_per_node = args.actor_num_gpus_per_node
     args.critic_num_nodes = args.actor_num_nodes
+
+    from slime.backends.megatron_utils.peft import validate_lora_args
+
+    validate_lora_args(args)
 
     if args.offload:
         args.offload_train = True
