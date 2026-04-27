@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Apr 24, 2026"/>
+    <meta name="docbuild:last-update" content="Apr 27, 2026"/>
   </head>
   
   
@@ -179,6 +179,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../advanced/fault-tolerance.html">Fault Tolerance</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD Disaggregation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/sglang-config.html">SGLang Config: Advanced Engine Deployment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/megatron-config.html">Megatron Config: Role-Based Training Overrides</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Usage</span></p>
@@ -446,6 +447,7 @@
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#ppo-algorithm">PPO Algorithm</a></li>
 </ul>
 </li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#advanced-megatron-configuration-megatron-config-path">Advanced Megatron Configuration (–megatron-config-path)</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rollout-function">Custom Rollout Function</a></li>
@@ -720,6 +722,24 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 </ul>
 </section>
 </section>
+<section id="advanced-megatron-configuration-megatron-config-path">
+<h3>Advanced Megatron Configuration (–megatron-config-path)<a class="headerlink" href="#advanced-megatron-configuration-megatron-config-path" title="Link to this heading">#</a></h3>
+<p>For PPO workflows, you can use <code class="docutils literal notranslate"><span class="pre">--megatron-config-path</span></code> with a YAML file to override Megatron arguments separately for actor and critic. Common use cases include setting a different critic <code class="docutils literal notranslate"><span class="pre">lr</span></code>, or giving actor and critic different <code class="docutils literal notranslate"><span class="pre">load</span></code> / <code class="docutils literal notranslate"><span class="pre">save</span></code> paths.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">megatron</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
+<span class="w">    </span><span class="nt">role</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">overrides</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">lr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1e-6</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
+<span class="w">    </span><span class="nt">role</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">critic</span>
+<span class="w">    </span><span class="nt">overrides</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">lr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1e-5</span>
+</pre></div>
+</div>
+<blockquote>
+<div><p><strong>Note:</strong> This configuration currently only supports PPO, and in current PPO the actor and critic must use the same Megatron parallel topology. The recommended pattern is to keep parallelism-related settings in the shared CLI arguments and put only role-specific differences in YAML. See <a class="reference internal" href="../advanced/megatron-config.html"><span class="std std-doc">Megatron Config: Role-Based Training Overrides</span></a> for details.</p>
+</div></blockquote>
+</section>
 </section>
 <section id="custom-rollout-function">
 <h2>Custom Rollout Function<a class="headerlink" href="#custom-rollout-function" title="Link to this heading">#</a></h2>
@@ -944,6 +964,7 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#ppo-algorithm">PPO Algorithm</a></li>
 </ul>
 </li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#advanced-megatron-configuration-megatron-config-path">Advanced Megatron Configuration (–megatron-config-path)</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rollout-function">Custom Rollout Function</a></li>
@@ -991,7 +1012,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Apr 24, 2026.
+  Last updated on Apr 27, 2026.
   <br/>
 </p>
   </div>

@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 04 月 24 日"/>
+    <meta name="docbuild:last-update" content="2026 年 04 月 27 日"/>
   </head>
   
   
@@ -179,6 +179,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../advanced/fault-tolerance.html">容灾</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD 分离</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/sglang-config.html">SGLang Config：高级引擎部署</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
@@ -442,6 +443,7 @@
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#ppo">PPO 算法</a></li>
 </ul>
 </li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-megatron-config-path">高级 Megatron 配置（--megatron-config-path）</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout">自定义 rollout 函数</a></li>
@@ -717,6 +719,24 @@
 </ul>
 </section>
 </section>
+<section id="megatron-megatron-config-path">
+<h3>高级 Megatron 配置（--megatron-config-path）<a class="headerlink" href="#megatron-megatron-config-path" title="链接到此标题。">#</a></h3>
+<p>对于 PPO 场景，可以使用 <code class="docutils literal notranslate"><span class="pre">--megatron-config-path</span></code> 指定一个 YAML 文件，对 actor / critic 分别覆盖 Megatron 参数。常见用途包括给 critic 设置不同的 <code class="docutils literal notranslate"><span class="pre">lr</span></code>，或者分别指定 <code class="docutils literal notranslate"><span class="pre">load</span></code> / <code class="docutils literal notranslate"><span class="pre">save</span></code> 等路径。</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">megatron</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
+<span class="w">    </span><span class="nt">role</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">overrides</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">lr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1e-6</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
+<span class="w">    </span><span class="nt">role</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">critic</span>
+<span class="w">    </span><span class="nt">overrides</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">lr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1e-5</span>
+</pre></div>
+</div>
+<blockquote>
+<div><p><strong>注意：</strong> 当前该配置只支持 PPO；并且当前 PPO 下 actor 和 critic 的 Megatron 并行配置必须保持一致。建议把并行相关参数继续写在公共 CLI 中，只把角色差异项放在 YAML 里。详见 <a class="reference internal" href="../advanced/megatron-config.html"><span class="std std-doc">Megatron Config：按角色覆盖训练参数</span></a>。</p>
+</div></blockquote>
+</section>
 </section>
 <section id="rollout">
 <h2>自定义 rollout 函数<a class="headerlink" href="#rollout" title="链接到此标题。">#</a></h2>
@@ -941,6 +961,7 @@
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#ppo">PPO 算法</a></li>
 </ul>
 </li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-megatron-config-path">高级 Megatron 配置（--megatron-config-path）</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout">自定义 rollout 函数</a></li>
@@ -988,7 +1009,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 04 月 24 日.
+  最后更新于 2026 年 04 月 27 日.
   <br/>
 </p>
   </div>
