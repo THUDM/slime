@@ -752,13 +752,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Number of initial rollout steps that train critic only; set >= num_rollout for critic-only runs",
             )
             parser.add_argument(
-                "--critic-config-path",
+                "--megatron-config-path",
                 type=str,
                 default=None,
                 help=(
-                    "Path to a structured YAML config for the critic model. The file should use "
-                    "a top-level 'critic' key, similar to --sglang-config style, and contain "
-                    "exactly one critic entry with Megatron/slime overrides."
+                    "Path to a structured YAML config for Megatron roles. The file should use "
+                    "a top-level 'megatron' key with role-tagged entries; the critic runtime will "
+                    "select exactly one entry with role=critic. Legacy 'critic' configs are still accepted."
                 ),
             )
 
@@ -1464,69 +1464,85 @@ def parse_args(add_custom_arguments=None):
     return args
 
 
-def parse_critic_args(actor_args, critic_config_path):
-    """Parse critic-specific arguments from a YAML config, inheriting from actor_args.
-
-    Creates an independent copy of actor_args and overrides with values from the YAML config.
-    This enables the critic to have a completely different parallel configuration (TP/PP/CP/EP),
-    micro batch size, global batch size, checkpoint path, etc.
-
-    Args:
-        actor_args: The parsed actor arguments namespace to inherit from.
-        critic_config_path: Path to a YAML file containing critic-specific overrides.
-
-    Returns:
-        A new Namespace with critic-specific configuration.
-    """
-    critic_args = copy.deepcopy(actor_args)
-
-    with open(critic_config_path) as f:
-        raw_config = yaml.safe_load(f) or {}
-
-    if "critic" in raw_config:
-        critic_entries = raw_config["critic"]
-        assert isinstance(critic_entries, list) and len(critic_entries) == 1, (
-            "critic config must contain exactly one entry under 'critic', e.g. "
-            "critic: [{name: default, overrides: {...}}]"
-        )
-        critic_entry = critic_entries[0]
-        critic_config = critic_entry.get("overrides") or critic_entry.get("args") or {}
-    else:
-        logger.warning(
-            "Legacy flat critic config detected. Please wrap overrides under "
-            "'critic: [{name: default, overrides: {...}}]'."
-        )
-        critic_config = raw_config
-
+def _apply_megatron_role_overrides(base_args, overrides, role):
+    role_args = copy.deepcopy(base_args)
     ignored_keys = {"num_nodes", "num_gpus_per_node"}
 
     # Apply overrides from the YAML config.
-    # Unspecified keys inherit from actor_args via deepcopy.
-    for key, value in critic_config.items():
+    # Unspecified keys inherit from base_args via deepcopy.
+    for key, value in overrides.items():
         if key in ignored_keys:
-            logger.info(f"Ignoring critic config key '{key}'; critic GPU allocation always follows actor.")
+            logger.info(f"Ignoring {role} config key '{key}'; GPU allocation always follows CLI args.")
             continue
-        if not hasattr(critic_args, key):
-            logger.warning(f"Critic config key '{key}' is not a known argument, setting it anyway.")
+        if not hasattr(role_args, key):
+            logger.warning(f"{role.capitalize()} config key '{key}' is not a known argument, setting it anyway.")
         else:
             # YAML safe_load doesn't parse scientific notation (e.g. 1e-5) as float.
             # Coerce the value to match the type of the existing attribute.
-            original = getattr(critic_args, key)
+            original = getattr(role_args, key)
             if original is not None and isinstance(value, str) and isinstance(original, (int, float)):
                 try:
                     value = type(original)(value)
                 except (ValueError, TypeError):
                     pass
-        setattr(critic_args, key, value)
+        setattr(role_args, key, value)
 
-    # Critic-specific: disable features that only apply to actors
-    critic_args.kl_coef = 0
-    critic_args.use_opd = False
-    critic_args.custom_advantage_function_path = None
-    critic_args.untie_embeddings_and_output_weights = True
-    logger.info(f"Parsed critic config from {critic_config_path}: overrides = {list(critic_config.keys())}")
+    if role == "critic":
+        # Critic-specific: disable features that only apply to actors.
+        role_args.kl_coef = 0
+        role_args.use_opd = False
+        role_args.custom_advantage_function_path = None
+        role_args.untie_embeddings_and_output_weights = True
 
-    return critic_args
+    return role_args
+
+
+def parse_megatron_role_args(base_args, megatron_config_path, role):
+    """Parse role-specific arguments from a unified Megatron YAML config.
+
+    The config must contain a top-level ``megatron`` list with per-role entries.
+    Missing roles inherit the base args unchanged.
+    """
+    assert role in {"actor", "critic"}, f"Unsupported Megatron config role: {role}"
+
+    with open(megatron_config_path) as f:
+        raw_config = yaml.safe_load(f) or {}
+
+    assert "megatron" in raw_config, (
+        "megatron config must contain a top-level 'megatron' list, e.g. "
+        "megatron: [{name: default, role: actor, overrides: {...}}]"
+    )
+
+    overrides = {}
+    megatron_entries = raw_config["megatron"]
+    assert isinstance(megatron_entries, list), (
+        "megatron config 'megatron' field must be a list, e.g. "
+        "megatron: [{name: default, role: actor, overrides: {...}}]"
+    )
+    role_entries = [entry for entry in megatron_entries if entry.get("role") == role]
+    assert len(role_entries) <= 1, (
+        f"megatron config must contain at most one entry with role={role}, e.g. "
+        f"megatron: [{{name: default, role: {role}, overrides: {{...}}}}]"
+    )
+    if role_entries:
+        role_entry = role_entries[0]
+        overrides = role_entry.get("overrides") or role_entry.get("args") or {}
+    else:
+        logger.info(
+            f"No megatron config entry with role={role} found in {megatron_config_path}; using inherited args."
+        )
+
+    role_args = _apply_megatron_role_overrides(base_args, overrides, role)
+    logger.info(
+        f"Parsed megatron config for role={role} from {megatron_config_path}: overrides = {list(overrides.keys())}"
+    )
+
+    return role_args
+
+
+def parse_critic_args(actor_args, megatron_config_path):
+    """Backward-compatible wrapper for critic-specific Megatron role parsing."""
+    return parse_megatron_role_args(actor_args, megatron_config_path, role="critic")
 
 
 def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
