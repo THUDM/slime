@@ -1500,55 +1500,36 @@ def _apply_megatron_role_overrides(base_args, overrides, role):
 def parse_megatron_role_args(base_args, megatron_config_path, role):
     """Parse role-specific arguments from a unified Megatron YAML config.
 
-    The config may contain a top-level ``megatron`` list with per-role entries.
-    Missing roles inherit the base args unchanged. Legacy critic-only formats are
-    still accepted for role="critic".
+    The config must contain a top-level ``megatron`` list with per-role entries.
+    Missing roles inherit the base args unchanged.
     """
     assert role in {"actor", "critic"}, f"Unsupported Megatron config role: {role}"
 
     with open(megatron_config_path) as f:
         raw_config = yaml.safe_load(f) or {}
 
+    assert "megatron" in raw_config, (
+        "megatron config must contain a top-level 'megatron' list, e.g. "
+        "megatron: [{name: default, role: actor, overrides: {...}}]"
+    )
+
     overrides = {}
-    if "megatron" in raw_config:
-        megatron_entries = raw_config["megatron"]
-        assert isinstance(megatron_entries, list), (
-            "megatron config 'megatron' field must be a list, e.g. "
-            "megatron: [{name: default, role: actor, overrides: {...}}]"
-        )
-        role_entries = [entry for entry in megatron_entries if entry.get("role") == role]
-        assert len(role_entries) <= 1, (
-            f"megatron config must contain at most one entry with role={role}, e.g. "
-            f"megatron: [{{name: default, role: {role}, overrides: {{...}}}}]"
-        )
-        if role_entries:
-            role_entry = role_entries[0]
-            overrides = role_entry.get("overrides") or role_entry.get("args") or {}
-        else:
-            logger.info(
-                f"No megatron config entry with role={role} found in {megatron_config_path}; using inherited args."
-            )
-    elif role == "critic" and "critic" in raw_config:
-        critic_entries = raw_config["critic"]
-        assert isinstance(critic_entries, list) and len(critic_entries) == 1, (
-            "critic config must contain exactly one entry under 'critic', e.g. "
-            "critic: [{name: default, overrides: {...}}]"
-        )
-        critic_entry = critic_entries[0]
-        overrides = critic_entry.get("overrides") or critic_entry.get("args") or {}
-        logger.warning(
-            "Legacy role-grouped critic config detected. Please migrate to "
-            "'megatron: [{name: default, role: critic, overrides: {...}}]'."
-        )
-    elif role == "critic" and raw_config:
-        logger.warning(
-            "Legacy flat critic config detected. Please wrap overrides under "
-            "'megatron: [{name: default, role: critic, overrides: {...}}]'."
-        )
-        overrides = raw_config
-    elif raw_config:
+    megatron_entries = raw_config["megatron"]
+    assert isinstance(megatron_entries, list), (
+        "megatron config 'megatron' field must be a list, e.g. "
+        "megatron: [{name: default, role: actor, overrides: {...}}]"
+    )
+    role_entries = [entry for entry in megatron_entries if entry.get("role") == role]
+    assert len(role_entries) <= 1, (
+        f"megatron config must contain at most one entry with role={role}, e.g. "
+        f"megatron: [{{name: default, role: {role}, overrides: {{...}}}}]"
+    )
+    if role_entries:
+        role_entry = role_entries[0]
+        overrides = role_entry.get("overrides") or role_entry.get("args") or {}
+    else:
         logger.info(
-            f"Legacy critic-only megatron config provided for role={role}; using inherited args without overrides."
+            f"No megatron config entry with role={role} found in {megatron_config_path}; using inherited args."
         )
 
     role_args = _apply_megatron_role_overrides(base_args, overrides, role)

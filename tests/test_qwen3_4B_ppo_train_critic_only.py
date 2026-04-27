@@ -26,14 +26,14 @@ def execute():
     megatron_config.write(
         """
 megatron:
-- name: default
+  - name: default
     role: critic
     overrides:
-        lr: 1e-5
-- name: default
+      lr: 1e-5
+  - name: default
     role: actor
     overrides:
-        lr: 1e-6
+      lr: 1e-6
 """
     )
     megatron_config.close()

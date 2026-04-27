@@ -33,10 +33,10 @@ def execute():
     megatron_config.write(
         """
 megatron:
-- name: default
+  - name: default
     role: critic
     overrides:
-        lr: 1e-5
+      lr: 1e-5
 """
     )
     megatron_config.close()

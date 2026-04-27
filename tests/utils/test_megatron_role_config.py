@@ -3,6 +3,7 @@
 import tempfile
 from argparse import Namespace
 
+import pytest
 import yaml
 
 
@@ -88,6 +89,23 @@ class TestMegatronRoleConfig:
         assert critic_args.kl_coef == 0
         assert critic_args.use_opd is False
 
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"critic": [{"name": "default", "overrides": {"lr": "1e-5"}}]},
+            {"lr": "1e-5"},
+            {},
+        ],
+    )
+    def test_requires_top_level_megatron_key(self, config):
+        from slime.utils.arguments import parse_megatron_role_args
+
+        path = _write_yaml(config)
+        args = _base_args()
+
+        with pytest.raises(AssertionError, match="top-level 'megatron' list"):
+            parse_megatron_role_args(args, path, role="critic")
+
     def test_create_training_models_applies_actor_override_without_critic(self, monkeypatch):
         from slime.ray import placement_group as placement_group_module
 
@@ -121,8 +139,8 @@ class TestMegatronRoleConfig:
             def set_rollout_manager(self, rollout_manager):
                 self.rollout_manager = rollout_manager
 
-        def fake_allocate_train_group(model_args, num_nodes, num_gpus_per_node, pg, role="actor"):
-            return DummyModel(model_args)
+        def fake_allocate_train_group(args, num_nodes, num_gpus_per_node, pg, role="actor"):
+            return DummyModel(args)
 
         monkeypatch.setattr(placement_group_module, "allocate_train_group", fake_allocate_train_group)
         monkeypatch.setattr(placement_group_module.ray, "get", lambda value: value)
