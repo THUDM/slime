@@ -189,6 +189,8 @@ local/
 .idea
 *.iml
 
+exp/
+
 glm/
 _examples_synced/
 .env
