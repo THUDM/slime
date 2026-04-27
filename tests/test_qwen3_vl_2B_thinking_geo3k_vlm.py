@@ -33,7 +33,7 @@ def execute():
         "--rollout-batch-size 1 "
         "--n-samples-per-prompt 2 "
         "--rollout-max-response-len 128 "
-        "--rollout-temperature 0.0 "
+        "--rollout-temperature 1.0 "
         "--global-batch-size 2 "
     )
 
