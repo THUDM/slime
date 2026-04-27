@@ -120,8 +120,14 @@ def allocate_train_group(args, num_nodes, num_gpus_per_node, pg, role="actor"):
 
 
 def create_training_models(args, pgs, rollout_manager):
+    actor_args = args
+    if args.megatron_config_path is not None:
+        from slime.utils.arguments import parse_megatron_role_args
+
+        actor_args = parse_megatron_role_args(args, args.megatron_config_path, role="actor")
+
     actor_model = allocate_train_group(
-        args=args,
+        args=actor_args,
         num_nodes=args.actor_num_nodes,
         num_gpus_per_node=args.actor_num_gpus_per_node,
         pg=pgs["actor"],
@@ -129,9 +135,13 @@ def create_training_models(args, pgs, rollout_manager):
 
     critic_model = None
     if args.use_critic:
-        from slime.utils.arguments import parse_critic_args
+        from slime.utils.arguments import parse_megatron_role_args
 
-        critic_args = parse_critic_args(args, args.critic_config_path) if args.critic_config_path is not None else args
+        critic_args = (
+            parse_megatron_role_args(args, args.megatron_config_path, role="critic")
+            if args.megatron_config_path is not None
+            else args
+        )
         critic_model = allocate_train_group(
             args=critic_args,
             num_nodes=args.critic_num_nodes,
@@ -143,10 +153,10 @@ def create_training_models(args, pgs, rollout_manager):
 
     actor_start_rollout_ids = ray.get(
         actor_model.async_init(
-            args,
+            actor_args,
             role="actor",
-            with_ref=args.kl_coef != 0 or args.use_kl_loss,
-            with_opd_teacher=args.use_opd and args.opd_type == "megatron",
+            with_ref=actor_args.kl_coef != 0 or actor_args.use_kl_loss,
+            with_opd_teacher=actor_args.use_opd and actor_args.opd_type == "megatron",
         )
     )
     # TODO how to decide rollout start id when critic is involved? For now we just require user to specify it via args.

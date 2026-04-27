@@ -29,9 +29,17 @@ def get_megatron_model_type(model_name: str) -> str:
 
 
 def execute():
-    critic_config = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
-    critic_config.write("lr: 1e-5\n")
-    critic_config.close()
+    megatron_config = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
+    megatron_config.write(
+        """
+megatron:
+- name: default
+    role: critic
+    overrides:
+        lr: 1e-5
+"""
+    )
+    megatron_config.close()
 
     ckpt_args = f"--hf-checkpoint /path/to/model/checkpoints/{MODEL_NAME} "
 
@@ -138,7 +146,7 @@ def execute():
         exit()
 
     train_args = (
-        f"--critic-config-path {critic_config.name} "
+        f"--megatron-config-path {megatron_config.name} "
         f"{ckpt_args} "
         f"{rollout_args} "
         f"{optimizer_args} "

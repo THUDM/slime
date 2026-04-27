@@ -22,9 +22,21 @@ def prepare():
 
 
 def execute():
-    critic_config = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
-    critic_config.write("critic:\n  - name: default\n    overrides:\n      lr: 1e-5\n")
-    critic_config.close()
+    megatron_config = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
+    megatron_config.write(
+        """
+megatron:
+  - name: default
+    role: critic
+    overrides:
+      lr: 1e-5
+  - name: default
+    role: actor
+    overrides:
+      lr: 1e-6
+"""
+    )
+    megatron_config.close()
 
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/{MODEL_NAME}_torch_dist "
 
@@ -111,7 +123,7 @@ def execute():
     )
 
     train_args = (
-        f"--critic-config-path {critic_config.name} "
+        f"--megatron-config-path {megatron_config.name} "
         f"{ckpt_args} "
         f"{rollout_args} "
         f"{optimizer_args} "
