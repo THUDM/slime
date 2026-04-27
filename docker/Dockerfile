@@ -4,7 +4,7 @@ FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 # ======================================== Arguments =============================================
 
 ARG PATCH_VERSION=latest
-ARG MEGATRON_COMMIT=3714d81d418c9f1bca4594fc35f9e8289f652862
+ARG MEGATRON_COMMIT=1dcf0dafa884ad52ffb243625717a3471643e087
 
 ARG ENABLE_CUDA_13=0
 
