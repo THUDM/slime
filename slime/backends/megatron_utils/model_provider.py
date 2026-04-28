@@ -54,7 +54,7 @@ class LinearForLastLayer(torch.nn.Linear):
         return logits, None
 
 
-def get_model_provider_func(
+def _get_model_provider_func(
     args: argparse.Namespace,
     role: Literal["actor", "critic"] = "actor",
 ):
@@ -239,18 +239,30 @@ def get_model_provider_func(
 
 
 def wrap_model_provider_with_freeze(original_provider, args):
-    def wrapped_provider(pre_process=True, post_process=True, vp_stage=None):
+    def wrapped_provider(
+        pre_process=True,
+        post_process=True,
+        **kwargs,
+    ):
         sig = inspect.signature(original_provider)
-        if "vp_stage" in sig.parameters:
-            model = original_provider(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
-        else:
-            model = original_provider(pre_process=pre_process, post_process=post_process)
+        provider_kwargs = {
+            "pre_process": pre_process,
+            "post_process": post_process,
+        }
+        for key in ["vp_stage", "config", "pg_collection"]:
+            if key in sig.parameters:
+                provider_kwargs[key] = kwargs.get(key, None)
 
+        model = original_provider(**provider_kwargs)
         freeze_model_params(model, args)
 
         return model
 
     return wrapped_provider
+
+
+def get_model_provider_func(args, role="actor"):
+    return wrap_model_provider_with_freeze(_get_model_provider_func(args, role), args)
 
 
 def freeze_model_params(model: GPTModel, args: argparse.Namespace):

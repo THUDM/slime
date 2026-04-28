@@ -306,6 +306,21 @@ index 1fd5dcfae..75e1072d5 100644
              ctx.v_dim,
              nheads,
              batch_size,
+diff --git a/megatron/core/inference/contexts/dynamic_context.py b/megatron/core/inference/contexts/dynamic_context.py
+index 5dc2d5030..2b241c86d 100644
+--- a/megatron/core/inference/contexts/dynamic_context.py
++++ b/megatron/core/inference/contexts/dynamic_context.py
+@@ -61,8 +61,8 @@ except ImportError:
+ try:
+     from torch_memory_saver import torch_memory_saver
+ 
+-    torch_memory_saver.hook_mode = "torch"
+-    HAVE_TORCH_MEMORY_SAVER = True
++    # torch_memory_saver.hook_mode = "torch"
++    HAVE_TORCH_MEMORY_SAVER = False
+ except ImportError:
+     HAVE_TORCH_MEMORY_SAVER = False
+ 
 diff --git a/megatron/core/models/common/embeddings/rotary_pos_embedding.py b/megatron/core/models/common/embeddings/rotary_pos_embedding.py
 index 05a7e8f60..881cfbcaa 100644
 --- a/megatron/core/models/common/embeddings/rotary_pos_embedding.py
@@ -759,7 +774,7 @@ index 12c248684..227e95862 100644
              # discard the output of the pre-mlp layernorm and register the recompute
              # as a gradient hook of mlp_output_with_bias[0]
 diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
-index 1af066a82..b607237d3 100644
+index 1af066a82..8c7acadb6 100644
 --- a/megatron/training/arguments.py
 +++ b/megatron/training/arguments.py
 @@ -1388,6 +1388,9 @@ def core_transformer_config_from_args(args, config_class=None):
@@ -772,16 +787,12 @@ index 1af066a82..b607237d3 100644
      # handle quantization config
      # NOTE: Kitchen arguments are only added to the namespace when
      # Kitchen library is available.
-@@ -1701,6 +1704,12 @@ def _add_network_size_args(parser):
+@@ -1701,6 +1704,8 @@ def _add_network_size_args(parser):
      group.add_argument('--make-vocab-size-divisible-by', type=int, default=128,
                         help='Pad the vocab size to be divisible by this value.'
                         'This is added for computational efficieny reasons.')
 +    group.add_argument('--use-gated-attention', action='store_true',
 +                       help='If set, use gated attention as in Qwen3Next')
-+    group.add_argument('--post-self-attn-layernorm', action='store_true',
-+                       help='If set, use post self attention layernorm.')
-+    group.add_argument('--post-mlp-layernorm', action='store_true',
-+                       help='If set, use post MLP layernorm.')
      group.add_argument('--openai-gelu', action='store_true',
                         help='Use OpenAIs GeLU implementation. This option'
                         'should not be used unless for backward compatibility'
