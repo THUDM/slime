@@ -64,7 +64,8 @@ RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
   fi
 
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install -r /tmp/requirements.txt
+RUN pip install --ignore-installed PyJWT && \
+    pip install -r /tmp/requirements.txt
 
 # Temporarily install another sgl-kernel version for GB300 without rebuilding the whole image
 RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
