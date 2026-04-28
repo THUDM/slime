@@ -266,7 +266,7 @@ def get_model_provider_func(args, role="actor"):
 
 
 def freeze_model_params(model: GPTModel, args: argparse.Namespace):
-    if args.only_train_params_name_list:
+    if getattr(args, "only_train_params_name_list", None):
         for name, param in model.named_parameters():
             param.requires_grad = False
             for pattern in args.only_train_params_name_list:
@@ -274,7 +274,7 @@ def freeze_model_params(model: GPTModel, args: argparse.Namespace):
                     param.requires_grad = True
                     break
 
-    if args.freeze_params_name_list:
+    if getattr(args, "freeze_params_name_list", None):
         for name, param in model.named_parameters():
             for pattern in args.freeze_params_name_list:
                 if re.search(pattern, name):
