@@ -6,6 +6,7 @@ import multiprocessing
 import os
 import random
 import socket
+import weakref
 
 import httpx
 
@@ -145,6 +146,7 @@ def terminate_process(process: multiprocessing.Process, timeout: float = 1.0) ->
 
 
 _http_client: httpx.AsyncClient | None = None
+_http_client_loop_ref: weakref.ref | None = None
 _client_concurrency: int = 0
 
 # Optional Ray-based distributed POST dispatch
@@ -199,23 +201,68 @@ async def _post(client, url, payload, max_retries=60, headers=None):
 
 
 def init_http_client(args):
-    """Initialize HTTP client and optionally enable distributed POST via Ray."""
-    global _http_client, _client_concurrency, _distributed_post_enabled
+    """Record HTTP-client concurrency and optionally enable distributed POST.
+
+    The actual ``httpx.AsyncClient`` is built lazily per event loop by
+    ``_get_http_client`` on first use, so Ray actors that hop loops get a
+    fresh client bound to the active loop.
+    """
+    global _client_concurrency, _distributed_post_enabled
     if not args.rollout_num_gpus:
         return
 
     _client_concurrency = args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
-    if _http_client is None:
-        _http_client = httpx.AsyncClient(
-            limits=httpx.Limits(max_connections=_client_concurrency),
-            timeout=httpx.Timeout(None),
-            trust_env=False,  # internal SGLang comm only — never route through system proxy
+    if _client_concurrency <= 0:
+        # Not fatal (we fall back to 1 in _get_http_client) but almost
+        # certainly a configuration bug; surface it in logs rather than
+        # silently throttling every rollout to 1 in-flight request.
+        logger.warning(
+            "_client_concurrency computed as %d from sglang_server_concurrency=%s, "
+            "rollout_num_gpus=%s, rollout_num_gpus_per_engine=%s; check your config.",
+            _client_concurrency,
+            args.sglang_server_concurrency,
+            args.rollout_num_gpus,
+            args.rollout_num_gpus_per_engine,
         )
 
-    # Optionally initialize distributed POST via Ray without changing interfaces
     if args.use_distributed_post:
         _init_ray_distributed_post(args)
         _distributed_post_enabled = True
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    """Get or (re)create the HTTP client for the current event loop.
+
+    ``httpx.AsyncClient`` binds its connection pool (and the internal
+    asyncio locks it uses) to the loop that created it. Ray actors can
+    serve calls on different loops across re-entries (e.g. rollout →
+    eval), so we detect a loop change and rebuild.
+
+    Old-client cleanup: we deliberately do *not* call ``aclose()`` on the
+    old client. It was bound to a loop that may already be dead; running
+    ``aclose()`` from a different loop races on the pool's internal
+    asyncio locks and can leave sockets half-closed. We drop the reference
+    and let GC close the underlying sockets when the client is collected
+    (httpx emits a ResourceWarning; expected). A socket leak across a
+    rare loop transition is cheaper than a partial-aclose data race.
+
+    Thread/concurrency safety: safe under asyncio because there is no
+    ``await`` between the loop-change check and the assignment to
+    ``_http_client``, so two concurrent callers on the same loop can't
+    both pass the check and race on construction. Any future refactor
+    that inserts an ``await`` here must add a per-loop lock.
+    """
+    global _http_client, _http_client_loop_ref
+    current_loop = asyncio.get_running_loop()
+    stored_loop = _http_client_loop_ref() if _http_client_loop_ref is not None else None
+    if _http_client is None or stored_loop is not current_loop:
+        _http_client = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=max(_client_concurrency, 1)),
+            timeout=httpx.Timeout(None),
+            trust_env=False,  # internal SGLang comm only — never route through system proxy
+        )
+        _http_client_loop_ref = weakref.ref(current_loop)
+    return _http_client
 
 
 def _init_ray_distributed_post(args):
@@ -292,11 +339,11 @@ async def post(url, payload, max_retries=60, headers=None):
             logger.info(f"[http_utils] Distributed POST failed, falling back to local: {e} (url={url})")
             # fall through to local
 
-    return await _post(_http_client, url, payload, max_retries, headers=headers)
+    return await _post(_get_http_client(), url, payload, max_retries, headers=headers)
 
 
 async def get(url):
-    response = await _http_client.get(url)
+    response = await _get_http_client().get(url)
     response.raise_for_status()
     content = await response.aread()
     output = json.loads(content)
