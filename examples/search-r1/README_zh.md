@@ -47,7 +47,7 @@ python $WORK_DIR/scripts/data_process/qa_search_test_merge.py \
 
 ```bash
 # hf checkpoint
-huggingface-cli download Qwen/Qwen2.5-3B --local-dir /root/Qwen2.5-3B
+hf download Qwen/Qwen2.5-3B --local-dir /root/Qwen2.5-3B
 
 # mcore checkpoint
 cd /root/slime
