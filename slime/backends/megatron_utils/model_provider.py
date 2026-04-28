@@ -54,7 +54,7 @@ class LinearForLastLayer(torch.nn.Linear):
         return logits, None
 
 
-def get_model_provider_func(
+def _get_model_provider_func(
     args: argparse.Namespace,
     role: Literal["actor", "critic"] = "actor",
 ):
@@ -239,13 +239,21 @@ def get_model_provider_func(
 
 
 def wrap_model_provider_with_freeze(original_provider, args):
-    def wrapped_provider(pre_process=True, post_process=True, vp_stage=None):
+    def wrapped_provider(
+        pre_process=True,
+        post_process=True,
+        **kwargs,
+    ):
         sig = inspect.signature(original_provider)
-        if "vp_stage" in sig.parameters:
-            model = original_provider(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
-        else:
-            model = original_provider(pre_process=pre_process, post_process=post_process)
+        provider_kwargs = {
+            "pre_process": pre_process,
+            "post_process": post_process,
+        }
+        for key in ["vp_stage", "config", "pg_collection"]:
+            if key in sig.parameters:
+                provider_kwargs[key] = kwargs.get(key, None)
 
+        model = original_provider(**provider_kwargs)
         freeze_model_params(model, args)
 
         return model
@@ -253,8 +261,12 @@ def wrap_model_provider_with_freeze(original_provider, args):
     return wrapped_provider
 
 
+def get_model_provider_func(args, role="actor"):
+    return wrap_model_provider_with_freeze(_get_model_provider_func(args, role), args)
+
+
 def freeze_model_params(model: GPTModel, args: argparse.Namespace):
-    if args.only_train_params_name_list:
+    if getattr(args, "only_train_params_name_list", None):
         for name, param in model.named_parameters():
             param.requires_grad = False
             for pattern in args.only_train_params_name_list:
@@ -262,7 +274,7 @@ def freeze_model_params(model: GPTModel, args: argparse.Namespace):
                     param.requires_grad = True
                     break
 
-    if args.freeze_params_name_list:
+    if getattr(args, "freeze_params_name_list", None):
         for name, param in model.named_parameters():
             for pattern in args.freeze_params_name_list:
                 if re.search(pattern, name):

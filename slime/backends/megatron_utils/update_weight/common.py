@@ -34,7 +34,9 @@ def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
     param_partitions = [torch.empty_like(param.data) for _ in range(tp_size)]
     dist.all_gather(param_partitions, param.data, group=tp_group)
     partition_dim = param.partition_dim
-    assert param.partition_stride == 1, "partition_stride != 1 is not supported"
+    assert param.partition_stride == 1 or (
+        param.partition_stride == 2 and "linear_fc1" in name
+    ), "partition_stride != 1 is not supported"
     # TODO: here we did an extra copy during concat, maybe merge this with convert_to_hf is better?
     # TODO: check only GLU is used.
     if "linear_fc1.weight" in name or "linear_fc1.bias" in name:
