@@ -24,7 +24,7 @@ MODEL_ARGS=(
    --kv-channels 256
    --num-layers 40
    --hidden-size 2048
-   --ffn-hidden-size 512
+   --ffn-hidden-size 5632
    --use-gated-attention
 
    --normalization RMSNorm

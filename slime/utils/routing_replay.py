@@ -17,6 +17,7 @@ class RoutingReplay:
         self.forward_index = 0
         self.backward_index = 0
         self.top_indices_list = []
+        self.skip_replay = False
         RoutingReplay.all_routing_replays.append(self)
 
     def record(self, top_indices):
@@ -58,7 +59,7 @@ def get_routing_replay_compute_topk(old_compute_topk):
     def compute_topk(scores, topk, num_groups=None, group_topk=None):
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             routing_replay_stage = os.environ["ROUTING_REPLAY_STAGE"]
-            if routing_replay_stage == "fallthrough":
+            if routing_replay_stage == "fallthrough" or getattr(ROUTING_REPLAY, "skip_replay", False):
                 return old_compute_topk(scores, topk, num_groups=num_groups, group_topk=group_topk)
             if routing_replay_stage == "record":
                 probs, top_indices = old_compute_topk(scores, topk, num_groups=num_groups, group_topk=group_topk)

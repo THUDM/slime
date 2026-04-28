@@ -270,6 +270,8 @@ class MegatronTrainRayActor(TrainRayActor):
 
         for iterator in data_iterator:
             iterator.reset()
+        for replay in RoutingReplay.all_routing_replays:
+            replay.skip_replay = False
 
         tp_rank = mpu.get_tensor_model_parallel_rank()
         tp_size = mpu.get_tensor_model_parallel_world_size()
@@ -328,7 +330,20 @@ class MegatronTrainRayActor(TrainRayActor):
                     layer_routed_experts = rollout_routed_experts[:, layer_id]
                     RoutingReplay.all_routing_replays[routing_replay_offset].record(layer_routed_experts)
                     routing_replay_offset += 1
-            assert routing_replay_offset == len(RoutingReplay.all_routing_replays)
+            if routing_replay_offset != len(RoutingReplay.all_routing_replays):
+                if self.args.enable_mtp_training and routing_replay_offset < len(RoutingReplay.all_routing_replays):
+                    num_skipped = len(RoutingReplay.all_routing_replays) - routing_replay_offset
+                    for replay in RoutingReplay.all_routing_replays[routing_replay_offset:]:
+                        replay.skip_replay = True
+                    logger.info(
+                        "Routing replay filled %d rollout routers, registered %d routers; "
+                        "skip replay for %d MTP-only routers.",
+                        routing_replay_offset,
+                        len(RoutingReplay.all_routing_replays),
+                        num_skipped,
+                    )
+                else:
+                    assert routing_replay_offset == len(RoutingReplay.all_routing_replays)
 
         del rollout_data["rollout_routed_experts"]
 
