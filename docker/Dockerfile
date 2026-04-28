@@ -1,4 +1,4 @@
-ARG SGLANG_IMAGE_TAG=v0.5.9
+ARG SGLANG_IMAGE_TAG=v0.5.10.post1
 FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
