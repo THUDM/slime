@@ -94,6 +94,7 @@ def _get_model_provider_func(
         provider.expert_tensor_parallel_size = args.expert_tensor_parallel_size
         provider.sequence_parallel = args.sequence_parallel
         provider.context_parallel_size = args.context_parallel_size
+        provider.attention_softmax_in_fp32 = args.attention_softmax_in_fp32
         provider.variable_seq_lengths = args.variable_seq_lengths
         if hasattr(args, "moe_token_dispatcher_type"):
             provider.moe_token_dispatcher_type = args.moe_token_dispatcher_type
@@ -101,6 +102,10 @@ def _get_model_provider_func(
             provider.num_layers_in_first_pipeline_stage = args.decoder_first_pipeline_num_layers
         if getattr(args, "decoder_last_pipeline_num_layers", None) is not None:
             provider.num_layers_in_last_pipeline_stage = args.decoder_last_pipeline_num_layers
+        if getattr(args, "moe_router_bias_update_rate", None) is not None:
+            provider.moe_router_bias_update_rate = args.moe_router_bias_update_rate
+        if getattr(args, "moe_aux_loss_coeff", None) is not None:
+            provider.moe_aux_loss_coeff = args.moe_aux_loss_coeff
         provider.finalize()
 
         if role == "critic":
