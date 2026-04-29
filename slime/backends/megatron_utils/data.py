@@ -21,6 +21,79 @@ from .cp_utils import get_sum_of_sample_mean, slice_with_cp
 
 logger = logging.getLogger(__name__)
 
+# One-shot latch to suppress repeated empty-microbatch warnings (see get_batch).
+_empty_microbatch_warned: bool = False
+
+
+def _fill_empty_microbatch_placeholder(batch: dict, keys, pad_token_id: int) -> list:
+    """Populate ``batch`` with a self-consistent 1-token placeholder sample
+    and return the new ``tokens`` list. Invoked by ``get_batch`` only when
+    the local DP rank has no real samples for this micro-batch.
+
+    Invariants after this function returns (matching the 1-token placeholder):
+      batch["tokens"]           == [pad_token_tensor]
+      batch["total_lengths"]    == [1]
+      batch["response_lengths"] == [0]
+      batch["loss_masks"]       == [zero-size int tensor]
+      batch["max_seq_lens"]     == [1]  (bshd-only, if requested)
+      every other list-valued key in ``keys`` has exactly one entry
+
+    The downstream effect of response_length=0 is that CP-chunk sizes are
+    0 on every CP rank, so per-sample log_probs / rollout_log_probs / etc.
+    contribute 0-size tensors and ``sum_of_sample_mean`` splits a 0-sized
+    slice with ``split_sizes=[0]``.
+
+    If a new rollout-schema field lands in ``keys`` without a corresponding
+    entry in the ``placeholder_for_key`` map below or matching the
+    per-token fp32 default, the post-fill invariant assertion fails here
+    — not 400 lines downstream inside ``torch.split``.
+    """
+    device = torch.cuda.current_device()
+    placeholder_for_key = {
+        "total_lengths": 1,
+        "response_lengths": 0,
+        "max_seq_lens": 1,
+        # length-0 mask; the post-padding step in get_batch aligns it
+        # with the size-1 placeholder token.
+        "loss_masks": torch.zeros(0, dtype=torch.int, device=device),
+        "multimodal_train_inputs": None,
+    }
+    # Per-token tensor-valued keys (log_probs, ref_log_probs, advantages,
+    # etc.) default to an empty fp32 tensor so torch.cat downstream works.
+    # New per-token fields of a different dtype must add themselves to
+    # placeholder_for_key instead of relying on this default.
+    per_token_default = torch.zeros(0, dtype=torch.float32, device=device)
+
+    placeholder = torch.tensor([pad_token_id], dtype=torch.long, device=device)
+    batch["tokens"] = [placeholder]
+    for key in keys:
+        if key == "tokens":
+            continue
+        v = batch.get(key)
+        if v is None:
+            continue
+        if isinstance(v, list) and len(v) == 0:
+            if key in placeholder_for_key:
+                batch[key] = [placeholder_for_key[key]]
+            else:
+                batch[key] = [per_token_default]
+
+    # Post-fill invariant: every list-valued key now has exactly one entry.
+    # If this fails, a new schema field was added to `keys` without a
+    # placeholder rule above.
+    for key in keys:
+        if key == "tokens":
+            continue
+        v = batch.get(key)
+        if isinstance(v, list):
+            assert len(v) == 1, (
+                f"empty-microbatch placeholder did not fill key={key!r}; "
+                f"got len(batch[{key!r}])={len(v)}, expected 1. Add a "
+                f"placeholder_for_key entry in _fill_empty_microbatch_placeholder."
+            )
+
+    return batch["tokens"]
+
 
 def get_batch(
     data_iterator: "DataIterator",
@@ -60,6 +133,37 @@ def get_batch(
     # use 0 as the pad token id should be fine?
     pad_token_id = 0
     pad_size = mpu.get_tensor_model_parallel_world_size() * pad_multiplier
+
+    # DP-imbalance guard: when DP ranks need different microbatch counts, the
+    # pipeline schedule loops for `max(num_mbs)` steps and ranks with surplus
+    # see empty micro-batches. Before, this raised a confusing
+    # ``torch.cat(): expected a non-empty list of Tensors``; replace with a
+    # self-consistent single-token placeholder so downstream operations
+    # (loss_mask align, CP slicing, per-sample log-prob extraction,
+    # sum_of_sample_mean split) all agree on 0 response tokens.
+    #
+    # Invariants of the placeholder:
+    #   tokens          = [pad]              (size 1 — prompt only)
+    #   total_lengths   = [1]
+    #   response_lengths= [0]
+    #   loss_masks      = [ [] ]             (0 response tokens → empty mask)
+    #   max_seq_lens    = [1]                (bshd-only, if requested)
+    # With response_length=0 the CP-chunk sizes are 0 on every CP rank, so
+    # the fake sample contributes 0-size tensors to per-sample log_probs /
+    # rollout_log_probs etc. `split_sizes=[0]` then splits a 0-sized slice.
+    if not tokens:
+        # Log once per rank — on an unbalanced multi-hour training run, every
+        # empty microbatch fires this path and per-instance logging would
+        # drown the logs.
+        global _empty_microbatch_warned
+        if not _empty_microbatch_warned:
+            logger.warning(
+                "get_batch: empty micro-batch (DP rank has fewer partitions "
+                "than the collective max); inserting 1-token placeholder. "
+                "Further occurrences on this rank will not be re-logged."
+            )
+            _empty_microbatch_warned = True
+        tokens = _fill_empty_microbatch_placeholder(batch, keys, pad_token_id)
 
     # for cp, we need all tokens to calculate logprob
     batch["unconcat_tokens"] = tokens

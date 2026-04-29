@@ -349,8 +349,36 @@ def forward_only(
             if args.use_dynamic_batch_size:
                 # TODO: This is ugly... Find a better way to make the data have the same order.
                 # TODO: move this out of the loop.
-                origin_values = [None] * len(values)
                 origin_indices = sum(data_iterator[0].micro_batch_indices, [])
+                # Size the output to the real sample count. When DP ranks need
+                # unequal microbatch counts, the all_reduce(MAX) + cap-aware
+                # partitioning can yield empty partitions, and our get_batch
+                # placeholder guard then produces extra "fake" forward outputs.
+                # Those trailing fakes must be dropped here; otherwise the
+                # result list ends with `None`s that crash downstream
+                # (e.g. compute_advantages_and_returns on log_probs).
+                #
+                # Invariant (enforced by the first-fit bin-packer in
+                # seqlen_balancing): real samples occupy origin_indices in
+                # [0, len(origin_indices)), so sizing by len(origin_indices)
+                # is correct and any placeholder outputs past that index
+                # are silently dropped. If the partitioner ever changes to
+                # interleave empties, this guard would silently drop real
+                # samples — assert the invariant locally.
+                if origin_indices:
+                    assert max(origin_indices) < len(origin_indices), (
+                        f"dynamic-batch reorder expects real samples at positions "
+                        f"[0, {len(origin_indices)}); got max(origin_indices)="
+                        f"{max(origin_indices)}. The seqlen partitioner changed."
+                    )
+                # And check we have *at least* as many forward outputs as real
+                # samples — fewer would silently drop real data.
+                assert len(values) >= len(origin_indices), (
+                    f"forward produced {len(values)} outputs for "
+                    f"{len(origin_indices)} real samples; real samples would be "
+                    f"dropped by the zip below."
+                )
+                origin_values = [None] * len(origin_indices)
                 for value, origin_index in zip(values, origin_indices, strict=False):
                     origin_values[origin_index] = value
                 values = origin_values
