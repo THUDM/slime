@@ -68,7 +68,8 @@ if [ ! -d "$BASE_DIR/slime" ]; then
   export SLIME_DIR=$BASE_DIR/slime
   pip install -e .
 else
-  export SLIME_DIR=$BASE_DIR/
+  export SLIME_DIR=$BASE_DIR/slime
+  cd $SLIME_DIR
   pip install -e .
 fi
 
