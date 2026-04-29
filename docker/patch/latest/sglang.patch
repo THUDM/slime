@@ -1794,6 +1794,19 @@ index 2f0074924d..1f991932c6 100644
                      if name not in params_dict:
                          continue
  
+diff --git a/python/sglang/srt/models/qwen3_moe.py b/python/sglang/srt/models/qwen3_moe.py
+index 912891b6a7..fd67a7b580 100644
+--- a/python/sglang/srt/models/qwen3_moe.py
++++ b/python/sglang/srt/models/qwen3_moe.py
+@@ -325,7 +325,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
+         topk_output = self.topk(hidden_states, router_logits)
+         final_hidden_states = self.experts(hidden_states, topk_output)
+ 
+-        if self.ep_size > 1 and not should_allreduce_fusion:
++        if self.ep_size > 1 and not should_allreduce_fusion and not use_reduce_scatter:
+             final_hidden_states = moe_expert_parallel_all_reduce(final_hidden_states)
+ 
+         if (
 diff --git a/python/sglang/srt/models/qwen3_vl.py b/python/sglang/srt/models/qwen3_vl.py
 index 7746b24459..57b65fe06f 100644
 --- a/python/sglang/srt/models/qwen3_vl.py
