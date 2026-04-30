@@ -68,15 +68,21 @@ class UpdateWeightFromDistributed:
 
         if self._is_pp_src_rank:
             if self._model_update_groups is not None:
-                disconnect_rollout_engines_from_distributed(
-                    self.args, self._group_name, self._model_update_groups, self.rollout_engines
-                )
+                self.disconnect_rollout_engines()
             self._model_update_groups = connect_rollout_engines_from_distributed(
                 self.args,
                 self._group_name,
                 rollout_engines,
                 engine_gpu_counts=engine_gpu_counts,
             )
+
+    def disconnect_rollout_engines(self) -> None:
+        if not getattr(self, "_is_pp_src_rank", False) or self._model_update_groups is None:
+            return
+        disconnect_rollout_engines_from_distributed(
+            self.args, self._group_name, self._model_update_groups, self.rollout_engines
+        )
+        self._model_update_groups = None
 
     @torch.no_grad()
     def update_weights(self) -> None:

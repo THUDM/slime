@@ -81,7 +81,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
                 torch_memory_saver.memory_margin_bytes = x
 
-        (self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id) = initialize_model_and_optimizer(
+        self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id = initialize_model_and_optimizer(
             args, role
         )
 
@@ -159,6 +159,13 @@ class MegatronTrainRayActor(TrainRayActor):
 
         clear_memory(clear_host_memory=True)
         print_memory("before offload model")
+        if (
+            self.role == "actor"
+            and self.args.use_critic
+            and not self.args.colocate
+            and hasattr(self.weight_updater, "disconnect_rollout_engines")
+        ):
+            self.weight_updater.disconnect_rollout_engines()
         destroy_process_groups()
 
         torch_memory_saver.pause()
@@ -549,10 +556,14 @@ class MegatronTrainRayActor(TrainRayActor):
             self.rollout_manager.get_updatable_engines_and_lock.remote()
         )
 
-        if self.args.offload_train:
+        reconnect_rollout_engines = self.args.offload_train and self.args.use_critic and not self.args.colocate
+
+        if reconnect_rollout_engines:
+            self.wake_up()
+        elif self.args.offload_train:
             reload_process_groups()
 
-        if num_new_engines > 0:
+        if num_new_engines > 0 or reconnect_rollout_engines:
             self.weight_updater.connect_rollout_engines(
                 rollout_engines,
                 rollout_engine_lock,
@@ -587,7 +598,9 @@ class MegatronTrainRayActor(TrainRayActor):
                 else:
                     self.weights_backuper.backup("old_actor")
 
-        if self.args.offload_train:
+        if reconnect_rollout_engines:
+            self.sleep()
+        elif self.args.offload_train:
             destroy_process_groups()
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:
