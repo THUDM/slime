@@ -4,9 +4,10 @@ import tempfile
 import slime.utils.external_utils.command_utils as U
 
 
-MODEL_NAME = "Qwen3-30B-A3B"
-MODEL_TYPE = "qwen3-30B-A3B"
+MODEL_NAME = "Qwen3.6-35B-A3B"
+MODEL_TYPE = "qwen3.5-35B-A3B"
 NUM_GPUS = 8
+TORCH_DIST_CKPT = f"/root/models/{MODEL_NAME}_torch_dist"
 
 
 def prepare():
@@ -18,12 +19,13 @@ def prepare():
         model_name=MODEL_NAME,
         megatron_model_type=MODEL_TYPE,
         num_gpus_per_node=NUM_GPUS,
+        dir_dst="/root/models",
     )
 
 
 def execute():
     debug_data_path = os.environ.get("DEBUG_ROLLOUT_DATA") or tempfile.mktemp(
-        prefix="qwen3_30b_a3b_pd_rollout_", suffix=".pt"
+        prefix="qwen3_6_35b_a3b_pd_rollout_", suffix=".pt"
     )
     try:
         os.remove(debug_data_path)
@@ -31,7 +33,7 @@ def execute():
         pass
     print(f"Saving debug rollout data to {debug_data_path}")
 
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} " f"--ref-load /root/{MODEL_NAME}_torch_dist "
+    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} " f"--ref-load {TORCH_DIST_CKPT} "
 
     rollout_args = (
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
@@ -57,7 +59,7 @@ def execute():
     )
 
     perf_args = (
-        "--tensor-model-parallel-size 4 "
+        "--tensor-model-parallel-size 2 "
         "--sequence-parallel "
         "--pipeline-model-parallel-size 1 "
         "--context-parallel-size 2 "
@@ -100,6 +102,12 @@ def execute():
         "--sglang-cuda-graph-bs 1 2 4 8 16 24 32 "
         "--sglang-max-running-requests 512 "
         "--prefill-num-servers 1 "
+        "--sglang-disaggregation-transfer-backend mooncake "
+        "--sglang-speculative-algorithm EAGLE "
+        "--sglang-speculative-num-steps 3 "
+        "--sglang-speculative-eagle-topk 1 "
+        "--sglang-speculative-num-draft-tokens 4 "
+        "--sglang-mamba-scheduler-strategy extra_buffer "
         "--sglang-enable-metrics "
     )
 
