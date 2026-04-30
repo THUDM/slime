@@ -5,14 +5,6 @@
 
 The environment setup, data, and checkpoint conversion are the same as for the Qwen3-4B model. You can refer to [Example: Qwen3-4B Model](qwen3-4B.md), replacing mentions of Qwen3-4B with GLM-4.7-Flash.
 
-### Prerequisites
-
-GLM-4.7-Flash requires **transformers ≥ 5.0** for the `Glm4MoeLiteForCausalLM` architecture. Install or upgrade:
-
-```bash
-pip install "transformers>=5.0"
-```
-
 ### Download Model
 
 ```bash

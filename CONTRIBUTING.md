@@ -6,7 +6,7 @@ Thank you for your interest in contributing to slime! We deeply appreciate every
 
 ## Collaboration Scope
 
-slime is the RL training infrastructure behind [GLM-4.5 through GLM-5](https://z.ai) and a large number of internal experiments at Z.ai. We open-sourced slime because we believe the training scenarios used internally cover the majority of cutting-edge RL algorithm requirements, and we hope to provide the community with a correct and efficient large-scale RL training infrastructure.
+slime is the RL training infrastructure behind [GLM-4.5 through GLM-5.1](https://z.ai) and a large number of internal experiments at Z.ai. We open-sourced slime because we believe the training scenarios used internally cover the majority of cutting-edge RL algorithm requirements, and we hope to provide the community with a correct and efficient large-scale RL training infrastructure.
 
 Our goal for open-source collaboration is focused on **bug fixes** and **general-purpose large-scale RL optimizations**. We have had several successful collaborations with the community in this area, including:
 
