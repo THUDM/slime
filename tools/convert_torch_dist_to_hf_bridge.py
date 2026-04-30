@@ -4,6 +4,8 @@ import os
 import megatron.bridge.training.model_load_save as _model_load_save_module
 from megatron.bridge import AutoBridge
 
+from slime.utils.megatron_bridge_utils import patch_auto_bridge_hf_config
+
 
 # Here we need to patch Megatron Bridge's `load_model_config`, since the checkpoint is saved
 # by Megatron and lack of provider information.
@@ -49,7 +51,7 @@ if __name__ == "__main__":
         raise ValueError(f"Output directory {args.output_dir} already exists. Use --force to overwrite it.")
 
     print(f"Loading config from {args.origin_hf_dir}")
-    bridge = AutoBridge.from_hf_pretrained(args.origin_hf_dir, trust_remote_code=True)
+    bridge = patch_auto_bridge_hf_config(AutoBridge.from_hf_pretrained(args.origin_hf_dir, trust_remote_code=True))
 
     # Use Bridge's provider so the correct model class is created (e.g., Qwen3VLModel
     # instead of GPTModel). This is needed because MLM checkpoints lack run_config.yaml.

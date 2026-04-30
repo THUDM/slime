@@ -31,28 +31,11 @@ jobs:
 
 
     runs-on: self-hosted
-    container:
-      image: slimerl/slime:latest
-      options: >
-        --gpus all
-        --ipc=host
-        --shm-size=16g
-        --ulimit memlock=-1
-        --ulimit stack=67108864
-        --memory=0
-        --memory-swap=0
-        -e http_proxy=$http_proxy
-        -e https_proxy=$https_proxy
-        -e HTTP_PROXY=$HTTP_PROXY
-        -e HTTPS_PROXY=$HTTPS_PROXY
-        -v /mnt/nvme0n1/slime_ci:/data/slime_ci
-        -v /mnt/nvme0n1/slime_ci/models:/root/models
-        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
 
     strategy:
       fail-fast: false
       matrix:
-        info: [{"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_gsm8k_async_short.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_gsm8k_short.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_ppo_critic_only_short.py"}]
+        info: [{"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"}, {"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_ppo_critic_only_short.py"}]
     defaults:
       run:
         working-directory: ${{ github.workspace }}
@@ -69,23 +52,61 @@ jobs:
         uses: actions/checkout@v4
 
 
-      - name: Install
-        shell: bash
-        run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
-
 
       - name: Execute
         shell: bash
         run: |
-          TEST_PATH="${{ matrix.info.test_file }}"
-          if [[ "$TEST_PATH" != tests/* ]]; then
-            TEST_PATH="tests/$TEST_PATH"
-          fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
-          else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
-          fi
+
+          docker run --rm \
+            --privileged \
+            --cap-add SYS_NICE \
+            --security-opt seccomp=unconfined \
+            --network host \
+            --gpus all \
+            --ipc=host \
+            --shm-size=16g \
+            --ulimit memlock=-1 \
+            --ulimit stack=67108864 \
+            --memory=0 \
+            --memory-swap=0 \
+            -e http_proxy \
+            -e https_proxy \
+            -e HTTP_PROXY \
+            -e HTTPS_PROXY \
+            -e GITHUB_COMMIT_NAME \
+            -e WANDB_API_KEY \
+            -e SLIME_TEST_ENABLE_INFINITE_RUN \
+            -e SLIME_TEST_USE_DEEPEP \
+            -e SLIME_TEST_USE_FP8_ROLLOUT \
+            -e SLIME_TEST_ENABLE_EVAL \
+            -e TEST_FILE="${{ matrix.info.test_file }}" \
+            -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
+            -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
+            -v /mnt/nvme0n1/slime_ci/models:/root/models \
+            -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
+            -w "$GITHUB_WORKSPACE" \
+            slimerl/slime:latest \
+            bash -lc '
+              set -euo pipefail
+              pip install -e . --no-deps --break-system-packages
+              TEST_PATH="$TEST_FILE"
+              if [[ "$TEST_PATH" != tests/* ]]; then
+                TEST_PATH="tests/$TEST_PATH"
+              fi
+              if [[ -n "$TEST_ARGS" ]]; then
+                read -r -a TEST_ARGS_ARRAY < <(printf "%s\n" "$TEST_ARGS")
+              else
+                TEST_ARGS_ARRAY=()
+              fi
+              if [ "$NUM_GPUS" = "0" ]; then
+                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              else
+                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              fi
+            '
+
 
   e2e-test-sglang-config:
 
@@ -93,23 +114,6 @@ jobs:
 
 
     runs-on: self-hosted
-    container:
-      image: slimerl/slime:latest
-      options: >
-        --gpus all
-        --ipc=host
-        --shm-size=16g
-        --ulimit memlock=-1
-        --ulimit stack=67108864
-        --memory=0
-        --memory-swap=0
-        -e http_proxy=$http_proxy
-        -e https_proxy=$https_proxy
-        -e HTTP_PROXY=$HTTP_PROXY
-        -e HTTPS_PROXY=$HTTPS_PROXY
-        -v /mnt/nvme0n1/slime_ci:/data/slime_ci
-        -v /mnt/nvme0n1/slime_ci/models:/root/models
-        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
 
     strategy:
       fail-fast: false
@@ -131,23 +135,61 @@ jobs:
         uses: actions/checkout@v4
 
 
-      - name: Install
-        shell: bash
-        run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
-
 
       - name: Execute
         shell: bash
         run: |
-          TEST_PATH="${{ matrix.info.test_file }}"
-          if [[ "$TEST_PATH" != tests/* ]]; then
-            TEST_PATH="tests/$TEST_PATH"
-          fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
-          else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
-          fi
+
+          docker run --rm \
+            --privileged \
+            --cap-add SYS_NICE \
+            --security-opt seccomp=unconfined \
+            --network host \
+            --gpus all \
+            --ipc=host \
+            --shm-size=16g \
+            --ulimit memlock=-1 \
+            --ulimit stack=67108864 \
+            --memory=0 \
+            --memory-swap=0 \
+            -e http_proxy \
+            -e https_proxy \
+            -e HTTP_PROXY \
+            -e HTTPS_PROXY \
+            -e GITHUB_COMMIT_NAME \
+            -e WANDB_API_KEY \
+            -e SLIME_TEST_ENABLE_INFINITE_RUN \
+            -e SLIME_TEST_USE_DEEPEP \
+            -e SLIME_TEST_USE_FP8_ROLLOUT \
+            -e SLIME_TEST_ENABLE_EVAL \
+            -e TEST_FILE="${{ matrix.info.test_file }}" \
+            -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
+            -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
+            -v /mnt/nvme0n1/slime_ci/models:/root/models \
+            -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
+            -w "$GITHUB_WORKSPACE" \
+            slimerl/slime:latest \
+            bash -lc '
+              set -euo pipefail
+              pip install -e . --no-deps --break-system-packages
+              TEST_PATH="$TEST_FILE"
+              if [[ "$TEST_PATH" != tests/* ]]; then
+                TEST_PATH="tests/$TEST_PATH"
+              fi
+              if [[ -n "$TEST_ARGS" ]]; then
+                read -r -a TEST_ARGS_ARRAY < <(printf "%s\n" "$TEST_ARGS")
+              else
+                TEST_ARGS_ARRAY=()
+              fi
+              if [ "$NUM_GPUS" = "0" ]; then
+                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              else
+                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              fi
+            '
+
 
   e2e-test-megatron:
 
@@ -155,28 +197,11 @@ jobs:
 
 
     runs-on: self-hosted
-    container:
-      image: slimerl/slime:latest
-      options: >
-        --gpus all
-        --ipc=host
-        --shm-size=16g
-        --ulimit memlock=-1
-        --ulimit stack=67108864
-        --memory=0
-        --memory-swap=0
-        -e http_proxy=$http_proxy
-        -e https_proxy=$https_proxy
-        -e HTTP_PROXY=$HTTP_PROXY
-        -e HTTPS_PROXY=$HTTPS_PROXY
-        -v /mnt/nvme0n1/slime_ci:/data/slime_ci
-        -v /mnt/nvme0n1/slime_ci/models:/root/models
-        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
 
     strategy:
       fail-fast: false
       matrix:
-        info: [{"num_gpus": 8, "test_file": "test_quick_start_glm4_9B.py"}, {"num_gpus": 8, "test_file": "test_qwen3_30B_A3B.py", "use_deepep": "1", "use_fp8_rollout": "1"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_30B_A3B_r3.py", "use_deepep": "1", "use_fp8_rollout": "1"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_30B_A3B_r3.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ppo.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ppo_train_critic_only.py"}, {"num_gpus": 8, "test_file": "test_moonlight_16B_A3B.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_moonlight_16B_A3B_r3.py"}, {"num_gpus": 8, "test_file": "test_mimo_7B_mtp_only_grad.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_debug_rollout_then_train.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_opd_sglang.py"}]
+        info: [{"num_gpus": 8, "test_file": "test_quick_start_glm4_9B.py"}, {"num_gpus": 8, "test_file": "test_glm4.7_30B_A3B_pd_mooncake.py"}, {"num_gpus": 8, "test_file": "test_qwen3_30B_A3B.py", "use_deepep": "1", "use_fp8_rollout": "1"}, {"num_gpus": 8, "test_file": "test_qwen3_30B_A3B_pd_mooncake.py", "use_deepep": "1"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_30B_A3B_r3.py", "use_deepep": "1", "use_fp8_rollout": "1"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_30B_A3B_r3.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ppo.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ppo_train_critic_only.py"}, {"num_gpus": 8, "test_file": "test_moonlight_16B_A3B.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_moonlight_16B_A3B_r3.py"}, {"num_gpus": 8, "test_file": "test_mimo_7B_mtp_only_grad.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_debug_rollout_then_train.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_opd_sglang.py"}]
     defaults:
       run:
         working-directory: ${{ github.workspace }}
@@ -193,23 +218,61 @@ jobs:
         uses: actions/checkout@v4
 
 
-      - name: Install
-        shell: bash
-        run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
-
 
       - name: Execute
         shell: bash
         run: |
-          TEST_PATH="${{ matrix.info.test_file }}"
-          if [[ "$TEST_PATH" != tests/* ]]; then
-            TEST_PATH="tests/$TEST_PATH"
-          fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
-          else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
-          fi
+
+          docker run --rm \
+            --privileged \
+            --cap-add SYS_NICE \
+            --security-opt seccomp=unconfined \
+            --network host \
+            --gpus all \
+            --ipc=host \
+            --shm-size=16g \
+            --ulimit memlock=-1 \
+            --ulimit stack=67108864 \
+            --memory=0 \
+            --memory-swap=0 \
+            -e http_proxy \
+            -e https_proxy \
+            -e HTTP_PROXY \
+            -e HTTPS_PROXY \
+            -e GITHUB_COMMIT_NAME \
+            -e WANDB_API_KEY \
+            -e SLIME_TEST_ENABLE_INFINITE_RUN \
+            -e SLIME_TEST_USE_DEEPEP \
+            -e SLIME_TEST_USE_FP8_ROLLOUT \
+            -e SLIME_TEST_ENABLE_EVAL \
+            -e TEST_FILE="${{ matrix.info.test_file }}" \
+            -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
+            -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
+            -v /mnt/nvme0n1/slime_ci/models:/root/models \
+            -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
+            -w "$GITHUB_WORKSPACE" \
+            slimerl/slime:latest \
+            bash -lc '
+              set -euo pipefail
+              pip install -e . --no-deps --break-system-packages
+              TEST_PATH="$TEST_FILE"
+              if [[ "$TEST_PATH" != tests/* ]]; then
+                TEST_PATH="tests/$TEST_PATH"
+              fi
+              if [[ -n "$TEST_ARGS" ]]; then
+                read -r -a TEST_ARGS_ARRAY < <(printf "%s\n" "$TEST_ARGS")
+              else
+                TEST_ARGS_ARRAY=()
+              fi
+              if [ "$NUM_GPUS" = "0" ]; then
+                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              else
+                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              fi
+            '
+
 
   e2e-test-precision:
 
@@ -217,23 +280,6 @@ jobs:
 
 
     runs-on: self-hosted
-    container:
-      image: slimerl/slime:latest
-      options: >
-        --gpus all
-        --ipc=host
-        --shm-size=16g
-        --ulimit memlock=-1
-        --ulimit stack=67108864
-        --memory=0
-        --memory-swap=0
-        -e http_proxy=$http_proxy
-        -e https_proxy=$https_proxy
-        -e HTTP_PROXY=$HTTP_PROXY
-        -e HTTPS_PROXY=$HTTPS_PROXY
-        -v /mnt/nvme0n1/slime_ci:/data/slime_ci
-        -v /mnt/nvme0n1/slime_ci/models:/root/models
-        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
 
     strategy:
       fail-fast: false
@@ -255,23 +301,61 @@ jobs:
         uses: actions/checkout@v4
 
 
-      - name: Install
-        shell: bash
-        run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
-
 
       - name: Execute
         shell: bash
         run: |
-          TEST_PATH="${{ matrix.info.test_file }}"
-          if [[ "$TEST_PATH" != tests/* ]]; then
-            TEST_PATH="tests/$TEST_PATH"
-          fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
-          else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
-          fi
+
+          docker run --rm \
+            --privileged \
+            --cap-add SYS_NICE \
+            --security-opt seccomp=unconfined \
+            --network host \
+            --gpus all \
+            --ipc=host \
+            --shm-size=16g \
+            --ulimit memlock=-1 \
+            --ulimit stack=67108864 \
+            --memory=0 \
+            --memory-swap=0 \
+            -e http_proxy \
+            -e https_proxy \
+            -e HTTP_PROXY \
+            -e HTTPS_PROXY \
+            -e GITHUB_COMMIT_NAME \
+            -e WANDB_API_KEY \
+            -e SLIME_TEST_ENABLE_INFINITE_RUN \
+            -e SLIME_TEST_USE_DEEPEP \
+            -e SLIME_TEST_USE_FP8_ROLLOUT \
+            -e SLIME_TEST_ENABLE_EVAL \
+            -e TEST_FILE="${{ matrix.info.test_file }}" \
+            -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
+            -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
+            -v /mnt/nvme0n1/slime_ci/models:/root/models \
+            -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
+            -w "$GITHUB_WORKSPACE" \
+            slimerl/slime:latest \
+            bash -lc '
+              set -euo pipefail
+              pip install -e . --no-deps --break-system-packages
+              TEST_PATH="$TEST_FILE"
+              if [[ "$TEST_PATH" != tests/* ]]; then
+                TEST_PATH="tests/$TEST_PATH"
+              fi
+              if [[ -n "$TEST_ARGS" ]]; then
+                read -r -a TEST_ARGS_ARRAY < <(printf "%s\n" "$TEST_ARGS")
+              else
+                TEST_ARGS_ARRAY=()
+              fi
+              if [ "$NUM_GPUS" = "0" ]; then
+                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              else
+                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              fi
+            '
+
 
   e2e-test-ckpt:
 
@@ -279,28 +363,11 @@ jobs:
 
 
     runs-on: self-hosted
-    container:
-      image: slimerl/slime:latest
-      options: >
-        --gpus all
-        --ipc=host
-        --shm-size=16g
-        --ulimit memlock=-1
-        --ulimit stack=67108864
-        --memory=0
-        --memory-swap=0
-        -e http_proxy=$http_proxy
-        -e https_proxy=$https_proxy
-        -e HTTP_PROXY=$HTTP_PROXY
-        -e HTTPS_PROXY=$HTTPS_PROXY
-        -v /mnt/nvme0n1/slime_ci:/data/slime_ci
-        -v /mnt/nvme0n1/slime_ci/models:/root/models
-        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
 
     strategy:
       fail-fast: false
       matrix:
-        info: [{"num_gpus": 8, "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ckpt.py --async-save"}]
+        info: [{"num_gpus": 8, "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--async-save", "test_file": "test_qwen3_4B_ckpt.py"}]
     defaults:
       run:
         working-directory: ${{ github.workspace }}
@@ -317,23 +384,61 @@ jobs:
         uses: actions/checkout@v4
 
 
-      - name: Install
-        shell: bash
-        run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
-
 
       - name: Execute
         shell: bash
         run: |
-          TEST_PATH="${{ matrix.info.test_file }}"
-          if [[ "$TEST_PATH" != tests/* ]]; then
-            TEST_PATH="tests/$TEST_PATH"
-          fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
-          else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
-          fi
+
+          docker run --rm \
+            --privileged \
+            --cap-add SYS_NICE \
+            --security-opt seccomp=unconfined \
+            --network host \
+            --gpus all \
+            --ipc=host \
+            --shm-size=16g \
+            --ulimit memlock=-1 \
+            --ulimit stack=67108864 \
+            --memory=0 \
+            --memory-swap=0 \
+            -e http_proxy \
+            -e https_proxy \
+            -e HTTP_PROXY \
+            -e HTTPS_PROXY \
+            -e GITHUB_COMMIT_NAME \
+            -e WANDB_API_KEY \
+            -e SLIME_TEST_ENABLE_INFINITE_RUN \
+            -e SLIME_TEST_USE_DEEPEP \
+            -e SLIME_TEST_USE_FP8_ROLLOUT \
+            -e SLIME_TEST_ENABLE_EVAL \
+            -e TEST_FILE="${{ matrix.info.test_file }}" \
+            -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
+            -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
+            -v /mnt/nvme0n1/slime_ci/models:/root/models \
+            -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
+            -w "$GITHUB_WORKSPACE" \
+            slimerl/slime:latest \
+            bash -lc '
+              set -euo pipefail
+              pip install -e . --no-deps --break-system-packages
+              TEST_PATH="$TEST_FILE"
+              if [[ "$TEST_PATH" != tests/* ]]; then
+                TEST_PATH="tests/$TEST_PATH"
+              fi
+              if [[ -n "$TEST_ARGS" ]]; then
+                read -r -a TEST_ARGS_ARRAY < <(printf "%s\n" "$TEST_ARGS")
+              else
+                TEST_ARGS_ARRAY=()
+              fi
+              if [ "$NUM_GPUS" = "0" ]; then
+                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              else
+                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              fi
+            '
+
 
   e2e-test-plugin-contracts:
 
@@ -382,15 +487,23 @@ jobs:
       - name: Execute
         shell: bash
         run: |
+
           TEST_PATH="${{ matrix.info.test_file }}"
           if [[ "$TEST_PATH" != tests/* ]]; then
             TEST_PATH="tests/$TEST_PATH"
           fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
+          TEST_ARGS="${{ matrix.info.test_args || '' }}"
+          if [[ -n "$TEST_ARGS" ]]; then
+            read -r -a TEST_ARGS_ARRAY < <(printf '%s\n' "$TEST_ARGS")
           else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+            TEST_ARGS_ARRAY=()
           fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          fi
+
 
   e2e-test-image:
 
@@ -398,28 +511,11 @@ jobs:
 
 
     runs-on: self-hosted
-    container:
-      image: slimerl/slime-test:latest
-      options: >
-        --gpus all
-        --ipc=host
-        --shm-size=16g
-        --ulimit memlock=-1
-        --ulimit stack=67108864
-        --memory=0
-        --memory-swap=0
-        -e http_proxy=$http_proxy
-        -e https_proxy=$https_proxy
-        -e HTTP_PROXY=$HTTP_PROXY
-        -e HTTPS_PROXY=$HTTPS_PROXY
-        -v /mnt/nvme0n1/slime_ci:/data/slime_ci
-        -v /mnt/nvme0n1/slime_ci/models:/root/models
-        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
 
     strategy:
       fail-fast: false
       matrix:
-        info: [{"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_gsm8k_async_short.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_gsm8k_short.py"}, {"num_gpus": 8, "test_file": "test_quick_start_glm4_9B.py"}, {"num_gpus": 8, "test_file": "test_qwen3_30B_A3B.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ppo.py"}, {"num_gpus": 8, "test_file": "test_moonlight_16B_A3B.py"}, {"num_gpus": 8, "test_file": "test_mimo_7B_mtp_only_grad.py"}, {"num_gpus": 8, "test_file": "test_qwen3_0.6B_parallel_check.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ckpt.py --async-save"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_debug_rollout_then_train.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_opd_sglang.py"}]
+        info: [{"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"}, {"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"}, {"num_gpus": 8, "test_file": "test_quick_start_glm4_9B.py"}, {"num_gpus": 8, "test_file": "test_glm4.7_30B_A3B_pd_mooncake.py"}, {"num_gpus": 8, "test_file": "test_qwen3_30B_A3B.py"}, {"num_gpus": 8, "test_file": "test_qwen3_30B_A3B_pd_mooncake.py", "use_deepep": "1"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ppo.py"}, {"num_gpus": 8, "test_file": "test_moonlight_16B_A3B.py"}, {"num_gpus": 8, "test_file": "test_mimo_7B_mtp_only_grad.py"}, {"num_gpus": 8, "test_file": "test_qwen3_0.6B_parallel_check.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--async-save", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_debug_rollout_then_train.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_opd_sglang.py"}]
     defaults:
       run:
         working-directory: ${{ github.workspace }}
@@ -436,38 +532,66 @@ jobs:
         uses: actions/checkout@v4
 
 
-      - name: Install
-        shell: bash
-        run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
-
 
       - name: Execute
         shell: bash
         run: |
-          TEST_PATH="${{ matrix.info.test_file }}"
-          if [[ "$TEST_PATH" != tests/* ]]; then
-            TEST_PATH="tests/$TEST_PATH"
-          fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
-          else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
-          fi
+
+          docker run --rm \
+            --privileged \
+            --cap-add SYS_NICE \
+            --security-opt seccomp=unconfined \
+            --network host \
+            --gpus all \
+            --ipc=host \
+            --shm-size=16g \
+            --ulimit memlock=-1 \
+            --ulimit stack=67108864 \
+            --memory=0 \
+            --memory-swap=0 \
+            -e http_proxy \
+            -e https_proxy \
+            -e HTTP_PROXY \
+            -e HTTPS_PROXY \
+            -e GITHUB_COMMIT_NAME \
+            -e WANDB_API_KEY \
+            -e SLIME_TEST_ENABLE_INFINITE_RUN \
+            -e SLIME_TEST_USE_DEEPEP \
+            -e SLIME_TEST_USE_FP8_ROLLOUT \
+            -e SLIME_TEST_ENABLE_EVAL \
+            -e TEST_FILE="${{ matrix.info.test_file }}" \
+            -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
+            -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
+            -v /mnt/nvme0n1/slime_ci/models:/root/models \
+            -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
+            -w "$GITHUB_WORKSPACE" \
+            slimerl/slime-test:latest \
+            bash -lc '
+              set -euo pipefail
+              pip install -e . --no-deps --break-system-packages
+              TEST_PATH="$TEST_FILE"
+              if [[ "$TEST_PATH" != tests/* ]]; then
+                TEST_PATH="tests/$TEST_PATH"
+              fi
+              if [[ -n "$TEST_ARGS" ]]; then
+                read -r -a TEST_ARGS_ARRAY < <(printf "%s\n" "$TEST_ARGS")
+              else
+                TEST_ARGS_ARRAY=()
+              fi
+              if [ "$NUM_GPUS" = "0" ]; then
+                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              else
+                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              fi
+            '
+
 
 
   e2e-test-changed-detect:
     if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-changed'))
     runs-on: self-hosted
-    container:
-      image: slimerl/slime:latest
-      options: >
-        --gpus all
-        --ipc=host
-        --shm-size=16g
-        --ulimit memlock=-1
-        --ulimit stack=67108864
-        --memory=0
-        --memory-swap=0
     outputs:
       matrix: ${{ steps.detect.outputs.matrix }}
       has_tests: ${{ steps.detect.outputs.has_tests }}
@@ -508,23 +632,6 @@ jobs:
     needs: e2e-test-changed-detect
     if: needs.e2e-test-changed-detect.outputs.has_tests == 'true'
     runs-on: self-hosted
-    container:
-      image: slimerl/slime:latest
-      options: >
-        --gpus all
-        --ipc=host
-        --shm-size=16g
-        --ulimit memlock=-1
-        --ulimit stack=67108864
-        --memory=0
-        --memory-swap=0
-        -e http_proxy=$http_proxy
-        -e https_proxy=$https_proxy
-        -e HTTP_PROXY=$HTTP_PROXY
-        -e HTTPS_PROXY=$HTTPS_PROXY
-        -v /mnt/nvme0n1/slime_ci:/data/slime_ci
-        -v /mnt/nvme0n1/slime_ci/models:/root/models
-        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.e2e-test-changed-detect.outputs.matrix) }}
@@ -543,19 +650,55 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install
-        shell: bash
-        run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
-
       - name: Execute
         shell: bash
         run: |
-          TEST_PATH="${{ matrix.info.test_file }}"
-          if [[ "$TEST_PATH" != tests/* ]]; then
-            TEST_PATH="tests/$TEST_PATH"
-          fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
-          else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
-          fi
+          docker run --rm \
+            --privileged \
+            --cap-add SYS_NICE \
+            --security-opt seccomp=unconfined \
+            --network host \
+            --gpus all \
+            --ipc=host \
+            --shm-size=16g \
+            --ulimit memlock=-1 \
+            --ulimit stack=67108864 \
+            --memory=0 \
+            --memory-swap=0 \
+            -e http_proxy \
+            -e https_proxy \
+            -e HTTP_PROXY \
+            -e HTTPS_PROXY \
+            -e GITHUB_COMMIT_NAME \
+            -e WANDB_API_KEY \
+            -e SLIME_TEST_ENABLE_INFINITE_RUN \
+            -e SLIME_TEST_USE_DEEPEP \
+            -e SLIME_TEST_USE_FP8_ROLLOUT \
+            -e SLIME_TEST_ENABLE_EVAL \
+            -e TEST_FILE="${{ matrix.info.test_file }}" \
+            -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
+            -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
+            -v /mnt/nvme0n1/slime_ci/models:/root/models \
+            -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
+            -w "$GITHUB_WORKSPACE" \
+            slimerl/slime:latest \
+            bash -lc '
+              set -euo pipefail
+              pip install -e . --no-deps --break-system-packages
+              TEST_PATH="$TEST_FILE"
+              if [[ "$TEST_PATH" != tests/* ]]; then
+                TEST_PATH="tests/$TEST_PATH"
+              fi
+              if [[ -n "$TEST_ARGS" ]]; then
+                read -r -a TEST_ARGS_ARRAY < <(printf "%s\n" "$TEST_ARGS")
+              else
+                TEST_ARGS_ARRAY=()
+              fi
+              if [ "$NUM_GPUS" = "0" ]; then
+                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              else
+                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              fi
+            '

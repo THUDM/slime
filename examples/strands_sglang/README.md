@@ -32,7 +32,7 @@ This example connects `slime` with [`strands-sglang`](https://github.com/horizon
 
 ```bash
 # hf checkpoint
-huggingface-cli download Qwen/Qwen3-8B --local-dir /root/models/Qwen/Qwen3-8B
+hf download Qwen/Qwen3-8B --local-dir /root/models/Qwen/Qwen3-8B
 
 # mcore checkpoint
 cd /root/slime

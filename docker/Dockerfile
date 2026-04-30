@@ -1,4 +1,4 @@
-ARG SGLANG_IMAGE_TAG=v0.5.9
+ARG SGLANG_IMAGE_TAG=v0.5.10.post1
 FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
@@ -64,7 +64,8 @@ RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
   fi
 
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install -r /tmp/requirements.txt
+RUN pip install --ignore-installed PyJWT && \
+    pip install -r /tmp/requirements.txt
 
 # Temporarily install another sgl-kernel version for GB300 without rebuilding the whole image
 RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
