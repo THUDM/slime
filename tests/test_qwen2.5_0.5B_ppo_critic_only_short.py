@@ -1,4 +1,5 @@
 import os
+import tempfile
 
 import slime.utils.external_utils.command_utils as U
 
@@ -11,11 +12,27 @@ NUM_GPUS = 4
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(f"huggingface-cli download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
+    U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
 
 
 def execute():
+    megatron_config = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
+    megatron_config.write(
+        """
+megatron:
+  - name: default
+    role: critic
+    overrides:
+      lr: 1e-5
+  - name: default
+    role: actor
+    overrides:
+      lr: 1e-6
+"""
+    )
+    megatron_config.close()
+
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ "
 
     rollout_args = (
@@ -52,9 +69,8 @@ def execute():
         "--kl-coef 0.00 "
         "--entropy-coef 0.00 "
         "--eps-clip 4e-4 "
-        "--critic-train-only "
+        "--num-critic-only-steps 3 "
         "--normalize-advantages "
-        "--critic-lr 1e-5 "
     )
 
     optimizer_args = (
@@ -82,14 +98,14 @@ def execute():
         "--accumulate-allreduce-grads-in-fp32 "
         "--attention-softmax-in-fp32 "
         "--attention-backend flash "
-        "--actor-num-nodes 0 "
-        "--actor-num-gpus-per-node 0 "
-        "--critic-num-nodes 1 "
-        "--critic-num-gpus-per-node 2 "
+        "--actor-num-nodes 1 "
+        "--actor-num-gpus-per-node 4 "
         "--megatron-to-hf-mode bridge "
+        "--colocate "
     )
 
     train_args = (
+        f"--megatron-config-path {megatron_config.name} "
         f"{ckpt_args} "
         f"{rollout_args} "
         f"{optimizer_args} "

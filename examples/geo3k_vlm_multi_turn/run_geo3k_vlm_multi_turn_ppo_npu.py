@@ -1,6 +1,6 @@
 import os
+import tempfile
 
-import slime.utils.misc as U
 from slime.utils.external_utils.command_utils import execute_train_npu
 
 MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-VL-2B-Instruct")
@@ -29,6 +29,18 @@ def get_megatron_model_type(model_name: str) -> str:
 
 
 def execute():
+    megatron_config = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
+    megatron_config.write(
+        """
+megatron:
+  - name: default
+    role: critic
+    overrides:
+      lr: 1e-5
+"""
+    )
+    megatron_config.close()
+
     ckpt_args = f"--hf-checkpoint /path/to/model/checkpoints/{MODEL_NAME} "
 
     wandb_args = (
@@ -69,7 +81,6 @@ def execute():
         "--eps-clip 4e-4 "
         "--num-critic-only-steps 1 "
         "--normalize-advantages "
-        "--critic-lr 1e-5 "
     )
 
     optimizer_args = (
@@ -79,7 +90,6 @@ def execute():
         "--weight-decay 0.1 "
         "--adam-beta1 0.9 "
         "--adam-beta2 0.98 "
-
         "--optimizer-cpu-offload "
         "--overlap-cpu-optimizer-d2h-h2d "
         "--use-precision-aware-optimizer "
@@ -122,9 +132,7 @@ def execute():
 
     misc_args = (
         "--actor-num-nodes 1 "
-        "--actor-num-gpus-per-node 4 "
-        "--critic-num-nodes 1 "
-        "--critic-num-gpus-per-node 4 "
+        "--actor-num-gpus-per-node 8 "
         "--rollout-num-gpus 8 "
         "--no-gradient-accumulation-fusion "
         "--use-flash-attn "
@@ -138,6 +146,7 @@ def execute():
         exit()
 
     train_args = (
+        f"--megatron-config-path {megatron_config.name} "
         f"{ckpt_args} "
         f"{rollout_args} "
         f"{optimizer_args} "

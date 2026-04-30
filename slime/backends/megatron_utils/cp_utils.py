@@ -223,7 +223,10 @@ def slice_log_prob_with_cp(
     qkv_format: str = "thd",
     max_token_len: int | None = None,
 ) -> list[float] | torch.Tensor:
-    assert len(log_prob) == response_length
+    assert len(log_prob) == response_length, (
+        f"log_prob length mismatch: len(log_prob)={len(log_prob)}, "
+        f"response_length={response_length}, total_length={total_length}"
+    )
 
     cp_size = mpu.get_context_parallel_world_size()
 

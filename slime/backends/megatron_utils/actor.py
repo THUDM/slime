@@ -1,7 +1,6 @@
 import logging
 import os
 import random
-import socket
 from argparse import Namespace
 from contextlib import nullcontext
 
@@ -10,14 +9,13 @@ import ray
 import torch
 import torch.distributed as dist
 from megatron.core import mpu
-from ray.actor import ActorHandle
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
 from slime.utils import train_dump_utils
 from slime.utils.data import process_rollout_data
-from slime.utils.distributed_utils import get_gloo_group, init_process_group
+from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.logging_utils import init_tracking
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.misc import Box
@@ -30,7 +28,7 @@ from ...utils.profile_utils import TrainProfiler
 from ...utils.tensor_backper import TensorBackuper
 from .checkpoint import load_checkpoint
 from .cp_utils import slice_log_prob_with_cp, slice_with_cp
-from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data, sync_actor_critic_data
+from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data
 from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
@@ -82,12 +80,6 @@ class MegatronTrainRayActor(TrainRayActor):
             if (x := args.train_memory_margin_bytes) > 0:
                 logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
                 torch_memory_saver.memory_margin_bytes = x
-
-        if role == "critic":
-            self.args.load = self.args.critic_load
-            self.args.save = self.args.critic_save
-            self.args.lr = self.args.critic_lr
-            self.args.lr_warmup_iters = self.args.critic_lr_warmup_iters
 
         (self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id) = initialize_model_and_optimizer(
             args, role
@@ -360,9 +352,9 @@ class MegatronTrainRayActor(TrainRayActor):
                 store_prefix=store_prefix,
             )
 
-    def train(self, rollout_id: int, rollout_data_ref: Box) -> None:
+    def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):
         if self.args.debug_rollout_only:
-            return
+            return None
 
         if self.args.offload_train:
             self.wake_up()
@@ -371,25 +363,22 @@ class MegatronTrainRayActor(TrainRayActor):
             rollout_data = self._get_rollout_data(rollout_data_ref)
 
         if self.role == "critic":
-            return self.train_critic(rollout_id, rollout_data)
+            result = self.train_critic(rollout_id, rollout_data)
         else:
-            return self.train_actor(rollout_id, rollout_data)
+            self.train_actor(rollout_id, rollout_data, external_data=external_data)
+            result = None
 
-    def train_critic(self, rollout_id: int, rollout_data: RolloutBatch) -> None:
-        # Create data iterator for log_probs and train.
+        if self.args.offload_train:
+            self.sleep()
+
+        return result
+
+    def train_critic(self, rollout_id: int, rollout_data: RolloutBatch):
+        """Train critic and return CPU values (used as old-values for the next actor train)."""
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
-        rollout_data.update(
-            forward_only(
-                get_values,
-                self.args,
-                self.model,
-                data_iterator,
-                num_microbatches,
-            )
-        )
 
-        if rollout_id >= self.args.num_critic_only_steps and not self.args.critic_train_only:
-            sync_actor_critic_data(self.args, rollout_data, self._actor_critic_groups)
+        # Compute current critic values (used as old_values for value loss and for actor advantages).
+        rollout_data.update(forward_only(get_values, self.args, self.model, data_iterator, num_microbatches))
 
         compute_advantages_and_returns(self.args, rollout_data)
 
@@ -403,7 +392,13 @@ class MegatronTrainRayActor(TrainRayActor):
             num_microbatches,
         )
 
-    def train_actor(self, rollout_id: int, rollout_data: RolloutBatch) -> None:
+        if mpu.is_pipeline_last_stage() and "values" in rollout_data:
+            from slime.backends.megatron_utils.data import tensors_to_cpu
+
+            return {"values": tensors_to_cpu(rollout_data["values"])}
+        return {}
+
+    def train_actor(self, rollout_id: int, rollout_data: RolloutBatch, external_data=None) -> None:
         # Create data iterator for log_probs and train.
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
 
@@ -455,11 +450,12 @@ class MegatronTrainRayActor(TrainRayActor):
                         RoutingReplay.clear_all_forward()
 
                 if self.args.use_critic:
-                    sync_actor_critic_data(
-                        self.args,
-                        rollout_data,
-                        self._actor_critic_groups,
-                    )
+                    if external_data is not None and mpu.is_pipeline_last_stage():
+                        values = external_data.get("values")
+                        if values is not None:
+                            from slime.backends.megatron_utils.data import tensors_to_gpu
+
+                            rollout_data["values"] = tensors_to_gpu(values)
                 if self._active_model_tag != "actor":
                     self._switch_model("actor")
 
@@ -623,26 +619,3 @@ class MegatronTrainRayActor(TrainRayActor):
 
         self.weights_backuper.backup(model_tag)
         self._active_model_tag = model_tag
-
-    def connect_actor_critic(
-        self,
-        actor_handle: ActorHandle | None = None,
-        master_address: str | None = None,
-        master_port: int | None = None,
-    ) -> None:
-        if self.role == "actor":
-            master_address = ray.util.get_node_ip_address()
-            with socket.socket() as sock:
-                sock.bind(("", 0))
-                master_port = sock.getsockname()[1]
-            actor_handle.connect_actor_critic.remote(master_address=master_address, master_port=master_port)
-
-        group_name = "actor_critic"
-        world_size = 2
-        self._actor_critic_groups = init_process_group(
-            backend="nccl",
-            init_method=f"tcp://{master_address}:{master_port}",
-            world_size=world_size,
-            rank=0 if self.role == "actor" else 1,
-            group_name=group_name,
-        )

@@ -256,6 +256,24 @@ PPO-related parameters:
 - `--value-clip`: Clip range for value loss.
 - `--kl-coef`: KL penalty coefficient for reward shaping.
 
+### Advanced Megatron Configuration (--megatron-config-path)
+
+For PPO workflows, you can use `--megatron-config-path` with a YAML file to override Megatron arguments separately for actor and critic. Common use cases include setting a different critic `lr`, or giving actor and critic different `load` / `save` paths.
+
+```yaml
+megatron:
+  - name: default
+    role: actor
+    overrides:
+      lr: 1e-6
+  - name: default
+    role: critic
+    overrides:
+      lr: 1e-5
+```
+
+> **Note:** This configuration currently only supports PPO, and in current PPO the actor and critic must use the same Megatron parallel topology. The recommended pattern is to keep parallelism-related settings in the shared CLI arguments and put only role-specific differences in YAML. See [Megatron Config: Role-Based Training Overrides](../advanced/megatron-config.md) for details.
+
 ## Custom Rollout Function
 
 slime supports customizing data generation (rollout) to various degrees.

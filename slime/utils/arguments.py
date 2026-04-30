@@ -1,4 +1,5 @@
 import argparse
+import copy
 import json
 import logging
 import os
@@ -38,12 +39,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--actor-num-nodes", type=int, default=1, help="Number of nodes for training actor")
             parser.add_argument(
                 "--actor-num-gpus-per-node", type=int, default=8, help="Number of gpus per node for training actor"
-            )
-            parser.add_argument(
-                "--critic-num-nodes", type=int, default=None, help="Number of nodes for training actor"
-            )
-            parser.add_argument(
-                "--critic-num-gpus-per-node", type=int, default=None, help="Number of gpus per node for training actor"
             )
 
             parser.add_argument(
@@ -786,16 +781,21 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             reset_arg(parser, "--calculate-per-token-loss", action="store_true")
             reset_arg(parser, "--lr", type=float, default=1e-6)
 
-            parser.add_argument("--num-critic-only-steps", type=int, default=0, help="Number of critic only steps")
-            parser.add_argument("--critic-load", type=str, default=None, help="The checkpoint for critic model.")
-            parser.add_argument("--critic-save", type=str, default=None, help="The checkpoint for critic model.")
-            parser.add_argument("--critic-lr", type=float, default=None, help="The lr for critic model")
-            parser.add_argument("--critic-train-only", action="store_true", default=False, help="Only train critic")
             parser.add_argument(
-                "--critic-lr-warmup-iters",
+                "--num-critic-only-steps",
                 type=int,
                 default=0,
-                help="number of iterations to linearly warmup for critic model.",
+                help="Number of initial rollout steps that train critic only; set >= num_rollout for critic-only runs",
+            )
+            parser.add_argument(
+                "--megatron-config-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a structured YAML config for Megatron roles. The file should use "
+                    "a top-level 'megatron' key with role-tagged entries; the critic runtime will "
+                    "select exactly one entry with role=critic. Legacy 'critic' configs are still accepted."
+                ),
             )
 
             parser.add_argument("--eps-clip", type=float, default=0.2, help="PPO clip range")
@@ -863,6 +863,19 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Whether to disable computing advantages and returns. "
                     "If set, we will not compute the advantages and returns, "
                     "This is useful for sft or custom loss function."
+                ),
+            )
+            parser.add_argument(
+                "--custom-advantage-function-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a custom advantage/returns computation function. "
+                    "When set, this function replaces the built-in compute_advantages_and_returns. "
+                    "Signature: def custom_fn(args, rollout_data) -> None. "
+                    "The function should set rollout_data['advantages'] and rollout_data['returns'] in-place. "
+                    "Critic values are available in rollout_data['values']. "
+                    "(e.g., my_module.py:my_advantage_fn)."
                 ),
             )
             parser.add_argument(
@@ -1106,7 +1119,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "Log statistics of the category of reward, such as why the reward function considers it as failed. "
-                    "Specify the key in the reward dict using this argument.",
+                    "Specify the key in the reward dict using this argument."
                 ),
             )
             parser.add_argument(
@@ -1487,6 +1500,87 @@ def parse_args(add_custom_arguments=None):
     return args
 
 
+def _apply_megatron_role_overrides(base_args, overrides, role):
+    role_args = copy.deepcopy(base_args)
+    ignored_keys = {"num_nodes", "num_gpus_per_node"}
+
+    # Apply overrides from the YAML config.
+    # Unspecified keys inherit from base_args via deepcopy.
+    for key, value in overrides.items():
+        if key in ignored_keys:
+            logger.info(f"Ignoring {role} config key '{key}'; GPU allocation always follows CLI args.")
+            continue
+        if not hasattr(role_args, key):
+            logger.warning(f"{role.capitalize()} config key '{key}' is not a known argument, setting it anyway.")
+        else:
+            # YAML safe_load doesn't parse scientific notation (e.g. 1e-5) as float.
+            # Coerce the value to match the type of the existing attribute.
+            original = getattr(role_args, key)
+            if original is not None and isinstance(value, str) and isinstance(original, (int, float)):
+                try:
+                    value = type(original)(value)
+                except (ValueError, TypeError):
+                    pass
+        setattr(role_args, key, value)
+
+    if role == "critic":
+        # Critic-specific: disable features that only apply to actors.
+        role_args.kl_coef = 0
+        role_args.use_opd = False
+        role_args.custom_advantage_function_path = None
+        role_args.untie_embeddings_and_output_weights = True
+
+    return role_args
+
+
+def parse_megatron_role_args(base_args, megatron_config_path, role):
+    """Parse role-specific arguments from a unified Megatron YAML config.
+
+    The config must contain a top-level ``megatron`` list with per-role entries.
+    Missing roles inherit the base args unchanged.
+    """
+    assert role in {"actor", "critic"}, f"Unsupported Megatron config role: {role}"
+
+    with open(megatron_config_path) as f:
+        raw_config = yaml.safe_load(f) or {}
+
+    assert "megatron" in raw_config, (
+        "megatron config must contain a top-level 'megatron' list, e.g. "
+        "megatron: [{name: default, role: actor, overrides: {...}}]"
+    )
+
+    overrides = {}
+    megatron_entries = raw_config["megatron"]
+    assert isinstance(megatron_entries, list), (
+        "megatron config 'megatron' field must be a list, e.g. "
+        "megatron: [{name: default, role: actor, overrides: {...}}]"
+    )
+    role_entries = [entry for entry in megatron_entries if entry.get("role") == role]
+    assert len(role_entries) <= 1, (
+        f"megatron config must contain at most one entry with role={role}, e.g. "
+        f"megatron: [{{name: default, role: {role}, overrides: {{...}}}}]"
+    )
+    if role_entries:
+        role_entry = role_entries[0]
+        overrides = role_entry.get("overrides") or role_entry.get("args") or {}
+    else:
+        logger.info(
+            f"No megatron config entry with role={role} found in {megatron_config_path}; using inherited args."
+        )
+
+    role_args = _apply_megatron_role_overrides(base_args, overrides, role)
+    logger.info(
+        f"Parsed megatron config for role={role} from {megatron_config_path}: overrides = {list(overrides.keys())}"
+    )
+
+    return role_args
+
+
+def parse_critic_args(actor_args, megatron_config_path):
+    """Backward-compatible wrapper for critic-specific Megatron role parsing."""
+    return parse_megatron_role_args(actor_args, megatron_config_path, role="critic")
+
+
 def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
     """
     Build evaluation dataset configurations from either --eval-config or --eval-prompt-data.
@@ -1659,22 +1753,9 @@ def slime_validate_args(args):
         args.debug_train_only = True
 
     args.use_critic = args.advantage_estimator == "ppo"
-    if args.critic_train_only:
-        if not args.use_critic:
-            raise ValueError("--critic-train-only requires --use-critic (or --advantage-estimator ppo).")
-        if args.actor_num_nodes != 0 or args.actor_num_gpus_per_node != 0:
-            raise ValueError(
-                "--critic-train-only requires --actor-num-nodes 0 --actor-num-gpus-per-node 0, "
-                f"but got actor_num_nodes={args.actor_num_nodes}, actor_num_gpus_per_node={args.actor_num_gpus_per_node}."
-            )
-    if args.critic_num_gpus_per_node is None:
-        args.critic_num_gpus_per_node = args.actor_num_gpus_per_node
-    if args.critic_num_nodes is None:
-        args.critic_num_nodes = args.actor_num_nodes
-    if args.critic_load is None:
-        args.critic_load = args.load
-    if args.critic_lr is None:
-        args.critic_lr = args.lr
+    # Critic always uses the same GPU count as actor.
+    args.critic_num_gpus_per_node = args.actor_num_gpus_per_node
+    args.critic_num_nodes = args.actor_num_nodes
 
     if args.offload:
         args.offload_train = True

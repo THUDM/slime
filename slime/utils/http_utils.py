@@ -276,13 +276,16 @@ async def post(url, payload, max_retries=60, headers=None):
     # If distributed mode is enabled and actors exist, dispatch via Ray.
     if _distributed_post_enabled and _post_actors:
         try:
-            import ray
-
             actor = _next_actor()
             if actor is not None:
-                # Use a thread to avoid blocking the event loop on ray.get
+                # Await the Ray ObjectRef directly. The previous
+                # `asyncio.to_thread(ray.get, obj_ref)` blocked an OS thread
+                # from the default ThreadPoolExecutor (capped at
+                # `min(32, cpu+4)`), which becomes a hard upper bound on the
+                # number of in-flight POSTs that can be waited on in parallel
+                # and produces large tail latencies under high concurrency.
                 obj_ref = actor.do_post.remote(url, payload, max_retries, headers=headers)
-                return await asyncio.to_thread(ray.get, obj_ref)
+                return await obj_ref
         except Exception as e:
             logger.info(f"[http_utils] Distributed POST failed, falling back to local: {e} (url={url})")
             # fall through to local
