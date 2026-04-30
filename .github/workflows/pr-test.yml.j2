@@ -20,7 +20,9 @@
       'label': 'run-ci-megatron',
       'tests': [
         {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8},
+        {'test_file': 'test_glm4.7_30B_A3B_pd_mooncake.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1'},
+        {'test_file': 'test_qwen3_30B_A3B_pd_mooncake.py', 'num_gpus': 8, 'use_deepep': '1'},
         {'test_file': 'test_qwen3_30B_A3B_r3.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1', 'enable_eval': '0'},
         {'test_file': 'test_qwen3_30B_A3B_r3.py', 'num_gpus': 8, 'enable_eval': '0'},
         {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8},
@@ -113,6 +115,9 @@ jobs:
     container:
       image: << config.image if config.image else 'slimerl/slime:latest' >>
       options: >
+        --privileged
+        --cap-add SYS_NICE
+        --security-opt seccomp=unconfined
         --gpus all
         --ipc=host
         --shm-size=16g
@@ -190,6 +195,9 @@ jobs:
     container:
       image: slimerl/slime:latest
       options: >
+        --privileged
+        --cap-add SYS_NICE
+        --security-opt seccomp=unconfined
         --gpus all
         --ipc=host
         --shm-size=16g
@@ -240,6 +248,9 @@ jobs:
     container:
       image: slimerl/slime:latest
       options: >
+        --privileged
+        --cap-add SYS_NICE
+        --security-opt seccomp=unconfined
         --gpus all
         --ipc=host
         --shm-size=16g
