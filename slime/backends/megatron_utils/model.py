@@ -776,6 +776,37 @@ def save(
         enable_forward_pre_hook(model)
 
 
+def _save_hf_direct(args, rollout_id: int) -> None:
+    """Fallback for models Megatron-Bridge doesn't support (e.g. Qwen3.5).
+    Reads the just-saved torch_dist checkpoint from disk and converts to HF.
+    Only rank 0 does the actual work; other ranks wait at the barrier."""
+    import torch.distributed as _dist
+
+    from transformers import AutoConfig
+
+    from slime.utils.torch_dist_to_hf import copy_assets, load_torch_dist, save_tensors
+
+    rank = _dist.get_rank()
+    if rank == 0:
+        ckpt_dir = os.path.join(args.save, f"iter_{rollout_id:07d}")
+        logger.info(f"[save_hf] Loading torch_dist checkpoint from {ckpt_dir}")
+
+        megatron_args, state_dict = load_torch_dist(ckpt_dir)
+
+        hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+        model_name = type(hf_config).__name__.lower()
+
+        path = args.save_hf.format(rollout_id=rollout_id)
+        vocab_size = getattr(args, "vocab_size", None)
+        save_tensors(megatron_args, model_name, state_dict, path, chunk_size=5 * 1024**3, vocab_size=vocab_size)
+        del state_dict
+
+        copy_assets(args.hf_checkpoint, path)
+        logger.info(f"[save_hf] HF checkpoint saved to {path}")
+
+    _dist.barrier()
+
+
 def save_hf_model(args, rollout_id: int, model: Sequence[DDP]) -> None:
     """Save Megatron model in HuggingFace format.
 
@@ -811,7 +842,12 @@ def save_hf_model(args, rollout_id: int, model: Sequence[DDP]) -> None:
             logger.info(f"Successfully saved HuggingFace model to {path}")
     except Exception as e:
         if should_log:
-            logger.error(f"Failed to save HuggingFace format: {e}")
+            logger.warning(f"[save_hf] Megatron-Bridge failed ({e!r}); falling back to disk-based conversion")
+        try:
+            _save_hf_direct(args, rollout_id)
+        except Exception as fallback_err:
+            if should_log:
+                logger.error("[save_hf] Fallback also failed; skipping HF export this rollout", exc_info=fallback_err)
 
 
 def initialize_model_and_optimizer(
