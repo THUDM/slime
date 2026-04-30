@@ -126,7 +126,6 @@ def execute():
         "--sglang-speculative-num-steps 3 "
         "--sglang-speculative-eagle-topk 1 "
         "--sglang-speculative-num-draft-tokens 4 "
-        "--sglang-mamba-scheduler-strategy extra_buffer "
         "--sglang-watchdog-timeout 1200 "
         "--sglang-router-request-timeout-secs 1200 "
         "--sglang-enable-metrics "
