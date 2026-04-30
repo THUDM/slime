@@ -84,10 +84,16 @@ jobs:
           if [[ "$TEST_PATH" != tests/* ]]; then
             TEST_PATH="tests/$TEST_PATH"
           fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
+          TEST_ARGS="${{ matrix.info.test_args || '' }}"
+          if [[ -n "$TEST_ARGS" ]]; then
+            read -r -a TEST_ARGS_ARRAY < <(printf '%s\n' "$TEST_ARGS")
           else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+            TEST_ARGS_ARRAY=()
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 
   e2e-test-sglang-config:
@@ -149,10 +155,16 @@ jobs:
           if [[ "$TEST_PATH" != tests/* ]]; then
             TEST_PATH="tests/$TEST_PATH"
           fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
+          TEST_ARGS="${{ matrix.info.test_args || '' }}"
+          if [[ -n "$TEST_ARGS" ]]; then
+            read -r -a TEST_ARGS_ARRAY < <(printf '%s\n' "$TEST_ARGS")
           else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+            TEST_ARGS_ARRAY=()
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 
   e2e-test-megatron:
@@ -214,10 +226,16 @@ jobs:
           if [[ "$TEST_PATH" != tests/* ]]; then
             TEST_PATH="tests/$TEST_PATH"
           fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
+          TEST_ARGS="${{ matrix.info.test_args || '' }}"
+          if [[ -n "$TEST_ARGS" ]]; then
+            read -r -a TEST_ARGS_ARRAY < <(printf '%s\n' "$TEST_ARGS")
           else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+            TEST_ARGS_ARRAY=()
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 
   e2e-test-precision:
@@ -279,10 +297,16 @@ jobs:
           if [[ "$TEST_PATH" != tests/* ]]; then
             TEST_PATH="tests/$TEST_PATH"
           fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
+          TEST_ARGS="${{ matrix.info.test_args || '' }}"
+          if [[ -n "$TEST_ARGS" ]]; then
+            read -r -a TEST_ARGS_ARRAY < <(printf '%s\n' "$TEST_ARGS")
           else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+            TEST_ARGS_ARRAY=()
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 
   e2e-test-ckpt:
@@ -315,7 +339,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        info: [{"num_gpus": 8, "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ckpt.py --async-save"}]
+        info: [{"num_gpus": 8, "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--async-save", "test_file": "test_qwen3_4B_ckpt.py"}]
     defaults:
       run:
         working-directory: ${{ github.workspace }}
@@ -344,10 +368,16 @@ jobs:
           if [[ "$TEST_PATH" != tests/* ]]; then
             TEST_PATH="tests/$TEST_PATH"
           fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
+          TEST_ARGS="${{ matrix.info.test_args || '' }}"
+          if [[ -n "$TEST_ARGS" ]]; then
+            read -r -a TEST_ARGS_ARRAY < <(printf '%s\n' "$TEST_ARGS")
           else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+            TEST_ARGS_ARRAY=()
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 
   e2e-test-plugin-contracts:
@@ -401,10 +431,16 @@ jobs:
           if [[ "$TEST_PATH" != tests/* ]]; then
             TEST_PATH="tests/$TEST_PATH"
           fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
+          TEST_ARGS="${{ matrix.info.test_args || '' }}"
+          if [[ -n "$TEST_ARGS" ]]; then
+            read -r -a TEST_ARGS_ARRAY < <(printf '%s\n' "$TEST_ARGS")
           else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+            TEST_ARGS_ARRAY=()
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 
   e2e-test-image:
@@ -437,7 +473,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        info: [{"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"}, {"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"}, {"num_gpus": 8, "test_file": "test_quick_start_glm4_9B.py"}, {"num_gpus": 8, "test_file": "test_glm4.7_30B_A3B_pd_mooncake.py"}, {"num_gpus": 8, "test_file": "test_qwen3_30B_A3B.py"}, {"num_gpus": 8, "test_file": "test_qwen3_30B_A3B_pd_mooncake.py", "use_deepep": "1"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ppo.py"}, {"num_gpus": 8, "test_file": "test_moonlight_16B_A3B.py"}, {"num_gpus": 8, "test_file": "test_mimo_7B_mtp_only_grad.py"}, {"num_gpus": 8, "test_file": "test_qwen3_0.6B_parallel_check.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ckpt.py --async-save"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_debug_rollout_then_train.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_opd_sglang.py"}]
+        info: [{"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"}, {"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"}, {"num_gpus": 8, "test_file": "test_quick_start_glm4_9B.py"}, {"num_gpus": 8, "test_file": "test_glm4.7_30B_A3B_pd_mooncake.py"}, {"num_gpus": 8, "test_file": "test_qwen3_30B_A3B.py"}, {"num_gpus": 8, "test_file": "test_qwen3_30B_A3B_pd_mooncake.py", "use_deepep": "1"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ppo.py"}, {"num_gpus": 8, "test_file": "test_moonlight_16B_A3B.py"}, {"num_gpus": 8, "test_file": "test_mimo_7B_mtp_only_grad.py"}, {"num_gpus": 8, "test_file": "test_qwen3_0.6B_parallel_check.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--async-save", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_debug_rollout_then_train.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_opd_sglang.py"}]
     defaults:
       run:
         working-directory: ${{ github.workspace }}
@@ -466,10 +502,16 @@ jobs:
           if [[ "$TEST_PATH" != tests/* ]]; then
             TEST_PATH="tests/$TEST_PATH"
           fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
+          TEST_ARGS="${{ matrix.info.test_args || '' }}"
+          if [[ -n "$TEST_ARGS" ]]; then
+            read -r -a TEST_ARGS_ARRAY < <(printf '%s\n' "$TEST_ARGS")
           else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+            TEST_ARGS_ARRAY=()
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 
 
@@ -578,8 +620,14 @@ jobs:
           if [[ "$TEST_PATH" != tests/* ]]; then
             TEST_PATH="tests/$TEST_PATH"
           fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
+          TEST_ARGS="${{ matrix.info.test_args || '' }}"
+          if [[ -n "$TEST_ARGS" ]]; then
+            read -r -a TEST_ARGS_ARRAY < <(printf '%s\n' "$TEST_ARGS")
           else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+            TEST_ARGS_ARRAY=()
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi

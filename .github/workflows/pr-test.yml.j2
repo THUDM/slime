@@ -44,7 +44,7 @@
       'label': 'run-ci-ckpt',
       'tests': [
         {'test_file': 'test_qwen3_4B_ckpt.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_ckpt.py --async-save', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--async-save', 'num_gpus': 8},
       ],
     },
 
@@ -75,7 +75,7 @@
         {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_4B_ckpt.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_ckpt.py --async-save', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--async-save', 'num_gpus': 8},
         {'test_file': 'test_qwen2.5_0.5B_debug_rollout_then_train.py', 'num_gpus': 8},
         {'test_file': 'test_qwen2.5_0.5B_opd_sglang.py', 'num_gpus': 8},
       ],
@@ -184,10 +184,16 @@ jobs:
           if [[ "$TEST_PATH" != tests/* ]]; then
             TEST_PATH="tests/$TEST_PATH"
           fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
+          TEST_ARGS="${{ matrix.info.test_args || '' }}"
+          if [[ -n "$TEST_ARGS" ]]; then
+            read -r -a TEST_ARGS_ARRAY < <(printf '%s\n' "$TEST_ARGS")
           else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+            TEST_ARGS_ARRAY=()
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 <% endfor %>
 
@@ -296,8 +302,14 @@ jobs:
           if [[ "$TEST_PATH" != tests/* ]]; then
             TEST_PATH="tests/$TEST_PATH"
           fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH"
+          TEST_ARGS="${{ matrix.info.test_args || '' }}"
+          if [[ -n "$TEST_ARGS" ]]; then
+            read -r -a TEST_ARGS_ARRAY < <(printf '%s\n' "$TEST_ARGS")
           else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+            TEST_ARGS_ARRAY=()
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
