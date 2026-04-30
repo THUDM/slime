@@ -217,6 +217,7 @@ def forward_only(
     data_iterator: Sequence[DataIterator],
     num_microbatches: Sequence[int],
     store_prefix: str = "",
+    step_callback: Callable[[], None] | None = None,
 ) -> dict[str, list[torch.Tensor]]:
     """Run forward passes only and collect non-loss outputs (e.g., logprobs).
 
@@ -331,6 +332,10 @@ def forward_only(
             micro_batch_size=args.micro_batch_size,
             forward_only=True,
         )
+
+        # Advance the train_log_probs profiler (if active) one tick per step.
+        if step_callback is not None:
+            step_callback()
 
     # Move model back to the train mode.
     for model_module in model:
@@ -557,6 +562,7 @@ def train(
     opt_param_scheduler: OptimizerParamScheduler,
     data_iterator: Sequence[DataIterator],
     num_microbatches: Sequence[int],
+    step_callback: Callable[[], None] | None = None,
 ) -> None:
     """Run training over a rollout consisting of multiple steps.
 
@@ -660,6 +666,13 @@ def train(
             opt_param_scheduler,
             num_microbatches[step_id],
         )
+
+        # Advance the train_actor profiler (if active) one tick per grad-accum
+        # step. The torch.profiler schedule (wait/warmup/active/repeat) decides
+        # which step actually captures; most ticks are no-ops. Kept out of the
+        # hot path by the callback being None when profiling is disabled.
+        if step_callback is not None:
+            step_callback()
 
         if step_id == 0:
             # Enable forward pre-hook after training step has successfully run. All subsequent
