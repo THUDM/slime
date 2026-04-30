@@ -90,7 +90,7 @@ def train(args):
         offload_train(actor_trains_this_step)
         if args.offload_rollout:
             ray.get(rollout_manager.onload_weights.remote())
-            actor_model.update_weights()
+        actor_model.update_weights()
 
         if args.offload_rollout:
             ray.get(rollout_manager.onload_kv.remote())
