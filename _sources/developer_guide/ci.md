@@ -75,7 +75,7 @@ NUM_GPUS = 4  # This constant is used by run-ci-changed
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(f"huggingface-cli download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
+    U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
     # Download datasets as needed ...
 
 def execute():

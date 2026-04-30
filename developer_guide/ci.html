@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Apr 27, 2026"/>
+    <meta name="docbuild:last-update" content="Apr 30, 2026"/>
   </head>
   
   
@@ -554,7 +554,7 @@
 
 <span class="k">def</span><span class="w"> </span><span class="nf">prepare</span><span class="p">():</span>
     <span class="n">U</span><span class="o">.</span><span class="n">exec_command</span><span class="p">(</span><span class="s2">&quot;mkdir -p /root/models /root/datasets&quot;</span><span class="p">)</span>
-    <span class="n">U</span><span class="o">.</span><span class="n">exec_command</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;huggingface-cli download Qwen/</span><span class="si">{</span><span class="n">MODEL_NAME</span><span class="si">}</span><span class="s2"> --local-dir /root/models/</span><span class="si">{</span><span class="n">MODEL_NAME</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">U</span><span class="o">.</span><span class="n">exec_command</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;hf download Qwen/</span><span class="si">{</span><span class="n">MODEL_NAME</span><span class="si">}</span><span class="s2"> --local-dir /root/models/</span><span class="si">{</span><span class="n">MODEL_NAME</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
     <span class="c1"># Download datasets as needed ...</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">execute</span><span class="p">():</span>
@@ -691,7 +691,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Apr 27, 2026.
+  Last updated on Apr 30, 2026.
   <br/>
 </p>
   </div>
