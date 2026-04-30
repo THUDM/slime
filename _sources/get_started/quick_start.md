@@ -71,7 +71,7 @@ hf download --repo-type dataset zhuzilin/aime-2024 \
 
 When using Megatron as the training backend, you need to first convert Hugging Face format model weights to Megatron `torch_dist` format.
 
-First, load the configuration file of the target model. The `slime/scripts/models` directory contains configuration files for supported models. You need to `source` the corresponding model script to load the configuration parameters into the current environment. Here we use GLM4-9B model as an example, and it's similar for Qwen3-4B, GLM-4.7-Flash, Qwen3-30B-A3B, etc.
+First, load the configuration file of the target model. The `slime/scripts/models` directory contains configuration files for supported models. You need to `source` the corresponding model script to load the configuration parameters into the current environment. Here we use GLM4-9B model as an example, and it's similar for Qwen3-4B, Qwen3.5, Qwen3.6, GLM-4.7-Flash, Qwen3-30B-A3B, etc.
 
 ```bash
 cd /root/slime

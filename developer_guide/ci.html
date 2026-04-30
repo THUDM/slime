@@ -460,7 +460,7 @@
 <h2>How It Works<a class="headerlink" href="#how-it-works" title="Link to this heading">#</a></h2>
 <p>The workflow is defined in <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml</span></code> (auto-generated from <code class="docutils literal notranslate"><span class="pre">pr-test.yml.j2</span></code>). Each CI job:</p>
 <ol class="arabic simple">
-<li><p>Runs on a self-hosted GPU runner inside a Docker container (<code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code>).</p></li>
+<li><p>Runs on a self-hosted GPU runner via <code class="docutils literal notranslate"><span class="pre">docker</span> <span class="pre">run</span></code>; most tests use <code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code>, while image validation uses <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code>.</p></li>
 <li><p>Installs slime with <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span> <span class="pre">--no-deps</span></code>.</p></li>
 <li><p>Acquires the required GPUs via <code class="docutils literal notranslate"><span class="pre">tests/ci/gpu_lock_exec.py</span> <span class="pre">--count</span> <span class="pre">&lt;num_gpus&gt;</span></code>.</p></li>
 <li><p>Executes the test file: <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">&lt;test_path&gt;.py</span></code> or <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/&lt;test_file&gt;.py</span></code>, depending on whether the test lives under <code class="docutils literal notranslate"><span class="pre">tests/</span></code> or a subdirectory such as <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/</span></code>.</p></li>
@@ -534,7 +534,7 @@
 <p>This is the primary label for validating Megatron-backend changes. It covers:</p>
 <ul class="simple">
 <li><p>Dense models: GLM4-9B, Qwen3-4B (PPO)</p></li>
-<li><p>MoE models: Qwen3-30B-A3B (with/without DeepEP + FP8), Moonlight-16B-A3B</p></li>
+<li><p>MoE models: Qwen3-30B-A3B (with DeepEP + FP8), Qwen3.6-35B-A3B PD + Mooncake, Moonlight-16B-A3B</p></li>
 <li><p>Specialized: MiMo-7B MTP, Qwen2.5-0.5B debug rollout-then-train, OPD with sglang teacher</p></li>
 </ul>
 <p>All tests use 8 GPUs. If you are modifying Megatron training logic, loss computation, or checkpoint conversion, this is the label to use.</p>

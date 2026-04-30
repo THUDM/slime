@@ -456,7 +456,7 @@
 <h2>工作原理<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
 <p>工作流定义在 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml</span></code>（由 <code class="docutils literal notranslate"><span class="pre">pr-test.yml.j2</span></code> 自动生成）。每个 CI 任务会：</p>
 <ol class="arabic simple">
-<li><p>在自托管 GPU runner 上以 Docker 容器（<code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code>）运行。</p></li>
+<li><p>在自托管 GPU runner 上通过 <code class="docutils literal notranslate"><span class="pre">docker</span> <span class="pre">run</span></code> 运行；大多数测试使用 <code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code>，镜像验证使用 <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code>。</p></li>
 <li><p>通过 <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span> <span class="pre">--no-deps</span></code> 安装 slime。</p></li>
 <li><p>通过 <code class="docutils literal notranslate"><span class="pre">tests/ci/gpu_lock_exec.py</span> <span class="pre">--count</span> <span class="pre">&lt;num_gpus&gt;</span></code> 获取所需数量的 GPU。</p></li>
 <li><p>执行测试文件：<code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">&lt;test_path&gt;.py</span></code> 或 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/&lt;test_file&gt;.py</span></code>。如果测试位于 <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/</span></code> 这样的子目录，CI 也会自动处理。</p></li>
@@ -530,7 +530,7 @@
 <p>这是验证 Megatron 后端改动的主要 label，覆盖：</p>
 <ul class="simple">
 <li><p>Dense 模型：GLM4-9B、Qwen3-4B（PPO）</p></li>
-<li><p>MoE 模型：Qwen3-30B-A3B（有/无 DeepEP + FP8）、Moonlight-16B-A3B</p></li>
+<li><p>MoE 模型：Qwen3-30B-A3B（DeepEP + FP8）、Qwen3.6-35B-A3B PD + Mooncake、Moonlight-16B-A3B</p></li>
 <li><p>特殊场景：MiMo-7B MTP、Qwen2.5-0.5B debug rollout-then-train、OPD（sglang teacher 模式）</p></li>
 </ul>
 <p>所有测试使用 8 张 GPU。如果你正在修改 Megatron 训练逻辑、loss 计算或 checkpoint 转换，应该使用这个 label。</p>

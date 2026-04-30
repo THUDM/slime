@@ -547,7 +547,7 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 <section id="hugging-face-megatron">
 <h3>Hugging Face 格式 转换为 Megatron 格式<a class="headerlink" href="#hugging-face-megatron" title="链接到此标题。">#</a></h3>
 <p>当使用 Megatron 作为训练后端时，需要先将 Hugging Face 格式的模型权重转换为 Megatron <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> 格式。</p>
-<p>首先，加载目标模型的配置文件。<code class="docutils literal notranslate"><span class="pre">slime/scripts/models</span></code> 目录下包含了支持模型的配置文件。需要 <code class="docutils literal notranslate"><span class="pre">source</span></code> 对应模型的脚本，将配置参数加载到当前环境中。此处我们以 GLM4-9B 模型为例子，对于 Qwen3-4B，GLM-4.7-Flash，Qwen3-30B-A3B，是类似的。</p>
+<p>首先，加载目标模型的配置文件。<code class="docutils literal notranslate"><span class="pre">slime/scripts/models</span></code> 目录下包含了支持模型的配置文件。需要 <code class="docutils literal notranslate"><span class="pre">source</span></code> 对应模型的脚本，将配置参数加载到当前环境中。此处我们以 GLM4-9B 模型为例子，对于 Qwen3-4B、Qwen3.5、Qwen3.6、GLM-4.7-Flash、Qwen3-30B-A3B，是类似的。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
 <span class="nb">source</span><span class="w"> </span>scripts/models/glm4-9B.sh
 </pre></div>
