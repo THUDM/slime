@@ -122,13 +122,13 @@ def compute_gspo_kl(
 
 
 @torch.compile(dynamic=True)
-def compute_policy_loss(
+def _compute_clipped_policy_loss(
     ppo_kl: torch.Tensor,
     advantages: torch.Tensor,
     eps_clip: float,
     eps_clip_high: float,
     eps_clip_c: float | None = None,
-):
+) -> tuple[torch.Tensor, torch.Tensor]:
     ratio = (-ppo_kl).exp()
     pg_losses1 = -ratio * advantages
     pg_losses2 = -ratio.clamp(1 - eps_clip, 1 + eps_clip_high) * advantages
@@ -146,6 +146,64 @@ def compute_policy_loss(
         pg_losses = clip_pg_losses1
 
     return pg_losses, clipfrac
+
+
+@torch.compile(dynamic=True)
+def _compute_sapo_policy_loss(
+    ppo_kl: torch.Tensor,
+    advantages: torch.Tensor,
+    eps_clip: float,
+    eps_clip_high: float,
+    sapo_tau_pos: float,
+    sapo_tau_neg: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    # SAPO saturates for extreme ratios; clamp the log-ratio used by the soft gate.
+    ratio = torch.exp(torch.clamp(-ppo_kl, min=-60.0, max=60.0))
+    tau_pos = torch.full_like(advantages, sapo_tau_pos)
+    tau_neg = torch.full_like(advantages, sapo_tau_neg)
+    tau = torch.where(advantages > 0, tau_pos, tau_neg)
+    soft_ratio = torch.sigmoid(torch.clamp(tau * (ratio - 1.0), min=-60.0, max=60.0)) * (4.0 / tau)
+    pg_losses = -soft_ratio * advantages
+
+    would_clip_low = (ratio < 1 - eps_clip) & (advantages < 0)
+    would_clip_high = (ratio > 1 + eps_clip_high) & (advantages > 0)
+    clipfrac = (would_clip_low | would_clip_high).float()
+    return pg_losses, clipfrac, soft_ratio
+
+
+def compute_policy_loss(
+    ppo_kl: torch.Tensor,
+    advantages: torch.Tensor,
+    eps_clip: float,
+    eps_clip_high: float,
+    eps_clip_c: float | None = None,
+    policy_loss_type: str = "clip",
+    sapo_tau_pos: float = 1.0,
+    sapo_tau_neg: float = 1.05,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+    """Compute the token-level policy gradient surrogate and auxiliary metrics."""
+    if policy_loss_type == "clip":
+        pg_losses, clipfrac = _compute_clipped_policy_loss(
+            ppo_kl,
+            advantages,
+            eps_clip,
+            eps_clip_high,
+            eps_clip_c,
+        )
+        return pg_losses, clipfrac, {}
+
+    if policy_loss_type == "sapo":
+        pg_losses, clipfrac, soft_ratio = _compute_sapo_policy_loss(
+            ppo_kl,
+            advantages,
+            eps_clip,
+            eps_clip_high,
+            sapo_tau_pos,
+            sapo_tau_neg,
+        )
+        return pg_losses, clipfrac, {"sapo_soft_ratio": soft_ratio}
+
+    raise ValueError(f"Unknown policy_loss_type: {policy_loss_type}")
 
 
 def compute_log_probs(logits: torch.Tensor, tokens: torch.Tensor, process_group: dist.ProcessGroup | None):
