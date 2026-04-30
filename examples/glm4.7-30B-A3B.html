@@ -432,7 +432,6 @@
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#environment-preparation">Environment Preparation</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisites">Prerequisites</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#download-model">Download Model</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#convert-checkpoint">Convert Checkpoint</a></li>
 </ul>
@@ -463,13 +462,6 @@
 <section id="environment-preparation">
 <h2>Environment Preparation<a class="headerlink" href="#environment-preparation" title="Link to this heading">#</a></h2>
 <p>The environment setup, data, and checkpoint conversion are the same as for the Qwen3-4B model. You can refer to <a class="reference internal" href="qwen3-4B.html"><span class="std std-doc">Example: Qwen3-4B Model</span></a>, replacing mentions of Qwen3-4B with GLM-4.7-Flash.</p>
-<section id="prerequisites">
-<h3>Prerequisites<a class="headerlink" href="#prerequisites" title="Link to this heading">#</a></h3>
-<p>GLM-4.7-Flash requires <strong>transformers ≥ 5.0</strong> for the <code class="docutils literal notranslate"><span class="pre">Glm4MoeLiteForCausalLM</span></code> architecture. Install or upgrade:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;transformers&gt;=5.0&quot;</span>
-</pre></div>
-</div>
-</section>
 <section id="download-model">
 <h3>Download Model<a class="headerlink" href="#download-model" title="Link to this heading">#</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>THUDM/GLM-4.7-Flash<span class="w"> </span>--local-dir<span class="w"> </span>/root/GLM-4.7-Flash
@@ -664,7 +656,6 @@ bash<span class="w"> </span>scripts/run-glm4.7-30B-A3B.sh
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#environment-preparation">Environment Preparation</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisites">Prerequisites</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#download-model">Download Model</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#convert-checkpoint">Convert Checkpoint</a></li>
 </ul>

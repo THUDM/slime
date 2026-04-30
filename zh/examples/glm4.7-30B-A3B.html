@@ -428,19 +428,18 @@
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">环境准备</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">前置条件</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">下载模型</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">下载模型</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#checkpoint">转换 Checkpoint</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">执行训练</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">参数简介</a><ul class="nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">执行训练</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">参数简介</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#moe">MoE 配置</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#mtp">MTP 投机解码（推理加速）</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">MTP 训练</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">MTP 训练</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">多机支持</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">多机支持</a></li>
 </ul>
 </li>
 </ul>
@@ -460,14 +459,7 @@
 <h2>环境准备<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
 <p>搭建环境、数据与 ckpt 转换均与 Qwen3-4B 模型相同，可以参考 <a class="reference internal" href="qwen3-4B.html"><span class="std std-doc">示例：Qwen3-4B</span></a>，将文中 Qwen3-4B 的部分转换为 GLM-4.7-Flash 即可。</p>
 <section id="id2">
-<h3>前置条件<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h3>
-<p>GLM-4.7-Flash 需要 <strong>transformers ≥ 5.0</strong> 以支持 <code class="docutils literal notranslate"><span class="pre">Glm4MoeLiteForCausalLM</span></code> 架构。请安装或升级：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;transformers&gt;=5.0&quot;</span>
-</pre></div>
-</div>
-</section>
-<section id="id3">
-<h3>下载模型<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h3>
+<h3>下载模型<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>THUDM/GLM-4.7-Flash<span class="w"> </span>--local-dir<span class="w"> </span>/root/GLM-4.7-Flash
 </pre></div>
 </div>
@@ -487,15 +479,15 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </div>
 </section>
 </section>
-<section id="id4">
-<h2>执行训练<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
+<section id="id3">
+<h2>执行训练<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
 <p>执行训练：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
 bash<span class="w"> </span>scripts/run-glm4.7-30B-A3B-8gpus.sh
 </pre></div>
 </div>
-<section id="id5">
-<h3>参数简介<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h3>
+<section id="id4">
+<h3>参数简介<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h3>
 <p>这里我们简单介绍一下脚本 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-30B-A3B-8gpus.sh">run-glm4.7-30B-A3B-8gpus.sh</a> 中的关键部分。</p>
 <section id="moe">
 <h4>MoE 配置<a class="headerlink" href="#moe" title="链接到此标题。">#</a></h4>
@@ -556,8 +548,8 @@ bash<span class="w"> </span>scripts/run-glm4.7-30B-A3B-8gpus.sh
 <div><p>⚠️ <strong>注意</strong>：投机解码会占用额外的 GPU 显存。如果遇到 OOM 问题，可以尝试降低 <code class="docutils literal notranslate"><span class="pre">--sglang-mem-fraction-static</span></code> 或关闭投机解码。</p>
 </div></blockquote>
 </section>
-<section id="id6">
-<h4>MTP 训练<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h4>
+<section id="id5">
+<h4>MTP 训练<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h4>
 <p>slime 也支持将 MTP 层与主模型联合训练，适用于已实现 MTP 权重转换的模型（如 MiMo、GLM-4.7）。启用时，相关参数如下：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 在模型配置中添加 MTP 层数</span>
 <span class="nv">MODEL_ARGS</span><span class="o">+=(</span>--mtp-num-layers<span class="w"> </span><span class="m">1</span><span class="o">)</span>
@@ -580,8 +572,8 @@ bash<span class="w"> </span>scripts/run-glm4.7-30B-A3B-8gpus.sh
 </div></blockquote>
 </section>
 </section>
-<section id="id7">
-<h3>多机支持<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h3>
+<section id="id6">
+<h3>多机支持<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h3>
 <p>对于多机训练（例如 2×8 H100），使用多机脚本：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
 <span class="nb">export</span><span class="w"> </span><span class="nv">BASE_DIR</span><span class="o">=</span>/shared/path<span class="w">  </span><span class="c1"># 所有节点都可以访问的路径</span>
@@ -660,19 +652,18 @@ bash<span class="w"> </span>scripts/run-glm4.7-30B-A3B.sh
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">环境准备</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">前置条件</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">下载模型</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">下载模型</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#checkpoint">转换 Checkpoint</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">执行训练</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">参数简介</a><ul class="nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">执行训练</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">参数简介</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#moe">MoE 配置</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#mtp">MTP 投机解码（推理加速）</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">MTP 训练</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">MTP 训练</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">多机支持</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">多机支持</a></li>
 </ul>
 </li>
 </ul>
