@@ -363,7 +363,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.debug_rollout_only:
             return None
 
-        if self.args.offload_train or self.args.use_critic:
+        if self.args.offload_train:
             self.wake_up()
 
         with timer("data_preprocess"):
@@ -375,7 +375,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.train_actor(rollout_id, rollout_data, external_data=external_data)
             result = None
 
-        if self.args.offload_train or self.args.use_critic:
+        if self.args.offload_train:
             self.sleep()
 
         return result
