@@ -2,8 +2,8 @@
     'e2e-test-short': {
       'label': 'run-ci-short',
       'tests': [
-        {'test_file': 'test_qwen2.5_0.5B_gsm8k_async_short.py', 'num_gpus': 4},
-        {'test_file': 'test_qwen2.5_0.5B_gsm8k_short.py', 'num_gpus': 4},
+        {'test_file': 'test_qwen3.5_0.8B_gsm8k_async_short.py', 'num_gpus': 4},
+        {'test_file': 'test_qwen3.5_0.8B_gsm8k_short.py', 'num_gpus': 4},
         {'test_file': 'test_qwen2.5_0.5B_ppo_critic_only_short.py', 'num_gpus': 4},
       ],
     },
@@ -64,8 +64,8 @@
       'label': 'run-ci-image',
       'image': 'slimerl/slime-test:latest',
       'tests': [
-        {'test_file': 'test_qwen2.5_0.5B_gsm8k_async_short.py', 'num_gpus': 4},
-        {'test_file': 'test_qwen2.5_0.5B_gsm8k_short.py', 'num_gpus': 4},
+        {'test_file': 'test_qwen3.5_0.8B_gsm8k_async_short.py', 'num_gpus': 4},
+        {'test_file': 'test_qwen3.5_0.8B_gsm8k_short.py', 'num_gpus': 4},
         {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8},
         {'test_file': 'test_glm4.7_30B_A3B_pd_mooncake.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8},
