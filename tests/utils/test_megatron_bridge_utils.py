@@ -35,6 +35,25 @@ def test_patch_hf_config_handles_nested_text_config():
 
 
 @pytest.mark.unit
+def test_patch_hf_config_handles_pretrained_wrapper_config():
+    wrapped_config = types.SimpleNamespace(rope_parameters={"rope_theta": 10000})
+    hf_pretrained = types.SimpleNamespace(config=wrapped_config)
+
+    patch_hf_config_for_megatron_bridge(hf_pretrained)
+
+    assert wrapped_config.rope_theta == 10000
+
+
+@pytest.mark.unit
+def test_patch_hf_config_uses_rope_scaling_fallback():
+    hf_config = types.SimpleNamespace(rope_scaling={"rope_theta": 10000})
+
+    patch_hf_config_for_megatron_bridge(hf_config)
+
+    assert hf_config.rope_theta == 10000
+
+
+@pytest.mark.unit
 def test_patch_auto_bridge_hf_config_patches_hf_pretrained():
     hf_config = types.SimpleNamespace(rope_parameters={"rope_theta": 12345})
     bridge = types.SimpleNamespace(hf_pretrained=hf_config)

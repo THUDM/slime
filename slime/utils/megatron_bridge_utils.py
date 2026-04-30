@@ -7,13 +7,23 @@ except ImportError:
 
 
 def patch_hf_config_for_megatron_bridge(hf_config):
-    configs = [hf_config]
-    text_config = getattr(hf_config, "text_config", None)
-    if text_config is not None and text_config is not hf_config:
-        configs.append(text_config)
+    configs = []
+    seen_config_ids = set()
+
+    def add_config(config):
+        if config is None or id(config) in seen_config_ids:
+            return
+        seen_config_ids.add(id(config))
+        configs.append(config)
+
+    add_config(hf_config)
+    add_config(getattr(hf_config, "config", None))
+
+    for config in list(configs):
+        add_config(getattr(config, "text_config", None))
 
     for config in configs:
-        rope_params = getattr(config, "rope_parameters", None)
+        rope_params = getattr(config, "rope_parameters", None) or getattr(config, "rope_scaling", None)
         if isinstance(rope_params, dict) and "rope_theta" in rope_params and not hasattr(config, "rope_theta"):
             config.rope_theta = rope_params["rope_theta"]
 
