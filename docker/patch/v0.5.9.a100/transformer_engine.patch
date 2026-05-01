@@ -1,0 +1,343 @@
+diff --git a/transformer_engine/pytorch/attention/dot_product_attention/dot_product_attention.py b/transformer_engine/pytorch/attention/dot_product_attention/dot_product_attention.py
+index 1303160..967168f 100644
+--- a/transformer_engine/pytorch/attention/dot_product_attention/dot_product_attention.py
++++ b/transformer_engine/pytorch/attention/dot_product_attention/dot_product_attention.py
+@@ -11,6 +11,7 @@ import warnings
+ import logging
+ 
+ import torch
++import torch.nn.functional as F
+ from torch.nn.parameter import Parameter
+ 
+ import transformer_engine_torch as tex
+@@ -1247,6 +1248,205 @@ class DotProductAttention(TransformerEngineBaseModule):
+                             key_layer.device,
+                         )
+ 
++            # ── FlashMLA SM100 fast-path ──
++            # Priority 1: if SM100+ GPU, MHA, and flash_mla is installed,
++            # bypass V-padding and all TE backends entirely.
++            _use_flash_mla = False
++            if (
++                head_dim_qk != head_dim_v
++                and num_attention_heads == num_gqa_groups  # MHA only
++                and not isinstance(value_layer, Float8Tensor)
++                and os.getenv("NVTE_FLASH_MLA", "1") != "0"
++            ):
++                try:
++                    from flash_mla import flash_attn_varlen_func as _flash_mla_varlen
++                    _has_flash_mla = True
++                except ImportError:
++                    _has_flash_mla = False
++
++                if _has_flash_mla:
++                    _dev_cap = torch.cuda.get_device_capability()
++                    if _dev_cap[0] >= 10:  # SM100+
++                        _use_flash_mla = True
++
++            if _use_flash_mla:
++                _causal = "causal" in attn_mask_type
++                _scale = 1.0 / (head_dim_qk ** 0.5)
++
++                class _ContiguousGrad(torch.autograd.Function):
++                    @staticmethod
++                    def forward(ctx, x):
++                        return x
++                    @staticmethod
++                    def backward(ctx, g):
++                        return g.contiguous()
++
++                if context_parallel:
++                    assert q_format == "thd", "FlashMLA + CP only supports thd format"
++                    assert num_attention_heads % cp_size == 0, (
++                        f"Ulysses CP requires num_heads({num_attention_heads}) "
++                        f"divisible by cp_size({cp_size})"
++                    )
++                    import torch.distributed as dist
++
++                    _cp_group = self.cp_group
++                    _cp_size = cp_size
++                    _local_cu = cu_seqlens_q // _cp_size
++                    _num_seqs = len(cu_seqlens_q) - 1
++                    _H = num_attention_heads
++
++                    # ── Core: all-to-all seq→head ──
++                    def _s2h(x):
++                        T, H_in, D = x.shape
++                        hpc = H_in // _cp_size
++                        send = x.reshape(T, _cp_size, hpc, D) \
++                                .permute(1, 0, 2, 3).contiguous() \
++                                .reshape(_cp_size * T, hpc, D)
++                        recv = torch.empty_like(send)
++                        dist.all_to_all_single(recv, send, group=_cp_group)
++                        pr = recv.reshape(_cp_size, T, hpc, D)
++                        parts = []
++                        for i in range(_num_seqs):
++                            ls = _local_cu[i].item()
++                            le = _local_cu[i + 1].item()
++                            cs = (le - ls) // 2
++                            for r in range(_cp_size):
++                                parts.append(pr[r, ls:ls + cs])
++                            for r in range(_cp_size - 1, -1, -1):
++                                parts.append(pr[r, ls + cs:le])
++                        return torch.cat(parts, dim=0)
++
++                    # ── Core: all-to-all head→seq ──
++                    def _h2s(x, H_out):
++                        hpc, D = x.shape[1], x.shape[2]
++                        T = x.shape[0] // _cp_size
++                        pr = torch.empty(
++                            _cp_size, T, hpc, D,
++                            dtype=x.dtype, device=x.device,
++                        )
++                        off = 0
++                        for i in range(_num_seqs):
++                            gs = (cu_seqlens_q[i + 1] - cu_seqlens_q[i]).item()
++                            ls = _local_cu[i].item()
++                            le = _local_cu[i + 1].item()
++                            cs = (le - ls) // 2
++                            seq = x[off:off + gs]
++                            off += gs
++                            ch = torch.chunk(seq, 2 * _cp_size, dim=0)
++                            for r in range(_cp_size):
++                                pr[r, ls:ls + cs] = ch[r]
++                                pr[r, ls + cs:le] = ch[2 * _cp_size - 1 - r]
++                        send = pr.contiguous().reshape(_cp_size * T, hpc, D)
++                        recv = torch.empty_like(send)
++                        dist.all_to_all_single(recv, send, group=_cp_group)
++                        return recv.reshape(_cp_size, T, hpc, D) \
++                                   .permute(1, 0, 2, 3).contiguous() \
++                                   .reshape(T, H_out, D)
++
++                    # ── Autograd wrappers ──
++                    class _S2H(torch.autograd.Function):
++                        @staticmethod
++                        def forward(ctx, x):
++                            ctx.H = x.shape[1]
++                            return _s2h(x)
++                        @staticmethod
++                        def backward(ctx, g):
++                            return _h2s(g, ctx.H)
++
++                    class _H2S(torch.autograd.Function):
++                        @staticmethod
++                        def forward(ctx, x):
++                            return _h2s(x, _H)
++                        @staticmethod
++                        def backward(ctx, g):
++                            return _s2h(g)
++
++                    # ── All-to-all: seq-split → head-split ──
++                    _q_full = _S2H.apply(query_layer)
++                    _k_full = _S2H.apply(key_layer)
++                    _v_full = _S2H.apply(value_layer)
++
++                    # ── FlashMLA: full sequence, H/cp heads ──
++                    _out_full, _ = _flash_mla_varlen(
++                        _q_full, _k_full, _v_full,
++                        cu_seqlens_q, cu_seqlens_q,
++                        max_seqlen_q, max_seqlen_q,
++                        causal=_causal,
++                        softmax_scale=_scale,
++                    )
++
++                    # ── All-to-all back: head-split → seq-split ──
++                    return _ContiguousGrad.apply(_H2S.apply(_out_full))
++
++                if q_format == "thd":
++                    # Already in varlen packed format (total, h, d)
++                    _out, _ = _flash_mla_varlen(
++                        query_layer, key_layer, value_layer,
++                        cu_seqlens_q, cu_seqlens_kv,
++                        max_seqlen_q, max_seqlen_kv,
++                        causal=_causal,
++                        softmax_scale=_scale,
++                    )
++                    return _ContiguousGrad.apply(_out)
++
++                # sbhd / bshd → varlen conversion
++                if q_format == "sbhd":
++                    _q = query_layer.transpose(0, 1).contiguous()
++                    _k = key_layer.transpose(0, 1).contiguous()
++                    _v = value_layer.transpose(0, 1).contiguous()
++                else:
++                    _q, _k, _v = query_layer, key_layer, value_layer
++
++                _B, _Sq = _q.shape[0], _q.shape[1]
++                _Skv = _k.shape[1]
++                _q_flat = _q.reshape(_B * _Sq, _q.shape[2], _q.shape[3])
++                _k_flat = _k.reshape(_B * _Skv, _k.shape[2], _k.shape[3])
++                _v_flat = _v.reshape(_B * _Skv, _v.shape[2], _v.shape[3])
++                _cu_q = torch.arange(
++                    0, (_B + 1) * _Sq, _Sq,
++                    dtype=torch.int32, device=query_layer.device,
++                )
++                _cu_kv = torch.arange(
++                    0, (_B + 1) * _Skv, _Skv,
++                    dtype=torch.int32, device=query_layer.device,
++                )
++
++                _out, _ = _flash_mla_varlen(
++                    _q_flat, _k_flat, _v_flat,
++                    _cu_q, _cu_kv,
++                    _Sq, _Skv,
++                    causal=_causal,
++                    softmax_scale=_scale,
++                )
++
++                _out = _out.reshape(_B, _Sq, _out.shape[1], _out.shape[2])
++                if q_format == "sbhd":
++                    _out = _out.transpose(0, 1).contiguous()
++
++                return _ContiguousGrad.apply(_out)
++
++            # ── V-padding fallback for MLA (when FlashMLA is not available) ──
++            orig_v_dim = None
++            pad_v = False
++            if head_dim_qk != head_dim_v:
++                if isinstance(value_layer, Float8Tensor):
++                    logger.warning(
++                        "V-padding for MLA is not supported with Float8Tensor. "
++                        "head_dim_qk=%d, head_dim_v=%d", head_dim_qk, head_dim_v,
++                    )
++                elif head_dim_v > head_dim_qk:
++                    raise ValueError(
++                        f"head_dim_v ({head_dim_v}) > head_dim_qk ({head_dim_qk}) is not "
++                        "supported. Only head_dim_v <= head_dim_qk (e.g. MLA) is handled "
++                        "by V-padding."
++                    )
++                else:
++                    orig_v_dim = value_layer.shape[-1]
++                    # Pad V so attention can run when Q/V head dims differ.
++                    value_layer = F.pad(value_layer, (0, head_dim_qk - orig_v_dim))
++                    head_dim_v = value_layer.shape[-1]
++                    pad_v = True
++
+             # set ALiBi attributes
+             global _alibi_cache
+             if alibi_slopes is not None:
+@@ -1407,6 +1607,33 @@ class DotProductAttention(TransformerEngineBaseModule):
+                 else None
+             )
+ 
++            def _trim_output(attn_out):
++                if not pad_v:
++                    return attn_out
++
++                def _trim_data(data):
++                    if data.ndim == 2:
++                        # (t, nheads*head_dim) -> reshape, trim, flatten
++                        data = data.reshape(data.shape[0], num_attention_heads, head_dim_v)
++                        data = data.narrow(-1, 0, orig_v_dim)
++                        return data.reshape(data.shape[0], -1)
++                    # ndim 3 (t,h,d) or ndim 4 (s,b,h,d): trim last dim
++                    return data.narrow(-1, 0, orig_v_dim)
++
++                def _trim_tensor(out):
++                    if out is None:
++                        return out
++                    if isinstance(out, Float8Tensor):
++                        out_data = _trim_data(out._data)
++                        return Float8Tensor.make_like(out, data=out_data, shape=out_data.shape)
++                    return _trim_data(out)
++
++                if isinstance(attn_out, tuple):
++                    return (_trim_tensor(attn_out[0]),) + attn_out[1:]
++                if isinstance(attn_out, list):
++                    return [_trim_tensor(attn_out[0])] + attn_out[1:] if attn_out else attn_out
++                return _trim_tensor(attn_out)
++
+             if use_flash_attention:
+                 if core_attention_bias_type == "alibi":
+                     alibi_slopes, _ = dpa_utils.get_alibi(
+@@ -1416,7 +1643,7 @@ class DotProductAttention(TransformerEngineBaseModule):
+                         max_seqlen_kv,
+                         alibi_slopes=alibi_slopes,
+                     )
+-                return self.flash_attention(
++                attn_out = self.flash_attention(
+                     query_layer,
+                     key_layer,
+                     value_layer,
+@@ -1441,6 +1668,7 @@ class DotProductAttention(TransformerEngineBaseModule):
+                     fp8_output=fp8_output,
+                     num_splits=num_splits,
+                 )
++                return _trim_output(attn_out)
+ 
+             if use_fused_attention:
+                 fu_core_attention_bias_type = core_attention_bias_type
+@@ -1459,7 +1687,7 @@ class DotProductAttention(TransformerEngineBaseModule):
+                         bottom_right_alignment=attn_mask_type not in ["causal", "padding_causal"],
+                     )
+                 if checkpoint_core_attention:
+-                    return self._checkpointed_attention_forward(
++                    attn_out = self._checkpointed_attention_forward(
+                         self.fused_attention,
+                         query_layer,
+                         key_layer,
+@@ -1490,7 +1718,8 @@ class DotProductAttention(TransformerEngineBaseModule):
+                         softmax_offset=softmax_offset,
+                         fp8_output=fp8_output,
+                     )
+-                return self.fused_attention(
++                    return _trim_output(attn_out)
++                attn_out = self.fused_attention(
+                     query_layer,
+                     key_layer,
+                     value_layer,
+@@ -1520,11 +1749,12 @@ class DotProductAttention(TransformerEngineBaseModule):
+                     softmax_offset=softmax_offset,
+                     fp8_output=fp8_output,
+                 )
++                return _trim_output(attn_out)
+ 
+             if use_unfused_attention:
+                 allow_emulation = os.getenv("NVTE_UnfusedDPA_Emulate_FP8", "0") == "1"
+                 if checkpoint_core_attention:
+-                    return self._checkpointed_attention_forward(
++                    attn_out = self._checkpointed_attention_forward(
+                         self.unfused_attention,
+                         _alibi_cache,
+                         query_layer,
+@@ -1548,7 +1778,8 @@ class DotProductAttention(TransformerEngineBaseModule):
+                         quantizers=self.quantizers,
+                         fp8_output=fp8_output,
+                     )
+-                return self.unfused_attention(
++                    return _trim_output(attn_out)
++                attn_out = self.unfused_attention(
+                     _alibi_cache,
+                     query_layer,
+                     key_layer,
+@@ -1571,4 +1802,5 @@ class DotProductAttention(TransformerEngineBaseModule):
+                     quantizers=self.quantizers,
+                     fp8_output=fp8_output,
+                 )
++                return _trim_output(attn_out)
+             return None
+diff --git a/transformer_engine/pytorch/attention/dot_product_attention/utils.py b/transformer_engine/pytorch/attention/dot_product_attention/utils.py
+index 8c6b6af..e2d37f7 100644
+--- a/transformer_engine/pytorch/attention/dot_product_attention/utils.py
++++ b/transformer_engine/pytorch/attention/dot_product_attention/utils.py
+@@ -115,7 +115,7 @@ class FlashAttentionUtils:
+     version = PkgVersion("0")
+     version_required = PkgVersion("2.1.1")
+     version_required_blackwell = PkgVersion("2.7.3")
+-    max_version = PkgVersion("2.8.3")
++    max_version = PkgVersion("2.8.4")
+     v2_plus = False
+     v2_1_plus = False
+     v2_3_plus = False
+@@ -595,11 +595,6 @@ def get_attention_backend(
+ 
+     # Filter: Head dimension
+     if head_dim_qk != head_dim_v:
+-        if use_flash_attention_2 and FlashAttentionUtils.is_installed:
+-            logger.debug("Disabling FlashAttention 2 as it does not support MLA.")
+-            use_flash_attention_2 = False
+-
+-        qkv_layout_group = qkv_layout.replace("b", "").replace("s", "").replace("t", "")
+         if use_fused_attention and qkv_layout_group != "hd_hd_hd":
+             logger.debug(
+                 "Disabling FusedAttention as MLA is not supported with qkv_layout = %s",
