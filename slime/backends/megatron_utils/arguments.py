@@ -1,4 +1,5 @@
 import logging
+import sys
 from megatron.training.arguments import parse_args as _megatron_parse_args
 from megatron.training.arguments import validate_args as _megatron_validate_args
 from megatron.training.tokenizer.tokenizer import _vocab_size_with_padding
@@ -112,6 +113,8 @@ set_default_megatron_args = _set_default_megatron_args
 def megatron_parse_args(extra_args_provider, skip_hf_validate=False):
     """Parse megatron args, validate HF config, and set defaults."""
     args = _megatron_parse_args(extra_args_provider=extra_args_provider, ignore_unknown_args=True)
+    if not any(arg == "--profile-ranks" or arg.startswith("--profile-ranks=") for arg in sys.argv):
+        args.profile_ranks = None
 
     if args.hf_checkpoint and not skip_hf_validate:
         hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)

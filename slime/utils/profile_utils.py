@@ -15,11 +15,14 @@ class TrainProfiler:
         self.args = args
         self._torch_profiler_overall = None
         self._memory_profiler_overall = None
+        self._rank = torch.distributed.get_rank()
+        profile_ranks = getattr(args, "profile_ranks", None)
+        self._rank_enabled = not profile_ranks or self._rank in profile_ranks
 
-        if args.use_pytorch_profiler and ("train_overall" in args.profile_target):
+        if self._rank_enabled and args.use_pytorch_profiler and ("train_overall" in args.profile_target):
             self._torch_profiler_overall = _create_torch_profiler(args, name="train_overall")
 
-        if args.record_memory_history and ("train_overall" in args.profile_target):
+        if self._rank_enabled and args.record_memory_history and ("train_overall" in args.profile_target):
             self._memory_profiler_overall = _BaseMemoryProfiler.create(args)
             self._memory_profiler_overall.start()
 
