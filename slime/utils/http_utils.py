@@ -276,8 +276,6 @@ async def post(url, payload, max_retries=60, headers=None):
     # If distributed mode is enabled and actors exist, dispatch via Ray.
     if _distributed_post_enabled and _post_actors:
         try:
-            import ray
-
             actor = _next_actor()
             if actor is not None:
                 # Await the Ray ObjectRef directly. The previous
