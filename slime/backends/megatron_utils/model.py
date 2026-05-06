@@ -581,7 +581,10 @@ def train(
     # or random initialization don't propagate to all ranks in first all-gather (which is a
     # no-op if things work correctly).
     if should_disable_forward_pre_hook(args):
-        disable_forward_pre_hook(model, param_sync=False)
+        # On re-entry (2nd+ rollout), hooks were already disabled at the end of
+        # the previous call, so only disable if any chunk still has active hooks.
+        if any(len(m.remove_forward_pre_hook_handles) > 0 for m in model if isinstance(m, DDP)):
+            disable_forward_pre_hook(model, param_sync=False)
         # Also remove param_sync_func temporarily so that sync calls made in
         # `forward_backward_func` are no-ops.
         param_sync_func = config.param_sync_func
