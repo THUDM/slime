@@ -11,6 +11,35 @@ __all__ = ["validate_args", "megatron_parse_args", "set_default_megatron_args"]
 logger = logging.getLogger(__name__)
 
 
+_ALLGATHER_CP_DSA_ARCHITECTURES = {
+    "DeepseekV32ForCausalLM",
+    "GlmMoeDsaForCausalLM",
+}
+
+
+def _is_allgather_cp_dsa_model(hf_config):
+    if hf_config is None:
+        return False
+
+    architecture_names = getattr(hf_config, "architectures", None) or []
+    return any(name in _ALLGATHER_CP_DSA_ARCHITECTURES for name in architecture_names)
+
+
+def _validate_allgather_cp_supported(args, hf_config=None):
+    if not getattr(args, "allgather_cp", False) or getattr(args, "context_parallel_size", 1) <= 1:
+        return
+
+    if _is_allgather_cp_dsa_model(hf_config):
+        return
+
+    raise ValueError(
+        "--allgather-cp with --context-parallel-size > 1 is currently only supported for "
+        "DSA attention models (DeepSeek-V3.2 and GLM-5.1). Non-DSA models still use the "
+        "zigzag CP layout and would silently scramble token order under allgather CP. "
+        "Please remove --allgather-cp, set --context-parallel-size 1, or use a supported DSA model."
+    )
+
+
 def _has_dense_moe_layers(args):
     moe_layer_freq = getattr(args, "moe_layer_freq", None)
     if moe_layer_freq is None:
@@ -151,9 +180,13 @@ def megatron_parse_args(extra_args_provider, skip_hf_validate=False):
     """Parse megatron args, validate HF config, and set defaults."""
     args = _megatron_parse_args(extra_args_provider=extra_args_provider, ignore_unknown_args=True)
 
+    hf_config = None
     if args.hf_checkpoint and not skip_hf_validate:
         hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
         _hf_validate_args(args, hf_config)
+
+    if not skip_hf_validate:
+        _validate_allgather_cp_supported(args, hf_config)
 
     args.rank = 0
     args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
