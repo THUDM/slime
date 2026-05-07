@@ -1,7 +1,8 @@
-diff -urN tmp_sglang_orig/python/sglang/srt/managers/io_struct.py tmp_sglang_mod/python/sglang/srt/managers/io_struct.py
---- tmp_sglang_orig/python/sglang/srt/managers/io_struct.py	2026-04-07 01:29:33.170989783 +0000
-+++ tmp_sglang_mod/python/sglang/srt/managers/io_struct.py	2026-04-07 01:30:22.328323959 +0000
-@@ -1362,6 +1362,7 @@
+diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
+index e6a147c..3ced395 100644
+--- a/python/sglang/srt/managers/io_struct.py
++++ b/python/sglang/srt/managers/io_struct.py
+@@ -1259,6 +1259,7 @@ class UpdateWeightsFromDistributedReqInput(BaseReq):
      names: List[str]
      dtypes: List[str]
      shapes: List[List[int]]
@@ -9,10 +10,11 @@ diff -urN tmp_sglang_orig/python/sglang/srt/managers/io_struct.py tmp_sglang_mod
      # The group name
      group_name: str = "weight_update_group"
      # Whether to flush the cache after updating weights
-diff -urN tmp_sglang_orig/python/sglang/srt/managers/tp_worker.py tmp_sglang_mod/python/sglang/srt/managers/tp_worker.py
---- tmp_sglang_orig/python/sglang/srt/managers/tp_worker.py	2026-04-07 01:29:33.368983074 +0000
-+++ tmp_sglang_mod/python/sglang/srt/managers/tp_worker.py	2026-04-07 01:30:32.446981062 +0000
-@@ -148,6 +148,7 @@
+diff --git a/python/sglang/srt/managers/tp_worker.py b/python/sglang/srt/managers/tp_worker.py
+index fb56de1..f40ffad 100644
+--- a/python/sglang/srt/managers/tp_worker.py
++++ b/python/sglang/srt/managers/tp_worker.py
+@@ -150,6 +150,7 @@ class BaseTpWorker(ABC):
              recv_req.names,
              recv_req.dtypes,
              recv_req.shapes,
@@ -20,18 +22,19 @@ diff -urN tmp_sglang_orig/python/sglang/srt/managers/tp_worker.py tmp_sglang_mod
              recv_req.group_name,
              recv_req.load_format,
          )
-diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_sglang_mod/python/sglang/srt/model_executor/model_runner.py
---- tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py	2026-04-07 01:29:33.592975483 +0000
-+++ tmp_sglang_mod/python/sglang/srt/model_executor/model_runner.py	2026-04-07 01:31:33.304918738 +0000
-@@ -13,6 +13,7 @@
- # ==============================================================================
- """ModelRunner runs the forward passes of the models."""
-
+diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
+index a7347c1..10ec546 100644
+--- a/python/sglang/srt/model_executor/model_runner.py
++++ b/python/sglang/srt/model_executor/model_runner.py
+@@ -15,6 +15,7 @@
+ 
+ from __future__ import annotations
+ 
 +import contextlib
  import datetime
  import gc
  import inspect
-@@ -247,6 +248,9 @@
+@@ -255,6 +256,9 @@ UNBALANCED_MODEL_LOADING_TIMEOUT_S = 480  # leave more time for post data proces
  
  logger = logging.getLogger(__name__)
  
@@ -41,7 +44,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
  
  def resolve_language_model(model: nn.Module) -> nn.Module:
      model_cls_name = model.__class__.__name__
-@@ -1341,6 +1345,7 @@
+@@ -1567,6 +1571,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
          names,
          dtypes,
          shapes,
@@ -49,7 +52,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
          group_name,
          load_format: Optional[str] = None,
      ):
-@@ -1363,6 +1368,18 @@
+@@ -1589,6 +1594,18 @@ class ModelRunner(ModelRunnerKVCacheMixin):
              return self._update_bucketed_weights_from_distributed(
                  names, dtypes, shapes, group_name
              )
@@ -68,7 +71,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
          try:
              weights = []
              handles = []
-@@ -1395,6 +1412,151 @@
+@@ -1621,6 +1638,151 @@ class ModelRunner(ModelRunnerKVCacheMixin):
              logger.error(error_msg)
              return False, error_msg
  
@@ -220,7 +223,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
      def _update_bucketed_weights_from_distributed(
          self, names, dtypes, shapes, group_name
      ):
-@@ -1437,6 +1599,10 @@
+@@ -1663,6 +1825,10 @@ class ModelRunner(ModelRunnerKVCacheMixin):
              return self._update_weights_from_flattened_bucket(
                  flattened_tensor_bucket_dict=named_tensors
              )
@@ -231,7 +234,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
  
          # We need to get device after patch otherwise the device would be wrong
          self.device_module = torch.get_device_module(self.device)
-@@ -1489,6 +1655,35 @@
+@@ -1715,6 +1881,35 @@ class ModelRunner(ModelRunnerKVCacheMixin):
  
          return True, "Success"
  
@@ -267,7 +270,7 @@ diff -urN tmp_sglang_orig/python/sglang/srt/model_executor/model_runner.py tmp_s
      def get_weights_by_name(
          self, name: str, truncate_size: int = 100
      ) -> Optional[torch.Tensor]:
-@@ -2718,6 +2907,67 @@
+@@ -3072,6 +3267,67 @@ class ModelRunner(ModelRunnerKVCacheMixin):
          return True, "Success"
  
  
