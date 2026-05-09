@@ -21,6 +21,7 @@ from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.core.utils import get_model_config, unwrap_model
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
+from tqdm import tqdm
 
 from slime.utils import logging_utils
 from slime.utils.memory_utils import clear_memory
@@ -31,6 +32,40 @@ from .loss import loss_function
 from .model_provider import get_model_provider_func
 
 logger = logging.getLogger(__name__)
+
+
+def _disable_tqdm_for_non_main_rank() -> bool:
+    return not (
+        mpu.get_data_parallel_rank(with_context_parallel=True) == 0
+        and mpu.get_tensor_model_parallel_rank() == 0
+        and mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1
+    )
+
+
+def _should_update_microbatch_pbar(model) -> bool:
+    if _disable_tqdm_for_non_main_rank():
+        return False
+
+    while hasattr(model, "module"):
+        model = model.module
+    vp_stage = getattr(model, "vp_stage", None)
+    if mpu.get_virtual_pipeline_model_parallel_world_size() is not None and vp_stage is not None:
+        return mpu.is_pipeline_last_stage(ignore_virtual=False, vp_stage=vp_stage)
+    return mpu.is_pipeline_last_stage(ignore_virtual=True)
+
+
+def _wrap_forward_step_with_microbatch_pbar(forward_step_func, pbar):
+    if pbar is None:
+        return forward_step_func
+
+    def wrapped_forward_step(*args, **kwargs):
+        result = forward_step_func(*args, **kwargs)
+        model = args[1] if len(args) > 1 else kwargs.get("model")
+        if model is not None and _should_update_microbatch_pbar(model):
+            pbar.update(1)
+        return result
+
+    return wrapped_forward_step
 
 
 def _iter_critic_output_layers(model: Sequence[DDP]):
@@ -321,9 +356,18 @@ def forward_only(
     config.timers = None
     forward_data_store = []
     num_steps_per_rollout = len(num_microbatches)
+    microbatch_pbar = tqdm(
+        total=sum(num_microbatches),
+        desc=f"{(store_prefix or getattr(model[0], 'role', 'actor')).rstrip('_')} forward",
+        unit="microbatch",
+        dynamic_ncols=True,
+        leave=False,
+        disable=_disable_tqdm_for_non_main_rank(),
+    )
+    forward_step_with_progress = _wrap_forward_step_with_microbatch_pbar(forward_step, microbatch_pbar)
     for step_id in range(num_steps_per_rollout):
         forward_data_store += forward_backward_func(
-            forward_step_func=forward_step,
+            forward_step_func=forward_step_with_progress,
             data_iterator=data_iterator,
             model=model,
             num_microbatches=num_microbatches[step_id],
@@ -331,6 +375,7 @@ def forward_only(
             micro_batch_size=args.micro_batch_size,
             forward_only=True,
         )
+    microbatch_pbar.close()
 
     # Move model back to the train mode.
     for model_module in model:
@@ -367,6 +412,7 @@ def train_one_step(
     optimizer: MegatronOptimizer,
     opt_param_scheduler: OptimizerParamScheduler,
     num_microbatches: int,
+    microbatch_pbar=None,
 ) -> tuple[dict[str, float], float]:
     """Execute a single pipeline-parallel training step.
 
@@ -481,7 +527,7 @@ def train_one_step(
     # Forward pass.
     forward_backward_func = get_forward_backward_func()
     losses_reduced = forward_backward_func(
-        forward_step_func=forward_step,
+        forward_step_func=_wrap_forward_step_with_microbatch_pbar(forward_step, microbatch_pbar),
         data_iterator=data_iterator,
         model=model,
         num_microbatches=num_microbatches,
@@ -645,6 +691,14 @@ def train(
         pre_hook_enabled = False
 
     num_steps_per_rollout = len(num_microbatches)
+    microbatch_pbar = tqdm(
+        total=sum(num_microbatches),
+        desc=f"{getattr(model[0], 'role', 'actor')} train",
+        unit="microbatch",
+        dynamic_ncols=True,
+        leave=False,
+        disable=_disable_tqdm_for_non_main_rank(),
+    )
 
     # Run training iterations till done.
     for step_id in range(num_steps_per_rollout):
@@ -659,6 +713,7 @@ def train(
             optimizer,
             opt_param_scheduler,
             num_microbatches[step_id],
+            microbatch_pbar=microbatch_pbar,
         )
 
         if step_id == 0:
@@ -743,6 +798,7 @@ def train(
                     rel_tol=0.01,
                     abs_tol=0.01,
                 ), f"grad norm mismatch: {grad_norm} != {expected_grad_norm}"
+    microbatch_pbar.close()
     # Close out pre-hooks if using distributed optimizer and overlapped param gather.
     if pre_hook_enabled:
         disable_forward_pre_hook(model)

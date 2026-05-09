@@ -440,7 +440,21 @@ class MegatronTrainRayActor(TrainRayActor):
                     )
 
                 self._switch_model("old_actor" if self.args.keep_old_actor else "actor")
-                if not self.args.use_rollout_logprobs or self.args.get_mismatch_metrics:
+                can_reuse_log_probs_in_loss = (
+                    len(num_microbatches) == 1
+                    and self.args.loss_type == "policy_loss"
+                    and self.args.kl_coef == 0
+                    and not self.args.use_rollout_logprobs
+                    and not self.args.get_mismatch_metrics
+                    and not self.args.use_critic
+                    and not self.args.keep_old_actor
+                    and not self.args.use_opd
+                    and not self.args.use_routing_replay
+                    and self.args.advantage_estimator != "gspo"
+                )
+                if (
+                    not self.args.use_rollout_logprobs or self.args.get_mismatch_metrics
+                ) and not can_reuse_log_probs_in_loss:
                     if self.args.use_routing_replay:
                         if self.args.use_rollout_routing_replay:
                             os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
