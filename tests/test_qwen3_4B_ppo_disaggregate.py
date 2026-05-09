@@ -3,17 +3,22 @@ import tempfile
 
 import slime.utils.external_utils.command_utils as U
 
-TIGHT_DEVICE_MEMORY = U.get_bool_env_var("SLIME_TEST_TIGHT_DEVICE_MEMORY", "1")
 
-MODEL_NAME = "Qwen2.5-0.5B-Instruct"
-MODEL_TYPE = "qwen2.5-0.5B"
-NUM_GPUS = 4
+ENABLE_EVAL = bool(int(os.environ.get("SLIME_TEST_ENABLE_EVAL", "1")))
+TIGHT_HOST_MEMORY = bool(int(os.environ.get("SLIME_TEST_TIGHT_HOST_MEMORY", "1")))
+
+MODEL_NAME = "Qwen3-4B"
+MODEL_TYPE = "qwen3-4B"
+NUM_GPUS = 8
 
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
+    U.exec_command("hf download Qwen/Qwen3-4B --local-dir /root/models/Qwen3-4B")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
+    U.hf_download_dataset("zhuzilin/aime-2024")
+
+    U.convert_checkpoint(model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=NUM_GPUS)
 
 
 def execute():
@@ -33,7 +38,7 @@ megatron:
     )
     megatron_config.close()
 
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ "
+    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/{MODEL_NAME}_torch_dist "
 
     rollout_args = (
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
@@ -45,31 +50,41 @@ megatron:
         "--num-rollout 3 "
         "--rollout-batch-size 8 "
         "--n-samples-per-prompt 4 "
-        "--rollout-max-response-len 1024 "
+        "--rollout-max-response-len 8192 "
         "--rollout-temperature 0.8 "
         "--global-batch-size 32 "
         "--balance-data "
     )
 
+    eval_args = (
+        f"{'--eval-interval 20 ' if ENABLE_EVAL else ''}"
+        "--eval-prompt-data aime24 /root/datasets/aime-2024/aime-2024.jsonl "
+        "--n-samples-per-eval-prompt 1 "
+        "--eval-max-response-len 16384 "
+        "--eval-top-k 1 "
+    )
+
     perf_args = (
-        "--tensor-model-parallel-size 1 "
+        "--tensor-model-parallel-size 2 "
         "--sequence-parallel "
         "--pipeline-model-parallel-size 1 "
-        "--context-parallel-size 1 "
-        "--expert-model-parallel-size 1 "
-        "--expert-tensor-parallel-size 1 "
+        "--context-parallel-size 2 "
+        "--recompute-granularity full "
+        "--recompute-method uniform "
+        "--recompute-num-layers 1 "
         "--use-dynamic-batch-size "
-        "--max-tokens-per-gpu 9216 "
+        f"--max-tokens-per-gpu {2048 if TIGHT_HOST_MEMORY else 16384} "
     )
 
     ppo_args = (
         "--advantage-estimator ppo "
+        f"{'' if TIGHT_HOST_MEMORY else '--use-kl-loss '}"
         "--kl-loss-coef 0.00 "
         "--kl-loss-type k1 "
         "--kl-coef 0.00 "
         "--entropy-coef 0.00 "
         "--eps-clip 4e-4 "
-        "--num-critic-only-steps 3 "
+        "--num-critic-only-steps 1 "
         "--normalize-advantages "
     )
 
@@ -83,25 +98,27 @@ megatron:
     )
 
     sglang_args = (
-        "--rollout-num-gpus-per-engine 1 "
-        "--rollout-num-gpus 2 "
-        f"--sglang-mem-fraction-static {0.6 if TIGHT_DEVICE_MEMORY else 0.7} "
+        "--rollout-num-gpus-per-engine 2 "
+        "--rollout-num-gpus 4 "
+        "--sglang-mem-fraction-static 0.8 "
         "--sglang-cuda-graph-max-bs 32 "
+        "--sglang-max-running-requests 512 "
         "--sglang-enable-metrics "
     )
 
     ci_args = "--ci-test "
 
     misc_args = (
+        # default dropout in megatron is 0.1
         "--attention-dropout 0.0 "
         "--hidden-dropout 0.0 "
+        # should be good for model performance
         "--accumulate-allreduce-grads-in-fp32 "
         "--attention-softmax-in-fp32 "
+        # need to comment this when using model with MLA
         "--attention-backend flash "
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 4 "
-        "--megatron-to-hf-mode bridge "
-        "--colocate "
     )
 
     train_args = (
@@ -112,6 +129,7 @@ megatron:
         f"{ppo_args} "
         f"{U.get_default_wandb_args(__file__)} "
         f"{perf_args} "
+        f"{eval_args} "
         f"{sglang_args} "
         f"{ci_args} "
         f"{misc_args} "
@@ -125,6 +143,7 @@ megatron:
 
 
 if __name__ == "__main__":
+    # TODO also use typer
     prepare()
     for proxy_var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
         os.environ.pop(proxy_var, None)

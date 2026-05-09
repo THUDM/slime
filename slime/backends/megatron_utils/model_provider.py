@@ -17,6 +17,7 @@ from megatron.core.transformer.spec_utils import import_module
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.training.arguments import core_transformer_config_from_args
 
+from slime.utils.megatron_bridge_utils import patch_auto_bridge_hf_config
 from slime.utils.misc import load_function
 
 
@@ -85,7 +86,7 @@ def _get_model_provider_func(
 
         import slime_plugins.megatron_bridge  # noqa: F401  # register custom bridges
 
-        bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
+        bridge = patch_auto_bridge_hf_config(AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True))
         provider = bridge.to_megatron_provider(load_weights=False)
         # TODO: we should not manually set this...
         provider.tensor_model_parallel_size = args.tensor_model_parallel_size

@@ -81,7 +81,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
                 torch_memory_saver.memory_margin_bytes = x
 
-        (self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id) = initialize_model_and_optimizer(
+        self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id = initialize_model_and_optimizer(
             args, role
         )
 
@@ -159,6 +159,13 @@ class MegatronTrainRayActor(TrainRayActor):
 
         clear_memory(clear_host_memory=True)
         print_memory("before offload model")
+        if (
+            self.role == "actor"
+            and self.args.use_critic
+            and not self.args.colocate
+            and hasattr(self.weight_updater, "disconnect_rollout_engines")
+        ):
+            self.weight_updater.disconnect_rollout_engines()
         destroy_process_groups()
 
         torch_memory_saver.pause()
@@ -433,7 +440,21 @@ class MegatronTrainRayActor(TrainRayActor):
                     )
 
                 self._switch_model("old_actor" if self.args.keep_old_actor else "actor")
-                if not self.args.use_rollout_logprobs or self.args.get_mismatch_metrics:
+                can_reuse_log_probs_in_loss = (
+                    len(num_microbatches) == 1
+                    and self.args.loss_type == "policy_loss"
+                    and self.args.kl_coef == 0
+                    and not self.args.use_rollout_logprobs
+                    and not self.args.get_mismatch_metrics
+                    and not self.args.use_critic
+                    and not self.args.keep_old_actor
+                    and not self.args.use_opd
+                    and not self.args.use_routing_replay
+                    and self.args.advantage_estimator != "gspo"
+                )
+                if (
+                    not self.args.use_rollout_logprobs or self.args.get_mismatch_metrics
+                ) and not can_reuse_log_probs_in_loss:
                     if self.args.use_routing_replay:
                         if self.args.use_rollout_routing_replay:
                             os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
@@ -515,7 +536,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         # torch dist may trigger nccl communication during saving.
         if self.args.offload_train:
-            reload_process_groups()
+            self.wake_up()
 
         if self.args.async_save:
             from megatron.training.async_utils import maybe_finalize_async_save
@@ -533,7 +554,7 @@ class MegatronTrainRayActor(TrainRayActor):
             save_hf_model(self.args, rollout_id, self.model)
 
         if self.args.offload_train:
-            destroy_process_groups()
+            self.sleep()
 
     @timer
     def update_weights(self) -> None:
@@ -549,10 +570,14 @@ class MegatronTrainRayActor(TrainRayActor):
             self.rollout_manager.get_updatable_engines_and_lock.remote()
         )
 
-        if self.args.offload_train:
+        reconnect_rollout_engines = self.args.offload_train and self.args.use_critic and not self.args.colocate
+
+        if reconnect_rollout_engines:
+            self.wake_up()
+        elif self.args.offload_train:
             reload_process_groups()
 
-        if num_new_engines > 0:
+        if num_new_engines > 0 or reconnect_rollout_engines:
             self.weight_updater.connect_rollout_engines(
                 rollout_engines,
                 rollout_engine_lock,
@@ -587,7 +612,9 @@ class MegatronTrainRayActor(TrainRayActor):
                 else:
                     self.weights_backuper.backup("old_actor")
 
-        if self.args.offload_train:
+        if reconnect_rollout_engines:
+            self.sleep()
+        elif self.args.offload_train:
             destroy_process_groups()
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:

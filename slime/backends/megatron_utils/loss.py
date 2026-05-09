@@ -593,7 +593,10 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
             "total_lengths"). Modified in-place to add "advantages" and
             "returns" keys, each mapping to lists of tensors per sample.
     """
-    log_probs: list[torch.Tensor] = rollout_data.get("rollout_log_probs" if args.use_rollout_logprobs else "log_probs")
+    rollout_log_probs: list[torch.Tensor] | None = rollout_data.get("rollout_log_probs")
+    log_probs: list[torch.Tensor] | None = (
+        rollout_log_probs if args.use_rollout_logprobs else rollout_data.get("log_probs")
+    )
     ref_log_probs: list[torch.Tensor] = rollout_data.get("ref_log_probs")
     rewards: list[float] = rollout_data.get("rewards")
     values: None | list[torch.Tensor] = rollout_data.get("values")
@@ -608,7 +611,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
 
     if args.kl_coef == 0 or not log_probs:
         # when kl_coef is 0, we won't compute ref_log_prob
-        xs = log_probs if log_probs is not None else values
+        xs = log_probs or rollout_log_probs or values
         kl = [torch.zeros_like(x, dtype=torch.float32, device=x.device) for x in xs]
     else:
         kl = [
@@ -822,7 +825,7 @@ def policy_loss_function(
         are enabled.
     """
     advantages = torch.cat(batch["advantages"], dim=0)
-    old_log_probs = batch["rollout_log_probs"] if args.use_rollout_logprobs else batch["log_probs"]
+    old_log_probs = batch["rollout_log_probs"] if args.use_rollout_logprobs else batch.get("log_probs")
 
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
@@ -839,6 +842,11 @@ def policy_loss_function(
     )
 
     log_probs = log_probs_and_entropy["log_probs"]
+    if not args.use_rollout_logprobs and not old_log_probs:
+        old_log_probs = [log_prob.detach() for log_prob in log_probs]
+    train_log_probs_for_tis = batch.get("log_probs")
+    if not train_log_probs_for_tis:
+        train_log_probs_for_tis = [log_prob.detach() for log_prob in log_probs]
 
     # Pre-gather log probs if needed by OPSM or GSPO to avoid duplicate gathering
     need_full_log_probs = args.use_opsm or args.advantage_estimator == "gspo"
@@ -907,7 +915,7 @@ def policy_loss_function(
         tis_kwargs = {
             "args": args,
             "pg_loss": pg_loss,
-            "train_log_probs": batch["log_probs"],
+            "train_log_probs": train_log_probs_for_tis,
             "rollout_log_probs": batch["rollout_log_probs"],
             "loss_masks": batch["loss_masks"],
             "total_lengths": total_lengths,

@@ -29,7 +29,7 @@ Initialize the Qwen3-4B-Instruct-2507 model needed for tool use:
 
 ```bash
 # hf checkpoint
-huggingface-cli download Qwen/Qwen3-4B-Instruct-2507 --local-dir /root/Qwen3-4B-Instruct-2507
+hf download Qwen/Qwen3-4B-Instruct-2507 --local-dir /root/Qwen3-4B-Instruct-2507
 
 # mcore checkpoint
 cd /root/slime
