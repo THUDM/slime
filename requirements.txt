@@ -13,6 +13,7 @@ qwen_vl_utils # for VLM
 ray[default]
 ring_flash_attn
 sglang-router>=0.2.3
+swanlab
 tensorboard
 transformers
 wandb

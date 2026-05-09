@@ -1095,6 +1095,40 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--wandb-run-id", type=str, default=None)
             return parser
 
+        # swanlab
+        def add_swanlab_arguments(parser):
+            parser.add_argument("--use-swanlab", action="store_true", default=False)
+            parser.add_argument(
+                "--swanlab-mode",
+                type=str,
+                default=None,
+                choices=["cloud", "local", "offline", "disabled"],
+                help="SwanLab mode: cloud (default), local, offline, or disabled.",
+            )
+            parser.add_argument(
+                "--swanlab-dir",
+                type=str,
+                default=None,
+                help="Directory to store SwanLab logs. Default is swanlog in the current directory.",
+            )
+            parser.add_argument("--swanlab-key", type=str, default=None)
+            parser.add_argument("--swanlab-host", type=str, default=None)
+            parser.add_argument("--swanlab-web-host", type=str, default=None)
+            parser.add_argument("--swanlab-workspace", type=str, default=None)
+            parser.add_argument("--swanlab-project", type=str, default=None)
+            parser.add_argument("--swanlab-group", type=str, default=None)
+            parser.add_argument("--swanlab-experiment-name", type=str, default=None)
+            parser.add_argument("--swanlab-open-metrics-interval", type=int, default=10)
+            parser.add_argument(
+                "--disable-swanlab-random-suffix",
+                action="store_false",
+                dest="swanlab_random_suffix",
+                default=True,
+                help="Whether to add a random suffix to the SwanLab group name.",
+            )
+            parser.add_argument("--swanlab-run-id", type=str, default=None)
+            return parser
+
         # tensorboard
         def add_tensorboard_arguments(parser):
             # tb_project_name, tb_experiment_name
@@ -1379,6 +1413,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_algo_arguments(parser)
         parser = add_on_policy_distillation_arguments(parser)
         parser = add_wandb_arguments(parser)
+        parser = add_swanlab_arguments(parser)
         parser = add_tensorboard_arguments(parser)
         parser = add_router_arguments(parser)
         parser = add_debug_arguments(parser)

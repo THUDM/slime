@@ -113,7 +113,7 @@ def execute(mode: str = ""):
         f"{rollout_args} "
         f"{optimizer_args} "
         f"{ppo_args} "
-        f"{U.get_default_wandb_args(__file__)} "
+        f"{U.get_default_tracking_args(__file__)} "
         f"{perf_args} "
         f"{sglang_args} "
         f"{ci_args} "

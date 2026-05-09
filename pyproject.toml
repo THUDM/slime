@@ -15,7 +15,7 @@ sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
 default_section = "THIRDPARTY"
 extend_skip = ["setup.py", "docs/source/conf.py"]
 known_first_party = ["slime", "slime_plugins"]
-known_third_party = ["megatron", "wandb", "ray", "transformers"]
+known_third_party = ["megatron", "ray", "swanlab", "transformers", "wandb"]
 src_paths = ["slime", "slime_plugins"]
 
 
