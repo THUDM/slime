@@ -306,5 +306,9 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
     # save the seqlen of the whole rollout batch
     Timer().seq_lens = total_lengths
     rollout_data["total_lengths"] = [total_lengths[i] for i in partition]
+    if "raw_reward" in rollout_data:
+        # Keep raw_reward global for passrate metrics, but provide a DP-local view
+        # for correct-sample metrics that index local response_lengths/total_lengths.
+        rollout_data["raw_rewards_partitioned"] = [rollout_data["raw_reward"][i] for i in partition]
 
     return rollout_data

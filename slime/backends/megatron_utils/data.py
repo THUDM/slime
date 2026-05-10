@@ -416,6 +416,7 @@ def log_rollout_data(
                 "rollout_routed_experts",
                 "max_seq_lens",
                 "dynamic_global_batch_size",
+                "raw_rewards_partitioned",
             ]:
                 continue
             # Upload per sample mean for each rollout value
@@ -505,13 +506,15 @@ def log_rollout_data(
                 percentile = {f"p{min(math.ceil(q*100),100)}": p for q, p in zip(quantiles, percentile, strict=True)}
                 return percentile
 
-            raw_rewards = rollout_data["raw_reward"]
+            # raw_reward may stay global for passrate; correct-sample metrics
+            # must use rewards aligned with local response_lengths/total_lengths.
+            raw_rewards_partitioned = rollout_data["raw_rewards_partitioned"]
             # Additional metrics for correct cases are calculated separately below.
             correct_response_lengths = []
             correct_total_lengths = []
             correct_loss_masks = []
             correct_entropy = []
-            for i, raw_reward in enumerate(raw_rewards):
+            for i, raw_reward in enumerate(raw_rewards_partitioned):
                 if raw_reward == 1:
                     correct_response_lengths.append(response_lengths[i])
                     correct_total_lengths.append(total_lengths[i])
