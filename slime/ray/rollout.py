@@ -766,6 +766,12 @@ class RolloutManager:
         else:
             partitions = [range(i, len(total_lengths), dp_size) for i in range(dp_size)]
 
+        if getattr(self.args, "transfer_backend", "ray") == "mooncake_dataproto":
+            from slime.utils.rollout_dataproto import split_rollout_data_by_dp_dataproto
+
+            dynamic_global_batch_size = getattr(self, "_dynamic_global_batch_size", None)
+            return split_rollout_data_by_dp_dataproto(self.args, data, dp_size, partitions, dynamic_global_batch_size)
+
         rollout_data_refs = []
 
         for i in range(dp_size):

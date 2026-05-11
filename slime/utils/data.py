@@ -4,7 +4,6 @@ import logging
 import os
 import random
 import re
-
 import numpy as np
 import ray
 
@@ -298,7 +297,14 @@ def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu):
 
 def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
     assert len(rollout_data_ref) == dp_size
-    rollout_data = ray.get(rollout_data_ref[dp_rank].inner)
+    if getattr(args, "transfer_backend", "ray") == "mooncake_dataproto":
+        from slime.utils.rollout_dataproto import DataProto, dataproto_to_rollout_data
+
+        proto = rollout_data_ref[dp_rank]
+        assert isinstance(proto, DataProto), f"expected DataProto, got {type(proto)}"
+        rollout_data = dataproto_to_rollout_data(proto, preserve_remote_tensors=True)
+    else:
+        rollout_data = ray.get(rollout_data_ref[dp_rank].inner)
 
     partition = rollout_data.pop("partition")
     total_lengths = rollout_data["total_lengths"]

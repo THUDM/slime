@@ -326,6 +326,24 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This is used to shuffle the prompts and also for the random sampling of the prompts."
                 ),
             )
+            parser.add_argument(
+                "--transfer-backend",
+                choices=["ray", "mooncake_dataproto"],
+                default="ray",
+                help="Rollout data transfer backend. Keep ray as the default; mooncake_dataproto is experimental.",
+            )
+            parser.add_argument(
+                "--mooncake-dataproto-hard-pin",
+                action=argparse.BooleanOptionalAction,
+                default=True,
+                help="Hard-pin Mooncake rollout tensors to the producer segment for mooncake_dataproto transfer.",
+            )
+            parser.add_argument(
+                "--mooncake-dataproto-store-init-kwargs",
+                type=json.loads,
+                default=None,
+                help="JSON kwargs used to initialize MooncakeDistributedStore for mooncake_dataproto transfer.",
+            )
 
             # sampling
             parser.add_argument(
@@ -1590,6 +1608,13 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
 
 def slime_validate_args(args):
     args.eval_datasets = _resolve_eval_datasets(args)
+
+    if getattr(args, "transfer_backend", "ray") == "mooncake_dataproto":
+        from slime.utils.remote_batch import normalize_store_init_kwargs
+
+        args.mooncake_dataproto_store_init_kwargs = normalize_store_init_kwargs(
+            args.mooncake_dataproto_store_init_kwargs
+        )
 
     if args.use_slime_router:
         logger.warning(
