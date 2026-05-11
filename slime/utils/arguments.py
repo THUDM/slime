@@ -1231,8 +1231,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Path to a custom function that converts samples to training data. "
                     "If set, this function will replace the default _convert_samples_to_train_data. "
-                    "The function should have the signature "
-                    "`def convert_samples_to_train_data(args, samples, raw_rewards, rewards) -> dict`."
+                    "The function should have the signature `def convert_samples_to_train_data(args, samples) -> dict`."
                 ),
             )
             return parser

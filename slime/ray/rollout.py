@@ -483,20 +483,11 @@ class RolloutManager:
             self._try_ci_fault_injection()
         data, metrics = self._get_rollout_data(rollout_id=rollout_id)
         self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
-
-        raw_rewards, rewards = self._post_process_rewards(data)
-        _log_rollout_data(rollout_id, self.args, data, raw_rewards, rewards, metrics, time.time() - start_time)
+        _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
         if self.args.debug_rollout_only:
             # if debug rollout only, we don't convert samples to train data and directly return
             return
-
-        self._neutralize_zero_advantage_samples(data, rewards)
-
-        if self.custom_convert_samples_to_train_data_func is not None:
-            data = self.custom_convert_samples_to_train_data_func(self.args, data, raw_rewards, rewards)
-        else:
-            data = self._convert_samples_to_train_data(data, raw_rewards, rewards)
-
+        data = self._convert_samples_to_train_data(data)
         return self._split_train_data_by_dp(data, self.train_parallel_config["dp_size"])
 
     def eval(self, rollout_id):
@@ -688,26 +679,39 @@ class RolloutManager:
 
         return raw_rewards, raw_rewards
 
-    def _neutralize_zero_advantage_samples(self, samples, rewards):
-        """Replace zero-advantage samples in place with a 2-token pad sequence so the forward pass is cheap and the gradient is zero."""
-        # 0 matches the pad token used in slime/backends/megatron_utils/data.py.
+    def _convert_samples_to_train_data(self, samples: list[Sample] | list[list[Sample]]):
+        """
+        Convert inference generated samples to training data.
+        """
+        if self.custom_convert_samples_to_train_data_func is not None:
+            return self.custom_convert_samples_to_train_data_func(self.args, samples)
+
+        raw_rewards, rewards = self._post_process_rewards(samples)
+
+        assert len(raw_rewards) == len(samples)
+        assert len(rewards) == len(samples)
+
+        # Neutralize zero-advantage samples: their forward pass is wasted compute
+        # since loss_mask=0 gives zero gradient. 0 matches the pad token used in
+        # slime/backends/megatron_utils/data.py.
         pad_token_id = 0
+        num_neutralized = 0
         for sample, r in zip(samples, rewards, strict=True):
             if r == 0.0:
                 sample.tokens = [pad_token_id, pad_token_id]
                 sample.response_length = 1
                 sample.loss_mask = [0]
                 sample.remove_sample = True
-
-    def _convert_samples_to_train_data(
-        self,
-        samples: list[Sample] | list[list[Sample]],
-        raw_rewards: list[float],
-        rewards: list[float],
-    ):
-        """Convert inference generated samples to training data."""
-        assert len(raw_rewards) == len(samples)
-        assert len(rewards) == len(samples)
+                num_neutralized += 1
+        logger.info(f"neutralized {num_neutralized}/{len(samples)} zero-advantage samples")
+        logging_utils.log(
+            self.args,
+            {
+                "rollout/neutralized_ratio": num_neutralized / len(samples),
+                "rollout/step": compute_rollout_step(self.args, self.rollout_id),
+            },
+            step_key="rollout/step",
+        )
 
         train_data = {
             "tokens": [sample.tokens for sample in samples],
@@ -715,7 +719,7 @@ class RolloutManager:
             # some reward model, e.g. remote rm, may return multiple rewards,
             # we could use key to select the reward.
             "rewards": rewards,
-            "raw_reward": _resolve_raw_rewards(samples, raw_rewards),
+            "raw_reward": raw_rewards,
             "truncated": [1 if sample.status == Sample.Status.TRUNCATED else 0 for sample in samples],
             "sample_indices": [sample.index for sample in samples],
         }
@@ -735,6 +739,14 @@ class RolloutManager:
                 sample.loss_mask = [0] * sample.response_length
             loss_masks.append(sample.loss_mask)
         train_data["loss_masks"] = loss_masks
+
+        # Overwrite raw_reward when available. Mixed-source batches may only
+        # populate this field for a subset of samples (e.g. SWE but not code).
+        if any(sample.metadata and "raw_reward" in sample.metadata for sample in samples):
+            train_data["raw_reward"] = [
+                sample.metadata["raw_reward"] if sample.metadata and "raw_reward" in sample.metadata else sample.reward
+                for sample in samples
+            ]
 
         # For rollout buffer
         if samples[0].metadata and "round_number" in samples[0].metadata:
@@ -1182,7 +1194,7 @@ def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any]
     return log_dict
 
 
-def _log_rollout_data(rollout_id, args, samples, raw_rewards, rewards, rollout_extra_metrics, rollout_time):
+def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_time):
     if args.custom_rollout_log_function_path is not None:
         custom_log_func = load_function(args.custom_rollout_log_function_path)
         if custom_log_func(rollout_id, args, samples, rollout_extra_metrics, rollout_time):
@@ -1191,29 +1203,13 @@ def _log_rollout_data(rollout_id, args, samples, raw_rewards, rewards, rollout_e
     if args.load_debug_rollout_data:
         return
 
-    num_samples = len(samples)
     log_dict = {**(rollout_extra_metrics or {})}
     log_dict |= dict_add_prefix(compute_metrics_from_samples(args, samples), "rollout/")
     log_dict |= dict_add_prefix(compute_perf_metrics_from_samples(args, samples, rollout_time), "perf/")
-    log_dict["rollout/raw_reward"] = sum(_resolve_raw_rewards(samples, raw_rewards)) / num_samples
-    log_dict["rollout/rewards"] = sum(rewards) / num_samples
-    log_dict["rollout/response_lengths"] = sum(s.response_length for s in samples) / num_samples
-    log_dict["rollout/total_lengths"] = sum(len(s.tokens) for s in samples) / num_samples
-    log_dict["rollout/zero_advantage_ratio"] = sum(1 for r in rewards if r == 0.0) / num_samples
     logger.info(f"perf {rollout_id}: {log_dict}")
     step = compute_rollout_step(args, rollout_id)
     log_dict["rollout/step"] = step
     logging_utils.log(args, log_dict, step_key="rollout/step")
-
-
-def _resolve_raw_rewards(samples, raw_rewards):
-    """Apply the sample.metadata['raw_reward'] override used by train_data."""
-    if not any(sample.metadata and "raw_reward" in sample.metadata for sample in samples):
-        return raw_rewards
-    return [
-        sample.metadata["raw_reward"] if sample.metadata and "raw_reward" in sample.metadata else sample.reward
-        for sample in samples
-    ]
 
 
 def compute_metrics_from_samples(args, samples):
