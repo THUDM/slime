@@ -40,3 +40,5 @@ except ImportError:
     pass
 
 logging.getLogger("megatron").setLevel(logging.WARNING)
+
+from . import megatron_patch  # noqa: F401, E402
