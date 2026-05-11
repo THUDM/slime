@@ -1308,18 +1308,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=False,
                 help="enable dynamic global batch size, disable trim samples in rollout buffer when converting samples to train data",
             )
-            parser.add_argument(
-                "--filter-zero-advantage-samples",
-                action="store_true",
-                default=False,
-                help=(
-                    "Drop samples whose post-processed reward (i.e. advantage in GRPO/GSPO with "
-                    "normalization) is 0 before training, since they contribute zero gradient. "
-                    "When fewer than dp_size non-zero samples survive, pad back to dp_size with "
-                    "dropped zero-advantage samples whose loss mask is zeroed via remove_sample. "
-                    "Requires --use-dynamic-global-batch-size."
-                ),
-            )
             return parser
 
         def add_custom_megatron_plugins_arguments(parser):
@@ -1712,11 +1700,6 @@ def slime_validate_args(args):
         if args.log_probs_max_tokens_per_gpu is None:
             args.log_probs_max_tokens_per_gpu = args.max_tokens_per_gpu
 
-    if args.filter_zero_advantage_samples:
-        assert args.use_dynamic_global_batch_size, (
-            "--filter-zero-advantage-samples requires --use-dynamic-global-batch-size so the global "
-            "batch size adapts to the post-filter sample count."
-        )
     if args.eps_clip_high is None:
         args.eps_clip_high = args.eps_clip
 

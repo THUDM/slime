@@ -490,9 +490,7 @@ class RolloutManager:
             # if debug rollout only, we don't convert samples to train data and directly return
             return
 
-        if self.args.filter_zero_advantage_samples:
-            data, raw_rewards, rewards = self._filter_zero_advantage_samples(data, raw_rewards, rewards)
-            self._dynamic_global_batch_size = self._compute_dynamic_global_batch_size(len(data))
+        self._neutralize_zero_advantage_samples(data, rewards)
 
         if self.custom_convert_samples_to_train_data_func is not None:
             data = self.custom_convert_samples_to_train_data_func(self.args, data, raw_rewards, rewards)
@@ -690,43 +688,16 @@ class RolloutManager:
 
         return raw_rewards, raw_rewards
 
-    def _filter_zero_advantage_samples(self, samples, raw_rewards, rewards):
-        """Drop zero-advantage samples; pad to dp_size with dropped samples when survivors fall short."""
-        dp_size = self.train_parallel_config["dp_size"]
-        total = len(samples)
-        nonzero_idx = [i for i, r in enumerate(rewards) if r != 0.0]
-        zero_idx = [i for i, r in enumerate(rewards) if r == 0.0]
-
-        if len(nonzero_idx) >= dp_size:
-            keep_count = (len(nonzero_idx) // dp_size) * dp_size
-            kept_idx = nonzero_idx[:keep_count]
-            padding_count = 0
-        else:
-            padding_count = dp_size - len(nonzero_idx)
-            assert len(zero_idx) >= padding_count, (
-                f"Not enough samples to pad to dp_size={dp_size}: "
-                f"total={total} nonzero={len(nonzero_idx)} zero={len(zero_idx)}"
-            )
-            pad_idx = zero_idx[:padding_count]
-            for i in pad_idx:
-                samples[i].remove_sample = True
-            kept_idx = nonzero_idx + pad_idx
-
-        kept_samples = [samples[i] for i in kept_idx]
-        kept_raw = [raw_rewards[i] for i in kept_idx]
-        kept_rewards = [rewards[i] for i in kept_idx]
-
-        log_dict = {
-            "rollout/filter/total": total,
-            "rollout/filter/kept": len(kept_samples),
-            "rollout/filter/dropped_ratio": (total - len(kept_samples)) / total,
-            "rollout/filter/zero_advantage_ratio": len(zero_idx) / total,
-            "rollout/filter/padding_count": padding_count,
-            "rollout/step": compute_rollout_step(self.args, self.rollout_id),
-        }
-        logger.info(f"filter {self.rollout_id}: {log_dict}")
-        logging_utils.log(self.args, log_dict, step_key="rollout/step")
-        return kept_samples, kept_raw, kept_rewards
+    def _neutralize_zero_advantage_samples(self, samples, rewards):
+        """Replace zero-advantage samples in place with a 2-token pad sequence so the forward pass is cheap and the gradient is zero."""
+        # 0 matches the pad token used in slime/backends/megatron_utils/data.py.
+        pad_token_id = 0
+        for sample, r in zip(samples, rewards, strict=True):
+            if r == 0.0:
+                sample.tokens = [pad_token_id, pad_token_id]
+                sample.response_length = 1
+                sample.loss_mask = [0]
+                sample.remove_sample = True
 
     def _convert_samples_to_train_data(
         self,
@@ -1228,6 +1199,7 @@ def _log_rollout_data(rollout_id, args, samples, raw_rewards, rewards, rollout_e
     log_dict["rollout/rewards"] = sum(rewards) / num_samples
     log_dict["rollout/response_lengths"] = sum(s.response_length for s in samples) / num_samples
     log_dict["rollout/total_lengths"] = sum(len(s.tokens) for s in samples) / num_samples
+    log_dict["rollout/zero_advantage_ratio"] = sum(1 for r in rewards if r == 0.0) / num_samples
     logger.info(f"perf {rollout_id}: {log_dict}")
     step = compute_rollout_step(args, rollout_id)
     log_dict["rollout/step"] = step
