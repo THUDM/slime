@@ -701,7 +701,6 @@ class RolloutManager:
                 sample.tokens = [pad_token_id, pad_token_id]
                 sample.response_length = 1
                 sample.loss_mask = [0]
-                sample.remove_sample = True
                 num_neutralized += 1
         logger.info(f"neutralized {num_neutralized}/{len(samples)} zero-advantage samples")
         logging_utils.log(
