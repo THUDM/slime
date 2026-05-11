@@ -44,7 +44,9 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
 
         import slime_plugins.megatron_bridge  # noqa: F401
 
-        self._bridge = AutoBridge.from_hf_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
+        self._bridge = megatron_bridge_utils.patch_auto_bridge_hf_config(
+            AutoBridge.from_hf_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
+        )
         _patch_bridge_expert_cache_to_cpu()
 
     def get_hf_weight_chunks(self, megatron_local_weights):

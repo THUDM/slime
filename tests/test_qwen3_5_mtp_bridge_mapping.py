@@ -169,6 +169,18 @@ def test_mtp_block_spec_uses_current_transformer_layer_spec():
 
 
 @pytest.mark.unit
+def test_tied_qwen3_5_uses_language_embedding_for_output_layer():
+    module = load_bridge_module()
+    bridge = module.Qwen3_5Bridge.__new__(module.Qwen3_5Bridge)
+    bridge.hf_config = types.SimpleNamespace(text_config=types.SimpleNamespace(tie_word_embeddings=True))
+
+    bridge._adjust_mapping_for_shared_weights()
+
+    assert bridge._DIRECT_MAPPING["output_layer.weight"] == "model.language_model.embed_tokens.weight"
+    assert module.Qwen3_5Bridge._DIRECT_MAPPING["output_layer.weight"] == "lm_head.weight"
+
+
+@pytest.mark.unit
 def test_eh_proj_keeps_column_order_when_loading_to_mcore():
     module = load_bridge_module()
     bridge = module.Qwen3_5Bridge.__new__(module.Qwen3_5Bridge)
