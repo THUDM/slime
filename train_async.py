@@ -1,5 +1,7 @@
 import ray
 
+from slime.utils.rollout_dataproto import maybe_cleanup_dataproto_refs
+
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.logging_utils import configure_logger, finish_tracking, init_tracking, update_tracking_open_metrics
@@ -42,15 +44,21 @@ def train(args):
         if rollout_id + 1 < args.num_rollout:
             rollout_data_next_future = rollout_manager.generate.remote(rollout_id + 1)
 
-        if args.use_critic:
-            actor_trains_this_step = rollout_id >= args.num_critic_only_steps
-            value_refs = critic_model.async_train(rollout_id, rollout_data_curr_ref)
-            if actor_trains_this_step:
-                ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref, external_data=value_refs))
+        train_succeeded = False
+        try:
+            if args.use_critic:
+                actor_trains_this_step = rollout_id >= args.num_critic_only_steps
+                value_refs = critic_model.async_train(rollout_id, rollout_data_curr_ref)
+                if actor_trains_this_step:
+                    ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref, external_data=value_refs))
+                else:
+                    ray.get(value_refs)
             else:
-                ray.get(value_refs)
-        else:
-            ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))
+                actor_trains_this_step = True
+                ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))
+            train_succeeded = True
+        finally:
+            maybe_cleanup_dataproto_refs(args, rollout_data_curr_ref, suppress_errors=not train_succeeded)
 
         if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
             if (not args.use_critic) or rollout_id >= args.num_critic_only_steps:
