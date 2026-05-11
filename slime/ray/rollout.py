@@ -483,11 +483,22 @@ class RolloutManager:
             self._try_ci_fault_injection()
         data, metrics = self._get_rollout_data(rollout_id=rollout_id)
         self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
-        _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
+
+        raw_rewards, rewards = self._post_process_rewards(data)
+        _log_rollout_data(rollout_id, self.args, data, raw_rewards, rewards, metrics, time.time() - start_time)
         if self.args.debug_rollout_only:
             # if debug rollout only, we don't convert samples to train data and directly return
             return
-        data = self._convert_samples_to_train_data(data)
+
+        if self.args.filter_zero_advantage_samples:
+            data, raw_rewards, rewards = self._filter_zero_advantage_samples(data, raw_rewards, rewards)
+            self._dynamic_global_batch_size = self._compute_dynamic_global_batch_size(len(data))
+
+        if self.custom_convert_samples_to_train_data_func is not None:
+            data = self.custom_convert_samples_to_train_data_func(self.args, data, raw_rewards, rewards)
+        else:
+            data = self._convert_samples_to_train_data(data, raw_rewards, rewards)
+
         return self._split_train_data_by_dp(data, self.train_parallel_config["dp_size"])
 
     def eval(self, rollout_id):
@@ -679,15 +690,51 @@ class RolloutManager:
 
         return raw_rewards, raw_rewards
 
-    def _convert_samples_to_train_data(self, samples: list[Sample] | list[list[Sample]]):
-        """
-        Convert inference generated samples to training data.
-        """
-        if self.custom_convert_samples_to_train_data_func is not None:
-            return self.custom_convert_samples_to_train_data_func(self.args, samples)
+    def _filter_zero_advantage_samples(self, samples, raw_rewards, rewards):
+        """Drop zero-advantage samples; pad to dp_size with dropped samples when survivors fall short."""
+        dp_size = self.train_parallel_config["dp_size"]
+        total = len(samples)
+        nonzero_idx = [i for i, r in enumerate(rewards) if r != 0.0]
+        zero_idx = [i for i, r in enumerate(rewards) if r == 0.0]
 
-        raw_rewards, rewards = self._post_process_rewards(samples)
+        if len(nonzero_idx) >= dp_size:
+            keep_count = (len(nonzero_idx) // dp_size) * dp_size
+            kept_idx = nonzero_idx[:keep_count]
+            padding_count = 0
+        else:
+            padding_count = dp_size - len(nonzero_idx)
+            assert len(zero_idx) >= padding_count, (
+                f"Not enough samples to pad to dp_size={dp_size}: "
+                f"total={total} nonzero={len(nonzero_idx)} zero={len(zero_idx)}"
+            )
+            pad_idx = zero_idx[:padding_count]
+            for i in pad_idx:
+                samples[i].remove_sample = True
+            kept_idx = nonzero_idx + pad_idx
 
+        kept_samples = [samples[i] for i in kept_idx]
+        kept_raw = [raw_rewards[i] for i in kept_idx]
+        kept_rewards = [rewards[i] for i in kept_idx]
+
+        log_dict = {
+            "rollout/filter/total": total,
+            "rollout/filter/kept": len(kept_samples),
+            "rollout/filter/dropped_ratio": (total - len(kept_samples)) / total,
+            "rollout/filter/zero_advantage_ratio": len(zero_idx) / total,
+            "rollout/filter/padding_count": padding_count,
+            "rollout/step": compute_rollout_step(self.args, self.rollout_id),
+        }
+        logger.info(f"filter {self.rollout_id}: {log_dict}")
+        logging_utils.log(self.args, log_dict, step_key="rollout/step")
+        return kept_samples, kept_raw, kept_rewards
+
+    def _convert_samples_to_train_data(
+        self,
+        samples: list[Sample] | list[list[Sample]],
+        raw_rewards: list[float],
+        rewards: list[float],
+    ):
+        """Convert inference generated samples to training data."""
         assert len(raw_rewards) == len(samples)
         assert len(rewards) == len(samples)
 
@@ -697,7 +744,7 @@ class RolloutManager:
             # some reward model, e.g. remote rm, may return multiple rewards,
             # we could use key to select the reward.
             "rewards": rewards,
-            "raw_reward": raw_rewards,
+            "raw_reward": _resolve_raw_rewards(samples, raw_rewards),
             "truncated": [1 if sample.status == Sample.Status.TRUNCATED else 0 for sample in samples],
             "sample_indices": [sample.index for sample in samples],
         }
@@ -717,14 +764,6 @@ class RolloutManager:
                 sample.loss_mask = [0] * sample.response_length
             loss_masks.append(sample.loss_mask)
         train_data["loss_masks"] = loss_masks
-
-        # Overwrite raw_reward when available. Mixed-source batches may only
-        # populate this field for a subset of samples (e.g. SWE but not code).
-        if any(sample.metadata and "raw_reward" in sample.metadata for sample in samples):
-            train_data["raw_reward"] = [
-                sample.metadata["raw_reward"] if sample.metadata and "raw_reward" in sample.metadata else sample.reward
-                for sample in samples
-            ]
 
         # For rollout buffer
         if samples[0].metadata and "round_number" in samples[0].metadata:
@@ -1172,7 +1211,7 @@ def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any]
     return log_dict
 
 
-def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_time):
+def _log_rollout_data(rollout_id, args, samples, raw_rewards, rewards, rollout_extra_metrics, rollout_time):
     if args.custom_rollout_log_function_path is not None:
         custom_log_func = load_function(args.custom_rollout_log_function_path)
         if custom_log_func(rollout_id, args, samples, rollout_extra_metrics, rollout_time):
@@ -1181,13 +1220,28 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
     if args.load_debug_rollout_data:
         return
 
+    num_samples = len(samples)
     log_dict = {**(rollout_extra_metrics or {})}
     log_dict |= dict_add_prefix(compute_metrics_from_samples(args, samples), "rollout/")
     log_dict |= dict_add_prefix(compute_perf_metrics_from_samples(args, samples, rollout_time), "perf/")
+    log_dict["rollout/raw_reward"] = sum(_resolve_raw_rewards(samples, raw_rewards)) / num_samples
+    log_dict["rollout/rewards"] = sum(rewards) / num_samples
+    log_dict["rollout/response_lengths"] = sum(s.response_length for s in samples) / num_samples
+    log_dict["rollout/total_lengths"] = sum(len(s.tokens) for s in samples) / num_samples
     logger.info(f"perf {rollout_id}: {log_dict}")
     step = compute_rollout_step(args, rollout_id)
     log_dict["rollout/step"] = step
     logging_utils.log(args, log_dict, step_key="rollout/step")
+
+
+def _resolve_raw_rewards(samples, raw_rewards):
+    """Apply the sample.metadata['raw_reward'] override used by train_data."""
+    if not any(sample.metadata and "raw_reward" in sample.metadata for sample in samples):
+        return raw_rewards
+    return [
+        sample.metadata["raw_reward"] if sample.metadata and "raw_reward" in sample.metadata else sample.reward
+        for sample in samples
+    ]
 
 
 def compute_metrics_from_samples(args, samples):

@@ -57,12 +57,12 @@ def reference_reward_post_process(args, samples):
     return raw_rewards, rewards
 
 
-def reference_convert_samples_to_train_data(args, samples):
+def reference_convert_samples_to_train_data(args, samples, raw_rewards, rewards):
     return {
         "tokens": [sample.tokens for sample in samples],
         "response_lengths": [sample.response_length for sample in samples],
-        "rewards": [sample.reward for sample in samples],
-        "raw_reward": [sample.reward for sample in samples],
+        "rewards": rewards,
+        "raw_reward": raw_rewards,
         "truncated": [0 for _ in samples],
         "sample_indices": [sample.index for sample in samples],
         "loss_masks": [sample.loss_mask for sample in samples],
@@ -116,7 +116,8 @@ def invoke_reward_post_process(fn):
 
 
 def invoke_convert_samples_to_train_data(fn):
-    train_data = fn(type("Args", (), {})(), [make_sample(0, 0.5), make_sample(1, 1.5)])
+    samples = [make_sample(0, 0.5), make_sample(1, 1.5)]
+    train_data = fn(type("Args", (), {})(), samples, [0.5, 1.5], [0.5, 1.5])
     assert {"tokens", "response_lengths", "rewards", "raw_reward", "truncated", "sample_indices", "loss_masks"} <= set(
         train_data
     )
@@ -161,8 +162,8 @@ HOOK_CASES = [
         "CUSTOM_CONVERT_SAMPLES_TO_TRAIN_DATA_PATH",
         "plugin_contracts.test_plugin_runtime_hook_contracts.reference_convert_samples_to_train_data",
         "slime/ray/rollout.py",
-        "self.custom_convert_samples_to_train_data_func(self.args, samples)",
-        ("args", "samples"),
+        "self.custom_convert_samples_to_train_data_func(self.args, data, raw_rewards, rewards)",
+        ("args", "samples", "raw_rewards", "rewards"),
         invoke_convert_samples_to_train_data,
     ),
     HookCase(

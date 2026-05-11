@@ -416,6 +416,13 @@ def log_rollout_data(
                 "rollout_routed_experts",
                 "max_seq_lens",
                 "dynamic_global_batch_size",
+                # rollout-source aggregates emitted by RolloutManager._log_rollout_data
+                # (pre-filter); skip here to keep one wandb writer per key.
+                "raw_reward",
+                "rewards",
+                "truncated",
+                "response_lengths",
+                "total_lengths",
             ]:
                 continue
             # Upload per sample mean for each rollout value
