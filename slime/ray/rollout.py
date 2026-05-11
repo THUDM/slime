@@ -693,25 +693,29 @@ class RolloutManager:
 
         # Neutralize zero-advantage samples: their forward pass is wasted compute
         # since loss_mask=0 gives zero gradient. 0 matches the pad token used in
-        # slime/backends/megatron_utils/data.py.
-        pad_token_id = 0
-        num_neutralized = 0
-        for sample, r in zip(samples, rewards, strict=True):
-            if r == 0.0:
-                sample.tokens = [pad_token_id, pad_token_id]
-                sample.response_length = 1
-                sample.loss_mask = [0]
-                sample.remove_sample = True
-                num_neutralized += 1
-        logger.info(f"neutralized {num_neutralized}/{len(samples)} zero-advantage samples")
-        logging_utils.log(
-            self.args,
-            {
-                "rollout/neutralized_ratio": num_neutralized / len(samples),
-                "rollout/step": compute_rollout_step(self.args, self.rollout_id),
-            },
-            step_key="rollout/step",
-        )
+        # slime/backends/megatron_utils/data.py. Limited to advantage estimators
+        # whose per-token advantage is a scalar broadcast of `rewards` (r==0 ⇒
+        # advantage==0); ppo/reinforce_plus_plus mix in values/kl/GAE so r==0 does
+        # not imply zero gradient.
+        if self.args.advantage_estimator in ["grpo", "gspo"]:
+            pad_token_id = 0
+            num_neutralized = 0
+            for sample, r in zip(samples, rewards, strict=True):
+                if r == 0.0:
+                    sample.tokens = [pad_token_id, pad_token_id]
+                    sample.response_length = 1
+                    sample.loss_mask = [0]
+                    sample.remove_sample = True
+                    num_neutralized += 1
+            logger.info(f"neutralized {num_neutralized}/{len(samples)} zero-advantage samples")
+            logging_utils.log(
+                self.args,
+                {
+                    "rollout/neutralized_ratio": num_neutralized / len(samples),
+                    "rollout/step": compute_rollout_step(self.args, self.rollout_id),
+                },
+                step_key="rollout/step",
+            )
 
         train_data = {
             "tokens": [sample.tokens for sample in samples],
