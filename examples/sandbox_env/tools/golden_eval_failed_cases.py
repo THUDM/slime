@@ -29,6 +29,7 @@ DEFAULT_INSTANCE_IDS = [
 
 
 def _parse_args() -> argparse.Namespace:
+    """Parses CLI arguments for preparing or running official golden eval subsets."""
     parser = argparse.ArgumentParser(
         description="Prepare or run official SWE-rebench-V2 golden eval."
     )
@@ -76,6 +77,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _collect_instance_ids(args: argparse.Namespace) -> list[str]:
+    """Combines default and CLI-provided instance ids while preserving first-seen order."""
     values = list(DEFAULT_INSTANCE_IDS)
     values.extend(str(x).strip() for x in args.instance_id if str(x).strip())
     if args.instance_ids:
@@ -93,6 +95,7 @@ def _collect_instance_ids(args: argparse.Namespace) -> list[str]:
 
 
 def _load_tasks(path: Path) -> list[dict]:
+    """Loads the full SWE-rebench task JSON array and keeps dict rows."""
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, list):
         raise ValueError(f"Expected a JSON array in {path}")
@@ -100,6 +103,7 @@ def _load_tasks(path: Path) -> list[dict]:
 
 
 def _select_tasks(tasks: list[dict], instance_ids: list[str]) -> tuple[list[dict], list[str]]:
+    """Selects requested tasks and returns any instance ids that were missing."""
     wanted = set(instance_ids)
     selected = [task for task in tasks if str(task.get("instance_id") or "") in wanted]
     found = {str(task.get("instance_id") or "") for task in selected}
@@ -112,6 +116,7 @@ def _build_command(
     report_json: Path,
     max_workers: int,
 ) -> list[str]:
+    """Builds the official SWE-rebench golden-eval subprocess command."""
     return [
         sys.executable,
         str(EVAL_SCRIPT),
@@ -126,6 +131,7 @@ def _build_command(
 
 
 def main() -> int:
+    """CLI entry point: writes a selected task subset and optionally runs official eval.py."""
     args = _parse_args()
     instance_ids = _collect_instance_ids(args)
     if not instance_ids:

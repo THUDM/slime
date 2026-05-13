@@ -39,6 +39,7 @@ DEFAULT_COMMANDS = [
 
 
 def _parse_env_assignments(values: list[str]) -> dict[str, str]:
+    """Parses repeated KEY=VALUE CLI arguments into an environment dict."""
     envs: dict[str, str] = {}
     for raw in values:
         text = str(raw).strip()
@@ -55,6 +56,7 @@ def _parse_env_assignments(values: list[str]) -> dict[str, str]:
 
 
 def _sanitize_template_name(image: str) -> str:
+    """Builds a deterministic debug template alias from an image reference."""
     digest = hashlib.sha1(image.encode("utf-8")).hexdigest()[:12]
     stem = re.sub(r"[^a-z0-9-]+", "-", image.lower()).strip("-")
     stem = stem[-40:] if len(stem) > 40 else stem
@@ -63,6 +65,7 @@ def _sanitize_template_name(image: str) -> str:
 
 
 def _wait_for_build(info) -> None:
+    """Polls an Inspire background template build until it is ready or fails."""
     offset = 0
     deadline = time.time() + BUILD_TIMEOUT_SECONDS
     while time.time() < deadline:
@@ -81,6 +84,7 @@ def _wait_for_build(info) -> None:
 
 
 def _resolve_template(args: argparse.Namespace) -> str:
+    """Returns an existing template alias or builds a temporary template from the requested image."""
     if args.template:
         return args.template
     image = str(args.image).strip()
@@ -108,6 +112,7 @@ def _run_commands(
     commands: list[str],
     envs: dict[str, str] | None,
 ) -> None:
+    """Runs diagnostic commands inside the sandbox and prints their stdout/stderr."""
     for command in commands:
         print(f"\n===== command user={user or '<default>'} =====", flush=True)
         print(command, flush=True)
@@ -126,6 +131,7 @@ def _run_commands(
 
 
 def parse_args() -> argparse.Namespace:
+    """Parses CLI arguments for image/template environment diagnostics."""
     parser = argparse.ArgumentParser(description="Debug Inspire sandbox image/template runtime environment.")
     parser.add_argument("--image", default="", help="Docker image to turn into a temporary Inspire template.")
     parser.add_argument("--template", default="", help="Existing Inspire template alias/id to start directly.")
@@ -159,6 +165,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """CLI entry point: creates a sandbox, runs diagnostics, and optionally keeps it alive."""
     args = parse_args()
     template = _resolve_template(args)
     run_user = args.user if str(args.user).strip() else None
