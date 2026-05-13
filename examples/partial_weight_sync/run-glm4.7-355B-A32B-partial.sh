@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# Non-colocated GLM-4.7-355B-A32B with delta-compression weight sync.
+# Non-colocated GLM-4.7-355B-A32B with partial weight sync.
 # 8 actor nodes (TP=8, PP=4, EP=16) + 64 rollout GPUs (8 H100 nodes worth),
-# 16 nodes total. Sends (current - snapshot) sparse-encoded as int32 nonzero
-# indices + values; SGLang applies it additively.
+# 16 nodes total. Two modes available — see PARTIAL_ARGS below; the default
+# block is `delta`, the alternate `selective` block is commented out.
 
 # for rerun the task
 pkill -9 sglang
@@ -130,23 +130,30 @@ SGLANG_ARGS=(
    --sglang-speculative-num-draft-tokens 4
 )
 
-# Partial weight sync (sender side). Two modes available:
-#   delta     — broadcast (current − snapshot), receiver applies additively.
-#   selective — broadcast new values at changed positions (NaN at unchanged),
-#               receiver overwrites only the non-NaN positions. Switch by
-#               changing --update-weight-mode below.
+# Partial weight sync (sender side). Pick one of the two blocks below.
+#
+# `--update-weight-base-sync-interval` is set very large here (10000) to
+# effectively disable periodic base syncs — both delta (with fp32 math) and
+# selective are lossless, so receiver state doesn't drift from a base-sync
+# reference no matter how many partial syncs elapse.
+
+# ── Mode 1: delta — broadcast (current − snapshot), receiver += delta ──────
 PARTIAL_ARGS=(
    --update-weight-mode delta
    --update-weight-partial-encoding sparse_indices
    --update-weight-delta-dtype fp32
-   # Base sync every 30 partial syncs. Setting this to a very large integer
-   # (e.g. 10000) effectively disables periodic base syncs. With
-   # --update-weight-delta-dtype fp32 the delta apply is lossless — every bf16
-   # value fits exactly in fp32 and the receiver's in-place add reproduces the
-   # trainer's bf16 state bit-for-bit each apply, so receiver state never
-   # drifts from a base-sync reference no matter how many partial syncs elapse.
-   --update-weight-base-sync-interval 30
+   --update-weight-base-sync-interval 10000
 )
+
+# ── Mode 2: selective — broadcast new values at changed positions ─────────
+# Uncomment to run selective instead (and comment out the delta block above).
+# `--update-weight-delta-dtype` is silently ignored in selective mode
+# (no arithmetic; apply is lossless by construction).
+# PARTIAL_ARGS=(
+#    --update-weight-mode selective
+#    --update-weight-partial-encoding sparse_indices
+#    --update-weight-base-sync-interval 10000
+# )
 
 MISC_ARGS=(
    --attention-dropout 0.0

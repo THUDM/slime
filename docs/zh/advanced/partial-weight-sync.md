@@ -13,6 +13,8 @@
 
 在**非 colocate**（non-colocated）模式下，slime 默认会在每一步训练时把所有参数完整地广播给 SGLang。完整广播的体积随模型规模线性增长，即使两步之间实际变化的权重比例很小，broadcast 仍然主导整个权重同步阶段。Partial-update 模式会把上一次同步时的权重在 pinned CPU 内存里保留一份 snapshot，每步只广播变化位置的数据，SGLang 接收端只更新这些位置。在 RL fine-tuning 阶段、学习率不大的常见设置里，每步 diff 都很稀疏（只有百分之几的权重发生变化），wire 体积也按比例减少。
 
+**参考资料 / 先验工作。** `delta` 模式的加性更新思路参考了 [Cursor Composer 2](https://cursor.com/resources/Composer2.pdf) 和 [Fireworks AI — Frontier RL Is Cheaper Than You Think](https://fireworks.ai/blog/frontier-rl-is-cheaper-than-you-think)。`selective` 模式的灵感来自 [arXiv:2509.19128](https://arxiv.org/abs/2509.19128)。
+
 ## 快速开始
 
 训练端开关与传输编码：
@@ -32,7 +34,7 @@ SGLang 端唯一的旋钮（slime 通过 `--sglang-update-weight-partial-chunk-b
 --sglang-update-weight-partial-chunk-bytes $((2 * 1024 * 1024 * 1024))
 ```
 
-完整非 colocate 启动脚本见 [examples/delta_compression/run-glm4.7-355B-A32B-delta.sh](../../../examples/delta_compression/run-glm4.7-355B-A32B-delta.sh)。
+完整非 colocate 启动脚本见 [examples/partial_weight_sync/run-glm4.7-355B-A32B-partial.sh](../../../examples/partial_weight_sync/run-glm4.7-355B-A32B-partial.sh)。
 
 ## 两种 partial 模式：delta 与 selective
 

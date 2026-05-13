@@ -13,6 +13,8 @@
 
 For **non-colocated** runs, slime's default weight sync broadcasts every parameter on every training step. The full broadcast scales linearly with model size and dominates the sync phase even when only a small fraction of weights actually change between steps. Partial-update modes keep a pinned-CPU snapshot of the last sync's weights and broadcast only the changed-position payload; the SGLang receiver applies it without re-touching unchanged params. During typical RL fine-tuning at conservative learning rates the per-step diff is sparse — a few percent of weights — so the wire shrinks proportionally.
 
+**Inspiration / prior art.** `delta` is informed by the additive-update approach in [Cursor Composer 2](https://cursor.com/resources/Composer2.pdf) and [Fireworks AI — Frontier RL Is Cheaper Than You Think](https://fireworks.ai/blog/frontier-rl-is-cheaper-than-you-think). `selective` is inspired by [arXiv:2509.19128](https://arxiv.org/abs/2509.19128).
+
 ## Quick Start
 
 Enable a partial mode on the trainer side:
@@ -32,7 +34,7 @@ And one knob on the SGLang side (auto-mirrored by slime as `--sglang-update-weig
 --sglang-update-weight-partial-chunk-bytes $((2 * 1024 * 1024 * 1024))
 ```
 
-See [examples/delta_compression/run-glm4.7-355B-A32B-delta.sh](../../../examples/delta_compression/run-glm4.7-355B-A32B-delta.sh) for a complete non-colocated launcher.
+See [examples/partial_weight_sync/run-glm4.7-355B-A32B-partial.sh](../../../examples/partial_weight_sync/run-glm4.7-355B-A32B-partial.sh) for a complete non-colocated launcher.
 
 ## Modes: delta vs selective
 
