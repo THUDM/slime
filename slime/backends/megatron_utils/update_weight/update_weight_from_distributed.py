@@ -14,7 +14,7 @@ from tqdm import tqdm
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 
 from ..megatron_to_hf import convert_to_hf
-from ..sglang import WeightDeltaSpec
+from ..sglang import PartialWeightSpec
 from .common import all_gather_param, named_params_and_buffers
 
 
@@ -237,11 +237,11 @@ class UpdateWeightFromDistributed:
         converted_named_tensors: list[tuple[str, torch.Tensor]],
         pbar: tqdm | None = None,
         load_format: str | None = None,
-        delta: WeightDeltaSpec | None = None,
+        partial: PartialWeightSpec | None = None,
     ) -> None:
         """
         Lock → broadcast → clear → unlock → pbar++. Lock prevents NCCL deadlock.
-        Delta mode passes ``load_format="delta"`` and a ``WeightDeltaSpec``.
+        Partial-update modes (delta/selective) pass ``load_format`` and a ``PartialWeightSpec``.
         """
         # lock the rollout engines to prevent dead lock on broadcast.
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
@@ -254,7 +254,7 @@ class UpdateWeightFromDistributed:
             self.rollout_engines,
             converted_named_tensors,
             load_format=load_format,
-            delta=delta,
+            partial=partial,
         )
 
         ray.get(refs)
@@ -328,11 +328,12 @@ def update_weights_from_distributed(
     rollout_engines: Sequence[ActorHandle],
     converted_named_tensors: Sequence[tuple[str, torch.Tensor]],
     load_format: str | None = None,
-    delta: WeightDeltaSpec | None = None,
+    partial: PartialWeightSpec | None = None,
 ) -> list[ObjectRef]:
     """
     Send metadata (Ray), broadcast tensors (NCCL rank 0 → engines).
-    Delta path passes ``load_format="delta"`` and ``delta`` (WeightDeltaSpec).
+    Partial-update modes pass ``load_format`` (``"delta"`` / ``"selective"``)
+    and ``partial`` (PartialWeightSpec).
     """
     refs = [
         engine.update_weights_from_distributed.remote(
@@ -342,7 +343,7 @@ def update_weights_from_distributed(
             group_name=group_name,
             weight_version=str(weight_version),
             load_format=load_format,
-            delta=delta,
+            partial=partial,
         )
         for engine in rollout_engines
     ]

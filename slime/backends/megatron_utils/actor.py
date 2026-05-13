@@ -34,7 +34,7 @@ from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get
 from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight.common import named_params_and_buffers
 from .update_weight.update_weight_from_distributed import UpdateWeightFromDistributed
-from .update_weight.update_weight_from_distributed_delta import UpdateWeightFromDistributedDelta
+from .update_weight.update_weight_from_distributed_partial import UpdateWeightFromDistributedPartial
 from .update_weight.update_weight_from_tensor import UpdateWeightFromTensor
 
 logging.getLogger("megatron").setLevel(logging.WARNING)
@@ -127,8 +127,8 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.colocate:
             update_weight_cls = UpdateWeightFromTensor
-        elif self.args.update_weight_mode == "delta":
-            update_weight_cls = UpdateWeightFromDistributedDelta
+        elif self.args.update_weight_mode in ("delta", "selective"):
+            update_weight_cls = UpdateWeightFromDistributedPartial
         else:
             update_weight_cls = UpdateWeightFromDistributed
         self.weight_updater = update_weight_cls(

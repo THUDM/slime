@@ -136,52 +136,62 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default="raw",
                 help="The method to convert megatron weights to hugging face weights for SGLang.",
             )
-            # delta sync. Receiver (SGLang) caps bytes per load_weights call via
-            # --sglang-update-weight-delta-chunk-bytes (auto-mirrored, default 512 MiB).
+            # Partial weight sync (delta + selective modes). Receiver chunking is mirrored
+            # automatically to SGLang as --sglang-update-weight-partial-chunk-bytes.
             parser.add_argument(
                 "--update-weight-mode",
-                choices=["full", "delta"],
+                choices=["full", "delta", "selective"],
                 default="full",
                 help=(
                     "Weight sync strategy. 'full' broadcasts every parameter on every "
-                    "sync. 'delta' broadcasts (new - baseline) and the receiver applies "
-                    "it additively; the wire payload can be sparse-compressed via "
-                    "--delta-compression. The first sync is always full regardless."
+                    "sync. 'delta' broadcasts (new − snapshot) and the receiver applies "
+                    "it additively. 'selective' broadcasts the new values at the changed "
+                    "positions only and the receiver overwrites those positions "
+                    "(unchanged positions are signaled by NaN in the wire payload). "
+                    "The first sync is always full regardless."
                 ),
             )
             parser.add_argument(
-                "--delta-dtype",
+                "--update-weight-delta-dtype",
                 choices=["fp16", "bf16", "fp32"],
                 default="fp32",
-                help="Dtype the delta tensor is cast to before broadcast (delta mode only).",
+                help=(
+                    "Math dtype for the delta subtraction and additive apply (delta mode "
+                    "only; ignored otherwise). Higher than the param dtype makes the "
+                    "apply lossless."
+                ),
             )
             parser.add_argument(
-                "--delta-compression",
+                "--update-weight-partial-encoding",
                 choices=["sparse_indices", "sparse_bitmask", "dense"],
                 default="sparse_indices",
                 help=(
-                    "Wire encoding for the delta payload (delta mode only). "
-                    "'sparse_indices' sends (indices, values) for non-zero entries; "
+                    "Wire encoding for partial broadcasts (delta + selective modes). "
+                    "'sparse_indices' sends (indices, values) for active entries; "
                     "'sparse_bitmask' sends a packed bitmask + values; 'dense' sends "
-                    "the full delta tensor."
+                    "the full per-param tensor."
                 ),
             )
             parser.add_argument(
-                "--delta-full-interval",
+                "--update-weight-base-sync-interval",
                 type=int,
                 default=30,
                 help=(
-                    "Run a full sync every N successful delta syncs (delta mode only). "
-                    "The first sync is always full."
+                    "Run a base sync (a full broadcast that re-establishes the snapshot) "
+                    "every N successful partial syncs (delta + selective modes). The "
+                    "first sync is always a base sync. Setting this to a very large "
+                    "integer (e.g. 10000) effectively disables periodic base syncs; "
+                    "with --update-weight-delta-dtype fp32 the delta apply is lossless "
+                    "so receiver state never drifts."
                 ),
             )
             parser.add_argument(
-                "--delta-artifact-dir",
+                "--update-weight-partial-artifact-dir",
                 type=str,
                 default=None,
                 help=(
-                    "Optional directory for asynchronously saving delta artifacts (delta "
-                    "mode only). Decoupled from hot-path baseline storage."
+                    "Optional directory for asynchronously saving per-broadcast partial-"
+                    "update artifacts (delta + selective modes). Off by default."
                 ),
             )
             parser.add_argument(
@@ -1891,14 +1901,12 @@ def slime_validate_args(args):
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")
 
-    if args.update_weight_mode == "delta" and args.colocate:
+    if args.update_weight_mode in ("delta", "selective") and args.colocate:
         raise ValueError(
-            "--update-weight-mode=delta is not supported with --colocate. "
-            "Colocate transfers weights via CUDA IPC: only a memory handle "
-            "(~64 B) crosses processes, never bytes. Delta compression shrinks "
-            "bytes on the wire, of which there are none here, so the delta math "
-            "(subtract + cast + baseline copies) is pure overhead. If you really "
-            "want this combo, also pass --enable-weights-cpu-backup so SGLang "
-            "keeps a CPU-side baseline — delta sync does ``param += delta`` in "
-            "place on the engine, so the prior weights must stay recoverable."
+            f"--update-weight-mode={args.update_weight_mode} is not supported with "
+            "--colocate. Colocate transfers weights via CUDA IPC: only a memory "
+            "handle (~64 B) crosses processes, never bytes. Partial-update modes "
+            "shrink bytes on the wire, of which there are none here, so the partial-"
+            "update bookkeeping (snapshot + subtract/mask + sparse encode) is pure "
+            "overhead."
         )

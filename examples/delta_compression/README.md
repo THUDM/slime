@@ -1,12 +1,15 @@
-# Delta-Compression Weight Sync
+# Partial Weight Sync (delta / selective)
 
-This example demonstrates non-colocated weight sync with **delta compression**: instead of broadcasting every parameter on every sync, slime broadcasts the sparse-encoded difference between the current weights and the last sync's weights, and the SGLang receiver applies it additively (`param += delta`).
+This example demonstrates non-colocated weight sync with **partial-update modes**: instead of broadcasting every parameter on every sync, slime broadcasts only the changed-position payload, and the SGLang receiver applies it without rebroadcasting the unchanged majority of the weights. Two sub-modes:
 
-For non-colocated runs the wire shrinks roughly in proportion to the delta's density, which is typically a few percent during RL fine-tuning at conservative learning rates. The broadcast that previously dominated the sync phase becomes a small fraction of it. Colocated runs share GPU memory via CUDA IPC and have no wire — delta compression buys nothing there and is rejected at argparse time.
+- **`delta`** — broadcast `(current − snapshot)` sparse-encoded; receiver applies additively (`param += delta`).
+- **`selective`** — broadcast new values at changed positions only (with NaN as the "unchanged" sentinel); receiver overwrites those positions, leaves others alone. Lossless by construction (no arithmetic), wire ~½ the size of fp32 delta.
+
+For non-colocated runs the wire shrinks roughly in proportion to the change density, which is typically a few percent during RL fine-tuning at conservative learning rates. The broadcast that previously dominated the sync phase becomes a small fraction of it. Colocated runs share GPU memory via CUDA IPC and have no wire — partial-update modes buy nothing there and are rejected at argparse time.
 
 ## Files
 
-- `run-glm4.7-355B-A32B-delta.sh`: 16-node (8 actor + 8 rollout) GLM-4.7-355B-A32B launcher with delta-compression flags set.
+- `run-glm4.7-355B-A32B-delta.sh`: 16-node (8 actor + 8 rollout) GLM-4.7-355B-A32B launcher with partial-update flags set.
 
 ## Usage
 
@@ -16,30 +19,32 @@ Set up the same checkpoint and dataset paths as a standard non-colocated GLM-4.7
 bash examples/delta_compression/run-glm4.7-355B-A32B-delta.sh
 ```
 
-The flags that switch the run into delta mode are grouped in `DELTA_ARGS` near the bottom of the script:
+The flags that switch the run into a partial-update mode are grouped in `PARTIAL_ARGS` near the bottom of the script:
 
 ```bash
---update-weight-mode delta            # default 'full'; first sync is always full
---delta-compression sparse_indices    # 'sparse_indices' / 'sparse_bitmask' / 'dense'
---delta-dtype fp32                    # subtraction and apply happen at this dtype
---delta-full-interval 30              # full sync every N successful deltas;
-                                      # safe to set very large (e.g. 10000) to
-                                      # effectively disable periodic full syncs
-                                      # — with fp32 delta the apply is lossless
-                                      # (no drift accumulates).
+--update-weight-mode delta                # 'delta' / 'selective' / 'full' (default)
+--update-weight-partial-encoding sparse_indices  # 'sparse_indices' / 'sparse_bitmask' / 'dense'
+--update-weight-delta-dtype fp32          # math precision (delta mode only)
+--update-weight-base-sync-interval 30     # base sync every N partial syncs; safe to set
+                                          # very large (e.g. 10000) to effectively disable
+                                          # — with fp32 delta the apply is lossless and
+                                          # receiver state never drifts. Selective is
+                                          # lossless too (no arithmetic).
 ```
+
+To try selective mode instead, change `--update-weight-mode delta` to `--update-weight-mode selective`. The `--update-weight-delta-dtype` flag is silently ignored in selective mode (no arithmetic happens).
 
 And one receiver-side flag in `SGLANG_ARGS`:
 
 ```bash
---sglang-update-weight-delta-chunk-bytes $((2 * 1024 * 1024 * 1024))
+--sglang-update-weight-partial-chunk-bytes $((2 * 1024 * 1024 * 1024))
 ```
 
 See [docs/en/advanced/delta-compression.md](../../docs/en/advanced/delta-compression.md) for the wire protocol, encoding choice, and precision behaviour.
 
 ## Results
 
-W&B traces comparing delta-compression against the full-sync baseline on the run above.
+W&B traces comparing delta-mode against the full-sync baseline on the run above.
 
 ![Raw reward](./raw_reward.png)
 

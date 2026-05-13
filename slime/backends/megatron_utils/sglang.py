@@ -13,7 +13,7 @@ except ImportError:
     from sglang.srt.patch_torch import monkey_patch_torch_reductions
 
 
-from sglang.srt.managers.io_struct import WeightDeltaEncoding, WeightDeltaParam, WeightDeltaSpec
+from sglang.srt.managers.io_struct import PartialWeightEncoding, PartialWeightParam, PartialWeightSpec
 from sglang.srt.utils import MultiprocessingSerializer
 
 
@@ -29,7 +29,7 @@ __all__ = [
     "monkey_patch_torch_reductions",
     "MultiprocessingSerializer",
     "FlattenedTensorBucket",
-    "WeightDeltaEncoding",
-    "WeightDeltaParam",
-    "WeightDeltaSpec",
+    "PartialWeightEncoding",
+    "PartialWeightParam",
+    "PartialWeightSpec",
 ]

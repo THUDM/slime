@@ -412,7 +412,7 @@ class SGLangEngine(RayActor):
         flush_cache=False,
         weight_version: str | None = None,
         load_format: str | None = None,
-        delta=None,
+        partial=None,
     ):
         payload = {
             "names": names,
@@ -425,8 +425,8 @@ class SGLangEngine(RayActor):
             payload["weight_version"] = weight_version
         if load_format is not None:
             payload["load_format"] = load_format
-        if delta is not None:
-            payload["delta"] = dataclasses.asdict(delta)
+        if partial is not None:
+            payload["partial"] = dataclasses.asdict(partial)
         return self._make_request(
             "update_weights_from_distributed",
             payload,

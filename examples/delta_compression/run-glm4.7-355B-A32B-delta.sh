@@ -121,7 +121,7 @@ SGLANG_ARGS=(
    # Receiver batches up to this many bytes per model.load_weights call. Bigger
    # amortizes per-call cost (name resolution, MoE expert remap) but raises
    # peak HBM during decode.
-   --sglang-update-weight-delta-chunk-bytes $((2 * 1024 * 1024 * 1024))
+   --sglang-update-weight-partial-chunk-bytes $((2 * 1024 * 1024 * 1024))
 
    # mtp
    --sglang-speculative-algorithm EAGLE
@@ -130,18 +130,22 @@ SGLANG_ARGS=(
    --sglang-speculative-num-draft-tokens 4
 )
 
-# Delta-compression weight sync (sender side).
-DELTA_ARGS=(
+# Partial weight sync (sender side). Two modes available:
+#   delta     — broadcast (current − snapshot), receiver applies additively.
+#   selective — broadcast new values at changed positions (NaN at unchanged),
+#               receiver overwrites only the non-NaN positions. Switch by
+#               changing --update-weight-mode below.
+PARTIAL_ARGS=(
    --update-weight-mode delta
-   --delta-compression sparse_indices
-   --delta-dtype fp32
-   # Full sync every 30 delta syncs. Setting this to a very large integer
-   # (e.g. 10000) effectively disables periodic full syncs. With --delta-dtype
-   # fp32 the delta is computed losslessly — every bf16 value fits exactly in
-   # fp32 and the receiver's in-place add reproduces the trainer's bf16 state
-   # bit-for-bit each apply, so receiver state never drifts from a full-sync
-   # reference no matter how many deltas elapse between full syncs.
-   --delta-full-interval 30
+   --update-weight-partial-encoding sparse_indices
+   --update-weight-delta-dtype fp32
+   # Base sync every 30 partial syncs. Setting this to a very large integer
+   # (e.g. 10000) effectively disables periodic base syncs. With
+   # --update-weight-delta-dtype fp32 the delta apply is lossless — every bf16
+   # value fits exactly in fp32 and the receiver's in-place add reproduces the
+   # trainer's bf16 state bit-for-bit each apply, so receiver state never
+   # drifts from a base-sync reference no matter how many partial syncs elapse.
+   --update-weight-base-sync-interval 30
 )
 
 MISC_ARGS=(
@@ -188,5 +192,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
-   ${DELTA_ARGS[@]} \
+   ${PARTIAL_ARGS[@]} \
    ${MISC_ARGS[@]}
