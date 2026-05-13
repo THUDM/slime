@@ -22,7 +22,11 @@ The flags that switch the run into delta mode are grouped in `DELTA_ARGS` near t
 --update-weight-mode delta            # default 'full'; first sync is always full
 --delta-compression sparse_indices    # 'sparse_indices' / 'sparse_bitmask' / 'dense'
 --delta-dtype fp32                    # subtraction and apply happen at this dtype
---delta-full-interval 10000           # full sync every N successful deltas
+--delta-full-interval 30              # full sync every N successful deltas;
+                                      # safe to set very large (e.g. 10000) to
+                                      # effectively disable periodic full syncs
+                                      # — with fp32 delta the apply is lossless
+                                      # (no drift accumulates).
 ```
 
 And one receiver-side flag in `SGLANG_ARGS`:

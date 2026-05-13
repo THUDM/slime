@@ -20,7 +20,9 @@
 --update-weight-mode delta
 --delta-compression sparse_indices
 --delta-dtype fp32
---delta-full-interval 10000
+--delta-full-interval 30   # 可以设成非常大的数（例如 10000）以彻底关闭周期性
+                           # full sync —— 在 fp32 delta 下整个 apply 是 lossless
+                           # 的（详见下面 "周期性 Full Sync" 一节）。
 ```
 
 SGLang 端唯一的旋钮（slime 通过 `--sglang-update-weight-delta-chunk-bytes` 自动转发）：
@@ -75,12 +77,11 @@ CPU snapshot 只占用 param dtype 的字节数（不会因此膨胀到 fp32 的
 
 ## 周期性 Full Sync
 
-第一次同步永远是 full sync。之后每当 `committed_syncs % --delta-full-interval == 0` 再触发一次完整广播，同时把所有人的 snapshot 重新校准。保留周期性 full sync 的两个理由：
+第一次同步永远是 full sync。之后每当 `committed_syncs % --delta-full-interval == 0` 再触发一次完整广播。
 
-- 如果某次 delta 应用失败，full sync 是一个自愈点；
-- 新加入的 rollout engine 在下一次 full sync 时被完整同步。
+在 `--delta-dtype fp32`（或任何高于 param 自身 dtype 的精度）下，delta 的计算与 apply 是**无损（lossless）**的：每个 bf16 值都可以精确表示为 fp32，`current_fp32 − snapshot_fp32` 得到两个 bf16 值的精确差，接收端的 `bf16_param.add_(fp32_delta)` 在自动提升到 fp32 完成加法、再 cast 回 bf16 之后，会逐比特地复现 trainer 的 bf16 状态。因为不会有误差累积，无论中间累积了多少次 delta，接收端的状态都不会偏离对应的 full sync 结果，从正确性角度并不需要周期性 full sync。把 `--delta-full-interval` 设得很大（例如 `10000`）就等于关闭周期性 full sync，在实践中是安全的。
 
-由于 sender 每步都会以自己的广播刷新 snapshot，实际使用中 interval 设得很大（例如 10000）是合理的。
+保留少量 full sync 的运营性理由主要是恢复点——例如一个中途加入的 rollout engine 需要先拿到完整状态才能应用后续 delta。如果你为了进一步压缩 wire 体积而把 `--delta-dtype` 设为 `bf16`（或不高于 param dtype 的精度），apply 就不再 lossless，这时候 interval 就需要给一个合理的有限值。
 
 ## 为什么 colocate 模式不需要
 

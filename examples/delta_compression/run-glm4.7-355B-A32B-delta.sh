@@ -136,9 +136,11 @@ DELTA_ARGS=(
    --delta-compression sparse_indices
    --delta-dtype fp32
    # Full sync every 30 delta syncs. Setting this to a very large integer
-   # (e.g. 10000) effectively disables periodic full syncs — empirically the
-   # per-step snapshot refresh on the sender makes drift over thousands of
-   # deltas negligible.
+   # (e.g. 10000) effectively disables periodic full syncs. With --delta-dtype
+   # fp32 the delta is computed losslessly — every bf16 value fits exactly in
+   # fp32 and the receiver's in-place add reproduces the trainer's bf16 state
+   # bit-for-bit each apply, so receiver state never drifts from a full-sync
+   # reference no matter how many deltas elapse between full syncs.
    --delta-full-interval 30
 )
 

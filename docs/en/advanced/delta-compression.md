@@ -20,7 +20,9 @@ Enable the mode and pick a wire encoding on the trainer side:
 --update-weight-mode delta
 --delta-compression sparse_indices
 --delta-dtype fp32
---delta-full-interval 10000
+--delta-full-interval 30   # safe to set very large (e.g. 10000) to disable
+                           # periodic full syncs — with fp32 delta the apply
+                           # is lossless (see "Periodic Full Sync" below).
 ```
 
 And one knob on the SGLang side (auto-mirrored by slime as `--sglang-update-weight-delta-chunk-bytes`):
@@ -75,12 +77,11 @@ The CPU snapshot still occupies only the param dtype's bytes (no fp32 inflation 
 
 ## Periodic Full Sync
 
-The first sync of every job is always full. After that, slime sends deltas until `committed_syncs % --delta-full-interval == 0`, at which point a full sync runs again (which simultaneously refreshes the snapshot for everyone). Two reasons to keep periodic full syncs in the schedule:
+The first sync of every job is always full. After that, slime sends deltas until `committed_syncs % --delta-full-interval == 0`, at which point a full sync runs again.
 
-- Snapshot drift if you ever miss a delta apply (you shouldn't, but full syncs are a self-healing point).
-- A new rollout engine joining mid-training gets resynchronized at the next full step.
+With `--delta-dtype fp32` (any precision higher than the param dtype), the delta apply is **lossless**: every bf16 value is exactly representable in fp32, the subtraction `current_fp32 − snapshot_fp32` produces the exact difference between the two stored bf16 values, and the receiver's in-place `bf16_param.add_(fp32_delta)` reconstructs the trainer's bf16 state bit-for-bit when the fp32 result is rounded back to bf16. Because no error accumulates across deltas, receiver state never drifts from a full-sync reference no matter how many deltas elapse — periodic full sync is not needed for correctness. Setting `--delta-full-interval` to a very large integer (e.g. `10000`) effectively disables it and is fine in practice.
 
-In practice the snapshot is exact-refreshed every step (the sender records its own broadcast), so very large intervals (10000) are reasonable.
+The only operational reasons to keep an occasional full sync are recovery points — e.g. a rollout engine that joins mid-training and needs a complete state before it can apply deltas. If you set `--delta-dtype bf16` (or anything not higher than the param dtype) to save wire bytes, the apply is no longer lossless and a finite interval starts to matter.
 
 ## Why Not Colocated
 
