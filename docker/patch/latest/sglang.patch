@@ -1106,34 +1106,35 @@ index 7a8fb65..f1c8589 100644
              is_k_full=self.is_k_full,
              routed_scaling_factor=self.moe_runner_config.routed_scaling_factor,
 diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
-index bd97965..8a3cb07 100644
+index bd97965..ba8976a 100644
 --- a/python/sglang/srt/managers/io_struct.py
 +++ b/python/sglang/srt/managers/io_struct.py
-@@ -1254,6 +1254,50 @@ class UpdateWeightFromDiskReqOutput(BaseReq):
+@@ -1254,6 +1254,54 @@ class UpdateWeightFromDiskReqOutput(BaseReq):
      num_paused_requests: Optional[int] = 0
  
  
-+class WeightDeltaEncoding(str, Enum):
-+    # Wire encoding for an additive weight-delta broadcast.
-+    # Choosing SPARSE_INDICES vs SPARSE_BITMASK: with n=numel, k=nnz, v=value bytes,
-+    # the wire sizes are k*(4+v) and ceil(n/8)+k*v respectively, so the break-even
-+    # density k/n = 1/32 ≈ 3.125% (independent of v). Pick INDICES below ~3%, BITMASK above.
++class PartialWeightEncoding(str, Enum):
++    # Wire encoding for a partial weight-update broadcast (used by load_format=
++    # "delta" and load_format="selective"). Choosing SPARSE_INDICES vs SPARSE_BITMASK:
++    # with n=numel, k=nnz, v=value bytes, the wire sizes are k*(4+v) and ceil(n/8)+k*v,
++    # so the break-even density k/n = 1/32 ≈ 3.125% (independent of v). Pick INDICES
++    # below ~3%, BITMASK above.
 +
 +    # One tensor per parameter, broadcast identical (name, dtype, shape) to the
-+    # parent request's lists. WeightDeltaSpec.params is None.
++    # parent request's lists. PartialWeightSpec.params is None.
 +    DENSE = "dense"
 +    # Two tensors broadcast: __packed_keys__ (int32 nonzero offsets) and __packed_values__.
-+    # Per-param slicing is in WeightDeltaSpec.params.
++    # Per-param slicing is in PartialWeightSpec.params.
 +    SPARSE_INDICES = "sparse_indices"
 +    # Two tensors broadcast: __packed_keys__ (uint8 packed bitmask, 1 bit per element,
 +    # LSB-first within each byte) and __packed_values__. Per-param slicing is in
-+    # WeightDeltaSpec.params.
++    # PartialWeightSpec.params.
 +    SPARSE_BITMASK = "sparse_bitmask"
 +
 +
 +@dataclass
-+class WeightDeltaParam:
-+    # Decoding manifest entry for one parameter in a sparse weight-delta broadcast.
++class PartialWeightParam:
++    # Decoding manifest entry for one parameter in a sparse partial-update broadcast.
 +    # Unused (and absent) for DENSE — the parent request's names/dtypes/shapes
 +    # already describe each param 1:1.
 +    name: str
@@ -1149,27 +1150,30 @@ index bd97965..8a3cb07 100644
 +
 +
 +@dataclass
-+class WeightDeltaSpec:
-+    # Wire-encoding descriptor for an additive weight-delta broadcast. Required iff
-+    # the parent UpdateWeightsFromDistributedReqInput has load_format == "delta".
-+    encoding: WeightDeltaEncoding
++class PartialWeightSpec:
++    # Wire-encoding descriptor for a partial weight-update broadcast. Required iff
++    # the parent UpdateWeightsFromDistributedReqInput has load_format in
++    # ("delta", "selective"). For load_format="delta" the values are deltas applied
++    # additively; for load_format="selective" the values are new param values with
++    # NaN as the "unchanged" sentinel.
++    encoding: PartialWeightEncoding
 +    # Per-param decoding manifest. Required for sparse encodings, None for DENSE.
-+    params: Optional[List[WeightDeltaParam]] = None
++    params: Optional[List[PartialWeightParam]] = None
 +
 +
  @dataclass
  class UpdateWeightsFromDistributedReqInput(BaseReq):
      names: List[str]
-@@ -1269,6 +1313,8 @@ class UpdateWeightsFromDistributedReqInput(BaseReq):
+@@ -1269,6 +1317,8 @@ class UpdateWeightsFromDistributedReqInput(BaseReq):
      weight_version: Optional[str] = None
      # Optional format specification for loading
      load_format: Optional[str] = None
-+    # Required iff load_format == "delta".
-+    delta: Optional[WeightDeltaSpec] = None
++    # Required iff load_format in ("delta", "selective").
++    partial: Optional[PartialWeightSpec] = None
  
  
  @dataclass
-@@ -1449,6 +1495,18 @@ class ResumeMemoryOccupationReqOutput(BaseReq):
+@@ -1449,6 +1499,18 @@ class ResumeMemoryOccupationReqOutput(BaseReq):
      pass
  
  
@@ -1188,7 +1192,7 @@ index bd97965..8a3cb07 100644
  @dataclass
  class CheckWeightsReqInput(BaseReq):
      action: str
-@@ -1753,6 +1811,8 @@ class GetLoadReqOutput(BaseReq):
+@@ -1753,6 +1815,8 @@ class GetLoadReqOutput(BaseReq):
      num_waiting_reqs: int
      num_tokens: int
      ts_tic: float
@@ -1472,7 +1476,7 @@ index 8142432..2c132be 100644
          if state.finished:
              retraction_count = (
 diff --git a/python/sglang/srt/managers/tp_worker.py b/python/sglang/srt/managers/tp_worker.py
-index 7f63610..a566fcc 100644
+index 7f63610..da6c2b2 100644
 --- a/python/sglang/srt/managers/tp_worker.py
 +++ b/python/sglang/srt/managers/tp_worker.py
 @@ -29,6 +29,7 @@ from sglang.srt.managers.io_struct import (
@@ -1487,7 +1491,7 @@ index 7f63610..a566fcc 100644
              recv_req.shapes,
              recv_req.group_name,
              recv_req.load_format,
-+            recv_req.delta,
++            recv_req.partial,
          )
          return success, message
  
@@ -1662,7 +1666,7 @@ index 7d16160..70fbdc7 100644
          return DecLockRefResult(delta=delta)
  
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
-index a59742b..b327281 100644
+index a59742b..8b43055 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
 +++ b/python/sglang/srt/model_executor/model_runner.py
 @@ -15,11 +15,13 @@
@@ -1683,7 +1687,7 @@ index a59742b..b327281 100644
  from sglang.srt.layers.torchao_utils import apply_torchao_config_to_model
  from sglang.srt.lora.lora_manager import LoRAManager
  from sglang.srt.lora.lora_registry import LoRARef
-+from sglang.srt.managers.io_struct import WeightDeltaEncoding, WeightDeltaSpec
++from sglang.srt.managers.io_struct import PartialWeightEncoding, PartialWeightSpec
  from sglang.srt.managers.schedule_batch import sanity_check_mm_pad_shift_value
  from sglang.srt.mem_cache.allocator import BaseTokenToKVPoolAllocator
  from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
@@ -1715,7 +1719,7 @@ index a59742b..b327281 100644
          shapes,
          group_name,
          load_format: Optional[str] = None,
-+        delta: Optional[WeightDeltaSpec] = None,
++        partial: Optional[PartialWeightSpec] = None,
      ):
          """
          Update specific parameter in the model weights online
@@ -1723,9 +1727,9 @@ index a59742b..b327281 100644
              return self._update_bucketed_weights_from_distributed(
                  names, dtypes, shapes, group_name
              )
-+        if load_format == "delta":
-+            return self._update_delta_weights_from_distributed(
-+                names, dtypes, shapes, group_name, delta
++        if load_format in ("delta", "selective"):
++            return self._update_partial_weights_from_distributed(
++                names, dtypes, shapes, group_name, partial, load_format
 +            )
          try:
 -            weights = []
@@ -1782,31 +1786,42 @@ index a59742b..b327281 100644
      def _update_bucketed_weights_from_distributed(
          self, names, dtypes, shapes, group_name
      ):
-@@ -1646,6 +1664,88 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -1646,6 +1664,102 @@ class ModelRunner(ModelRunnerKVCacheMixin):
              logger.error(error_msg)
              return False, error_msg
  
-+    def _update_delta_weights_from_distributed(
-+        self, names, dtypes, shapes, group_name, delta: Optional[WeightDeltaSpec]
++    def _update_partial_weights_from_distributed(
++        self, names, dtypes, shapes, group_name, partial: Optional[PartialWeightSpec], mode: str,
 +    ):
-+        if delta is None:
-+            return False, "load_format='delta' requires `delta` (WeightDeltaSpec) in the request"
-+        encoding = delta.encoding
++        if partial is None:
++            return False, f"load_format='{mode}' requires `partial` (PartialWeightSpec) in the request"
++        # mode 'delta'    → fill unchanged with 0,   apply via _additive_load_context.
++        # mode 'selective'→ fill unchanged with NaN, apply via _selective_load_context
++        #                   (NaN positions are left untouched on the receiver).
++        if mode == "delta":
++            fill_value = 0.0
++            apply_ctx = _additive_load_context
++        else:  # "selective"
++            fill_value = float("nan")
++            apply_ctx = _selective_load_context
++        encoding = partial.encoding
 +        try:
 +            encoded = self._broadcast_named_tensors(names, dtypes, shapes, group_name)
 +            encoded_tensors = [t for _, t in encoded]
 +
-+            # Decode must run OUTSIDE the additive context: its zeros buffers
-+            # and index_copy_ must overwrite, not accumulate. Yielding one
-+            # decoded tensor at a time bounds peak HBM during apply.
-+            if encoding is WeightDeltaEncoding.DENSE:
++            # Decode must run OUTSIDE the apply context: its initial buffer fill
++            # and index_copy_ must overwrite, not accumulate / mask-overwrite.
++            # Yielding one decoded tensor at a time bounds peak HBM during apply.
++            if encoding is PartialWeightEncoding.DENSE:
 +                decoded_iter = zip(names, encoded_tensors)
-+            elif encoding in (WeightDeltaEncoding.SPARSE_INDICES, WeightDeltaEncoding.SPARSE_BITMASK):
-+                if delta.params is None:
-+                    return False, f"encoding={encoding.value!r} requires delta.params"
-+                decoded_iter = self._decode_sparse_delta(encoded_tensors, delta.params, encoding)
++            elif encoding in (PartialWeightEncoding.SPARSE_INDICES, PartialWeightEncoding.SPARSE_BITMASK):
++                if partial.params is None:
++                    return False, f"encoding={encoding.value!r} requires partial.params"
++                decoded_iter = self._decode_sparse_partial(
++                    encoded_tensors, partial.params, encoding, fill_value,
++                )
 +            else:
-+                return False, f"unknown delta encoding: {encoding!r}"
++                return False, f"unknown partial-update encoding: {encoding!r}"
 +
 +            # Bigger chunk_byte_cap amortizes per-call cost (name resolution,
 +            # MoE expert remap, fp8 scale repacking) but raises peak HBM.
@@ -1814,8 +1829,8 @@ index a59742b..b327281 100644
 +            #    96 MiB → 1110 calls / 37.8s
 +            #   512 MiB →  128 calls / 30.3s   ← default
 +            #  1024 MiB →  OOM on some engines
-+            chunk_byte_cap = self.server_args.update_weight_delta_chunk_bytes
-+            with _additive_load_context(self.model):
++            chunk_byte_cap = self.server_args.update_weight_partial_chunk_bytes
++            with apply_ctx(self.model):
 +                chunk = []
 +                chunk_bytes = 0
 +                for name, t in decoded_iter:
@@ -1829,28 +1844,30 @@ index a59742b..b327281 100644
 +                if chunk:
 +                    self.model.load_weights(chunk)
 +
-+            return True, "Succeeded to apply weight deltas online."
++            return True, f"Succeeded to apply weight {mode} update online."
 +        except Exception as e:
 +            error_msg = (
-+                f"Failed to apply weight deltas online: {e}. "
++                f"Failed to apply weight {mode} update online: {e}. "
 +                f"The model weights may be in an inconsistent state. "
 +                f"Please discard the whole weights."
 +            )
 +            logger.error(error_msg)
 +            return False, error_msg
 +
-+    def _decode_sparse_delta(self, encoded_tensors, params, encoding):
++    def _decode_sparse_partial(self, encoded_tensors, params, encoding, fill_value):
 +        """
 +        Generator: yield one decoded (name, tensor) per param. Decoded tensors
 +        are not retained across yields, so the consumer's per-chunk byte cap
-+        also bounds the receiver's peak HBM during decode.
++        also bounds the receiver's peak HBM during decode. ``fill_value`` is
++        the sentinel used at unchanged positions — 0 for delta mode, NaN for
++        selective mode.
 +        """
 +        # encoded_tensors[0] is __packed_keys__: either int32 nonzero offsets
 +        # (SPARSE_INDICES) or a packed bitmask (SPARSE_BITMASK). index_copy_
 +        # needs int64, so we cast once up front for the indices path.
-+        if encoding is WeightDeltaEncoding.SPARSE_INDICES:
++        if encoding is PartialWeightEncoding.SPARSE_INDICES:
 +            packed_keys = encoded_tensors[0].to(dtype=torch.long)
-+        elif encoding is WeightDeltaEncoding.SPARSE_BITMASK:
++        elif encoding is PartialWeightEncoding.SPARSE_BITMASK:
 +            packed_keys = encoded_tensors[0]
 +        else:
 +            raise ValueError(f"unsupported sparse encoding: {encoding!r}")
@@ -1858,20 +1875,21 @@ index a59742b..b327281 100644
 +
 +        for p in params:
 +            numel = math.prod(p.shape)
-+            flat = torch.zeros(numel, dtype=getattr(torch, p.dtype), device=self.device)
++            param_dtype = getattr(torch, p.dtype)
++            flat = torch.full((numel,), fill_value, dtype=param_dtype, device=self.device)
 +            if p.keys_end > p.keys_start:
 +                keys = packed_keys[p.keys_start : p.keys_end]
 +                values = packed_values[p.values_start : p.values_end]
-+                if encoding is WeightDeltaEncoding.SPARSE_INDICES:
++                if encoding is PartialWeightEncoding.SPARSE_INDICES:
 +                    flat.index_copy_(0, keys, values)
-+                elif encoding is WeightDeltaEncoding.SPARSE_BITMASK:
++                elif encoding is PartialWeightEncoding.SPARSE_BITMASK:
 +                    flat[_unpack_bitmask(keys, numel, self.device)] = values
 +            yield p.name, flat.view(tuple(p.shape))
 +
      def update_weights_from_tensor(
          self,
          named_tensors: List[Tuple[str, Union[torch.Tensor, "LocalSerializedTensor"]]],
-@@ -2767,11 +2867,19 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -2767,11 +2881,19 @@ class ModelRunner(ModelRunnerKVCacheMixin):
          output.expert_distribution_metrics = recorder_outputs.get("metrics")
  
          # Copy cached routing experts' buffers back to CPU cache
@@ -1896,7 +1914,7 @@ index a59742b..b327281 100644
  
          if self.eplb_manager is not None:
              self.eplb_manager.on_forward_pass_end()
-@@ -3021,6 +3129,137 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -3021,6 +3143,192 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                      device=self.device,
                  )
  
@@ -1937,19 +1955,11 @@ index a59742b..b327281 100644
 +        return True, "Success"
 +
 +
-+@contextlib.contextmanager
-+def _additive_load_context(model):
-+    """Make in-place writes to ``model``'s parameter memory accumulate (``add_``)
-+    instead of overwriting (``copy_``/``fill_``). A write targets param memory
-+    iff its data_ptr falls within the storage range of one of the model's
-+    parameters or buffers, captured at context entry — so views/slices of
-+    params hit the same range. Writes to non-param storage (scratch, dtype
-+    temps) are unaffected.
-+
-+    ``model.post_load_weights`` (if defined) is wrapped to run in the
-+    unmodified op environment, so derived tensors (fp8 scales, MoE biases)
-+    overwrite correctly even when invoked from inside ``load_weights``.
-+    """
++def _param_storage_predicate(model):
++    """Return a callable that tests whether a tensor's storage falls inside one
++    of ``model``'s parameter/buffer storage ranges, captured at call time.
++    Used by the partial-update apply contexts to scope their patched copy_/
++    fill_ rewrites to writes that hit param memory."""
 +    import bisect
 +
 +    # Skip meta tensors — no real storage to track.
@@ -1974,7 +1984,7 @@ index a59742b..b327281 100644
 +    starts = [starts[i] for i in order]
 +    ends = [ends[i] for i in order]
 +
-+    def _is_param_write(dst):
++    def is_param_write(dst):
 +        try:
 +            ptr = dst.data_ptr()
 +        except RuntimeError:
@@ -1982,21 +1992,25 @@ index a59742b..b327281 100644
 +        idx = bisect.bisect_right(starts, ptr) - 1
 +        return 0 <= idx < len(starts) and starts[idx] <= ptr < ends[idx]
 +
++    return is_param_write
++
++
++@contextlib.contextmanager
++def _patched_in_place_writes(model, patched_copy_factory, patched_fill_factory):
++    """Shared scaffolding for the partial-update apply contexts. Patches
++    Tensor.copy_ and Tensor.fill_ with caller-provided variants, scoped to
++    writes whose destination is inside ``model``'s param storage. Also wraps
++    ``model.post_load_weights`` (if defined) to run in the unmodified op
++    environment, so derived tensors (fp8 scales, MoE biases, DeepSeek
++    w_kc/w_vc) overwrite correctly even when invoked from inside
++    ``load_weights``.
++    """
++    is_param_write = _param_storage_predicate(model)
 +    original_copy_ = torch.Tensor.copy_
 +    original_fill_ = torch.Tensor.fill_
 +
-+    def patched_copy_(self, src, *args, **kwargs):
-+        if _is_param_write(self):
-+            # In-place add_ promotes operands to common dtype for the math, then
-+            # casts the result to self.dtype on store — so bf16 += fp32 keeps
-+            # fp32 precision without an explicit src.to(self.dtype).
-+            return self.add_(src.to(device=self.device))
-+        return original_copy_(self, src, *args, **kwargs)
-+
-+    def patched_fill_(self, value):
-+        if _is_param_write(self):
-+            return self.add_(value)
-+        return original_fill_(self, value)
++    patched_copy_ = patched_copy_factory(is_param_write, original_copy_)
++    patched_fill_ = patched_fill_factory(is_param_write, original_fill_)
 +
 +    original_post_load = getattr(model, "post_load_weights", None)
 +    if original_post_load is not None:
@@ -2022,6 +2036,65 @@ index a59742b..b327281 100644
 +        torch.Tensor.fill_ = original_fill_
 +        if original_post_load is not None:
 +            model.post_load_weights = original_post_load
++
++
++def _additive_load_context(model):
++    """Make in-place writes to ``model``'s parameter memory accumulate (``add_``)
++    instead of overwriting (``copy_``/``fill_``). Writes to non-param storage
++    (scratch, dtype temps) are unaffected."""
++
++    def make_copy(is_param_write, original_copy_):
++        def patched_copy_(self, src, *args, **kwargs):
++            if is_param_write(self):
++                # In-place add_ promotes operands to common dtype for the math, then
++                # casts the result to self.dtype on store — so bf16 += fp32 keeps
++                # fp32 precision without an explicit src.to(self.dtype).
++                return self.add_(src.to(device=self.device))
++            return original_copy_(self, src, *args, **kwargs)
++        return patched_copy_
++
++    def make_fill(is_param_write, original_fill_):
++        def patched_fill_(self, value):
++            if is_param_write(self):
++                return self.add_(value)
++            return original_fill_(self, value)
++        return patched_fill_
++
++    return _patched_in_place_writes(model, make_copy, make_fill)
++
++
++def _selective_load_context(model):
++    """Make in-place writes to ``model``'s parameter memory overwrite only at
++    positions where the source is *not* NaN; positions whose source is NaN are
++    left untouched. This is the apply path for load_format="selective", where
++    the sender uses NaN as the "unchanged" sentinel in the dense decoded tensor.
++    Non-param writes go through the unmodified ops."""
++
++    def make_copy(is_param_write, original_copy_):
++        def patched_copy_(self, src, *args, **kwargs):
++            if is_param_write(self):
++                src_aligned = src.to(device=self.device, dtype=self.dtype) if src.dtype != self.dtype else src
++                mask = ~torch.isnan(src_aligned)
++                self[mask] = src_aligned[mask]
++                return self
++            return original_copy_(self, src, *args, **kwargs)
++        return patched_copy_
++
++    def make_fill(is_param_write, original_fill_):
++        # fill_ takes a scalar. In selective mode, a NaN scalar means "don't
++        # change the param" (matches the per-element semantics of patched_copy_).
++        # Non-NaN scalars fall through to a normal fill.
++        def patched_fill_(self, value):
++            if is_param_write(self):
++                try:
++                    if math.isnan(value):
++                        return self
++                except TypeError:
++                    pass
++            return original_fill_(self, value)
++        return patched_fill_
++
++    return _patched_in_place_writes(model, make_copy, make_fill)
 +
 +
 +def _unpack_bitmask(packed, numel, device):
@@ -2549,7 +2622,7 @@ index ff5695c..588379a 100644
  
      def get_loads(self: Scheduler, req: GetLoadsReqInput = None) -> GetLoadsReqOutput:
 diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
-index d91ced8..674e58b 100644
+index d91ced8..023085d 100644
 --- a/python/sglang/srt/server_args.py
 +++ b/python/sglang/srt/server_args.py
 @@ -670,6 +670,7 @@ class ServerArgs:
@@ -2564,7 +2637,7 @@ index d91ced8..674e58b 100644
      # For model weight update and weight loading
      custom_weight_loader: Optional[List[str]] = None
      weight_loader_disable_mmap: bool = False
-+    update_weight_delta_chunk_bytes: int = 512 * 1024 * 1024
++    update_weight_partial_chunk_bytes: int = 512 * 1024 * 1024
      remote_instance_weight_loader_seed_instance_ip: Optional[str] = None
      remote_instance_weight_loader_seed_instance_service_port: Optional[int] = None
      remote_instance_weight_loader_send_weights_group_ports: Optional[List[int]] = None
@@ -2586,14 +2659,14 @@ index d91ced8..674e58b 100644
              help="The custom dataloader which used to update the model. Should be set with a valid import path, such as my_package.weight_load_func",
          )
 +        parser.add_argument(
-+            "--update-weight-delta-chunk-bytes",
++            "--update-weight-partial-chunk-bytes",
 +            type=int,
-+            default=ServerArgs.update_weight_delta_chunk_bytes,
++            default=ServerArgs.update_weight_partial_chunk_bytes,
 +            help=(
-+                "Byte cap per model.load_weights call when applying a delta "
-+                "update. Bigger amortizes per-call cost (name resolution, MoE "
-+                "expert remap, fp8 scale repacking) but raises peak HBM "
-+                "during decode."
++                "Byte cap per model.load_weights call when applying a partial "
++                "weight update (delta or selective). Bigger amortizes per-call "
++                "cost (name resolution, MoE expert remap, fp8 scale repacking) "
++                "but raises peak HBM during decode."
 +            ),
 +        )
          parser.add_argument(

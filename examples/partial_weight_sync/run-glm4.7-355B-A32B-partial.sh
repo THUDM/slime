@@ -132,17 +132,18 @@ SGLANG_ARGS=(
 
 # Partial weight sync (sender side). Pick one of the two blocks below.
 #
-# `--update-weight-base-sync-interval` is set very large here (10000) to
-# effectively disable periodic base syncs — both delta (with fp32 math) and
-# selective are lossless, so receiver state doesn't drift from a base-sync
-# reference no matter how many partial syncs elapse.
+# `--update-weight-base-sync-interval` defaults to 9999 — effectively disables
+# periodic base syncs because both modes are lossless under their defaults
+# (delta with fp32 math, selective by construction). Set lower (e.g. 30) if
+# you want to verify against periodic full broadcasts, or if your workload
+# has a custom base-sync requirement.
 
 # ── Mode 1: delta — broadcast (current − snapshot), receiver += delta ──────
 PARTIAL_ARGS=(
    --update-weight-mode delta
    --update-weight-partial-encoding sparse_indices
    --update-weight-delta-dtype fp32
-   --update-weight-base-sync-interval 10000
+   --update-weight-base-sync-interval 9999
 )
 
 # ── Mode 2: selective — broadcast new values at changed positions ─────────
@@ -152,7 +153,7 @@ PARTIAL_ARGS=(
 # PARTIAL_ARGS=(
 #    --update-weight-mode selective
 #    --update-weight-partial-encoding sparse_indices
-#    --update-weight-base-sync-interval 10000
+#    --update-weight-base-sync-interval 9999
 # )
 
 MISC_ARGS=(

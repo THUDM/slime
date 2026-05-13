@@ -23,9 +23,12 @@ Enable a partial mode on the trainer side:
 --update-weight-mode delta                # 'delta' / 'selective' / 'full' (default)
 --update-weight-partial-encoding sparse_indices
 --update-weight-delta-dtype fp32          # delta mode only
---update-weight-base-sync-interval 30     # safe to set very large (e.g. 10000) to disable
-                                          # periodic base syncs — partial-mode apply is
-                                          # lossless (see "Periodic Base Sync" below).
+--update-weight-base-sync-interval 9999   # default. Both partial modes are lossless under
+                                          # their defaults (delta with fp32 math, selective
+                                          # by construction), so 9999 effectively disables
+                                          # periodic base syncs. Set lower (e.g. 30) to
+                                          # verify against periodic full broadcasts, or
+                                          # if your workload has a custom base-sync need.
 ```
 
 And one knob on the SGLang side (auto-mirrored by slime as `--sglang-update-weight-partial-chunk-bytes`):
@@ -102,7 +105,7 @@ The CPU snapshot occupies only the param dtype's bytes in both modes (no fp32 in
 
 The first sync of every job is always a *base sync* (a full broadcast that re-establishes the snapshot). After that, slime sends partial syncs until `committed_syncs % --update-weight-base-sync-interval == 0`, at which point a base sync runs again.
 
-With `--update-weight-delta-dtype fp32` (delta mode) or in selective mode, the partial apply is **lossless**: every bf16 value is exactly representable in fp32, the subtraction `current_fp32 − snapshot_fp32` produces the exact difference between the two stored bf16 values, and the receiver's in-place `bf16_param.add_(fp32_delta)` reconstructs the trainer's bf16 state bit-for-bit when the fp32 result is rounded back to bf16. Selective is lossless by construction (direct overwrite). Because no error accumulates across partial syncs, receiver state never drifts from a base-sync reference no matter how many partial syncs elapse — periodic base sync is not needed for correctness. Setting `--update-weight-base-sync-interval` to a very large integer (e.g. `10000`) effectively disables it and is fine in practice.
+With `--update-weight-delta-dtype fp32` (delta mode) or in selective mode, the partial apply is **lossless**: every bf16 value is exactly representable in fp32, the subtraction `current_fp32 − snapshot_fp32` produces the exact difference between the two stored bf16 values, and the receiver's in-place `bf16_param.add_(fp32_delta)` reconstructs the trainer's bf16 state bit-for-bit when the fp32 result is rounded back to bf16. Selective is lossless by construction (direct overwrite). Because no error accumulates across partial syncs, receiver state never drifts from a base-sync reference no matter how many partial syncs elapse — periodic base sync is not needed for correctness. The default `--update-weight-base-sync-interval 9999` effectively disables it and is the recommended setting; set lower (e.g. `30`) if you want periodic full broadcasts to verify correctness or your workload has a custom base-sync requirement.
 
 The only operational reason to keep an occasional base sync is recovery — e.g. a rollout engine that joins mid-training and needs a complete state before it can apply partial updates. If you set `--update-weight-delta-dtype bf16` (delta only, not higher than the param dtype) to save wire bytes, the delta apply is no longer lossless and a finite interval starts to matter.
 

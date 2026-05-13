@@ -175,14 +175,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--update-weight-base-sync-interval",
                 type=int,
-                default=30,
+                default=9999,
                 help=(
                     "Run a base sync (a full broadcast that re-establishes the snapshot) "
                     "every N successful partial syncs (delta + selective modes). The "
-                    "first sync is always a base sync. Setting this to a very large "
-                    "integer (e.g. 10000) effectively disables periodic base syncs; "
-                    "with --update-weight-delta-dtype fp32 the delta apply is lossless "
-                    "so receiver state never drifts."
+                    "first sync is always a base sync. Both modes are lossless under "
+                    "their default settings (delta with fp32 math, selective by "
+                    "construction), so the default 9999 effectively disables periodic "
+                    "base syncs — receiver state doesn't drift from a base-sync "
+                    "reference no matter how many partial syncs elapse. Set lower "
+                    "(e.g. 30) to verify correctness against periodic full broadcasts, "
+                    "or if your workload has a custom base-sync requirement."
                 ),
             )
             parser.add_argument(

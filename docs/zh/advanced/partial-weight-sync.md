@@ -23,9 +23,11 @@
 --update-weight-mode delta                # 'delta' / 'selective' / 'full'（默认）
 --update-weight-partial-encoding sparse_indices
 --update-weight-delta-dtype fp32          # 仅 delta 模式生效
---update-weight-base-sync-interval 30     # 可以设成非常大的数（例如 10000）以彻底关闭周期性
-                                          # base sync —— partial 模式的 apply 是 lossless 的
-                                          # （详见下面 "周期性 Base Sync" 一节）。
+--update-weight-base-sync-interval 9999   # 默认值。两种 partial 模式在默认设置下都是 lossless 的
+                                          # （delta 配 fp32 算术，selective 按构造），所以 9999
+                                          # 实际上关闭了周期性 base sync。若想用周期性全量广播
+                                          # 来验证正确性、或有自定义的 base sync 需求，可调小
+                                          # （例如 30）。
 ```
 
 SGLang 端唯一的旋钮（slime 通过 `--sglang-update-weight-partial-chunk-bytes` 自动转发）：
@@ -102,7 +104,7 @@ CPU snapshot 在两种模式下都只占用 param dtype 的字节数（不会因
 
 每次任务的第一次同步永远是 *base sync*（一次完整广播，重建 snapshot）。之后每当 `committed_syncs % --update-weight-base-sync-interval == 0` 再触发一次 base sync。
 
-在 `--update-weight-delta-dtype fp32`（delta 模式）或 selective 模式下，partial apply 都是**无损（lossless）**的：每个 bf16 值都可以精确表示为 fp32，`current_fp32 − snapshot_fp32` 得到两个 bf16 值的精确差，接收端的 `bf16_param.add_(fp32_delta)` 在自动提升到 fp32 完成加法、再 cast 回 bf16 之后，会逐比特地复现 trainer 的 bf16 状态；selective 模式则因为直接覆盖而天然无损。因为不会有误差累积，无论中间累积了多少次 partial 同步，接收端的状态都不会偏离对应的 base sync 结果，从正确性角度并不需要周期性 base sync。把 `--update-weight-base-sync-interval` 设得很大（例如 `10000`）就等于关闭周期性 base sync，在实践中是安全的。
+在 `--update-weight-delta-dtype fp32`（delta 模式）或 selective 模式下，partial apply 都是**无损（lossless）**的：每个 bf16 值都可以精确表示为 fp32，`current_fp32 − snapshot_fp32` 得到两个 bf16 值的精确差，接收端的 `bf16_param.add_(fp32_delta)` 在自动提升到 fp32 完成加法、再 cast 回 bf16 之后，会逐比特地复现 trainer 的 bf16 状态；selective 模式则因为直接覆盖而天然无损。因为不会有误差累积，无论中间累积了多少次 partial 同步，接收端的状态都不会偏离对应的 base sync 结果，从正确性角度并不需要周期性 base sync。默认 `--update-weight-base-sync-interval 9999` 实际上已关闭周期性 base sync，是推荐设置；若希望用周期性全量广播来验证正确性或有自定义需求，可设成较小的值（例如 `30`）。
 
 保留少量 base sync 的运营性理由主要是恢复点——例如一个中途加入的 rollout engine 需要先拿到完整状态才能应用后续 partial 更新。如果你为了进一步压缩 wire 体积而把 `--update-weight-delta-dtype` 设为 `bf16`（不高于 param dtype 的精度，仅对 delta 模式有意义），apply 就不再 lossless，这时 interval 才需要给一个合理的有限值。
 

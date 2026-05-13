@@ -28,7 +28,7 @@ PARTIAL_ARGS=(
    --update-weight-mode delta
    --update-weight-partial-encoding sparse_indices
    --update-weight-delta-dtype fp32
-   --update-weight-base-sync-interval 10000
+   --update-weight-base-sync-interval 9999
 )
 ```
 
@@ -38,13 +38,13 @@ PARTIAL_ARGS=(
 PARTIAL_ARGS=(
    --update-weight-mode selective
    --update-weight-partial-encoding sparse_indices
-   --update-weight-base-sync-interval 10000
+   --update-weight-base-sync-interval 9999
 )
 ```
 
 Notes:
 - `--update-weight-delta-dtype` is delta-only (silently ignored in selective mode — no arithmetic happens there).
-- `--update-weight-base-sync-interval 10000` effectively disables periodic base syncs. Both modes are lossless, so receiver state doesn't drift from a base-sync reference no matter how many partial syncs elapse.
+- `--update-weight-base-sync-interval` defaults to `9999` — effectively disables periodic base syncs because both modes are lossless under their defaults (delta with fp32 math, selective by construction). Set lower (e.g. `30`) if you want to verify correctness against periodic full broadcasts, or if your workload has a custom base-sync requirement.
 - `--update-weight-partial-encoding` accepts `sparse_indices` / `sparse_bitmask` / `dense`.
 
 And one receiver-side flag in `SGLANG_ARGS`:
