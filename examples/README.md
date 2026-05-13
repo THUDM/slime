@@ -4,6 +4,7 @@ These examples provide concrete examples to leverage slime in your own RL workfl
 
 ## Directory Structure
 
+- **[delta_compression](./delta_compression)**: Non-colocated weight sync that broadcasts sparse-encoded deltas instead of full weights (~30× wire reduction at 355B scale).
 - **[eval_multi_task](./eval_multi_task)**: Example for supporting evaluation multiple tasks with different configs.
 - **[fully_async](./fully_async)**: Demonstrates fully asynchronous rollout generation for higher efficiency.
 - **[geo3k_vlm](./geo3k_vlm)**: Training VLMs on a single-turn reasoning task using GRPO on the GEO3K dataset.

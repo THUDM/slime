@@ -136,6 +136,54 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default="raw",
                 help="The method to convert megatron weights to hugging face weights for SGLang.",
             )
+            # delta sync. Receiver (SGLang) caps bytes per load_weights call via
+            # --sglang-update-weight-delta-chunk-bytes (auto-mirrored, default 512 MiB).
+            parser.add_argument(
+                "--update-weight-mode",
+                choices=["full", "delta"],
+                default="full",
+                help=(
+                    "Weight sync strategy. 'full' broadcasts every parameter on every "
+                    "sync. 'delta' broadcasts (new - baseline) and the receiver applies "
+                    "it additively; the wire payload can be sparse-compressed via "
+                    "--delta-compression. The first sync is always full regardless."
+                ),
+            )
+            parser.add_argument(
+                "--delta-dtype",
+                choices=["fp16", "bf16", "fp32"],
+                default="fp32",
+                help="Dtype the delta tensor is cast to before broadcast (delta mode only).",
+            )
+            parser.add_argument(
+                "--delta-compression",
+                choices=["sparse_indices", "sparse_bitmask", "dense"],
+                default="sparse_indices",
+                help=(
+                    "Wire encoding for the delta payload (delta mode only). "
+                    "'sparse_indices' sends (indices, values) for non-zero entries; "
+                    "'sparse_bitmask' sends a packed bitmask + values; 'dense' sends "
+                    "the full delta tensor."
+                ),
+            )
+            parser.add_argument(
+                "--delta-full-interval",
+                type=int,
+                default=30,
+                help=(
+                    "Run a full sync every N successful delta syncs (delta mode only). "
+                    "The first sync is always full."
+                ),
+            )
+            parser.add_argument(
+                "--delta-artifact-dir",
+                type=str,
+                default=None,
+                help=(
+                    "Optional directory for asynchronously saving delta artifacts (delta "
+                    "mode only). Decoupled from hot-path baseline storage."
+                ),
+            )
             parser.add_argument(
                 "--custom-model-provider-path",
                 type=str,
@@ -1842,3 +1890,15 @@ def slime_validate_args(args):
 
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")
+
+    if args.update_weight_mode == "delta" and args.colocate:
+        raise ValueError(
+            "--update-weight-mode=delta is not supported with --colocate. "
+            "Colocate transfers weights via CUDA IPC: only a memory handle "
+            "(~64 B) crosses processes, never bytes. Delta compression shrinks "
+            "bytes on the wire, of which there are none here, so the delta math "
+            "(subtract + cast + baseline copies) is pure overhead. If you really "
+            "want this combo, also pass --enable-weights-cpu-backup so SGLang "
+            "keeps a CPU-side baseline — delta sync does ``param += delta`` in "
+            "place on the engine, so the prior weights must stay recoverable."
+        )
