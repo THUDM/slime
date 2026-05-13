@@ -1,1 +1,1 @@
-# Package marker for the inspire-sandbox + ROCK agent rollout example.
+# Package marker for the inspire-sandbox SWE rollout example.

@@ -12,9 +12,12 @@ from typing import Any
 AVALANCHE_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_TASKS_JSON = AVALANCHE_ROOT / "data" / "raw_data" / "single" / "swe_rebench_v2" / "data" / "train-00000-of-00001.json"
 DEFAULT_TEMPLATE_MANIFEST = (
-    AVALANCHE_ROOT / "data" / "raw_data" / "single" / "swe_rebench_v2" / "data" / "prefetch_image_template_success.jsonl"
+    AVALANCHE_ROOT / "zf_workspace" / "eval" / "data" / "swe_rebench_v2" / "data" / "prefetch_image_template_success.jsonl"
 )
+
+
 def _load_rows(path: Path) -> list[dict[str, Any]]:
+    """Loads and validates a JSON array of task rows from the SWE-rebench tasks file."""
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, list):
         raise ValueError(f"Expected JSON array in {path}")
@@ -22,6 +25,7 @@ def _load_rows(path: Path) -> list[dict[str, Any]]:
 
 
 def _load_manifest(path: Path | None) -> dict[str, dict[str, Any]]:
+    """Loads a JSONL consumable template manifest into an instance_id → row dict."""
     if path is None or not path.exists():
         return {}
     manifest: dict[str, dict[str, Any]] = {}
@@ -37,6 +41,7 @@ def _load_manifest(path: Path | None) -> dict[str, dict[str, Any]]:
 
 
 def _normalize_optional_path(value: str) -> Path | None:
+    """Converts a string to a Path or returns None if the value is empty."""
     value = (value or "").strip()
     if not value:
         return None
@@ -44,12 +49,14 @@ def _normalize_optional_path(value: str) -> Path | None:
 
 
 def _has_resolved_image_user(entry: dict[str, Any] | None) -> bool:
+    """Returns True if the template manifest entry has a non-empty docker_image_default_user resolved."""
     if not isinstance(entry, dict):
         return False
     return bool(str(entry.get("docker_image_default_user") or "").strip())
 
 
 def _has_resolved_image_env(entry: dict[str, Any] | None) -> bool:
+    """Returns True if the template manifest entry has a non-empty docker_image_env dict resolved."""
     if not isinstance(entry, dict):
         return False
     env_value = entry.get("docker_image_env")
@@ -57,6 +64,7 @@ def _has_resolved_image_env(entry: dict[str, Any] | None) -> bool:
 
 
 def _repo_workdir(repo: str) -> str:
+    """Derives the in-sandbox working directory from the owner/repo string (e.g. 'django/django' → '/django')."""
     parts = str(repo or "").split("/", 1)
     if len(parts) != 2 or not parts[1]:
         raise ValueError(f"Invalid repo value: {repo!r}")
@@ -64,6 +72,7 @@ def _repo_workdir(repo: str) -> str:
 
 
 def _build_prompt(row: dict[str, Any]) -> str:
+    """Assembles the task prompt from problem_statement, pr_description, interface, and evaluation constraints."""
     parts = [str(row.get("problem_statement") or "").strip()]
 
     pr_description = str(row.get("pr_description") or "").strip()
@@ -102,6 +111,7 @@ def _build_runtime_row(
     conversation_prompt: bool,
     consumable_template_entry: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    """Builds one training JSONL row with prompt, gold patch label, and full metadata for sandbox rollout."""
     prompt_text = _build_prompt(row)
     if conversation_prompt:
         prompt: Any = [{"role": "user", "content": prompt_text}]
@@ -171,6 +181,7 @@ def _build_runtime_row(
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    """Writes a list of dicts to a JSONL file, creating parent directories as needed."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         for row in rows:
@@ -178,6 +189,7 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def main() -> None:
+    """CLI entry point: loads tasks, filters by consumable templates, splits train/val, writes normalized JSONL."""
     parser = argparse.ArgumentParser(description="Build runtime jsonl files for SWE-rebench training.")
     parser.add_argument("--tasks-json", default=str(DEFAULT_TASKS_JSON))
     parser.add_argument("--train-dest", required=True)
