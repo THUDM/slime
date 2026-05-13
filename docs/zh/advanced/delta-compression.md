@@ -10,7 +10,7 @@
 
 ## 概述
 
-在**非 colocate**（non-colocated）模式下，slime 默认会在每一步训练时把所有参数完整地广播给 SGLang。在 355B 规模下，每步要走 NCCL ~170 GB，即使实际变化的权重比例很小。Delta-compression 会把上一次同步时的权重在 pinned CPU 内存里保留一份 snapshot，每步只广播稀疏编码后的 `(current − snapshot)`，SGLang 接收端以 `param += delta` 的方式累加。典型 RL 训练步的稠密度大约在 2–3%，wire 体积可缩减 ~30×。
+在**非 colocate**（non-colocated）模式下，slime 默认会在每一步训练时把所有参数完整地广播给 SGLang。完整广播的体积随模型规模线性增长，即使两步之间实际变化的权重比例很小，broadcast 仍然主导整个权重同步阶段。Delta-compression 会把上一次同步时的权重在 pinned CPU 内存里保留一份 snapshot，每步只广播稀疏编码后的 `(current − snapshot)`，SGLang 接收端以 `param += delta` 的方式累加。在 RL fine-tuning 阶段、学习率不大的常见设置里，每步 delta 都很稀疏（只有百分之几的权重发生变化），wire 体积也按比例减少。
 
 ## 快速开始
 

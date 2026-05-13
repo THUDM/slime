@@ -2,21 +2,18 @@
 
 This example demonstrates non-colocated weight sync with **delta compression**: instead of broadcasting every parameter on every sync, slime broadcasts the sparse-encoded difference between the current weights and the last sync's weights, and the SGLang receiver applies it additively (`param += delta`).
 
-For non-colocated runs the wire shrinks by ~30× (typical 2–3% density at 355B), and the broadcast that previously dominated the sync phase becomes a small fraction of it. Colocated runs share GPU memory via CUDA IPC and have no wire — delta compression buys nothing there and is rejected at argparse time.
+For non-colocated runs the wire shrinks roughly in proportion to the delta's density, which is typically a few percent during RL fine-tuning at conservative learning rates. The broadcast that previously dominated the sync phase becomes a small fraction of it. Colocated runs share GPU memory via CUDA IPC and have no wire — delta compression buys nothing there and is rejected at argparse time.
 
 ## Files
 
-- `run-glm4.7-355B-A32B-delta.sh`: non-colocated GLM-4.7-355B-A32B launcher with delta-compression flags set.
+- `run-glm4.7-355B-A32B-delta.sh`: 16-node (8 actor + 8 rollout) GLM-4.7-355B-A32B launcher with delta-compression flags set.
 
 ## Usage
 
-1. Set up the same checkpoint and dataset paths as a standard non-colocated run (see [docs/en/examples/glm4.7-355B-A32B.md](../../docs/en/examples/glm4.7-355B-A32B.md)).
-
-2. Launch:
+Set up the same checkpoint and dataset paths as a standard non-colocated GLM-4.7 run (see [docs/en/examples/glm4.7-355B-A32B.md](../../docs/en/examples/glm4.7-355B-A32B.md)), then launch:
 
 ```bash
-ACTOR_NUM_NODES=4 ROLLOUT_NUM_GPUS=64 MASTER_ADDR=<head-ip> \
-    bash examples/delta_compression/run-glm4.7-355B-A32B-delta.sh
+bash examples/delta_compression/run-glm4.7-355B-A32B-delta.sh
 ```
 
 The flags that switch the run into delta mode are grouped in `DELTA_ARGS` near the bottom of the script:
@@ -35,6 +32,22 @@ And one receiver-side flag in `SGLANG_ARGS`:
 ```
 
 See [docs/en/advanced/delta-compression.md](../../docs/en/advanced/delta-compression.md) for the wire protocol, encoding choice, and precision behaviour.
+
+## Results
+
+W&B traces comparing delta-compression against the full-sync baseline on the run above.
+
+![Raw reward](./raw_reward.png)
+
+*Raw reward over training steps — delta and full match.*
+
+![Train/rollout logprob abs diff](./train_rollout_logprob_abs_diff.png)
+
+*Absolute logprob difference between train and rollout — delta and full match.*
+
+![Update weights time](./update_weights_time.png)
+
+*Per-step weight-update wall-clock — delta is substantially faster.*
 
 ## When to use which encoding
 

@@ -10,7 +10,7 @@
 
 ## Overview
 
-For **non-colocated** runs, slime's default weight sync broadcasts every parameter on every training step. At 355B that's ~170 GB across NCCL per step, even when only a small fraction of weights actually change. Delta-compression keeps a pinned-CPU snapshot of the last sync's weights, broadcasts only `(current − snapshot)` sparse-encoded, and the SGLang receiver applies it additively (`param += delta`). Typical RL-step density is 2–3%, so the wire shrinks by ~30×.
+For **non-colocated** runs, slime's default weight sync broadcasts every parameter on every training step. The full broadcast scales linearly with model size and dominates the sync phase even when only a small fraction of weights actually change between steps. Delta-compression keeps a pinned-CPU snapshot of the last sync's weights, broadcasts only `(current − snapshot)` sparse-encoded, and the SGLang receiver applies it additively (`param += delta`). During typical RL fine-tuning at conservative learning rates the per-step delta is sparse — a few percent of weights — so the wire shrinks proportionally.
 
 ## Quick Start
 

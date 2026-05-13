@@ -1,11 +1,9 @@
 #!/bin/bash
 
 # Non-colocated GLM-4.7-355B-A32B with delta-compression weight sync.
-# 4 actor nodes (TP=8, PP=4, EP=16) + 64 rollout GPUs (2 nodes worth).
-# Sends (current - snapshot) for each weight, sparse-encoded as int32 nonzero
-# indices + values, applied additively on SGLang. Periodic full sync every
-# --delta-full-interval delta syncs (10000 here ≈ never, since the snapshot
-# is exact-refreshed each step).
+# 8 actor nodes (TP=8, PP=4, EP=16) + 64 rollout GPUs (8 H100 nodes worth),
+# 16 nodes total. Sends (current - snapshot) sparse-encoded as int32 nonzero
+# indices + values; SGLang applies it additively.
 
 # for rerun the task
 pkill -9 sglang
@@ -32,16 +30,15 @@ else
 fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "/root/slime/scripts/models/glm4.5-355B-A32B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint $BASE_DIR/GLM-4.7-355B-A32B
-   --ref-load $BASE_DIR/GLM-4.7-355B-A32B_torch_dist/
+   --hf-checkpoint /root/GLM-4.7-355B-A32B
+   --ref-load /root/GLM-4.7-355B-A32B_torch_dist/
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data $BASE_DIR/dapo-math-17k/dapo-math-17k.jsonl
+   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
    --apply-chat-template
@@ -60,7 +57,7 @@ ROLLOUT_ARGS=(
 
 EVAL_ARGS=(
    --eval-interval 20
-   --eval-prompt-data aime $BASE_DIR/aime-2024/aime-2024.jsonl
+   --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 8
    --eval-max-response-len 8192
    --eval-top-p 1
@@ -123,7 +120,7 @@ SGLANG_ARGS=(
 
    # Receiver batches up to this many bytes per model.load_weights call. Bigger
    # amortizes per-call cost (name resolution, MoE expert remap) but raises
-   # peak HBM during decode. 512 MiB was best in our 355B sweep.
+   # peak HBM during decode.
    --sglang-update-weight-delta-chunk-bytes $((2 * 1024 * 1024 * 1024))
 
    # mtp
@@ -138,7 +135,11 @@ DELTA_ARGS=(
    --update-weight-mode delta
    --delta-compression sparse_indices
    --delta-dtype fp32
-   --delta-full-interval 10000
+   # Full sync every 30 delta syncs. Setting this to a very large integer
+   # (e.g. 10000) effectively disables periodic full syncs — empirically the
+   # per-step snapshot refresh on the sender makes drift over thousands of
+   # deltas negligible.
+   --delta-full-interval 30
 )
 
 MISC_ARGS=(
@@ -149,44 +150,18 @@ MISC_ARGS=(
    --attention-backend flash
    --moe-token-dispatcher-type flex
    --moe-enable-deepep
-   # Increasing the sender bucket reduces NCCL broadcast count.
    --update-weight-buffer-size $((2 * 1024 * 1024 * 1024))
 )
 
-ACTOR_NUM_NODES=${ACTOR_NUM_NODES:-4}
-ACTOR_NUM_GPUS_PER_NODE=${ACTOR_NUM_GPUS_PER_NODE:-8}
-ROLLOUT_NUM_GPUS=${ROLLOUT_NUM_GPUS:-64}
-SOCKET_IFNAME=${SOCKET_IFNAME:-eth0}
-
-MASTER_ADDR=${MASTER_ADDR:-}
-if [ -z "${MASTER_ADDR}" ]; then
-  echo "MASTER_ADDR is not set. Please set it to the master node address."
-  exit 1
-fi
-
 # launch the master node of ray
-export no_proxy="127.0.0.1,${MASTER_ADDR}"
-ray start --head --node-ip-address "${MASTER_ADDR}" --num-gpus "${ACTOR_NUM_GPUS_PER_NODE}" --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
-HOSTFILE=${HOSTFILE:-}
-if [ -n "${HOSTFILE}" ]; then
-  for WORKER_IP in $(awk '{print $1}' "${HOSTFILE}"); do
-    if [[ "${WORKER_IP}" == "${MASTER_ADDR}" ]]; then
-      continue
-    fi
-    echo "Starting Ray worker on ${WORKER_IP}"
-    ssh root@"${WORKER_IP}" \
-      "pkill -9 sglang ; ray stop --force ; pkill -9 python ; ray start --address=${MASTER_ADDR}:6379 --num-gpus ${ACTOR_NUM_GPUS_PER_NODE} --node-ip-address ${WORKER_IP} --disable-usage-stats" &
-  done
-  wait
-fi
-
+# Build the runtime environment JSON
 RUNTIME_ENV_JSON=$(cat <<EOF_JSON
 {
   "env_vars": {
     "no_proxy": "localhost,127.0.0.1,0.0.0.0,${MASTER_ADDR}",
-    "GLOO_SOCKET_IFNAME": "${SOCKET_IFNAME}",
-    "TP_SOCKET_IFNAME": "${SOCKET_IFNAME}",
     "MASTER_ADDR": "${MASTER_ADDR}",
     "PYTHONPATH": "/root/Megatron-LM/",
     "CUDA_DEVICE_MAX_CONNECTIONS": "1",
@@ -199,9 +174,9 @@ EOF_JSON
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
-   --actor-num-nodes "${ACTOR_NUM_NODES}" \
-   --actor-num-gpus-per-node "${ACTOR_NUM_GPUS_PER_NODE}" \
-   --rollout-num-gpus "${ROLLOUT_NUM_GPUS}" \
+   --actor-num-nodes 8 \
+   --actor-num-gpus-per-node 8 \
+   --rollout-num-gpus 64 \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
