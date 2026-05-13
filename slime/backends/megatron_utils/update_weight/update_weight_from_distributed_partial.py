@@ -37,11 +37,13 @@ class PartialChunk:
     dense → tensors=[(name, payload)], params=None.
     sparse_* → tensors=[("__packed_keys__", ...), ("__packed_values__", ...)],
     params holds per-param decoding with chunk-local offsets.
+    nnz is the active-position count across all params (used for density).
     """
 
     tensors: list[tuple[str, torch.Tensor]]
     params: list[PartialWeightParam] | None
     byte_size: int
+    nnz: int = 0
 
 
 def encode_partial(
@@ -52,20 +54,21 @@ def encode_partial(
     """
     Encode partial-update tensors per wire encoding.
 
-    mode='delta': named_tensors values are deltas with 0 at unchanged positions.
     mode='selective': named_tensors values are new param values with NaN at unchanged.
+    mode='delta': named_tensors values are deltas with 0 at unchanged positions.
 
     The sparse encoders use the corresponding active-position predicate.
     """
-    if encoding is PartialWeightEncoding.DENSE:
-        size = sum(t.numel() * t.element_size() for _, t in named_tensors)
-        return PartialChunk(tensors=list(named_tensors), params=None, byte_size=size)
-    if mode == "delta":
-        is_active = lambda flat: flat != 0  # noqa: E731
-    elif mode == "selective":
+    if mode == "selective":
         is_active = lambda flat: ~torch.isnan(flat)  # noqa: E731
+    elif mode == "delta":
+        is_active = lambda flat: flat != 0  # noqa: E731
     else:
         raise ValueError(f"unknown partial-update mode: {mode!r}")
+    if encoding is PartialWeightEncoding.DENSE:
+        size = sum(t.numel() * t.element_size() for _, t in named_tensors)
+        nnz = sum(int(is_active(t.contiguous().view(-1)).sum()) for _, t in named_tensors)
+        return PartialChunk(tensors=list(named_tensors), params=None, byte_size=size, nnz=nnz)
     if encoding is PartialWeightEncoding.SPARSE_INDICES:
         return _encode_sparse(named_tensors, _make_indices_kv(is_active))
     if encoding is PartialWeightEncoding.SPARSE_BITMASK:
@@ -117,6 +120,7 @@ def _encode_sparse(
         tensors=[("__packed_keys__", packed_keys), ("__packed_values__", packed_values)],
         params=params,
         byte_size=size,
+        nnz=values_off,
     )
 
 
@@ -209,8 +213,8 @@ class PartialSendBucket:
 class PartialSync:
     """
     Owns pinned-CPU snapshot of last broadcast's tensors and the base-vs-partial
-    decision. PP-source-rank only. Provides compute_delta (for delta mode) and
-    compute_selective (for selective mode); both consume the same snapshot.
+    decision. PP-source-rank only. Provides compute_selective (for selective mode)
+    and compute_delta (for delta mode); both consume the same snapshot.
     """
 
     def __init__(self, args: Namespace) -> None:
@@ -340,11 +344,11 @@ class UpdateWeightFromDistributedPartial(UpdateWeightFromDistributed):
     Partial-update variant. Sends a sparse-encoded payload per named tensor and
     has SGLang apply it. Two sub-modes, selected by ``--update-weight-mode``:
 
-    * ``delta``: payload values are ``(current − snapshot)`` cast to delta_dtype;
-      receiver applies additively (``param += delta``).
     * ``selective``: payload values are the new param values at changed positions,
       with NaN as the "unchanged" sentinel; receiver overwrites the non-NaN
       positions only.
+    * ``delta``: payload values are ``(current − snapshot)`` cast to delta_dtype;
+      receiver applies additively (``param += delta``).
 
     Periodic base syncs (full broadcasts) refresh the snapshot. The ``_on_chunk``
     hook on the base class is used to keep the snapshot in lockstep during base
@@ -367,7 +371,7 @@ class UpdateWeightFromDistributedPartial(UpdateWeightFromDistributed):
             model_name=model_name,
             quantization_config=quantization_config,
         )
-        self.mode = args.update_weight_mode  # "delta" or "selective"
+        self.mode = args.update_weight_mode  # "selective" or "delta"
         self.partial_sync = PartialSync(args)
         self.artifact_writer = (
             PartialArtifactWriter(args.update_weight_partial_artifact_dir)
@@ -376,26 +380,36 @@ class UpdateWeightFromDistributedPartial(UpdateWeightFromDistributed):
         )
         self.artifact_chunk_idx = 0
         self.pending_artifacts: list[list[tuple[str, torch.Tensor]]] = []
+        self.density_nnz = 0
+        self.density_numel = 0
+        self.wire_bytes = 0
 
     def _send_weights(self, pbar: tqdm | None) -> None:
-        if self.partial_sync.should_send_base():
+        is_base = self.partial_sync.should_send_base()
+        self.density_nnz = 0
+        self.density_numel = 0
+        self.wire_bytes = 0
+        if is_base:
             super()._send_weights(pbar)
         else:
             self._send_partial_weights(pbar)
         # Increment on all ranks so should_send_base() stays in lockstep across
         # the PP group. flush_snapshot() is a no-op on non-PP-src ranks.
         self.partial_sync.on_sync_succeeded()
+        self._record_metrics(is_base)
 
     def _on_chunk(self, hf_chunk: list[tuple[str, torch.Tensor]]) -> None:
         """
         Base-sync hook: snapshot this chunk so the next partial sync has prev to diff against.
+        Also count dense wire bytes so base syncs share the wire_bytes metric axis.
         """
         self.partial_sync.update_snapshot_async(hf_chunk)
+        self.wire_bytes += sum(t.numel() * t.element_size() for _, t in hf_chunk)
 
     def _send_partial_weights(self, pbar: tqdm | None) -> None:
         """
         non-expert (TP) loop → barrier → expert (EP) loop. Each HF chunk is
-        converted to a partial-update payload (delta or selective) and bucketed.
+        converted to a partial-update payload (selective or delta) and bucketed.
         """
         encoding = PartialWeightEncoding(self.args.update_weight_partial_encoding)
         bucket = PartialSendBucket()
@@ -421,12 +435,17 @@ class UpdateWeightFromDistributedPartial(UpdateWeightFromDistributed):
         """
         if not hf_chunk:
             return
-        if self.mode == "delta":
-            payload = self.partial_sync.compute_delta(hf_chunk)
-        else:  # "selective"
+        if self.mode == "selective":
             payload = self.partial_sync.compute_selective(hf_chunk)
+        else:  # "delta"
+            payload = self.partial_sync.compute_delta(hf_chunk)
         self.partial_sync.update_snapshot_async(hf_chunk)
         chunk = encode_partial(payload, encoding, self.mode)
+        # numel from input payload (not chunk.params) so zero-nnz params still
+        # count — otherwise the ratio biases toward params that did change.
+        self.density_numel += sum(t.numel() for _, t in payload)
+        self.density_nnz += chunk.nnz
+        self.wire_bytes += chunk.byte_size
         if not chunk.tensors:
             return
         if bucket.should_flush_before_add(chunk, self.args.update_weight_buffer_size):
@@ -446,7 +465,7 @@ class UpdateWeightFromDistributedPartial(UpdateWeightFromDistributed):
         """
         Lock → broadcast (with PartialWeightSpec) → unlock → pbar++. Drains
         pending artifacts to the async writer once the broadcast lands.
-        load_format is "delta" or "selective" per self.mode.
+        load_format is "selective" or "delta" per self.mode.
         """
         if not bucket.has_updates:
             return
@@ -459,3 +478,18 @@ class UpdateWeightFromDistributedPartial(UpdateWeightFromDistributed):
                 self.artifact_writer.enqueue(self.weight_version, self.artifact_chunk_idx, artifact)
                 self.artifact_chunk_idx += 1
             self.pending_artifacts.clear()
+
+    def _record_metrics(self, is_base: bool) -> None:
+        """
+        Base sync sends every position → density 1.0 by definition.
+        """
+        counts = torch.tensor(
+            [self.density_nnz, self.density_numel, self.wire_bytes],
+            dtype=torch.int64,
+            device=torch.cuda.current_device(),
+        )
+        dist.all_reduce(counts)
+        nnz, numel, wire_bytes = counts.tolist()
+        self.update_weight_metrics["perf/update_weights_is_base_sync"] = 1.0 if is_base else 0.0
+        self.update_weight_metrics["perf/update_weights_density"] = 1.0 if is_base else nnz / max(numel, 1)
+        self.update_weight_metrics["perf/update_weights_wire_bytes"] = wire_bytes

@@ -127,7 +127,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.colocate:
             update_weight_cls = UpdateWeightFromTensor
-        elif self.args.update_weight_mode in ("delta", "selective"):
+        elif self.args.update_weight_mode in ("selective", "delta"):
             update_weight_cls = UpdateWeightFromDistributedPartial
         else:
             update_weight_cls = UpdateWeightFromDistributed
@@ -533,7 +533,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     logger.info(f"Updating ref model at rollout_id {rollout_id}")
                 self.weights_backuper.backup("ref")
 
-        log_perf_data(rollout_id, self.args)
+        log_perf_data(rollout_id, self.args, extra_metrics=self.weight_updater.pop_metrics())
 
     @timer
     def save_model(self, rollout_id: int, force_sync: bool = False) -> None:

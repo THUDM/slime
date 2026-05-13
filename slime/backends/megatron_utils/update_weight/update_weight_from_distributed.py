@@ -43,6 +43,15 @@ class UpdateWeightFromDistributed:
         self.quantization_config = quantization_config
         self.weight_version = 0
         self._model_update_groups = None
+        self.update_weight_metrics: dict[str, float] = {}
+
+    def pop_metrics(self) -> dict[str, float]:
+        """
+        Return and clear ``update_weight_metrics``. Drained by the actor onto
+        the rollout/step flush each step.
+        """
+        out, self.update_weight_metrics = self.update_weight_metrics, {}
+        return out
 
     def connect_rollout_engines(
         self,
@@ -241,7 +250,7 @@ class UpdateWeightFromDistributed:
     ) -> None:
         """
         Lock → broadcast → clear → unlock → pbar++. Lock prevents NCCL deadlock.
-        Partial-update modes (delta/selective) pass ``load_format`` and a ``PartialWeightSpec``.
+        Partial-update modes (selective/delta) pass ``load_format`` and a ``PartialWeightSpec``.
         """
         # lock the rollout engines to prevent dead lock on broadcast.
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
@@ -332,7 +341,7 @@ def update_weights_from_distributed(
 ) -> list[ObjectRef]:
     """
     Send metadata (Ray), broadcast tensors (NCCL rank 0 → engines).
-    Partial-update modes pass ``load_format`` (``"delta"`` / ``"selective"``)
+    Partial-update modes pass ``load_format`` (``"selective"`` / ``"delta"``)
     and ``partial`` (PartialWeightSpec).
     """
     refs = [

@@ -3,7 +3,7 @@
 # Non-colocated GLM-4.7-355B-A32B with partial weight sync.
 # 8 actor nodes (TP=8, PP=4, EP=16) + 64 rollout GPUs (8 H100 nodes worth),
 # 16 nodes total. Two modes available — see PARTIAL_ARGS below; the default
-# block is `delta`, the alternate `selective` block is commented out.
+# block is `selective`, the alternate `delta` block is commented out.
 
 # for rerun the task
 pkill -9 sglang
@@ -45,8 +45,8 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    --rm-type deepscaler
    --num-rollout 3000
-   --rollout-batch-size 32
-   --n-samples-per-prompt 4
+   --rollout-batch-size 64
+   --n-samples-per-prompt 8
    --rollout-max-response-len 8192
    --rollout-temperature 1
 
@@ -134,25 +134,25 @@ SGLANG_ARGS=(
 #
 # `--update-weight-base-sync-interval` defaults to 9999 — effectively disables
 # periodic base syncs because both modes are lossless under their defaults
-# (delta with fp32 math, selective by construction). Set lower (e.g. 30) if
+# (selective by construction, delta with fp32 math). Set lower (e.g. 30) if
 # you want to verify against periodic full broadcasts, or if your workload
 # has a custom base-sync requirement.
 
-# ── Mode 1: delta — broadcast (current − snapshot), receiver += delta ──────
+# ── Mode 1: selective — broadcast new values at changed positions ─────────
+# `--update-weight-delta-dtype` is silently ignored here (no arithmetic; apply
+# is lossless by construction).
 PARTIAL_ARGS=(
-   --update-weight-mode delta
+   --update-weight-mode selective
    --update-weight-partial-encoding sparse_indices
-   --update-weight-delta-dtype fp32
    --update-weight-base-sync-interval 9999
 )
 
-# ── Mode 2: selective — broadcast new values at changed positions ─────────
-# Uncomment to run selective instead (and comment out the delta block above).
-# `--update-weight-delta-dtype` is silently ignored in selective mode
-# (no arithmetic; apply is lossless by construction).
+# ── Mode 2: delta — broadcast (current − snapshot), receiver += delta ──────
+# Uncomment to run delta instead (and comment out the selective block above).
 # PARTIAL_ARGS=(
-#    --update-weight-mode selective
+#    --update-weight-mode delta
 #    --update-weight-partial-encoding sparse_indices
+#    --update-weight-delta-dtype fp32
 #    --update-weight-base-sync-interval 9999
 # )
 

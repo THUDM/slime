@@ -136,18 +136,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default="raw",
                 help="The method to convert megatron weights to hugging face weights for SGLang.",
             )
-            # Partial weight sync (delta + selective modes). Receiver chunking is mirrored
+            # Partial weight sync (selective + delta modes). Receiver chunking is mirrored
             # automatically to SGLang as --sglang-update-weight-partial-chunk-bytes.
             parser.add_argument(
                 "--update-weight-mode",
-                choices=["full", "delta", "selective"],
+                choices=["full", "selective", "delta"],
                 default="full",
                 help=(
                     "Weight sync strategy. 'full' broadcasts every parameter on every "
-                    "sync. 'delta' broadcasts (new − snapshot) and the receiver applies "
-                    "it additively. 'selective' broadcasts the new values at the changed "
-                    "positions only and the receiver overwrites those positions "
-                    "(unchanged positions are signaled by NaN in the wire payload). "
+                    "sync. 'selective' broadcasts the new values at the changed positions "
+                    "only and the receiver overwrites those positions (unchanged positions "
+                    "are signaled by NaN in the wire payload). 'delta' broadcasts "
+                    "(new − snapshot) and the receiver applies it additively. "
                     "The first sync is always full regardless."
                 ),
             )
@@ -166,7 +166,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 choices=["sparse_indices", "sparse_bitmask", "dense"],
                 default="sparse_indices",
                 help=(
-                    "Wire encoding for partial broadcasts (delta + selective modes). "
+                    "Wire encoding for partial broadcasts (selective + delta modes). "
                     "'sparse_indices' sends (indices, values) for active entries; "
                     "'sparse_bitmask' sends a packed bitmask + values; 'dense' sends "
                     "the full per-param tensor."
@@ -178,10 +178,10 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=9999,
                 help=(
                     "Run a base sync (a full broadcast that re-establishes the snapshot) "
-                    "every N successful partial syncs (delta + selective modes). The "
+                    "every N successful partial syncs (selective + delta modes). The "
                     "first sync is always a base sync. Both modes are lossless under "
-                    "their default settings (delta with fp32 math, selective by "
-                    "construction), so the default 9999 effectively disables periodic "
+                    "their default settings (selective by construction, delta with fp32 "
+                    "math), so the default 9999 effectively disables periodic "
                     "base syncs — receiver state doesn't drift from a base-sync "
                     "reference no matter how many partial syncs elapse. Set lower "
                     "(e.g. 30) to verify correctness against periodic full broadcasts, "
@@ -194,7 +194,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "Optional directory for asynchronously saving per-broadcast partial-"
-                    "update artifacts (delta + selective modes). Off by default."
+                    "update artifacts (selective + delta modes). Off by default."
                 ),
             )
             parser.add_argument(
@@ -1904,7 +1904,7 @@ def slime_validate_args(args):
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")
 
-    if args.update_weight_mode in ("delta", "selective") and args.colocate:
+    if args.update_weight_mode in ("selective", "delta") and args.colocate:
         raise ValueError(
             f"--update-weight-mode={args.update_weight_mode} is not supported with "
             "--colocate. Colocate transfers weights via CUDA IPC: only a memory "
