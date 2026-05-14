@@ -202,3 +202,5 @@ __pycache__/
 
 # Example scripts are operational tooling, not core library code.
 examples/scripts/
+
+3rdparty/
