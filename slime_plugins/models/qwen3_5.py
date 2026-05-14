@@ -25,6 +25,73 @@ def _get_text_config(hf_config):
     return hf_config
 
 
+def _configure_gdn_params(config, text_config):
+    config.linear_conv_kernel_dim = getattr(text_config, "linear_conv_kernel_dim", 4)
+    config.linear_key_head_dim = getattr(text_config, "linear_key_head_dim", 128)
+    config.linear_value_head_dim = getattr(text_config, "linear_value_head_dim", 128)
+    config.linear_num_key_heads = getattr(text_config, "linear_num_key_heads", 16)
+    config.linear_num_value_heads = getattr(text_config, "linear_num_value_heads", 32)
+
+    interval = getattr(text_config, "full_attention_interval", None)
+    if interval is not None:
+        config.linear_attention_freq = interval
+    elif hasattr(text_config, "layer_types"):
+        config.linear_attention_freq = [
+            1 if layer_type == "linear_attention" else 0 for layer_type in text_config.layer_types
+        ]
+
+    tp_size = config.tensor_model_parallel_size
+    cp_size = config.context_parallel_size
+    if config.linear_num_value_heads % config.linear_num_key_heads != 0:
+        raise ValueError(
+            "linear_num_value_heads must be a multiple of linear_num_key_heads "
+            f"({config.linear_num_value_heads=} {config.linear_num_key_heads=})"
+        )
+    if config.linear_num_key_heads % tp_size != 0:
+        raise ValueError(f"linear_num_key_heads must be divisible by TP size ({tp_size})")
+    if config.linear_num_value_heads % tp_size != 0:
+        raise ValueError(f"linear_num_value_heads must be divisible by TP size ({tp_size})")
+
+    qk_dim_local_tp = config.linear_key_head_dim * config.linear_num_key_heads // tp_size
+    v_dim_local_tp = config.linear_value_head_dim * config.linear_num_value_heads // tp_size
+    value_heads_local_tp = config.linear_num_value_heads // tp_size
+    if qk_dim_local_tp % cp_size != 0:
+        raise ValueError(f"local GDN q/k dim must be divisible by CP size ({cp_size})")
+    if v_dim_local_tp % cp_size != 0:
+        raise ValueError(f"local GDN value dim must be divisible by CP size ({cp_size})")
+    if value_heads_local_tp % cp_size != 0:
+        raise ValueError(f"local GDN value heads must be divisible by CP size ({cp_size})")
+
+
+def _get_gdn_module_spec(config, use_transformer_engine: bool):
+    from megatron.core.models.backends import LocalSpecProvider
+
+    if use_transformer_engine:
+        from megatron.core.extensions.transformer_engine_spec_provider import TESpecProvider
+
+        backend = TESpecProvider(fallback_to_eager_attn=getattr(config, "fallback_to_eager_attn", False))
+    else:
+        backend = LocalSpecProvider()
+
+    from .gated_delta_net import GatedDeltaNet, GatedDeltaNetSubmodules
+
+    rms_norm = config.normalization == "RMSNorm"
+    in_proj = backend.column_parallel_layer_norm_linear()
+    fuse_input_layernorm = in_proj is not None and backend.fuse_layernorm_and_linear()
+    if not fuse_input_layernorm:
+        in_proj = backend.column_parallel_linear()
+
+    return ModuleSpec(
+        module=GatedDeltaNet,
+        submodules=GatedDeltaNetSubmodules(
+            in_proj=in_proj,
+            out_norm=backend.layer_norm(rms_norm=rms_norm, for_qk=False),
+            out_proj=backend.row_parallel_linear(),
+        ),
+        metainfo={"fuse_input_layernorm": fuse_input_layernorm},
+    )
+
+
 # Adapted from Qwen3NextGatedDeltaNet but with separate in_proj_qkv and in_proj_z
 class Qwen3_5GatedDeltaNet(nn.Module):
     """
@@ -194,7 +261,12 @@ def get_qwen3_5_spec(args, config, vp_stage):
     }
     if vp_stage is not None:
         kwargs["vp_stage"] = vp_stage
-    transformer_layer_spec = get_gpt_decoder_block_spec(config, **kwargs)
+    saved_linear_attention_freq = getattr(config, "linear_attention_freq", None)
+    config.linear_attention_freq = None
+    try:
+        transformer_layer_spec = get_gpt_decoder_block_spec(config, **kwargs)
+    finally:
+        config.linear_attention_freq = saved_linear_attention_freq
 
     assert config.pipeline_model_parallel_layout is None, "not support this at the moment"
 
@@ -213,12 +285,12 @@ def get_qwen3_5_spec(args, config, vp_stage):
             "full_attention" if (i + 1) % interval == 0 else "linear_attention" for i in range(n)
         ]
 
+    _configure_gdn_params(config, text_config)
+    gdn_module_spec = _get_gdn_module_spec(config, kwargs["use_transformer_engine"])
+
     for layer_id in range(num_layers_to_build):
         if text_config.layer_types[layer_id + offset] == "linear_attention":
             layer_specs = copy.deepcopy(transformer_layer_spec.layer_specs[layer_id])
-            layer_specs.submodules.self_attention = ModuleSpec(
-                module=Attention,
-                params={"args": args},
-            )
+            layer_specs.submodules.self_attention = copy.deepcopy(gdn_module_spec)
             transformer_layer_spec.layer_specs[layer_id] = layer_specs
     return transformer_layer_spec

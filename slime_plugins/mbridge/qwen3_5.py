@@ -7,6 +7,151 @@ from mbridge.core import register_model
 from mbridge.models import Qwen2MoEBridge
 
 
+def _get_gdn_dims(config):
+    hidden_size = config.hidden_size
+    qk_head_dim = config.linear_key_head_dim
+    v_head_dim = config.linear_value_head_dim
+    num_qk_heads = config.linear_num_key_heads
+    num_v_heads = config.linear_num_value_heads
+    qk_dim = qk_head_dim * num_qk_heads
+    v_dim = v_head_dim * num_v_heads
+    return hidden_size, qk_head_dim, v_head_dim, num_qk_heads, num_v_heads, qk_dim, v_dim
+
+
+def _infer_gdn_pack_tp_size(config, qkv_rows: int) -> int:
+    _, _, _, _, _, qk_dim, v_dim = _get_gdn_dims(config)
+    full_rows = 2 * qk_dim + v_dim
+    tp_size = getattr(config, "tensor_model_parallel_size", 1)
+    if qkv_rows == full_rows:
+        return tp_size
+    if tp_size > 1 and qkv_rows == full_rows // tp_size:
+        return 1
+    raise ValueError(f"Unexpected GDN qkv rows: got {qkv_rows}, expected {full_rows} or {full_rows // tp_size}")
+
+
+def _merge_gdn_linear_separate(config, qkv, z, b, a):
+    hidden_size, qk_head_dim, v_head_dim, _, _, qk_dim, v_dim = _get_gdn_dims(config)
+    pack_tp_size = _infer_gdn_pack_tp_size(config, qkv.shape[0])
+    input_v_dim = z.shape[0]
+    input_qk_dim = (qkv.shape[0] - input_v_dim) // 2
+    input_num_qk_heads = input_qk_dim // qk_head_dim
+    input_num_v_heads = input_v_dim // v_head_dim
+    v_per_group = input_num_v_heads // input_num_qk_heads
+
+    if tuple(qkv.shape) != (2 * input_qk_dim + input_v_dim, hidden_size):
+        raise ValueError(f"qkv shape mismatch: got {tuple(qkv.shape)}")
+    if tuple(z.shape) != (input_v_dim, hidden_size):
+        raise ValueError(f"z shape mismatch: got {tuple(z.shape)}")
+    if tuple(b.shape) != (input_num_v_heads, hidden_size):
+        raise ValueError(f"b shape mismatch: got {tuple(b.shape)}")
+    if tuple(a.shape) != (input_num_v_heads, hidden_size):
+        raise ValueError(f"a shape mismatch: got {tuple(a.shape)}")
+
+    q_flat, k_flat, v_flat = torch.split(qkv, [input_qk_dim, input_qk_dim, input_v_dim], dim=0)
+    q = q_flat.reshape(input_num_qk_heads, qk_head_dim, hidden_size)
+    k = k_flat.reshape(input_num_qk_heads, qk_head_dim, hidden_size)
+    v = v_flat.reshape(input_num_qk_heads, v_per_group * v_head_dim, hidden_size)
+    z = z.reshape(input_num_qk_heads, v_per_group * v_head_dim, hidden_size)
+    b = b.reshape(input_num_qk_heads, v_per_group, hidden_size)
+    a = a.reshape(input_num_qk_heads, v_per_group, hidden_size)
+
+    q, k, v, z, b, a = [weight.reshape(pack_tp_size, -1, hidden_size) for weight in [q, k, v, z, b, a]]
+    return torch.cat([q, k, v, z, b, a], dim=1).reshape(-1, hidden_size).contiguous()
+
+
+def _split_gdn_linear_separate(config, in_proj):
+    hidden_size, qk_head_dim, v_head_dim, num_qk_heads, num_v_heads, qk_dim, v_dim = _get_gdn_dims(config)
+    tp_size = getattr(config, "tensor_model_parallel_size", 1)
+    in_proj_dim = 2 * qk_dim + 2 * v_dim + 2 * num_v_heads
+    if in_proj.shape[0] == in_proj_dim:
+        pack_tp_size = tp_size
+    elif tp_size > 1 and in_proj.shape[0] == in_proj_dim // tp_size:
+        pack_tp_size = 1
+    else:
+        raise ValueError(f"Unexpected GDN in_proj rows: got {in_proj.shape[0]}, expected {in_proj_dim}")
+
+    qk_heads_per_block = num_qk_heads // tp_size
+    v_heads_per_block = num_v_heads // tp_size
+    qk_dim_per_block = qk_head_dim * qk_heads_per_block
+    v_dim_per_block = v_head_dim * v_heads_per_block
+    output_num_qk_heads = qk_heads_per_block * pack_tp_size
+
+    in_proj = in_proj.reshape(pack_tp_size, -1, hidden_size)
+    q, k, v, z, b, a = torch.split(
+        in_proj,
+        [
+            qk_dim_per_block,
+            qk_dim_per_block,
+            v_dim_per_block,
+            v_dim_per_block,
+            v_heads_per_block,
+            v_heads_per_block,
+        ],
+        dim=1,
+    )
+    q, k, v, z, b, a = [
+        weight.reshape(output_num_qk_heads, -1, hidden_size) for weight in [q, k, v, z, b, a]
+    ]
+    qkv = torch.cat([q.reshape(-1, hidden_size), k.reshape(-1, hidden_size), v.reshape(-1, hidden_size)], dim=0)
+    return (
+        qkv.contiguous(),
+        z.reshape(-1, hidden_size).contiguous(),
+        b.reshape(-1, hidden_size).contiguous(),
+        a.reshape(-1, hidden_size).contiguous(),
+    )
+
+
+def _merge_gdn_conv1d_weight(config, weight):
+    _, _, _, _, _, qk_dim, v_dim = _get_gdn_dims(config)
+    pack_tp_size = _infer_gdn_pack_tp_size(config, weight.shape[0])
+    if weight.shape[0] == 2 * qk_dim + v_dim:
+        input_qk_dim = qk_dim
+        input_v_dim = v_dim
+    else:
+        input_qk_dim = qk_dim // getattr(config, "tensor_model_parallel_size", 1)
+        input_v_dim = v_dim // getattr(config, "tensor_model_parallel_size", 1)
+    q, k, v = torch.split(weight, [input_qk_dim, input_qk_dim, input_v_dim], dim=0)
+    q, k, v = [x.reshape(pack_tp_size, -1, *weight.shape[1:]) for x in [q, k, v]]
+    return torch.cat([q, k, v], dim=1).reshape(-1, *weight.shape[1:]).contiguous()
+
+
+def _split_gdn_conv1d_weight(config, weight):
+    _, _, _, _, _, qk_dim, v_dim = _get_gdn_dims(config)
+    tp_size = getattr(config, "tensor_model_parallel_size", 1)
+    conv_dim = 2 * qk_dim + v_dim
+    if weight.shape[0] == conv_dim:
+        pack_tp_size = tp_size
+    elif tp_size > 1 and weight.shape[0] == conv_dim // tp_size:
+        pack_tp_size = 1
+    else:
+        raise ValueError(f"Unexpected GDN conv1d rows: got {weight.shape[0]}, expected {conv_dim}")
+    qk_dim_per_block = qk_dim // tp_size
+    v_dim_per_block = v_dim // tp_size
+    weight = weight.reshape(pack_tp_size, -1, *weight.shape[1:])
+    q, k, v = torch.split(weight, [qk_dim_per_block, qk_dim_per_block, v_dim_per_block], dim=1)
+    return torch.cat(
+        [
+            q.reshape(-1, *weight.shape[2:]),
+            k.reshape(-1, *weight.shape[2:]),
+            v.reshape(-1, *weight.shape[2:]),
+        ],
+        dim=0,
+    ).contiguous()
+
+
+def _gdn_out_norm_hf_to_mcore(config, weight):
+    weight = weight.clone()
+    if getattr(config, "layernorm_zero_centered_gamma", False):
+        weight = weight - 1
+    return weight
+
+
+def _gdn_out_norm_mcore_to_hf(config, weight):
+    if getattr(config, "layernorm_zero_centered_gamma", False):
+        weight = weight + 1
+    return weight
+
+
 @register_model(["qwen3_5", "qwen3_5_moe"])
 class Qwen3_5Bridge(Qwen2MoEBridge):
     """
@@ -38,20 +183,24 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
             "model.language_model.layers.{layer_number}.self_attn.k_proj.bias",
             "model.language_model.layers.{layer_number}.self_attn.v_proj.bias",
         ],
+        # linear attention / GDN
+        "self_attention.in_proj.layer_norm_weight": [
+            "model.language_model.layers.{layer_number}.input_layernorm.weight"
+        ],
+        "self_attention.in_proj.weight": [
+            "model.language_model.layers.{layer_number}.linear_attn.in_proj_qkv.weight",
+            "model.language_model.layers.{layer_number}.linear_attn.in_proj_z.weight",
+            "model.language_model.layers.{layer_number}.linear_attn.in_proj_b.weight",
+            "model.language_model.layers.{layer_number}.linear_attn.in_proj_a.weight",
+        ],
+        "self_attention.conv1d.weight": ["model.language_model.layers.{layer_number}.linear_attn.conv1d.weight"],
+        "self_attention.A_log": ["model.language_model.layers.{layer_number}.linear_attn.A_log"],
+        "self_attention.dt_bias": ["model.language_model.layers.{layer_number}.linear_attn.dt_bias"],
+        "self_attention.out_norm.weight": ["model.language_model.layers.{layer_number}.linear_attn.norm.weight"],
+        "self_attention.out_proj.weight": ["model.language_model.layers.{layer_number}.linear_attn.out_proj.weight"],
     } | {
         f"self_attention.{weight_name}": ["model.language_model.layers.{layer_number}." + weight_name]
         for weight_name in [
-            "input_layernorm.weight",
-            # linear attn
-            "linear_attn.A_log",
-            "linear_attn.conv1d.weight",
-            "linear_attn.dt_bias",
-            "linear_attn.in_proj_a.weight",
-            "linear_attn.in_proj_b.weight",
-            "linear_attn.in_proj_qkv.weight",
-            "linear_attn.in_proj_z.weight",
-            "linear_attn.norm.weight",
-            "linear_attn.out_proj.weight",
             # gated attn (full attention layers)
             "self_attn.k_norm.weight",
             "self_attn.k_proj.weight",
@@ -240,6 +389,18 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
     def _weight_to_mcore_format(
         self, mcore_weights_name: str, hf_weights: list[torch.Tensor]
     ) -> tuple[list[str], list[torch.Tensor]]:
+        if "self_attention.in_proj.weight" in mcore_weights_name:
+            assert len(hf_weights) == 4
+            return _merge_gdn_linear_separate(self.config, *hf_weights)
+
+        if "self_attention.conv1d.weight" in mcore_weights_name:
+            assert len(hf_weights) == 1
+            return _merge_gdn_conv1d_weight(self.config, hf_weights[0])
+
+        if "self_attention.out_norm.weight" in mcore_weights_name:
+            assert len(hf_weights) == 1
+            return _gdn_out_norm_hf_to_mcore(self.config, hf_weights[0])
+
         if "self_attention.linear_qkv." in mcore_weights_name and "layer_norm" not in mcore_weights_name:
             # merge qkv
             assert len(hf_weights) == 3
@@ -299,6 +460,21 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
     def _weight_to_hf_format(
         self, mcore_weights_name: str, mcore_weights: torch.Tensor
     ) -> tuple[list[str], list[torch.Tensor]]:
+        if "self_attention.in_proj.weight" in mcore_weights_name:
+            return self._weight_name_mapping_mcore_to_hf(mcore_weights_name), list(
+                _split_gdn_linear_separate(self.config, mcore_weights)
+            )
+
+        if "self_attention.conv1d.weight" in mcore_weights_name:
+            return self._weight_name_mapping_mcore_to_hf(mcore_weights_name), [
+                _split_gdn_conv1d_weight(self.config, mcore_weights)
+            ]
+
+        if "self_attention.out_norm.weight" in mcore_weights_name:
+            return self._weight_name_mapping_mcore_to_hf(mcore_weights_name), [
+                _gdn_out_norm_mcore_to_hf(self.config, mcore_weights)
+            ]
+
         return super()._weight_to_hf_format(mcore_weights_name, mcore_weights)
 
     def _build_config(self):
@@ -319,6 +495,12 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
             moe_router_pre_softmax=False,
             qk_layernorm=True,
             attention_output_gate=True,
+            linear_conv_kernel_dim=getattr(text_config, "linear_conv_kernel_dim", 4),
+            linear_key_head_dim=getattr(text_config, "linear_key_head_dim", 128),
+            linear_value_head_dim=getattr(text_config, "linear_value_head_dim", 128),
+            linear_num_key_heads=getattr(text_config, "linear_num_key_heads", 16),
+            linear_num_value_heads=getattr(text_config, "linear_num_value_heads", 32),
+            linear_attention_freq=getattr(text_config, "full_attention_interval", 4),
             **mtp_args,
         )
 

@@ -13,10 +13,53 @@ def install_bridge_stubs():
     models_mod = types.ModuleType("megatron.core.models")
     gpt_mod = types.ModuleType("megatron.core.models.gpt")
     gpt_layer_specs_mod = types.ModuleType("megatron.core.models.gpt.gpt_layer_specs")
+    inference_mod = types.ModuleType("megatron.core.inference")
+    inference_contexts_mod = types.ModuleType("megatron.core.inference.contexts")
+    packed_seq_mod = types.ModuleType("megatron.core.packed_seq_params")
+    transformer_mod = types.ModuleType("megatron.core.transformer")
+    transformer_module_mod = types.ModuleType("megatron.core.transformer.module")
+    spec_utils_mod = types.ModuleType("megatron.core.transformer.spec_utils")
+    transformer_block_mod = types.ModuleType("megatron.core.transformer.transformer_block")
+    transformer_layer_mod = types.ModuleType("megatron.core.transformer.transformer_layer")
     gpt_layer_specs_mod.get_gpt_mtp_block_spec = lambda _config, transformer_layer_spec, **_kwargs: (
         "mtp-spec",
         transformer_layer_spec,
     )
+    gpt_layer_specs_mod.get_gpt_decoder_block_spec = lambda *args, **kwargs: None
+
+    class PackedSeqParams:
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    class MegatronModule(torch.nn.Module):
+        def __init__(self, config=None):
+            super().__init__()
+            self.config = config
+
+    class ModuleSpec:
+        def __init__(self, module=None, params=None):
+            self.module = module
+            self.params = params or {}
+
+    mpu_stub = types.SimpleNamespace(
+        get_context_parallel_world_size=lambda: 1,
+        get_context_parallel_group=lambda: None,
+        get_context_parallel_rank=lambda: 0,
+        get_tensor_model_parallel_group=lambda: None,
+    )
+    tensor_parallel_stub = types.SimpleNamespace(
+        gather_from_sequence_parallel_region=lambda x, group=None: x,
+        scatter_to_sequence_parallel_region=lambda x, group=None: x,
+    )
+    inference_contexts_mod.BaseInferenceContext = type("BaseInferenceContext", (), {})
+    packed_seq_mod.PackedSeqParams = PackedSeqParams
+    transformer_module_mod.MegatronModule = MegatronModule
+    spec_utils_mod.ModuleSpec = ModuleSpec
+    transformer_block_mod.get_num_layers_to_build = lambda *args, **kwargs: 0
+    transformer_layer_mod.get_transformer_layer_offset = lambda *args, **kwargs: 0
+    core_mod.mpu = mpu_stub
+    core_mod.tensor_parallel = tensor_parallel_stub
 
     mbridge_mod = types.ModuleType("mbridge")
     mbridge_core_mod = types.ModuleType("mbridge.core")
@@ -65,6 +108,9 @@ def install_bridge_stubs():
         def _weight_name_mapping_attention(self, name: str) -> list[str]:
             raise NotImplementedError(f"Unexpected attention mapping lookup: {name}")
 
+        def _weight_name_mapping_mcore_to_hf(self, name: str) -> list[str]:
+            return [name]
+
         def _get_transformer_layer_spec(self, vp_stage=None):
             return "REAL_LAYER_SPEC" if vp_stage is None else f"REAL_LAYER_SPEC_VP{vp_stage}"
 
@@ -97,6 +143,14 @@ def install_bridge_stubs():
     sys.modules["megatron.core.models"] = models_mod
     sys.modules["megatron.core.models.gpt"] = gpt_mod
     sys.modules["megatron.core.models.gpt.gpt_layer_specs"] = gpt_layer_specs_mod
+    sys.modules["megatron.core.inference"] = inference_mod
+    sys.modules["megatron.core.inference.contexts"] = inference_contexts_mod
+    sys.modules["megatron.core.packed_seq_params"] = packed_seq_mod
+    sys.modules["megatron.core.transformer"] = transformer_mod
+    sys.modules["megatron.core.transformer.module"] = transformer_module_mod
+    sys.modules["megatron.core.transformer.spec_utils"] = spec_utils_mod
+    sys.modules["megatron.core.transformer.transformer_block"] = transformer_block_mod
+    sys.modules["megatron.core.transformer.transformer_layer"] = transformer_layer_mod
     sys.modules["mbridge"] = mbridge_mod
     sys.modules["mbridge.core"] = mbridge_core_mod
     sys.modules["mbridge.models"] = mbridge_models_mod
@@ -228,3 +282,154 @@ def test_raw_qwen3_5_mtp_export_keeps_eh_proj_column_order():
     )
 
     assert converted == [("mtp.fc.weight", weight)]
+
+
+def make_gdn_config():
+    return types.SimpleNamespace(
+        hidden_size=8,
+        linear_key_head_dim=2,
+        linear_value_head_dim=2,
+        linear_num_key_heads=4,
+        linear_num_value_heads=8,
+        num_attention_heads=4,
+        num_query_groups=2,
+        kv_channels=2,
+        tensor_model_parallel_size=2,
+        layernorm_zero_centered_gamma=True,
+    )
+
+
+@pytest.mark.unit
+def test_qwen3_5_gdn_separate_in_proj_roundtrip_for_tp_packed_layout():
+    module = load_bridge_module()
+    bridge = module.Qwen3_5Bridge.__new__(module.Qwen3_5Bridge)
+    bridge.config = make_gdn_config()
+
+    qkv = torch.arange((2 * 8 + 16) * 8, dtype=torch.float32).view(32, 8)
+    z = torch.arange(16 * 8, dtype=torch.float32).view(16, 8) + 1_000
+    b = torch.arange(8 * 8, dtype=torch.float32).view(8, 8) + 2_000
+    a = torch.arange(8 * 8, dtype=torch.float32).view(8, 8) + 3_000
+
+    packed = bridge._weight_to_mcore_format("decoder.layers.0.self_attention.in_proj.weight", [qkv, z, b, a])
+    qkv_out, z_out, b_out, a_out = module._split_gdn_linear_separate(bridge.config, packed)
+    packed_blocks = packed.reshape(2, -1, 8)
+    expected_block0 = torch.cat([qkv[0:4], qkv[8:12], qkv[16:24], z[0:8], b[0:4], a[0:4]], dim=0)
+    expected_block1 = torch.cat([qkv[4:8], qkv[12:16], qkv[24:32], z[8:16], b[4:8], a[4:8]], dim=0)
+
+    assert packed.shape == (64, 8)
+    assert torch.equal(packed_blocks[0], expected_block0)
+    assert torch.equal(packed_blocks[1], expected_block1)
+    assert torch.equal(qkv_out, qkv)
+    assert torch.equal(z_out, z)
+    assert torch.equal(b_out, b)
+    assert torch.equal(a_out, a)
+
+
+@pytest.mark.unit
+def test_qwen3_5_gdn_separate_in_proj_roundtrip_for_local_tp_shard():
+    module = load_bridge_module()
+    bridge = module.Qwen3_5Bridge.__new__(module.Qwen3_5Bridge)
+    bridge.config = make_gdn_config()
+
+    qkv = torch.arange((2 * 4 + 8) * 8, dtype=torch.float32).view(16, 8)
+    z = torch.arange(8 * 8, dtype=torch.float32).view(8, 8) + 1_000
+    b = torch.arange(4 * 8, dtype=torch.float32).view(4, 8) + 2_000
+    a = torch.arange(4 * 8, dtype=torch.float32).view(4, 8) + 3_000
+
+    packed = bridge._weight_to_mcore_format("decoder.layers.0.self_attention.in_proj.weight", [qkv, z, b, a])
+    qkv_out, z_out, b_out, a_out = module._split_gdn_linear_separate(bridge.config, packed)
+
+    assert packed.shape == (32, 8)
+    assert torch.equal(qkv_out, qkv)
+    assert torch.equal(z_out, z)
+    assert torch.equal(b_out, b)
+    assert torch.equal(a_out, a)
+
+
+@pytest.mark.unit
+def test_qwen3_5_gdn_conv1d_roundtrip_for_tp_packed_layout():
+    module = load_bridge_module()
+    bridge = module.Qwen3_5Bridge.__new__(module.Qwen3_5Bridge)
+    bridge.config = make_gdn_config()
+
+    conv = torch.arange((2 * 8 + 16) * 1 * 4, dtype=torch.float32).view(32, 1, 4)
+
+    packed = bridge._weight_to_mcore_format("decoder.layers.0.self_attention.conv1d.weight", [conv])
+    conv_out = module._split_gdn_conv1d_weight(bridge.config, packed)
+    packed_blocks = packed.reshape(2, -1, 1, 4)
+    expected_block0 = torch.cat([conv[0:4], conv[8:12], conv[16:24]], dim=0)
+    expected_block1 = torch.cat([conv[4:8], conv[12:16], conv[24:32]], dim=0)
+
+    assert packed.shape == conv.shape
+    assert torch.equal(packed_blocks[0], expected_block0)
+    assert torch.equal(packed_blocks[1], expected_block1)
+    assert torch.equal(conv_out, conv)
+
+
+@pytest.mark.unit
+def test_qwen3_5_gdn_conv1d_roundtrip_for_local_tp_shard():
+    module = load_bridge_module()
+    bridge = module.Qwen3_5Bridge.__new__(module.Qwen3_5Bridge)
+    bridge.config = make_gdn_config()
+
+    conv = torch.arange((2 * 4 + 8) * 1 * 4, dtype=torch.float32).view(16, 1, 4)
+
+    packed = bridge._weight_to_mcore_format("decoder.layers.0.self_attention.conv1d.weight", [conv])
+    conv_out = module._split_gdn_conv1d_weight(bridge.config, packed)
+
+    assert packed.shape == conv.shape
+    assert torch.equal(conv_out, conv)
+
+
+@pytest.mark.unit
+def test_qwen3_5_gdn_out_norm_uses_zero_centered_rmsnorm_mapping():
+    module = load_bridge_module()
+    bridge = module.Qwen3_5Bridge.__new__(module.Qwen3_5Bridge)
+    bridge.config = make_gdn_config()
+
+    hf_weight = torch.tensor([0.87109375, 0.8671875, 0.88427734, 0.90332031])
+    expected_mcore_weight = hf_weight - 1
+    mcore_weight = bridge._weight_to_mcore_format("decoder.layers.0.self_attention.out_norm.weight", [hf_weight])
+    _names, hf_weights = bridge._weight_to_hf_format("decoder.layers.0.self_attention.out_norm.weight", mcore_weight)
+
+    torch.testing.assert_close(mcore_weight, expected_mcore_weight)
+    torch.testing.assert_close(hf_weights[0], hf_weight)
+
+    bridge.config.layernorm_zero_centered_gamma = False
+    passthrough_weight = bridge._weight_to_mcore_format(
+        "decoder.layers.0.self_attention.out_norm.weight", [hf_weight]
+    )
+    torch.testing.assert_close(passthrough_weight, hf_weight)
+
+
+@pytest.mark.unit
+def test_raw_qwen3_5_export_splits_new_gdn_in_proj_names():
+    bridge_module = load_bridge_module()
+    raw_module = load_raw_export_module()
+    args = make_gdn_config()
+    args.apply_layernorm_1p = True
+    bridge = bridge_module.Qwen3_5Bridge.__new__(bridge_module.Qwen3_5Bridge)
+    bridge.config = args
+
+    qkv = torch.arange((2 * 8 + 16) * 8, dtype=torch.float32).view(32, 8)
+    z = torch.arange(16 * 8, dtype=torch.float32).view(16, 8) + 1_000
+    b = torch.arange(8 * 8, dtype=torch.float32).view(8, 8) + 2_000
+    a = torch.arange(8 * 8, dtype=torch.float32).view(8, 8) + 3_000
+    packed = bridge._weight_to_mcore_format("decoder.layers.0.self_attention.in_proj.weight", [qkv, z, b, a])
+
+    converted = raw_module.convert_qwen3_5_to_hf(
+        args,
+        "module.module.decoder.layers.3.self_attention.in_proj.weight",
+        packed,
+    )
+
+    assert [name for name, _ in converted] == [
+        "model.language_model.layers.3.linear_attn.in_proj_qkv.weight",
+        "model.language_model.layers.3.linear_attn.in_proj_z.weight",
+        "model.language_model.layers.3.linear_attn.in_proj_b.weight",
+        "model.language_model.layers.3.linear_attn.in_proj_a.weight",
+    ]
+    assert torch.equal(converted[0][1], qkv)
+    assert torch.equal(converted[1][1], z)
+    assert torch.equal(converted[2][1], b)
+    assert torch.equal(converted[3][1], a)

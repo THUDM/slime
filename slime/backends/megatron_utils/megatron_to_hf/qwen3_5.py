@@ -3,6 +3,83 @@ import re
 import torch
 
 
+def _get_arg(args, name, default):
+    return getattr(args, name, default)
+
+
+def _get_gdn_dims(args):
+    hidden_size = args.hidden_size
+    qk_head_dim = _get_arg(args, "linear_key_head_dim", 128)
+    v_head_dim = _get_arg(args, "linear_value_head_dim", 128)
+    num_qk_heads = _get_arg(args, "linear_num_key_heads", 16)
+    num_v_heads = _get_arg(args, "linear_num_value_heads", 32)
+    qk_dim = qk_head_dim * num_qk_heads
+    v_dim = v_head_dim * num_v_heads
+    return hidden_size, qk_head_dim, v_head_dim, num_qk_heads, num_v_heads, qk_dim, v_dim
+
+
+def _split_gdn_linear_separate(args, in_proj):
+    hidden_size, qk_head_dim, v_head_dim, num_qk_heads, num_v_heads, qk_dim, v_dim = _get_gdn_dims(args)
+    tp_size = _get_arg(args, "tensor_model_parallel_size", 1)
+    in_proj_dim = 2 * qk_dim + 2 * v_dim + 2 * num_v_heads
+    if in_proj.shape[0] == in_proj_dim:
+        pack_tp_size = tp_size
+    elif tp_size > 1 and in_proj.shape[0] == in_proj_dim // tp_size:
+        pack_tp_size = 1
+    else:
+        raise ValueError(f"Unexpected GDN in_proj rows: got {in_proj.shape[0]}, expected {in_proj_dim}")
+
+    qk_heads_per_block = num_qk_heads // tp_size
+    v_heads_per_block = num_v_heads // tp_size
+    qk_dim_per_block = qk_head_dim * qk_heads_per_block
+    v_dim_per_block = v_head_dim * v_heads_per_block
+    output_num_qk_heads = qk_heads_per_block * pack_tp_size
+
+    in_proj = in_proj.reshape(pack_tp_size, -1, hidden_size)
+    q, k, v, z, b, a = torch.split(
+        in_proj,
+        [
+            qk_dim_per_block,
+            qk_dim_per_block,
+            v_dim_per_block,
+            v_dim_per_block,
+            v_heads_per_block,
+            v_heads_per_block,
+        ],
+        dim=1,
+    )
+    q, k, v, z, b, a = [
+        weight.reshape(output_num_qk_heads, -1, hidden_size) for weight in [q, k, v, z, b, a]
+    ]
+    qkv = torch.cat([q.reshape(-1, hidden_size), k.reshape(-1, hidden_size), v.reshape(-1, hidden_size)], dim=0)
+    return (
+        qkv.contiguous(),
+        z.reshape(-1, hidden_size).contiguous(),
+        b.reshape(-1, hidden_size).contiguous(),
+        a.reshape(-1, hidden_size).contiguous(),
+    )
+
+
+def _split_gdn_conv1d_weight(args, weight):
+    _, _, _, _, _, qk_dim, v_dim = _get_gdn_dims(args)
+    tp_size = _get_arg(args, "tensor_model_parallel_size", 1)
+    conv_dim = 2 * qk_dim + v_dim
+    if weight.shape[0] == conv_dim:
+        pack_tp_size = tp_size
+    elif tp_size > 1 and weight.shape[0] == conv_dim // tp_size:
+        pack_tp_size = 1
+    else:
+        raise ValueError(f"Unexpected GDN conv1d rows: got {weight.shape[0]}, expected {conv_dim}")
+    qk_dim_per_block = qk_dim // tp_size
+    v_dim_per_block = v_dim // tp_size
+    weight = weight.reshape(pack_tp_size, -1, *weight.shape[1:])
+    q, k, v = torch.split(weight, [qk_dim_per_block, qk_dim_per_block, v_dim_per_block], dim=1)
+    return torch.cat(
+        [q.reshape(-1, *weight.shape[2:]), k.reshape(-1, *weight.shape[2:]), v.reshape(-1, *weight.shape[2:])],
+        dim=0,
+    ).contiguous()
+
+
 def _convert_mtp_layer(args, name, param, layer_idx):
     """Convert MTP layer parameters from Megatron to HuggingFace format."""
     if "enorm.weight" in name:
@@ -168,17 +245,7 @@ def convert_qwen3_5_to_hf(args, name, param):
         elif rest == "self_attention.k_layernorm.weight":
             return [(f"{prefix}.self_attn.k_norm.weight", param)]
         elif rest.startswith("self_attention.") and rest[len("self_attention.") :] in [
-            "input_layernorm.weight",
             # linear attn (Qwen3.5 uses separate in_proj_b/in_proj_a)
-            "linear_attn.A_log",
-            "linear_attn.conv1d.weight",
-            "linear_attn.dt_bias",
-            "linear_attn.in_proj_a.weight",
-            "linear_attn.in_proj_b.weight",
-            "linear_attn.in_proj_qkv.weight",
-            "linear_attn.in_proj_z.weight",
-            "linear_attn.norm.weight",
-            "linear_attn.out_proj.weight",
             # gated attn (full attention layers)
             "self_attn.k_norm.weight",
             "self_attn.k_proj.weight",
@@ -189,5 +256,29 @@ def convert_qwen3_5_to_hf(args, name, param):
         ]:
             rest = rest[len("self_attention.") :]
             return [(f"{prefix}.{rest}", param)]
+
+        # linear attention / GDN
+        elif rest == "self_attention.in_proj.layer_norm_weight":
+            return [(f"{prefix}.input_layernorm.weight", param)]
+        elif rest == "self_attention.in_proj.weight":
+            qkv, z, b, a = _split_gdn_linear_separate(args, param)
+            return [
+                (f"{prefix}.linear_attn.in_proj_qkv.weight", qkv),
+                (f"{prefix}.linear_attn.in_proj_z.weight", z),
+                (f"{prefix}.linear_attn.in_proj_b.weight", b),
+                (f"{prefix}.linear_attn.in_proj_a.weight", a),
+            ]
+        elif rest == "self_attention.conv1d.weight":
+            return [(f"{prefix}.linear_attn.conv1d.weight", _split_gdn_conv1d_weight(args, param))]
+        elif rest == "self_attention.A_log":
+            return [(f"{prefix}.linear_attn.A_log", param)]
+        elif rest == "self_attention.dt_bias":
+            return [(f"{prefix}.linear_attn.dt_bias", param)]
+        elif rest == "self_attention.out_norm.weight":
+            if getattr(args, "apply_layernorm_1p", False):
+                param = param + 1
+            return [(f"{prefix}.linear_attn.norm.weight", param)]
+        elif rest == "self_attention.out_proj.weight":
+            return [(f"{prefix}.linear_attn.out_proj.weight", param)]
 
     raise ValueError(f"Unknown parameter name: {name}")

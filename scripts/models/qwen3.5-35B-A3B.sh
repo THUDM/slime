@@ -55,4 +55,10 @@ MODEL_ARGS=(
    # qwen3.5 specific
    --attention-output-gate
    --moe-shared-expert-gate
+   --linear-attention-freq 4
+   --linear-conv-kernel-dim 4
+   --linear-key-head-dim 128
+   --linear-value-head-dim 128
+   --linear-num-key-heads 16
+   --linear-num-value-heads 32
 )

@@ -77,6 +77,16 @@ def get_args():
     return args
 
 
+def sync_bridge_config_from_args(bridge, args):
+    extra_args = {"layernorm_zero_centered_gamma": args.apply_layernorm_1p}
+    if hasattr(bridge, "set_extra_args"):
+        bridge.set_extra_args(**extra_args)
+    elif hasattr(bridge, "config"):
+        for key, value in extra_args.items():
+            if hasattr(bridge.config, key):
+                setattr(bridge.config, key, value)
+
+
 def main():
     if torch.version.hip:
         import megatron.core.dist_checkpointing.strategies.filesystem_async as filesystem_async_module
@@ -116,6 +126,7 @@ def main():
     # Load model
     hf_model_path = args.hf_checkpoint
     bridge = AutoBridge.from_pretrained(hf_model_path, trust_remote_code=True)
+    sync_bridge_config_from_args(bridge, args)
     bridge.load_weights(model, hf_model_path, memory_efficient=True)
     print(f"Model loaded: {hf_model_path}")
 
