@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import os
 import threading
 from argparse import Namespace
@@ -13,7 +14,6 @@ from safetensors.torch import save, save_file
 from tqdm import tqdm
 
 from slime.utils.distributed_utils import get_gloo_group
-
 from ..sglang import PartialWeightEncoding, PartialWeightParam, PartialWeightSpec
 from .update_weight_from_distributed import UpdateWeightFromDistributed
 
@@ -49,16 +49,15 @@ class PartialChunk:
 @dataclass
 class PartialPayload:
     """
-    Per-param compute output flowing into the encoder. ``payload`` carries the
-    full-size values at every position (deltas for ``delta``, new param values
-    for ``selective``); ``mask`` is a bool tensor marking active positions.
-    The encoder consumes (payload, mask) directly — no mode-specific predicate
-    re-derives the mask, and no sentinel value is materialized on the sender.
+    Per-param compute output flowing into the encoder. ``payload`` is the full-size
+    values; ``mask`` marks active positions, or is ``None`` for the delta fast path
+    (encoder uses ``torch.nonzero(payload)`` directly). Selective always sets a mask
+    so legitimately-zero new values aren't dropped.
     """
 
     name: str
     payload: torch.Tensor
-    mask: torch.Tensor
+    mask: torch.Tensor | None
 
 
 def encode_partial(
@@ -73,10 +72,8 @@ def encode_partial(
     """
     if encoding is PartialWeightEncoding.DENSE:
         return _encode_dense(named_payloads, mode)
-    if encoding is PartialWeightEncoding.SPARSE_INDICES:
-        return _encode_sparse(named_payloads, _indices_kv)
-    if encoding is PartialWeightEncoding.SPARSE_BITMASK:
-        return _encode_sparse(named_payloads, _bitmask_kv)
+    if encoding in (PartialWeightEncoding.SPARSE_INDICES, PartialWeightEncoding.SPARSE_BITMASK):
+        return _encode_sparse(named_payloads, encoding)
     raise ValueError(f"unknown partial-update encoding: {encoding!r}")
 
 
@@ -90,7 +87,8 @@ def _encode_dense(named_payloads: list[PartialPayload], mode: str) -> PartialChu
     tensors: list[tuple[str, torch.Tensor]] = []
     nnz = 0
     for pp in named_payloads:
-        nnz += int(pp.mask.sum())
+        # Delta path may not provide mask; derive nnz from payload directly.
+        nnz += int(pp.mask.sum()) if pp.mask is not None else int((pp.payload != 0).sum())
         if mode == "selective":
             nan = torch.full_like(pp.payload, float("nan"))
             tensors.append((pp.name, torch.where(pp.mask, pp.payload, nan)))
@@ -102,44 +100,61 @@ def _encode_dense(named_payloads: list[PartialPayload], mode: str) -> PartialChu
 
 def _encode_sparse(
     named_payloads: list[PartialPayload],
-    kv_fn: Callable[[torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor]],
+    encoding: PartialWeightEncoding,
 ) -> PartialChunk:
     """
-    Walk named_payloads, ask kv_fn for (keys, values) per param, pack into a
-    single (packed_keys, packed_values) PartialChunk with a per-param manifest.
-    Params with zero active positions are skipped.
+    Sparse encoder for SPARSE_INDICES and SPARSE_BITMASK. Boundaries are found once
+    via ``_sparse_boundaries``; the per-param loop emits encoding-specific keys
+    (in-param int32 indices, or bit-packed mask bytes).
     """
-    keys_chunks: list[torch.Tensor] = []
-    values_chunks: list[torch.Tensor] = []
+    if not named_payloads:
+        return PartialChunk(tensors=[], params=[], byte_size=0)
+
+    big_val, bounds, big_idx, cum = _sparse_boundaries(named_payloads)
+
     params: list[PartialWeightParam] = []
+    keys_pieces: list[torch.Tensor] = []
+    vals_pieces: list[torch.Tensor] = []
     keys_off = values_off = 0
-    for pp in named_payloads:
-        flat_payload = pp.payload.contiguous().view(-1)
-        flat_mask = pp.mask.contiguous().view(-1)
-        keys, values = kv_fn(flat_payload, flat_mask)
-        nnz = int(values.numel())
-        if nnz == 0:
-            continue
-        keys_count = int(keys.numel())
-        params.append(
-            PartialWeightParam(
-                name=pp.name,
-                dtype=str(pp.payload.dtype).replace("torch.", ""),
-                shape=list(pp.payload.shape),
-                keys_start=keys_off,
-                keys_end=keys_off + keys_count,
-                values_start=values_off,
-                values_end=values_off + nnz,
+    prev_b = 0
+    prev_off = 0
+    for i, pp in enumerate(named_payloads):
+        b = bounds[i]
+        nnz = b - prev_b
+        if nnz > 0:
+            if encoding is PartialWeightEncoding.SPARSE_INDICES:
+                # Global → in-param coordinates.
+                keys_i = (big_idx[prev_b:b] - prev_off).to(torch.int32)
+            else:  # SPARSE_BITMASK
+                # Delta has no mask; derive from payload. Selective brings its own.
+                flat_mask_i = (
+                    pp.mask.contiguous().view(-1) if pp.mask is not None else (pp.payload.contiguous().view(-1) != 0)
+                )
+                keys_i = _pack_bitmask(flat_mask_i)
+            values_i = big_val[prev_b:b]
+            keys_count = keys_i.numel()
+            params.append(
+                PartialWeightParam(
+                    name=pp.name,
+                    dtype=str(pp.payload.dtype).replace("torch.", ""),
+                    shape=list(pp.payload.shape),
+                    keys_start=keys_off,
+                    keys_end=keys_off + keys_count,
+                    values_start=values_off,
+                    values_end=values_off + nnz,
+                )
             )
-        )
-        keys_chunks.append(keys)
-        values_chunks.append(values)
-        keys_off += keys_count
-        values_off += nnz
+            keys_pieces.append(keys_i)
+            vals_pieces.append(values_i)
+            keys_off += keys_count
+            values_off += nnz
+        prev_b = b
+        prev_off = cum[i]
+
     if not params:
         return PartialChunk(tensors=[], params=[], byte_size=0)
-    packed_keys = torch.cat(keys_chunks, dim=0)
-    packed_values = torch.cat(values_chunks, dim=0)
+    packed_keys = torch.cat(keys_pieces, dim=0)
+    packed_values = torch.cat(vals_pieces, dim=0)
     size = packed_keys.numel() * packed_keys.element_size() + packed_values.numel() * packed_values.element_size()
     return PartialChunk(
         tensors=[("__packed_keys__", packed_keys), ("__packed_values__", packed_values)],
@@ -149,22 +164,43 @@ def _encode_sparse(
     )
 
 
-def _indices_kv(flat_payload: torch.Tensor, flat_mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    idx_long = flat_mask.nonzero(as_tuple=False).view(-1)
-    return idx_long.to(dtype=torch.int32), flat_payload[idx_long]
+def _sparse_boundaries(
+    named_payloads: list[PartialPayload],
+) -> tuple[torch.Tensor, list[int], torch.Tensor, list[int]]:
+    """
+    concat → one nonzero → searchsorted → one ``.tolist()``: collapses ~30
+    per-param host syncs/chunk to 1. Returns ``(big_val, bounds, big_idx, cum)``
+    for the encoder's per-param emission step.
+    """
+    has_mask = named_payloads[0].mask is not None
+    device = named_payloads[0].payload.device
+    sizes = [pp.payload.numel() for pp in named_payloads]
+    cum = list(itertools.accumulate(sizes))
+    cum_t = torch.tensor(cum, dtype=torch.int64, device=device)
+
+    big_payload = torch.cat([pp.payload.contiguous().view(-1) for pp in named_payloads], dim=0)
+    if has_mask:
+        big_mask = torch.cat([pp.mask.contiguous().view(-1) for pp in named_payloads], dim=0)
+        big_idx = big_mask.nonzero(as_tuple=False).view(-1)
+    else:
+        # Delta: zeros in the payload mean "unchanged" — nonzero(payload) directly.
+        big_idx = torch.nonzero(big_payload, as_tuple=False).view(-1)
+    big_val = big_payload[big_idx]
+    bounds = torch.searchsorted(big_idx, cum_t).tolist()
+    return big_val, bounds, big_idx, cum
 
 
-def _bitmask_kv(flat_payload: torch.Tensor, flat_mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    values = flat_payload[flat_mask]
+def _pack_bitmask(flat_mask: torch.Tensor) -> torch.Tensor:
+    """Bit-pack a 1-D bool mask into uint8 bytes (little-endian within byte)."""
     if flat_mask.numel() == 0:
-        return torch.empty(0, dtype=torch.uint8, device=flat_mask.device), values
+        return torch.empty(0, dtype=torch.uint8, device=flat_mask.device)
     mask_u8 = flat_mask.to(dtype=torch.uint8)
     pad = (-mask_u8.numel()) % 8
     if pad:
         mask_u8 = torch.cat([mask_u8, torch.zeros(pad, dtype=torch.uint8, device=mask_u8.device)])
     bits = mask_u8.view(-1, 8)
     weights = (2 ** torch.arange(8, dtype=torch.uint8, device=mask_u8.device)).view(1, 8)
-    return torch.sum(bits * weights, dim=1, dtype=torch.uint8), values
+    return torch.sum(bits * weights, dim=1, dtype=torch.uint8)
 
 
 @dataclass
@@ -230,9 +266,9 @@ class PartialSendBucket:
 
 class PartialSync:
     """
-    Owns pinned-CPU snapshot of last broadcast's tensors and the base-vs-partial
-    decision. PP-source-rank only. ``compute_payload`` produces per-param
-    PartialPayloads for either mode against the same snapshot.
+    Sender state: pinned-CPU snapshot of the last broadcast, base-sync cadence,
+    and the H2D/D2H streams that pipeline snapshot transfer behind encode+broadcast.
+    PP-source-rank only.
     """
 
     def __init__(self, args: Namespace) -> None:
@@ -243,28 +279,49 @@ class PartialSync:
         self.snapshot: dict[str, torch.Tensor] = {}
         self.committed_syncs = 0
         self.d2h_stream: torch.cuda.Stream | None = None
+        self.h2d_stream: torch.cuda.Stream | None = None
         self.snapshot_dirty = False
 
     def should_send_base(self) -> bool:
         return self.committed_syncs == 0 or self.committed_syncs % self.base_sync_interval == 0
 
-    def compute_payload(self, named_tensors: list[tuple[str, torch.Tensor]], mode: str) -> list[PartialPayload]:
+    def prefetch_snapshot(
+        self, named_tensors: list[tuple[str, torch.Tensor]]
+    ) -> tuple[list[torch.Tensor], torch.cuda.Event]:
         """
-        For each param produce a PartialPayload. Both modes share the snapshot
-        preamble (wait for in-flight D2H, batch H2D the pinned snapshot, sync);
-        they differ only in what counts as the payload and how the mask is
-        derived:
+        Start an async H2D copy of the snapshot tensors for ``named_tensors`` on
+        a side stream. Returns (prev_gpu_list, event) — pass to ``compute_payload``
+        as ``prefetched=(prev_gpu_list, event)``; the consumer's stream will wait
+        on the event before reading prev_gpu.
+        """
+        if self.h2d_stream is None:
+            self.h2d_stream = torch.cuda.Stream()
+        prev_gpu: list[torch.Tensor] = []
+        with torch.cuda.stream(self.h2d_stream):
+            for name, tensor in named_tensors:
+                if name not in self.snapshot:
+                    raise KeyError(f"missing snapshot for {name!r}; need a base sync first")
+                prev_gpu.append(self.snapshot[name].to(device=tensor.device, non_blocking=True))
+            event = self.h2d_stream.record_event()
+        return prev_gpu, event
 
-          delta     — payload = (new − snapshot) at delta_dtype; mask = payload != 0
-          selective — payload = new (reference, no copy);        mask = new != snapshot
+    def compute_payload(
+        self,
+        named_tensors: list[tuple[str, torch.Tensor]],
+        mode: str,
+        prefetched: tuple[list[torch.Tensor], torch.cuda.Event],
+    ) -> list[PartialPayload]:
+        """
+        Build a PartialPayload per param from the prefetched snapshot.
 
-        Caller advances snapshot after.
+        delta: payload = (new − snapshot) at delta_dtype, mask = None — encoder uses
+        ``torch.nonzero(payload)`` directly, skipping the bool intermediate.
+        selective: payload = new (reference, no copy), mask = (new != snapshot).
         """
         if mode == "delta":
 
             def per_param(name, tensor, prev):
-                payload = tensor.to(self.delta_dtype) - prev.to(self.delta_dtype)
-                return payload, payload != 0
+                return tensor.to(self.delta_dtype) - prev.to(self.delta_dtype), None
 
         elif mode == "selective":
 
@@ -275,18 +332,14 @@ class PartialSync:
 
         else:
             raise ValueError(f"unknown partial-update mode: {mode!r}")
-        self.flush_snapshot()
-        prev_gpu = []
-        for name, tensor in named_tensors:
-            if name not in self.snapshot:
-                raise KeyError(f"missing snapshot for {name!r}; need a base sync first")
-            prev_gpu.append(self.snapshot[name].to(device=tensor.device, non_blocking=True))
-        torch.cuda.synchronize()
+
+        prev_gpu, event = prefetched
+        event.wait()
+
         result: list[PartialPayload] = []
         for (name, tensor), prev in zip(named_tensors, prev_gpu, strict=True):
             payload, mask = per_param(name, tensor, prev)
             result.append(PartialPayload(name=name, payload=payload, mask=mask))
-            del prev
         return result
 
     def update_snapshot_async(self, named_tensors: list[tuple[str, torch.Tensor]]) -> None:
@@ -357,18 +410,10 @@ class PartialArtifactWriter:
 
 class UpdateWeightFromDistributedPartial(UpdateWeightFromDistributed):
     """
-    Partial-update variant. Sends a sparse-encoded payload per named tensor and
-    has SGLang apply it. Two sub-modes, selected by ``--update-weight-mode``:
-
-    * ``selective``: payload values are the new param values at changed positions,
-      with NaN as the "unchanged" sentinel; receiver overwrites the non-NaN
-      positions only.
-    * ``delta``: payload values are ``(current − snapshot)`` cast to delta_dtype;
-      receiver applies additively (``param += delta``).
-
-    Periodic base syncs (full broadcasts) refresh the snapshot. The ``_on_chunk``
-    hook on the base class is used to keep the snapshot in lockstep during base
-    syncs.
+    Partial-update variant selected by ``--update-weight-mode``. ``selective``:
+    overwrite changed positions only (NaN = unchanged sentinel). ``delta``:
+    apply ``(new − snapshot)`` additively cast to delta_dtype. Periodic base
+    syncs refresh the snapshot via ``_on_chunk`` on the parent.
     """
 
     def __init__(
@@ -424,20 +469,52 @@ class UpdateWeightFromDistributedPartial(UpdateWeightFromDistributed):
 
     def _send_partial_weights(self, pbar: tqdm | None) -> None:
         """
-        non-expert (TP) loop → barrier → expert (EP) loop. Each HF chunk is
-        converted to a partial-update payload (selective or delta) and bucketed.
+        non-expert (TP) loop → barrier → expert (EP) loop, with 1-step H2D
+        prefetch lookahead so chunk N+1's snapshot transfer overlaps chunk N's
+        compute+encode+broadcast.
         """
         encoding = PartialWeightEncoding(self.args.update_weight_partial_encoding)
         bucket = PartialSendBucket()
-        for hf_chunk in self._iter_non_expert_chunks():
-            self._enqueue_partial_chunk(hf_chunk, encoding, bucket, pbar)
+        # One flush at the start of the sync ensures previous-sync D2H is
+        # complete before we prefetch any snapshot for this sync. Per-chunk
+        # prefetches don't need to flush again — they read different param
+        # names than the in-flight D2H writes within this sync.
+        self.partial_sync.flush_snapshot()
+
+        self._iter_with_pipeline(self._iter_non_expert_chunks(), encoding, bucket, pbar)
         self._flush_partial_bucket(bucket, encoding, pbar)
 
         dist.barrier(group=get_gloo_group())
 
-        for hf_chunk in self._iter_expert_chunks():
-            self._enqueue_partial_chunk(hf_chunk, encoding, bucket, pbar)
+        self._iter_with_pipeline(self._iter_expert_chunks(), encoding, bucket, pbar)
         self._flush_partial_bucket(bucket, encoding, pbar)
+
+    def _iter_with_pipeline(
+        self,
+        chunk_iter,
+        encoding: PartialWeightEncoding,
+        bucket: PartialSendBucket,
+        pbar: tqdm | None,
+    ) -> None:
+        """
+        1-step H2D prefetch lookahead so chunk N+1's snapshot transfer overlaps
+        chunk N's compute+encode on the default stream.
+        """
+
+        def drain(item):
+            if item is None:
+                return
+            chunk, prefetched = item
+            self._enqueue_partial_chunk(chunk, encoding, bucket, pbar, prefetched=prefetched)
+
+        pending = None
+        for hf_chunk in chunk_iter:
+            if not hf_chunk:
+                continue
+            ahead = (hf_chunk, self.partial_sync.prefetch_snapshot(hf_chunk))
+            drain(pending)
+            pending = ahead
+        drain(pending)
 
     def _enqueue_partial_chunk(
         self,
@@ -445,13 +522,14 @@ class UpdateWeightFromDistributedPartial(UpdateWeightFromDistributed):
         encoding: PartialWeightEncoding,
         bucket: PartialSendBucket,
         pbar: tqdm | None,
+        prefetched: tuple[list[torch.Tensor], torch.cuda.Event],
     ) -> None:
         """
         compute payloads (mode-specific) → snapshot new prev → encode → bucket.add.
+        ``prefetched`` carries the result of ``PartialSync.prefetch_snapshot``;
+        compute_payload waits on its event before reading prev_gpu.
         """
-        if not hf_chunk:
-            return
-        payloads = self.partial_sync.compute_payload(hf_chunk, self.mode)
+        payloads = self.partial_sync.compute_payload(hf_chunk, self.mode, prefetched=prefetched)
         self.partial_sync.update_snapshot_async(hf_chunk)
         chunk = encode_partial(payloads, encoding, self.mode)
         # numel from input payload so zero-nnz params still count — otherwise
