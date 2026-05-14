@@ -92,8 +92,10 @@ def _encode_dense(named_payloads: list[PartialPayload], mode: str) -> PartialChu
         if mode == "selective":
             nan = torch.full_like(pp.payload, float("nan"))
             tensors.append((pp.name, torch.where(pp.mask, pp.payload, nan)))
-        else:  # "delta"
+        elif mode == "delta":
             tensors.append((pp.name, pp.payload))
+        else:
+            raise ValueError(f"unknown partial-update mode: {mode!r}")
     size = sum(t.numel() * t.element_size() for _, t in tensors)
     return PartialChunk(tensors=tensors, params=None, byte_size=size, nnz=nnz)
 
@@ -125,12 +127,14 @@ def _encode_sparse(
             if encoding is PartialWeightEncoding.SPARSE_INDICES:
                 # Global → in-param coordinates.
                 keys_i = (big_idx[prev_b:b] - prev_off).to(torch.int32)
-            else:  # SPARSE_BITMASK
+            elif encoding is PartialWeightEncoding.SPARSE_BITMASK:
                 # Delta has no mask; derive from payload. Selective brings its own.
                 flat_mask_i = (
                     pp.mask.contiguous().view(-1) if pp.mask is not None else (pp.payload.contiguous().view(-1) != 0)
                 )
                 keys_i = _pack_bitmask(flat_mask_i)
+            else:
+                raise ValueError(f"unsupported sparse encoding: {encoding!r}")
             values_i = big_val[prev_b:b]
             keys_count = keys_i.numel()
             params.append(
