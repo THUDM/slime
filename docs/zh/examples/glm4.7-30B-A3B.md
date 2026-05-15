@@ -4,14 +4,6 @@
 
 搭建环境、数据与 ckpt 转换均与 Qwen3-4B 模型相同，可以参考 [示例：Qwen3-4B](qwen3-4B.md)，将文中 Qwen3-4B 的部分转换为 GLM-4.7-Flash 即可。
 
-### 前置条件
-
-GLM-4.7-Flash 需要 **transformers ≥ 5.0** 以支持 `Glm4MoeLiteForCausalLM` 架构。请安装或升级：
-
-```bash
-pip install "transformers>=5.0"
-```
-
 ### 下载模型
 
 ```bash

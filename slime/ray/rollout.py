@@ -123,7 +123,6 @@ class ServerGroup:
                     "SLIME_ENABLE_PROFILING": "true",
                 }.items()
             }
-
             rollout_engine = RolloutRayActor.options(
                 num_cpus=num_cpus,
                 num_gpus=num_gpus,
@@ -967,11 +966,7 @@ def _compute_rollout_offset(args) -> int:
     """Offset (in PG bundle slots) where rollout GPUs start."""
     if args.debug_train_only or args.debug_rollout_only or args.colocate:
         return 0
-    if args.critic_train_only:
-        return args.critic_num_nodes * args.critic_num_gpus_per_node
     offset = args.actor_num_nodes * args.actor_num_gpus_per_node
-    if args.use_critic:
-        offset += args.critic_num_nodes * args.critic_num_gpus_per_node
     return offset
 
 
@@ -979,11 +974,7 @@ def _compute_megatron_num_gpus(args) -> int:
     """Total number of megatron (actor + critic) GPU slots in the placement group."""
     if args.debug_rollout_only:
         return 0
-    if args.critic_train_only:
-        return args.critic_num_nodes * args.critic_num_gpus_per_node
     num = args.actor_num_nodes * args.actor_num_gpus_per_node
-    if args.use_critic:
-        num += args.critic_num_nodes * args.critic_num_gpus_per_node
     return num
 
 
@@ -1205,6 +1196,8 @@ def compute_metrics_from_samples(args, samples):
     log_dict = {}
     log_dict |= dict_add_prefix(compute_statistics(response_lengths), "response_len/")
     log_dict |= _compute_zero_std_metrics(args, samples)
+    log_dict |= _compute_spec_metrics(args, samples)
+    log_dict |= _compute_prefix_cache_metrics(args, samples)
     log_dict |= _compute_reward_cat_metrics(args, samples)
     log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
     log_dict["truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()

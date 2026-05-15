@@ -292,7 +292,6 @@ def _build_shifted_tokens(
 def _extract_per_sample(
     log_prob_full: torch.Tensor,
     entropy_full: torch.Tensor | None,
-    unconcat_tokens: list[torch.Tensor],
     total_lengths: list[int],
     response_lengths: list[int],
     qkv_format: str,
@@ -302,22 +301,12 @@ def _extract_per_sample(
     """Slice per-sample response log-probs/entropy from full-length 1-D tensors."""
     cp_size = mpu.get_context_parallel_world_size()
     log_probs_list: list[torch.Tensor] = []
-    entropy_list: list[torch.Tensor | None] = []
-
-    def _append(lp: torch.Tensor) -> None:
-        log_probs_list.append(lp)
-        entropy_list.append(None)
-
-    def _append_with_entropy(lp: torch.Tensor, start: int, end: int) -> None:
-        log_probs_list.append(lp)
-        entropy_list.append(entropy_full[start:end] if entropy_full is not None else None)
+    entropy_list: list[torch.Tensor] = []
 
     if cp_size > 1 and not allgather_cp:
         # zigzag CP
         pos = 0
-        for i, (_tokens, total_length, response_length) in enumerate(
-            zip(unconcat_tokens, total_lengths, response_lengths, strict=False)
-        ):
+        for i, (total_length, response_length) in enumerate(zip(total_lengths, response_lengths, strict=False)):
             max_seq_len = max_seq_lens[i] if max_seq_lens is not None else None
             chunk_size_cp, chunks_offset, logits_offset, _tokens_offset = get_logits_and_tokens_offset_with_cp(
                 total_length, response_length, qkv_format, max_seq_len
@@ -344,8 +333,6 @@ def _extract_per_sample(
                     dim=0,
                 )
                 entropy_list.append(ent)
-            else:
-                entropy_list.append(None)
             pos += 2 * chunk_size_cp
 
     elif allgather_cp:
@@ -363,11 +350,13 @@ def _extract_per_sample(
             s = max(logit_global_start, chunk_start)
             e = min(logit_global_end, chunk_end)
             if e <= s:
-                _append(log_prob_full[0:0])
+                log_probs_list.append(torch.zeros((0,), dtype=log_prob_full.dtype, device=log_prob_full.device))
+                if entropy_full is not None:
+                    entropy_list.append(torch.zeros((0,), dtype=entropy_full.dtype, device=entropy_full.device))
             else:
-                _append_with_entropy(
-                    log_prob_full[s - chunk_start : e - chunk_start], s - chunk_start, e - chunk_start
-                )
+                log_probs_list.append(log_prob_full[s - chunk_start : e - chunk_start])
+                if entropy_full is not None:
+                    entropy_list.append(entropy_full[s - chunk_start : e - chunk_start])
             seq_start += total_length
 
     else:
@@ -377,13 +366,17 @@ def _extract_per_sample(
             for total_length, response_length in zip(total_lengths, response_lengths, strict=False):
                 end = offset + total_length
                 start = end - response_length
-                _append_with_entropy(log_prob_full[start - 1 : end - 1], start - 1, end - 1)
+                log_probs_list.append(log_prob_full[start - 1 : end - 1])
+                if entropy_full is not None:
+                    entropy_list.append(entropy_full[start - 1 : end - 1])
                 offset += total_length
         else:  # bshd
             for i, (total_length, response_length) in enumerate(zip(total_lengths, response_lengths, strict=False)):
                 end = max_seq_lens[i] * i + total_length
                 start = end - response_length
-                _append_with_entropy(log_prob_full[start - 1 : end - 1], start - 1, end - 1)
+                log_probs_list.append(log_prob_full[start - 1 : end - 1])
+                if entropy_full is not None:
+                    entropy_list.append(entropy_full[start - 1 : end - 1])
 
     return log_probs_list, entropy_list
 
@@ -450,7 +443,6 @@ def get_log_probs_and_entropy(
     log_probs_list, entropy_list = _extract_per_sample(
         log_prob_full,
         entropy_full,
-        unconcat_tokens,
         total_lengths,
         response_lengths,
         qkv_format,
@@ -589,6 +581,10 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
     Early returns if both `log_probs` and `values` are None (intermediate
     pipeline stages).
 
+    If ``args.custom_advantage_function_path`` is set, it is called after KL computation
+    and must populate ``rollout_data["advantages"]`` and
+    ``rollout_data["returns"]``.
+
     Args:
         args: Configuration specifying estimator type, KL coefficient,
             normalization settings, and other hyperparameters.
@@ -597,7 +593,10 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
             "total_lengths"). Modified in-place to add "advantages" and
             "returns" keys, each mapping to lists of tensors per sample.
     """
-    log_probs: list[torch.Tensor] = rollout_data.get("rollout_log_probs" if args.use_rollout_logprobs else "log_probs")
+    rollout_log_probs: list[torch.Tensor] | None = rollout_data.get("rollout_log_probs")
+    log_probs: list[torch.Tensor] | None = (
+        rollout_log_probs if args.use_rollout_logprobs else rollout_data.get("log_probs")
+    )
     ref_log_probs: list[torch.Tensor] = rollout_data.get("ref_log_probs")
     rewards: list[float] = rollout_data.get("rewards")
     values: None | list[torch.Tensor] = rollout_data.get("values")
@@ -612,7 +611,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
 
     if args.kl_coef == 0 or not log_probs:
         # when kl_coef is 0, we won't compute ref_log_prob
-        xs = log_probs if log_probs is not None else values
+        xs = log_probs or rollout_log_probs or values
         kl = [torch.zeros_like(x, dtype=torch.float32, device=x.device) for x in xs]
     else:
         kl = [
@@ -623,8 +622,14 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
             )
             for i in range(len(log_probs))
         ]
+    rollout_data["kl"] = kl
 
-    if args.advantage_estimator in ["grpo", "gspo"]:
+    if args.custom_advantage_function_path is not None:
+        custom_adv_fn = load_function(args.custom_advantage_function_path)
+        custom_adv_fn(args, rollout_data)
+        advantages, returns = rollout_data["advantages"], rollout_data["returns"]
+
+    elif args.advantage_estimator in ["grpo", "gspo"]:
         rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
         returns = get_grpo_returns(rewards, kl)
         # TODO: is the copy necessary?
@@ -820,7 +825,7 @@ def policy_loss_function(
         are enabled.
     """
     advantages = torch.cat(batch["advantages"], dim=0)
-    old_log_probs = batch["rollout_log_probs"] if args.use_rollout_logprobs else batch["log_probs"]
+    old_log_probs = batch["rollout_log_probs"] if args.use_rollout_logprobs else batch.get("log_probs")
 
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
@@ -837,6 +842,11 @@ def policy_loss_function(
     )
 
     log_probs = log_probs_and_entropy["log_probs"]
+    if not args.use_rollout_logprobs and not old_log_probs:
+        old_log_probs = [log_prob.detach() for log_prob in log_probs]
+    train_log_probs_for_tis = batch.get("log_probs")
+    if not train_log_probs_for_tis:
+        train_log_probs_for_tis = [log_prob.detach() for log_prob in log_probs]
 
     # Pre-gather log probs if needed by OPSM or GSPO to avoid duplicate gathering
     need_full_log_probs = args.use_opsm or args.advantage_estimator == "gspo"
@@ -905,7 +915,7 @@ def policy_loss_function(
         tis_kwargs = {
             "args": args,
             "pg_loss": pg_loss,
-            "train_log_probs": batch["log_probs"],
+            "train_log_probs": train_log_probs_for_tis,
             "rollout_log_probs": batch["rollout_log_probs"],
             "loss_masks": batch["loss_masks"],
             "total_lengths": total_lengths,

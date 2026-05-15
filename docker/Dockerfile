@@ -1,10 +1,10 @@
-ARG SGLANG_IMAGE_TAG=v0.5.9
+ARG SGLANG_IMAGE_TAG=v0.5.10.post1
 FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
 
 ARG PATCH_VERSION=latest
-ARG MEGATRON_COMMIT=3714d81d418c9f1bca4594fc35f9e8289f652862
+ARG MEGATRON_COMMIT=1dcf0dafa884ad52ffb243625717a3471643e087
 
 ARG ENABLE_CUDA_13=0
 
@@ -54,8 +54,8 @@ RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
     cd Megatron-LM && git checkout ${MEGATRON_COMMIT} && \
     pip install -e .
 
-RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@dc6876905830430b5054325fa4211ff302169c6b --no-cache-dir --force-reinstall
-RUN pip install git+https://github.com/fzyzcjy/Megatron-Bridge.git@dev_rl --no-build-isolation
+RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@d64a639 --no-cache-dir --force-reinstall
+RUN pip install git+https://github.com/radixark/Megatron-Bridge.git@bridge --no-deps --no-build-isolation
 RUN pip install nvidia-modelopt[torch]>=0.37.0 --no-build-isolation
 
 # This patch from masahi will be included in later Triton releases
@@ -64,7 +64,8 @@ RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
   fi
 
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install -r /tmp/requirements.txt
+RUN pip install --ignore-installed PyJWT && \
+    pip install -r /tmp/requirements.txt
 
 # Temporarily install another sgl-kernel version for GB300 without rebuilding the whole image
 RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \

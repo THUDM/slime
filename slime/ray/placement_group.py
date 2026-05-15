@@ -77,46 +77,35 @@ def _create_placement_group(num_gpus):
 
 
 def create_placement_groups(args):
-    """Create placement groups for actor and rollout engines."""
+    """Create placement groups for actor, critic, and rollout engines."""
 
     num_gpus = 0
     if args.debug_train_only:
         num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
         rollout_offset = 0
-        if args.use_critic:
-            num_gpus += args.critic_num_nodes * args.critic_num_gpus_per_node
-            critic_offset = args.actor_num_nodes * args.actor_num_gpus_per_node
     elif args.debug_rollout_only:
         num_gpus = args.rollout_num_gpus
         rollout_offset = 0
     elif args.colocate:
         num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
         rollout_offset = 0
-        if args.use_critic:
-            num_gpus += args.critic_num_nodes * args.critic_num_gpus_per_node
-            critic_offset = args.actor_num_nodes * args.actor_num_gpus_per_node
     else:
         num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node + args.rollout_num_gpus
         rollout_offset = args.actor_num_nodes * args.actor_num_gpus_per_node
-        if args.use_critic:
-            num_gpus += args.critic_num_nodes * args.critic_num_gpus_per_node
-            critic_offset = args.actor_num_nodes * args.actor_num_gpus_per_node
-            rollout_offset += args.critic_num_nodes * args.critic_num_gpus_per_node
 
     logger.info(f"Creating placement group with {num_gpus} GPUs...")
     pg, actor_pg_reordered_bundle_indices, actor_pg_reordered_gpu_ids = _create_placement_group(num_gpus)
-
     rollout_pg_reordered_bundle_indices = actor_pg_reordered_bundle_indices[rollout_offset:]
     rollout_pg_reordered_gpu_ids = actor_pg_reordered_gpu_ids[rollout_offset:]
-    if args.use_critic:
-        critic_pg_reordered_bundle_indices = actor_pg_reordered_bundle_indices[critic_offset:]
-        critic_pg_reordered_gpu_ids = actor_pg_reordered_gpu_ids[critic_offset:]
 
-    return {
+    result = {
         "actor": (pg, actor_pg_reordered_bundle_indices, actor_pg_reordered_gpu_ids),
-        "critic": (pg, critic_pg_reordered_bundle_indices, critic_pg_reordered_gpu_ids) if args.use_critic else None,
         "rollout": (pg, rollout_pg_reordered_bundle_indices, rollout_pg_reordered_gpu_ids),
     }
+
+    result["critic"] = result["actor"] if args.use_critic else None
+
+    return result
 
 
 def allocate_train_group(args, num_nodes, num_gpus_per_node, pg, role="actor"):
@@ -131,39 +120,50 @@ def allocate_train_group(args, num_nodes, num_gpus_per_node, pg, role="actor"):
 
 
 def create_training_models(args, pgs, rollout_manager):
+    actor_args = args
+    if args.megatron_config_path is not None:
+        from slime.utils.arguments import parse_megatron_role_args
+
+        actor_args = parse_megatron_role_args(args, args.megatron_config_path, role="actor")
+
     actor_model = allocate_train_group(
-        args=args,
+        args=actor_args,
         num_nodes=args.actor_num_nodes,
         num_gpus_per_node=args.actor_num_gpus_per_node,
         pg=pgs["actor"],
     )
+
+    critic_model = None
     if args.use_critic:
+        from slime.utils.arguments import parse_megatron_role_args
+
+        critic_args = (
+            parse_megatron_role_args(args, args.megatron_config_path, role="critic")
+            if args.megatron_config_path is not None
+            else args
+        )
         critic_model = allocate_train_group(
-            args=args,
+            args=critic_args,
             num_nodes=args.critic_num_nodes,
             num_gpus_per_node=args.critic_num_gpus_per_node,
             pg=pgs["critic"],
             role="critic",
         )
-        critic_init_handle = critic_model.async_init(args, role="critic", with_ref=False)
-    else:
-        critic_model = None
+        critic_start_rollout_ids = ray.get(critic_model.async_init(critic_model.args, role="critic", with_ref=False))
 
-    start_rollout_ids = ray.get(
+    actor_start_rollout_ids = ray.get(
         actor_model.async_init(
-            args,
+            actor_args,
             role="actor",
-            with_ref=args.kl_coef != 0 or args.use_kl_loss,
-            with_opd_teacher=args.use_opd and args.opd_type == "megatron",
+            with_ref=actor_args.kl_coef != 0 or actor_args.use_kl_loss,
+            with_opd_teacher=actor_args.use_opd and actor_args.opd_type == "megatron",
         )
     )
-
+    # TODO how to decide rollout start id when critic is involved? For now we just require user to specify it via args.
     if args.use_critic:
-        critic_start_rollout_ids = ray.get(critic_init_handle)
-        if not args.critic_train_only:
-            actor_model.connect(critic_model)
-        else:
-            start_rollout_ids = critic_start_rollout_ids
+        start_rollout_ids = critic_start_rollout_ids
+    else:
+        start_rollout_ids = actor_start_rollout_ids
 
     assert len(set(start_rollout_ids)) == 1
 

@@ -260,6 +260,24 @@ PPO 相关参数：
 - `--value-clip`：value loss 的 clip 范围；
 - `--kl-coef`：KL penalty 系数，用于 reward shaping。
 
+### 高级 Megatron 配置（--megatron-config-path）
+
+对于 PPO 场景，可以使用 `--megatron-config-path` 指定一个 YAML 文件，对 actor / critic 分别覆盖 Megatron 参数。常见用途包括给 critic 设置不同的 `lr`，或者分别指定 `load` / `save` 等路径。
+
+```yaml
+megatron:
+  - name: default
+    role: actor
+    overrides:
+      lr: 1e-6
+  - name: default
+    role: critic
+    overrides:
+      lr: 1e-5
+```
+
+> **注意：** 当前该配置只支持 PPO；并且当前 PPO 下 actor 和 critic 的 Megatron 并行配置必须保持一致。建议把并行相关参数继续写在公共 CLI 中，只把角色差异项放在 YAML 里。详见 [Megatron Config：按角色覆盖训练参数](../advanced/megatron-config.md)。
+
 ## 自定义 rollout 函数
 
 slime 支持不同程度的自定义数据生成（rollout）。
