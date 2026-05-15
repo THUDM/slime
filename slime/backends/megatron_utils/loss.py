@@ -842,6 +842,7 @@ def policy_loss_function(
     )
 
     log_probs = log_probs_and_entropy["log_probs"]
+    current_log_probs_for_tis = log_probs
     if not args.use_rollout_logprobs and not old_log_probs:
         old_log_probs = [log_prob.detach() for log_prob in log_probs]
     train_log_probs_for_tis = batch.get("log_probs")
@@ -916,10 +917,12 @@ def policy_loss_function(
             "args": args,
             "pg_loss": pg_loss,
             "train_log_probs": train_log_probs_for_tis,
+            "current_log_probs": current_log_probs_for_tis,
             "rollout_log_probs": batch["rollout_log_probs"],
             "loss_masks": batch["loss_masks"],
             "total_lengths": total_lengths,
             "response_lengths": response_lengths,
+            "advantages": advantages,
         }
 
         if args.custom_tis_function_path is not None:
@@ -984,7 +987,10 @@ def policy_loss_function(
     train_rollout_logprob_abs_diff = None
     if "rollout_log_probs" in batch and batch["rollout_log_probs"]:
         rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
-        train_rollout_logprob_abs_diff = sum_of_sample_mean((old_log_probs - rollout_log_probs).abs())
+        train_log_probs_for_metrics = batch.get("log_probs")
+        if train_log_probs_for_metrics:
+            train_log_probs_for_metrics = torch.cat(train_log_probs_for_metrics, dim=0)
+            train_rollout_logprob_abs_diff = sum_of_sample_mean((train_log_probs_for_metrics - rollout_log_probs).abs())
 
     reported_loss = {
         "loss": loss.clone().detach(),

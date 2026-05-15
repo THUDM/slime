@@ -225,7 +225,29 @@ def postprocess_function(args, samples: list[list[Sample]]) -> None
 - Custom importance sampling ratio computation
 - Advanced off-policy correction methods
 
-**Example**: `examples/train_infer_mismatch_helper/mis.py:compute_mis_weights_with_cp`
+**Signature**:
+```python
+def custom_tis_function(
+    args,
+    *,
+    pg_loss: torch.Tensor,
+    train_log_probs: list[torch.Tensor],
+    current_log_probs: list[torch.Tensor],
+    rollout_log_probs: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+    advantages: torch.Tensor,
+    **kwargs,
+) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]
+```
+
+**Example**: `examples.train_infer_mismatch_helper.mis.compute_mis_weights_with_cp`
+
+**Notes**:
+- When `--use-rollout-logprobs` and `--use-tis` are enabled together, a custom TIS function is required.
+- Builtin TIS assumes train-vs-rollout correction semantics. For rollout-proxy corrections, use a custom hook such as `examples.train_infer_mismatch_helper.mis.compute_rollout_proxy_pg_loss_with_cp`.
+- Custom TIS hooks now receive both `train_log_probs` and `current_log_probs` so they can decide whether to implement decoupled correction or direct rollout-proxy correction.
 
 ---
 
