@@ -545,6 +545,11 @@ class MegatronTrainRayActor(TrainRayActor):
 
         save(rollout_id, self.model, self.optimizer, self.opt_param_scheduler)
 
+        if self.args.max_checkpoint_count is not None and is_megatron_main_rank():
+            from slime.backends.megatron_utils.checkpoint import cleanup_old_checkpoints
+
+            cleanup_old_checkpoints(self.args.save, self.args.max_checkpoint_count)
+
         if force_sync and self.args.async_save:
             maybe_finalize_async_save(blocking=True)
 
