@@ -60,4 +60,7 @@ MODEL_ARGS=(
    --linear-value-head-dim 128
    --linear-num-key-heads 16
    --linear-num-value-heads 32
+
+   # mtp
+   --mtp-num-layers 1
 )
