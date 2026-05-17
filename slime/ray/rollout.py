@@ -663,19 +663,29 @@ class RolloutManager:
         ):
             # group norm
             rewards = torch.tensor(raw_rewards, dtype=torch.float)
-            if rewards.shape[-1] == self.args.n_samples_per_prompt * self.args.rollout_batch_size:
-                rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
-            else:
-                # when samples count are not equal in each group
-                rewards = rewards.view(-1, rewards.shape[-1])
-            mean = rewards.mean(dim=-1, keepdim=True)
-            rewards = rewards - mean
+            normalized_rewards = torch.empty_like(rewards)
+            group_size = max(int(self.args.n_samples_per_prompt), 1)
+            grouped_indices: dict[int | tuple[str, int], list[int]] = {}
+            for i, sample in enumerate(samples):
+                group_key = sample.group_index
+                if group_key is None:
+                    group_key = ("position", i // group_size)
+                grouped_indices.setdefault(group_key, []).append(i)
 
-            if self.args.advantage_estimator in ["grpo", "gspo"] and self.args.grpo_std_normalization:
-                std = rewards.std(dim=-1, keepdim=True)
-                rewards = rewards / (std + 1e-6)
+            for indices in grouped_indices.values():
+                group_rewards = rewards[indices]
+                group_rewards = group_rewards - group_rewards.mean()
 
-            return raw_rewards, rewards.flatten().tolist()
+                if self.args.advantage_estimator in ["grpo", "gspo"] and self.args.grpo_std_normalization:
+                    if group_rewards.numel() > 1:
+                        std = group_rewards.std()
+                        group_rewards = group_rewards / (std + 1e-6)
+                    else:
+                        group_rewards = torch.zeros_like(group_rewards)
+
+                normalized_rewards[indices] = group_rewards
+
+            return raw_rewards, normalized_rewards.tolist()
 
         return raw_rewards, raw_rewards
 
