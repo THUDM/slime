@@ -136,6 +136,67 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default="raw",
                 help="The method to convert megatron weights to hugging face weights for SGLang.",
             )
+            # Partial weight sync (selective + delta modes). Receiver chunking is mirrored
+            # automatically to SGLang as --sglang-update-weight-partial-chunk-bytes.
+            parser.add_argument(
+                "--update-weight-mode",
+                choices=["full", "selective", "delta"],
+                default="full",
+                help=(
+                    "Weight sync strategy. 'full' broadcasts every parameter on every "
+                    "sync. 'selective' broadcasts the new values at the changed positions "
+                    "only and the receiver overwrites those positions (unchanged positions "
+                    "are signaled by NaN in the wire payload). 'delta' broadcasts "
+                    "(new − snapshot) and the receiver applies it additively. "
+                    "The first sync is always full regardless."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-delta-dtype",
+                choices=["fp16", "bf16", "fp32"],
+                default="fp32",
+                help=(
+                    "Math dtype for the delta subtraction and additive apply (delta mode "
+                    "only; ignored otherwise). Higher than the param dtype makes the "
+                    "apply lossless."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-partial-encoding",
+                choices=["sparse_indices", "sparse_bitmask", "dense"],
+                default="sparse_indices",
+                help=(
+                    "Wire encoding for partial broadcasts (selective + delta modes). "
+                    "'sparse_indices' sends (indices, values) for active entries; "
+                    "'sparse_bitmask' sends a packed bitmask + values; 'dense' sends "
+                    "the full per-param tensor."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-base-sync-interval",
+                type=int,
+                default=9999,
+                help=(
+                    "Run a base sync (a full broadcast that re-establishes the snapshot) "
+                    "every N successful partial syncs (selective + delta modes). The "
+                    "first sync is always a base sync. Both modes are lossless under "
+                    "their default settings (selective by construction, delta with fp32 "
+                    "math), so the default 9999 effectively disables periodic "
+                    "base syncs — receiver state doesn't drift from a base-sync "
+                    "reference no matter how many partial syncs elapse. Set lower "
+                    "(e.g. 30) to verify correctness against periodic full broadcasts, "
+                    "or if your workload has a custom base-sync requirement."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-partial-artifact-dir",
+                type=str,
+                default=None,
+                help=(
+                    "Optional directory for asynchronously saving per-broadcast partial-"
+                    "update artifacts (selective + delta modes). Off by default."
+                ),
+            )
             parser.add_argument(
                 "--custom-model-provider-path",
                 type=str,
@@ -1842,3 +1903,13 @@ def slime_validate_args(args):
 
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")
+
+    if args.update_weight_mode in ("selective", "delta") and args.colocate:
+        raise ValueError(
+            f"--update-weight-mode={args.update_weight_mode} is not supported with "
+            "--colocate. Colocate transfers weights via CUDA IPC: only a memory "
+            "handle (~64 B) crosses processes, never bytes. Partial-update modes "
+            "shrink bytes on the wire, of which there are none here, so the partial-"
+            "update bookkeeping (snapshot + subtract/mask + sparse encode) is pure "
+            "overhead."
+        )
