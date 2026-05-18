@@ -188,6 +188,7 @@ Additionally, we provide a `metadata_key`, which defaults to `"metadata"`. When 
 
   Note: On-policy distillation (OPD) is now orthogonal to the advantage estimator. Use `--use-opd` and `--opd-kl-coef` to enable OPD on top of any estimator.
 - `--calculate-per-token-loss`: By default, slime calculates loss on a per-sample basis, i.e., `mean(sum(sample_i) / len(sample_i))`. Enable this flag to calculate loss on a per-token basis, i.e., `sum(sum(sample_i)) / sum(len(sample_i))`.
+- `--policy-loss-type`: Selects the policy-gradient surrogate objective used by `--loss-type policy_loss`. The default `clip` keeps the existing PPO-style hard clipping objective. Set `sapo` to use Soft Adaptive Policy Optimization with a smooth temperature-controlled surrogate.
 - `--use-tis`: Enable this setting to use TIS (Truncated Importance Sampling) (https://fengyao.notion.site/off-policy-rl).
 
 #### GRPO Algorithm
@@ -211,6 +212,27 @@ Related parameters:
 - `--n-samples-per-prompt`: Number of responses sampled per prompt for intra-group comparison.
 - `--normalize-advantages`: Whether to normalize advantages.
 - `--eps-clip`: PPO-style clip range.
+
+#### SAPO Policy Objective
+
+SAPO (Soft Adaptive Policy Optimization) replaces the hard clipping in the policy objective with a smooth temperature-controlled surrogate. It keeps the same advantage estimator and rollout flow as GRPO/GSPO, so it is enabled through `--policy-loss-type` rather than `--advantage-estimator`.
+
+To use SAPO with GRPO, set:
+
+```bash
+--advantage-estimator grpo \
+--policy-loss-type sapo \
+--sapo-tau-pos 1.0 \
+--sapo-tau-neg 1.05
+```
+
+Related parameters:
+
+- `--sapo-tau-pos`: Temperature for tokens with positive advantages. Default is `1.0`.
+- `--sapo-tau-neg`: Temperature for tokens with zero or negative advantages. Default is `1.05`.
+- `--eps-clip` and `--eps-clip-high`: Still used to report the legacy `pg_clipfrac` diagnostic when SAPO is enabled.
+
+With `--advantage-estimator gspo`, SAPO softens slime's existing sequence-level GSPO ratio rather than using token-level ratios.
 
 #### PPO Algorithm
 

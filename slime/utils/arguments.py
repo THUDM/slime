@@ -765,6 +765,28 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--eps-clip", type=float, default=0.2, help="PPO clip range")
             parser.add_argument("--eps-clip-high", type=float, default=None, help="PPO clip upper range")
             parser.add_argument(
+                "--policy-loss-type",
+                type=str,
+                choices=["clip", "sapo"],
+                default="clip",
+                help=(
+                    "Policy-gradient surrogate objective. 'clip' uses PPO hard clipping; "
+                    "'sapo' uses Soft Adaptive Policy Optimization."
+                ),
+            )
+            parser.add_argument(
+                "--sapo-tau-pos",
+                type=float,
+                default=1.0,
+                help="SAPO temperature for positive advantages.",
+            )
+            parser.add_argument(
+                "--sapo-tau-neg",
+                type=float,
+                default=1.05,
+                help="SAPO temperature for zero or negative advantages.",
+            )
+            parser.add_argument(
                 "--eps-clip-c",
                 type=float,
                 default=None,
@@ -1701,6 +1723,10 @@ def slime_validate_args(args):
 
     if args.eps_clip_high is None:
         args.eps_clip_high = args.eps_clip
+    assert args.sapo_tau_pos > 0, "sapo_tau_pos must be positive."
+    assert args.sapo_tau_neg > 0, "sapo_tau_neg must be positive."
+    if args.policy_loss_type == "sapo":
+        assert args.advantage_estimator in ["grpo", "gspo"], "SAPO policy loss is currently supported for GRPO/GSPO."
 
     if args.eval_reward_key is None:
         args.eval_reward_key = args.reward_key
