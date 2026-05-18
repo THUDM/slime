@@ -104,6 +104,12 @@ You may choose from above algorithms by specifying arguments below:
 | True | False | Bypassing PPO (Algorithm 3) | 2 ($\pi_\theta$, $\pi_{\textcolor{red}{\text{SGLang}}}$) |🚀 Skipped | No | N/A |
 | False | True | Decoupled PPO (Algorithm 2) | 3 ($\pi_\theta$, $\pi_{\textcolor{blue}{\text{old}}}$, $\pi_{\textcolor{red}{\text{SGLang}}}$)  |Yes  | Yes | token/seq/geo |
 
+`use_rollout_logprobs=True` and `use_tis=True` are intentionally still not wired to the builtin TIS implementations.
+If you want a rollout-proxy correction path, use a custom TIS hook so the rollout ratio is only applied once.
+This repo now exposes `current_log_probs` to custom hooks for that purpose. A ready-to-use example is:
+
+`examples.train_infer_mismatch_helper.mis.compute_rollout_proxy_pg_loss_with_cp`
+
 ## Configs and Recommended Settings
 
 When choosing to use importance sampling or rejection sampling for mismatch correction (`use-rollout-correction` enabled, Algorithm 2 & 3), you may specify the IS modes and applied levels. 
