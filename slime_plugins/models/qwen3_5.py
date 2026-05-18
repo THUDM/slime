@@ -1,4 +1,5 @@
 import copy
+import logging
 
 import torch
 import torch.nn as nn
@@ -17,12 +18,58 @@ except ImportError:
 
 from .hf_attention import HuggingfaceAttention, _load_hf_config
 
+logger = logging.getLogger(__name__)
+
 
 def _get_text_config(hf_config):
     """Extract text config from a VLM config if needed."""
     if hasattr(hf_config, "text_config"):
         return hf_config.text_config
     return hf_config
+
+
+def _te_supports_head_dim(head_dim: int) -> bool:
+    """Check if Transformer Engine's DotProductAttention supports the given head_dim.
+
+    TE's fused/flash attention kernels only support head_dim <= 128 on GPUs with
+    compute capability < 9.0 (i.e. pre-Hopper architectures such as Ada Lovelace L20,
+    RTX 4090, A100, etc.).  On Hopper (sm_90+) all head_dim values up to 256 are
+    supported.
+
+    Returns True if TE is expected to work, False if a fallback is needed.
+    """
+    if head_dim <= 128:
+        # All TE backends support head_dim <= 128
+        return True
+    try:
+        if not torch.cuda.is_available():
+            return False
+        sm_major, _ = torch.cuda.get_device_capability()
+        # sm_90+ (Hopper / Blackwell) supports head_dim=256 in TE
+        return sm_major >= 9
+    except Exception:
+        return False
+
+
+def _replace_core_attention_in_spec(spec, replacement_cls):
+    """Recursively replace core_attention in a layer/block spec."""
+    if hasattr(spec, "layer_specs") and not hasattr(spec, "submodules"):
+        for layer_spec in spec.layer_specs:
+            _replace_core_attention_in_spec(layer_spec, replacement_cls)
+        return
+    if hasattr(spec, "submodules"):
+        sub = spec.submodules
+        if hasattr(sub, "core_attention"):
+            sub.core_attention = replacement_cls
+        if hasattr(sub, "layer_specs"):
+            for layer_spec in sub.layer_specs:
+                _replace_core_attention_in_spec(layer_spec, replacement_cls)
+        for attr in dir(sub):
+            if attr.startswith("_") or attr == "layer_specs":
+                continue
+            val = getattr(sub, attr)
+            if hasattr(val, "submodules"):
+                _replace_core_attention_in_spec(val, replacement_cls)
 
 
 # Adapted from Qwen3NextGatedDeltaNet but with separate in_proj_qkv and in_proj_z
@@ -195,6 +242,21 @@ def get_qwen3_5_spec(args, config, vp_stage):
     if vp_stage is not None:
         kwargs["vp_stage"] = vp_stage
     transformer_layer_spec = get_gpt_decoder_block_spec(config, **kwargs)
+
+    # On GPUs where TE's DotProductAttention does not support the model's head_dim
+    # (e.g. head_dim=256 on pre-Hopper architectures like L20/A100/RTX 4090),
+    # replace core_attention with FlashDotProductAttention which uses flash_attn
+    # directly and bypasses TE entirely.
+    if not _te_supports_head_dim(config.kv_channels):
+        from slime_plugins.models.flash_dot_product_attention import FlashDotProductAttention
+
+        _replace_core_attention_in_spec(transformer_layer_spec, FlashDotProductAttention)
+        logger.warning(
+            "TE DotProductAttention does not support head_dim=%d on this GPU "
+            "(compute capability < 9.0). Falling back to FlashDotProductAttention "
+            "for full_attention layers.",
+            config.kv_channels,
+        )
 
     assert config.pipeline_model_parallel_layout is None, "not support this at the moment"
 
