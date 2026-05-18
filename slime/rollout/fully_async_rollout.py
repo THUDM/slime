@@ -10,7 +10,9 @@ Plug in per-sample logic via ``--custom-generate-function-path`` and
 per-sample reward via ``--custom-rm-path`` — the worker calls slime's stock
 :func:`generate_and_rm_group` which dispatches to those.
 
-Concurrency is sourced from ``args.sglang_server_concurrency``.
+Concurrency is sourced from ``args.sglang_server_concurrency`` and scaled by
+the number of sglang engines (``rollout_num_gpus // rollout_num_gpus_per_engine``)
+to match the per-sample semaphore cap in :mod:`slime.rollout.sglang_rollout`.
 
 The worker is intentionally oblivious to slime's higher-level pause /
 weight-update signalling (e.g. ``GenerateState.aborted``). Each in-flight
@@ -52,7 +54,10 @@ def _get_global_worker(args, data_buffer) -> AsyncRolloutWorker:
     with _worker_lock:
         if _global_worker is None or not _global_worker.worker_thread.is_alive():
             logger.info("starting fully-async rollout worker")
-            _global_worker = AsyncRolloutWorker(args, data_buffer, concurrency=args.sglang_server_concurrency)
+            num_engines = max(1, args.rollout_num_gpus // args.rollout_num_gpus_per_engine)
+            _global_worker = AsyncRolloutWorker(
+                args, data_buffer, concurrency=args.sglang_server_concurrency * num_engines
+            )
             _global_worker.start()
         return _global_worker
 
