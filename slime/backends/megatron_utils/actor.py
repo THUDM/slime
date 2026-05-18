@@ -60,7 +60,7 @@ class MegatronTrainRayActor(TrainRayActor):
         init(args)
 
         if is_megatron_main_rank():
-            init_tracking(args, primary=False)
+            init_tracking(args, primary=False, role=role)
 
         self.prof = TrainProfiler(args)
 
