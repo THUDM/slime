@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Fully Asynchronous Rollout Example &#8212; slime</title>
+    <title>Fully-Async Rollout Example &#8212; slime</title>
   
   
   
@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 05 月 11 日"/>
+    <meta name="docbuild:last-update" content="2026 年 05 月 18 日"/>
   </head>
   
   
@@ -186,7 +186,7 @@
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Fully Asynchronous Rollout Example</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Fully-Async Rollout Example</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../multi_agent/README.html">Multi-Agent RL</a></li>
 </ul>
@@ -417,7 +417,7 @@
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>Fully Asynchronous Rollout Example</h1>
+    <h1>Fully-Async Rollout Example</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -428,11 +428,11 @@
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#files">Files</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisite">Prerequisite</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-start">Quick Start</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-works-very-short">How It Works (Very Short)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisites">Prerequisites</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#run">Run</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-plug-your-own-generate-into-this">How To Plug Your Own Generate Into This</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#worker-internals-very-short">Worker Internals (Very Short)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#limitations">Limitations</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#config-differences-2-key-points">Config Differences (2 Key Points)</a></li>
 </ul>
             </nav>
         </div>
@@ -444,62 +444,88 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section class="tex2jax_ignore mathjax_ignore" id="fully-asynchronous-rollout-example">
-<h1>Fully Asynchronous Rollout Example<a class="headerlink" href="#fully-asynchronous-rollout-example" title="链接到此标题。">#</a></h1>
-<p>This example shows a simple way to make rollout generation <strong>fully asynchronous</strong>: a single global worker is created once and then keeps running in the background, continuously pulling prompts and launching generation tasks. Training only needs to fetch already finished results. This removes the per‑step wait that happens in the normal synchronous style.</p>
+  <section class="tex2jax_ignore mathjax_ignore" id="fully-async-rollout-example">
+<h1>Fully-Async Rollout Example<a class="headerlink" href="#fully-async-rollout-example" title="链接到此标题。">#</a></h1>
+<p>End-to-end demo of slime's fully-async rollout path. A background asyncio
+worker keeps a fixed pool of in-flight generations across rollout boundaries,
+so the next training step doesn't wait for the slowest in-flight sample.
+The worker itself lives in <code class="docutils literal notranslate"><span class="pre">slime.rollout.fully_async_rollout</span></code>; this
+directory is just the launch script + CI test.</p>
 <section id="files">
 <h2>Files<a class="headerlink" href="#files" title="链接到此标题。">#</a></h2>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">fully_async_rollout.py</span></code>: global async worker + <code class="docutils literal notranslate"><span class="pre">generate_rollout_fully_async</span></code> entry.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">run-qwen3-4b-fully_async.sh</span></code>: example launch script with Qwen3‑4B.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-qwen2.5-0.5B-fully_async.sh</span></code> — single-node, 4-GPU, three-rollout demo
+with Qwen2.5-0.5B-Instruct on dapo-math-17k. Fast enough to be the CI
+smoke test for the fully-async path.</p></li>
 </ul>
+<p>The same script doubles as <code class="docutils literal notranslate"><span class="pre">tests/test_qwen2.5_0.5B_fully_async_short.py</span></code> in
+CI.</p>
 </section>
-<section id="prerequisite">
-<h2>Prerequisite<a class="headerlink" href="#prerequisite" title="链接到此标题。">#</a></h2>
-<p>First set up model &amp; environment following the Qwen3-4B example.</p>
+<section id="prerequisites">
+<h2>Prerequisites<a class="headerlink" href="#prerequisites" title="链接到此标题。">#</a></h2>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">/</span><span class="n">root</span><span class="o">/</span><span class="n">models</span><span class="o">/</span><span class="n">Qwen2</span><span class="mf">.5</span><span class="o">-</span><span class="mf">0.5</span><span class="n">B</span><span class="o">-</span><span class="n">Instruct</span><span class="o">/</span>            <span class="c1"># HF checkpoint</span>
+<span class="o">/</span><span class="n">root</span><span class="o">/</span><span class="n">models</span><span class="o">/</span><span class="n">Qwen2</span><span class="mf">.5</span><span class="o">-</span><span class="mf">0.5</span><span class="n">B</span><span class="o">-</span><span class="n">Instruct_torch_dist</span><span class="o">/</span> <span class="c1"># tools/convert_hf_to_torch_dist.py</span>
+<span class="o">/</span><span class="n">root</span><span class="o">/</span><span class="n">datasets</span><span class="o">/</span><span class="n">dapo</span><span class="o">-</span><span class="n">math</span><span class="o">-</span><span class="mi">17</span><span class="n">k</span><span class="o">/</span><span class="n">dapo</span><span class="o">-</span><span class="n">math</span><span class="o">-</span><span class="mi">17</span><span class="n">k</span><span class="o">.</span><span class="n">jsonl</span>
+</pre></div>
+</div>
 </section>
-<section id="quick-start">
-<h2>Quick Start<a class="headerlink" href="#quick-start" title="链接到此标题。">#</a></h2>
+<section id="run">
+<h2>Run<a class="headerlink" href="#run" title="链接到此标题。">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>slime
-bash<span class="w"> </span>examples/fully_async/run-qwen3-4b-fully_async.sh
+bash<span class="w"> </span>examples/fully_async/run-qwen2.5-0.5B-fully_async.sh
 </pre></div>
 </div>
-<p>You should see log lines like:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Creating</span> <span class="n">new</span> <span class="k">global</span> <span class="k">async</span> <span class="n">worker</span><span class="o">...</span>
-<span class="n">Continuous</span> <span class="k">async</span> <span class="n">rollout</span> <span class="n">worker</span> <span class="n">started</span>
+<p>You should see:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">fully</span><span class="o">-</span><span class="k">async</span> <span class="n">rollout</span> <span class="mi">0</span><span class="p">:</span> <span class="n">target</span><span class="o">=</span><span class="mi">8</span> <span class="n">queue_warm</span><span class="o">=</span><span class="mi">0</span>
+<span class="n">fully</span><span class="o">-</span><span class="k">async</span> <span class="n">rollout</span> <span class="mi">0</span><span class="p">:</span> <span class="n">done</span> <span class="ow">in</span> <span class="o">...</span><span class="n">s</span><span class="p">,</span> <span class="n">queue_left</span><span class="o">=...</span>
 </pre></div>
 </div>
 </section>
-<section id="how-it-works-very-short">
-<h2>How It Works (Very Short)<a class="headerlink" href="#how-it-works-very-short" title="链接到此标题。">#</a></h2>
+<section id="how-to-plug-your-own-generate-into-this">
+<h2>How To Plug Your Own Generate Into This<a class="headerlink" href="#how-to-plug-your-own-generate-into-this" title="链接到此标题。">#</a></h2>
+<p>Two pieces flip the standard pipeline into fully-async:</p>
+<ol class="arabic">
+<li><p>Use the async training driver: <code class="docutils literal notranslate"><span class="pre">python3</span> <span class="pre">train_async.py</span></code> (not <code class="docutils literal notranslate"><span class="pre">train.py</span></code>).</p></li>
+<li><p>Set the rollout function path:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">--</span><span class="n">rollout</span><span class="o">-</span><span class="n">function</span><span class="o">-</span><span class="n">path</span> <span class="n">slime</span><span class="o">.</span><span class="n">rollout</span><span class="o">.</span><span class="n">fully_async_rollout</span><span class="o">.</span><span class="n">generate_rollout_fully_async</span>
+</pre></div>
+</div>
+</li>
+</ol>
+<p>For custom per-sample logic, use slime's standard plug-in points — they
+work unchanged under fully-async:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">--</span><span class="n">custom</span><span class="o">-</span><span class="n">generate</span><span class="o">-</span><span class="n">function</span><span class="o">-</span><span class="n">path</span> <span class="n">your</span><span class="o">.</span><span class="n">module</span><span class="o">.</span><span class="n">generate</span>     <span class="c1"># (args, sample, sampling_params) -&gt; Sample | list[Sample]</span>
+<span class="o">--</span><span class="n">custom</span><span class="o">-</span><span class="n">rm</span><span class="o">-</span><span class="n">path</span>                <span class="n">your</span><span class="o">.</span><span class="n">module</span><span class="o">.</span><span class="n">reward</span>      <span class="c1"># (args, sample | list[Sample]) -&gt; float | list[float]</span>
+</pre></div>
+</div>
+<p>See <code class="docutils literal notranslate"><span class="pre">examples/swe_codex/</span></code> for a non-trivial example that plugs in a
+multi-turn agent (Claude Code in a Docker-Proxy sandbox) this way.</p>
+</section>
+<section id="worker-internals-very-short">
+<h2>Worker Internals (Very Short)<a class="headerlink" href="#worker-internals-very-short" title="链接到此标题。">#</a></h2>
 <ul class="simple">
-<li><p>First call: create <code class="docutils literal notranslate"><span class="pre">AsyncRolloutWorker</span></code> (thread + asyncio loop).</p></li>
-<li><p>Loop keeps up to <code class="docutils literal notranslate"><span class="pre">--rollout-batch-size</span></code> tasks in flight using <code class="docutils literal notranslate"><span class="pre">generate_and_rm_group</span></code>.</p></li>
-<li><p>Completed groups are pushed into a queue; caller drains until it has enough samples.</p></li>
-<li><p>Worker is stopped automatically at process exit.</p></li>
+<li><p>First call: create a process-wide <code class="docutils literal notranslate"><span class="pre">AsyncRolloutWorker</span></code> (thread + asyncio
+loop). The worker is shared across all subsequent <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code>
+calls so its queue stays warm.</p></li>
+<li><p>Loop keeps up to <code class="docutils literal notranslate"><span class="pre">args.sglang_server_concurrency</span></code> tasks in flight using
+<code class="docutils literal notranslate"><span class="pre">generate_and_rm_group</span></code>.</p></li>
+<li><p>Completed groups land on an output queue; each <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code> call
+drains until it has <code class="docutils literal notranslate"><span class="pre">rollout_batch_size</span></code> groups and returns them sorted
+by <code class="docutils literal notranslate"><span class="pre">sample.index</span></code>.</p></li>
+<li><p>Groups containing an <code class="docutils literal notranslate"><span class="pre">ABORTED</span></code> sample are pushed back into
+<code class="docutils literal notranslate"><span class="pre">data_buffer.add_samples</span></code> instead of being shipped to training.</p></li>
+<li><p>Worker is stopped automatically at process exit via <code class="docutils literal notranslate"><span class="pre">atexit</span></code>.</p></li>
 </ul>
 </section>
 <section id="limitations">
 <h2>Limitations<a class="headerlink" href="#limitations" title="链接到此标题。">#</a></h2>
 <ul class="simple">
-<li><p>No evaluation mode.</p></li>
-<li><p>Ordering is best effort (sorted at the end by index).</p></li>
-<li><p>Minimal error handling.</p></li>
+<li><p>No evaluation mode (would conflict with the continuous-running model).</p></li>
+<li><p>Ordering across rollouts is best-effort — within a rollout, groups are
+sorted by index before being handed to training.</p></li>
+<li><p>TODO: partial-rollout-style resume for <code class="docutils literal notranslate"><span class="pre">ABORTED</span></code> trajectories is not
+yet wired; for now the trajectory is re-queued and starts over.</p></li>
 </ul>
-</section>
-<section id="config-differences-2-key-points">
-<h2>Config Differences (2 Key Points)<a class="headerlink" href="#config-differences-2-key-points" title="链接到此标题。">#</a></h2>
-<p>To enable the fully async pattern there are only two changes compared to a normal run:</p>
-<ol class="arabic">
-<li><p>Use the async training driver: <code class="docutils literal notranslate"><span class="pre">train_async.py</span></code> (not <code class="docutils literal notranslate"><span class="pre">train.py</span></code>).</p></li>
-<li><p>Set the rollout function path:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-function-path<span class="w"> </span>fully_async_rollout.generate_rollout_fully_async
-</pre></div>
-</div>
-</li>
-</ol>
-<p>Why is it still &quot;fully&quot; async although <code class="docutils literal notranslate"><span class="pre">train_async.py</span></code> itself schedules rollouts step‑by‑step?</p>
-<p>Because the real generation work is done by a <strong>persistent background worker</strong> created in <code class="docutils literal notranslate"><span class="pre">generate_rollout_fully_async</span></code>. Each call from <code class="docutils literal notranslate"><span class="pre">train_async.py</span></code> only drains already completed samples from the worker's output queue; the worker has been continuously generating since the first call. Thus rollout production (model inference) and training consume happen in parallel with minimal waiting.</p>
 </section>
 </section>
 
@@ -551,11 +577,11 @@ bash<span class="w"> </span>examples/fully_async/run-qwen3-4b-fully_async.sh
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#files">Files</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisite">Prerequisite</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-start">Quick Start</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-works-very-short">How It Works (Very Short)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisites">Prerequisites</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#run">Run</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-plug-your-own-generate-into-this">How To Plug Your Own Generate Into This</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#worker-internals-very-short">Worker Internals (Very Short)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#limitations">Limitations</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#config-differences-2-key-points">Config Differences (2 Key Points)</a></li>
 </ul>
   </nav></div>
 
@@ -589,7 +615,7 @@ bash<span class="w"> </span>examples/fully_async/run-qwen3-4b-fully_async.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 05 月 11 日.
+  最后更新于 2026 年 05 月 18 日.
   <br/>
 </p>
   </div>
