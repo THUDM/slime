@@ -144,9 +144,6 @@ def _compute_config_for_logging(args):
     ]
     output["env_vars"] = {k: v for k, v in os.environ.items() if k in whitelist_env_vars}
 
-    actor_args = _get_role_args_for_logging(args, role="actor")
-    output.update(_prefix_config_keys(_args_to_config_dict(actor_args), "actor"))
-
     if getattr(args, "use_critic", False):
         critic_args = _get_role_args_for_logging(args, role="critic")
         output.update(_prefix_config_keys(_args_to_config_dict(critic_args), "critic"))
@@ -173,8 +170,8 @@ def _get_role_args_for_logging(args, role):
 
 def _compute_secondary_config_for_logging(args, role=None):
     config = _args_to_config_dict(args)
-    if role in {"actor", "critic"}:
-        return _prefix_config_keys(config, f"{role}")
+    if role == "critic":
+        return _prefix_config_keys(config, "critic")
     return config
 
 
