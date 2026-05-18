@@ -3,6 +3,7 @@ import copy
 import inspect
 import logging
 import uuid
+import weakref
 from argparse import Namespace
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -91,9 +92,18 @@ class GenerateState(metaclass=SingletonMeta):
         self.tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
         self.processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
-        self.semaphore = asyncio.Semaphore(
+        # Concurrency semaphore must be created per-event-loop: asyncio
+        # primitives bind to the loop that was running when they were
+        # constructed, and Ray actors can serve requests on different loops
+        # across re-entries (e.g. between rollout and eval). Defer
+        # construction to the `semaphore` property below, which lazily
+        # (re)builds on first access and on any subsequent loop change.
+        self._semaphore_value = (
             args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
         )
+        self._semaphore: asyncio.Semaphore | None = None
+        self._semaphore_loop_ref: weakref.ref | None = None
+
         self.sampling_params: dict[str, Any] = dict(
             temperature=args.rollout_temperature,
             top_p=args.rollout_top_p,
@@ -127,6 +137,32 @@ class GenerateState(metaclass=SingletonMeta):
         finally:
             self.dp_counts[dp_rank] -= 1
             assert self.dp_counts[dp_rank] >= 0
+
+    @property
+    def semaphore(self) -> asyncio.Semaphore:
+        # (Re)bind on event-loop change (see __init__ comment). Dropping the
+        # old semaphore is safe: asyncio.Semaphore holds no OS resources, and
+        # coroutines already inside `async with state.semaphore:` on the old
+        # loop keep a direct reference to the old object for their release;
+        # only new callers see the rebuilt one.
+        #
+        # Loop identity is tracked via weakref rather than id(), because
+        # id() is an address and the OS can recycle it for a new loop object
+        # after the old one is GC'd. Weakref goes dead when the old loop is
+        # collected, forcing a rebuild.
+        #
+        # Concurrency note: during a loop transition, in-flight coroutines
+        # on the old loop still hold the old semaphore, while the new loop's
+        # first caller rebuilds. Across the handoff window the effective
+        # in-flight cap is transiently (old_limit + new_limit), not
+        # sglang_server_concurrency. Loop transitions are rare and SGLang
+        # handles backpressure, so this is acceptable.
+        current_loop = asyncio.get_running_loop()
+        stored_loop = self._semaphore_loop_ref() if self._semaphore_loop_ref is not None else None
+        if self._semaphore is None or stored_loop is not current_loop:
+            self._semaphore = asyncio.Semaphore(self._semaphore_value)
+            self._semaphore_loop_ref = weakref.ref(current_loop)
+        return self._semaphore
 
     def reset(self) -> None:
         self.remaining_batch_size = 0
