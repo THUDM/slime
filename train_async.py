@@ -31,9 +31,11 @@ def train(args):
     if args.check_weight_update_equal:
         ray.get(rollout_manager.check_weights.remote(action="compare"))
 
-    # Run initial val before training to record baseline loss (step 0).
+    # Run initial val before training to record baseline loss.
+    # Use start_rollout_id - 1 so the baseline point sits just before the
+    # first training step (avoids step collision and discontinuity on resume).
     if args.val_interval and getattr(args, "val_data", None):
-        actor_model.compute_val_loss(rollout_id=0)
+        actor_model.compute_val_loss(rollout_id=max(0, args.start_rollout_id - 1))
 
     # async train loop.
     rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)

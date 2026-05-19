@@ -234,7 +234,11 @@ def compute_val_loss(
         )
 
         local_nll.fill_(nll.item())
-        local_tokens.fill_(num_tokens.item())
+        # Divide by cp_size: each CP rank holds the full loss_mask but only
+        # computes a partial NLL. When all_reduced across the DP+CP group,
+        # NLL partials sum correctly, but tokens would be overcounted by cp_size.
+        cp_size = mpu.get_context_parallel_world_size()
+        local_tokens.fill_(num_tokens.item() / cp_size)
 
         # Compute entropy if available (same CP-correct reduction)
         if log_entropy and "entropy" in result:
