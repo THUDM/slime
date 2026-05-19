@@ -1,4 +1,4 @@
-"""Anthropic Messages API <-> SGLang /generate bridge.
+"""Anthropic Messages API <-> SGLang /generate middleware.
 
 Translates Claude Code's Anthropic Messages API into slime's SGLang ``/generate``
 (token-native + logprobs) and captures the actual tokens per session_id so the
@@ -50,7 +50,7 @@ class _Session:
     # Canonical chat log. Each assistant turn we append after /generate carries
     # reasoning_content so the next round's apply_chat_template re-render matches
     # the tokens the model actually emitted (preserving prefix match).
-    glm_messages: list[dict] = dataclasses.field(default_factory=list)
+    chat_messages: list[dict] = dataclasses.field(default_factory=list)
     tools_schema: list[dict] | None = None
     seen_msgs: int = 0
     prompt_ids: list[int] = dataclasses.field(default_factory=list)
@@ -100,7 +100,7 @@ def _flatten(c: Any) -> str:
 def _translate_messages(messages: list[dict], system: Any) -> list[dict]:
     """Anthropic blocks -> chat-template messages (system/user/assistant/tool).
 
-    Thinking blocks are dropped from input; the bridge re-injects them via
+    Thinking blocks are dropped from input; the middleware re-injects them via
     reasoning_content after parsing /generate output (so the next round's
     template re-render produces tokens matching what the model actually emitted)."""
     out: list[dict] = []
@@ -208,14 +208,14 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
         all_msgs = body.get("messages") or []
         new = _translate_messages(all_msgs[s.seen_msgs:],
                                    body.get("system") if s.seen_msgs == 0 else None)
-        s.glm_messages.extend(new)
+        s.chat_messages.extend(new)
         s.seen_msgs = len(all_msgs)
         if s.tools_schema is None:
             s.tools_schema = _tools_schema(body.get("tools"))
 
         # --- 2) re-render full template; diff vs cumulative -> obs (loss_mask=0)
         ideal_text = tok.apply_chat_template(
-            s.glm_messages, tools=s.tools_schema, tokenize=False, add_generation_prompt=True,
+            s.chat_messages, tools=s.tools_schema, tokenize=False, add_generation_prompt=True,
         )
         ideal_ids = tok.encode(ideal_text, add_special_tokens=False)
 
@@ -228,7 +228,7 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
                 s.response_ids.extend(obs)
                 s.loss_mask.extend([0] * len(obs))
             else:
-                logger.warning("[bridge] %s template-rerender mismatch; rebaselining", session_id)
+                logger.warning("[middleware] %s template-rerender mismatch; rebaselining", session_id)
                 s.response_ids = ideal_ids[len(s.prompt_ids):]
                 s.loss_mask = [0] * len(s.response_ids)
 
@@ -289,7 +289,7 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
         if tool_uses:
             asst["tool_calls"] = [{"function": {"name": tu["name"], "arguments": tu["input"]}}
                                    for tu in tool_uses]
-        s.glm_messages.append(asst)
+        s.chat_messages.append(asst)
 
         # --- 6) build Anthropic blocks (shared by JSON + SSE paths)
         blocks: list[dict] = []
@@ -365,7 +365,7 @@ async def _ok(request: web.Request) -> web.Response:
 # Public handle + start()
 # ---------------------------------------------------------------------------
 @dataclasses.dataclass
-class BridgeHandle:
+class MiddlewareHandle:
     app_handle: AppHandle
     store: _Store
     public_host: str
@@ -391,13 +391,13 @@ def start(
     *,
     tokenizer,
     sglang_url: str,
-    tool_parser: str | None = "glm47",
-    reasoning_parser: str | None = "glm45",
+    tool_parser: str | None = None,
+    reasoning_parser: str | None = None,
     host: str = "0.0.0.0",
     port: int = 0,
     public_host: str | None = None,
-) -> BridgeHandle:
-    """Spin up the bridge on a daemon thread; return a handle.
+) -> MiddlewareHandle:
+    """Spin up the middleware on a daemon thread; return a handle.
 
     Args:
         tokenizer:        HF tokenizer that supports apply_chat_template(tools=)
@@ -418,7 +418,7 @@ def start(
     app.router.add_post("/v1/messages/count_tokens", _count_tokens)
     app.router.add_get("/healthz", _ok)
     app.router.add_get("/v1/models", _ok)
-    handle = run_app_in_thread(app, host=host, port=port, thread_name="anthropic-bridge")
-    logger.info("[coding_agent_rl.bridge] %s -> %s (tool=%s reasoning=%s)",
+    handle = run_app_in_thread(app, host=host, port=port, thread_name="anthropic-middleware")
+    logger.info("[coding_agent_rl.middleware] %s -> %s (tool=%s reasoning=%s)",
                 handle.url, sglang_url, tool_parser, reasoning_parser)
-    return BridgeHandle(app_handle=handle, store=store, public_host=public_host or host)
+    return MiddlewareHandle(app_handle=handle, store=store, public_host=public_host or host)

@@ -25,14 +25,14 @@ the per-sample `generate()` is swapped.
 |---|---|
 | `generate.py` | Per-sample entrypoint slime calls. Reads top-to-bottom: provision sandbox → drop `PROBLEM_STATEMENT.md` → run agent → `git diff` → eval in a fresh sandbox → fill `Sample`. |
 | `sandbox.py` | Sandbox backend. Owns boot/kill, exec/upload, `install_node22` + `install_claude_code`, the long-running agent spawn (done-marker poll), `git diff`, and the fresh-sandbox eval runner (`swepro` / `f2p_script` / `eval_cmd`). |
-| `bridge.py` | head-node aiohttp shim. Translates the agent's Anthropic Messages API into slime's SGLang `/generate` (token-native + logprobs) and keeps `(prompt_ids, response_ids, loss_mask)` per session so the trainer skips re-tokenization. Model-agnostic. |
+| `middleware.py` | head-node aiohttp shim. Translates the agent's Anthropic Messages API into slime's SGLang `/generate` (token-native + logprobs) and keeps `(prompt_ids, response_ids, loss_mask)` per session so the trainer skips re-tokenization. Model-agnostic. |
 | `run_glm47_355b.sh` | Reference launch script: GLM-4.7-355B-A32B, 8 nodes / 64 GPUs, colocate, E2B sandbox. |
 
 ## How a sample flows
 
 ```
 ┌──────────┐  apply_chat_template + /generate    ┌───────────┐
-│  bridge  │ ───────────────────────────────────►│  SGLang   │
+│middleware│ ───────────────────────────────────►│  SGLang   │
 │ (head)   │ ◄───────────────────────────────────│ (rollout) │
 └────▲─────┘     output_token_logprobs           └───────────┘
      │
@@ -47,7 +47,7 @@ the per-sample `generate()` is swapped.
                                             → 0/1 reward
 ```
 
-The session_id (passed as `ANTHROPIC_AUTH_TOKEN`) is what lets the bridge
+The session_id (passed as `ANTHROPIC_AUTH_TOKEN`) is what lets the middleware
 demux concurrent requests from many parallel rollouts and assemble the right
 per-sample `(prompt_ids, response_ids, loss_mask)`.
 
@@ -99,7 +99,7 @@ following env vars are required:
 | Var | What it is |
 |---|---|
 | `E2B_API_KEY` | Your E2B cloud API key. |
-| `SLIME_HEAD_HOST` | Public host/IP the sandboxes use to reach the bridge. Required when sandboxes can't resolve the trainer's hostname (always required for E2B cloud). |
+| `SLIME_HEAD_HOST` | Public host/IP the sandboxes use to reach the middleware. Required when sandboxes can't resolve the trainer's hostname (always required for E2B cloud). |
 | `SWE_HOST_NODE_TARBALL` | Host path to a Node 22 tarball — uploaded into every sandbox. Debian-12-based images often ship Node 16, which can't run Claude Code's `cli.js`. |
 | `SWE_HOST_CC_TARBALL` | Host path to the Claude Code npm tarball — also uploaded into every sandbox. |
 | `HF_CHECKPOINT` | HF dir / id used as actor init (and tokenizer source). |
@@ -118,8 +118,8 @@ Optional tuning knobs:
 | `SWE_BOOT_RETRIES` | `2` | Retry the whole `boot + install` on transient h2 / SSL errors. |
 | `SWE_RPC_RETRIES` | `3` | Per-RPC retry count for transient httpx/h2 failures. |
 | `SWE_SANDBOX_LIFETIME_SEC` | `3600` | Upper-bound sandbox lifetime (E2B kills regardless of activity). |
-| `SWE_SANDBOX_GROUP` / `SWE_SANDBOX_SIZE` | `""` / `lg` | Passed into E2B sandbox metadata; tune to whatever your account expects. |
-| `SHIM_BIND_HOST` / `SHIM_PORT` | `0.0.0.0` / `18001` | bridge bind. |
+| `SWE_SANDBOX_METADATA_JSON` | `""` | Optional JSON object passed verbatim into `AsyncSandbox.create(metadata=...)`. Use this if your sandbox backend reads routing/size tags from metadata (e.g. `'{"my-platform/size": "lg"}'`). |
+| `SHIM_BIND_HOST` / `SHIM_PORT` | `0.0.0.0` / `18001` | middleware bind. |
 | `E2B_ENV_FILE` | — | Optional path to a `.env` the launch script will `source` (handy for `E2B_API_KEY`). |
 
 ## Run it
@@ -152,7 +152,7 @@ template accepts `tools=`, no code change is needed.
 `install_claude_code` and the `shell_command + env` block inside
 `run_claude_code` in `sandbox.py`. If the agent speaks OpenAI Chat
 Completions instead of Anthropic Messages, also replace `_handle_messages`
-in `bridge.py` — the session token store + prefix-diff over
+in `middleware.py` — the session token store + prefix-diff over
 `apply_chat_template` is reusable as-is, only the inbound/outbound API
 shape changes.
 
@@ -167,7 +167,7 @@ branch alongside the existing `swepro` / `f2p_script` / `eval_cmd` handlers.
 
 ## Design notes
 
-- **No re-tokenization.** The bridge captures the exact `output_token_logprobs`
+- **No re-tokenization.** The middleware captures the exact `output_token_logprobs`
   returned by `/generate` and stitches them onto `prompt_ids` (re-rendered
   via `apply_chat_template` every turn). The trainer reads
   `(tokens, response_length, loss_mask)` from `Sample` directly.

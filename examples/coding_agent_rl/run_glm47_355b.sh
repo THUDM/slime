@@ -10,7 +10,7 @@
 # Required env vars (set in your shell or a sourced ``.env``):
 #
 #   E2B_API_KEY               — E2B cloud API key
-#   SLIME_HEAD_HOST           — public host/IP the sandboxes use to reach the bridge
+#   SLIME_HEAD_HOST           — public host/IP the sandboxes use to reach the middleware
 #   SWE_HOST_NODE_TARBALL     — host path to a Node 22 tarball
 #   SWE_HOST_CC_TARBALL       — host path to the Claude Code npm tarball
 #   HF_CHECKPOINT             — HF checkpoint dir (or HF id) used as actor init
@@ -20,6 +20,10 @@
 # Optional:
 #
 #   E2B_ENV_FILE              — path to a .env to source for E2B_API_KEY etc.
+#   SWE_SANDBOX_METADATA_JSON — JSON object passed verbatim into
+#                                 AsyncSandbox.create(metadata=...). Use this if
+#                                 your backend reads routing/size tags from
+#                                 metadata; default is empty.
 #   MASTER_ADDR               — defaults to ${MLP_WORKER_0_HOST}
 #   HOSTFILE                  — defaults to /root/mpi_rack_hostfile
 #   SOCKET_IFNAME             — NCCL/GLOO socket interface name
@@ -32,7 +36,7 @@
 #
 # To swap model: change CKPT_ARGS + ``SWE_TOOL_PARSER`` / ``SWE_REASONING_PARSER``
 # env (e.g. Qwen3: ``tool_parser=qwen25 reasoning_parser=qwen3``). The
-# generate/bridge code is model-agnostic.
+# generate/middleware code is model-agnostic.
 
 set -ex
 
@@ -77,8 +81,10 @@ export SWE_HOST_NODE_TARBALL
 export SWE_HOST_CC_TARBALL
 export SWE_TIME_BUDGET_SEC=${SWE_TIME_BUDGET_SEC:-3600}
 export SWE_EVAL_TIMEOUT_SEC=${SWE_EVAL_TIMEOUT_SEC:-300}
-export SWE_SANDBOX_GROUP=${SWE_SANDBOX_GROUP:-}
-export SWE_SANDBOX_SIZE=${SWE_SANDBOX_SIZE:-lg}
+# Optional JSON dict passed into AsyncSandbox.create(metadata=...). Most users
+# can leave this unset; only set it if your sandbox backend reads routing tags
+# from metadata, e.g. SWE_SANDBOX_METADATA_JSON='{"my-platform/size":"lg"}'.
+export SWE_SANDBOX_METADATA_JSON=${SWE_SANDBOX_METADATA_JSON:-}
 export SWE_TOOL_PARSER=${SWE_TOOL_PARSER:-glm47}
 export SWE_REASONING_PARSER=${SWE_REASONING_PARSER:-glm45}
 export SHIM_BIND_HOST=${SHIM_BIND_HOST:-0.0.0.0}
@@ -169,7 +175,7 @@ SGLANG_ARGS=(
    --sglang-ep-size 16
    --sglang-enable-dp-lm-head
    --sglang-moe-dense-tp-size 1
-   # SGLang server-side parsers are not strictly needed (the bridge does its own
+   # SGLang server-side parsers are not strictly needed (the middleware does its own
    # parsing on /generate output), but keep them on for /v1/chat consumers.
    --sglang-tool-call-parser glm47
    --sglang-reasoning-parser glm45
@@ -230,8 +236,7 @@ RUNTIME_ENV_JSON=$(cat <<EOF_JSON
     "SWE_HOST_CC_TARBALL": "${SWE_HOST_CC_TARBALL}",
     "SWE_TIME_BUDGET_SEC": "${SWE_TIME_BUDGET_SEC}",
     "SWE_EVAL_TIMEOUT_SEC": "${SWE_EVAL_TIMEOUT_SEC}",
-    "SWE_SANDBOX_GROUP": "${SWE_SANDBOX_GROUP}",
-    "SWE_SANDBOX_SIZE": "${SWE_SANDBOX_SIZE}",
+    "SWE_SANDBOX_METADATA_JSON": "${SWE_SANDBOX_METADATA_JSON}",
     "SWE_TOOL_PARSER": "${SWE_TOOL_PARSER}",
     "SWE_REASONING_PARSER": "${SWE_REASONING_PARSER}",
     "SHIM_BIND_HOST": "${SHIM_BIND_HOST}",

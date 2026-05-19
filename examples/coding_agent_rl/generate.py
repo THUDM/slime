@@ -6,20 +6,20 @@ Wire-up:
 
 ``generate()`` below IS the agent. Read it top-to-bottom to see what one SWE
 rollout sample does. All sandbox-side details live in ``sandbox.py``; the LLM
-plumbing (Anthropic <-> SGLang /generate, token capture) lives in ``bridge.py``.
+plumbing (Anthropic <-> SGLang /generate, token capture) lives in ``middleware.py``.
 
 Per-sample steps:
 
     1. Boot a fresh sandbox from the dataset image.
     2. Install Node 22 + Claude Code CLI.
     3. Create the agent user, drop PROBLEM_STATEMENT.md.
-    4. Run claude-code pointed at the head-node bridge (bridge captures tokens
-       by session_id, passed via the Bearer token).
+    4. Run claude-code pointed at the head-node middleware (the middleware
+       captures tokens by session_id, passed via the Bearer token).
     5. ``git diff`` to capture the model-produced patch.
     6. Boot a SECOND, fresh sandbox; apply diff; run the dataset's tests for
        reward. (No-test-cheating guarantee: reward only depends on the diff.)
-    7. Pull (prompt_ids, response_ids, loss_mask) from the bridge and fill the
-       Sample. No re-tokenization.
+    7. Pull (prompt_ids, response_ids, loss_mask) from the middleware and fill
+       the Sample. No re-tokenization.
 
 Dataset row ``metadata`` schema::
 
@@ -40,7 +40,7 @@ Env knobs (set in run.sh):
     SWE_REASONING_PARSER     glm45           (sglang ReasoningParser name)
     SHIM_BIND_HOST           0.0.0.0
     SHIM_PORT                18001
-    SLIME_HEAD_HOST          public host the sandboxes use to reach the bridge
+    SLIME_HEAD_HOST          public host the sandboxes use to reach the middleware
                               (REQUIRED for E2B — set to a host/IP that the
                               sandboxes can route back to)
 
@@ -51,7 +51,7 @@ Forking this file (each step above is one or two lines below; modify in place):
 * Swap claude_code for codex: edit ``_provision_sandbox`` (the
   ``install_claude_code`` line) and replace ``sandbox.run_claude_code(...)``
   in ``generate()`` with your own helpers in sandbox.py (or another module).
-  Most likely you also need a new ``bridge.py`` if your agent speaks OpenAI
+  Most likely you also need a new ``middleware.py`` if your agent speaks OpenAI
   Chat Completions instead of Anthropic.
 
 * Swap E2B for local docker: re-import a different sandbox module (e.g.
@@ -86,7 +86,7 @@ from slime.utils.misc import SingletonMeta
 from slime.utils.processing_utils import load_tokenizer
 from slime.utils.types import Sample
 
-from . import bridge, sandbox
+from . import middleware, sandbox
 
 logger = logging.getLogger(__name__)
 
@@ -105,8 +105,8 @@ SWE_HOST_CC_TARBALL = Path(os.environ.get(
 ))
 SWE_TIME_BUDGET_SEC = int(os.environ.get("SWE_TIME_BUDGET_SEC", "900"))
 SWE_EVAL_TIMEOUT_SEC = int(os.environ.get("SWE_EVAL_TIMEOUT_SEC", "600"))
-SWE_TOOL_PARSER = os.environ.get("SWE_TOOL_PARSER", "glm47") or None
-SWE_REASONING_PARSER = os.environ.get("SWE_REASONING_PARSER", "glm45") or None
+SWE_TOOL_PARSER = os.environ.get("SWE_TOOL_PARSER", "") or None
+SWE_REASONING_PARSER = os.environ.get("SWE_REASONING_PARSER", "") or None
 SHIM_BIND_HOST = os.environ.get("SHIM_BIND_HOST", "0.0.0.0")
 SHIM_PORT = int(os.environ.get("SHIM_PORT", "18001"))
 
@@ -129,7 +129,7 @@ CC_PROMPT = (
 
 
 # ---------------------------------------------------------------------------
-# Singleton: tokenizer + in-process bridge handle (one per worker process)
+# Singleton: tokenizer + in-process middleware handle (one per worker process)
 # ---------------------------------------------------------------------------
 class _State(metaclass=SingletonMeta):
     def __init__(self, args) -> None:
@@ -140,7 +140,7 @@ class _State(metaclass=SingletonMeta):
             or os.environ.get("MLP_WORKER_0_HOST")
             or socket.gethostname()
         )
-        self.bridge = bridge.start(
+        self.middleware = middleware.start(
             tokenizer=self.tokenizer,
             sglang_url=sglang_url,
             tool_parser=SWE_TOOL_PARSER,
@@ -149,7 +149,7 @@ class _State(metaclass=SingletonMeta):
             port=SHIM_PORT,
             public_host=public_host,
         )
-        logger.info("[coding_agent_rl] tokenizer=%s bridge=%s", args.hf_checkpoint, self.bridge.public_url)
+        logger.info("[coding_agent_rl] tokenizer=%s middleware=%s", args.hf_checkpoint, self.middleware.public_url)
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +216,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sam
 
     session_id = sample.session_id or f"cagent-{md['instance_id']}-{secrets.token_hex(4)}"
     sample.session_id = session_id
-    state.bridge.open_session(session_id, sampling_defaults=sampling_params)
+    state.middleware.open_session(session_id, sampling_defaults=sampling_params)
 
     t0 = time.time()
     diff_text = ""
@@ -234,7 +234,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sam
 
             await sandbox.run_claude_code(
                 sb, workdir=md["workdir"], session_id=session_id,
-                bridge_url=state.bridge.public_url, prompt=CC_PROMPT,
+                middleware_url=state.middleware.public_url, prompt=CC_PROMPT,
                 time_budget_sec=SWE_TIME_BUDGET_SEC,
             )
             diff_text = await sandbox.git_diff(sb, md["workdir"])
@@ -251,10 +251,10 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sam
                      md["instance_id"], e, traceback.format_exc())
         return _abort(sample, f"exception:{type(e).__name__}")
 
-    # --- 3) pull tokens from bridge, fill sample ----------------------------
-    prompt_ids, response_ids, loss_mask = state.bridge.pop_session(session_id)
+    # --- 3) pull tokens from middleware, fill sample -----------------------
+    prompt_ids, response_ids, loss_mask = state.middleware.pop_session(session_id)
     if not prompt_ids:
-        return _abort(sample, "bridge_session_empty")
+        return _abort(sample, "middleware_session_empty")
 
     sample.tokens = prompt_ids + response_ids
     sample.response_length = len(response_ids)

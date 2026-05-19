@@ -53,11 +53,30 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Tunables (env-driven so the same code runs across clusters)
 # ---------------------------------------------------------------------------
-# Sandbox metadata. SANDBOX_GROUP / SANDBOX_SIZE are passed verbatim into
-# AsyncSandbox.create's metadata dict (E2B reads them as glm-platform/* tags).
-# Adjust to whatever your E2B account / sandbox image expects.
-SANDBOX_GROUP = os.environ.get("SWE_SANDBOX_GROUP", "")
-SANDBOX_SIZE = os.environ.get("SWE_SANDBOX_SIZE", "lg")
+# Optional sandbox metadata passed verbatim into ``AsyncSandbox.create``'s
+# ``metadata=`` kwarg. Some E2B-style backends use metadata for routing tags
+# (e.g. ``provider/size``, ``provider/group``); most setups don't need any.
+# Set ``SWE_SANDBOX_METADATA_JSON`` to a JSON object string if your backend
+# expects specific keys, e.g.::
+#
+#     export SWE_SANDBOX_METADATA_JSON='{"my-platform/size": "lg"}'
+#
+# Parsed once at import time; default is an empty dict.
+def _parse_sandbox_metadata() -> dict[str, str]:
+    raw = os.environ.get("SWE_SANDBOX_METADATA_JSON", "").strip()
+    if not raw:
+        return {}
+    try:
+        md = json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.warning("[sandbox] SWE_SANDBOX_METADATA_JSON not valid JSON, ignoring: %s", e)
+        return {}
+    if not isinstance(md, dict):
+        logger.warning("[sandbox] SWE_SANDBOX_METADATA_JSON must be a JSON object, got %s", type(md).__name__)
+        return {}
+    return {str(k): str(v) for k, v in md.items()}
+
+SANDBOX_METADATA = _parse_sandbox_metadata()
 
 # Sandbox wall-clock lifetime in seconds. E2B kills the sandbox `timeout` seconds
 # after creation, regardless of activity (it is NOT an idle timeout — commands.run
@@ -141,12 +160,11 @@ class E2BSandbox:
 
     async def __aenter__(self) -> "E2BSandbox":
         from e2b import AsyncSandbox  # type: ignore
-        self._sb = await AsyncSandbox.create(timeout=self.timeout, metadata={
-            "glm-platform/size":      SANDBOX_SIZE,
-            "glm-platform/group":     SANDBOX_GROUP,
-            "glm-platform/image":     self.image,
-            "glm-platform/namespace": "test-namespace",
-        })
+        # Some backends want an explicit image hint; merge it in only if the
+        # user-provided metadata doesn't already set one.
+        md = dict(SANDBOX_METADATA)
+        md.setdefault("image", self.image)
+        self._sb = await AsyncSandbox.create(timeout=self.timeout, metadata=md)
         self.sandbox_id = self._sb.sandbox_id
         return self
 
@@ -276,7 +294,7 @@ async def run_claude_code(
     *,
     workdir: str,
     session_id: str,
-    bridge_url: str,
+    middleware_url: str,
     prompt: str,
     time_budget_sec: int,
 ) -> int:
@@ -302,8 +320,8 @@ async def run_claude_code(
     await sb.exec(f"chmod +x {launcher}", user="agent", timeout=30)
 
     env = {
-        "ANTHROPIC_BASE_URL": bridge_url,
-        "ANTHROPIC_AUTH_TOKEN": session_id,    # bridge reads this as session id
+        "ANTHROPIC_BASE_URL": middleware_url,
+        "ANTHROPIC_AUTH_TOKEN": session_id,    # middleware reads this as session id
         "ANTHROPIC_MODEL": "slime-actor",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
