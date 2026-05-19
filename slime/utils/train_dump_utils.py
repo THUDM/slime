@@ -29,12 +29,16 @@ def resolve_debug_train_data_path(template: str, *, rollout_id: int, rank: int) 
 
 
 def save_debug_train_data(args, *, rollout_id, rollout_data) -> None:
-    template = args.save_debug_train_data
-    if template is None:
-        return
-
-    rank = torch.distributed.get_rank()
-    path = resolve_debug_train_data_path(template, rollout_id=rollout_id, rank=rank)
-    logger.info("Save debug train data to %s", path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"rollout_id": rollout_id, "rank": rank, "rollout_data": rollout_data}, path)
+    if (path_template := args.save_debug_train_data) is not None:
+        rank = torch.distributed.get_rank()
+        path = resolve_debug_train_data_path(path_template, rollout_id=rollout_id, rank=rank)
+        logger.info(f"Save debug train data to {path}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            dict(
+                rollout_id=rollout_id,
+                rank=rank,
+                rollout_data=rollout_data,
+            ),
+            path,
+        )
