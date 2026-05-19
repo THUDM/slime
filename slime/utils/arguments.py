@@ -1167,6 +1167,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 choices=["torch", "memray"],
                 default="torch",
             )
+            reset_arg(parser, "--record-memory-history", action="store_true", default=False)
             parser.add_argument("--check-weight-update-equal", action="store_true")
             return parser
 
@@ -1761,6 +1762,9 @@ def slime_validate_args(args):
         args.offload_train = False
     if args.offload_rollout is None:
         args.offload_rollout = False
+
+    if args.offload_train:
+        args.disable_grad_buffers_cpu_backup = True
 
     if args.use_critic:
         args.offload_train = True
