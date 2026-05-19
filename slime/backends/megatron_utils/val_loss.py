@@ -58,7 +58,15 @@ class ValDataLoader:
         val_tool_key = getattr(self.args, "val_tool_key", None)
 
         all_records = list(read_file(self.args.val_data))
-        my_records = all_records[self.dp_rank :: self.dp_size]
+        if len(all_records) < self.dp_size:
+            # Replicate small datasets so every rank has data (avoids skip).
+            logger.info(
+                f"Val data ({len(all_records)} samples) < dp_size ({self.dp_size}), "
+                f"replicating to all ranks."
+            )
+            my_records = all_records
+        else:
+            my_records = all_records[self.dp_rank :: self.dp_size]
 
         samples = []
         for record in my_records:

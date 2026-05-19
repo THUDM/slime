@@ -34,8 +34,13 @@ def train(args):
     # Run initial val before training to record baseline loss.
     # Use start_rollout_id - 1 so the baseline point sits just before the
     # first training step (avoids step collision and discontinuity on resume).
+    # Skip when val_interval=1 and start=0: the first periodic val fires
+    # immediately at step 0, so a separate baseline would collide.
     if args.val_interval and getattr(args, "val_data", None):
-        actor_model.compute_val_loss(rollout_id=max(0, args.start_rollout_id - 1))
+        baseline_id = max(0, args.start_rollout_id - 1)
+        first_periodic_id = args.val_interval - 1 + args.start_rollout_id
+        if baseline_id < first_periodic_id:
+            actor_model.compute_val_loss(rollout_id=baseline_id)
 
     # async train loop.
     rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)
