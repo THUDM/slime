@@ -31,6 +31,10 @@ def train(args):
     if args.check_weight_update_equal:
         ray.get(rollout_manager.check_weights.remote(action="compare"))
 
+    # Run initial val before training to record baseline loss (step 0).
+    if args.val_interval and getattr(args, "val_data", None):
+        actor_model.compute_val_loss(rollout_id=0)
+
     # async train loop.
     rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
@@ -74,6 +78,10 @@ def train(args):
 
         if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
             ray.get(rollout_manager.eval.remote(rollout_id))
+
+        # Compute validation loss periodically (for SFT overfitting monitoring)
+        if args.val_interval and should_run_periodic_action(rollout_id, args.val_interval, num_rollout_per_epoch):
+            actor_model.compute_val_loss(rollout_id)
 
     ray.get(rollout_manager.dispose.remote())
     finish_tracking(args)

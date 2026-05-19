@@ -1087,7 +1087,13 @@ def sft_loss_function(
     """Compute supervised fine-tuning loss over response tokens.
 
     Computes log-probabilities of the ground-truth tokens in the response
-    segments and returns the negative log-likelihood as the loss.
+    segments and returns the negative log-likelihood as the loss. Optionally
+    computes and logs token-level entropy when ``args.log_sft_entropy`` is set.
+
+    Entropy is computed under ``torch.no_grad()`` since it is only used for
+    logging and does not participate in the loss. This avoids retaining the
+    extra ``[T, V]`` clone in the autograd graph which would cause OOM for
+    large-vocabulary models.
 
     Args:
         args: Configuration (passed through to helpers).
@@ -1097,12 +1103,15 @@ def sft_loss_function(
         sum_of_sample_mean: Reduction function that averages per-sample values.
 
     Returns:
-        Tuple of `(loss, metrics)` where `metrics` contains a single detached
-        scalar "loss".
+        Tuple of `(loss, metrics)` where `metrics` contains detached scalars
+        "loss" and optionally "entropy".
     """
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
 
+    log_entropy = getattr(args, "log_sft_entropy", False)
+
+    # Step 1: compute log_probs for loss (with gradient)
     _, log_probs_and_entropy = get_log_probs_and_entropy(
         logits,
         args=args,
@@ -1121,12 +1130,30 @@ def sft_loss_function(
     if log_probs.numel() == 0:
         loss += 0 * logits.sum()
 
-    return (
-        loss,
-        {
-            "loss": loss.clone().detach(),
-        },
-    )
+    reported_loss = {
+        "loss": loss.clone().detach(),
+    }
+
+    # Step 2: compute entropy for logging only (no_grad to avoid OOM)
+    # The logits.clone() inside calculate_log_probs_and_entropy won't be
+    # retained in the autograd graph, so it's freed after computation.
+    if log_entropy:
+        with torch.no_grad():
+            _, entropy_result = get_log_probs_and_entropy(
+                logits,
+                args=args,
+                unconcat_tokens=batch["unconcat_tokens"],
+                total_lengths=total_lengths,
+                response_lengths=response_lengths,
+                with_entropy=True,
+                max_seq_lens=batch.get("max_seq_lens", None),
+            )
+        entropy = entropy_result["entropy"]
+        entropy = torch.cat(entropy, dim=0)
+        mean_entropy = sum_of_sample_mean(entropy)
+        reported_loss["entropy"] = mean_entropy.detach()
+
+    return loss, reported_loss
 
 
 def loss_function(
