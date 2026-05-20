@@ -299,6 +299,8 @@ def log_rollout_data(
                 "rollout_routed_experts",
                 "max_seq_lens",
                 "dynamic_global_batch_size",
+                "num_microbatches",
+                "micro_batch_indices",
             ]:
                 continue
             # Upload per sample mean for each rollout value
