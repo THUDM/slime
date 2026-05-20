@@ -309,7 +309,14 @@ async def generate_and_rm(
 )
 async def generate_and_rm_group(
     args: Namespace, group: list[Sample], sampling_params: dict[str, Any], evaluation: bool = False
-) -> list[Sample]:
+) -> list[Sample] | list[list[Sample]]:
+    # ``generate_and_rm`` may return either a ``Sample`` or a ``list[Sample]``
+    # depending on whether the ``--custom-generate-function-path`` callable
+    # emits one trainable sample or several (e.g. multi-turn agent rollouts
+    # that fan out into multiple prefix-chained samples). The asyncio.gather
+    # below preserves whichever shape each task produced, so the group is
+    # ``list[Sample]`` for plain rollouts and ``list[list[Sample]]`` for
+    # the fan-out case.
     state = GenerateState(args)
 
     if state.aborted:
