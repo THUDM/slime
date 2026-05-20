@@ -368,6 +368,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 data_iterator,
                 num_microbatches,
                 store_prefix=store_prefix,
+                step_callback=self.prof.step_train_log_probs,
             )
 
     def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):
@@ -397,7 +398,16 @@ class MegatronTrainRayActor(TrainRayActor):
         num_microbatches = rollout_data["num_microbatches"]
 
         # Compute current critic values (used as old_values for value loss and for actor advantages).
-        rollout_data.update(forward_only(get_values, self.args, self.model, data_iterator, num_microbatches))
+        rollout_data.update(
+            forward_only(
+                get_values,
+                self.args,
+                self.model,
+                data_iterator,
+                num_microbatches,
+                step_callback=self.prof.step_train_log_probs,
+            )
+        )
 
         compute_advantages_and_returns(self.args, rollout_data)
 
@@ -517,6 +527,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     self.opt_param_scheduler,
                     data_iterator,
                     num_microbatches,
+                    step_callback=self.prof.step_train_actor,
                 )
 
             self.prof.step(rollout_id=rollout_id)
