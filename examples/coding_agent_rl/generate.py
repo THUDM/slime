@@ -38,6 +38,7 @@ Env knobs (set in run.sh):
     SWE_EVAL_TIMEOUT_SEC     600   per eval test execution
     SWE_TOOL_PARSER          glm47           (sglang FunctionCallParser name)
     SWE_REASONING_PARSER     glm45           (sglang ReasoningParser name)
+    SWE_SAVE_TRAJECTORY_TREE 0               save full per-turn request/response tree in metadata
     SHIM_BIND_HOST           0.0.0.0
     SHIM_PORT                18001
     SLIME_HEAD_HOST          public host the sandboxes use to reach the middleware
@@ -107,6 +108,7 @@ SWE_TIME_BUDGET_SEC = int(os.environ.get("SWE_TIME_BUDGET_SEC", "900"))
 SWE_EVAL_TIMEOUT_SEC = int(os.environ.get("SWE_EVAL_TIMEOUT_SEC", "600"))
 SWE_TOOL_PARSER = os.environ.get("SWE_TOOL_PARSER", "") or None
 SWE_REASONING_PARSER = os.environ.get("SWE_REASONING_PARSER", "") or None
+SWE_SAVE_TRAJECTORY_TREE = os.environ.get("SWE_SAVE_TRAJECTORY_TREE", "0") == "1"
 SHIM_BIND_HOST = os.environ.get("SHIM_BIND_HOST", "0.0.0.0")
 SHIM_PORT = int(os.environ.get("SHIM_PORT", "18001"))
 
@@ -120,11 +122,12 @@ SWE_BOOT_CONCURRENCY = int(os.environ.get("SWE_BOOT_CONCURRENCY", "16"))
 SWE_BOOT_RETRIES = int(os.environ.get("SWE_BOOT_RETRIES", "2"))
 _BOOT_SEM: asyncio.Semaphore | None = None  # lazy-init: must bind to the right loop
 
-CC_PROMPT = (
+CC_PROMPT = os.environ.get(
+    "SWE_CC_PROMPT",
     "Read PROBLEM_STATEMENT.md in the current directory and resolve the issue. "
     "Edit source files only (do NOT touch tests). After editing, run the relevant "
     "tests to verify your fix passes. Do NOT modify PROBLEM_STATEMENT.md and do "
-    "NOT commit. When finished, print a one-line summary and exit."
+    "NOT commit. When finished, print a one-line summary and exit.",
 )
 
 
@@ -216,7 +219,11 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sam
 
     session_id = sample.session_id or f"cagent-{md['instance_id']}-{secrets.token_hex(4)}"
     sample.session_id = session_id
-    state.middleware.open_session(session_id, sampling_defaults=sampling_params)
+    state.middleware.open_session(
+        session_id,
+        sampling_defaults=sampling_params,
+        record_tree=SWE_SAVE_TRAJECTORY_TREE,
+    )
 
     t0 = time.time()
     diff_text = ""
@@ -252,7 +259,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sam
         return _abort(sample, f"exception:{type(e).__name__}")
 
     # --- 3) pull tokens from middleware, fill sample -----------------------
-    prompt_ids, response_ids, loss_mask = state.middleware.pop_session(session_id)
+    prompt_ids, response_ids, loss_mask, trajectory_tree = state.middleware.pop_session(session_id)
     if not prompt_ids:
         return _abort(sample, "middleware_session_empty")
 
@@ -269,6 +276,8 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sam
         "applied_cleanly": bool(applied_cleanly),
         "elapsed_sec": time.time() - t0,
     }
+    if SWE_SAVE_TRAJECTORY_TREE:
+        sample.metadata["trajectory_tree"] = trajectory_tree
     logger.info(
         "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs tokens=%d",
         md["instance_id"], reward, is_solved, applied_cleanly,

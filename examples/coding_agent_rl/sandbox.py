@@ -44,6 +44,7 @@ import json
 import logging
 import lzma
 import os
+import shlex
 import shutil
 import tempfile
 import time
@@ -328,7 +329,10 @@ async def run_claude_code(
         "export HOME=/home/agent\n"
         f"/usr/local/bin/claude -p {json.dumps(prompt)} "
         f"--permission-mode bypassPermissions "
-        f"--output-format stream-json --verbose 2>&1 | tee {traj}\n"
+        f"--output-format stream-json --include-partial-messages "
+        f"--include-hook-events --verbose "
+        f"{os.environ.get('SWE_CLAUDE_EXTRA_ARGS', '').strip()} "
+        f"2>&1 | tee {shlex.quote(traj)}\n"
         f"echo $? > {done}\n"
     )
     await sb.write_text(launcher, launcher_body, user="agent")
