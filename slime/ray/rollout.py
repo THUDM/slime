@@ -489,7 +489,9 @@ class RolloutManager:
             # if debug rollout only, we don't convert samples to train data and directly return
             return
         data = self._convert_samples_to_train_data(data)
-        return self._split_train_data_by_dp(data)
+        data["total_lengths"] = [len(t) for t in data["tokens"]]
+        per_step_mbs = self._build_micro_batch_schedule(data["total_lengths"])
+        return self._split_train_data_by_dp(data, per_step_mbs)
 
     def eval(self, rollout_id):
         if self.args.debug_train_only:
@@ -752,76 +754,83 @@ class RolloutManager:
     def set_train_parallel_config(self, config: dict):
         self.train_parallel_config = config
 
-    def _split_train_data_by_dp(self, data):
-        """Split the train data by DP and pre-compute the per-step micro-batch schedule.
+    def _build_micro_batch_schedule(self, total_lengths):
+        """Partition each training step's samples into micro-batches.
 
-        For each training step (chunk of ``global_batch_size`` samples):
-          - Static mbs: split samples into DP ranks (balanced or strided) and emit
-            ``num_microbatches = (gbs/dp) // micro_batch_size`` contiguous mbs.
-          - Dynamic mbs: bin-pack the step globally so each bin holds
-            <= ``max_tokens_per_gpu * cp_size`` tokens, then balance bins across DP ranks
-            so every rank ends up with the same ``num_microbatches`` and similar tokens.
+        Returns ``list[list[list[int]]]``: per step, list of micro-batches, each mbs
+        being step-local sample indices. The mbs count per step is always a multiple
+        of ``dp_size`` so DP assignment can give every rank the same count.
 
-        Both paths emit ``num_microbatches`` and ``micro_batch_indices`` so the training
-        side just consumes them — no per-step all-reduce needed.
+        Static path: each mbs is ``args.micro_batch_size`` consecutive samples.
+        Dynamic path: bin-pack the step globally so each bin holds
+        ``<= max_tokens_per_gpu * cp_size`` tokens, with per-rank mbs count rounded up
+        (and to ``microbatch_group_size_per_vp_stage`` when VPP is on).
         """
         dp_size = self.train_parallel_config["dp_size"]
         cp_size = self.train_parallel_config["cp_size"]
         vpp_size = self.train_parallel_config["vpp_size"]
         mb_group = self.train_parallel_config["microbatch_group_size_per_vp_stage"]
 
-        total_lengths = [len(t) for t in data["tokens"]]
-        data["total_lengths"] = total_lengths
-
         global_batch_size = getattr(self, "_dynamic_global_batch_size", self.args.global_batch_size)
         num_samples = len(total_lengths)
-        num_local_gbs = global_batch_size // dp_size
         num_steps = num_samples // global_batch_size
 
-        per_rank_sample_indices: list[list[int]] = [[] for _ in range(dp_size)]
-        per_rank_mbs_indices: list[list[list[int]]] = [[] for _ in range(dp_size)]
-        num_microbatches_per_step: list[int] = []
-
+        per_step_mbs: list[list[list[int]]] = []
         for step_i in range(num_steps):
             step_start = step_i * global_batch_size
             step_lengths = total_lengths[step_start : step_start + global_batch_size]
 
             if not self.args.use_dynamic_batch_size:
                 mbs = self.args.micro_batch_size
-                num_microbatches_per_step.append(num_local_gbs // mbs)
-                if self.args.balance_data:
-                    rank_parts = get_seqlen_balanced_partitions(step_lengths, dp_size, equal_size=True)
-                else:
-                    rank_parts = [list(range(r, global_batch_size, dp_size)) for r in range(dp_size)]
-                for r in range(dp_size):
-                    offset = len(per_rank_sample_indices[r])
-                    rank_samples = rank_parts[r]
-                    for j in range(0, len(rank_samples), mbs):
-                        per_rank_mbs_indices[r].append(list(range(offset + j, offset + j + mbs)))
-                    per_rank_sample_indices[r].extend(idx + step_start for idx in rank_samples)
+                mbs_list = [list(range(j, j + mbs)) for j in range(0, global_batch_size, mbs)]
             else:
                 assert self.args.max_tokens_per_gpu is not None
-                # Compute the global minimum mbs across the whole step; ceil-divide by dp to
-                # get per-rank num_mbs. This is tighter than the original per-rank min + MAX.
+                # Compute the global minimum mbs across the whole step; ceil-divide by dp
+                # to get per-rank num_mbs. Tighter than the original per-rank min + MAX.
                 global_min_mbs = get_minimum_num_micro_batch_size(step_lengths, self.args.max_tokens_per_gpu * cp_size)
                 num_mbs_per_rank = max((global_min_mbs + dp_size - 1) // dp_size, 1)
                 if vpp_size > 1:
                     # Match the original floor-to-mb_group rounding (with min=1).
                     num_mbs_per_rank = max(num_mbs_per_rank // mb_group * mb_group, 1)
-                num_microbatches_per_step.append(num_mbs_per_rank)
-
                 total_mbs = num_mbs_per_rank * dp_size
-                bin_parts = get_seqlen_balanced_partitions(step_lengths, total_mbs, equal_size=False)
-                # Balance bins across DP ranks by total tokens so per-rank load is even.
-                bin_totals = [sum(step_lengths[idx] for idx in b) for b in bin_parts]
-                rank_bin_assignment = get_seqlen_balanced_partitions(bin_totals, dp_size, equal_size=True)
-                for r in range(dp_size):
-                    offset = len(per_rank_sample_indices[r])
-                    for bin_idx in rank_bin_assignment[r]:
-                        bin_local_indices = bin_parts[bin_idx]
-                        per_rank_mbs_indices[r].append(list(range(offset, offset + len(bin_local_indices))))
-                        per_rank_sample_indices[r].extend(idx + step_start for idx in bin_local_indices)
-                        offset += len(bin_local_indices)
+                mbs_list = get_seqlen_balanced_partitions(step_lengths, total_mbs, equal_size=False)
+            per_step_mbs.append(mbs_list)
+        return per_step_mbs
+
+    def _split_train_data_by_dp(self, data, per_step_mbs):
+        """Assign micro-batches to DP ranks and package each rank's rollout_data.
+
+        With ``balance_data`` or dynamic mbs, mbs are distributed across DP ranks by
+        balancing total token counts; otherwise mbs are striped across ranks.
+        """
+        dp_size = self.train_parallel_config["dp_size"]
+        total_lengths = data["total_lengths"]
+        global_batch_size = getattr(self, "_dynamic_global_batch_size", self.args.global_batch_size)
+        balance_by_tokens = self.args.use_dynamic_batch_size or self.args.balance_data
+
+        per_rank_sample_indices: list[list[int]] = [[] for _ in range(dp_size)]
+        per_rank_mbs_indices: list[list[list[int]]] = [[] for _ in range(dp_size)]
+        num_microbatches_per_step: list[int] = []
+
+        for step_i, mbs_list in enumerate(per_step_mbs):
+            step_start = step_i * global_batch_size
+            total_mbs = len(mbs_list)
+            assert total_mbs % dp_size == 0, f"total_mbs {total_mbs} not divisible by dp_size {dp_size}"
+            num_microbatches_per_step.append(total_mbs // dp_size)
+
+            if balance_by_tokens:
+                mbs_totals = [sum(total_lengths[step_start + i] for i in m) for m in mbs_list]
+                rank_assignment = get_seqlen_balanced_partitions(mbs_totals, dp_size, equal_size=True)
+            else:
+                rank_assignment = [list(range(r, total_mbs, dp_size)) for r in range(dp_size)]
+
+            for r in range(dp_size):
+                offset = len(per_rank_sample_indices[r])
+                for mbs_idx in rank_assignment[r]:
+                    mbs_local = mbs_list[mbs_idx]
+                    per_rank_mbs_indices[r].append(list(range(offset, offset + len(mbs_local))))
+                    per_rank_sample_indices[r].extend(step_start + i for i in mbs_local)
+                    offset += len(mbs_local)
 
         rollout_data_refs = []
         for r in range(dp_size):
