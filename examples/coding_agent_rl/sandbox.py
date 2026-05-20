@@ -42,7 +42,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import lzma
 import os
+import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -160,10 +163,9 @@ class E2BSandbox:
 
     async def __aenter__(self) -> "E2BSandbox":
         from e2b import AsyncSandbox  # type: ignore
-        # Some backends want an explicit image hint; merge it in only if the
-        # user-provided metadata doesn't already set one.
+        # Internal E2B routing reads the image from metadata, not template.
         md = dict(SANDBOX_METADATA)
-        md.setdefault("image", self.image)
+        md.setdefault("glm-platform/image", self.image)
         self._sb = await AsyncSandbox.create(timeout=self.timeout, metadata=md)
         self.sandbox_id = self._sb.sandbox_id
         return self
@@ -238,11 +240,24 @@ class E2BSandbox:
 async def install_node22(sb: E2BSandbox, host_tarball: Path) -> None:
     """Node 22 over the base image's Node (Debian 12 ships 16 which can't run
     claude-code's cli.js). ``npm prefix=/usr/local`` is required for the
-    sweap-images family (see e2b_sweap_image_node_and_npm_quirks)."""
-    await sb.upload(host_tarball, "/tmp/node22.tar.xz")
+    sweap-images family (see e2b_sweap_image_node_and_npm_quirks).
+
+    Decompresses ``.xz`` on the host (cached) so sandboxes without ``xz-utils``
+    (e.g. sweap-images / ScaleSWE) can still run plain ``tar xf``.
+    """
+    host_tarball = Path(host_tarball)
+    if host_tarball.suffix == ".xz":
+        plain = Path(tempfile.gettempdir()) / f"coding_agent_rl.{host_tarball.stem}.tar"
+        if not plain.exists():
+            tmp = plain.with_suffix(".tar.partial")
+            with lzma.open(host_tarball, "rb") as src, open(tmp, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            os.replace(tmp, plain)
+        host_tarball = plain
+    await sb.upload(host_tarball, "/tmp/node22.tar")
     await sb.exec(
         "set -e && mkdir -p /opt/node22 && "
-        "tar xf /tmp/node22.tar.xz -C /opt/node22 --strip-components=1 && "
+        "tar xf /tmp/node22.tar -C /opt/node22 --strip-components=1 && "
         "ln -sf /opt/node22/bin/node /usr/local/bin/node && "
         "ln -sf /opt/node22/bin/npm  /usr/local/bin/npm && "
         "ln -sf /opt/node22/bin/npx  /usr/local/bin/npx && "
