@@ -71,9 +71,6 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
             dist.barrier(group=get_gloo_group())
 
-        self.train_parallel_config = {
-            "dp_size": mpu.get_data_parallel_world_size(with_context_parallel=False),
-        }
         dist.barrier(group=get_gloo_group())
 
         if args.offload_train:
@@ -84,6 +81,20 @@ class MegatronTrainRayActor(TrainRayActor):
         self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id = initialize_model_and_optimizer(
             args, role
         )
+
+        vpp_size = mpu.get_virtual_pipeline_model_parallel_world_size() or 1
+        if vpp_size > 1:
+            from megatron.core.utils import get_model_config
+
+            microbatch_group_size_per_vp_stage = get_model_config(self.model[0]).microbatch_group_size_per_vp_stage
+        else:
+            microbatch_group_size_per_vp_stage = 1
+        self.train_parallel_config = {
+            "dp_size": mpu.get_data_parallel_world_size(with_context_parallel=False),
+            "cp_size": mpu.get_context_parallel_world_size(),
+            "vpp_size": vpp_size,
+            "microbatch_group_size_per_vp_stage": microbatch_group_size_per_vp_stage,
+        }
 
         start_rollout_id = loaded_rollout_id + 1
 

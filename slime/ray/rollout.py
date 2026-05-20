@@ -18,6 +18,7 @@ from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupCo
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
+from slime.utils.data import get_minimum_num_micro_batch_size
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.logging_utils import configure_logger, init_tracking
@@ -488,7 +489,7 @@ class RolloutManager:
             # if debug rollout only, we don't convert samples to train data and directly return
             return
         data = self._convert_samples_to_train_data(data)
-        return self._split_train_data_by_dp(data, self.train_parallel_config["dp_size"])
+        return self._split_train_data_by_dp(data)
 
     def eval(self, rollout_id):
         if self.args.debug_train_only:
@@ -751,27 +752,79 @@ class RolloutManager:
     def set_train_parallel_config(self, config: dict):
         self.train_parallel_config = config
 
-    def _split_train_data_by_dp(self, data, dp_size):
-        """Split the train data by data parallel size."""
-        rollout_data = {}
+    def _split_train_data_by_dp(self, data):
+        """Split the train data by DP and pre-compute the per-step micro-batch schedule.
 
-        if "prompt" in data:
-            rollout_data["prompt"] = data["prompt"]
+        For each training step (chunk of ``global_batch_size`` samples):
+          - Static mbs: split samples into DP ranks (balanced or strided) and emit a
+            fixed ``num_microbatches = (gbs/dp) // micro_batch_size``.
+          - Dynamic mbs: bin-pack the step globally so each bin holds
+            <= ``max_tokens_per_gpu * cp_size`` tokens, then balance bins across DP ranks
+            so every rank ends up with the same ``num_microbatches`` and similar tokens.
+
+        The training side just consumes ``num_microbatches`` and (in the dynamic case)
+        ``micro_batch_indices`` — no per-step all-reduce needed.
+        """
+        dp_size = self.train_parallel_config["dp_size"]
+        cp_size = self.train_parallel_config["cp_size"]
+        vpp_size = self.train_parallel_config["vpp_size"]
+        mb_group = self.train_parallel_config["microbatch_group_size_per_vp_stage"]
 
         total_lengths = [len(t) for t in data["tokens"]]
         data["total_lengths"] = total_lengths
 
-        if self.args.balance_data:
-            partitions = get_seqlen_balanced_partitions(total_lengths, dp_size, equal_size=True)
-        else:
-            partitions = [range(i, len(total_lengths), dp_size) for i in range(dp_size)]
+        global_batch_size = getattr(self, "_dynamic_global_batch_size", self.args.global_batch_size)
+        num_samples = len(total_lengths)
+        num_local_gbs = global_batch_size // dp_size
+        num_steps = num_samples // global_batch_size
+
+        per_rank_sample_indices: list[list[int]] = [[] for _ in range(dp_size)]
+        num_microbatches_per_step: list[int] = []
+        per_rank_mbs_indices: list[list[list[int]]] | None = (
+            [[] for _ in range(dp_size)] if self.args.use_dynamic_batch_size else None
+        )
+
+        for step_i in range(num_steps):
+            step_start = step_i * global_batch_size
+            step_lengths = total_lengths[step_start : step_start + global_batch_size]
+
+            if not self.args.use_dynamic_batch_size:
+                num_microbatches_per_step.append(num_local_gbs // self.args.micro_batch_size)
+                if self.args.balance_data:
+                    rank_parts = get_seqlen_balanced_partitions(step_lengths, dp_size, equal_size=True)
+                else:
+                    rank_parts = [list(range(r, global_batch_size, dp_size)) for r in range(dp_size)]
+                for r in range(dp_size):
+                    per_rank_sample_indices[r].extend(idx + step_start for idx in rank_parts[r])
+            else:
+                assert self.args.max_tokens_per_gpu is not None
+                # Compute the global minimum mbs across the whole step; ceil-divide by dp to
+                # get per-rank num_mbs. This is tighter than the original per-rank min + MAX.
+                global_min_mbs = get_minimum_num_micro_batch_size(step_lengths, self.args.max_tokens_per_gpu * cp_size)
+                num_mbs_per_rank = max((global_min_mbs + dp_size - 1) // dp_size, 1)
+                if vpp_size > 1:
+                    # Match the original floor-to-mb_group rounding (with min=1).
+                    num_mbs_per_rank = max(num_mbs_per_rank // mb_group * mb_group, 1)
+                num_microbatches_per_step.append(num_mbs_per_rank)
+
+                total_mbs = num_mbs_per_rank * dp_size
+                bin_parts = get_seqlen_balanced_partitions(step_lengths, total_mbs, equal_size=False)
+                # Balance bins across DP ranks by total tokens so per-rank load is even.
+                bin_totals = [sum(step_lengths[idx] for idx in b) for b in bin_parts]
+                rank_bin_assignment = get_seqlen_balanced_partitions(bin_totals, dp_size, equal_size=True)
+                assert per_rank_mbs_indices is not None
+                for r in range(dp_size):
+                    offset = len(per_rank_sample_indices[r])
+                    for bin_idx in rank_bin_assignment[r]:
+                        bin_local_indices = bin_parts[bin_idx]
+                        per_rank_mbs_indices[r].append(list(range(offset, offset + len(bin_local_indices))))
+                        per_rank_sample_indices[r].extend(idx + step_start for idx in bin_local_indices)
+                        offset += len(bin_local_indices)
 
         rollout_data_refs = []
-
-        for i in range(dp_size):
-            rollout_data = {}
-            partition = partitions[i]
-            rollout_data["partition"] = partition
+        for r in range(dp_size):
+            partition = per_rank_sample_indices[r]
+            rollout_data = {"partition": partition}
             for key in [
                 "tokens",
                 "multimodal_train_inputs",
@@ -788,8 +841,7 @@ class RolloutManager:
             ]:
                 if key not in data:
                     continue
-                val = [data[key][j] for j in partition]
-                rollout_data[key] = val
+                rollout_data[key] = [data[key][j] for j in partition]
             # keys that need to be splited at train side
             for key in [
                 "raw_reward",
@@ -801,6 +853,9 @@ class RolloutManager:
             # Pass dynamic global_batch_size to training side
             if hasattr(self, "_dynamic_global_batch_size"):
                 rollout_data["dynamic_global_batch_size"] = self._dynamic_global_batch_size
+            rollout_data["num_microbatches"] = num_microbatches_per_step
+            if per_rank_mbs_indices is not None:
+                rollout_data["micro_batch_indices"] = per_rank_mbs_indices[r]
             rollout_data_refs.append(Box(ray.put(rollout_data)))
         return rollout_data_refs
 
