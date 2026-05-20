@@ -222,61 +222,37 @@ def gather_log_data(
 
 
 class DataIterator:
-    """Micro-batch iterator over rollout dicts.
-
-    Supports either fixed contiguous micro-batches or an explicit per-step
-    index schedule (for dynamic batch sizing / sequence-length balancing).
-    """
+    """Iterator over a rollout dict following an explicit micro-batch index schedule."""
 
     def __init__(
         self,
         rollout_data: RolloutBatch,
-        micro_batch_size: int | None = None,
-        micro_batch_indices: list[list[int]] | None = None,
+        micro_batch_indices: list[list[int]],
     ) -> None:
-        """Initialize an iterator over `rollout_data`.
+        """Initialize an iterator over ``rollout_data``.
 
         Args:
-            rollout_data: Dict of per-sample fields for the local step.
-            micro_batch_size: Fixed contiguous slice size when not using dynamic scheduling.
-            micro_batch_indices: Explicit indices per micro-batch when using dynamic balancing.
-                Must be mutually exclusive with `micro_batch_size`.
+            rollout_data: Dict of per-sample fields for this DP rank.
+            micro_batch_indices: List of mbs, each mbs being the local sample indices to select.
         """
         self.rollout_data = rollout_data
-        self.micro_batch_size = micro_batch_size
         self.micro_batch_indices = micro_batch_indices
-        assert micro_batch_size is None or micro_batch_indices is None
         self.offset = 0
 
     def get_next(self, keys: Sequence[str]) -> dict[str, list[object] | None]:
         """Return the next micro-batch for the requested keys.
 
-        - If `micro_batch_indices` is provided, selects rows according to the current
-          index list for each requested key.
-        - Otherwise, slices a contiguous window of size `micro_batch_size` starting
-          at the current offset.
-
         Returns a dict mapping each key to a list subset (or None if absent).
         """
         batch = {}
+        indices = self.micro_batch_indices[self.offset]
         for key in keys:
             vals = self.rollout_data.get(key, None)
             if vals is None:
                 batch[key] = None
             else:
-                if self.micro_batch_indices is not None:
-                    indices = self.micro_batch_indices[self.offset]
-                    batch[key] = [vals[i] for i in indices]
-                else:
-                    assert self.offset + self.micro_batch_size <= len(
-                        vals
-                    ), f"offset: {self.offset}, micro_batch_size: {self.micro_batch_size}, len(vals): {len(vals)}"
-                    batch[key] = vals[self.offset : self.offset + self.micro_batch_size]
-
-        if self.micro_batch_indices is not None:
-            self.offset += 1
-        else:
-            self.offset += self.micro_batch_size
+                batch[key] = [vals[i] for i in indices]
+        self.offset += 1
         return batch
 
     def reset(self) -> "DataIterator":
@@ -285,32 +261,11 @@ class DataIterator:
         return self
 
 
-def get_data_iterator(
-    args: Namespace,
-    model: torch.nn.Module | Sequence[torch.nn.Module],
-    rollout_data: RolloutBatch,
-) -> tuple[list[DataIterator], list[int]]:
-    """
-    Create iterators from the micro-batch schedule pre-computed on the rollout side.
-
-    ``rollout_data["num_microbatches"]`` (list[int], one per local step) is always
-    present. For ``use_dynamic_batch_size``, ``rollout_data["micro_batch_indices"]``
-    holds the per-mbs sample index lists (local to this DP rank). For the static
-    path, the iterator offset-steps by ``args.micro_batch_size``.
-
-    Returns ``(data_iterators, num_microbatches)`` where ``data_iterators`` has one
-    entry per VPP stage (size 1 if VPP disabled).
-    """
+def get_data_iterator(rollout_data: RolloutBatch) -> list[DataIterator]:
+    """Build one ``DataIterator`` per VPP stage from the pre-computed schedule in ``rollout_data``."""
     vpp_size = mpu.get_virtual_pipeline_model_parallel_world_size() or 1
-    num_microbatches = rollout_data["num_microbatches"]
-
-    if not args.use_dynamic_batch_size:
-        data_iterator = [DataIterator(rollout_data, args.micro_batch_size, None) for _ in range(vpp_size)]
-    else:
-        micro_batch_indices = rollout_data["micro_batch_indices"]
-        data_iterator = [DataIterator(rollout_data, None, micro_batch_indices) for _ in range(vpp_size)]
-
-    return data_iterator, num_microbatches
+    micro_batch_indices = rollout_data["micro_batch_indices"]
+    return [DataIterator(rollout_data, micro_batch_indices) for _ in range(vpp_size)]
 
 
 def log_rollout_data(

@@ -756,14 +756,14 @@ class RolloutManager:
         """Split the train data by DP and pre-compute the per-step micro-batch schedule.
 
         For each training step (chunk of ``global_batch_size`` samples):
-          - Static mbs: split samples into DP ranks (balanced or strided) and emit a
-            fixed ``num_microbatches = (gbs/dp) // micro_batch_size``.
+          - Static mbs: split samples into DP ranks (balanced or strided) and emit
+            ``num_microbatches = (gbs/dp) // micro_batch_size`` contiguous mbs.
           - Dynamic mbs: bin-pack the step globally so each bin holds
             <= ``max_tokens_per_gpu * cp_size`` tokens, then balance bins across DP ranks
             so every rank ends up with the same ``num_microbatches`` and similar tokens.
 
-        The training side just consumes ``num_microbatches`` and (in the dynamic case)
-        ``micro_batch_indices`` — no per-step all-reduce needed.
+        Both paths emit ``num_microbatches`` and ``micro_batch_indices`` so the training
+        side just consumes them — no per-step all-reduce needed.
         """
         dp_size = self.train_parallel_config["dp_size"]
         cp_size = self.train_parallel_config["cp_size"]
@@ -779,23 +779,26 @@ class RolloutManager:
         num_steps = num_samples // global_batch_size
 
         per_rank_sample_indices: list[list[int]] = [[] for _ in range(dp_size)]
+        per_rank_mbs_indices: list[list[list[int]]] = [[] for _ in range(dp_size)]
         num_microbatches_per_step: list[int] = []
-        per_rank_mbs_indices: list[list[list[int]]] | None = (
-            [[] for _ in range(dp_size)] if self.args.use_dynamic_batch_size else None
-        )
 
         for step_i in range(num_steps):
             step_start = step_i * global_batch_size
             step_lengths = total_lengths[step_start : step_start + global_batch_size]
 
             if not self.args.use_dynamic_batch_size:
-                num_microbatches_per_step.append(num_local_gbs // self.args.micro_batch_size)
+                mbs = self.args.micro_batch_size
+                num_microbatches_per_step.append(num_local_gbs // mbs)
                 if self.args.balance_data:
                     rank_parts = get_seqlen_balanced_partitions(step_lengths, dp_size, equal_size=True)
                 else:
                     rank_parts = [list(range(r, global_batch_size, dp_size)) for r in range(dp_size)]
                 for r in range(dp_size):
-                    per_rank_sample_indices[r].extend(idx + step_start for idx in rank_parts[r])
+                    offset = len(per_rank_sample_indices[r])
+                    rank_samples = rank_parts[r]
+                    for j in range(0, len(rank_samples), mbs):
+                        per_rank_mbs_indices[r].append(list(range(offset + j, offset + j + mbs)))
+                    per_rank_sample_indices[r].extend(idx + step_start for idx in rank_samples)
             else:
                 assert self.args.max_tokens_per_gpu is not None
                 # Compute the global minimum mbs across the whole step; ceil-divide by dp to
@@ -812,7 +815,6 @@ class RolloutManager:
                 # Balance bins across DP ranks by total tokens so per-rank load is even.
                 bin_totals = [sum(step_lengths[idx] for idx in b) for b in bin_parts]
                 rank_bin_assignment = get_seqlen_balanced_partitions(bin_totals, dp_size, equal_size=True)
-                assert per_rank_mbs_indices is not None
                 for r in range(dp_size):
                     offset = len(per_rank_sample_indices[r])
                     for bin_idx in rank_bin_assignment[r]:
@@ -854,8 +856,7 @@ class RolloutManager:
             if hasattr(self, "_dynamic_global_batch_size"):
                 rollout_data["dynamic_global_batch_size"] = self._dynamic_global_batch_size
             rollout_data["num_microbatches"] = num_microbatches_per_step
-            if per_rank_mbs_indices is not None:
-                rollout_data["micro_batch_indices"] = per_rank_mbs_indices[r]
+            rollout_data["micro_batch_indices"] = per_rank_mbs_indices[r]
             rollout_data_refs.append(Box(ray.put(rollout_data)))
         return rollout_data_refs
 
