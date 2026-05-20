@@ -177,6 +177,37 @@ def get_seqlen_balanced_partitions(seqlen_list: list[int], k_partitions: int, eq
     return _check_and_sort_partitions(partitions)
 
 
+def _split_bin_by_tokens(bin_indices: list[int], lengths) -> list[list[int]]:
+    """Split a bin's indices into two halves balanced by total tokens (LPT heuristic).
+
+    Returns ``[left, right]`` where both lists together cover ``bin_indices``. Because
+    each half is a strict subset of ``bin_indices``, both have token sums ``<=`` the
+    original bin's sum — useful when you need to grow a bin packing without ever
+    creating a bin larger than the originals.
+    """
+    halves: list[list[int]] = [[], []]
+    sums = [0, 0]
+    for idx in sorted(bin_indices, key=lambda i: -lengths[i]):
+        h = 0 if sums[0] <= sums[1] else 1
+        halves[h].append(idx)
+        sums[h] += lengths[idx]
+    return halves
+
+
+def expand_bins_by_splitting(bins: list[list[int]], target_count: int, lengths) -> None:
+    """Grow ``bins`` in place to ``target_count`` by repeatedly splitting the largest
+    multi-sample bin via :func:`_split_bin_by_tokens`. Stops early if every remaining
+    bin is a singleton (no bin can be split further)."""
+    while len(bins) < target_count:
+        candidates = [(sum(lengths[i] for i in b), idx) for idx, b in enumerate(bins) if len(b) > 1]
+        if not candidates:
+            break
+        _, idx = max(candidates)
+        left, right = _split_bin_by_tokens(bins[idx], lengths)
+        bins[idx] = left
+        bins.append(right)
+
+
 def get_reverse_idx(idx_map):
     reverse_idx_map = copy.deepcopy(idx_map)
 

@@ -282,18 +282,30 @@ class Dataset:
         return len(self.samples)
 
 
-def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu):
-    # use first fit to get the number of micro batches
-    batches = []
-    for length in total_lengths:
-        for i in range(len(batches)):
-            if batches[i] + length <= max_tokens_per_gpu:
-                batches[i] += length
+def first_fit_pack(total_lengths, max_tokens_per_bin):
+    """First-fit bin packing.
+
+    Returns ``list[list[int]]`` — each bin is a list of indices into ``total_lengths``
+    whose sum is ``<= max_tokens_per_bin``. Assumes every individual ``length`` already
+    fits within ``max_tokens_per_bin`` (caller should assert this).
+    """
+    bins: list[list[int]] = []
+    bin_sums: list[int] = []
+    for idx, length in enumerate(total_lengths):
+        for j in range(len(bins)):
+            if bin_sums[j] + length <= max_tokens_per_bin:
+                bins[j].append(idx)
+                bin_sums[j] += length
                 break
         else:
-            batches.append(length)
+            bins.append([idx])
+            bin_sums.append(length)
+    return bins
 
-    return len(batches)
+
+def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu):
+    # use first fit to get the number of micro batches
+    return len(first_fit_pack(total_lengths, max_tokens_per_gpu))
 
 
 def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):

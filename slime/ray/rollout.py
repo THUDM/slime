@@ -18,13 +18,13 @@ from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupCo
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
-from slime.utils.data import get_minimum_num_micro_batch_size
+from slime.utils.data import first_fit_pack
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.logging_utils import configure_logger, init_tracking
 from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
 from slime.utils.misc import Box, group_by, load_function
-from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
+from slime.utils.seqlen_balancing import expand_bins_by_splitting, get_seqlen_balanced_partitions
 from slime.utils.types import Sample
 
 from ..utils.metric_utils import has_repetition
@@ -778,8 +778,15 @@ class RolloutManager:
 
         total_lengths = [len(t) for t in data["tokens"]]
         data["total_lengths"] = total_lengths
-        balance_by_tokens = self.args.use_dynamic_batch_size or self.args.balance_data
         num_steps = len(total_lengths) // global_batch_size
+
+        if self.args.use_dynamic_batch_size:
+            assert self.args.max_tokens_per_gpu is not None
+            max_per_bin = self.args.max_tokens_per_gpu * cp_size
+            longest = max(total_lengths)
+            assert (
+                longest <= max_per_bin
+            ), f"sample with length {longest} exceeds max_tokens_per_gpu * cp_size = {max_per_bin}"
 
         # Accumulated outputs of the per-step loop below. Indexed by DP rank.
         #   per_rank_sample_indices[r] — global sample indices assigned to rank r,
@@ -796,43 +803,54 @@ class RolloutManager:
         per_rank_mbs_indices: list[list[list[int]]] = [[] for _ in range(dp_size)]
         num_microbatches_per_step: list[int] = []
 
-        # 3. Build mbs schedule and assign to DP ranks, per step
+        # 3. Per step: split samples into DP ranks with equal sample counts, then
+        #    build each rank's mbs schedule.
         for step_i in range(num_steps):
             step_start = step_i * global_batch_size
             step_lengths = total_lengths[step_start : step_start + global_batch_size]
 
-            if not self.args.use_dynamic_batch_size:
-                mbs = self.args.micro_batch_size
-                mbs_list = [list(range(j, j + mbs)) for j in range(0, global_batch_size, mbs)]
+            # Split samples to DP ranks (each rank gets gbs/dp samples).
+            if self.args.balance_data:
+                rank_parts = get_seqlen_balanced_partitions(step_lengths, dp_size, equal_size=True)
             else:
-                assert self.args.max_tokens_per_gpu is not None
-                # Compute the global minimum mbs across the whole step; ceil-divide by dp
-                # to get per-rank num_mbs. Tighter than the original per-rank min + MAX.
-                global_min_mbs = get_minimum_num_micro_batch_size(step_lengths, self.args.max_tokens_per_gpu * cp_size)
-                num_mbs_per_rank = max((global_min_mbs + dp_size - 1) // dp_size, 1)
+                rank_parts = [list(range(r, global_batch_size, dp_size)) for r in range(dp_size)]
+
+            if not self.args.use_dynamic_batch_size:
+                # Static: each rank's samples chunked into mbs of args.micro_batch_size.
+                mbs = self.args.micro_batch_size
+                rank_mbs = [
+                    [rank_parts[r][i : i + mbs] for i in range(0, len(rank_parts[r]), mbs)] for r in range(dp_size)
+                ]
+                num_mbs_per_rank = len(rank_mbs[0])
+            else:
+                # Dynamic: per-rank first-fit (strict bin sum <= max_per_bin), take MAX
+                # across ranks for VPP/PP alignment, then expand each rank to MAX bins
+                # by splitting its largest bins (split halves are <= original, so the
+                # <= max_per_bin guarantee is preserved).
+                rank_mbs = []
+                for r in range(dp_size):
+                    local_indices = rank_parts[r]
+                    local_bins = first_fit_pack([step_lengths[i] for i in local_indices], max_per_bin)
+                    # first_fit_pack returns indices into the local list; translate back to step-local.
+                    rank_mbs.append([[local_indices[i] for i in b] for b in local_bins])
+
+                num_mbs_per_rank = max(len(b) for b in rank_mbs)
                 if vpp_size > 1:
                     # Match the original floor-to-mb_group rounding (with min=1).
                     num_mbs_per_rank = max(num_mbs_per_rank // mb_group * mb_group, 1)
-                total_mbs = num_mbs_per_rank * dp_size
-                mbs_list = get_seqlen_balanced_partitions(step_lengths, total_mbs, equal_size=False)
 
-            total_mbs = len(mbs_list)
-            assert total_mbs % dp_size == 0, f"total_mbs {total_mbs} not divisible by dp_size {dp_size}"
-            num_microbatches_per_step.append(total_mbs // dp_size)
+                for r in range(dp_size):
+                    expand_bins_by_splitting(rank_mbs[r], num_mbs_per_rank, step_lengths)
 
-            if balance_by_tokens:
-                mbs_totals = [sum(step_lengths[i] for i in m) for m in mbs_list]
-                rank_assignment = get_seqlen_balanced_partitions(mbs_totals, dp_size, equal_size=True)
-            else:
-                rank_assignment = [list(range(r, total_mbs, dp_size)) for r in range(dp_size)]
+            num_microbatches_per_step.append(num_mbs_per_rank)
 
+            # Accumulate this step's per-rank samples (in mbs order) and local mbs indices.
             for r in range(dp_size):
                 offset = len(per_rank_sample_indices[r])
-                for mbs_idx in rank_assignment[r]:
-                    mbs_local = mbs_list[mbs_idx]
-                    per_rank_mbs_indices[r].append(list(range(offset, offset + len(mbs_local))))
-                    per_rank_sample_indices[r].extend(step_start + i for i in mbs_local)
-                    offset += len(mbs_local)
+                for mbs_indices in rank_mbs[r]:
+                    per_rank_mbs_indices[r].append(list(range(offset, offset + len(mbs_indices))))
+                    per_rank_sample_indices[r].extend(step_start + i for i in mbs_indices)
+                    offset += len(mbs_indices)
 
         # 4. Package per-rank rollout_data
         rollout_data_refs = []
