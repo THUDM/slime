@@ -1,24 +1,25 @@
 """Per-rollout DP/microbatch scheduling.
 
-Pure-Python logic that turns the (already-trimmed) collected rollout samples into
-per-DP-rank training shards plus the micro-batch schedule each rank will follow.
-Lives outside the ray/sglang-importing modules so it can be unit-tested under
-CPU-only CI.
+Pure-Python logic that decides, for one (already-trimmed) rollout's worth of
+sample lengths, which global sample goes to which DP rank and how each rank
+groups its samples into micro-batches. Lives outside the ray/sglang-importing
+modules so it can be unit-tested under CPU-only CI.
 
-Trim and dynamic-global_batch_size resolution stay on the caller's side; this
-module just consumes the resolved ``global_batch_size`` and assumes ``data`` is
-already a multiple of it.
+Trim, dynamic-global_batch_size resolution, and per-rank rollout_data
+packaging all stay on the caller's side; this module only computes the
+schedule itself.
 
-Invariants guaranteed by :func:`build_dp_rollout_data` (asserted by the tests):
+Invariants guaranteed by :func:`build_dp_schedule` (asserted by the tests):
   - every DP rank holds the same number of samples (``num_samples // dp_size``);
   - every DP rank runs the same ``num_microbatches`` per training step
     (required for PP sync);
-  - every mbs holds ``<= max_tokens_per_gpu * cp_size`` tokens, with one exception
-    — an individual sample larger than that cap lands alone in its own mbs (and
-    that mbs is the only one allowed to exceed the cap);
-  - the union of per-rank sample indices equals ``range(num_samples)`` and the
-    per-rank index sets are disjoint;
-  - flattening ``micro_batch_indices`` for a rank yields ``range(num_samples_rank)``.
+  - every mbs holds ``<= max_tokens_per_gpu * cp_size`` tokens, with one
+    exception — an individual sample larger than that cap lands alone in its
+    own mbs (and that mbs is the only one allowed to exceed the cap);
+  - the union of per-rank sample indices equals ``range(num_samples)`` and
+    the per-rank index sets are disjoint;
+  - flattening ``micro_batch_indices`` for a rank yields
+    ``range(num_samples_rank)``.
 """
 
 from __future__ import annotations
@@ -26,24 +27,6 @@ from __future__ import annotations
 from typing import Any
 
 from slime.utils.seqlen_balancing import expand_bins_by_splitting, first_fit_pack, get_seqlen_balanced_partitions
-
-# Sample-aligned fields: split per-rank using ``partition`` (rank-r's sample indices).
-_SAMPLE_KEYS = (
-    "tokens",
-    "multimodal_train_inputs",
-    "response_lengths",
-    "rewards",
-    "truncated",
-    "loss_masks",
-    "round_number",
-    "sample_indices",
-    "rollout_log_probs",
-    "rollout_routed_experts",
-    "prompt",
-    "teacher_log_probs",
-)
-# Whole-batch fields: passed through unsliced; the training side picks its own slice.
-_PASSTHROUGH_KEYS = ("raw_reward", "total_lengths")
 
 
 def compute_dynamic_global_batch_size(num_samples: int, dp_size: int) -> int:
@@ -58,75 +41,59 @@ def compute_dynamic_global_batch_size(num_samples: int, dp_size: int) -> int:
     return dynamic_gbs
 
 
-def build_dp_rollout_data(
+def build_dp_schedule(
     args: Any,
     train_parallel_config: dict,
-    data: dict,
+    total_lengths: list[int],
     *,
     global_batch_size: int,
-    dynamic_global_batch_size: int | None = None,
-) -> list[dict]:
-    """Return one ``rollout_data`` dict per DP rank.
+) -> tuple[list[list[int]], list[list[list[int]]], list[int]]:
+    """Compute the per-rank DP partition and micro-batch schedule.
 
-    Pipeline (also see module docstring for invariants):
-      1. For each training step (chunk of ``global_batch_size`` samples):
-         a. Split samples to DP ranks with equal counts (``balance_data`` => token-
-            balanced via Karmarkar-Karp, otherwise strided).
-         b. Static path: chunk each rank's samples into mbs of ``args.micro_batch_size``.
-            Dynamic path: per-rank first-fit (``<= max_tokens_per_gpu * cp_size``), take
-            ``MAX`` across ranks for PP/VPP alignment, then expand each rank to that
-            count by splitting its largest multi-sample bins. Split halves are ``<=``
-            their parent, so the cap is preserved.
-      2. Materialize each rank's sample list in mbs order so each mbs occupies a
-         contiguous range of local positions, then build ``micro_batch_indices``
-         pointing at those ranges.
+    For each training step (chunk of ``global_batch_size`` samples):
+      a. Split samples to DP ranks with equal counts (``balance_data`` => token-
+         balanced via Karmarkar-Karp, otherwise strided).
+      b. Static path: chunk each rank's samples into mbs of ``args.micro_batch_size``.
+         Dynamic path: per-rank first-fit (``<= max_tokens_per_gpu * cp_size``), take
+         ``MAX`` across ranks for PP/VPP alignment, then expand each rank to that
+         count by splitting its largest multi-sample bins. Split halves are ``<=``
+         their parent, so the cap is preserved.
 
-    Mutates ``data`` in place: writes ``data["total_lengths"]``. Assumes the caller
-    has already trimmed ``data`` to a multiple of ``global_batch_size``.
+    Samples are appended to ``partitions[r]`` in mbs order so each mbs occupies a
+    contiguous range of positions there; ``micro_batch_indices[r][k]`` is that range.
 
     Args:
         args: Namespace with ``micro_batch_size``, ``use_dynamic_batch_size``,
             ``max_tokens_per_gpu``, ``balance_data``.
         train_parallel_config: ``{"dp_size", "cp_size", "vpp_size",
             "microbatch_group_size_per_vp_stage"}``.
-        data: Rollout dict with at least ``"tokens"`` (list of token id sequences);
-            other ``_SAMPLE_KEYS`` are sliced per rank when present.
+        total_lengths: token count per sample, length must be a multiple of
+            ``global_batch_size``.
         global_batch_size: samples per training step.
-        dynamic_global_batch_size: if set, stamped onto every per-rank dict so the
-            training side reads the dynamic value instead of the static
-            ``args.global_batch_size``.
 
     Returns:
-        List of ``dp_size`` dicts, each ready to be ``ray.put`` and consumed by the
-        training side. Each dict carries: ``partition`` (global sample indices for
-        that rank), the sliced ``_SAMPLE_KEYS``, the passthrough ``_PASSTHROUGH_KEYS``,
-        ``num_microbatches`` (same list on every rank), ``micro_batch_indices``
-        (rank-local), and ``dynamic_global_batch_size`` when applicable.
+        ``(partitions, micro_batch_indices, num_microbatches)``:
+          - ``partitions[r]`` — global sample indices going to rank r, concatenated
+            across all steps in mbs order.
+          - ``micro_batch_indices[r][k]`` — local indices into ``partitions[r]`` for
+            the k-th mbs of rank r (flat across all steps).
+          - ``num_microbatches[s]`` — mbs count for step s; same value on every rank.
     """
     dp_size = train_parallel_config["dp_size"]
     cp_size = train_parallel_config["cp_size"]
     vpp_size = train_parallel_config["vpp_size"]
     mb_group = train_parallel_config["microbatch_group_size_per_vp_stage"]
 
-    total_lengths = [len(t) for t in data["tokens"]]
-    data["total_lengths"] = total_lengths
     num_steps = len(total_lengths) // global_batch_size
 
     if args.use_dynamic_batch_size:
         assert args.max_tokens_per_gpu is not None
         max_per_bin = args.max_tokens_per_gpu * cp_size
 
-    # Accumulators indexed by DP rank.
-    #   partitions[r] — global sample indices going to rank r, concatenated across
-    #     all steps in mbs-order. Also becomes ``rollout_data["partition"]``.
-    #   per_rank_mbs_indices[r] — flat list of mbs (across all steps in order),
-    #     each mbs being LOCAL indices into partitions[r].
-    #   num_microbatches_per_step[s] — same value on every DP rank (PP sync).
     partitions: list[list[int]] = [[] for _ in range(dp_size)]
-    per_rank_mbs_indices: list[list[list[int]]] = [[] for _ in range(dp_size)]
-    num_microbatches_per_step: list[int] = []
+    micro_batch_indices: list[list[list[int]]] = [[] for _ in range(dp_size)]
+    num_microbatches: list[int] = []
 
-    # 1. Per step: DP split, then per-rank mbs schedule.
     for step_i in range(num_steps):
         step_start = step_i * global_batch_size
         step_lengths = total_lengths[step_start : step_start + global_batch_size]
@@ -153,30 +120,12 @@ def build_dp_rollout_data(
             for r in range(dp_size):
                 expand_bins_by_splitting(rank_mbs[r], num_mbs_per_rank, rank_lens[r])
 
-        num_microbatches_per_step.append(num_mbs_per_rank)
+        num_microbatches.append(num_mbs_per_rank)
 
-        # 2. Materialize per-rank schedule. Samples are appended in mbs order so each
-        # mbs occupies a contiguous range of positions in partitions[r].
         for r in range(dp_size):
             for mbs_local in rank_mbs[r]:
                 local_start = len(partitions[r])
                 partitions[r].extend(step_start + rank_parts[r][i] for i in mbs_local)
-                per_rank_mbs_indices[r].append(list(range(local_start, local_start + len(mbs_local))))
+                micro_batch_indices[r].append(list(range(local_start, local_start + len(mbs_local))))
 
-    # 3. Build per-rank rollout_data dicts (caller wraps in Ray Box).
-    rollout_data_list: list[dict] = []
-    for r in range(dp_size):
-        partition = partitions[r]
-        rollout_data: dict = {"partition": partition}
-        for key in _SAMPLE_KEYS:
-            if key in data:
-                rollout_data[key] = [data[key][j] for j in partition]
-        for key in _PASSTHROUGH_KEYS:
-            if key in data:
-                rollout_data[key] = data[key]
-        if dynamic_global_batch_size is not None:
-            rollout_data["dynamic_global_batch_size"] = dynamic_global_batch_size
-        rollout_data["num_microbatches"] = num_microbatches_per_step
-        rollout_data["micro_batch_indices"] = per_rank_mbs_indices[r]
-        rollout_data_list.append(rollout_data)
-    return rollout_data_list
+    return partitions, micro_batch_indices, num_microbatches

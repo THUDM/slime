@@ -18,7 +18,7 @@ from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupCo
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
-from slime.utils.dp_schedule import build_dp_rollout_data, compute_dynamic_global_batch_size
+from slime.utils.dp_schedule import build_dp_schedule, compute_dynamic_global_batch_size
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.logging_utils import configure_logger, init_tracking
@@ -708,9 +708,9 @@ class RolloutManager:
         self.train_parallel_config = config
 
     def _split_train_data_by_dp(self, data):
-        """Resolve gbs, trim ``data`` to a multiple of it, then build per-rank
-        rollout_data shards (delegated to :func:`build_dp_rollout_data` so the
-        scheduling/packaging logic stays unit-testable without Ray/sglang)."""
+        """Resolve gbs, trim ``data``, compute the DP/mbs schedule, and package each
+        rank's rollout_data into a Ray Box. The schedule itself is computed by
+        :func:`build_dp_schedule` so it stays unit-testable without Ray/sglang."""
         dp_size = self.train_parallel_config["dp_size"]
 
         # 1. Resolve effective global_batch_size
@@ -738,14 +738,49 @@ class RolloutManager:
                     if isinstance(val, list):
                         data[key] = val[:trim_len]
 
-        rollout_data_list = build_dp_rollout_data(
+        # 3. Compute schedule
+        total_lengths = [len(t) for t in data["tokens"]]
+        data["total_lengths"] = total_lengths
+        partitions, micro_batch_indices, num_microbatches = build_dp_schedule(
             self.args,
             self.train_parallel_config,
-            data,
+            total_lengths,
             global_batch_size=global_batch_size,
-            dynamic_global_batch_size=dynamic_gbs,
         )
-        return [Box(ray.put(d)) for d in rollout_data_list]
+
+        # 4. Package per-rank rollout_data
+        rollout_data_refs = []
+        for r in range(dp_size):
+            partition = partitions[r]
+            rollout_data = {"partition": partition}
+            for key in [
+                "tokens",
+                "multimodal_train_inputs",
+                "response_lengths",
+                "rewards",
+                "truncated",
+                "loss_masks",
+                "round_number",
+                "sample_indices",
+                "rollout_log_probs",
+                "rollout_routed_experts",
+                "prompt",
+                "teacher_log_probs",
+            ]:
+                if key not in data:
+                    continue
+                rollout_data[key] = [data[key][j] for j in partition]
+            # keys that need to be splited at train side
+            for key in ["raw_reward", "total_lengths"]:
+                if key not in data:
+                    continue
+                rollout_data[key] = data[key]
+            if dynamic_gbs is not None:
+                rollout_data["dynamic_global_batch_size"] = dynamic_gbs
+            rollout_data["num_microbatches"] = num_microbatches
+            rollout_data["micro_batch_indices"] = micro_batch_indices[r]
+            rollout_data_refs.append(Box(ray.put(rollout_data)))
+        return rollout_data_refs
 
 
 def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):

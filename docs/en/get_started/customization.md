@@ -435,7 +435,7 @@ python -m pytest \
 
 Each test file can also be executed directly with `python tests/plugin_contracts/<file>.py`, which keeps them compatible with `run-ci-changed`.
 
-A dedicated `run-ci-plugin-contracts` CI label is also available. Adding it to a PR triggers all four contract test files in parallel (no GPU required).
+A dedicated `run-ci-cpu-unittest` CI label is also available. Adding it to a PR triggers the CPU-only unit-test job, which runs the contract tests plus other lightweight unit tests in parallel (no GPU required).
 
 For user-defined implementations, you can either export environment variables such as `SLIME_CONTRACT_ROLLOUT_FUNCTION_PATH` and `SLIME_CONTRACT_CUSTOM_RM_PATH`, or pass overrides directly when running a test file, for example:
 
