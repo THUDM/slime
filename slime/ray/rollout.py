@@ -18,13 +18,12 @@ from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupCo
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
-from slime.utils.data import first_fit_pack
+from slime.utils.dp_schedule import build_dp_rollout_data, compute_dynamic_global_batch_size
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.logging_utils import configure_logger, init_tracking
 from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
 from slime.utils.misc import Box, group_by, load_function
-from slime.utils.seqlen_balancing import expand_bins_by_splitting, get_seqlen_balanced_partitions
 from slime.utils.types import Sample
 
 from ..utils.metric_utils import has_repetition
@@ -590,33 +589,6 @@ class RolloutManager:
 
         return data, metrics
 
-    def _compute_dynamic_global_batch_size(self, num_samples: int) -> int:
-        """Calculate dynamic global_batch_size to ensure only one training step.
-
-        Strategy: global_batch_size = num_samples rounded down to a multiple of dp_size
-        This ensures num_steps_per_rollout = num_samples // global_batch_size = 1
-        """
-        dp_size = self.train_parallel_config["dp_size"]
-        original_gbs = self.args.global_batch_size
-
-        # Round down to a multiple of dp_size to ensure only one training step
-        dynamic_gbs = (num_samples // dp_size) * dp_size
-
-        if dynamic_gbs == 0:
-            # Too few samples, use at least dp_size
-            dynamic_gbs = dp_size
-            logger.warning(f"num_samples={num_samples} < dp_size={dp_size}, using dp_size as global_batch_size")
-
-        # Calculate how many samples will be discarded
-        wasted = num_samples - dynamic_gbs
-
-        if dynamic_gbs != original_gbs or wasted > 0:
-            logger.info(
-                f"Dynamic global_batch_size: {original_gbs} -> {dynamic_gbs} (num_samples={num_samples}, dp_size={dp_size}, num_steps=1, wasted={wasted})"
-            )
-
-        return dynamic_gbs
-
     def _save_debug_rollout_data(self, data, rollout_id, evaluation: bool):
         # TODO to be refactored (originally Buffer._set_data)
         if (path_template := self.args.save_debug_rollout_data) is not None:
@@ -736,155 +708,28 @@ class RolloutManager:
         self.train_parallel_config = config
 
     def _split_train_data_by_dp(self, data):
-        """Convert collected samples into per-DP-rank training shards.
+        """Build per-rank rollout_data shards and wrap each in a Ray Box.
 
-        Pipeline:
-          1. Resolve the effective ``global_batch_size`` (dynamic if enabled).
-          2. Trim ``data`` to a multiple of it (skipped if ``disable_rollout_trim_samples``).
-          3. For each training step (chunk of ``global_batch_size`` samples):
-             - Build mbs. Static: ``args.micro_batch_size``-sized contiguous mbs.
-               Dynamic: bin-pack the step globally so each mbs fits
-               ``max_tokens_per_gpu * cp_size`` (per-rank mbs count rounded up,
-               and to ``microbatch_group_size_per_vp_stage`` when VPP is on).
-             - Assign mbs to DP ranks: token-balanced for dynamic / ``balance_data``,
-               otherwise strided across mbs.
-          4. Package each rank's rollout_data into a Ray Box, with ``num_microbatches``
-             and ``micro_batch_indices`` so the training side just consumes the schedule.
+        The scheduling/packaging logic lives in :func:`slime.utils.dp_schedule.build_dp_rollout_data`
+        as a pure function so it can be unit-tested without Ray/sglang imports.
         """
         dp_size = self.train_parallel_config["dp_size"]
-        cp_size = self.train_parallel_config["cp_size"]
-        vpp_size = self.train_parallel_config["vpp_size"]
-        mb_group = self.train_parallel_config["microbatch_group_size_per_vp_stage"]
-
-        # 1. Resolve effective global_batch_size
-        dynamic_global_batch_size: int | None = None
+        dynamic_gbs: int | None = None
         if self.args.use_dynamic_global_batch_size and not self.args.disable_rollout_trim_samples:
-            dynamic_global_batch_size = self._compute_dynamic_global_batch_size(len(data["tokens"]))
-            global_batch_size = dynamic_global_batch_size
-        else:
-            global_batch_size = self.args.global_batch_size
+            dynamic_gbs = compute_dynamic_global_batch_size(len(data["tokens"]), dp_size)
+            if dynamic_gbs != self.args.global_batch_size:
+                logger.info(
+                    f"Dynamic global_batch_size: {self.args.global_batch_size} -> {dynamic_gbs} "
+                    f"(num_samples={len(data['tokens'])}, dp_size={dp_size}, num_steps=1)"
+                )
 
-        # 2. Trim data to a multiple of global_batch_size
-        if not self.args.disable_rollout_trim_samples:
-            num_samples = len(data["tokens"])
-            trim_len = num_samples // global_batch_size * global_batch_size
-            if trim_len == 0:
-                raise ValueError(f"Not enough samples {num_samples} for global_batch_size {global_batch_size}")
-            if trim_len < num_samples:
-                logger.info(f"Trimmed samples from {num_samples} to {trim_len}")
-                for key, val in data.items():
-                    if isinstance(val, list):
-                        data[key] = val[:trim_len]
-
-        total_lengths = [len(t) for t in data["tokens"]]
-        data["total_lengths"] = total_lengths
-        num_steps = len(total_lengths) // global_batch_size
-
-        if self.args.use_dynamic_batch_size:
-            assert self.args.max_tokens_per_gpu is not None
-            max_per_bin = self.args.max_tokens_per_gpu * cp_size
-
-        # Accumulated outputs of the per-step loop below. Indexed by DP rank.
-        #   per_rank_sample_indices[r] — global sample indices assigned to rank r,
-        #     concatenated across all steps. Used as the "partition" that selects
-        #     which rows of each ``data[key]`` list go to rank r.
-        #   per_rank_mbs_indices[r] — rank r's mbs schedule: a flat list of mbs
-        #     (across all steps, in step order), each mbs being LOCAL indices into
-        #     rank r's own samples (i.e. offsets within per_rank_sample_indices[r]).
-        #     This is what DataIterator iterates over on the training side.
-        #   num_microbatches_per_step[s] — number of mbs each rank runs in step s.
-        #     Same value on every DP rank (PP sync requirement); training side reads
-        #     this to drive its per-step forward/backward loop.
-        per_rank_sample_indices: list[list[int]] = [[] for _ in range(dp_size)]
-        per_rank_mbs_indices: list[list[list[int]]] = [[] for _ in range(dp_size)]
-        num_microbatches_per_step: list[int] = []
-
-        # 3. Per step: split samples into DP ranks with equal sample counts, then
-        #    build each rank's mbs schedule.
-        for step_i in range(num_steps):
-            step_start = step_i * global_batch_size
-            step_lengths = total_lengths[step_start : step_start + global_batch_size]
-
-            # Split samples to DP ranks (each rank gets gbs/dp samples).
-            if self.args.balance_data:
-                rank_parts = get_seqlen_balanced_partitions(step_lengths, dp_size, equal_size=True)
-            else:
-                rank_parts = [list(range(r, global_batch_size, dp_size)) for r in range(dp_size)]
-
-            if not self.args.use_dynamic_batch_size:
-                # Static: each rank's samples chunked into mbs of args.micro_batch_size.
-                mbs = self.args.micro_batch_size
-                rank_mbs = [
-                    [rank_parts[r][i : i + mbs] for i in range(0, len(rank_parts[r]), mbs)] for r in range(dp_size)
-                ]
-                num_mbs_per_rank = len(rank_mbs[0])
-            else:
-                # Dynamic: per-rank first-fit (strict bin sum <= max_per_bin), take MAX
-                # across ranks for VPP/PP alignment, then expand each rank to MAX bins
-                # by splitting its largest bins (split halves are <= original, so the
-                # <= max_per_bin guarantee is preserved).
-                rank_mbs = []
-                for r in range(dp_size):
-                    local_indices = rank_parts[r]
-                    local_bins = first_fit_pack([step_lengths[i] for i in local_indices], max_per_bin)
-                    # first_fit_pack returns indices into the local list; translate back to step-local.
-                    rank_mbs.append([[local_indices[i] for i in b] for b in local_bins])
-
-                num_mbs_per_rank = max(len(b) for b in rank_mbs)
-                if vpp_size > 1:
-                    # Match the original floor-to-mb_group rounding (with min=1).
-                    num_mbs_per_rank = max(num_mbs_per_rank // mb_group * mb_group, 1)
-
-                for r in range(dp_size):
-                    expand_bins_by_splitting(rank_mbs[r], num_mbs_per_rank, step_lengths)
-
-            num_microbatches_per_step.append(num_mbs_per_rank)
-
-            # Accumulate this step's per-rank samples (in mbs order) and local mbs indices.
-            for r in range(dp_size):
-                offset = len(per_rank_sample_indices[r])
-                for mbs_indices in rank_mbs[r]:
-                    per_rank_mbs_indices[r].append(list(range(offset, offset + len(mbs_indices))))
-                    per_rank_sample_indices[r].extend(step_start + i for i in mbs_indices)
-                    offset += len(mbs_indices)
-
-        # 4. Package per-rank rollout_data
-        rollout_data_refs = []
-        for r in range(dp_size):
-            partition = per_rank_sample_indices[r]
-            rollout_data = {"partition": partition}
-            for key in [
-                "tokens",
-                "multimodal_train_inputs",
-                "response_lengths",
-                "rewards",
-                "truncated",
-                "loss_masks",
-                "round_number",
-                "sample_indices",
-                "rollout_log_probs",
-                "rollout_routed_experts",
-                "prompt",
-                "teacher_log_probs",
-            ]:
-                if key not in data:
-                    continue
-                rollout_data[key] = [data[key][j] for j in partition]
-            # keys that need to be splited at train side
-            for key in [
-                "raw_reward",
-                "total_lengths",
-            ]:
-                if key not in data:
-                    continue
-                rollout_data[key] = data[key]
-            # Pass dynamic global_batch_size to training side
-            if dynamic_global_batch_size is not None:
-                rollout_data["dynamic_global_batch_size"] = dynamic_global_batch_size
-            rollout_data["num_microbatches"] = num_microbatches_per_step
-            rollout_data["micro_batch_indices"] = per_rank_mbs_indices[r]
-            rollout_data_refs.append(Box(ray.put(rollout_data)))
-        return rollout_data_refs
+        rollout_data_list = build_dp_rollout_data(
+            self.args,
+            self.train_parallel_config,
+            data,
+            dynamic_global_batch_size=dynamic_gbs,
+        )
+        return [Box(ray.put(d)) for d in rollout_data_list]
 
 
 def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):
