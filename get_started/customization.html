@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="May 18, 2026"/>
+    <meta name="docbuild:last-update" content="May 20, 2026"/>
   </head>
   
   
@@ -924,7 +924,7 @@ Covers <code class="docutils literal notranslate"><span class="pre">--custom-rol
 </pre></div>
 </div>
 <p>Each test file can also be executed directly with <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/plugin_contracts/&lt;file&gt;.py</span></code>, which keeps them compatible with <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code>.</p>
-<p>A dedicated <code class="docutils literal notranslate"><span class="pre">run-ci-plugin-contracts</span></code> CI label is also available. Adding it to a PR triggers all four contract test files in parallel (no GPU required).</p>
+<p>A dedicated <code class="docutils literal notranslate"><span class="pre">run-ci-cpu-unittest</span></code> CI label is also available. Adding it to a PR triggers the CPU-only unit-test job, which runs the contract tests plus other lightweight unit tests in parallel (no GPU required).</p>
 <p>For user-defined implementations, you can either export environment variables such as <code class="docutils literal notranslate"><span class="pre">SLIME_CONTRACT_ROLLOUT_FUNCTION_PATH</span></code> and <code class="docutils literal notranslate"><span class="pre">SLIME_CONTRACT_CUSTOM_RM_PATH</span></code>, or pass overrides directly when running a test file, for example:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tests/plugin_contracts/test_plugin_rollout_contracts.py<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--rollout-function-path<span class="w"> </span>my_project.custom_rollout.generate_rollout
@@ -1046,7 +1046,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on May 18, 2026.
+  Last updated on May 20, 2026.
   <br/>
 </p>
   </div>

@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 05 月 18 日"/>
+    <meta name="docbuild:last-update" content="2026 年 05 月 20 日"/>
   </head>
   
   
@@ -922,7 +922,7 @@
 </pre></div>
 </div>
 <p>每个测试文件也支持直接通过 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/plugin_contracts/&lt;file&gt;.py</span></code> 执行，这样可以和 <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> 保持兼容。</p>
-<p>CI 中也提供了独立的 <code class="docutils literal notranslate"><span class="pre">run-ci-plugin-contracts</span></code> label，给 PR 打上该标签后会并行运行上述全部四个契约测试（无需 GPU）。</p>
+<p>CI 中也提供了独立的 <code class="docutils literal notranslate"><span class="pre">run-ci-cpu-unittest</span></code> label，给 PR 打上该标签后会并行运行 CPU-only 的单元测试任务，包含上述契约测试以及其他轻量单测（无需 GPU）。</p>
 <p>如果你要验证自己的自定义实现，可以直接设置环境变量，例如 <code class="docutils literal notranslate"><span class="pre">SLIME_CONTRACT_ROLLOUT_FUNCTION_PATH</span></code>、<code class="docutils literal notranslate"><span class="pre">SLIME_CONTRACT_CUSTOM_RM_PATH</span></code>，也可以在直接运行测试文件时传参，例如：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tests/plugin_contracts/test_plugin_rollout_contracts.py<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--rollout-function-path<span class="w"> </span>my_project.custom_rollout.generate_rollout
@@ -1044,7 +1044,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 05 月 18 日.
+  最后更新于 2026 年 05 月 20 日.
   <br/>
 </p>
   </div>

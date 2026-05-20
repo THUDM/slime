@@ -437,7 +437,7 @@ python -m pytest \
 
 每个测试文件也支持直接通过 `python tests/plugin_contracts/<file>.py` 执行，这样可以和 `run-ci-changed` 保持兼容。
 
-CI 中也提供了独立的 `run-ci-plugin-contracts` label，给 PR 打上该标签后会并行运行上述全部四个契约测试（无需 GPU）。
+CI 中也提供了独立的 `run-ci-cpu-unittest` label，给 PR 打上该标签后会并行运行 CPU-only 的单元测试任务，包含上述契约测试以及其他轻量单测（无需 GPU）。
 
 如果你要验证自己的自定义实现，可以直接设置环境变量，例如 `SLIME_CONTRACT_ROLLOUT_FUNCTION_PATH`、`SLIME_CONTRACT_CUSTOM_RM_PATH`，也可以在直接运行测试文件时传参，例如：
 
