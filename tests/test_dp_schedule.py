@@ -1,7 +1,11 @@
 """CPU unit tests for slime.utils.dp_schedule.build_dp_rollout_data.
 
 The tests assert the invariants documented at the top of dp_schedule.py against a
-range of static / dynamic / VPP / oversize / trim / balance scenarios.
+range of static / dynamic / VPP / oversize / balance scenarios.
+
+Trim and dynamic-gbs resolution live in the caller (``RolloutManager``), so these
+tests just hand ``build_dp_rollout_data`` a ``data`` dict whose ``tokens`` length
+is already a multiple of the supplied ``global_batch_size``.
 """
 
 from types import SimpleNamespace
@@ -13,21 +17,15 @@ from slime.utils.dp_schedule import build_dp_rollout_data, compute_dynamic_globa
 
 def make_args(
     *,
-    global_batch_size,
     micro_batch_size=1,
     use_dynamic_batch_size=False,
     max_tokens_per_gpu=None,
-    use_dynamic_global_batch_size=False,
-    disable_rollout_trim_samples=False,
     balance_data=False,
 ):
     return SimpleNamespace(
-        global_batch_size=global_batch_size,
         micro_batch_size=micro_batch_size,
         use_dynamic_batch_size=use_dynamic_batch_size,
         max_tokens_per_gpu=max_tokens_per_gpu,
-        use_dynamic_global_batch_size=use_dynamic_global_batch_size,
-        disable_rollout_trim_samples=disable_rollout_trim_samples,
         balance_data=balance_data,
     )
 
@@ -93,10 +91,10 @@ def test_static_stride_single_step():
     """Static + strided DP split, single step."""
     lengths = [10] * 16
     data = make_data(lengths)
-    args = make_args(global_batch_size=16, micro_batch_size=2)
+    args = make_args(micro_batch_size=2)
     tp = make_tp(dp_size=4)
 
-    out = build_dp_rollout_data(args, tp, data)
+    out = build_dp_rollout_data(args, tp, data, global_batch_size=16)
 
     assert len(out) == 4
     assert out[0]["num_microbatches"] == [2]
@@ -108,10 +106,10 @@ def test_static_balance_multi_step():
     """Static + balance_data + 2 training steps. Each rank must get gbs/dp per step."""
     lengths = [1, 2, 3, 4, 5, 6, 7, 8, 8, 7, 6, 5, 4, 3, 2, 1]  # 2 steps of 8
     data = make_data(lengths)
-    args = make_args(global_batch_size=8, micro_batch_size=2, balance_data=True)
+    args = make_args(micro_batch_size=2, balance_data=True)
     tp = make_tp(dp_size=2)
 
-    out = build_dp_rollout_data(args, tp, data)
+    out = build_dp_rollout_data(args, tp, data, global_batch_size=8)
 
     assert out[0]["num_microbatches"] == [2, 2]
     assert_invariants(out, dp_size=2, total_lengths=lengths)
@@ -122,10 +120,10 @@ def test_dynamic_uniform():
     """Dynamic mbs on uniform-length samples."""
     lengths = [5] * 8
     data = make_data(lengths)
-    args = make_args(global_batch_size=8, use_dynamic_batch_size=True, max_tokens_per_gpu=10)
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=10)
     tp = make_tp(dp_size=2)
 
-    out = build_dp_rollout_data(args, tp, data)
+    out = build_dp_rollout_data(args, tp, data, global_batch_size=8)
 
     assert_invariants(out, dp_size=2, total_lengths=lengths, max_per_bin=10)
 
@@ -135,10 +133,10 @@ def test_dynamic_skewed_lengths():
     """Skewed lengths (the case where K-K used to over-pack a single bin)."""
     lengths = [9, 9, 9, 9, 1, 1, 1, 1]
     data = make_data(lengths)
-    args = make_args(global_batch_size=8, use_dynamic_batch_size=True, max_tokens_per_gpu=10)
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=10)
     tp = make_tp(dp_size=2)
 
-    out = build_dp_rollout_data(args, tp, data)
+    out = build_dp_rollout_data(args, tp, data, global_batch_size=8)
 
     assert_invariants(out, dp_size=2, total_lengths=lengths, max_per_bin=10)
 
@@ -149,10 +147,10 @@ def test_dynamic_oversized_sample_lands_alone():
     other samples crammed in)."""
     lengths = [15, 3, 3, 3, 3, 3, 3, 3]  # 15 > C=10
     data = make_data(lengths)
-    args = make_args(global_batch_size=8, use_dynamic_batch_size=True, max_tokens_per_gpu=10)
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=10)
     tp = make_tp(dp_size=2)
 
-    out = build_dp_rollout_data(args, tp, data)
+    out = build_dp_rollout_data(args, tp, data, global_batch_size=8)
 
     assert_invariants(out, dp_size=2, total_lengths=lengths, max_per_bin=10)
     # Find the rank holding the oversized sample and verify it lives alone in some mbs.
@@ -175,10 +173,10 @@ def test_dynamic_with_vpp_rounds_to_mb_group():
     """num_microbatches per rank should be a multiple of mb_group when vpp_size > 1."""
     lengths = [4] * 32  # 2 steps of 16; per step, ~8 bins of 8 needed at C=8
     data = make_data(lengths)
-    args = make_args(global_batch_size=16, use_dynamic_batch_size=True, max_tokens_per_gpu=8)
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=8)
     tp = make_tp(dp_size=2, vpp_size=2, microbatch_group_size_per_vp_stage=2)
 
-    out = build_dp_rollout_data(args, tp, data)
+    out = build_dp_rollout_data(args, tp, data, global_batch_size=16)
 
     nmb = out[0]["num_microbatches"]
     for n in nmb:
@@ -187,55 +185,18 @@ def test_dynamic_with_vpp_rounds_to_mb_group():
 
 
 @pytest.mark.unit
-def test_trim_to_global_batch_size():
-    """Surplus samples beyond a multiple of global_batch_size get trimmed."""
-    lengths = [10] * 9  # 9 -> trim to 8 with gbs=4
+def test_dynamic_global_batch_size_stamped_on_rollout_data():
+    """When dynamic_global_batch_size is passed it should appear on every per-rank dict."""
+    lengths = [4] * 8
     data = make_data(lengths)
-    args = make_args(global_batch_size=4, micro_batch_size=1)
-    tp = make_tp(dp_size=2)
-
-    out = build_dp_rollout_data(args, tp, data)
-
-    # 8 surviving samples * num_steps unchanged.
-    assert len(data["tokens"]) == 8
-    assert out[0]["num_microbatches"] == [2, 2]
-    assert_invariants(out, dp_size=2, total_lengths=lengths[:8])
-
-
-@pytest.mark.unit
-def test_disable_trim_passes_through_uneven_data():
-    """When disable_rollout_trim_samples is on we don't trim. With an exact multiple
-    of gbs the schedule still works; uneven input would raise downstream, which we
-    don't assert here (we just verify the no-trim case is left alone)."""
-    lengths = [10] * 8
-    data = make_data(lengths)
-    args = make_args(global_batch_size=4, micro_batch_size=1, disable_rollout_trim_samples=True)
-    tp = make_tp(dp_size=2)
-
-    out = build_dp_rollout_data(args, tp, data)
-
-    assert len(data["tokens"]) == 8  # untouched
-    assert_invariants(out, dp_size=2, total_lengths=lengths)
-
-
-@pytest.mark.unit
-def test_dynamic_global_batch_size_resolves_to_one_step():
-    """compute_dynamic_global_batch_size + caller wiring should produce one step
-    covering all dp-aligned samples."""
-    lengths = [4] * 10  # 10 samples, dp=4 -> dynamic gbs = 8, 1 step, 2 trimmed
-    data = make_data(lengths)
-    args = make_args(global_batch_size=4, micro_batch_size=1, use_dynamic_global_batch_size=True)
+    args = make_args(micro_batch_size=1)
     tp = make_tp(dp_size=4)
 
-    dynamic_gbs = compute_dynamic_global_batch_size(len(lengths), tp["dp_size"])
-    assert dynamic_gbs == 8
+    out = build_dp_rollout_data(args, tp, data, global_batch_size=8, dynamic_global_batch_size=8)
 
-    out = build_dp_rollout_data(args, tp, data, dynamic_global_batch_size=dynamic_gbs)
-
-    assert len(data["tokens"]) == 8
     assert out[0]["num_microbatches"] == [2]
-    assert out[0]["dynamic_global_batch_size"] == 8
-    assert_invariants(out, dp_size=4, total_lengths=lengths[:8])
+    for r in range(4):
+        assert out[r]["dynamic_global_batch_size"] == 8
 
 
 @pytest.mark.unit
@@ -255,10 +216,10 @@ def test_sample_aligned_fields_are_sliced_by_partition():
     data = make_data(lengths)
     data["rewards"] = list(range(100, 108))  # one per sample
     data["raw_reward"] = "passthrough"  # whole-batch field
-    args = make_args(global_batch_size=8, micro_batch_size=1)
+    args = make_args(micro_batch_size=1)
     tp = make_tp(dp_size=2)
 
-    out = build_dp_rollout_data(args, tp, data)
+    out = build_dp_rollout_data(args, tp, data, global_batch_size=8)
 
     for r in range(2):
         partition = out[r]["partition"]

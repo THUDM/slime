@@ -1,8 +1,13 @@
 """Per-rollout DP/microbatch scheduling.
 
-Pure-Python logic that turns collected rollout samples into per-DP-rank training
-shards plus the micro-batch schedule each rank will follow. Lives outside the
-ray/sglang-importing modules so it can be unit-tested under CPU-only CI.
+Pure-Python logic that turns the (already-trimmed) collected rollout samples into
+per-DP-rank training shards plus the micro-batch schedule each rank will follow.
+Lives outside the ray/sglang-importing modules so it can be unit-tested under
+CPU-only CI.
+
+Trim and dynamic-global_batch_size resolution stay on the caller's side; this
+module just consumes the resolved ``global_batch_size`` and assumes ``data`` is
+already a multiple of it.
 
 Invariants guaranteed by :func:`build_dp_rollout_data` (asserted by the tests):
   - every DP rank holds the same number of samples (``num_samples // dp_size``);
@@ -18,14 +23,9 @@ Invariants guaranteed by :func:`build_dp_rollout_data` (asserted by the tests):
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-from slime.utils.data import first_fit_pack
-from slime.utils.seqlen_balancing import expand_bins_by_splitting, get_seqlen_balanced_partitions
-
-logger = logging.getLogger(__name__)
-
+from slime.utils.seqlen_balancing import expand_bins_by_splitting, first_fit_pack, get_seqlen_balanced_partitions
 
 # Sample-aligned fields: split per-rank using ``partition`` (rank-r's sample indices).
 _SAMPLE_KEYS = (
@@ -63,15 +63,13 @@ def build_dp_rollout_data(
     train_parallel_config: dict,
     data: dict,
     *,
+    global_batch_size: int,
     dynamic_global_batch_size: int | None = None,
 ) -> list[dict]:
     """Return one ``rollout_data`` dict per DP rank.
 
     Pipeline (also see module docstring for invariants):
-      1. Resolve the effective ``global_batch_size`` (the ``dynamic_global_batch_size``
-         arg overrides ``args.global_batch_size`` when provided).
-      2. Trim ``data`` to a multiple of that, unless ``args.disable_rollout_trim_samples``.
-      3. For each training step (chunk of ``global_batch_size`` samples):
+      1. For each training step (chunk of ``global_batch_size`` samples):
          a. Split samples to DP ranks with equal counts (``balance_data`` => token-
             balanced via Karmarkar-Karp, otherwise strided).
          b. Static path: chunk each rank's samples into mbs of ``args.micro_batch_size``.
@@ -79,24 +77,24 @@ def build_dp_rollout_data(
             ``MAX`` across ranks for PP/VPP alignment, then expand each rank to that
             count by splitting its largest multi-sample bins. Split halves are ``<=``
             their parent, so the cap is preserved.
-      4. Materialize each rank's sample list in mbs order so each mbs occupies a
+      2. Materialize each rank's sample list in mbs order so each mbs occupies a
          contiguous range of local positions, then build ``micro_batch_indices``
          pointing at those ranges.
 
-    Mutates ``data`` in place: trims sample-aligned lists when needed and writes
-    ``data["total_lengths"]``.
+    Mutates ``data`` in place: writes ``data["total_lengths"]``. Assumes the caller
+    has already trimmed ``data`` to a multiple of ``global_batch_size``.
 
     Args:
-        args: Namespace with ``global_batch_size``, ``micro_batch_size``,
-            ``use_dynamic_batch_size``, ``max_tokens_per_gpu``, ``balance_data``,
-            ``disable_rollout_trim_samples``.
+        args: Namespace with ``micro_batch_size``, ``use_dynamic_batch_size``,
+            ``max_tokens_per_gpu``, ``balance_data``.
         train_parallel_config: ``{"dp_size", "cp_size", "vpp_size",
             "microbatch_group_size_per_vp_stage"}``.
         data: Rollout dict with at least ``"tokens"`` (list of token id sequences);
             other ``_SAMPLE_KEYS`` are sliced per rank when present.
-        dynamic_global_batch_size: precomputed dynamic gbs to use; if ``None``,
-            ``args.global_batch_size`` is used. Caller should compute this via
-            :func:`compute_dynamic_global_batch_size` to keep that decision local.
+        global_batch_size: samples per training step.
+        dynamic_global_batch_size: if set, stamped onto every per-rank dict so the
+            training side reads the dynamic value instead of the static
+            ``args.global_batch_size``.
 
     Returns:
         List of ``dp_size`` dicts, each ready to be ``ray.put`` and consumed by the
@@ -110,24 +108,6 @@ def build_dp_rollout_data(
     vpp_size = train_parallel_config["vpp_size"]
     mb_group = train_parallel_config["microbatch_group_size_per_vp_stage"]
 
-    # 1. Resolve effective global_batch_size
-    if dynamic_global_batch_size is not None:
-        global_batch_size = dynamic_global_batch_size
-    else:
-        global_batch_size = args.global_batch_size
-
-    # 2. Trim data to a multiple of global_batch_size
-    if not args.disable_rollout_trim_samples:
-        num_samples = len(data["tokens"])
-        trim_len = num_samples // global_batch_size * global_batch_size
-        if trim_len == 0:
-            raise ValueError(f"Not enough samples {num_samples} for global_batch_size {global_batch_size}")
-        if trim_len < num_samples:
-            logger.info(f"Trimmed samples from {num_samples} to {trim_len}")
-            for key, val in data.items():
-                if isinstance(val, list):
-                    data[key] = val[:trim_len]
-
     total_lengths = [len(t) for t in data["tokens"]]
     data["total_lengths"] = total_lengths
     num_steps = len(total_lengths) // global_batch_size
@@ -137,16 +117,16 @@ def build_dp_rollout_data(
         max_per_bin = args.max_tokens_per_gpu * cp_size
 
     # Accumulators indexed by DP rank.
-    #   per_rank_sample_indices[r] — global sample indices going to rank r,
-    #     concatenated across all steps in mbs-order.
+    #   partitions[r] — global sample indices going to rank r, concatenated across
+    #     all steps in mbs-order. Also becomes ``rollout_data["partition"]``.
     #   per_rank_mbs_indices[r] — flat list of mbs (across all steps in order),
-    #     each mbs being LOCAL indices into per_rank_sample_indices[r].
+    #     each mbs being LOCAL indices into partitions[r].
     #   num_microbatches_per_step[s] — same value on every DP rank (PP sync).
-    per_rank_sample_indices: list[list[int]] = [[] for _ in range(dp_size)]
+    partitions: list[list[int]] = [[] for _ in range(dp_size)]
     per_rank_mbs_indices: list[list[list[int]]] = [[] for _ in range(dp_size)]
     num_microbatches_per_step: list[int] = []
 
-    # 3. Per step: DP split, then per-rank mbs schedule.
+    # 1. Per step: DP split, then per-rank mbs schedule.
     for step_i in range(num_steps):
         step_start = step_i * global_batch_size
         step_lengths = total_lengths[step_start : step_start + global_batch_size]
@@ -175,18 +155,18 @@ def build_dp_rollout_data(
 
         num_microbatches_per_step.append(num_mbs_per_rank)
 
-        # 4. Materialize per-rank schedule. Samples are appended in mbs order so each
-        # mbs occupies a contiguous range of positions in per_rank_sample_indices[r].
+        # 2. Materialize per-rank schedule. Samples are appended in mbs order so each
+        # mbs occupies a contiguous range of positions in partitions[r].
         for r in range(dp_size):
             for mbs_local in rank_mbs[r]:
-                local_start = len(per_rank_sample_indices[r])
-                per_rank_sample_indices[r].extend(step_start + rank_parts[r][i] for i in mbs_local)
+                local_start = len(partitions[r])
+                partitions[r].extend(step_start + rank_parts[r][i] for i in mbs_local)
                 per_rank_mbs_indices[r].append(list(range(local_start, local_start + len(mbs_local))))
 
-    # 5. Build per-rank rollout_data dicts (caller wraps in Ray Box).
+    # 3. Build per-rank rollout_data dicts (caller wraps in Ray Box).
     rollout_data_list: list[dict] = []
     for r in range(dp_size):
-        partition = per_rank_sample_indices[r]
+        partition = partitions[r]
         rollout_data: dict = {"partition": partition}
         for key in _SAMPLE_KEYS:
             if key in data:

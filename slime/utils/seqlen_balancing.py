@@ -177,6 +177,27 @@ def get_seqlen_balanced_partitions(seqlen_list: list[int], k_partitions: int, eq
     return _check_and_sort_partitions(partitions)
 
 
+def first_fit_pack(total_lengths, max_tokens_per_bin):
+    """First-fit bin packing.
+
+    Returns ``list[list[int]]`` — each bin is a list of indices into ``total_lengths``.
+    Bin sums are ``<= max_tokens_per_bin`` whenever every individual ``length`` fits;
+    an oversized sample lands alone in its own bin with sum equal to its length.
+    """
+    bins: list[list[int]] = []
+    bin_sums: list[int] = []
+    for idx, length in enumerate(total_lengths):
+        for j in range(len(bins)):
+            if bin_sums[j] + length <= max_tokens_per_bin:
+                bins[j].append(idx)
+                bin_sums[j] += length
+                break
+        else:
+            bins.append([idx])
+            bin_sums.append(length)
+    return bins
+
+
 def _split_bin_by_tokens(bin_indices: list[int], lengths) -> list[list[int]]:
     """Split a bin's indices into two halves balanced by total tokens (LPT heuristic).
 

@@ -282,32 +282,6 @@ class Dataset:
         return len(self.samples)
 
 
-def first_fit_pack(total_lengths, max_tokens_per_bin):
-    """First-fit bin packing.
-
-    Returns ``list[list[int]]`` — each bin is a list of indices into ``total_lengths``.
-    Bin sums are ``<= max_tokens_per_bin`` whenever every individual ``length`` fits;
-    an oversized sample lands alone in its own bin with sum equal to its length.
-    """
-    bins: list[list[int]] = []
-    bin_sums: list[int] = []
-    for idx, length in enumerate(total_lengths):
-        for j in range(len(bins)):
-            if bin_sums[j] + length <= max_tokens_per_bin:
-                bins[j].append(idx)
-                bin_sums[j] += length
-                break
-        else:
-            bins.append([idx])
-            bin_sums.append(length)
-    return bins
-
-
-def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu):
-    # use first fit to get the number of micro batches
-    return len(first_fit_pack(total_lengths, max_tokens_per_gpu))
-
-
 def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
     assert len(rollout_data_ref) == dp_size
     rollout_data = ray.get(rollout_data_ref[dp_rank].inner)

@@ -708,12 +708,12 @@ class RolloutManager:
         self.train_parallel_config = config
 
     def _split_train_data_by_dp(self, data):
-        """Build per-rank rollout_data shards and wrap each in a Ray Box.
-
-        The scheduling/packaging logic lives in :func:`slime.utils.dp_schedule.build_dp_rollout_data`
-        as a pure function so it can be unit-tested without Ray/sglang imports.
-        """
+        """Resolve gbs, trim ``data`` to a multiple of it, then build per-rank
+        rollout_data shards (delegated to :func:`build_dp_rollout_data` so the
+        scheduling/packaging logic stays unit-testable without Ray/sglang)."""
         dp_size = self.train_parallel_config["dp_size"]
+
+        # 1. Resolve effective global_batch_size
         dynamic_gbs: int | None = None
         if self.args.use_dynamic_global_batch_size and not self.args.disable_rollout_trim_samples:
             dynamic_gbs = compute_dynamic_global_batch_size(len(data["tokens"]), dp_size)
@@ -722,11 +722,27 @@ class RolloutManager:
                     f"Dynamic global_batch_size: {self.args.global_batch_size} -> {dynamic_gbs} "
                     f"(num_samples={len(data['tokens'])}, dp_size={dp_size}, num_steps=1)"
                 )
+            global_batch_size = dynamic_gbs
+        else:
+            global_batch_size = self.args.global_batch_size
+
+        # 2. Trim data to a multiple of global_batch_size
+        if not self.args.disable_rollout_trim_samples:
+            num_samples = len(data["tokens"])
+            trim_len = num_samples // global_batch_size * global_batch_size
+            if trim_len == 0:
+                raise ValueError(f"Not enough samples {num_samples} for global_batch_size {global_batch_size}")
+            if trim_len < num_samples:
+                logger.info(f"Trimmed samples from {num_samples} to {trim_len}")
+                for key, val in data.items():
+                    if isinstance(val, list):
+                        data[key] = val[:trim_len]
 
         rollout_data_list = build_dp_rollout_data(
             self.args,
             self.train_parallel_config,
             data,
+            global_batch_size=global_batch_size,
             dynamic_global_batch_size=dynamic_gbs,
         )
         return [Box(ray.put(d)) for d in rollout_data_list]
