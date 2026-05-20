@@ -561,9 +561,11 @@ def train_one_step(
         # Update parameters.
         update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
 
-        # Update learning rate.
+        # Update learning rate. Use the per-step global_batch_size when dynamic
+        # batching is on so the scheduler's samples-seen counter tracks reality.
         assert update_successful
-        opt_param_scheduler.step(increment=args.global_batch_size)
+        increment = data_iterator[0].rollout_data.get("dynamic_global_batch_size", args.global_batch_size)
+        opt_param_scheduler.step(increment=increment)
 
     # release grad
     for model_chunk in model:
