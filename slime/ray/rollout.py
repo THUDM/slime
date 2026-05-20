@@ -489,9 +489,7 @@ class RolloutManager:
             # if debug rollout only, we don't convert samples to train data and directly return
             return
         data = self._convert_samples_to_train_data(data)
-        data["total_lengths"] = [len(t) for t in data["tokens"]]
-        per_step_mbs = self._build_micro_batch_schedule(data["total_lengths"])
-        return self._split_train_data_by_dp(data, per_step_mbs)
+        return self._split_train_data_by_dp(data)
 
     def eval(self, rollout_id):
         if self.args.debug_train_only:
@@ -589,23 +587,6 @@ class RolloutManager:
             # flatten the data if it is a list of lists
             while isinstance(data[0], list):
                 data = list(itertools.chain.from_iterable(data))
-
-            if not self.args.disable_rollout_trim_samples and not self.args.debug_rollout_only:
-                global_batch_size = self.args.global_batch_size
-                if self.args.use_dynamic_global_batch_size:
-                    logger.info(f"Collected {len(data)} samples from rollout to train with dynamic global batch size")
-                    # TODO: this is a temporary solution, we should directly save dynamic_global_batch_size to rollout data
-                    self._dynamic_global_batch_size = self._compute_dynamic_global_batch_size(len(data))
-                    global_batch_size = self._dynamic_global_batch_size
-
-                if len(data) % global_batch_size != 0:
-                    trim_len = (len(data) // global_batch_size) * global_batch_size
-                    if trim_len == 0:
-                        raise ValueError(f"Not enough samples {len(data)} for global_batch_size {global_batch_size}")
-                    origin_data_length = len(data)
-                    data = data[:trim_len]
-                    logger.info(f"trim number of samples from {origin_data_length} to {trim_len}")
-                logger.info(f"Final collected {len(data)} samples from rollout to train")
 
         return data, metrics
 
@@ -754,28 +735,59 @@ class RolloutManager:
     def set_train_parallel_config(self, config: dict):
         self.train_parallel_config = config
 
-    def _build_micro_batch_schedule(self, total_lengths):
-        """Partition each training step's samples into micro-batches.
+    def _split_train_data_by_dp(self, data):
+        """Convert collected samples into per-DP-rank training shards.
 
-        Returns ``list[list[list[int]]]``: per step, list of micro-batches, each mbs
-        being step-local sample indices. The mbs count per step is always a multiple
-        of ``dp_size`` so DP assignment can give every rank the same count.
-
-        Static path: each mbs is ``args.micro_batch_size`` consecutive samples.
-        Dynamic path: bin-pack the step globally so each bin holds
-        ``<= max_tokens_per_gpu * cp_size`` tokens, with per-rank mbs count rounded up
-        (and to ``microbatch_group_size_per_vp_stage`` when VPP is on).
+        Pipeline:
+          1. Resolve the effective ``global_batch_size`` (dynamic if enabled).
+          2. Trim ``data`` to a multiple of it (skipped if ``disable_rollout_trim_samples``).
+          3. For each training step (chunk of ``global_batch_size`` samples):
+             - Build mbs. Static: ``args.micro_batch_size``-sized contiguous mbs.
+               Dynamic: bin-pack the step globally so each mbs fits
+               ``max_tokens_per_gpu * cp_size`` (per-rank mbs count rounded up,
+               and to ``microbatch_group_size_per_vp_stage`` when VPP is on).
+             - Assign mbs to DP ranks: token-balanced for dynamic / ``balance_data``,
+               otherwise strided across mbs.
+          4. Package each rank's rollout_data into a Ray Box, with ``num_microbatches``
+             and ``micro_batch_indices`` so the training side just consumes the schedule.
         """
         dp_size = self.train_parallel_config["dp_size"]
         cp_size = self.train_parallel_config["cp_size"]
         vpp_size = self.train_parallel_config["vpp_size"]
         mb_group = self.train_parallel_config["microbatch_group_size_per_vp_stage"]
 
-        global_batch_size = getattr(self, "_dynamic_global_batch_size", self.args.global_batch_size)
-        num_samples = len(total_lengths)
-        num_steps = num_samples // global_batch_size
+        # 1. Resolve gbs and 2. trim data
+        num_samples = len(data["tokens"])
+        if not self.args.disable_rollout_trim_samples:
+            if self.args.use_dynamic_global_batch_size:
+                logger.info(f"Collected {num_samples} samples from rollout to train with dynamic global batch size")
+                self._dynamic_global_batch_size = self._compute_dynamic_global_batch_size(num_samples)
+                global_batch_size = self._dynamic_global_batch_size
+            else:
+                global_batch_size = self.args.global_batch_size
 
-        per_step_mbs: list[list[list[int]]] = []
+            trim_len = (num_samples // global_batch_size) * global_batch_size
+            if trim_len == 0:
+                raise ValueError(f"Not enough samples {num_samples} for global_batch_size {global_batch_size}")
+            if trim_len < num_samples:
+                for key, val in list(data.items()):
+                    if isinstance(val, list):
+                        data[key] = val[:trim_len]
+                logger.info(f"trim number of samples from {num_samples} to {trim_len}")
+            logger.info(f"Final collected {trim_len} samples from rollout to train")
+        else:
+            global_batch_size = self.args.global_batch_size
+
+        total_lengths = [len(t) for t in data["tokens"]]
+        data["total_lengths"] = total_lengths
+        balance_by_tokens = self.args.use_dynamic_batch_size or self.args.balance_data
+        num_steps = len(total_lengths) // global_batch_size
+
+        per_rank_sample_indices: list[list[int]] = [[] for _ in range(dp_size)]
+        per_rank_mbs_indices: list[list[list[int]]] = [[] for _ in range(dp_size)]
+        num_microbatches_per_step: list[int] = []
+
+        # 3. Build mbs schedule and assign to DP ranks, per step
         for step_i in range(num_steps):
             step_start = step_i * global_batch_size
             step_lengths = total_lengths[step_start : step_start + global_batch_size]
@@ -794,32 +806,13 @@ class RolloutManager:
                     num_mbs_per_rank = max(num_mbs_per_rank // mb_group * mb_group, 1)
                 total_mbs = num_mbs_per_rank * dp_size
                 mbs_list = get_seqlen_balanced_partitions(step_lengths, total_mbs, equal_size=False)
-            per_step_mbs.append(mbs_list)
-        return per_step_mbs
 
-    def _split_train_data_by_dp(self, data, per_step_mbs):
-        """Assign micro-batches to DP ranks and package each rank's rollout_data.
-
-        With ``balance_data`` or dynamic mbs, mbs are distributed across DP ranks by
-        balancing total token counts; otherwise mbs are striped across ranks.
-        """
-        dp_size = self.train_parallel_config["dp_size"]
-        total_lengths = data["total_lengths"]
-        global_batch_size = getattr(self, "_dynamic_global_batch_size", self.args.global_batch_size)
-        balance_by_tokens = self.args.use_dynamic_batch_size or self.args.balance_data
-
-        per_rank_sample_indices: list[list[int]] = [[] for _ in range(dp_size)]
-        per_rank_mbs_indices: list[list[list[int]]] = [[] for _ in range(dp_size)]
-        num_microbatches_per_step: list[int] = []
-
-        for step_i, mbs_list in enumerate(per_step_mbs):
-            step_start = step_i * global_batch_size
             total_mbs = len(mbs_list)
             assert total_mbs % dp_size == 0, f"total_mbs {total_mbs} not divisible by dp_size {dp_size}"
             num_microbatches_per_step.append(total_mbs // dp_size)
 
             if balance_by_tokens:
-                mbs_totals = [sum(total_lengths[step_start + i] for i in m) for m in mbs_list]
+                mbs_totals = [sum(step_lengths[i] for i in m) for m in mbs_list]
                 rank_assignment = get_seqlen_balanced_partitions(mbs_totals, dp_size, equal_size=True)
             else:
                 rank_assignment = [list(range(r, total_mbs, dp_size)) for r in range(dp_size)]
@@ -832,6 +825,7 @@ class RolloutManager:
                     per_rank_sample_indices[r].extend(step_start + i for i in mbs_local)
                     offset += len(mbs_local)
 
+        # 4. Package per-rank rollout_data
         rollout_data_refs = []
         for r in range(dp_size):
             partition = per_rank_sample_indices[r]
