@@ -756,27 +756,25 @@ class RolloutManager:
         vpp_size = self.train_parallel_config["vpp_size"]
         mb_group = self.train_parallel_config["microbatch_group_size_per_vp_stage"]
 
-        # 1. Resolve gbs and 2. trim data
-        num_samples = len(data["tokens"])
-        if not self.args.disable_rollout_trim_samples:
-            if self.args.use_dynamic_global_batch_size:
-                logger.info(f"Collected {num_samples} samples from rollout to train with dynamic global batch size")
-                self._dynamic_global_batch_size = self._compute_dynamic_global_batch_size(num_samples)
-                global_batch_size = self._dynamic_global_batch_size
-            else:
-                global_batch_size = self.args.global_batch_size
+        # 1. Resolve effective global_batch_size
+        dynamic_global_batch_size: int | None = None
+        if self.args.use_dynamic_global_batch_size and not self.args.disable_rollout_trim_samples:
+            dynamic_global_batch_size = self._compute_dynamic_global_batch_size(len(data["tokens"]))
+            global_batch_size = dynamic_global_batch_size
+        else:
+            global_batch_size = self.args.global_batch_size
 
-            trim_len = (num_samples // global_batch_size) * global_batch_size
+        # 2. Trim data to a multiple of global_batch_size
+        if not self.args.disable_rollout_trim_samples:
+            num_samples = len(data["tokens"])
+            trim_len = num_samples // global_batch_size * global_batch_size
             if trim_len == 0:
                 raise ValueError(f"Not enough samples {num_samples} for global_batch_size {global_batch_size}")
             if trim_len < num_samples:
-                for key, val in list(data.items()):
+                logger.info(f"Trimmed samples from {num_samples} to {trim_len}")
+                for key, val in data.items():
                     if isinstance(val, list):
                         data[key] = val[:trim_len]
-                logger.info(f"trim number of samples from {num_samples} to {trim_len}")
-            logger.info(f"Final collected {trim_len} samples from rollout to train")
-        else:
-            global_batch_size = self.args.global_batch_size
 
         total_lengths = [len(t) for t in data["tokens"]]
         data["total_lengths"] = total_lengths
@@ -856,8 +854,8 @@ class RolloutManager:
                     continue
                 rollout_data[key] = data[key]
             # Pass dynamic global_batch_size to training side
-            if hasattr(self, "_dynamic_global_batch_size"):
-                rollout_data["dynamic_global_batch_size"] = self._dynamic_global_batch_size
+            if dynamic_global_batch_size is not None:
+                rollout_data["dynamic_global_batch_size"] = dynamic_global_batch_size
             rollout_data["num_microbatches"] = num_microbatches_per_step
             rollout_data["micro_batch_indices"] = per_rank_mbs_indices[r]
             rollout_data_refs.append(Box(ray.put(rollout_data)))
