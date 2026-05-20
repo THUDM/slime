@@ -285,9 +285,9 @@ class Dataset:
 def first_fit_pack(total_lengths, max_tokens_per_bin):
     """First-fit bin packing.
 
-    Returns ``list[list[int]]`` — each bin is a list of indices into ``total_lengths``
-    whose sum is ``<= max_tokens_per_bin``. Assumes every individual ``length`` already
-    fits within ``max_tokens_per_bin`` (caller should assert this).
+    Returns ``list[list[int]]`` — each bin is a list of indices into ``total_lengths``.
+    Bin sums are ``<= max_tokens_per_bin`` whenever every individual ``length`` fits;
+    an oversized sample lands alone in its own bin with sum equal to its length.
     """
     bins: list[list[int]] = []
     bin_sums: list[int] = []

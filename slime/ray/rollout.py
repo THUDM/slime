@@ -783,10 +783,6 @@ class RolloutManager:
         if self.args.use_dynamic_batch_size:
             assert self.args.max_tokens_per_gpu is not None
             max_per_bin = self.args.max_tokens_per_gpu * cp_size
-            longest = max(total_lengths)
-            assert (
-                longest <= max_per_bin
-            ), f"sample with length {longest} exceeds max_tokens_per_gpu * cp_size = {max_per_bin}"
 
         # Accumulated outputs of the per-step loop below. Indexed by DP rank.
         #   per_rank_sample_indices[r] — global sample indices assigned to rank r,
