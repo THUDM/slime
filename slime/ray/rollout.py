@@ -781,6 +781,17 @@ class RolloutManager:
         balance_by_tokens = self.args.use_dynamic_batch_size or self.args.balance_data
         num_steps = len(total_lengths) // global_batch_size
 
+        # Accumulated outputs of the per-step loop below. Indexed by DP rank.
+        #   per_rank_sample_indices[r] — global sample indices assigned to rank r,
+        #     concatenated across all steps. Used as the "partition" that selects
+        #     which rows of each ``data[key]`` list go to rank r.
+        #   per_rank_mbs_indices[r] — rank r's mbs schedule: a flat list of mbs
+        #     (across all steps, in step order), each mbs being LOCAL indices into
+        #     rank r's own samples (i.e. offsets within per_rank_sample_indices[r]).
+        #     This is what DataIterator iterates over on the training side.
+        #   num_microbatches_per_step[s] — number of mbs each rank runs in step s.
+        #     Same value on every DP rank (PP sync requirement); training side reads
+        #     this to drive its per-step forward/backward loop.
         per_rank_sample_indices: list[list[int]] = [[] for _ in range(dp_size)]
         per_rank_mbs_indices: list[list[list[int]]] = [[] for _ in range(dp_size)]
         num_microbatches_per_step: list[int] = []
