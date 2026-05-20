@@ -114,6 +114,14 @@ class SGLangEngine(RayActor):
         self.sglang_overrides = sglang_overrides or {}
         self.num_gpus_per_engine = num_gpus_per_engine
 
+        # Optional per-engine pre-read hook for delta sync (e.g. shared-FS reload on
+        # non-POSIX volumes). Fires once per engine actor — see --custom-delta-pre-read-path.
+        self._delta_pre_read_hook = None
+        if getattr(args, "custom_delta_pre_read_path", None):
+            from slime.utils.misc import load_function
+
+            self._delta_pre_read_hook = load_function(args.custom_delta_pre_read_path)
+
     def init(
         self,
         dist_init_addr,
@@ -367,15 +375,31 @@ class SGLangEngine(RayActor):
     def check_weights(self, action: str):
         return self._make_request("weights_checker", {"action": action})
 
-    def update_weights_from_disk(self, model_path: str, load_format: str | None = None):
+    def update_weights_from_disk(
+        self,
+        model_path: str,
+        load_format: str | None = None,
+        weight_version: str | None = None,
+    ):
         """Reload weights from *model_path* without restarting the engine.
 
-        Used for non-updatable (frozen) models that overlap with megatron:
-        after offload, weights are restored from disk instead of CPU cache.
+        Used for:
+        - Non-updatable (frozen) models that overlap with megatron — ``load_format`` unset,
+          receiver does a normal HF load.
+        - Delta weight sync (``load_format == "delta"``) — sender publishes a directory of
+          per-flush safetensors under ``model_path``; receiver decodes + applies them all
+          and advances to ``weight_version``. The optional ``custom_delta_pre_read_path``
+          hook runs here (once per engine actor) — used for non-POSIX shared FS that needs
+          a per-container reload to see trainer-committed files.
+        Sender owns ``model_path`` cleanup after every engine has acknowledged.
         """
-        payload = {"model_path": model_path}
+        if load_format == "delta" and self._delta_pre_read_hook is not None:
+            self._delta_pre_read_hook(self)
+        payload: dict = {"model_path": model_path}
         if load_format is not None:
             payload["load_format"] = load_format
+        if weight_version is not None:
+            payload["weight_version"] = weight_version
         return self._make_request("update_weights_from_disk", payload)
 
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):

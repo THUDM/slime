@@ -1,0 +1,581 @@
+diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
+index e6a147c..09d066d 100644
+--- a/python/sglang/srt/managers/io_struct.py
++++ b/python/sglang/srt/managers/io_struct.py
+@@ -1254,6 +1254,52 @@ class UpdateWeightFromDiskReqOutput(BaseReq):
+     num_paused_requests: Optional[int] = 0
+ 
+ 
++class DeltaEncoding(str, Enum):
++    """Position encoding for delta weight updates (load_format=="delta").
++    User-selectable via slime's --update-weight-encoding. Choice is a
++    bandwidth/compute tradeoff over the same (__positions__, __values__) wire layout."""
++
++    # int32 absolute nonzero offsets. Lowest compute, largest payload.
++    INDICES = "indices"
++    # uint16 gap-deltas between consecutive sorted positions; uint32 fallback per
++    # param. Smaller payload, modest compute (one cumsum on apply).
++    DELTAS = "deltas"
++    # ``deltas`` with the safetensors blob wrapped in zstd L1. Smallest payload,
++    # heaviest compute. Best for shared-FS bandwidth ≤ ~300 MB/s.
++    DELTAS_ZSTD = "deltas_zstd"
++
++
++@dataclass
++class DeltaParam:
++    """Per-param decoding manifest for a delta weight update.
++
++    Position layout (``__positions__`` — uint8 byte blob shared by all encodings):
++    each param occupies the half-open byte range [pos_start, pos_end). ``pos_width``
++    is the byte width per position value — 4 for INDICES (int32 absolute offsets)
++    and DELTAS' uint32 fallback, 2 for DELTAS' uint16 case.
++
++    Value layout (``__values__`` — param-dtype, typically bf16): each param occupies
++    the half-open ELEMENT range [val_start, val_end)."""
++
++    name: str
++    dtype: str
++    shape: List[int]
++    pos_start: int
++    pos_end: int
++    pos_width: int  # 2 or 4
++    val_start: int
++    val_end: int
++
++
++@dataclass
++class DeltaSpec:
++    """Wire-encoding descriptor for one delta-sync bucket. Required when the parent
++    request's load_format is "delta"."""
++
++    encoding: DeltaEncoding
++    params: List[DeltaParam]
++
++
+ @dataclass
+ class UpdateWeightsFromDistributedReqInput(BaseReq):
+     names: List[str]
+@@ -1269,6 +1315,8 @@ class UpdateWeightsFromDistributedReqInput(BaseReq):
+     weight_version: Optional[str] = None
+     # Optional format specification for loading
+     load_format: Optional[str] = None
++    # Required iff load_format == "delta".
++    delta: Optional[DeltaSpec] = None
+ 
+ 
+ @dataclass
+diff --git a/python/sglang/srt/managers/tp_worker.py b/python/sglang/srt/managers/tp_worker.py
+index fb56de1..26d10b7 100644
+--- a/python/sglang/srt/managers/tp_worker.py
++++ b/python/sglang/srt/managers/tp_worker.py
+@@ -98,6 +98,7 @@ class BaseTpWorker(ABC):
+             recv_req.model_path,
+             recv_req.load_format,
+             recapture_cuda_graph=recv_req.recapture_cuda_graph,
++            weight_version=recv_req.weight_version,
+         )
+         return success, message
+ 
+@@ -152,6 +153,7 @@ class BaseTpWorker(ABC):
+             recv_req.shapes,
+             recv_req.group_name,
+             recv_req.load_format,
++            recv_req.delta,
+         )
+         return success, message
+ 
+diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
+index a7347c1..f1e32fe 100644
+--- a/python/sglang/srt/model_executor/model_runner.py
++++ b/python/sglang/srt/model_executor/model_runner.py
+@@ -15,18 +15,22 @@
+ 
+ from __future__ import annotations
+ 
++import contextlib
++import contextvars
+ import datetime
+ import gc
++import glob
+ import inspect
+ import json
+ import logging
++import math
+ import os
+ import socket
+ import threading
+ import time
+ from collections import defaultdict
+ from dataclasses import dataclass
+-from typing import Callable, List, Optional, Tuple, Union
++from typing import Callable, Dict, List, Optional, Tuple, Union
+ 
+ import torch
+ import torch.distributed as dist
+@@ -118,6 +122,7 @@ from sglang.srt.layers.sampler import create_sampler
+ from sglang.srt.layers.torchao_utils import apply_torchao_config_to_model
+ from sglang.srt.lora.lora_manager import LoRAManager
+ from sglang.srt.lora.lora_registry import LoRARef
++from sglang.srt.managers.io_struct import DeltaEncoding, DeltaParam, DeltaSpec
+ from sglang.srt.managers.schedule_batch import sanity_check_mm_pad_shift_value
+ from sglang.srt.mem_cache.allocator import BaseTokenToKVPoolAllocator
+ from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
+@@ -326,6 +331,12 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+         self.model_config = model_config
+         self.dist_port = nccl_port
+         self.server_args = server_args
++        # Partial-update lineage state (file transport). Trainer sends
++        # ``prev_version`` in each safetensors' metadata; we refuse to apply
++        # unless it matches this. Updated to ``current_version`` after a
++        # successful apply + verification. Starts at SGLang's bootstrap default
++        # so slime's first sync (``prev_version="default"``) chains correctly.
++        self.current_weight_version: str = "default"
+         self.is_draft_worker = is_draft_worker
+         self.memory_pool_config = memory_pool_config
+         self.is_generation = model_config.is_generation
+@@ -1347,6 +1358,13 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+         recapture_cuda_graph: bool = False,
+     ) -> tuple[bool, str]:
+         """Update engine weights in-place from the disk."""
++        # Delta sync (``load_format == "delta"``): bulk-apply every per-flush
++        # safetensors file under ``model_path``, then advance current_weight_version.
++        # Caller (slime trainer) owns ``model_path`` cleanup after every engine
++        # has acknowledged — receivers must not delete to avoid multi-engine races.
++        if load_format == "delta":
++            return self._apply_delta_dir(model_path)
++
+         logger.info(
+             f"Update engine weights online from disk begin. "
+             f"avail mem={get_available_gpu_memory(self.device, self.gpu_id, empty_cache=False):.2f} GB"
+@@ -1569,6 +1587,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+         shapes,
+         group_name,
+         load_format: Optional[str] = None,
++        delta: Optional[DeltaSpec] = None,
+     ):
+         """
+         Update specific parameter in the model weights online
+@@ -1589,6 +1608,12 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+             return self._update_bucketed_weights_from_distributed(
+                 names, dtypes, shapes, group_name
+             )
++        if load_format == "delta":
++            if delta is None:
++                return False, "load_format='delta' requires a DeltaSpec in the request"
++            return self._apply_delta_from_distributed(
++                names, dtypes, shapes, group_name, delta
++            )
+         try:
+             weights = []
+             handles = []
+@@ -1652,6 +1677,212 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+             logger.error(error_msg)
+             return False, error_msg
+ 
++    def _decode_delta_one_param(
++        self,
++        encoding: DeltaEncoding,
++        positions: torch.Tensor,
++        values: torch.Tensor,
++        p: DeltaParam,
++    ) -> torch.Tensor:
++        """Decode one param's position+value slice into a full-shape tensor with NaN at
++        unchanged positions and the sent values at changed positions. The NaN sentinel
++        triggers ``_delta_apply_context``'s masked copy_ on apply.
++
++        Stays on GPU end-to-end: positions are reinterpreted from raw uint8 bytes via
++        reshape-and-shift, avoiding a ``.view(int16/int32)`` alignment constraint when
++        the per-param ``pos_start`` byte offset is not a multiple of pos_width."""
++        numel = math.prod(p.shape)
++        param_dtype = p.dtype if isinstance(p.dtype, torch.dtype) else getattr(torch, p.dtype)
++        flat = torch.full((numel,), float("nan"), dtype=param_dtype, device=self.device)
++        val_slice = values[p.val_start : p.val_end]
++        if val_slice.numel() == 0:
++            return flat.view(tuple(p.shape))
++
++        pos_bytes = positions[p.pos_start : p.pos_end]
++        if encoding is DeltaEncoding.INDICES:
++            width = 4  # int32 absolute indices
++        elif encoding in (DeltaEncoding.DELTAS, DeltaEncoding.DELTAS_ZSTD):
++            width = p.pos_width  # uint16 or uint32 gap-deltas
++        else:
++            raise ValueError(f"unsupported delta encoding: {encoding!r}")
++
++        n_elems = pos_bytes.numel() // width
++        b = pos_bytes.view(n_elems, width).to(torch.int64)
++        if width == 2:
++            unpacked = b[:, 0] | (b[:, 1] << 8)
++        else:  # 4
++            unpacked = b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16) | (b[:, 3] << 24)
++
++        if encoding is DeltaEncoding.INDICES:
++            idx = unpacked
++        else:
++            # Sender encodes ``delta[k] = idx[k] - idx[k-1] - 1`` with idx[-1] := -1;
++            # receiver inverts with ``idx = cumsum(delta + 1) - 1``.
++            idx = (unpacked + 1).cumsum(dim=0) - 1
++        flat.index_copy_(0, idx, val_slice)
++        return flat.view(tuple(p.shape))
++
++    def _apply_delta_payload(
++        self,
++        encoding: DeltaEncoding,
++        params: List[DeltaParam],
++        positions: torch.Tensor,
++        values: torch.Tensor,
++    ) -> None:
++        """Decode every per-param slice from ``(positions, values)`` into a NaN-masked
++        full-shape tensor and apply via the patched-copy context. Bucketed by byte
++        budget so each ``load_weights`` call stays within ``update_weight_delta_chunk_bytes``.
++        Shared by the NCCL and disk delta paths."""
++        chunk_byte_cap = self.server_args.update_weight_delta_chunk_bytes
++        with _delta_apply_context(self.model):
++            chunk: List[Tuple[str, torch.Tensor]] = []
++            chunk_bytes = 0
++            for p in params:
++                t = self._decode_delta_one_param(encoding, positions, values, p)
++                tensor_bytes = t.numel() * t.element_size()
++                if chunk_bytes + tensor_bytes > chunk_byte_cap and chunk:
++                    self.model.load_weights(chunk)
++                    chunk = []
++                    chunk_bytes = 0
++                chunk.append((p.name, t))
++                chunk_bytes += tensor_bytes
++            if chunk:
++                self.model.load_weights(chunk)
++
++    def _decode_and_apply_blob(self, blob: bytes) -> tuple[bool, str, Optional[str]]:
++        """Decode + apply one decompressed safetensors blob from the delta sender.
++        Returns ``(success, message, target_version)`` with the in-file ``current_version``.
++        Does NOT update ``self.current_weight_version`` — caller (the directory-bulk path)
++        advances it after every file is applied.
++
++        Validates ``meta.prev_version == self.current_weight_version`` so a stale or
++        out-of-order RPC is rejected.
++        """
++        from safetensors.torch import load as st_load
++
++        # Metadata lives in the safetensors header; ``st_load`` only returns tensors,
++        # so parse the header once to pull (encoding, params, version lineage).
++        hdr_len = int.from_bytes(blob[:8], "little")
++        meta = json.loads(blob[8:8 + hdr_len]).get("__metadata__", {})
++        if meta["prev_version"] != self.current_weight_version:
++            return False, (
++                f"lineage mismatch: file expects prev_version={meta['prev_version']!r}, "
++                f"receiver at {self.current_weight_version!r}"
++            ), None
++        encoding = DeltaEncoding(meta["encoding"])
++        params = [DeltaParam(**p) for p in json.loads(meta["params"])]
++
++        tensors = st_load(blob)
++        positions = tensors["__positions__"].to(self.device, non_blocking=True)
++        values = tensors["__values__"].to(self.device, non_blocking=True)
++        self._apply_delta_payload(encoding, params, positions, values)
++        return True, "ok", meta["current_version"]
++
++    def _apply_delta_from_distributed(
++        self,
++        names: List[str],
++        dtypes: List[str],
++        shapes: List[List[int]],
++        group_name: str,
++        delta: DeltaSpec,
++    ) -> tuple[bool, str]:
++        """NCCL delta receive: broadcast (__positions__, __values__) from the sender,
++        then apply via the shared ``_apply_delta_payload``. Sender's ``DeltaSpec`` carries
++        per-param decoding offsets; the broadcast tensors carry the payload."""
++        try:
++            recv: Dict[str, torch.Tensor] = {}
++            handles = []
++            for name, dtype, shape in zip(names, dtypes, shapes):
++                target_dtype = dtype if isinstance(dtype, torch.dtype) else getattr(torch, dtype)
++                t = torch.empty(shape, dtype=target_dtype, device=self.device)
++                handles.append(
++                    torch.distributed.broadcast(
++                        t, src=0, group=self._model_update_group[group_name], async_op=True
++                    )
++                )
++                recv[name] = t
++            for h in handles:
++                h.wait()
++
++            self._apply_delta_payload(delta.encoding, delta.params, recv["__positions__"], recv["__values__"])
++            return True, "ok"
++        except Exception as e:
++            error_msg = f"Failed to apply delta from distributed: {e}."
++            logger.error(error_msg)
++            return False, error_msg
++
++    def _apply_delta_dir(self, model_path: str) -> tuple[bool, str]:
++        """Disk delta receive: read every per-flush safetensors file under ``model_path``,
++        decode + apply each, then advance ``current_weight_version``.
++
++        File-level zstd decompression is auto-detected from the leading magic bytes.
++        Cross-host file visibility is the shared-FS layer's concern; if the deployment
++        lacks POSIX semantics, the trainer-side ``custom_delta_pre_push_path`` hook is
++        the place to fan out commit/reload RPCs to the engines."""
++        import time as _time
++
++        t_total_start = _time.perf_counter()
++        done_path = os.path.join(model_path, "DONE")
++        if not os.path.exists(done_path):
++            return False, f"DONE marker missing in {model_path!r}"
++        files = sorted(glob.glob(os.path.join(model_path, "*.safetensors")))
++
++        target_version: Optional[str] = None
++        t_prefetch_ms = 0.0
++        t_apply_ms = 0.0
++        n_files = len(files)
++        bytes_on_disk = 0
++        bytes_decompressed = 0
++
++        def _read_and_decompress(path: str) -> Tuple[int, bytes]:
++            with open(path, "rb") as fh:
++                blob = fh.read()
++            return len(blob), _maybe_zstd_decompress(blob)
++
++        try:
++            # Batched parallel prefetch: read + decompress ``workers`` files concurrently,
++            # then apply them before starting the next batch. Caps peak memory at
++            # ``workers × file_size`` instead of ``n_files × file_size``.
++            import concurrent.futures
++
++            workers = min(n_files, 4)
++            for i in range(0, n_files, workers):
++                t_phase = _time.perf_counter()
++                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
++                    batch = list(pool.map(_read_and_decompress, files[i : i + workers]))
++                t_prefetch_ms += (_time.perf_counter() - t_phase) * 1000
++
++                for compressed_size, blob in batch:
++                    bytes_on_disk += compressed_size
++                    bytes_decompressed += len(blob)
++
++                    t_phase = _time.perf_counter()
++                    ok, msg, tv = self._decode_and_apply_blob(blob)
++                    t_apply_ms += (_time.perf_counter() - t_phase) * 1000
++                    if not ok:
++                        return False, msg
++                    if target_version is None:
++                        target_version = tv
++
++            assert target_version is not None
++            self.current_weight_version = target_version
++            total_ms = (_time.perf_counter() - t_total_start) * 1000
++            other_ms = total_ms - (t_prefetch_ms + t_apply_ms)
++            logger.info(
++                "[delta sync recv rank=%d gpu_id=%d v=%s] files=%d workers=%d "
++                "on_disk=%.1fMiB decompressed=%.1fMiB | "
++                "prefetch=%.2fs apply=%.2fs other=%.2fs total=%.2fs",
++                dist.get_rank(), self.gpu_id, target_version, n_files, workers,
++                bytes_on_disk / 1024 ** 2, bytes_decompressed / 1024 ** 2,
++                t_prefetch_ms / 1000, t_apply_ms / 1000,
++                other_ms / 1000, total_ms / 1000,
++            )
++            return True, f"Applied delta update to version {target_version!r}"
++        except Exception as e:
++            error_msg = f"Failed to apply delta update from disk: {e}."
++            logger.error(error_msg)
++            return False, error_msg
++
+     def update_weights_from_tensor(
+         self,
+         named_tensors: List[Tuple[str, Union[torch.Tensor, "LocalSerializedTensor"]]],
+@@ -3071,6 +3302,168 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+ 
+         return True, "Success"
+ 
++    def post_process_weights(self, recv_req):
++        """
++        Execute post-processing logic for model weights, such as Marlin quantization format conversion.
++        """
++        from sglang.srt.model_loader.loader import device_loading_context
++
++        target_device = torch.device("cuda", torch.cuda.current_device())
++
++        if recv_req.restore_weights_before_load:
++            for _, module in self.model.named_modules():
++                quant_method = getattr(module, "quant_method", None)
++
++                # Check if the module supports restoring weights
++                if quant_method is not None and hasattr(
++                    quant_method, "restore_weights_before_loading"
++                ):
++
++                    with device_loading_context(module, target_device):
++                        quant_method.restore_weights_before_loading(module)
++
++        if recv_req.post_process_quantization:
++            # Iterate through all modules to apply specific post-loading processing
++            for _, module in self.model.named_modules():
++                quant_method = getattr(module, "quant_method", None)
++
++                # Check if the module supports quantization post-processing
++                if quant_method is not None and hasattr(
++                    quant_method, "process_weights_after_loading"
++                ):
++
++                    # Apply the post-processing (e.g., repacking weights for Marlin kernel)
++                    with device_loading_context(module, target_device):
++                        quant_method.process_weights_after_loading(module)
++
++        return True, "Success"
++
++
++def _param_storage_index(model):
++    """Return ``find_parent(dst)`` — given a tensor (typically a slice/view into a model
++    param), returns the owning parameter/buffer or ``None`` if the storage isn't part of
++    ``model``'s param memory. Used by ``_delta_apply_context`` to scope its patched
++    copy_/fill_ rewrites to param writes."""
++    import bisect
++
++    # Skip meta tensors — no real storage to track.
++    starts: List[int] = []
++    ends: List[int] = []
++    owners: List[torch.Tensor] = []
++    seen: set = set()
++    for tensors in (model.named_parameters(), model.named_buffers()):
++        for _, t in tensors:
++            if t.is_meta:
++                continue
++            try:
++                ptr = t.data_ptr()
++            except RuntimeError:
++                continue
++            if ptr == 0 or ptr in seen:
++                continue
++            seen.add(ptr)
++            sz = t.numel() * t.element_size()
++            starts.append(ptr)
++            ends.append(ptr + sz)
++            owners.append(t)
++    order = sorted(range(len(starts)), key=lambda i: starts[i])
++    starts = [starts[i] for i in order]
++    ends = [ends[i] for i in order]
++    owners = [owners[i] for i in order]
++
++    def find_parent(dst):
++        try:
++            ptr = dst.data_ptr()
++        except RuntimeError:
++            return None
++        idx = bisect.bisect_right(starts, ptr) - 1
++        if 0 <= idx < len(starts) and starts[idx] <= ptr < ends[idx]:
++            return owners[idx]
++        return None
++
++    return find_parent
++
++
++@contextlib.contextmanager
++def _delta_apply_context(model):
++    """Patch ``Tensor.copy_`` / ``Tensor.fill_`` so writes to ``model``'s param storage
++    do NaN-masked selective overwrite (positions whose source is NaN are left
++    untouched). Writes to non-param storage (scratch, dtype temps) go through unmodified.
++
++    Also wraps ``model.post_load_weights`` (if defined) to run in the unmodified op
++    environment, so derived tensors (fp8 scales, MoE biases, DeepSeek w_kc/w_vc)
++    overwrite correctly even when invoked from inside ``load_weights``.
++    """
++    is_param_target = _param_storage_index(model)
++    original_copy_ = torch.Tensor.copy_
++    original_fill_ = torch.Tensor.fill_
++
++    def patched_copy_(self, src, *args, **kwargs):
++        if is_param_target(self) is not None:
++            src_aligned = (
++                src.to(device=self.device, dtype=self.dtype)
++                if src.dtype != self.dtype
++                else src
++            )
++            mask = ~torch.isnan(src_aligned)
++            self[mask] = src_aligned[mask]
++            return self
++        return original_copy_(self, src, *args, **kwargs)
++
++    def patched_fill_(self, value):
++        if is_param_target(self) is not None:
++            # NaN scalar means "don't change the param" (per-element analog of
++            # patched_copy_). Non-NaN scalars write through.
++            try:
++                if math.isnan(value):
++                    return self
++            except TypeError:
++                pass
++            return original_fill_(self, value)
++        return original_fill_(self, value)
++
++    original_post_load = getattr(model, "post_load_weights", None)
++    if original_post_load is not None:
++        def wrapped_post_load(*args, **kwargs):
++            current_copy = torch.Tensor.copy_
++            current_fill = torch.Tensor.fill_
++            torch.Tensor.copy_ = original_copy_
++            torch.Tensor.fill_ = original_fill_
++            try:
++                return original_post_load(*args, **kwargs)
++            finally:
++                torch.Tensor.copy_ = current_copy
++                torch.Tensor.fill_ = current_fill
++
++        model.post_load_weights = wrapped_post_load
++
++    torch.Tensor.copy_ = patched_copy_
++    torch.Tensor.fill_ = patched_fill_
++    try:
++        yield
++    finally:
++        torch.Tensor.copy_ = original_copy_
++        torch.Tensor.fill_ = original_fill_
++        if original_post_load is not None:
++            model.post_load_weights = original_post_load
++
++
++# Safetensors files start with an 8-byte little-endian header length, then a UTF-8 JSON
++# header whose first byte is '{' (0x7b). Anything else at byte 0 means the blob is
++# wrapped in zstd (magic 0x28b52ffd, little-endian) — slime's delta-sync writer uses
++# this when --update-weight-encoding=deltas_zstd.
++_ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
++
++
++def _maybe_zstd_decompress(blob: bytes) -> bytes:
++    """Detect a leading zstd frame and decompress; otherwise return as-is. Used by the
++    delta-sync receiver to transparently handle both raw and zstd-wrapped safetensors."""
++    if blob.startswith(_ZSTD_MAGIC):
++        import zstandard
++
++        return zstandard.ZstdDecompressor().decompress(blob)
++    return blob
++
+ 
+ def _model_load_weights_direct(model, named_tensors: List[Tuple[str, torch.Tensor]]):
+     params_dict = dict(model.named_parameters())
+diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
+index 4c8774b..75a317c 100644
+--- a/python/sglang/srt/server_args.py
++++ b/python/sglang/srt/server_args.py
+@@ -712,6 +712,7 @@ class ServerArgs:
+     # For model weight update and weight loading
+     custom_weight_loader: Optional[List[str]] = None
+     weight_loader_disable_mmap: bool = False
++    update_weight_delta_chunk_bytes: int = 512 * 1024 * 1024
+     remote_instance_weight_loader_seed_instance_ip: Optional[str] = None
+     remote_instance_weight_loader_seed_instance_service_port: Optional[int] = None
+     remote_instance_weight_loader_send_weights_group_ports: Optional[List[int]] = None
+@@ -5837,6 +5838,16 @@ class ServerArgs:
+             action="store_true",
+             help="Disable mmap while loading weight using safetensors.",
+         )
++        parser.add_argument(
++            "--update-weight-delta-chunk-bytes",
++            type=int,
++            default=ServerArgs.update_weight_delta_chunk_bytes,
++            help=(
++                "Byte cap per ``model.load_weights`` call when applying a delta weight "
++                "update (load_format=='delta'). Bigger amortizes per-call cost (name "
++                "resolution, MoE expert remap, fp8 scale repacking) but raises peak HBM."
++            ),
++        )
+         parser.add_argument(
+             "--remote-instance-weight-loader-seed-instance-ip",
+             type=str,

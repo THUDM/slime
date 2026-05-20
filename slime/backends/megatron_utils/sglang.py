@@ -13,6 +13,7 @@ except ImportError:
     from sglang.srt.patch_torch import monkey_patch_torch_reductions
 
 
+from sglang.srt.managers.io_struct import DeltaEncoding, DeltaParam, DeltaSpec
 from sglang.srt.utils import MultiprocessingSerializer
 
 
@@ -28,4 +29,7 @@ __all__ = [
     "monkey_patch_torch_reductions",
     "MultiprocessingSerializer",
     "FlattenedTensorBucket",
+    "DeltaEncoding",
+    "DeltaParam",
+    "DeltaSpec",
 ]
