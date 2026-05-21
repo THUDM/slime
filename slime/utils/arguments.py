@@ -1763,11 +1763,11 @@ def slime_validate_args(args):
     if args.offload_rollout is None:
         args.offload_rollout = False
 
-    if args.offload_train:
-        args.disable_grad_buffers_cpu_backup = True
-
     if args.use_critic:
         args.offload_train = True
+
+    if args.offload_train:
+        args.disable_grad_buffers_cpu_backup = True
 
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path
