@@ -1297,12 +1297,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--use-dynamic-global-batch-size",
-                action="store_true",
-                default=False,
-                help="enable dynamic global batch size — one training step per rollout, using whatever sample count the rollout produced.",
-            )
-            parser.add_argument(
                 "--custom-rollout-step-split-path",
                 type=str,
                 default=None,

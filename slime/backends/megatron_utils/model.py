@@ -842,8 +842,7 @@ def save(
     """Persist a training checkpoint safely with forward hooks disabled.
 
     Args:
-        iteration (int): Current global iteration number (slime stores
-            ``rollout_id`` here so resume can pick up the next rollout).
+        iteration (int): Current global iteration number.
         model (Sequence[DDP]): Sequence of DDP-wrapped model chunks.
         optimizer (MegatronOptimizer): Optimizer instance.
         opt_param_scheduler (OptimizerParamScheduler): LR/WD scheduler.
@@ -914,8 +913,7 @@ def initialize_model_and_optimizer(
 
     Returns:
         tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
-            DDP-wrapped model chunks, optimizer, scheduler, and iteration index
-            (slime stores ``rollout_id`` here).
+            DDP-wrapped model chunks, optimizer, scheduler, and iteration index.
     """
 
     if torch.version.hip:

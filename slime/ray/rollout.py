@@ -758,27 +758,9 @@ class RolloutManager:
         or by the user's custom splitter.
         """
         dp_size = self.train_parallel_config["dp_size"]
-        num_samples = len(data["tokens"])
+        global_batch_size = self.args.global_batch_size
 
-        # 1. Resolve effective global_batch_size. ``--use-dynamic-global-batch-size``
-        # forces a single training step over the full rollout, so its gbs is the
-        # real sample count. Otherwise we fall back to the static
-        # ``--global-batch-size`` setting.
-        if self.args.use_dynamic_global_batch_size:
-            assert num_samples >= dp_size, (
-                f"use_dynamic_global_batch_size requires num_samples ({num_samples}) >= dp_size "
-                f"({dp_size}); shrink dp_size or increase rollout_batch_size * n_samples_per_prompt."
-            )
-            global_batch_size = num_samples
-            if global_batch_size != self.args.global_batch_size:
-                logger.info(
-                    f"Dynamic global_batch_size: {self.args.global_batch_size} -> {global_batch_size} "
-                    f"(num_samples={num_samples}, dp_size={dp_size}, num_steps=1)"
-                )
-        else:
-            global_batch_size = self.args.global_batch_size
-
-        # 2. Compute step boundaries. Custom splitter wins; otherwise pick the
+        # Compute step boundaries. Custom splitter wins; otherwise pick the
         # default based on which of ``--num-steps-per-rollout`` and
         # ``--global-batch-size`` the user set:
         #   - ``--num-steps-per-rollout N``: split into N near-equal chunks.
