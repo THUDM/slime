@@ -18,6 +18,7 @@ from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupCo
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
+from slime.utils import trackio_utils
 from slime.utils.dp_schedule import build_dp_schedule, compute_dynamic_global_batch_size
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
@@ -1149,6 +1150,9 @@ def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any]
     step = compute_rollout_step(args, rollout_id)
     log_dict["eval/step"] = step
     logging_utils.log(args, log_dict, step_key="eval/step")
+    for key in data.keys():
+        if (samples := data[key].get("samples")) is not None:
+            trackio_utils.log_rollout_traces(args, rollout_id, samples, split=f"eval/{key}", step=step)
 
     return log_dict
 
@@ -1169,6 +1173,7 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
     step = compute_rollout_step(args, rollout_id)
     log_dict["rollout/step"] = step
     logging_utils.log(args, log_dict, step_key="rollout/step")
+    trackio_utils.log_rollout_traces(args, rollout_id, samples, split="rollout", step=step)
 
 
 def compute_metrics_from_samples(args, samples):
