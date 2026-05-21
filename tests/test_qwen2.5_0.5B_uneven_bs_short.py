@@ -45,7 +45,7 @@ def execute():
         "--rollout-max-response-len 1024 "
         "--rollout-temperature 0.8 "
         "--global-batch-size 8 "
-        "--custom-rollout-step-split-path slime_plugins.rollout_step_splits.uneven.uneven_3_steps_7_8_9 "
+        "--custom-rollout-step-split-path slime.rollout.step_split_hub.uneven.uneven_3_steps_7_8_9 "
         "--balance-data "
     )
 

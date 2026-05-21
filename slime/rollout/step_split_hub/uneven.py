@@ -1,10 +1,9 @@
-"""Example custom rollout-step splitters.
+"""Built-in rollout step splitters for ``--custom-rollout-step-split-path``.
 
-Plug via ``--custom-rollout-step-split-path slime_plugins.rollout_step_splits.uneven.<fn>``.
-Each splitter has signature ``fn(args, total_lengths) -> list[list[int]]`` and returns
-a list of per-step sample-index groups; sum of group sizes typically equals
-``len(total_lengths)`` but the splitter is allowed to drop samples (a warning is
-logged on the rollout side).
+Each splitter has signature ``fn(args, total_lengths) -> list[list[int]]`` and
+returns a list of per-step sample-index groups. The schedule itself does the
+DP / micro-batch packing; the splitter only decides which samples land in which
+training step.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from argparse import Namespace
 def uneven_3_steps_7_8_9(args: Namespace, total_lengths: list[int]) -> list[list[int]]:
     """Split a 24-sample rollout into 3 uneven training steps of size 7 / 8 / 9.
 
-    Used by the ``test_qwen2.5_0.5B_uneven_bs_short`` CI test to exercise the
+    Used by ``test_qwen2.5_0.5B_uneven_bs_short`` to exercise the
     pack-first-distribute-second scheduler with non-uniform per-step batch
     sizes. Asserts the expected sample count so the test fails loudly if the
     rollout produced something unexpected.
