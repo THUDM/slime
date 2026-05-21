@@ -166,10 +166,14 @@ CKPT_ARGS=(
 
 > ⚠️ 这里的 **参数更新** 指训练环节的 optimizer.step()，不同于训练引擎向推理引擎发起的权重同步(Weight Sync)。
 
-在这个过程中，每轮的“产出”与“消耗”必须相等，遵循以下约束：
-**`(rollout-batch-size × n-samples-per-prompt) = (global-batch-size × num-steps-per-rollout)`**
+在这个过程中，每轮的”产出”与”消耗”建议保持一致：
+**`(rollout-batch-size × n-samples-per-prompt) ≈ (global-batch-size × num-steps-per-rollout)`**
 
-- 在 slime 中，如果设置了 `--num-steps-per-rollout` ，`--global-batch-size` 未设置则会被自动设置，设置了则会被用上述公式校验。
+- 在 slime 中，`--num-steps-per-rollout` 和 `--global-batch-size` 二选一即可：
+  - 如果设了 `--num-steps-per-rollout N`：把单轮采样到的真实样本数 `num_samples` 平均切成 N 个 step（首批 step 各多 1 个样本，凑余数）。
+  - 如果只设了 `--global-batch-size G`：以 G 为目标 step 大小，切成 `round(num_samples / G)` 个 step；若 `num_samples` 不能被 G 整除，剩余样本会**均摊到各 step**（不会被丢弃），同时打一条 warning。
+- 当 dynamic sampling、动态过滤等机制导致单轮真实样本数与 `rollout_batch_size × n_samples_per_prompt` 不一致时，**不需要手动调 gbs**；slime 会按上述规则自动切分，loss / 上报数值都按每 step 真实样本数加权。
+- 若需要完全自定义切分（例如固定 7/8/9 这种不均匀 batch），可以传 `--custom-rollout-step-split-path my_module.my_split_fn`，函数签名 `fn(args, total_lengths) -> list[list[int]]`，每个内层 list 是该 step 的样本索引。约束：每个 step 至少要有 `dp_size` 个样本。
 
 **训练流程次数控制**
 -   `--num-rollout`: 控制整个 **“采样→训练”** 循环的**总执行轮次**。

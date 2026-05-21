@@ -168,10 +168,14 @@ The entire training process can be viewed as a closed loop of **"Data Sampling �
 
 > ⚠️ The **parameter update** here refers to the optimizer.step() in the training phase, which is different from the weight synchronization (Weight Sync) initiated by the training engine to the inference engine.
 
-In this process, the "output" and "consumption" of each round must be equal, following this constraint:
-**`(rollout-batch-size × n-samples-per-prompt) = (global-batch-size × num-steps-per-rollout)`**
+In this process, the per-round "output" and "consumption" should approximately match:
+**`(rollout-batch-size × n-samples-per-prompt) ≈ (global-batch-size × num-steps-per-rollout)`**
 
-- In slime, if `--num-steps-per-rollout` is set, `--global-batch-size` will be automatically set if not set, and if set, it will be validated using the above formula.
+- In slime, `--num-steps-per-rollout` and `--global-batch-size` are **either-or**:
+  - If `--num-steps-per-rollout N` is set: the rollout's real sample count is split near-equally into N steps (the first few steps each receive one extra sample to absorb any remainder).
+  - If only `--global-batch-size G` is set: G is used as the target step size; the rollout is split into `round(num_samples / G)` steps and any remainder is **redistributed across steps** (no samples dropped), with a warning.
+- When dynamic sampling, dynamic filtering, etc. cause the actual per-rollout sample count to differ from `rollout_batch_size × n_samples_per_prompt`, **no manual gbs adjustment is needed** — slime splits automatically and loss / reported metrics are weighted by each step's real sample count.
+- For fully custom splits (e.g., a fixed 7/8/9 uneven batch pattern), pass `--custom-rollout-step-split-path my_module.my_split_fn`. Signature: `fn(args, total_lengths) -> list[list[int]]`, each inner list being the sample indices for one step. Constraint: every step must contain at least `dp_size` samples.
 
 **Training Process Count Control**
 - `--num-rollout`: Controls the **total number of execution rounds** of the entire **"sampling→training"** loop.

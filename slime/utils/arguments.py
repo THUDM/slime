@@ -1308,6 +1308,21 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=False,
                 help="enable dynamic global batch size, disable trim samples in rollout buffer when converting samples to train data",
             )
+            parser.add_argument(
+                "--custom-rollout-step-split-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a user-supplied function that partitions a rollout's samples "
+                    "into training steps. Signature: ``custom_split(args, total_lengths) -> "
+                    "list[list[int]]``, where each inner list is the sample indices for one "
+                    "step. Each step's length becomes that step's global_batch_size on the "
+                    "train side; every step must have at least dp_size samples. When unset, "
+                    "the default splitter uses --num-steps-per-rollout if given, otherwise "
+                    "--global-batch-size as a target step size (near-equal split with a "
+                    "warning if num_samples doesn't divide gbs evenly)."
+                ),
+            )
             return parser
 
         def add_custom_megatron_plugins_arguments(parser):

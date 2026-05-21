@@ -118,6 +118,23 @@ def has_repetition(text: str):
 
 
 def compute_rollout_step(args, rollout_id):
-    if args.wandb_always_use_train_step:
-        return rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-    return rollout_id
+    """Resolve the wandb ``step`` label for ``rollout_id``.
+
+    The default (``--wandb-always-use-train-step`` off) returns ``rollout_id`` —
+    this is robust to variable per-rollout step counts since rollout IDs are
+    always sequential.
+
+    The ``--wandb-always-use-train-step`` mode wants a monotonic train-step
+    label. With fixed-shape rollouts we can derive it from
+    ``rollout_id * rb * nspp // gbs``; with variable per-rollout sample counts
+    or a custom step splitter, the actor's authoritative count is published on
+    ``args._wandb_train_step_offset`` by ``train_one_step``. We prefer that
+    counter when it's set so the wandb step stays correct across resume even
+    when ``num_steps_per_rollout`` varied historically.
+    """
+    if not args.wandb_always_use_train_step:
+        return rollout_id
+    train_step_offset = getattr(args, "_wandb_train_step_offset", None)
+    if train_step_offset is not None:
+        return train_step_offset
+    return rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size

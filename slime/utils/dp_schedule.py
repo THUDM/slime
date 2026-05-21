@@ -7,11 +7,15 @@ under CPU-only CI.
 
 The scheduling philosophy is **pack first, distribute second**:
 
-  1. Pack the step's samples into ``K`` micro-batches with a single global
+  1. The caller provides ``step_sample_indices`` — one list of global sample
+     indices per training step. The default split is even chunks of
+     ``global_batch_size``; users can plug a custom splitter (e.g. uneven
+     7/8/9 batches from 24 samples) via ``--custom-rollout-step-split-path``.
+  2. For each step, pack its samples into ``K`` micro-batches with a single
      first-fit pass (dynamic batch) or fixed-size chunking (static batch).
-  2. Adjust ``K`` to a multiple of ``dp_size * (mb_group if vpp>1 else 1)``
+  3. Adjust ``K`` to a multiple of ``dp_size * (mb_group if vpp>1 else 1)``
      by splitting the largest multi-sample bins (dynamic only).
-  3. Distribute the ``K`` mbs across ``dp_size`` ranks, ``K / dp_size``
+  4. Distribute the ``K`` mbs across ``dp_size`` ranks, ``K / dp_size``
      each, with either a strided round-robin or a Karmarkar-Karp pass on
      mbs token sums.
 
@@ -28,6 +32,9 @@ rank to the global max mbs count" approach because:
     require trimming. The train side already normalises by per-step
     ``global_batch_sizes`` and per-rank ``(sum, count)`` tuples; rank-level
     sample asymmetry is therefore mathematically harmless.
+  - Per-step sample counts can also vary across steps (e.g. 7/8/9 instead
+    of 8/8/8) — the per-step ``global_batch_sizes`` plumbing handles that
+    on the train side.
 
 Invariants guaranteed by :func:`build_dp_schedule` (asserted by the tests):
   - every DP rank runs the **same** ``num_microbatches`` per training step
@@ -36,8 +43,8 @@ Invariants guaranteed by :func:`build_dp_schedule` (asserted by the tests):
     tokens, with one exception — an individual sample larger than that cap
     lands alone in its own mbs (and that mbs is the only one allowed to
     exceed the cap);
-  - the union of per-rank sample indices equals ``range(num_samples)`` and
-    the per-rank index sets are disjoint;
+  - the union of per-rank sample indices equals the union of the input
+    ``step_sample_indices`` (every assigned sample placed exactly once);
   - flattening ``micro_batch_indices`` for a rank yields
     ``range(num_samples_rank)`` (each rank's samples are tiled exactly once
     by its mbs schedule).
@@ -45,27 +52,44 @@ Invariants guaranteed by :func:`build_dp_schedule` (asserted by the tests):
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from slime.utils.seqlen_balancing import expand_bins_by_splitting, first_fit_pack, get_seqlen_balanced_partitions
 
 
-def compute_dynamic_global_batch_size(num_samples: int, dp_size: int) -> int:
-    """Return ``num_samples`` as the per-step gbs when dynamic-gbs is enabled.
+def near_equal_step_split(num_samples: int, *, num_steps: int) -> list[list[int]]:
+    """Split ``num_samples`` contiguous samples into ``num_steps`` near-equal chunks.
 
-    With the pack-first-distribute-later schedule, ``num_samples`` no longer
-    needs to be a multiple of ``dp_size`` — rank-level sample asymmetry is
-    handled by per-rank ``(sum, count)`` log aggregation and per-step
-    ``global_batch_size`` loss scaling. We still clamp to ``>= dp_size`` so
-    the schedule has at least one mbs per rank to place.
+    Chunks differ in size by at most 1: the first ``num_samples % num_steps``
+    chunks get ``ceil(num_samples / num_steps)`` samples each, the rest get
+    ``floor(num_samples / num_steps)``. So 24 samples / 3 steps → ``[8, 8, 8]``;
+    23 samples / 3 steps → ``[8, 8, 7]``; 25 samples / 3 steps → ``[9, 8, 8]``.
     """
-    if num_samples < dp_size:
-        # Edge case: not enough samples to place one per rank. The caller
-        # is expected to dummy-pad to dp_size in this regime; the schedule
-        # itself can't fabricate samples. We round up so the math agrees
-        # with the padded count.
-        return dp_size
-    return num_samples
+    assert num_steps >= 1, f"num_steps must be >= 1, got {num_steps}"
+    assert (
+        num_samples >= num_steps
+    ), f"num_samples ({num_samples}) < num_steps ({num_steps}); cannot place at least one sample per step."
+    base = num_samples // num_steps
+    extra = num_samples % num_steps
+    out: list[list[int]] = []
+    start = 0
+    for i in range(num_steps):
+        size = base + (1 if i < extra else 0)
+        out.append(list(range(start, start + size)))
+        start += size
+    return out
+
+
+def even_step_split(num_samples: int, global_batch_size: int) -> list[list[int]]:
+    """Default step split: contiguous chunks of ``global_batch_size`` samples.
+
+    Returns ``num_steps = num_samples // global_batch_size`` lists, each holding
+    ``global_batch_size`` sample indices. Trailing samples that don't fill a
+    complete step are dropped by the caller before this function is invoked.
+    """
+    num_steps = num_samples // global_batch_size
+    return [list(range(s * global_batch_size, (s + 1) * global_batch_size)) for s in range(num_steps)]
 
 
 def _pack_step_into_mbs(
@@ -89,19 +113,29 @@ def build_dp_schedule(
     train_parallel_config: dict,
     total_lengths: list[int],
     *,
-    global_batch_size: int,
+    step_sample_indices: Sequence[Sequence[int]],
 ) -> tuple[list[list[int]], list[list[list[int]]], list[int], list[int]]:
     """Compute the per-rank DP partition and micro-batch schedule.
 
     See module docstring for the pack-first-distribute-second strategy.
-    Returns ``(partitions, micro_batch_indices, num_microbatches, global_batch_sizes)``.
+
+    Args:
+        args: Namespace with ``micro_batch_size``, ``use_dynamic_batch_size``,
+            ``max_tokens_per_gpu``, ``balance_data``.
+        train_parallel_config: ``{"dp_size", "cp_size", "vpp_size",
+            "microbatch_group_size_per_vp_stage"}``.
+        total_lengths: token count per sample, indexed globally.
+        step_sample_indices: per-step lists of indices into ``total_lengths``.
+            Each step's sample count becomes that step's ``global_batch_size``.
+            Step sample counts may vary across steps.
+
+    Returns:
+        ``(partitions, micro_batch_indices, num_microbatches, global_batch_sizes)``.
     """
     dp_size = train_parallel_config["dp_size"]
     cp_size = train_parallel_config["cp_size"]
     vpp_size = train_parallel_config["vpp_size"]
     mb_group = train_parallel_config["microbatch_group_size_per_vp_stage"]
-
-    num_steps = len(total_lengths) // global_batch_size
 
     max_per_bin = None
     if args.use_dynamic_batch_size:
@@ -118,12 +152,16 @@ def build_dp_schedule(
     num_microbatches: list[int] = []
     global_batch_sizes: list[int] = []
 
-    for step_i in range(num_steps):
-        step_start = step_i * global_batch_size
-        step_lengths = total_lengths[step_start : step_start + global_batch_size]
-        global_batch_sizes.append(len(step_lengths))
+    for step_i, sample_indices in enumerate(step_sample_indices):
+        step_lengths = [total_lengths[i] for i in sample_indices]
+        global_batch_sizes.append(len(sample_indices))
+        assert len(sample_indices) >= dp_size, (
+            f"step {step_i}: {len(sample_indices)} samples < dp_size {dp_size}; "
+            f"each step needs at least one sample per rank."
+        )
 
         # 1. Pack samples in this step into mbs with one global pass.
+        # ``step_mbs`` indices are LOCAL into ``step_lengths`` / ``sample_indices``.
         step_mbs = _pack_step_into_mbs(
             step_lengths,
             use_dynamic_batch_size=args.use_dynamic_batch_size,
@@ -138,17 +176,17 @@ def build_dp_schedule(
                 expand_bins_by_splitting(step_mbs, target_K, step_lengths)
                 assert len(step_mbs) == target_K, (
                     f"dynamic path: could only produce {len(step_mbs)} mbs after maximal splitting; "
-                    f"need {target_K}. This happens when num_samples ({len(step_lengths)}) is below the "
-                    f"alignment threshold ({align_to}); pad the rollout with dummy samples before calling."
+                    f"need {target_K}. step {step_i} has {len(sample_indices)} samples, below the "
+                    f"alignment threshold ({align_to})."
                 )
             else:
                 raise AssertionError(
                     f"static path: num_mbs ({len(step_mbs)}) is not a multiple of "
                     f"dp_size * mb_group ({align_to}); got "
-                    f"global_batch_size={global_batch_size}, micro_batch_size={args.micro_batch_size}, "
+                    f"step_size={len(sample_indices)}, micro_batch_size={args.micro_batch_size}, "
                     f"dp_size={dp_size}, mb_group={mb_group if vpp_size > 1 else 1}. "
                     f"Splitting static mbs would break the fixed-size invariant; adjust the config "
-                    f"so global_batch_size % (dp_size * micro_batch_size * mb_group) == 0."
+                    f"so step_size % (dp_size * micro_batch_size * mb_group) == 0."
                 )
 
         K = len(step_mbs)
@@ -168,9 +206,9 @@ def build_dp_schedule(
         # (local indices into partitions[r]).
         for r in range(dp_size):
             for mbs_idx in rank_mbs_idx[r]:
-                mbs_locals = step_mbs[mbs_idx]
+                mbs_locals = step_mbs[mbs_idx]  # local indices into sample_indices
                 local_start = len(partitions[r])
-                partitions[r].extend(step_start + i for i in mbs_locals)
+                partitions[r].extend(sample_indices[i] for i in mbs_locals)
                 micro_batch_indices[r].append(list(range(local_start, local_start + len(mbs_locals))))
 
     return partitions, micro_batch_indices, num_microbatches, global_batch_sizes

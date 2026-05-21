@@ -143,7 +143,15 @@ def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer)
     Returns:
         OptimizerParamScheduler: Initialized scheduler bound to ``optimizer``.
     """
-    # Iteration-based training.
+    # Iteration-based training. ``train_iters`` is an estimate of the total
+    # number of training steps — it's only used to size Megatron's LR decay
+    # schedule (and ``lr_decay_iters`` defaults to it). With variable per-rollout
+    # sample counts (dynamic sampling / filtering / custom step splitter) the
+    # *actual* total can drift; the schedule still tracks the true progress via
+    # ``opt_param_scheduler.num_steps`` (samples consumed, also persisted across
+    # resume), so the worst case is the cosine/linear schedule reaches its
+    # plateau slightly early or late. Pass ``--lr-decay-iters`` explicitly if you
+    # need exact decay control.
     args.train_iters = args.num_rollout * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
     if args.lr_decay_iters is None:
         args.lr_decay_iters = args.train_iters
@@ -609,7 +617,8 @@ def train(
     data_iterator: Sequence[DataIterator],
     num_microbatches: Sequence[int],
     global_batch_sizes: Sequence[int],
-) -> None:
+    train_step_offset: int = 0,
+) -> int:
     """Run training over a rollout consisting of multiple steps.
 
     The model is switched to train mode, training hooks are configured, and
@@ -625,6 +634,13 @@ def train(
         global_batch_sizes (Sequence[int]): Sample count per step (total across
             DP). Same length as ``num_microbatches``; consumed by
             ``train_one_step`` for loss scaling and LR scheduler increments.
+        train_step_offset (int): Cumulative train-step count *before* this
+            rollout. Used as the base for the wandb step label so it stays
+            monotonic when ``num_steps_per_rollout`` varies across rollouts.
+
+    Returns:
+        int: ``train_step_offset + len(num_microbatches)`` — the actor uses
+            this to persist a resume-safe cumulative train-step counter.
     """
     args = get_args()
 
@@ -767,7 +783,7 @@ def train(
             and mpu.get_tensor_model_parallel_rank() == 0
             and mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1
         ):
-            accumulated_step_id = rollout_id * num_steps_per_rollout + step_id
+            accumulated_step_id = train_step_offset + step_id
             role = getattr(model[0], "role", "actor")
             role_tag = "" if role == "actor" else f"{role}-"
             log_dict = {
@@ -781,6 +797,8 @@ def train(
             for param_group_id, param_group in enumerate(optimizer.param_groups):
                 log_dict[f"train/{role_tag}lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
 
+            # Per-step gbs — uneven step sizes are easy to miss without this.
+            log_dict[f"train/{role_tag}global_batch_size"] = global_batch_sizes[step_id]
             log_dict["train/step"] = accumulated_step_id
             logging_utils.log(args, log_dict, step_key="train/step")
 
@@ -818,17 +836,30 @@ def train(
     if pre_hook_enabled:
         disable_forward_pre_hook(model)
 
+    return train_step_offset + num_steps_per_rollout
+
 
 def save(
-    iteration: int, model: Sequence[DDP], optimizer: MegatronOptimizer, opt_param_scheduler: OptimizerParamScheduler
+    iteration: int,
+    model: Sequence[DDP],
+    optimizer: MegatronOptimizer,
+    opt_param_scheduler: OptimizerParamScheduler,
+    train_step_count: int = 0,
 ) -> None:
     """Persist a training checkpoint safely with forward hooks disabled.
 
     Args:
-        iteration (int): Current global iteration number.
+        iteration (int): Current global iteration number (slime stores
+            ``rollout_id`` here so resume can pick up the next rollout).
         model (Sequence[DDP]): Sequence of DDP-wrapped model chunks.
         optimizer (MegatronOptimizer): Optimizer instance.
         opt_param_scheduler (OptimizerParamScheduler): LR/WD scheduler.
+        train_step_count (int): Cumulative number of training steps the actor
+            has executed so far. Persisted in Megatron's
+            ``num_floating_point_operations_so_far`` field — slime doesn't
+            track FLOPs separately, so we repurpose the slot for a
+            resume-safe wandb step counter that survives variable-length
+            rollouts.
     """
     args = get_args()
     if should_disable_forward_pre_hook(args):
@@ -838,7 +869,7 @@ def save(
         model,
         optimizer,
         opt_param_scheduler,
-        num_floating_point_operations_so_far=0,
+        num_floating_point_operations_so_far=train_step_count,
         checkpointing_context=None,
         train_data_iterator=None,
         preprocess_common_state_dict_fn=None,
@@ -887,7 +918,7 @@ def save_hf_model(args, rollout_id: int, model: Sequence[DDP]) -> None:
 
 def initialize_model_and_optimizer(
     args: Namespace, role: str = "actor"
-) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
+) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int, int]:
     """Initialize model(s), optimizer, scheduler, and load from checkpoint.
 
     Args:
@@ -895,8 +926,13 @@ def initialize_model_and_optimizer(
         role (str): Logical role of the model (e.g., "actor", "critic").
 
     Returns:
-        tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
-            DDP-wrapped model chunks, optimizer, scheduler, and iteration index.
+        tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int, int]:
+            DDP-wrapped model chunks, optimizer, scheduler, the iteration index
+            (slime uses this as ``rollout_id``), and the cumulative training-step
+            count carried in Megatron's ``num_floating_point_operations_so_far``
+            field (we repurpose it as ``train_step_count`` so wandb step labels
+            stay monotonic across resume — slime never uses the FLOPs counter
+            for anything else).
     """
 
     if torch.version.hip:
@@ -911,7 +947,7 @@ def initialize_model_and_optimizer(
     model[0].role = role
     reinit_critic_output_layer = _critic_output_layer_needs_reinit(args, model, role)
     clear_memory()
-    iteration, _ = load_checkpoint(
+    iteration, train_step_count = load_checkpoint(
         model,
         optimizer,
         opt_param_scheduler,
@@ -924,4 +960,4 @@ def initialize_model_and_optimizer(
             optimizer.reload_model_params()
     clear_memory()
 
-    return model, optimizer, opt_param_scheduler, iteration
+    return model, optimizer, opt_param_scheduler, iteration, train_step_count

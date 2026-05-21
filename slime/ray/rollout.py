@@ -18,7 +18,7 @@ from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupCo
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
-from slime.utils.dp_schedule import build_dp_schedule, compute_dynamic_global_batch_size
+from slime.utils.dp_schedule import build_dp_schedule, even_step_split, near_equal_step_split
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.logging_utils import configure_logger, init_tracking
@@ -708,18 +708,24 @@ class RolloutManager:
         self.train_parallel_config = config
 
     def _split_train_data_by_dp(self, data):
-        """Resolve gbs, (optionally) trim or dummy-pad ``data``, compute the DP/mbs
-        schedule, and package each rank's rollout_data into a Ray Box. The schedule
-        itself is computed by :func:`build_dp_schedule` so it stays unit-testable
+        """Resolve gbs, (optionally) trim ``data``, compute the DP/mbs schedule,
+        and package each rank's rollout_data into a Ray Box. The schedule itself
+        is computed by :func:`build_dp_schedule` so it stays unit-testable
         without Ray/sglang."""
         dp_size = self.train_parallel_config["dp_size"]
         num_samples = len(data["tokens"])
 
         # 1. Resolve effective global_batch_size. With dynamic-gbs, use the real
         # sample count so the train side normalises by it; the schedule then runs
-        # a single training step over the full rollout.
+        # a single training step over the full rollout. We require at least
+        # ``dp_size`` samples so the schedule can place one mbs on every rank —
+        # fewer is treated as a configuration error rather than silently padded.
         if self.args.use_dynamic_global_batch_size and not self.args.disable_rollout_trim_samples:
-            global_batch_size = compute_dynamic_global_batch_size(num_samples, dp_size)
+            assert num_samples >= dp_size, (
+                f"use_dynamic_global_batch_size requires num_samples ({num_samples}) >= dp_size "
+                f"({dp_size}); shrink dp_size or increase rollout_batch_size * n_samples_per_prompt."
+            )
+            global_batch_size = num_samples
             if global_batch_size != self.args.global_batch_size:
                 logger.info(
                     f"Dynamic global_batch_size: {self.args.global_batch_size} -> {global_batch_size} "
@@ -728,25 +734,16 @@ class RolloutManager:
         else:
             global_batch_size = self.args.global_batch_size
 
-        # 2. Pad with dummy samples only when dynamic-gbs is on AND the rollout is
-        # below the dp-size floor (otherwise the per-rank schedule can't even place
-        # one mbs on every rank). Dummies carry loss_mask=0 so they don't move
-        # gradients; we still emit them so PP/DP collectives stay synced.
-        if num_samples < global_batch_size:
-            if not (self.args.use_dynamic_global_batch_size and not self.args.disable_rollout_trim_samples):
-                raise ValueError(f"Not enough samples {num_samples} for global_batch_size {global_batch_size}")
-            num_dummies = global_batch_size - num_samples
-            logger.warning(
-                f"Padding {num_dummies} dummy sample(s) to reach dp_size floor "
-                f"(num_samples={num_samples}, dp_size={dp_size})."
-            )
-            self._pad_data_with_dummies(data, num_dummies)
-
-        # 3. Trim to a multiple of global_batch_size. With dynamic-gbs this is a
-        # no-op (gbs == num_samples after the dummy-pad above). With static gbs it
-        # drops samples that don't fill a complete training step.
-        if not self.args.disable_rollout_trim_samples:
-            num_samples = len(data["tokens"])
+        # 2. Trim to a multiple of global_batch_size. Only static-gbs without a
+        # custom splitter still needs this — the dynamic-gbs path sets gbs to the
+        # real sample count (so no remainder), and the custom-splitter path
+        # decides itself which samples to drop.
+        if (
+            not self.args.disable_rollout_trim_samples
+            and not self.args.use_dynamic_global_batch_size
+            and self.args.num_steps_per_rollout is None
+            and self.args.custom_rollout_step_split_path is None
+        ):
             trim_len = num_samples // global_batch_size * global_batch_size
             if trim_len == 0:
                 raise ValueError(f"Not enough samples {num_samples} for global_batch_size {global_batch_size}")
@@ -756,14 +753,62 @@ class RolloutManager:
                     if isinstance(val, list):
                         data[key] = val[:trim_len]
 
-        # 4. Compute schedule
+        # 3. Compute step boundaries — the list of per-step sample-index groups.
+        # Custom path wins; otherwise pick the default based on which of
+        # ``--num-steps-per-rollout`` and ``--global-batch-size`` the user set:
+        #   - ``--num-steps-per-rollout N``: split into N near-equal chunks.
+        #   - ``--global-batch-size G``: target step size G; if ``num_samples %
+        #     G != 0``, redistribute the remainder evenly across steps and warn.
+        # The train side scales loss / aggregates metrics per step, so uneven
+        # step sizes are fine as long as each step has >= dp_size samples.
         total_lengths = [len(t) for t in data["tokens"]]
         data["total_lengths"] = total_lengths
+        num_samples = len(total_lengths)
+
+        if self.args.custom_rollout_step_split_path:
+            custom_split = load_function(self.args.custom_rollout_step_split_path)
+            step_sample_indices = list(custom_split(self.args, total_lengths))
+            assert step_sample_indices, "custom_rollout_step_split returned an empty list of steps"
+            seen: set[int] = set()
+            for s, indices in enumerate(step_sample_indices):
+                indices = list(indices)
+                step_sample_indices[s] = indices
+                assert seen.isdisjoint(indices), (
+                    f"custom_rollout_step_split: step {s} reuses sample indices already placed: "
+                    f"{sorted(set(indices) & seen)}"
+                )
+                seen.update(indices)
+            extra = seen - set(range(num_samples))
+            assert not extra, f"custom_rollout_step_split returned out-of-range sample indices: {sorted(extra)}"
+            missing = set(range(num_samples)) - seen
+            if missing:
+                logger.warning(
+                    f"custom_rollout_step_split dropped {len(missing)} sample(s); " f"first few: {sorted(missing)[:5]}"
+                )
+        elif self.args.num_steps_per_rollout is not None:
+            num_steps = self.args.num_steps_per_rollout
+            assert num_samples >= num_steps, (
+                f"num_samples ({num_samples}) < num_steps_per_rollout ({num_steps}); "
+                f"cannot place at least one sample per step."
+            )
+            step_sample_indices = near_equal_step_split(num_samples, num_steps=num_steps)
+        elif num_samples % global_batch_size != 0:
+            # gbs is a target; round to the nearest # of steps and redistribute.
+            num_steps = max(1, round(num_samples / global_batch_size))
+            logger.warning(
+                f"num_samples ({num_samples}) is not divisible by global_batch_size ({global_batch_size}); "
+                f"using {num_steps} step(s) of roughly {num_samples // num_steps} samples each "
+                f"(near-equal split, no samples dropped). Set --num-steps-per-rollout to silence."
+            )
+            step_sample_indices = near_equal_step_split(num_samples, num_steps=num_steps)
+        else:
+            step_sample_indices = even_step_split(num_samples, global_batch_size)
+
         partitions, micro_batch_indices, num_microbatches, global_batch_sizes = build_dp_schedule(
             self.args,
             self.train_parallel_config,
             total_lengths,
-            global_batch_size=global_batch_size,
+            step_sample_indices=step_sample_indices,
         )
 
         # 4. Package per-rank rollout_data
@@ -802,50 +847,6 @@ class RolloutManager:
             rollout_data["micro_batch_indices"] = micro_batch_indices[r]
             rollout_data_refs.append(Box(ray.put(rollout_data)))
         return rollout_data_refs
-
-    def _pad_data_with_dummies(self, data: dict, num_dummies: int) -> None:
-        """Append ``num_dummies`` zero-contribution samples to ``data`` in place.
-
-        Used only when a rollout produced fewer samples than ``dp_size`` and the
-        schedule can't otherwise place at least one mbs per rank. Dummies carry
-        a single token with ``loss_mask=0`` so they never move any gradient or
-        bias any aggregated metric; their only job is to keep PP/DP collectives
-        unblocked.
-        """
-        if num_dummies <= 0:
-            return
-        ref_tokens = data["tokens"][0]
-        dummy_token = torch.zeros(1, dtype=ref_tokens.dtype, device=ref_tokens.device)
-        ref_mask = data["loss_masks"][0]
-        dummy_mask = torch.zeros(1, dtype=ref_mask.dtype, device=ref_mask.device)
-        for _ in range(num_dummies):
-            for key, val in list(data.items()):
-                if not isinstance(val, list):
-                    continue
-                if key == "tokens":
-                    val.append(dummy_token.clone())
-                elif key == "loss_masks":
-                    val.append(dummy_mask.clone())
-                elif key == "response_lengths":
-                    val.append(1)
-                elif key in ("rewards", "raw_reward", "advantages", "returns", "values"):
-                    val.append(0.0)
-                elif key == "truncated":
-                    val.append(False)
-                elif key in ("round_number",):
-                    val.append(0)
-                elif key in ("sample_indices",):
-                    val.append(-1)
-                elif key == "prompt":
-                    val.append("")
-                else:
-                    # Best-effort: copy the first element's shape/type with a
-                    # zero-equivalent. Unknown optional keys are simply
-                    # left short — get_data_iterator handles ``None`` already.
-                    if val and isinstance(val[0], torch.Tensor):
-                        val.append(torch.zeros_like(val[0]))
-                    elif val:
-                        val.append(type(val[0])() if callable(type(val[0])) else None)
 
 
 def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):
