@@ -708,25 +708,43 @@ class RolloutManager:
         self.train_parallel_config = config
 
     def _split_train_data_by_dp(self, data):
-        """Resolve gbs, trim ``data``, compute the DP/mbs schedule, and package each
-        rank's rollout_data into a Ray Box. The schedule itself is computed by
-        :func:`build_dp_schedule` so it stays unit-testable without Ray/sglang."""
+        """Resolve gbs, (optionally) trim or dummy-pad ``data``, compute the DP/mbs
+        schedule, and package each rank's rollout_data into a Ray Box. The schedule
+        itself is computed by :func:`build_dp_schedule` so it stays unit-testable
+        without Ray/sglang."""
         dp_size = self.train_parallel_config["dp_size"]
+        num_samples = len(data["tokens"])
 
-        # 1. Resolve effective global_batch_size
-        dynamic_gbs: int | None = None
+        # 1. Resolve effective global_batch_size. With dynamic-gbs, use the real
+        # sample count so the train side normalises by it; the schedule then runs
+        # a single training step over the full rollout.
         if self.args.use_dynamic_global_batch_size and not self.args.disable_rollout_trim_samples:
-            dynamic_gbs = compute_dynamic_global_batch_size(len(data["tokens"]), dp_size)
-            if dynamic_gbs != self.args.global_batch_size:
+            global_batch_size = compute_dynamic_global_batch_size(num_samples, dp_size)
+            if global_batch_size != self.args.global_batch_size:
                 logger.info(
-                    f"Dynamic global_batch_size: {self.args.global_batch_size} -> {dynamic_gbs} "
-                    f"(num_samples={len(data['tokens'])}, dp_size={dp_size}, num_steps=1)"
+                    f"Dynamic global_batch_size: {self.args.global_batch_size} -> {global_batch_size} "
+                    f"(num_samples={num_samples}, dp_size={dp_size}, num_steps=1)"
                 )
-            global_batch_size = dynamic_gbs
         else:
             global_batch_size = self.args.global_batch_size
 
-        # 2. Trim data to a multiple of global_batch_size
+        # 2. Pad with dummy samples only when dynamic-gbs is on AND the rollout is
+        # below the dp-size floor (otherwise the per-rank schedule can't even place
+        # one mbs on every rank). Dummies carry loss_mask=0 so they don't move
+        # gradients; we still emit them so PP/DP collectives stay synced.
+        if num_samples < global_batch_size:
+            if not (self.args.use_dynamic_global_batch_size and not self.args.disable_rollout_trim_samples):
+                raise ValueError(f"Not enough samples {num_samples} for global_batch_size {global_batch_size}")
+            num_dummies = global_batch_size - num_samples
+            logger.warning(
+                f"Padding {num_dummies} dummy sample(s) to reach dp_size floor "
+                f"(num_samples={num_samples}, dp_size={dp_size})."
+            )
+            self._pad_data_with_dummies(data, num_dummies)
+
+        # 3. Trim to a multiple of global_batch_size. With dynamic-gbs this is a
+        # no-op (gbs == num_samples after the dummy-pad above). With static gbs it
+        # drops samples that don't fill a complete training step.
         if not self.args.disable_rollout_trim_samples:
             num_samples = len(data["tokens"])
             trim_len = num_samples // global_batch_size * global_batch_size
@@ -738,7 +756,7 @@ class RolloutManager:
                     if isinstance(val, list):
                         data[key] = val[:trim_len]
 
-        # 3. Compute schedule
+        # 4. Compute schedule
         total_lengths = [len(t) for t in data["tokens"]]
         data["total_lengths"] = total_lengths
         partitions, micro_batch_indices, num_microbatches, global_batch_sizes = build_dp_schedule(
@@ -784,6 +802,50 @@ class RolloutManager:
             rollout_data["micro_batch_indices"] = micro_batch_indices[r]
             rollout_data_refs.append(Box(ray.put(rollout_data)))
         return rollout_data_refs
+
+    def _pad_data_with_dummies(self, data: dict, num_dummies: int) -> None:
+        """Append ``num_dummies`` zero-contribution samples to ``data`` in place.
+
+        Used only when a rollout produced fewer samples than ``dp_size`` and the
+        schedule can't otherwise place at least one mbs per rank. Dummies carry
+        a single token with ``loss_mask=0`` so they never move any gradient or
+        bias any aggregated metric; their only job is to keep PP/DP collectives
+        unblocked.
+        """
+        if num_dummies <= 0:
+            return
+        ref_tokens = data["tokens"][0]
+        dummy_token = torch.zeros(1, dtype=ref_tokens.dtype, device=ref_tokens.device)
+        ref_mask = data["loss_masks"][0]
+        dummy_mask = torch.zeros(1, dtype=ref_mask.dtype, device=ref_mask.device)
+        for _ in range(num_dummies):
+            for key, val in list(data.items()):
+                if not isinstance(val, list):
+                    continue
+                if key == "tokens":
+                    val.append(dummy_token.clone())
+                elif key == "loss_masks":
+                    val.append(dummy_mask.clone())
+                elif key == "response_lengths":
+                    val.append(1)
+                elif key in ("rewards", "raw_reward", "advantages", "returns", "values"):
+                    val.append(0.0)
+                elif key == "truncated":
+                    val.append(False)
+                elif key in ("round_number",):
+                    val.append(0)
+                elif key in ("sample_indices",):
+                    val.append(-1)
+                elif key == "prompt":
+                    val.append("")
+                else:
+                    # Best-effort: copy the first element's shape/type with a
+                    # zero-equivalent. Unknown optional keys are simply
+                    # left short — get_data_iterator handles ``None`` already.
+                    if val and isinstance(val[0], torch.Tensor):
+                        val.append(torch.zeros_like(val[0]))
+                    elif val:
+                        val.append(type(val[0])() if callable(type(val[0])) else None)
 
 
 def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):

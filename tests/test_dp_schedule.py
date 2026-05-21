@@ -240,11 +240,98 @@ def test_dynamic_with_vpp_rounds_to_mb_group():
 
 
 @pytest.mark.unit
-def test_compute_dynamic_global_batch_size_floor_and_min():
-    """Verify both the floor-to-dp-multiple and the dp_size floor."""
-    assert compute_dynamic_global_batch_size(10, 4) == 8
+def test_compute_dynamic_global_batch_size_returns_real_count():
+    """With the pack-first-distribute-later schedule, dynamic-gbs no longer
+    rounds down to a multiple of dp_size: the train side normalises by the
+    real per-step sample total. Only the ``num_samples < dp_size`` edge case
+    is clamped (caller is expected to dummy-pad to dp_size in that regime)."""
+    assert compute_dynamic_global_batch_size(10, 4) == 10
     assert compute_dynamic_global_batch_size(16, 4) == 16
-    # Fewer samples than dp_size: clamp to dp_size so we still produce a valid mbs.
+    assert compute_dynamic_global_batch_size(2, 4) == 4
+
+
+@pytest.mark.unit
+def test_dynamic_uneven_sample_count():
+    """Pack-first lets DP ranks hold different numbers of samples (here gbs=10,
+    dp=4 → ranks must still run the same ``num_mbs`` but sample counts differ)."""
+    # 10 samples of length 5, max-per-bin 10 → first-fit packs into 5 bins of 2 each.
+    # 5 is not a multiple of dp_size=4, so the schedule splits the largest bin until
+    # K is the next multiple of 4 → K=8, num_mbs_per_rank=2.
+    total_lengths = [5] * 10
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=10)
+    tp = make_tp(dp_size=4)
+
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(args, tp, total_lengths, global_batch_size=10)
+
+    # Per-step gbs = real sample count.
+    assert gbs_per_step == [10]
+    # Same num_mbs across ranks (PP sync).
+    for r in range(4):
+        assert len(mbi[r]) == sum(nmb), f"rank {r}: {len(mbi[r])} mbs, want {sum(nmb)}"
+    # All 10 samples assigned exactly once across ranks.
+    seen: set[int] = set()
+    for r in range(4):
+        assert seen.isdisjoint(partitions[r])
+        seen.update(partitions[r])
+    assert seen == set(range(10))
+    # Per-rank mbs respect the cap.
+    for r in range(4):
+        for mbs in mbi[r]:
+            assert sum(total_lengths[partitions[r][i]] for i in mbs) <= 10
+
+
+@pytest.mark.unit
+def test_dynamic_uneven_balanced_distribution():
+    """``--balance_data`` distributes mbs across DP ranks by KK on mbs token sums."""
+    # 9 samples with varied lengths → first-fit packs into a few bins, then we align
+    # to dp_size=2 (already multiple of 2) and balance by token sum.
+    total_lengths = [4, 4, 4, 4, 4, 4, 4, 4, 4]
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=8, balance_data=True)
+    tp = make_tp(dp_size=2)
+
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(args, tp, total_lengths, global_batch_size=9)
+
+    assert gbs_per_step == [9]
+    # Same num_mbs across ranks.
+    for r in range(2):
+        assert len(mbi[r]) == sum(nmb)
+    # All 9 samples assigned exactly once.
+    seen: set[int] = set()
+    for r in range(2):
+        seen.update(partitions[r])
+    assert seen == set(range(9))
+    # Per-rank mbs respect the cap.
+    for r in range(2):
+        for mbs in mbi[r]:
+            assert sum(total_lengths[partitions[r][i]] for i in mbs) <= 8
+
+
+@pytest.mark.unit
+def test_dynamic_low_K_padded_by_splitting():
+    """Few-but-large samples: first-fit produces fewer bins than dp_size, schedule
+    must split the largest bins until K reaches dp_size."""
+    total_lengths = [3, 3, 3, 3]  # first-fit at cap=12 → 1 bin of 4 samples
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=12)
+    tp = make_tp(dp_size=4)
+
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(args, tp, total_lengths, global_batch_size=4)
+
+    # Should split the single bin all the way down to 4 singletons.
+    assert nmb == [1]
+    for r in range(4):
+        assert len(partitions[r]) >= 1  # every rank has at least one sample
+    seen: set[int] = set()
+    for r in range(4):
+        seen.update(partitions[r])
+    assert seen == set(range(4))
+
+
+@pytest.mark.unit
+def test_compute_dynamic_global_batch_size_floor_and_min():
+    """Backward-compat alias for the old test name; same expectations as the
+    new ``returns_real_count`` test."""
+    assert compute_dynamic_global_batch_size(10, 4) == 10
+    assert compute_dynamic_global_batch_size(16, 4) == 16
     assert compute_dynamic_global_batch_size(2, 4) == 4
 
 
