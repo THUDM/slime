@@ -74,6 +74,7 @@ Forking this file (each step above is one or two lines below; modify in place):
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import os
 import secrets
@@ -118,6 +119,11 @@ SWE_MAX_RESPONSE_TOKENS = int(os.environ.get("SWE_MAX_RESPONSE_TOKENS", "0") or 
 SWE_TOOL_PARSER = os.environ.get("SWE_TOOL_PARSER", "") or None
 SWE_REASONING_PARSER = os.environ.get("SWE_REASONING_PARSER", "") or None
 SWE_SAVE_TRAJECTORY_TREE = os.environ.get("SWE_SAVE_TRAJECTORY_TREE", "0") == "1"
+# list_trajectory mode: fan a single rollout out into one trainable Sample
+# per chain segment (one segment per sub-agent / compact wipe + the final
+# chain). When 0 (default), generate() returns a single Sample whose
+# tokens = prompt_ids + final_response_ids -- the tree_trajectory mode.
+SWE_LIST_TRAJECTORY = os.environ.get("SWE_LIST_TRAJECTORY", "0") == "1"
 SHIM_BIND_HOST = os.environ.get("SHIM_BIND_HOST", "0.0.0.0")
 SHIM_PORT = int(os.environ.get("SHIM_PORT", "18001"))
 
@@ -283,6 +289,50 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sam
         return _abort(sample, f"exception:{type(e).__name__}")
 
     # --- 3) pull tokens from middleware, fill sample -----------------------
+    if SWE_LIST_TRAJECTORY:
+        segments, trajectory_tree = state.middleware.pop_session_split(session_id)
+        if not segments:
+            return _abort(sample, "middleware_session_empty")
+        # Drop empty-response segments (defensive: pop_session_split already
+        # filters but the final live chain might have 0 responses if claude-code
+        # exited before emitting anything new after the last wipe).
+        segments = [seg for seg in segments if seg[1]]
+        if not segments:
+            return _abort(sample, "middleware_session_empty")
+        fanned: list[Sample] = []
+        instance_id = md["instance_id"]
+        elapsed = time.time() - t0
+        for seg_idx, (prompt_ids, response_ids, loss_mask, seg_meta) in enumerate(segments):
+            response_ids, loss_mask = _cap_response_for_training(response_ids, loss_mask)
+            sub = sample if seg_idx == 0 else copy.deepcopy(sample)
+            sub.tokens = prompt_ids + response_ids
+            sub.response_length = len(response_ids)
+            sub.loss_mask = loss_mask
+            sub.response = state.tokenizer.decode(response_ids, skip_special_tokens=False)
+            sub.reward = float(reward)  # per-sample reward propagates to every segment
+            sub.status = Sample.Status.COMPLETED
+            sub.metadata = {
+                **(sample.metadata or {}),
+                "instance_id": instance_id,
+                "is_solved": bool(is_solved),
+                "applied_cleanly": bool(applied_cleanly),
+                "elapsed_sec": elapsed,
+                "list_trajectory_segment_idx": seg_idx,
+                "list_trajectory_num_segments": len(segments),
+                "list_trajectory_segment_kind": seg_meta.get("kind"),
+                "list_trajectory_completed_turns_at_split": seg_meta.get("completed_turns"),
+            }
+            if SWE_SAVE_TRAJECTORY_TREE and seg_idx == 0:
+                # attach the full tree only to the first segment to keep dumps
+                # compact; viz still gets the per-instance picture.
+                sub.metadata["trajectory_tree"] = trajectory_tree
+            fanned.append(sub)
+        logger.info(
+            "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs list_segments=%d",
+            instance_id, reward, is_solved, applied_cleanly, elapsed, len(fanned),
+        )
+        return fanned
+
     prompt_ids, response_ids, loss_mask, trajectory_tree = state.middleware.pop_session(session_id)
     if not prompt_ids:
         return _abort(sample, "middleware_session_empty")

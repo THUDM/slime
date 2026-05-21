@@ -174,6 +174,16 @@ class _Session:
     # if the parent itself was already short (post-compact early turn).
     initial_prompt_len: int = 0
 
+    # === list_trajectory: snapshot every chain segment before wiping =========
+    # Each entry: (prompt_ids, response_ids, loss_mask, meta). When the chain
+    # rebases (autoCompact wipe or sibling fork landing on the same session),
+    # we snapshot the previous chain here so generate.py can fan it out into
+    # one trainable Sample per segment instead of throwing the pre-wipe tokens
+    # away. The current (live) chain is NOT in this list -- it's still in
+    # s.prompt_ids/response_ids/loss_mask; pop_session_split() appends it
+    # before returning.
+    completed_trajectories: list[tuple[list[int], list[int], list[int], dict]] = dataclasses.field(default_factory=list)
+
 
 class _Store:
     def __init__(self) -> None:
@@ -1042,12 +1052,19 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
             # original raw tokens (preserving Megatron training signal).
             _attach_pending_raw_tokens(s, base_idx, new)
         else:
-            # autoCompact wipe or other non-linear update. The previous
-            # trajectory becomes orphan: its raw tokens no longer correspond
-            # to chat_messages indices in the new chain, so we drop them.
-            # The previous chain's gens are LOST for training in this
-            # single-sample format -- preserving them would require a
-            # multi-sample/sub-trajectory architecture.
+            # autoCompact wipe or other non-linear update. The previous chain
+            # is about to be replaced -- list_trajectory mode snapshots it
+            # (prompt/response/mask) into s.completed_trajectories so the
+            # downstream Sample fan-out can train on it. tree_trajectory mode
+            # simply drops it; either way s.asst_raw_tokens has to go because
+            # its chat_messages indices no longer map to the rebuilt chain.
+            if s.response_ids:
+                s.completed_trajectories.append((
+                    list(s.prompt_ids),
+                    list(s.response_ids),
+                    list(s.loss_mask),
+                    {"kind": "pre_wipe", "completed_turns": len(s.turns)},
+                ))
             logger.info("[middleware] %s non-linear messages update; rebuilding prompt", session_id)
             s.chat_messages = _translate_messages(all_msgs, body.get("system"))
             s.system_hash = system_hash
@@ -1106,6 +1123,15 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
                     diag = f"<diag err: {e}>"
                 logger.warning("[middleware] %s ideal_ids does not extend prompt_ids; resetting [%s]",
                                session_id, diag)
+                # list_trajectory mode: snapshot the chain we are about to
+                # nuke (same rationale as the explicit wipe path above).
+                if s.response_ids:
+                    s.completed_trajectories.append((
+                        list(s.prompt_ids),
+                        list(s.response_ids),
+                        list(s.loss_mask),
+                        {"kind": "diverge_reset", "completed_turns": len(s.turns)},
+                    ))
                 s.prompt_ids = ideal_ids
                 s.response_ids = []
                 s.loss_mask = []
@@ -1327,6 +1353,45 @@ class MiddlewareHandle:
 
     def pop_session(self, session_id: str) -> tuple[list[int], list[int], list[int], dict[str, Any]]:
         fut = asyncio.run_coroutine_threadsafe(self._pop_session(session_id), self.app_handle.loop)
+        return fut.result(timeout=10)
+
+    async def _pop_session_split(self, session_id: str) -> tuple[
+        list[tuple[list[int], list[int], list[int], dict[str, Any]]],
+        dict[str, Any],
+    ]:
+        s = await self.store.pop(session_id)
+        if s is None:
+            return [], {}
+        async with s.lock:
+            segments: list[tuple[list[int], list[int], list[int], dict[str, Any]]] = [
+                (list(p), list(r), list(m), dict(meta))
+                for (p, r, m, meta) in s.completed_trajectories
+            ]
+            if s.response_ids:
+                segments.append((
+                    list(s.prompt_ids),
+                    list(s.response_ids),
+                    list(s.loss_mask),
+                    {"kind": "final", "completed_turns": len(s.turns)},
+                ))
+            return segments, _export_tree(s)
+
+    def pop_session_split(self, session_id: str) -> tuple[
+        list[tuple[list[int], list[int], list[int], dict[str, Any]]],
+        dict[str, Any],
+    ]:
+        """list_trajectory variant of pop_session: returns one (prompt_ids,
+        response_ids, loss_mask, meta) tuple per chain segment.
+
+        Segments are emitted in chronological order:
+          * one per autoCompact / non-linear wipe (kind="pre_wipe")
+          * one per ideal/prompt-prefix-divergence reset (kind="diverge_reset")
+          * a final segment for the live chain (kind="final")
+
+        Empty-response segments are dropped (no trainable tokens). The
+        trajectory_tree export is returned alongside so the caller can attach
+        it to ONE of the fanned-out Samples for downstream viz."""
+        fut = asyncio.run_coroutine_threadsafe(self._pop_session_split(session_id), self.app_handle.loop)
         return fut.result(timeout=10)
 
     # --- Weight-update abort/resume control -----------------------------------
