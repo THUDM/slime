@@ -131,6 +131,36 @@ class _Turn:
 
 
 @dataclasses.dataclass
+class _SubSession:
+    """Independent prefix-tracking state for one subagent dispatch.
+
+    Owns its own prompt_ids / response_ids / loss_mask / msg_hashes /
+    seen_msgs / chat_messages / system_hash / initial_prompt_len /
+    asst_raw_tokens / pending_raw_tokens. The main session pushes one
+    onto ``subagent_stack`` when a Task/Agent dispatch is detected and
+    pops it (snapshotting into ``completed_trajectories`` with
+    ``kind="subagent"``) when the dispatch returns.
+
+    Per user decision 1 (MASTER_PLAN preamble): the subagent segment's
+    prompt prefix is the subagent's own system prompt + initial task
+    only, never the main-line prefix from before the dispatch."""
+
+    system_hash: str = ""
+    chat_messages: list[dict] = dataclasses.field(default_factory=list)
+    tools_schema: list[dict] | None = None
+    seen_msgs: int = 0
+    msg_hashes: list[str] = dataclasses.field(default_factory=list)
+    prompt_ids: list[int] = dataclasses.field(default_factory=list)
+    response_ids: list[int] = dataclasses.field(default_factory=list)
+    loss_mask: list[int] = dataclasses.field(default_factory=list)
+    initial_prompt_len: int = 0
+    asst_raw_tokens: dict[int, tuple[list[int], int]] = dataclasses.field(default_factory=dict)
+    pending_raw_tokens: list[tuple[list[int], int]] = dataclasses.field(default_factory=list)
+    dispatch_tool_use_id: str = ""  # the tool_use id we are waiting on
+    nested_depth: int = 1
+
+
+@dataclasses.dataclass
 class _Session:
     # Canonical chat log. Assistant entries get added by _translate_messages
     # when claude-code echoes our previous generation back in its next request
@@ -183,6 +213,25 @@ class _Session:
     # s.prompt_ids/response_ids/loss_mask; pop_session_split() appends it
     # before returning.
     completed_trajectories: list[tuple[list[int], list[int], list[int], dict]] = dataclasses.field(default_factory=list)
+
+    # === subagent dispatch tracking (list_trajectory mode) ===================
+    # Stack of currently-active subagent dispatches. The top of stack receives
+    # all requests whose body["system"] hashes to its system_hash. When the
+    # subagent's tool_result returns on the main line, we pop and snapshot the
+    # top into completed_trajectories with kind="subagent". Per user decision 3
+    # (MASTER_PLAN preamble): nested subagents (depth >= 2) are merged into
+    # the outer sub-session at pop time; only depth-1 pops emit a separate
+    # segment.
+    subagent_stack: list[_SubSession] = dataclasses.field(default_factory=list)
+    # Tool-use id of the most recent Task/Agent dispatch we saw on whichever
+    # routing target is "current" (main or top of stack). The next request
+    # whose new user messages contain a tool_result with this id triggers the
+    # pop. Cleared after pop or when a new dispatch arrives.
+    _pending_dispatch_id: str = ""
+    # finish_reason of the most recent /generate call on the main line. Used
+    # by pop_session_split to annotate the final segment metadata so we can
+    # tell task-done from max-turns / length truncation post-hoc.
+    last_finish_reason: str = ""
 
 
 class _Store:
@@ -604,12 +653,15 @@ def _detect_gen_prefix(ideal_ids: list[int], marker_ids: list[int]) -> list[int]
 
 
 def _attach_pending_raw_tokens(
-    s: "_Session",
+    s: "_Session | _SubSession",
     base_index: int,
     new_translated_msgs: list[dict],
 ) -> None:
     """Pop entries from s.pending_raw_tokens to attach raw tokens to each new
     assistant entry we just appended to s.chat_messages.
+
+    Works on both main ``_Session`` and per-dispatch ``_SubSession``; both
+    expose the same ``pending_raw_tokens`` / ``asst_raw_tokens`` fields.
 
     base_index is the chat_messages position of new_translated_msgs[0]; we
     walk in order and for each role==assistant entry, pop one (raw, gen_off)
@@ -1070,6 +1122,86 @@ async def _generate_with_abort_resume(
 
 
 # ---------------------------------------------------------------------------
+# Subagent dispatch detection (list_trajectory mode)
+# ---------------------------------------------------------------------------
+# Tool names claude-code uses to dispatch into a subagent. The corresponding
+# tool_result on the main line marks the subagent's return.
+_SUBAGENT_TOOL_NAMES = ("Task", "Agent")
+
+
+def _find_dispatch_tool_use_id(blocks: list[dict]) -> str:
+    """Return the tool_use id of the most recent Task/Agent block in ``blocks``,
+    or "" if none. Used on the main-line response to mark the next request's
+    expected subagent dispatch."""
+    for b in blocks:
+        if not isinstance(b, dict):
+            continue
+        if b.get("type") == "tool_use" and b.get("name") in _SUBAGENT_TOOL_NAMES:
+            return b.get("id", "") or ""
+    return ""
+
+
+def _has_tool_result_for(messages: list[dict], tool_use_id: str) -> bool:
+    """True when any of ``messages`` is a user message containing a
+    ``tool_result`` block whose ``tool_use_id`` matches ``tool_use_id``.
+
+    Used on the main line to detect that an outstanding Task/Agent dispatch
+    has returned (subagent finished, control back to main)."""
+    if not tool_use_id:
+        return False
+    for m in messages:
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        content = m.get("content")
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "tool_result" \
+                    and b.get("tool_use_id") == tool_use_id:
+                return True
+    return False
+
+
+def _snapshot_subagent(s: _Session, sub: _SubSession) -> None:
+    """Append the sub-session as a kind="subagent" segment to s.completed_trajectories.
+
+    Only called when popping the outermost sub-session (depth==1). Sub-sessions
+    at deeper nesting are merged into their parent via _merge_into_parent."""
+    if not sub.response_ids:
+        return
+    s.completed_trajectories.append((
+        list(sub.prompt_ids),
+        list(sub.response_ids),
+        list(sub.loss_mask),
+        {
+            "kind": "subagent",
+            "completed_turns": sub.seen_msgs,
+            "nested_depth": sub.nested_depth,
+        },
+    ))
+
+
+def _merge_into_parent(top: _SubSession, parent: _SubSession) -> None:
+    """Merge a nested sub-session (depth >= 2) into its parent at pop time.
+
+    Per user decision 3 (MASTER_PLAN preamble): nested subagents do NOT emit
+    their own segment. We concatenate ``top.response_ids`` and
+    ``top.loss_mask`` onto the parent's so the inner subagent's tokens stay
+    trainable (with loss_mask=1 since they are still model-generated).
+
+    We do NOT touch parent.prompt_ids — the inner subagent's tokens are
+    technically observations from the parent's PoV, but accurate chat-
+    template splicing would require reconstructing the parent's chain
+    around the dispatch boundary, which we have already lost. Marking
+    them loss_mask=1 keeps them in the training signal at the cost of a
+    minor off-policy bias on tokens generated by the same model in the
+    inner sub-context."""
+    parent.response_ids.extend(top.response_ids)
+    parent.loss_mask.extend([1] * len(top.response_ids))
+    parent.nested_depth = max(parent.nested_depth, top.nested_depth)
+
+
+# ---------------------------------------------------------------------------
 # Request handler
 # ---------------------------------------------------------------------------
 async def _handle_messages(request: web.Request) -> web.StreamResponse:
@@ -1093,60 +1225,122 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
 
     s = await store.get(session_id)
     async with s.lock:
-        # --- 1) ingest new messages (since last call) into the canonical log
+        # --- 0) routing: decide whether this request belongs on main line or
+        # on top of subagent_stack. Per user decision 4 (MASTER_PLAN preamble):
+        # hash body["system"] and compare against the main-line cached system
+        # hash; differing hashes are subagent requests. Per user decision 5:
+        # any unresolvable ambiguity falls back to main-line routing.
         all_msgs = body.get("messages") or []
         msg_hashes = [_hash_obj(m) for m in all_msgs]
         system_value = body.get("system") if "system" in body else None
-        system_hash = _hash_obj(system_value) if "system" in body else s.system_hash
+        req_system_hash = _hash_obj(system_value) if "system" in body else s.system_hash
+
+        # Check for subagent return on main line BEFORE deciding routing: if
+        # the new user messages contain a tool_result for our pending
+        # dispatch id, the subagent has returned. Pop top of stack and
+        # snapshot it (or merge if nested), then route this request to main.
+        if s._pending_dispatch_id and s.subagent_stack \
+                and _has_tool_result_for(all_msgs, s._pending_dispatch_id):
+            top = s.subagent_stack.pop()
+            if s.subagent_stack:
+                # nested case: merge into parent sub-session
+                _merge_into_parent(top, s.subagent_stack[-1])
+            else:
+                # outermost subagent return: snapshot as its own segment
+                _snapshot_subagent(s, top)
+            s._pending_dispatch_id = ""
+
+        # Now pick the routing target. Rules (in order):
+        #   1. If subagent_stack is non-empty AND req_system_hash matches the
+        #      top of stack → route to top sub-session.
+        #   2. If subagent_stack is non-empty AND req_system_hash matches
+        #      s.system_hash → subagent already returned (shouldn't normally
+        #      happen because the tool_result check above handled it, but
+        #      defensive); fall through to main.
+        #   3. If s.system_hash is set AND req_system_hash differs AND we
+        #      have a pending dispatch marker on the current target → push a
+        #      new _SubSession (nested if stack non-empty).
+        #   4. Fallback: route to main.
+        target_is_sub = False
+        target: Any = s
+
+        if s.subagent_stack and req_system_hash == s.subagent_stack[-1].system_hash:
+            target = s.subagent_stack[-1]
+            target_is_sub = True
+        elif s.system_hash and req_system_hash != s.system_hash \
+                and req_system_hash != "" \
+                and (s._pending_dispatch_id or (s.subagent_stack
+                                                and s.subagent_stack[-1].dispatch_tool_use_id)):
+            # New subagent dispatch: push a fresh sub-session onto the stack.
+            parent_depth = s.subagent_stack[-1].nested_depth if s.subagent_stack else 0
+            new_sub = _SubSession(
+                system_hash=req_system_hash,
+                dispatch_tool_use_id=s._pending_dispatch_id
+                    if not s.subagent_stack else s.subagent_stack[-1].dispatch_tool_use_id,
+                nested_depth=parent_depth + 1,
+            )
+            s.subagent_stack.append(new_sub)
+            # Clear the pending marker on whoever held it; it's now consumed.
+            s._pending_dispatch_id = ""
+            target = new_sub
+            target_is_sub = True
+
+        # --- 1) ingest new messages (since last call) into the canonical log
         is_append = (
-            system_hash == s.system_hash
-            and len(msg_hashes) >= s.seen_msgs
-            and msg_hashes[:s.seen_msgs] == s.msg_hashes[:s.seen_msgs]
+            req_system_hash == target.system_hash
+            and len(msg_hashes) >= target.seen_msgs
+            and msg_hashes[:target.seen_msgs] == target.msg_hashes[:target.seen_msgs]
         )
         wiped = False
-        if s.seen_msgs == 0:
+        if target.seen_msgs == 0:
             new = _translate_messages(all_msgs, body.get("system"))
-            base_idx = len(s.chat_messages)
-            s.chat_messages.extend(new)
-            _attach_pending_raw_tokens(s, base_idx, new)
-            s.system_hash = system_hash
+            base_idx = len(target.chat_messages)
+            target.chat_messages.extend(new)
+            _attach_pending_raw_tokens(target, base_idx, new)
+            target.system_hash = req_system_hash
         elif is_append:
-            new = _translate_messages(all_msgs[s.seen_msgs:], None)
-            base_idx = len(s.chat_messages)
-            s.chat_messages.extend(new)
+            new = _translate_messages(all_msgs[target.seen_msgs:], None)
+            base_idx = len(target.chat_messages)
+            target.chat_messages.extend(new)
             # Each new role==assistant in `new` is claude-code echoing one of our
             # generated turns back. Pop from pending_raw_tokens and attach so the
             # splice render replaces that assistant body with the model's
             # original raw tokens (preserving Megatron training signal).
-            _attach_pending_raw_tokens(s, base_idx, new)
+            _attach_pending_raw_tokens(target, base_idx, new)
         else:
             # autoCompact wipe or other non-linear update. The previous chain
             # is about to be replaced -- list_trajectory mode snapshots it
             # (prompt/response/mask) into s.completed_trajectories so the
             # downstream Sample fan-out can train on it. tree_trajectory mode
-            # simply drops it; either way s.asst_raw_tokens has to go because
-            # its chat_messages indices no longer map to the rebuilt chain.
-            if s.response_ids:
+            # simply drops it; either way target.asst_raw_tokens has to go
+            # because its chat_messages indices no longer map to the rebuilt
+            # chain. Subagent targets share the same snapshot container on s
+            # so per-chain wipes inside a subagent also produce a pre_wipe
+            # segment (matches user decision 2's whitelist of three kinds).
+            if target.response_ids:
                 s.completed_trajectories.append((
-                    list(s.prompt_ids),
-                    list(s.response_ids),
-                    list(s.loss_mask),
-                    {"kind": "pre_wipe", "completed_turns": len(s.turns)},
+                    list(target.prompt_ids),
+                    list(target.response_ids),
+                    list(target.loss_mask),
+                    {"kind": "pre_wipe",
+                     "completed_turns": len(s.turns),
+                     "on_subagent": target_is_sub},
                 ))
-            logger.info("[middleware] %s non-linear messages update; rebuilding prompt", session_id)
-            s.chat_messages = _translate_messages(all_msgs, body.get("system"))
-            s.system_hash = system_hash
-            s.asst_raw_tokens.clear()
-            s.pending_raw_tokens.clear()
+            logger.info("[middleware] %s non-linear messages update; rebuilding prompt (sub=%s)",
+                        session_id, target_is_sub)
+            target.chat_messages = _translate_messages(all_msgs, body.get("system"))
+            target.system_hash = req_system_hash
+            target.asst_raw_tokens.clear()
+            target.pending_raw_tokens.clear()
             # Re-attach any assistant in the rebuilt chain (rare: claude-code
             # might include an assistant from before the wipe). Pending is now
             # empty, so this is a no-op unless we added one above.
-            _attach_pending_raw_tokens(s, 0, s.chat_messages)
+            _attach_pending_raw_tokens(target, 0, target.chat_messages)
             wiped = True
-        s.seen_msgs = len(all_msgs)
-        s.msg_hashes = msg_hashes
-        if s.tools_schema is None:
-            s.tools_schema = _tools_schema(body.get("tools"))
+        target.seen_msgs = len(all_msgs)
+        target.msg_hashes = msg_hashes
+        if target.tools_schema is None:
+            target.tools_schema = _tools_schema(body.get("tools"))
 
         # --- 2) render with raw-token splice; loss_mask=1 marks model-generated
         # tokens (from stored raw spans), loss_mask=0 marks template-rendered
@@ -1154,59 +1348,56 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
         # spliced raw tokens are byte-identical to what the model originally
         # emitted, so cumulative prefix always matches.
         ideal_ids, raw_ranges = _render_with_raw_splice(
-            tok, s.chat_messages, s.tools_schema, s.asst_raw_tokens,
+            tok, target.chat_messages, target.tools_schema, target.asst_raw_tokens,
             add_generation_prompt=True,
         )
-        turn = _maybe_new_turn(s, ideal_ids, body)
+        # Tree recording only fires on the main session (subagent forks are
+        # represented as their own trajectory in completed_trajectories, not
+        # as tree branches).
+        turn = _maybe_new_turn(s, ideal_ids, body) if not target_is_sub else None
 
-        if not s.prompt_ids or wiped:
-            s.prompt_ids = ideal_ids
-            if s.initial_prompt_len == 0:
-                # First-ever request: cache initial prompt length for use in
-                # _classify_branch (compact wipe detection on later requests).
-                s.initial_prompt_len = len(ideal_ids)
-            s.response_ids = []
-            s.loss_mask = []
+        if not target.prompt_ids or wiped:
+            target.prompt_ids = ideal_ids
+            if target.initial_prompt_len == 0:
+                # First-ever request on this target: cache initial prompt
+                # length for _classify_branch (compact wipe detection later).
+                target.initial_prompt_len = len(ideal_ids)
+            target.response_ids = []
+            target.loss_mask = []
         else:
-            # ideal_ids should always start with prompt_ids (system + first
-            # user prompt is stable across the session unless we hit Cat B).
-            # If not, fall back to a clean reset.
-            if len(ideal_ids) < len(s.prompt_ids) or ideal_ids[:len(s.prompt_ids)] != s.prompt_ids:
+            # ideal_ids should always start with target.prompt_ids (system +
+            # first user prompt is stable across the session unless we hit
+            # Cat B). If not, fall back to a clean reset. Per user decision
+            # 2 (MASTER_PLAN preamble) we do NOT emit a diverge_reset
+            # segment — the divergence is absorbed into the next pre_wipe
+            # or final segment instead.
+            if len(ideal_ids) < len(target.prompt_ids) or ideal_ids[:len(target.prompt_ids)] != target.prompt_ids:
                 # Diagnostic: find first divergence and dump context once per session.
                 diag = ""
                 try:
-                    if len(ideal_ids) < len(s.prompt_ids):
-                        diag = f"length-short ideal={len(ideal_ids)} prompt={len(s.prompt_ids)}"
+                    if len(ideal_ids) < len(target.prompt_ids):
+                        diag = f"length-short ideal={len(ideal_ids)} prompt={len(target.prompt_ids)}"
                     else:
-                        for di in range(len(s.prompt_ids)):
-                            if ideal_ids[di] != s.prompt_ids[di]:
+                        for di in range(len(target.prompt_ids)):
+                            if ideal_ids[di] != target.prompt_ids[di]:
                                 a0, a1 = max(0, di - 8), di + 8
-                                old_ctx = tok.decode(s.prompt_ids[a0:a1])
+                                old_ctx = tok.decode(target.prompt_ids[a0:a1])
                                 new_ctx = tok.decode(ideal_ids[a0:a1])
-                                diag = (f"diverge@{di}/{len(s.prompt_ids)} "
-                                        f"chat_msgs={len(s.chat_messages)} ranges={raw_ranges} "
+                                diag = (f"diverge@{di}/{len(target.prompt_ids)} "
+                                        f"chat_msgs={len(target.chat_messages)} ranges={raw_ranges} "
                                         f"OLD={old_ctx!r} NEW={new_ctx!r}")
                                 break
                 except Exception as e:
                     diag = f"<diag err: {e}>"
-                logger.warning("[middleware] %s ideal_ids does not extend prompt_ids; resetting [%s]",
-                               session_id, diag)
-                # list_trajectory mode: snapshot the chain we are about to
-                # nuke (same rationale as the explicit wipe path above).
-                if s.response_ids:
-                    s.completed_trajectories.append((
-                        list(s.prompt_ids),
-                        list(s.response_ids),
-                        list(s.loss_mask),
-                        {"kind": "diverge_reset", "completed_turns": len(s.turns)},
-                    ))
-                s.prompt_ids = ideal_ids
-                s.response_ids = []
-                s.loss_mask = []
+                logger.info("[middleware] %s divergence reset; dropping previous segment [%s]",
+                            session_id, diag)
+                target.prompt_ids = ideal_ids
+                target.response_ids = []
+                target.loss_mask = []
             else:
-                s.response_ids = ideal_ids[len(s.prompt_ids):]
-                s.loss_mask = _build_loss_mask_from_raw_ranges(
-                    len(s.response_ids), len(s.prompt_ids), raw_ranges,
+                target.response_ids = ideal_ids[len(target.prompt_ids):]
+                target.loss_mask = _build_loss_mask_from_raw_ranges(
+                    len(target.response_ids), len(target.prompt_ids), raw_ranges,
                 )
 
         # --- 3) sampling params (request overrides session defaults)
@@ -1225,16 +1416,17 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
         # echoes from tool results. Without this, large grep/read outputs eat
         # the budget and the chain short-circuits to length/0 mid-trajectory
         # even though the model itself has generated far fewer tokens.
-        remaining = max_response_tokens - sum(s.loss_mask) if max_response_tokens > 0 else None
+        remaining = max_response_tokens - sum(target.loss_mask) if max_response_tokens > 0 else None
         if remaining is not None and remaining > 0:
             sp["max_new_tokens"] = min(int(sp["max_new_tokens"]), remaining)
 
         # --- 4) /generate (with abort/resume; non-streaming upstream) ---------
         # Counter shared with the on_partial callback so the final turn record
         # knows how many of the returned tokens came from the pre-abort
-        # attempt. NOTE: the callback MUST NOT extend s.response_ids / s.loss_mask
-        # itself — _generate_with_abort_resume already returns the concatenated
-        # output across abort/resume cycles, and the extend below adds it once.
+        # attempt. NOTE: the callback MUST NOT extend target.response_ids /
+        # target.loss_mask itself — _generate_with_abort_resume already returns
+        # the concatenated output across abort/resume cycles, and the extend
+        # below adds it once.
         partial_count: list[int] = [0]
 
         async def _record_partial(ids: list[int], _why: str) -> None:
@@ -1268,18 +1460,22 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
         # --- 5) record output tokens; parse; queue raw tokens for next-round attach
         # output_ids is the *full* concatenation across any abort/resume retries
         # (see _generate_with_abort_resume contract).
-        s.response_ids.extend(output_ids)
-        s.loss_mask.extend([1] * len(output_ids))
+        target.response_ids.extend(output_ids)
+        target.loss_mask.extend([1] * len(output_ids))
+        # Always store the finish_reason on the main session so the final
+        # segment metadata can surface it (user spec §appendix A: distinguish
+        # task done from max_turns / max_response_tokens truncation).
+        s.last_finish_reason = finish
 
         raw_output = tok.decode(output_ids, skip_special_tokens=False)
         thinking, visible, tool_uses = _parse_output(
             raw_output,
             tool_parser_name=tool_parser, reasoning_parser_name=reasoning_parser,
-            tools_schema=s.tools_schema,
+            tools_schema=target.tools_schema,
         )
 
         # NOTE: we intentionally DO NOT append the structured assistant to
-        # s.chat_messages here. Doing so + claude-code echoing the same
+        # target.chat_messages here. Doing so + claude-code echoing the same
         # assistant in its next request would double the message in
         # chat_messages, causing chronic template-rerender mismatch +
         # rebaseline (which previously zeroed the entire loss_mask --
@@ -1306,7 +1502,7 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
             A["_assistant_marker_ids"] = marker_ids
         gen_prefix = _detect_gen_prefix(ideal_ids, marker_ids)
         full_raw = gen_prefix + list(output_ids)
-        s.pending_raw_tokens.append((full_raw, len(gen_prefix)))
+        target.pending_raw_tokens.append((full_raw, len(gen_prefix)))
 
         # --- 6) build Anthropic blocks (shared by JSON + SSE paths)
         blocks: list[dict] = []
@@ -1316,6 +1512,19 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
             blocks.append({"type": "tool_use", "id": f"toolu_{secrets.token_hex(8)}",
                             "name": tu["name"], "input": tu["input"]})
         if not blocks: blocks.append({"type": "text", "text": ""})
+
+        # --- 6b) subagent dispatch marker: if this response on the main line
+        # contains a Task/Agent tool_use, remember the id so the next non-
+        # main system_hash request can be matched to this dispatch. Only
+        # arm the marker on the main session (depth-0 of subagent_stack);
+        # nested dispatches set the marker on the sub-session itself so the
+        # nested push can pick it up.
+        dispatch_id = _find_dispatch_tool_use_id(blocks)
+        if dispatch_id:
+            if target_is_sub:
+                target.dispatch_tool_use_id = dispatch_id
+            else:
+                s._pending_dispatch_id = dispatch_id
 
         stop_reason = "tool_use" if tool_uses else ("max_tokens" if finish == "length" else "end_turn")
         in_tokens = len(ideal_ids)
@@ -1431,6 +1640,17 @@ class MiddlewareHandle:
         if s is None:
             return [], {}
         async with s.lock:
+            # Any subagent still on the stack never returned (claude-code may
+            # have exited mid-dispatch). Snapshot the outermost one as a
+            # subagent segment if it has any response tokens; nested ones
+            # get merged into their parent first.
+            while s.subagent_stack:
+                top = s.subagent_stack.pop()
+                if s.subagent_stack:
+                    _merge_into_parent(top, s.subagent_stack[-1])
+                else:
+                    _snapshot_subagent(s, top)
+
             segments: list[tuple[list[int], list[int], list[int], dict[str, Any]]] = [
                 (list(p), list(r), list(m), dict(meta))
                 for (p, r, m, meta) in s.completed_trajectories
@@ -1440,7 +1660,11 @@ class MiddlewareHandle:
                     list(s.prompt_ids),
                     list(s.response_ids),
                     list(s.loss_mask),
-                    {"kind": "final", "completed_turns": len(s.turns)},
+                    {
+                        "kind": "final",
+                        "completed_turns": len(s.turns),
+                        "finish_reason": s.last_finish_reason,
+                    },
                 ))
             return segments, _export_tree(s)
 
@@ -1451,14 +1675,23 @@ class MiddlewareHandle:
         """list_trajectory variant of pop_session: returns one (prompt_ids,
         response_ids, loss_mask, meta) tuple per chain segment.
 
-        Segments are emitted in chronological order:
-          * one per autoCompact / non-linear wipe (kind="pre_wipe")
-          * one per ideal/prompt-prefix-divergence reset (kind="diverge_reset")
-          * a final segment for the live chain (kind="final")
+        Segments are emitted in chronological order (only three ``kind``s
+        per user decision 2 in MASTER_PLAN preamble):
+          * ``pre_wipe`` — one per autoCompact / non-linear wipe on the
+            currently routed target (main line OR a sub-session).
+          * ``subagent`` — one per outermost Task/Agent dispatch return.
+            Nested dispatches (depth >= 2) merge into their parent and
+            never emit a standalone segment.
+          * ``final`` — the live main-line chain at session pop time.
+
+        ``diverge_reset`` and ``compact_summarization`` are NOT emitted
+        as separate segments; divergence simply drops the current chain
+        and starts a fresh one whose tokens land in the next ``pre_wipe``
+        or ``final`` segment.
 
         Empty-response segments are dropped (no trainable tokens). The
-        trajectory_tree export is returned alongside so the caller can attach
-        it to ONE of the fanned-out Samples for downstream viz."""
+        trajectory_tree export is returned alongside so the caller can
+        attach it to ONE of the fanned-out Samples for downstream viz."""
         fut = asyncio.run_coroutine_threadsafe(self._pop_session_split(session_id), self.app_handle.loop)
         return fut.result(timeout=10)
 
