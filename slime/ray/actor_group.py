@@ -117,7 +117,7 @@ class RayTrainGroup:
             for actor in self._actor_handlers
         ]
 
-    def async_train(self, rollout_id, rollout_data_ref, external_data=None, train_step_offset: int = 0):
+    def async_train(self, rollout_id, rollout_data_ref, external_data=None):
         """Do one rollout training. Returns a list of Ray refs (one per worker).
 
         For critics, each ref resolves to ``{"values": [cpu tensors...]}`` (or ``{}``
@@ -125,20 +125,15 @@ class RayTrainGroup:
 
         ``external_data`` may be a list (one item per worker) or a single dict
         broadcast to all workers.
-
-        ``train_step_offset`` is the cumulative train-step counter the rollout
-        manager has tracked so far; the actor uses it as the wandb step base.
         """
         if isinstance(external_data, list):
             assert len(external_data) == len(self._actor_handlers)
             return [
-                actor.train.remote(rollout_id, rollout_data_ref, external_data=ed, train_step_offset=train_step_offset)
+                actor.train.remote(rollout_id, rollout_data_ref, external_data=ed)
                 for actor, ed in zip(self._actor_handlers, external_data, strict=False)
             ]
         return [
-            actor.train.remote(
-                rollout_id, rollout_data_ref, external_data=external_data, train_step_offset=train_step_offset
-            )
+            actor.train.remote(rollout_id, rollout_data_ref, external_data=external_data)
             for actor in self._actor_handlers
         ]
 

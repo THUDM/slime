@@ -172,7 +172,7 @@ CKPT_ARGS=(
 - 在 slime 中，`--num-steps-per-rollout` 和 `--global-batch-size` 二选一即可：
   - 如果设了 `--num-steps-per-rollout N`：把单轮采样到的真实样本数 `num_samples` 平均切成 N 个 step（首批 step 各多 1 个样本，凑余数）。
   - 如果只设了 `--global-batch-size G`：以 G 为目标 step 大小，切成 `round(num_samples / G)` 个 step；若 `num_samples` 不能被 G 整除，剩余样本会**均摊到各 step**（不会被丢弃），同时打一条 warning。
-- 当 dynamic sampling、动态过滤等机制导致单轮真实样本数与 `rollout_batch_size × n_samples_per_prompt` 不一致时，**不需要手动调 gbs**；slime 会按上述规则自动切分，loss / 上报数值都按每 step 真实样本数加权。
+- 当 multi-agent rollout（一条 prompt 出多条变长轨迹）或 agent 端的 trajectory compact 等机制导致单轮真实样本数与 `rollout_batch_size × n_samples_per_prompt` 不一致时，**不需要手动调 gbs**；slime 会按上述规则自动切分，loss / 上报数值都按每 step 真实样本数加权。
 - 若需要完全自定义切分（例如固定 7/8/9 这种不均匀 batch），可以传 `--custom-rollout-step-split-path my_module.my_split_fn`，函数签名 `fn(args, total_lengths) -> list[list[int]]`，每个内层 list 是该 step 的样本索引。约束：每个 step 至少要有 `dp_size` 个样本。
 
 **训练流程次数控制**

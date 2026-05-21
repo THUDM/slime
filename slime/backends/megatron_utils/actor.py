@@ -370,7 +370,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 store_prefix=store_prefix,
             )
 
-    def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None, train_step_offset: int = 0):
+    def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):
         if self.args.debug_rollout_only:
             return None
 
@@ -380,11 +380,12 @@ class MegatronTrainRayActor(TrainRayActor):
         with timer("data_preprocess"):
             rollout_data = self._get_rollout_data(rollout_data_ref)
 
-        # ``train_step_offset`` is the cumulative train-step counter the
-        # rollout manager has tracked so far (loaded from rollout metadata on
-        # resume). Publish it on args so ``compute_rollout_step`` and the
-        # per-step wandb label use a counter that stays monotonic across
-        # variable-length rollouts.
+        # The wandb step base for this rollout is computed once on the rollout
+        # manager side (it's the cumulative training-step counter, advanced by
+        # ``len(num_microbatches)`` per rollout) and ferried through
+        # rollout_data so we don't need extra ray.get round-trips. Publish it
+        # on args so ``compute_rollout_step`` can use it.
+        train_step_offset = rollout_data.get("train_step_offset", 0)
         self.args._wandb_train_step_offset = train_step_offset
 
         if self.role == "critic":

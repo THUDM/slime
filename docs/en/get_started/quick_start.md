@@ -174,7 +174,7 @@ In this process, the per-round "output" and "consumption" should approximately m
 - In slime, `--num-steps-per-rollout` and `--global-batch-size` are **either-or**:
   - If `--num-steps-per-rollout N` is set: the rollout's real sample count is split near-equally into N steps (the first few steps each receive one extra sample to absorb any remainder).
   - If only `--global-batch-size G` is set: G is used as the target step size; the rollout is split into `round(num_samples / G)` steps and any remainder is **redistributed across steps** (no samples dropped), with a warning.
-- When dynamic sampling, dynamic filtering, etc. cause the actual per-rollout sample count to differ from `rollout_batch_size × n_samples_per_prompt`, **no manual gbs adjustment is needed** — slime splits automatically and loss / reported metrics are weighted by each step's real sample count.
+- When multi-agent rollouts (one prompt producing a variable number of trajectories) or agent-side trajectory compaction cause the actual per-rollout sample count to differ from `rollout_batch_size × n_samples_per_prompt`, **no manual gbs adjustment is needed** — slime splits automatically and loss / reported metrics are weighted by each step's real sample count.
 - For fully custom splits (e.g., a fixed 7/8/9 uneven batch pattern), pass `--custom-rollout-step-split-path my_module.my_split_fn`. Signature: `fn(args, total_lengths) -> list[list[int]]`, each inner list being the sample indices for one step. Constraint: every step must contain at least `dp_size` samples.
 
 **Training Process Count Control**

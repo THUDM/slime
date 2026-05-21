@@ -366,12 +366,10 @@ class RolloutManager:
 
         # Cumulative training-step counter — used as the wandb step base when
         # ``num_steps_per_rollout`` varies across rollouts. Rehydrated from
-        # ``data_source.metadata`` on ``load``; advanced by
-        # ``advance_train_step_count`` after each rollout's training completes.
+        # ``data_source.metadata`` on ``load`` and advanced inside
+        # ``_split_train_data_by_dp`` (after snapshotting it into rollout_data
+        # for the actor).
         self.train_step_count = 0
-        # Number of training steps the most recent ``_split_train_data_by_dp``
-        # call produced; ``advance_train_step_count`` adds this to the counter.
-        self._last_num_train_steps = 0
 
         self.generate_rollout = load_function(self.args.rollout_function_path)
         self.eval_generate_rollout = load_function(self.args.eval_function_path)
@@ -492,6 +490,11 @@ class RolloutManager:
     def generate(self, rollout_id):
         start_time = time.time()
         self.rollout_id = rollout_id
+        # Publish the wandb step base for rollout/* metrics so
+        # ``compute_rollout_step`` produces the right label whether it's
+        # called here or on the actor side. ``self.train_step_count`` is
+        # advanced inside ``_split_train_data_by_dp`` (post-snapshot).
+        self.args._wandb_train_step_offset = self.train_step_count
         self.health_monitoring_resume()
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
@@ -509,6 +512,9 @@ class RolloutManager:
             # if debug train only, we don't generate evaluation data
             return
         self.health_monitoring_resume()
+        # Publish wandb step base for eval/* metrics. Eval doesn't train, so
+        # we use the current cumulative counter as-is (no advance).
+        self.args._wandb_train_step_offset = self.train_step_count
 
         result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
         data = result.data
@@ -541,21 +547,6 @@ class RolloutManager:
             )
         else:
             self.train_step_count = 0
-
-    def get_train_step_count(self) -> int:
-        """Return the cumulative train-step counter (= base wandb step label for the
-        next rollout). Driver calls this before invoking ``actor.train``."""
-        return self.train_step_count
-
-    def advance_train_step_count(self) -> int:
-        """Advance the counter by the number of training steps the most recent
-        rollout produced. Driver calls this after ``actor.train`` returns.
-        Assumes actor and critic run the same number of training steps per
-        rollout (they share ``num_microbatches`` from the same schedule), so
-        we only advance once even when both train this rollout.
-        """
-        self.train_step_count += self._last_num_train_steps
-        return self.train_step_count
 
     def offload(self):
         self.health_monitoring_pause()
@@ -830,9 +821,6 @@ class RolloutManager:
             total_lengths,
             step_sample_indices=step_sample_indices,
         )
-        # Remember how many train steps this rollout will produce so the driver
-        # can call ``advance_train_step_count`` after training completes.
-        self._last_num_train_steps = len(num_microbatches)
 
         # 4. Package per-rank rollout_data
         rollout_data_refs = []
@@ -868,7 +856,17 @@ class RolloutManager:
             rollout_data["global_batch_sizes"] = global_batch_sizes
             rollout_data["num_microbatches"] = num_microbatches
             rollout_data["micro_batch_indices"] = micro_batch_indices[r]
+            # Snapshot the cumulative train-step counter as it stands before
+            # this rollout's training so the actor can use it as the wandb
+            # step base; we advance the counter below.
+            rollout_data["train_step_offset"] = self.train_step_count
             rollout_data_refs.append(Box(ray.put(rollout_data)))
+
+        # Advance the cumulative counter by the number of train steps this
+        # rollout will produce. Both actor and critic read the snapshot above,
+        # so this single increment is correct regardless of how many models
+        # train this rollout.
+        self.train_step_count += len(num_microbatches)
         return rollout_data_refs
 
 

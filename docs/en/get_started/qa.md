@@ -35,7 +35,7 @@
 
 6.  **How is the batch size calculated?**
 
-    A single rollout uses `rollout_batch_size` prompts. For each prompt, `n_samples_per_prompt` samples are generated. So a rollout nominally yields `rollout_batch_size * n_samples_per_prompt` samples — but dynamic sampling / filtering / over-sampling can change the actual count.
+    A single rollout uses `rollout_batch_size` prompts. For each prompt, `n_samples_per_prompt` samples are generated. So a rollout nominally yields `rollout_batch_size * n_samples_per_prompt` samples — but multi-agent rollouts (one prompt → variable number of trajectories) or agent-style trajectory compaction can change the actual count.
 
     Use either `--num-steps-per-rollout N` (split the rollout's real sample count near-equally into N steps) **or** `--global-batch-size G` (use G as the target step size, splitting into `round(num_samples / G)` near-equal steps with a warning if the remainder is non-zero). Loss / metrics are normalised per step from the **real** per-step sample count, so uneven step sizes are safe. For fully custom splits pass `--custom-rollout-step-split-path` (signature `fn(args, total_lengths) -> list[list[int]]`).
 

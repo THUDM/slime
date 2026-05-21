@@ -75,28 +75,14 @@ def train(args):
 
         actor_trains_this_step = (not args.use_critic) or rollout_id >= args.num_critic_only_steps
 
-        # Wandb step base: cumulative train-step counter so labels stay
-        # monotonic across resume and variable-length rollouts. Persisted by
-        # the rollout manager via ``data_source.metadata``.
-        train_step_offset = ray.get(rollout_manager.get_train_step_count.remote())
-
         if args.use_critic:
-            value_refs = critic_model.async_train(rollout_id, rollout_data_ref, train_step_offset=train_step_offset)
+            value_refs = critic_model.async_train(rollout_id, rollout_data_ref)
             if actor_trains_this_step:
-                ray.get(
-                    actor_model.async_train(
-                        rollout_id, rollout_data_ref, external_data=value_refs, train_step_offset=train_step_offset
-                    )
-                )
+                ray.get(actor_model.async_train(rollout_id, rollout_data_ref, external_data=value_refs))
             else:
                 ray.get(value_refs)
         else:
-            ray.get(actor_model.async_train(rollout_id, rollout_data_ref, train_step_offset=train_step_offset))
-
-        # Actor and critic ran the same number of training steps this rollout
-        # (they share ``num_microbatches`` from the same schedule), so we only
-        # need to advance the counter once.
-        ray.get(rollout_manager.advance_train_step_count.remote())
+            ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
 
         if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
             save(rollout_id)
