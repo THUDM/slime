@@ -36,6 +36,7 @@ Env knobs (set in run.sh):
     SWE_HOST_CC_TARBALL      host path to the Claude Code npm tarball (REQUIRED)
     SWE_TIME_BUDGET_SEC      900   per agent run, wallclock
     SWE_EVAL_TIMEOUT_SEC     600   per eval test execution
+    SWE_MAX_RESPONSE_TOKENS  0     optional smoke-test cap before training (0 = off)
     SWE_TOOL_PARSER          glm47           (sglang FunctionCallParser name)
     SWE_REASONING_PARSER     glm45           (sglang ReasoningParser name)
     SWE_SAVE_TRAJECTORY_TREE 0               save full per-turn request/response tree in metadata
@@ -89,6 +90,13 @@ from slime.utils.types import Sample
 
 from . import middleware, sandbox
 
+try:
+    # Optional: lets the middleware tap slime's weight-update signal so that
+    # in-flight /generate calls are aborted/resumed transparently.
+    from slime.rollout.sglang_rollout import GenerateState as _SlimeGenerateState
+except Exception:  # pragma: no cover - allow import without slime trainer
+    _SlimeGenerateState = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 
@@ -106,6 +114,7 @@ SWE_HOST_CC_TARBALL = Path(os.environ.get(
 ))
 SWE_TIME_BUDGET_SEC = int(os.environ.get("SWE_TIME_BUDGET_SEC", "900"))
 SWE_EVAL_TIMEOUT_SEC = int(os.environ.get("SWE_EVAL_TIMEOUT_SEC", "600"))
+SWE_MAX_RESPONSE_TOKENS = int(os.environ.get("SWE_MAX_RESPONSE_TOKENS", "0") or 0)
 SWE_TOOL_PARSER = os.environ.get("SWE_TOOL_PARSER", "") or None
 SWE_REASONING_PARSER = os.environ.get("SWE_REASONING_PARSER", "") or None
 SWE_SAVE_TRAJECTORY_TREE = os.environ.get("SWE_SAVE_TRAJECTORY_TREE", "0") == "1"
@@ -152,6 +161,21 @@ class _State(metaclass=SingletonMeta):
             port=SHIM_PORT,
             public_host=public_host,
         )
+        # Tap slime's weight-update signal so that an /abort_request from the
+        # trainer pauses in-flight /generate calls until the new weights have
+        # been pushed to sglang. The middleware then re-issues the call with
+        # max_new_tokens decremented by the already-generated prefix.
+        if _SlimeGenerateState is not None:
+            try:
+                slime_state = _SlimeGenerateState(args)
+                self.middleware.install_abort_poll(
+                    lambda s=slime_state: bool(getattr(s, "aborted", False)),
+                    interval_sec=float(os.environ.get("SWE_ABORT_POLL_INTERVAL", "0.5")),
+                    max_wait_sec=float(os.environ.get("SWE_ABORT_MAX_WAIT_SEC", "1800")),
+                )
+                logger.info("[coding_agent_rl] abort-poll wired to GenerateState.aborted")
+            except Exception as e:
+                logger.warning("[coding_agent_rl] could not wire abort-poll: %s", e)
         logger.info("[coding_agent_rl] tokenizer=%s middleware=%s", args.hf_checkpoint, self.middleware.public_url)
 
 
@@ -262,6 +286,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sam
     prompt_ids, response_ids, loss_mask, trajectory_tree = state.middleware.pop_session(session_id)
     if not prompt_ids:
         return _abort(sample, "middleware_session_empty")
+    response_ids, loss_mask = _cap_response_for_training(response_ids, loss_mask)
 
     sample.tokens = prompt_ids + response_ids
     sample.response_length = len(response_ids)
@@ -284,6 +309,12 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sam
         time.time() - t0, len(response_ids),
     )
     return sample
+
+
+def _cap_response_for_training(response_ids: list[int], loss_mask: list[int]) -> tuple[list[int], list[int]]:
+    if SWE_MAX_RESPONSE_TOKENS <= 0 or len(response_ids) <= SWE_MAX_RESPONSE_TOKENS:
+        return response_ids, loss_mask
+    return response_ids[:SWE_MAX_RESPONSE_TOKENS], loss_mask[:SWE_MAX_RESPONSE_TOKENS]
 
 
 # ---------------------------------------------------------------------------

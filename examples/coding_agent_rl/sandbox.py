@@ -57,30 +57,57 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Tunables (env-driven so the same code runs across clusters)
 # ---------------------------------------------------------------------------
-# Optional sandbox metadata passed verbatim into ``AsyncSandbox.create``'s
-# ``metadata=`` kwarg. Some E2B-style backends use metadata for routing tags
-# (e.g. ``provider/size``, ``provider/group``); most setups don't need any.
-# Set ``SWE_SANDBOX_METADATA_JSON`` to a JSON object string if your backend
-# expects specific keys, e.g.::
+# Sandbox metadata passed verbatim into ``AsyncSandbox.create``'s ``metadata=``
+# kwarg. The metadata content is cluster-specific (E2B-style backends use it
+# for routing tags like ``glm-platform/image``, ``provider/size``, etc.) so it
+# MUST NOT be hardcoded here. Two ways to provide it; the file path wins:
 #
-#     export SWE_SANDBOX_METADATA_JSON='{"my-platform/size": "lg"}'
+#   * ``SWE_SANDBOX_METADATA_FILE`` — absolute path to a JSON file with a
+#     top-level object of string keys to string values. Example::
 #
-# Parsed once at import time; default is an empty dict.
+#         {
+#           "glm-platform/group": "rl-rollout",
+#           "glm-platform/size":  "lg"
+#         }
+#
+#   * ``SWE_SANDBOX_METADATA_JSON`` — inline JSON object string (legacy /
+#     small-config path); same shape as above.
+#
+# If both are set, the file path wins. Either may be empty/missing, in which
+# case we send an empty metadata dict (the only key we then attach is the
+# image-routing key derived from the dataset row; see ``__aenter__`` below).
 def _parse_sandbox_metadata() -> dict[str, str]:
-    raw = os.environ.get("SWE_SANDBOX_METADATA_JSON", "").strip()
+    file_path = os.environ.get("SWE_SANDBOX_METADATA_FILE", "").strip()
+    raw = ""
+    if file_path:
+        try:
+            raw = Path(file_path).read_text()
+        except OSError as e:
+            logger.warning("[sandbox] SWE_SANDBOX_METADATA_FILE=%s unreadable, ignoring: %s",
+                           file_path, e)
+            raw = ""
+    if not raw:
+        raw = os.environ.get("SWE_SANDBOX_METADATA_JSON", "").strip()
     if not raw:
         return {}
     try:
         md = json.loads(raw)
     except json.JSONDecodeError as e:
-        logger.warning("[sandbox] SWE_SANDBOX_METADATA_JSON not valid JSON, ignoring: %s", e)
+        logger.warning("[sandbox] sandbox metadata not valid JSON, ignoring: %s", e)
         return {}
     if not isinstance(md, dict):
-        logger.warning("[sandbox] SWE_SANDBOX_METADATA_JSON must be a JSON object, got %s", type(md).__name__)
+        logger.warning("[sandbox] sandbox metadata must be a JSON object, got %s", type(md).__name__)
         return {}
     return {str(k): str(v) for k, v in md.items()}
 
 SANDBOX_METADATA = _parse_sandbox_metadata()
+
+# Key used to route to the right image on E2B-style backends. The dataset row
+# specifies the image string; this env var lets the cluster pick which metadata
+# key carries it (default matches the GLM internal E2B gateway).
+SANDBOX_IMAGE_METADATA_KEY = os.environ.get(
+    "SWE_SANDBOX_IMAGE_METADATA_KEY", "glm-platform/image",
+)
 
 # Sandbox wall-clock lifetime in seconds. E2B kills the sandbox `timeout` seconds
 # after creation, regardless of activity (it is NOT an idle timeout — commands.run
@@ -165,8 +192,11 @@ class E2BSandbox:
     async def __aenter__(self) -> "E2BSandbox":
         from e2b import AsyncSandbox  # type: ignore
         # Internal E2B routing reads the image from metadata, not template.
+        # The metadata schema is cluster-specific (key name + extra routing
+        # tags) so the base dict comes from SWE_SANDBOX_METADATA_FILE /
+        # SWE_SANDBOX_METADATA_JSON — never hardcoded.
         md = dict(SANDBOX_METADATA)
-        md.setdefault("glm-platform/image", self.image)
+        md.setdefault(SANDBOX_IMAGE_METADATA_KEY, self.image)
         self._sb = await AsyncSandbox.create(timeout=self.timeout, metadata=md)
         self.sandbox_id = self._sb.sandbox_id
         return self

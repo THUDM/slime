@@ -10,6 +10,43 @@ via ``sglang.srt.parser.reasoning_parser.ReasoningParser``.
 
 ---
 
+What this file owns:
+
+* **session token store** — keeps the canonical chat log per session_id
+  (Anthropic Bearer token), re-renders the chat template each turn, diffs
+  against cumulative ids so observation tokens get loss_mask=0 and model-
+  generated tokens get loss_mask=1.
+
+* **tree-shaped trajectory recording** — Claude Code is *not* a linear agent.
+  Sub-agents and compaction both rewrite the message list so that the next
+  request's tokens share only a *prefix* with one of the earlier turns. We
+  detect this by computing the longest-common-prefix of the new request
+  against every recorded turn's ``full_ids`` (= input tokens + output tokens
+  the model emitted). The matching turn becomes the parent; the prefix len
+  is the branch point. A linear conversation produces a chain (parent_i =
+  i-1, prefix grows monotonically); a sub-agent fork produces a sibling
+  rooted at the parent turn; a compact produces a NEW root whose parent
+  prefix len is small.
+
+* **weight-update abort/resume** — at training time slime calls a global
+  ``abort()`` that POSTs ``/abort_request`` to every sglang worker and flips
+  ``GenerateState.aborted`` to True. SGLang then returns partial output and
+  ``finish_reason.type == "abort"``. We:
+
+  1. record the partial output tokens as a turn (so they're not lost),
+  2. wait until the abort flag clears (slime resets it before the next
+     rollout, *after* parameters have been pushed to sglang),
+  3. re-submit ``/generate`` with the previously-rendered prompt extended
+     by the partial output, with ``max_new_tokens`` reduced by the partial
+     length.
+
+  Net effect for Claude Code: a single ``/v1/messages`` request can take
+  several minutes to complete (it spans a weight update) but it always
+  returns a "complete" Anthropic response built from one or more underlying
+  sglang turns. The caller never sees a half-message.
+
+---
+
 Forking this file (kept dict-based on purpose so the dataflow is easy to fork):
 
 * Swap the agent's API protocol (e.g. Codex speaks OpenAI Chat Completions):
@@ -32,9 +69,11 @@ import dataclasses
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
-from typing import Any
+import time
+from typing import Any, Awaitable, Callable
 
 import aiohttp
 from aiohttp import web
@@ -49,6 +88,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 @dataclasses.dataclass
 class _Turn:
+    """One round-trip with SGLang.
+
+    ``full_ids`` is the input tokens (the chat-template-rendered prompt for
+    this turn) plus the output tokens the model emitted. It's what the NEXT
+    turn's prefix-match is computed against; that's why a chain of linear
+    turns produces strictly increasing parent_prefix_len.
+    """
+
     id: int
     parent_id: int | None
     parent_prefix_len: int
@@ -56,12 +103,17 @@ class _Turn:
     output_len: int = 0
     finish_reason: str = "unknown"
     stop_reason: str = "unknown"
+    branch_kind: str = "root"  # "root" | "linear" | "sibling" | "compact"
     request: dict[str, Any] = dataclasses.field(default_factory=dict)
     response: dict[str, Any] = dataclasses.field(default_factory=dict)
     full_ids: list[int] = dataclasses.field(default_factory=list, repr=False)
+    # When > 0, this turn was the second half of an abort/resume pair (i.e.
+    # the model produced ``output_len`` tokens *after* the resume, and
+    # ``aborted_prefix_len`` tokens before it).
+    aborted_prefix_len: int = 0
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "id": self.id,
             "parent_id": self.parent_id,
             "parent_prefix_len": self.parent_prefix_len,
@@ -69,16 +121,24 @@ class _Turn:
             "output_len": self.output_len,
             "finish_reason": self.finish_reason,
             "stop_reason": self.stop_reason,
+            "branch_kind": self.branch_kind,
             "request": self.request,
             "response": self.response,
         }
+        if self.aborted_prefix_len:
+            d["aborted_prefix_len"] = self.aborted_prefix_len
+        return d
 
 
 @dataclasses.dataclass
 class _Session:
-    # Canonical chat log. Each assistant turn we append after /generate carries
-    # reasoning_content so the next round's apply_chat_template re-render matches
-    # the tokens the model actually emitted (preserving prefix match).
+    # Canonical chat log. Assistant entries get added by _translate_messages
+    # when claude-code echoes our previous generation back in its next request
+    # (Anthropic API is stateless; claude-code resends the full conversation
+    # each turn). We do NOT append to chat_messages ourselves immediately after
+    # /generate -- doing so + claude-code's echo on the next turn would double
+    # the assistant message, which previously caused chronic template-rerender
+    # mismatch + rebaseline (zeroing loss_mask).
     chat_messages: list[dict] = dataclasses.field(default_factory=list)
     tools_schema: list[dict] | None = None
     seen_msgs: int = 0
@@ -91,6 +151,28 @@ class _Session:
     sampling_defaults: dict[str, Any] = dataclasses.field(default_factory=dict)
     record_tree: bool = False
     lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
+    num_aborts: int = 0
+
+    # === Raw-token preservation (RL on-policy training fix) =================
+    # asst_raw_tokens: chat_messages index -> (full_raw_ids, gen_offset).
+    # ``full_raw_ids`` = gen_prefix (template-injected, e.g. ``<think>\n``)
+    # followed by output_ids (what the model actually emitted). ``gen_offset``
+    # = len(gen_prefix); tokens at [gen_offset:] in the raw segment are the
+    # ones we want to count as model-generated (loss_mask=1). Splicing the
+    # full sequence (prefix + output) makes the rendered ideal_ids byte-
+    # identical to what the model originally conditioned on + emitted, so
+    # the next-turn cumulative-prefix check always matches.
+    asst_raw_tokens: dict[int, tuple[list[int], int]] = dataclasses.field(default_factory=dict)
+    # FIFO of (full_raw_ids, gen_offset) tuples awaiting attachment to
+    # chat_messages indices. Pushed after each /generate; popped when
+    # _translate_messages encounters the corresponding assistant message in
+    # claude-code's echo on the next request.
+    pending_raw_tokens: list[tuple[list[int], int]] = dataclasses.field(default_factory=list)
+    # Cached size of the initial prompt (after first request's render). Used
+    # by _classify_branch to recognize autoCompact wipes: when the new request
+    # only shares ~initial_prompt_len tokens with its parent, it's a wipe even
+    # if the parent itself was already short (post-compact early turn).
+    initial_prompt_len: int = 0
 
 
 class _Store:
@@ -120,8 +202,24 @@ def _common_prefix_len(a: list[int], b: list[int]) -> int:
     return i
 
 
+def _strip_cache_control(obj: Any) -> Any:
+    # Anthropic prompt-caching attaches "cache_control": {"type": "ephemeral"}
+    # to whichever message/system block currently holds the cache breakpoint.
+    # The breakpoint migrates across turns (claude-code re-pins it to the most
+    # recent few blocks), so the *same* logical message has different hashes
+    # in consecutive requests. That spurious mismatch flips is_append=False and
+    # forces a full chat_messages rebuild + token-level rebaseline, which then
+    # shows up in the trajectory tree as a fake "sibling" branch.
+    if isinstance(obj, dict):
+        return {k: _strip_cache_control(v) for k, v in obj.items() if k != "cache_control"}
+    if isinstance(obj, list):
+        return [_strip_cache_control(x) for x in obj]
+    return obj
+
+
 def _hash_obj(obj: Any) -> str:
-    payload = json.dumps(obj, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    payload = json.dumps(_strip_cache_control(obj), sort_keys=True,
+                         ensure_ascii=False, default=str).encode("utf-8")
     return hashlib.sha1(payload).hexdigest()[:12]
 
 
@@ -130,21 +228,161 @@ def _request_snapshot(body: dict[str, Any]) -> dict[str, Any]:
     return {k: body[k] for k in keep if k in body}
 
 
+# Threshold (in tokens) for treating a small parent_prefix_len as "essentially
+# only the initial system+first-user prompt + autoCompact pack" -> classify as
+# compact. claude-code's post-compact m[0] is a list of: 6-ish (read tool
+# input/result) blocks + currentDate + a 9-10KB "This session is being
+# continued..." summary, which renders to 5-10K tokens beyond the system
+# prompt. 16K gives comfortable headroom for the largest packs we have seen.
+_COMPACT_PFX_EPS = 16384
+
+# Phrases claude-code uses in its autoCompact "please summarize this
+# conversation" request. When both appear in the *last* user message we mark
+# the turn as compact_summarization -- it's a one-off summarization call whose
+# response goes into a synthetic <system-reminder>, not the trajectory itself.
+_SUMMARIZATION_MARKERS = (
+    "create a detailed summary",
+    "Respond with TEXT ONLY",
+)
+
+# Marker claude-code injects as the prefix of the autoCompact "resume" summary
+# in messages[0] after it wipes the conversation. Detecting it directly lets
+# us classify the new chain as `compact` without relying on token-length
+# thresholds that vary by Read-pack size.
+_COMPACT_RESUME_MARKER = "This session is being continued from a previous conversation"
+
+
+def _last_user_text(messages: list[dict]) -> str:
+    if not messages:
+        return ""
+    last = messages[-1]
+    if last.get("role") != "user":
+        return ""
+    content = last.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            b.get("text", "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+    return ""
+
+
+def _is_summarization_request(body: dict[str, Any]) -> bool:
+    text = _last_user_text(body.get("messages") or [])
+    return all(m in text for m in _SUMMARIZATION_MARKERS)
+
+
+def _is_compact_resume_request(body: dict[str, Any]) -> bool:
+    """True when any user message of the request contains claude-code's
+    autoCompact "resume from summary" marker. claude-code places the marker in
+    a text block right after the conversation gets wiped; depending on whether
+    the wipe lands before or after a Read tool call, the marker shows up either
+    as a text block of messages[0] *or* of messages[1] (the latter when m[0] is
+    a bare `<system-reminder>Called the Read tool ...` and m[1] is the
+    corresponding tool result + currentDate + summary pack)."""
+    msgs = body.get("messages") or []
+    # Only the first couple of user messages can carry the autoCompact pack —
+    # claude-code emits the pack inline at the head of the new conversation.
+    for m in msgs[:2]:
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            if _COMPACT_RESUME_MARKER in content:
+                return True
+        elif isinstance(content, list):
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "text":
+                    if _COMPACT_RESUME_MARKER in b.get("text", ""):
+                        return True
+    return False
+
+
+def _classify_branch(
+    parent: _Turn | None,
+    parent_prefix_len: int,
+    parent_full_len: int,
+    *,
+    initial_prompt_len: int = 0,
+    is_summarization: bool = False,
+    is_compact_resume: bool = False,
+) -> str:
+    """Categorize how this turn relates to its parent.
+
+    * ``root`` — no parent (first turn or completely disjoint).
+    * ``linear`` — extends the parent's full_ids exactly (the common case for
+      a normal assistant turn followed by tool_result followed by next user).
+    * ``compact_summarization`` — the request body is itself an autoCompact
+      summarization call (last user message contains the standard claude-code
+      summarize prompt). The response isn't part of the agent's action stream.
+    * ``compact`` — parent_prefix_len is much shorter than the parent's full
+      input (either <= initial_prompt_len + ε, meaning autoCompact wiped to
+      just the system prompt; or < parent.input_len/2 for older cases).
+    * ``sibling`` — shares a proper prefix with the parent but diverges
+      before the parent's output ended. Pre-fix this category catches a lot
+      of false positives caused by chat_template re-render drift; with the
+      raw-token splice in _render_with_raw_splice those false positives go
+      away and true siblings only arise from genuine sub-agent forks.
+    """
+    if parent is None:
+        return "root"
+    if is_summarization:
+        return "compact_summarization"
+    # Check the linear-extend path BEFORE the autoCompact marker check: after
+    # claude-code wipes the conversation, the resume pack stays embedded in
+    # every subsequent request's messages[0..1] for the rest of the chain.
+    # Without this ordering, every linear continuation on the post-compact
+    # chain would be mis-flagged as `compact` purely because the marker is
+    # still floating around in the prefix.
+    if parent_prefix_len >= parent_full_len:
+        return "linear"
+    # m[0]/m[1] marker is the ground-truth signal that claude-code started a
+    # new chain from autoCompact — authoritative for picking compact over
+    # sibling when the token geometry is ambiguous (pfx well above
+    # initial_prompt_len + _COMPACT_PFX_EPS, e.g. when the resume pack itself
+    # is 20K+ tokens of inlined Read results).
+    if is_compact_resume:
+        return "compact"
+    # autoCompact wipes the chat history down to the initial system prompt
+    # plus a Read-pack + summary that renders to 5-10K tokens. The shared
+    # prefix collapses to ~initial_prompt_len + that pack size, even when the
+    # parent itself is short (e.g. a post-compact early turn at ~30K).
+    if initial_prompt_len > 0 and parent_prefix_len <= initial_prompt_len + _COMPACT_PFX_EPS:
+        return "compact"
+    if parent_prefix_len * 2 < parent.input_len:
+        return "compact"
+    return "sibling"
+
+
 def _new_turn(s: _Session, ideal_ids: list[int], body: dict[str, Any]) -> _Turn:
     parent_id = None
     parent_prefix_len = 0
+    parent_turn: _Turn | None = None
     for prev in s.turns:
         prefix_len = _common_prefix_len(prev.full_ids, ideal_ids)
         if prefix_len > parent_prefix_len:
             parent_id = prev.id
             parent_prefix_len = prefix_len
+            parent_turn = prev
 
+    branch_kind = _classify_branch(
+        parent_turn,
+        parent_prefix_len,
+        len(parent_turn.full_ids) if parent_turn is not None else 0,
+        initial_prompt_len=s.initial_prompt_len,
+        is_summarization=_is_summarization_request(body),
+        is_compact_resume=_is_compact_resume_request(body),
+    )
     turn = _Turn(
         id=len(s.turns),
         parent_id=parent_id,
         parent_prefix_len=parent_prefix_len,
         input_len=len(ideal_ids),
         request=_request_snapshot(body),
+        branch_kind=branch_kind,
     )
     s.turns.append(turn)
     return turn
@@ -158,12 +396,13 @@ def _maybe_new_turn(s: _Session, ideal_ids: list[int], body: dict[str, Any]) -> 
 
 def _export_tree(s: _Session) -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": 2,
         "turns": [t.to_dict() for t in s.turns],
         "num_turns": len(s.turns),
         "prompt_tokens": len(s.prompt_ids),
         "response_tokens": len(s.response_ids),
         "loss_mask_tokens": len(s.loss_mask),
+        "num_aborts": s.num_aborts,
     }
 
 
@@ -245,6 +484,242 @@ def _tools_schema(anthropic_tools: list[dict] | None) -> list[dict] | None:
 
 
 # ---------------------------------------------------------------------------
+# Raw-token splice render (RL on-policy training fix)
+# ---------------------------------------------------------------------------
+# Unique placeholder marker used inside the chat_template render to mark
+# where each spliced assistant's raw tokens should go. Surrounding `\x07`
+# (BEL) chars keep BPE boundaries clean -- BEL is rare in normal text so
+# the tokenizer encodes it consistently regardless of surrounding context.
+_RAW_PLACEHOLDER_PREFIX = "\x07RAWSPLICE_"
+_RAW_PLACEHOLDER_SUFFIX = "_END\x07"
+
+# Empty-reasoning-stub text that Qwen3 reasoning chat templates auto-inject
+# for completed assistant messages WITHOUT a `reasoning_content` field. The
+# template emits this stub BEFORE the assistant `content`, so when our
+# placeholder render is used and we want to splice the model's raw tokens
+# (which already begin with the gen-prefix `<think>\n`) starting at the bare
+# `<|im_start|>assistant\n` position, we must extend the splice region LEFT
+# to swallow the stub. Otherwise we'd get `<think>\n\n</think>\n\n<think>\n...`
+# double-think and the prefix-match across turns fails 95%+ of the time.
+_EMPTY_THINK_STUB_TEXT = "<think>\n\n</think>\n\n"
+
+# Token sequence for `<|im_start|>assistant\n` -- used to locate where the
+# generation prompt tail begins in ideal_ids so we can capture the chat
+# template's "gen prefix" (e.g. `<think>\n` for Qwen3 reasoning models)
+# and prepend it to raw output tokens when storing into pending. Without
+# this, replaying raw tokens via splice would skip the gen prefix that the
+# model actually conditioned on, breaking prefix-match.
+_ASSISTANT_MARKER_TEXT = "<|im_start|>assistant\n"
+
+
+def _detect_gen_prefix(ideal_ids: list[int], marker_ids: list[int]) -> list[int]:
+    """Return tokens AFTER the LAST occurrence of ``marker_ids`` in
+    ``ideal_ids``. For Qwen3-reasoning this is typically ``<think>\\n`` (2
+    tokens). For non-reasoning models it may be empty."""
+    if not marker_ids:
+        return []
+    n = len(marker_ids)
+    for start in range(len(ideal_ids) - n, -1, -1):
+        if ideal_ids[start:start + n] == marker_ids:
+            return list(ideal_ids[start + n:])
+    return []
+
+
+def _attach_pending_raw_tokens(
+    s: "_Session",
+    base_index: int,
+    new_translated_msgs: list[dict],
+) -> None:
+    """Pop entries from s.pending_raw_tokens to attach raw tokens to each new
+    assistant entry we just appended to s.chat_messages.
+
+    base_index is the chat_messages position of new_translated_msgs[0]; we
+    walk in order and for each role==assistant entry, pop one (raw, gen_off)
+    tuple from pending and store it under s.asst_raw_tokens[index].
+    """
+    for offset, m in enumerate(new_translated_msgs):
+        if m.get("role") != "assistant":
+            continue
+        if not s.pending_raw_tokens:
+            # claude-code echoed an assistant we didn't generate (resumed
+            # session, mid-stream restart, etc.) -- can't attach raw tokens
+            # for it, render will fall back to chat_template (may produce
+            # Cat A drift for *that one* message but the other assistants
+            # still benefit from splice).
+            continue
+        s.asst_raw_tokens[base_index + offset] = s.pending_raw_tokens.pop(0)
+
+
+def _render_with_raw_splice(
+    tok: Any,
+    chat_messages: list[dict],
+    tools_schema: list[dict] | None,
+    asst_raw_tokens: dict[int, tuple[list[int], int]],
+    *,
+    add_generation_prompt: bool = True,
+) -> tuple[list[int], list[tuple[int, int, int]]]:
+    """Render chat_messages but splice in stored raw token sequences for any
+    assistant entry whose index is in asst_raw_tokens.
+
+    Returns ``(ideal_ids, raw_ranges)``. Each entry of raw_ranges is
+    ``(splice_start, gen_start, splice_end)`` in ideal_ids coords -- gen_start
+    marks where the model's generated tokens begin within the splice (after
+    the template's gen prefix like ``<think>\\n``). The portion
+    [splice_start:gen_start] is template-injected and should get loss_mask=0;
+    [gen_start:splice_end] is model-generated and gets loss_mask=1.
+
+    The trick: for each spliced assistant we replace its content with a
+    unique placeholder string before rendering. Then we tokenize the
+    rendered text with offset_mapping, find each placeholder's token range,
+    and substitute the stored raw tokens. The template prefix/suffix
+    (`<|im_start|>assistant\\n` and `<|im_end|>`) stays intact -- only the
+    assistant body comes from raw tokens.
+    """
+    valid = {i: tup for i, tup in asst_raw_tokens.items() if 0 <= i < len(chat_messages)}
+    if not valid:
+        text = tok.apply_chat_template(
+            chat_messages, tools=tools_schema, tokenize=False,
+            add_generation_prompt=add_generation_prompt,
+        )
+        return tok.encode(text, add_special_tokens=False), []
+
+    # Build a render-only copy with unique placeholder content for each
+    # spliced assistant. Drop reasoning_content/tool_calls so the template
+    # emits a bare assistant body containing just the placeholder.
+    placeholders: dict[int, str] = {}
+    render_msgs: list[dict] = []
+    for i, m in enumerate(chat_messages):
+        if i in valid:
+            ph = f"{_RAW_PLACEHOLDER_PREFIX}{i}_{secrets.token_hex(6)}{_RAW_PLACEHOLDER_SUFFIX}"
+            placeholders[i] = ph
+            render_msgs.append({"role": "assistant", "content": ph})
+        else:
+            render_msgs.append(m)
+
+    text = tok.apply_chat_template(
+        render_msgs, tools=tools_schema, tokenize=False,
+        add_generation_prompt=add_generation_prompt,
+    )
+
+    # Tokenize once. Prefer offset_mapping for robust token-range location;
+    # fall back to segment-by-segment encoding if the tokenizer lacks fast-
+    # tokenizer support.
+    try:
+        enc = tok(text, add_special_tokens=False, return_offsets_mapping=True)
+        template_ids = list(enc["input_ids"])
+        offsets = list(enc["offset_mapping"])
+        use_offsets = True
+    except (TypeError, ValueError, NotImplementedError):
+        use_offsets = False
+        template_ids = tok.encode(text, add_special_tokens=False)
+        offsets = []
+
+    if use_offsets:
+        # Pre-compute the empty-think stub token sequence so we can extend
+        # placeholder ranges left to swallow it. The stub is template-injected
+        # for completed assistants without `reasoning_content`; if not absorbed
+        # here the splice would land AFTER the stub, producing a doubled
+        # `<think>...</think><think>...` and breaking prefix-match across turns.
+        stub_ids = tok.encode(_EMPTY_THINK_STUB_TEXT, add_special_tokens=False)
+        if hasattr(stub_ids, "ids"):
+            stub_ids = list(stub_ids.ids)
+        else:
+            stub_ids = list(stub_ids)
+
+        placeholder_ranges: list[tuple[int, int, int]] = []
+        for asst_idx, ph in placeholders.items():
+            char_start = text.find(ph)
+            if char_start < 0:
+                logger.warning("[middleware] raw-splice: placeholder for asst %d not found", asst_idx)
+                continue
+            char_end = char_start + len(ph)
+            tok_start: int | None = None
+            tok_end: int | None = None
+            for j, (cs, ce) in enumerate(offsets):
+                if tok_start is None and ce > char_start:
+                    tok_start = j
+                if cs < char_end:
+                    tok_end = j + 1
+                elif cs >= char_end:
+                    break
+            if tok_start is None or tok_end is None:
+                logger.warning("[middleware] raw-splice: no tokens overlap placeholder for asst %d", asst_idx)
+                continue
+            # Extend tok_start LEFT to swallow the auto-injected empty-think
+            # stub if present immediately before the placeholder.
+            n_stub = len(stub_ids)
+            if n_stub > 0 and tok_start >= n_stub \
+                    and template_ids[tok_start - n_stub:tok_start] == stub_ids:
+                tok_start -= n_stub
+            placeholder_ranges.append((tok_start, tok_end, asst_idx))
+        placeholder_ranges.sort()
+
+        ideal_ids: list[int] = []
+        raw_ranges: list[tuple[int, int, int]] = []
+        cursor = 0
+        for tok_start, tok_end, asst_idx in placeholder_ranges:
+            ideal_ids.extend(template_ids[cursor:tok_start])
+            rs = len(ideal_ids)
+            full_raw, gen_off = valid[asst_idx]
+            ideal_ids.extend(full_raw)
+            re = len(ideal_ids)
+            raw_ranges.append((rs, rs + gen_off, re))
+            cursor = tok_end
+        ideal_ids.extend(template_ids[cursor:])
+        return ideal_ids, raw_ranges
+
+    # ---- fallback: encode the text in segments around placeholders ----
+    # First strip the auto-injected empty-think stub immediately before any
+    # placeholder (same reason as the offset path above).
+    if _EMPTY_THINK_STUB_TEXT:
+        for ph in placeholders.values():
+            text = text.replace(_EMPTY_THINK_STUB_TEXT + ph, ph)
+    char_ranges: list[tuple[int, int, int]] = []
+    for asst_idx, ph in placeholders.items():
+        cs = text.find(ph)
+        if cs < 0:
+            continue
+        char_ranges.append((cs, cs + len(ph), asst_idx))
+    char_ranges.sort()
+
+    ideal_ids = []
+    raw_ranges = []
+    cursor_char = 0
+    for cs, ce, asst_idx in char_ranges:
+        if cs > cursor_char:
+            ideal_ids.extend(tok.encode(text[cursor_char:cs], add_special_tokens=False))
+        rs = len(ideal_ids)
+        full_raw, gen_off = valid[asst_idx]
+        ideal_ids.extend(full_raw)
+        re = len(ideal_ids)
+        raw_ranges.append((rs, rs + gen_off, re))
+        cursor_char = ce
+    if cursor_char < len(text):
+        ideal_ids.extend(tok.encode(text[cursor_char:], add_special_tokens=False))
+    return ideal_ids, raw_ranges
+
+
+def _build_loss_mask_from_raw_ranges(
+    response_len: int,
+    prompt_len: int,
+    raw_ranges: list[tuple[int, int, int]],
+) -> list[int]:
+    """Build loss_mask aligned to response_ids (= ideal_ids[prompt_len:]).
+    For each (splice_start, gen_start, splice_end), tokens in
+    [gen_start:splice_end] get mask=1 (model-generated). Tokens in
+    [splice_start:gen_start] (template-injected gen prefix) and tokens
+    outside any range get mask=0 (observation)."""
+    mask = [0] * response_len
+    for splice_start, gen_start, splice_end in raw_ranges:
+        a = max(0, gen_start - prompt_len)
+        b = max(0, splice_end - prompt_len)
+        b = min(b, response_len)
+        for k in range(a, b):
+            mask[k] = 1
+    return mask
+
+
+# ---------------------------------------------------------------------------
 # Output parsing (reuse SGLang)
 # ---------------------------------------------------------------------------
 def _parse_output(
@@ -306,6 +781,217 @@ def _sse(event: str, data: dict) -> bytes:
 
 
 # ---------------------------------------------------------------------------
+# Abort/resume coordinator
+# ---------------------------------------------------------------------------
+class _AbortCoordinator:
+    """Holds the shared "weight update in progress" state for the middleware.
+
+    Two ways to wire it up:
+
+    * **explicit** — caller invokes ``aborted_now()`` / ``resumed_now()`` from
+      training code at known checkpoints.
+    * **polled** — register a 0-arg ``should_abort_fn`` (e.g.
+      ``lambda: GenerateState(args).aborted``) and call ``start_polling()``.
+      A background coroutine flips state when the function value changes.
+
+    The handler logic only ever consults ``is_aborted`` / ``await
+    wait_for_resume()``; both wiring paths converge here.
+    """
+
+    def __init__(self) -> None:
+        self._aborted: bool = False
+        self._cleared = asyncio.Event()
+        self._cleared.set()
+        self._lock = asyncio.Lock()
+        self._poll_task: asyncio.Task | None = None
+        self._should_abort_fn: Callable[[], bool] | None = None
+        self._max_wait_sec: float = 0.0  # 0 = wait forever
+        self.on_aborted: Callable[[], None] | None = None
+        self.on_resumed: Callable[[], None] | None = None
+
+    @property
+    def is_aborted(self) -> bool:
+        return self._aborted
+
+    async def aborted_now(self) -> None:
+        async with self._lock:
+            if self._aborted:
+                return
+            self._aborted = True
+            self._cleared.clear()
+        if self.on_aborted is not None:
+            try:
+                self.on_aborted()
+            except Exception as e:
+                logger.warning("[middleware] on_aborted callback failed: %s", e)
+
+    async def resumed_now(self) -> None:
+        async with self._lock:
+            if not self._aborted:
+                return
+            self._aborted = False
+            self._cleared.set()
+        if self.on_resumed is not None:
+            try:
+                self.on_resumed()
+            except Exception as e:
+                logger.warning("[middleware] on_resumed callback failed: %s", e)
+
+    async def wait_for_resume(self, max_wait_sec: float | None = None) -> bool:
+        """Block until aborted state clears. Returns True if cleared in time."""
+        if not self._aborted:
+            return True
+        budget = max_wait_sec if max_wait_sec is not None else self._max_wait_sec
+        if budget <= 0:
+            await self._cleared.wait()
+            return True
+        try:
+            await asyncio.wait_for(self._cleared.wait(), timeout=budget)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+    def install_poll(
+        self,
+        should_abort_fn: Callable[[], bool],
+        *,
+        interval_sec: float = 0.5,
+        max_wait_sec: float = 1800.0,
+        loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        """Wire ``should_abort_fn`` to be polled inside the middleware's event loop."""
+        self._should_abort_fn = should_abort_fn
+        self._max_wait_sec = max_wait_sec
+
+        async def _poll() -> None:
+            prev = False
+            while True:
+                try:
+                    cur = bool(self._should_abort_fn())
+                except Exception as e:
+                    logger.warning("[middleware] should_abort_fn raised: %s; aborting poll", e)
+                    return
+                if cur and not prev:
+                    await self.aborted_now()
+                elif not cur and prev:
+                    await self.resumed_now()
+                prev = cur
+                await asyncio.sleep(interval_sec)
+
+        async def _spawn() -> None:
+            self._poll_task = asyncio.create_task(_poll())
+
+        asyncio.run_coroutine_threadsafe(_spawn(), loop)
+
+
+# ---------------------------------------------------------------------------
+# /generate call (with abort + resume around weight updates)
+# ---------------------------------------------------------------------------
+async def _post_generate(
+    sglang_url: str,
+    input_ids: list[int],
+    sampling_params: dict[str, Any],
+) -> dict[str, Any]:
+    """Single non-streaming POST. Returns the parsed JSON body."""
+    timeout = aiohttp.ClientTimeout(total=None, sock_read=900)
+    async with aiohttp.ClientSession(timeout=timeout) as sess, \
+               sess.post(f"{sglang_url}/generate", json={
+                   "input_ids": input_ids, "sampling_params": sampling_params,
+                   "return_logprob": True,
+               }) as r:
+        if r.status >= 400:
+            text = await r.text()
+            raise RuntimeError(f"sglang upstream {r.status}: {text[:400]}")
+        return await r.json()
+
+
+async def _generate_with_abort_resume(
+    *,
+    sglang_url: str,
+    input_ids: list[int],
+    sampling_params: dict[str, Any],
+    abort: _AbortCoordinator,
+    on_partial: Callable[[list[int], str], Awaitable[None]] | None = None,
+) -> tuple[list[int], str, dict[str, Any]]:
+    """Run ``/generate`` and transparently retry across an abort/resume cycle.
+
+    Returns ``(output_token_ids, finish_reason, meta_info_of_last_call)``.
+
+    Loops at most ``MAX_RESUME_ATTEMPTS`` times. On an aborted upstream call:
+
+    1. Record the partial output via ``on_partial`` if provided.
+    2. Wait for the abort coordinator to clear.
+    3. Re-issue ``/generate`` with prompt + accumulated partial, with
+       ``max_new_tokens`` decremented by the partial length.
+
+    Aborts that the middleware itself observes via the coordinator BEFORE
+    issuing the upstream call get the same wait-then-retry treatment, so a
+    request that arrives mid-update simply blocks until resume.
+    """
+    MAX_RESUME_ATTEMPTS = int(os.environ.get("SWE_ABORT_RESUME_MAX_ATTEMPTS", "8"))
+    BUDGET_FLOOR = int(os.environ.get("SWE_ABORT_RESUME_MIN_TOKENS", "16"))
+
+    accumulated: list[int] = []
+    last_finish = "unknown"
+    last_meta: dict[str, Any] = {}
+
+    attempt = 0
+    while attempt < MAX_RESUME_ATTEMPTS:
+        # If the coordinator already says "aborted", wait it out before issuing.
+        if abort.is_aborted:
+            await abort.wait_for_resume()
+
+        # Compose the input for this attempt.
+        cur_input = input_ids + accumulated
+        budget = int(sampling_params.get("max_new_tokens", 4096)) - len(accumulated)
+        if budget <= 0:
+            last_finish = "length"
+            break
+        sp = dict(sampling_params)
+        sp["max_new_tokens"] = max(budget, BUDGET_FLOOR)
+
+        try:
+            data = await _post_generate(sglang_url, cur_input, sp)
+        except Exception as e:
+            # If we got interrupted *because* of an abort, fall through to the
+            # resume path. Otherwise re-raise so the caller can decide.
+            if abort.is_aborted:
+                logger.info("[middleware] /generate raised during abort: %s; will retry post-resume", e)
+                await abort.wait_for_resume()
+                attempt += 1
+                continue
+            raise
+
+        meta = data.get("meta_info") or {}
+        ids = [x[1] for x in (meta.get("output_token_logprobs") or [])]
+        accumulated.extend(ids)
+        last_meta = meta
+        last_finish = (meta.get("finish_reason") or {}).get("type", "stop") or "stop"
+
+        if last_finish == "abort":
+            # sglang aborted this request — most likely because slime POSTed
+            # /abort_request on a weight-update. Record what we have, wait
+            # for the coordinator to clear (i.e. weights have been pushed
+            # back and sglang is hot again), then go around.
+            if on_partial is not None:
+                try:
+                    await on_partial(ids, last_finish)
+                except Exception as e:
+                    logger.warning("[middleware] on_partial failed: %s", e)
+            await abort.wait_for_resume()
+            attempt += 1
+            continue
+
+        # Normal termination (stop / length / matched stop_token / refusal).
+        break
+    else:
+        logger.warning("[middleware] hit MAX_RESUME_ATTEMPTS=%d; returning whatever was accumulated",
+                       MAX_RESUME_ATTEMPTS)
+
+    return accumulated, last_finish, last_meta
+
+
+# ---------------------------------------------------------------------------
 # Request handler
 # ---------------------------------------------------------------------------
 async def _handle_messages(request: web.Request) -> web.StreamResponse:
@@ -315,6 +1001,7 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
     tool_parser = A["tool_parser"]
     reasoning_parser = A["reasoning_parser"]
     store: _Store = A["store"]
+    abort: _AbortCoordinator = A["abort"]
 
     body = await request.json()
     streaming = bool(body.get("stream", False))
@@ -338,41 +1025,95 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
             and len(msg_hashes) >= s.seen_msgs
             and msg_hashes[:s.seen_msgs] == s.msg_hashes[:s.seen_msgs]
         )
+        wiped = False
         if s.seen_msgs == 0:
             new = _translate_messages(all_msgs, body.get("system"))
+            base_idx = len(s.chat_messages)
             s.chat_messages.extend(new)
+            _attach_pending_raw_tokens(s, base_idx, new)
             s.system_hash = system_hash
         elif is_append:
             new = _translate_messages(all_msgs[s.seen_msgs:], None)
+            base_idx = len(s.chat_messages)
             s.chat_messages.extend(new)
+            # Each new role==assistant in `new` is claude-code echoing one of our
+            # generated turns back. Pop from pending_raw_tokens and attach so the
+            # splice render replaces that assistant body with the model's
+            # original raw tokens (preserving Megatron training signal).
+            _attach_pending_raw_tokens(s, base_idx, new)
         else:
+            # autoCompact wipe or other non-linear update. The previous
+            # trajectory becomes orphan: its raw tokens no longer correspond
+            # to chat_messages indices in the new chain, so we drop them.
+            # The previous chain's gens are LOST for training in this
+            # single-sample format -- preserving them would require a
+            # multi-sample/sub-trajectory architecture.
             logger.info("[middleware] %s non-linear messages update; rebuilding prompt", session_id)
             s.chat_messages = _translate_messages(all_msgs, body.get("system"))
             s.system_hash = system_hash
+            s.asst_raw_tokens.clear()
+            s.pending_raw_tokens.clear()
+            # Re-attach any assistant in the rebuilt chain (rare: claude-code
+            # might include an assistant from before the wipe). Pending is now
+            # empty, so this is a no-op unless we added one above.
+            _attach_pending_raw_tokens(s, 0, s.chat_messages)
+            wiped = True
         s.seen_msgs = len(all_msgs)
         s.msg_hashes = msg_hashes
         if s.tools_schema is None:
             s.tools_schema = _tools_schema(body.get("tools"))
 
-        # --- 2) re-render full template; diff vs cumulative -> obs (loss_mask=0)
-        ideal_text = tok.apply_chat_template(
-            s.chat_messages, tools=s.tools_schema, tokenize=False, add_generation_prompt=True,
+        # --- 2) render with raw-token splice; loss_mask=1 marks model-generated
+        # tokens (from stored raw spans), loss_mask=0 marks template-rendered
+        # observations. No more chat_template-rerender-mismatch rebaseline:
+        # spliced raw tokens are byte-identical to what the model originally
+        # emitted, so cumulative prefix always matches.
+        ideal_ids, raw_ranges = _render_with_raw_splice(
+            tok, s.chat_messages, s.tools_schema, s.asst_raw_tokens,
+            add_generation_prompt=True,
         )
-        ideal_ids = tok.encode(ideal_text, add_special_tokens=False)
         turn = _maybe_new_turn(s, ideal_ids, body)
 
-        if not s.prompt_ids:
+        if not s.prompt_ids or wiped:
             s.prompt_ids = ideal_ids
+            if s.initial_prompt_len == 0:
+                # First-ever request: cache initial prompt length for use in
+                # _classify_branch (compact wipe detection on later requests).
+                s.initial_prompt_len = len(ideal_ids)
+            s.response_ids = []
+            s.loss_mask = []
         else:
-            cumulative = s.prompt_ids + s.response_ids
-            if ideal_ids[:len(cumulative)] == cumulative:
-                obs = ideal_ids[len(cumulative):]
-                s.response_ids.extend(obs)
-                s.loss_mask.extend([0] * len(obs))
+            # ideal_ids should always start with prompt_ids (system + first
+            # user prompt is stable across the session unless we hit Cat B).
+            # If not, fall back to a clean reset.
+            if len(ideal_ids) < len(s.prompt_ids) or ideal_ids[:len(s.prompt_ids)] != s.prompt_ids:
+                # Diagnostic: find first divergence and dump context once per session.
+                diag = ""
+                try:
+                    if len(ideal_ids) < len(s.prompt_ids):
+                        diag = f"length-short ideal={len(ideal_ids)} prompt={len(s.prompt_ids)}"
+                    else:
+                        for di in range(len(s.prompt_ids)):
+                            if ideal_ids[di] != s.prompt_ids[di]:
+                                a0, a1 = max(0, di - 8), di + 8
+                                old_ctx = tok.decode(s.prompt_ids[a0:a1])
+                                new_ctx = tok.decode(ideal_ids[a0:a1])
+                                diag = (f"diverge@{di}/{len(s.prompt_ids)} "
+                                        f"chat_msgs={len(s.chat_messages)} ranges={raw_ranges} "
+                                        f"OLD={old_ctx!r} NEW={new_ctx!r}")
+                                break
+                except Exception as e:
+                    diag = f"<diag err: {e}>"
+                logger.warning("[middleware] %s ideal_ids does not extend prompt_ids; resetting [%s]",
+                               session_id, diag)
+                s.prompt_ids = ideal_ids
+                s.response_ids = []
+                s.loss_mask = []
             else:
-                logger.warning("[middleware] %s template-rerender mismatch; rebaselining", session_id)
                 s.response_ids = ideal_ids[len(s.prompt_ids):]
-                s.loss_mask = [0] * len(s.response_ids)
+                s.loss_mask = _build_loss_mask_from_raw_ranges(
+                    len(s.response_ids), len(s.prompt_ids), raw_ranges,
+                )
 
         # --- 3) sampling params (request overrides session defaults)
         sp = dict(s.sampling_defaults or {})
@@ -385,26 +1126,54 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
         sp.setdefault("spaces_between_special_tokens", False)
         sp.setdefault("no_stop_trim", True)
 
-        # --- 4) /generate (non-streaming upstream; we may stream downstream)
-        timeout = aiohttp.ClientTimeout(total=None, sock_read=900)
-        try:
-            async with aiohttp.ClientSession(timeout=timeout) as sess, \
-                       sess.post(f"{sglang_url}/generate", json={
-                           "input_ids": ideal_ids, "sampling_params": sp, "return_logprob": True,
-                       }) as r:
-                if r.status >= 400:
-                    return web.json_response({"type": "error", "error": {
-                        "type": "upstream_error", "message": await r.text(),
-                    }}, status=r.status)
-                upstream = await r.json()
-        except aiohttp.ClientError as e:
-            return web.json_response({"type": "error", "error": {
-                "type": "upstream_unreachable", "message": str(e),
-            }}, status=502)
+        max_response_tokens = int(os.environ.get("SWE_MAX_RESPONSE_TOKENS", "0") or 0)
+        # Cap counts only model-generated tokens (loss_mask==1), not observation
+        # echoes from tool results. Without this, large grep/read outputs eat
+        # the budget and the chain short-circuits to length/0 mid-trajectory
+        # even though the model itself has generated far fewer tokens.
+        remaining = max_response_tokens - sum(s.loss_mask) if max_response_tokens > 0 else None
+        if remaining is not None and remaining > 0:
+            sp["max_new_tokens"] = min(int(sp["max_new_tokens"]), remaining)
 
-        # --- 5) record output tokens; parse; stash assistant turn for re-render
-        meta = upstream.get("meta_info") or {}
-        output_ids = [x[1] for x in (meta.get("output_token_logprobs") or [])]
+        # --- 4) /generate (with abort/resume; non-streaming upstream) ---------
+        # Counter shared with the on_partial callback so the final turn record
+        # knows how many of the returned tokens came from the pre-abort
+        # attempt. NOTE: the callback MUST NOT extend s.response_ids / s.loss_mask
+        # itself — _generate_with_abort_resume already returns the concatenated
+        # output across abort/resume cycles, and the extend below adds it once.
+        partial_count: list[int] = [0]
+
+        async def _record_partial(ids: list[int], _why: str) -> None:
+            partial_count[0] += len(ids)
+            s.num_aborts += 1
+            if turn is not None:
+                turn.aborted_prefix_len += len(ids)
+
+        if remaining is not None and remaining <= 0:
+            output_ids: list[int] = []
+            finish = "length"
+            meta: dict[str, Any] = {}
+        else:
+            try:
+                output_ids, finish, meta = await _generate_with_abort_resume(
+                    sglang_url=sglang_url,
+                    input_ids=ideal_ids,
+                    sampling_params=sp,
+                    abort=abort,
+                    on_partial=_record_partial,
+                )
+            except aiohttp.ClientError as e:
+                return web.json_response({"type": "error", "error": {
+                    "type": "upstream_unreachable", "message": str(e),
+                }}, status=502)
+            except Exception as e:
+                return web.json_response({"type": "error", "error": {
+                    "type": "upstream_error", "message": str(e),
+                }}, status=502)
+
+        # --- 5) record output tokens; parse; queue raw tokens for next-round attach
+        # output_ids is the *full* concatenation across any abort/resume retries
+        # (see _generate_with_abort_resume contract).
         s.response_ids.extend(output_ids)
         s.loss_mask.extend([1] * len(output_ids))
 
@@ -415,24 +1184,35 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
             tools_schema=s.tools_schema,
         )
 
-        asst: dict[str, Any] = {"role": "assistant", "content": visible}
-        # If the model produced any thinking, stash it for re-render.
-        # The empty-thinking case requires care: the chat template's "no
-        # reasoning_content" branch emits a bare `</think>` (no opener), but
-        # the prompt's add_generation_prompt suffix already provided
-        # `<|assistant|><think>` -- so the actual emitted tokens start with a
-        # `</think>` after a prompt-side `<think>`. To make the next round's
-        # re-render match, we feed back reasoning_content=" " (a whitespace
-        # that strips to empty) which renders as `<think></think>` -- byte-
-        # equivalent to "prompt opens `<think>` + model emits `</think>`".
-        if reasoning_parser:
-            asst["reasoning_content"] = thinking if thinking else " "
-        elif thinking:
-            asst["reasoning_content"] = thinking
-        if tool_uses:
-            asst["tool_calls"] = [{"function": {"name": tu["name"], "arguments": tu["input"]}}
-                                   for tu in tool_uses]
-        s.chat_messages.append(asst)
+        # NOTE: we intentionally DO NOT append the structured assistant to
+        # s.chat_messages here. Doing so + claude-code echoing the same
+        # assistant in its next request would double the message in
+        # chat_messages, causing chronic template-rerender mismatch +
+        # rebaseline (which previously zeroed the entire loss_mask --
+        # leaving 75% of trajectories with sum(loss_mask)=0).
+        #
+        # Instead we queue the raw token sequence into pending_raw_tokens.
+        # On the next request, _attach_pending_raw_tokens will pop this and
+        # attach it to the chat_messages index where _translate_messages
+        # places claude-code's echo of this assistant. The splice in
+        # _render_with_raw_splice then replaces that assistant's body with
+        # the model's actual raw output tokens (no normalization, no
+        # OpenHands -> qwen25 JSON re-rendering, no token drift).
+        #
+        # We prepend the gen prefix (e.g. `<think>\n` injected by the chat
+        # template for Qwen3 reasoning models) so that what gets spliced
+        # equals what the model originally conditioned on + emitted, byte
+        # for byte. Without the prefix, prior-asst splice would skip the
+        # `<think>\n` opener that the gen prompt added in this turn but
+        # that the chat template does NOT auto-inject for completed asst
+        # messages -- breaking cumulative prefix match.
+        marker_ids = A.get("_assistant_marker_ids")
+        if marker_ids is None:
+            marker_ids = tok.encode(_ASSISTANT_MARKER_TEXT, add_special_tokens=False)
+            A["_assistant_marker_ids"] = marker_ids
+        gen_prefix = _detect_gen_prefix(ideal_ids, marker_ids)
+        full_raw = gen_prefix + list(output_ids)
+        s.pending_raw_tokens.append((full_raw, len(gen_prefix)))
 
         # --- 6) build Anthropic blocks (shared by JSON + SSE paths)
         blocks: list[dict] = []
@@ -443,12 +1223,12 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
                             "name": tu["name"], "input": tu["input"]})
         if not blocks: blocks.append({"type": "text", "text": ""})
 
-        finish = (meta.get("finish_reason") or {}).get("type", "stop")
         stop_reason = "tool_use" if tool_uses else ("max_tokens" if finish == "length" else "end_turn")
-        in_tokens, out_tokens = len(ideal_ids), len(output_ids)
+        in_tokens = len(ideal_ids)
+        out_tokens = len(output_ids)
         model = body.get("model") or "slime-actor"
         if turn is not None:
-            turn.output_len = len(output_ids)
+            turn.output_len = out_tokens
             turn.finish_reason = finish
             turn.stop_reason = stop_reason
             turn.full_ids = ideal_ids + output_ids
@@ -522,6 +1302,7 @@ async def _ok(request: web.Request) -> web.Response:
 class MiddlewareHandle:
     app_handle: AppHandle
     store: _Store
+    abort: _AbortCoordinator
     public_host: str
 
     @property
@@ -548,6 +1329,39 @@ class MiddlewareHandle:
         fut = asyncio.run_coroutine_threadsafe(self._pop_session(session_id), self.app_handle.loop)
         return fut.result(timeout=10)
 
+    # --- Weight-update abort/resume control -----------------------------------
+    def aborted_now(self) -> None:
+        """Tell the middleware: stop accepting new generate calls; mark
+        in-flight ones as ABORTED. Idempotent; safe to call from any thread."""
+        asyncio.run_coroutine_threadsafe(self.abort.aborted_now(), self.app_handle.loop).result(timeout=5)
+
+    def resumed_now(self) -> None:
+        """Tell the middleware: weights are reloaded; re-issue aborted /generate
+        calls with reduced max_new_tokens and let new requests through."""
+        asyncio.run_coroutine_threadsafe(self.abort.resumed_now(), self.app_handle.loop).result(timeout=5)
+
+    def install_abort_poll(
+        self,
+        should_abort_fn: Callable[[], bool],
+        *,
+        interval_sec: float = 0.5,
+        max_wait_sec: float = 1800.0,
+    ) -> None:
+        """Wire ``should_abort_fn`` to be polled inside the middleware loop.
+
+        Typical usage from the rollout worker process::
+
+            from slime.rollout.sglang_rollout import GenerateState
+            state = GenerateState(args)
+            middleware.install_abort_poll(lambda: state.aborted)
+        """
+        self.abort.install_poll(
+            should_abort_fn,
+            interval_sec=interval_sec,
+            max_wait_sec=max_wait_sec,
+            loop=self.app_handle.loop,
+        )
+
     def stop(self) -> None:
         self.app_handle.stop()
 
@@ -573,12 +1387,14 @@ def start(
                           ('glm45' / 'qwen3' / 'deepseek-r1' / ...) or None to disable.
     """
     store = _Store()
+    abort = _AbortCoordinator()
     app = web.Application(client_max_size=64 * 1024 * 1024)
     app["tokenizer"] = tokenizer
     app["sglang_url"] = sglang_url.rstrip("/")
     app["tool_parser"] = tool_parser
     app["reasoning_parser"] = reasoning_parser
     app["store"] = store
+    app["abort"] = abort
     app.router.add_post("/v1/messages", _handle_messages)
     app.router.add_post("/v1/messages/count_tokens", _count_tokens)
     app.router.add_get("/healthz", _ok)
@@ -586,4 +1402,4 @@ def start(
     handle = run_app_in_thread(app, host=host, port=port, thread_name="anthropic-middleware")
     logger.info("[coding_agent_rl.middleware] %s -> %s (tool=%s reasoning=%s)",
                 handle.url, sglang_url, tool_parser, reasoning_parser)
-    return MiddlewareHandle(app_handle=handle, store=store, public_host=public_host or host)
+    return MiddlewareHandle(app_handle=handle, store=store, abort=abort, public_host=public_host or host)
