@@ -40,6 +40,9 @@ Env knobs (set in run.sh):
     SWE_TOOL_PARSER          glm47           (sglang FunctionCallParser name)
     SWE_REASONING_PARSER     glm45           (sglang ReasoningParser name)
     SWE_SAVE_TRAJECTORY_TREE 0               save full per-turn request/response tree in metadata
+    SWE_LIST_TRAJECTORY      0               1 = fan a single rollout into one Sample per chain segment
+    SWE_LIST_TRAJECTORY_REWARD_MODE  uniform  uniform | copy | final_only
+    SWE_LIST_TRAJECTORY_MAX_SEGMENTS 8        cap segments per rollout (drops middle when exceeded)
     SHIM_BIND_HOST           0.0.0.0
     SHIM_PORT                18001
     SLIME_HEAD_HOST          public host the sandboxes use to reach the middleware
@@ -124,6 +127,23 @@ SWE_SAVE_TRAJECTORY_TREE = os.environ.get("SWE_SAVE_TRAJECTORY_TREE", "0") == "1
 # chain). When 0 (default), generate() returns a single Sample whose
 # tokens = prompt_ids + final_response_ids -- the tree_trajectory mode.
 SWE_LIST_TRAJECTORY = os.environ.get("SWE_LIST_TRAJECTORY", "0") == "1"
+# Reward allocation across segments. Default "uniform" averages the rollout
+# reward across the K emitted segments (reward / K each). "copy" replicates
+# the rollout reward verbatim per segment (back-compat with the original
+# list_trajectory fan-out). "final_only" places the full reward on the
+# "final" segment and zero elsewhere — useful as a control that matches
+# tree_trajectory's reward sum.
+SWE_LIST_TRAJECTORY_REWARD_MODE = os.environ.get(
+    "SWE_LIST_TRAJECTORY_REWARD_MODE", "uniform"
+)  # uniform | copy | final_only
+# Hard cap on segments fanned out per rollout. Compact-heavy modes (esp.
+# compact_subagent) can produce 8-16 segments which explodes GBS and amplifies
+# per-prompt baseline dilution under GRPO. When exceeded we keep the FIRST
+# cap-1 segments and the LAST segment; the middle is dropped. See
+# MASTER_PLAN §A appendix entry for the GBS risk.
+SWE_LIST_TRAJECTORY_MAX_SEGMENTS = int(
+    os.environ.get("SWE_LIST_TRAJECTORY_MAX_SEGMENTS", "8") or 8
+)
 SHIM_BIND_HOST = os.environ.get("SHIM_BIND_HOST", "0.0.0.0")
 SHIM_PORT = int(os.environ.get("SHIM_PORT", "18001"))
 
@@ -239,6 +259,23 @@ async def _provision_sandbox(image: str):
 
 
 # ---------------------------------------------------------------------------
+# Reward allocation across segments (pure function, smoke-tested)
+# ---------------------------------------------------------------------------
+def _segment_reward(reward: float, num_segments: int, seg_kind: str | None,
+                    mode: str) -> float:
+    """Allocate the rollout reward to a single segment under the given mode.
+
+    Pure function so the smoke test can hit it without spinning up middleware.
+    """
+    if mode == "uniform":
+        return float(reward) / max(1, num_segments)
+    if mode == "final_only":
+        return float(reward) if seg_kind == "final" else 0.0
+    # "copy" (back-compat with the original list_trajectory fan-out)
+    return float(reward)
+
+
+# ---------------------------------------------------------------------------
 # Main per-sample agent function
 # ---------------------------------------------------------------------------
 async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sample:
@@ -299,9 +336,28 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sam
         segments = [seg for seg in segments if seg[1]]
         if not segments:
             return _abort(sample, "middleware_session_empty")
+
+        # Segment cap: list_trajectory can fan out 8-16 segments under
+        # compact_subagent, which (a) blows GBS past --global-batch-size and
+        # (b) under GRPO whitening dilutes the per-prompt baseline by ~K/cap.
+        # Compromise: keep the first cap-1 (oldest) segments and the last
+        # (kind="final") segment; drop the middle. This loses some mid-chain
+        # context but preserves both the chain head and the terminal segment
+        # that carries the reward signal under final_only mode.
+        # See MASTER_PLAN §A GBS risk entry.
+        if len(segments) > SWE_LIST_TRAJECTORY_MAX_SEGMENTS:
+            logger.warning(
+                "[coding_agent_rl] %s: capping segments %d -> %d (dropping middle)",
+                md["instance_id"], len(segments), SWE_LIST_TRAJECTORY_MAX_SEGMENTS,
+            )
+            head = segments[: SWE_LIST_TRAJECTORY_MAX_SEGMENTS - 1]
+            tail = segments[-1:]
+            segments = head + tail
+
         fanned: list[Sample] = []
         instance_id = md["instance_id"]
         elapsed = time.time() - t0
+        num_segments = len(segments)
         for seg_idx, (prompt_ids, response_ids, loss_mask, seg_meta) in enumerate(segments):
             response_ids, loss_mask = _cap_response_for_training(response_ids, loss_mask)
             sub = sample if seg_idx == 0 else copy.deepcopy(sample)
@@ -309,7 +365,10 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sam
             sub.response_length = len(response_ids)
             sub.loss_mask = loss_mask
             sub.response = state.tokenizer.decode(response_ids, skip_special_tokens=False)
-            sub.reward = float(reward)  # per-sample reward propagates to every segment
+            seg_kind = seg_meta.get("kind")
+            sub.reward = _segment_reward(
+                reward, num_segments, seg_kind, SWE_LIST_TRAJECTORY_REWARD_MODE
+            )
             sub.status = Sample.Status.COMPLETED
             sub.metadata = {
                 **(sample.metadata or {}),
@@ -318,9 +377,14 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sam
                 "applied_cleanly": bool(applied_cleanly),
                 "elapsed_sec": elapsed,
                 "list_trajectory_segment_idx": seg_idx,
-                "list_trajectory_num_segments": len(segments),
-                "list_trajectory_segment_kind": seg_meta.get("kind"),
+                "list_trajectory_num_segments": num_segments,
+                "list_trajectory_segment_kind": seg_kind,
                 "list_trajectory_completed_turns_at_split": seg_meta.get("completed_turns"),
+                "list_trajectory_reward_mode": SWE_LIST_TRAJECTORY_REWARD_MODE,
+                # final-only meta: may be None; sub-agent B is wiring this
+                # field into the final-segment metadata so we just propagate
+                # whatever middleware put there.
+                "list_trajectory_finish_reason": seg_meta.get("finish_reason"),
             }
             if SWE_SAVE_TRAJECTORY_TREE and seg_idx == 0:
                 # attach the full tree only to the first segment to keep dumps
@@ -328,8 +392,9 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sam
                 sub.metadata["trajectory_tree"] = trajectory_tree
             fanned.append(sub)
         logger.info(
-            "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs list_segments=%d",
-            instance_id, reward, is_solved, applied_cleanly, elapsed, len(fanned),
+            "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs list_segments=%d mode=%s",
+            instance_id, reward, is_solved, applied_cleanly, elapsed,
+            len(fanned), SWE_LIST_TRAJECTORY_REWARD_MODE,
         )
         return fanned
 
