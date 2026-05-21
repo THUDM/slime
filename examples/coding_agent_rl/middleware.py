@@ -246,6 +246,15 @@ def _request_snapshot(body: dict[str, Any]) -> dict[str, Any]:
 # prompt. 16K gives comfortable headroom for the largest packs we have seen.
 _COMPACT_PFX_EPS = 16384
 
+# Token tolerance for treating ``parent_prefix_len`` as "essentially equal to"
+# the parent's full_ids length. After raw-splice render landed, linear turns
+# match exactly (pfx == par.full); pre-splice dumps still drift by a handful
+# to a few hundred tokens of chat_template re-render noise. 2048 covers every
+# Cat-A drift observed in the 0521 archive while staying well below typical
+# sub-agent fork divergence (which is on the order of par.output tokens).
+# Also reused by _new_turn's pass-1 neighbor-first parent selection.
+LINEAR_DEFICIT_TOK = 2048
+
 # Phrases claude-code uses in its autoCompact "please summarize this
 # conversation" request. When both appear in the *last* user message we mark
 # the turn as compact_summarization -- it's a one-off summarization call whose
@@ -281,8 +290,25 @@ def _last_user_text(messages: list[dict]) -> str:
 
 
 def _is_summarization_request(body: dict[str, Any]) -> bool:
-    text = _last_user_text(body.get("messages") or [])
-    return all(m in text for m in _SUMMARIZATION_MARKERS)
+    msgs = body.get("messages") or []
+    # Main path: claude-code places the summarize prompt as the last user msg.
+    text = _last_user_text(msgs)
+    if all(m in text for m in _SUMMARIZATION_MARKERS):
+        return True
+    # Fallback: scan non-last user msgs. Rare cases (observed in flaky compact
+    # retries) where claude-code attaches the markers to a non-last user msg.
+    # Skip msgs that contain the autoCompact resume marker -- those are the
+    # embedded resume pack carrying a prior conversation's summary text, NOT
+    # an active summarization request.
+    for m in msgs[:-1]:
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        body_text = _flatten(m.get("content"))
+        if _COMPACT_RESUME_MARKER in body_text:
+            continue
+        if all(mk in body_text for mk in _SUMMARIZATION_MARKERS):
+            return True
+    return False
 
 
 def _is_compact_resume_request(body: dict[str, Any]) -> bool:
@@ -349,6 +375,30 @@ def _classify_branch(
     # still floating around in the prefix.
     if parent_prefix_len >= parent_full_len:
         return "linear"
+    # [C3] Near-linear tolerance: chat_template re-render drift (Cat A) leaves
+    # pfx a few hundred tokens to ~2K short of parent_full_len on otherwise-
+    # linear continuations. The auxiliary guard `pfx > parent.input_len`
+    # ensures the new turn consumed at least one token of parent's output
+    # (real sub-agent forks share only the input prefix and consume zero
+    # output, so they fail this guard).
+    #
+    # NOTE: spec_1 §3.4 originally proposed a stricter `pfx > parent.input +
+    # parent.output/2` guard, but that rejects observed-linear cases like
+    # sib 14 (pfx=46738, par.in=46401, par.out=1475 → consumed only 337/1475
+    # of par.output). Empirically the loose guard is sufficient to separate
+    # Cat A drift from sub-agent forks because forks share exactly par.input
+    # (or less). Verified by smoke case 13 (true fork, pfx=par.in+1000,
+    # par.out=10000 → deficit=9000 > LINEAR_DEFICIT_TOK rejects via deficit).
+    if (parent_full_len - parent_prefix_len) <= LINEAR_DEFICIT_TOK \
+            and parent_prefix_len > parent.input_len:
+        return "linear"
+    # [C4] Root-parent special case: when initial_prompt_len is 0 (legacy
+    # dumps without C1 serialization) and the parent IS root, treat any pfx
+    # that nearly fills the root's full_ids as a compact wipe provided the
+    # resume marker is present. This covers sample-11 sib 21 / 32 / 51 / 72
+    # where init_pl was lost but parent==root and marker is in m[0..1].
+    if parent.id == 0 and parent_prefix_len + LINEAR_DEFICIT_TOK >= parent_full_len and is_compact_resume:
+        return "compact"
     # m[0]/m[1] marker is the ground-truth signal that claude-code started a
     # new chain from autoCompact — authoritative for picking compact over
     # sibling when the token geometry is ambiguous (pfx well above
@@ -371,12 +421,29 @@ def _new_turn(s: _Session, ideal_ids: list[int], body: dict[str, Any]) -> _Turn:
     parent_id = None
     parent_prefix_len = 0
     parent_turn: _Turn | None = None
-    for prev in s.turns:
+    # [C5] Pass 1: neighbor-first. Walk turns in REVERSE order and pick the
+    # most recent prev whose prefix-match is close to its full_ids length
+    # (linear continuation) AND that consumed at least part of prev.input
+    # (guards against picking a forked sibling whose full_ids happen to
+    # overlap the new request in just the input portion). This avoids the
+    # longest-prefix-match flattening artifact where multiple linear turns
+    # downstream of a compact-init node all reparent to that node.
+    for prev in reversed(s.turns):
         prefix_len = _common_prefix_len(prev.full_ids, ideal_ids)
-        if prefix_len > parent_prefix_len:
+        if prefix_len >= len(prev.full_ids) - LINEAR_DEFICIT_TOK and prefix_len > prev.input_len:
             parent_id = prev.id
             parent_prefix_len = prefix_len
             parent_turn = prev
+            break
+    # Pass 2: fall back to the original longest-prefix-match if pass 1 found
+    # no linear-neighbor candidate (true sub-agent fork or compact wipe).
+    if parent_turn is None:
+        for prev in s.turns:
+            prefix_len = _common_prefix_len(prev.full_ids, ideal_ids)
+            if prefix_len > parent_prefix_len:
+                parent_id = prev.id
+                parent_prefix_len = prefix_len
+                parent_turn = prev
 
     branch_kind = _classify_branch(
         parent_turn,
@@ -406,13 +473,14 @@ def _maybe_new_turn(s: _Session, ideal_ids: list[int], body: dict[str, Any]) -> 
 
 def _export_tree(s: _Session) -> dict[str, Any]:
     return {
-        "version": 2,
+        "version": 3,
         "turns": [t.to_dict() for t in s.turns],
         "num_turns": len(s.turns),
         "prompt_tokens": len(s.prompt_ids),
         "response_tokens": len(s.response_ids),
         "loss_mask_tokens": len(s.loss_mask),
         "num_aborts": s.num_aborts,
+        "initial_prompt_len": s.initial_prompt_len,
     }
 
 
