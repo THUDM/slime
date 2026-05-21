@@ -1133,6 +1133,7 @@ def loss_function(
     args: Namespace,
     batch: RolloutBatch,
     num_microbatches: int,
+    step_global_batch_size: int,
     logits: torch.Tensor,
 ) -> tuple[torch.Tensor, int | torch.Tensor, dict[str, list[str] | torch.Tensor]]:
     """Dispatch to the configured loss and rescale for Megatron integration.
@@ -1144,10 +1145,14 @@ def loss_function(
 
     Args:
         args: Configuration specifying `loss_type`, `calculate_per_token_loss`,
-            `global_batch_size`, and optionally `custom_loss_function_path`.
+            and optionally `custom_loss_function_path`.
         batch: Mini-batch with "loss_masks", "response_lengths", and other
             keys required by the selected loss function.
         num_microbatches: Number of gradient accumulation steps.
+        step_global_batch_size: Sample count for the current training step
+            (total across DP). Replaces the legacy ``args.global_batch_size``
+            fallback so the train side stops depending on "every DP rank holds
+            the same N samples".
         logits: Model outputs (policy or value head).
 
     Returns:
@@ -1196,10 +1201,12 @@ def loss_function(
         loss = loss + 0 * logits.sum()
 
     # Here we need to divide by cp_size because to cancel the multiply in Megatron.
-    global_batch_size = batch.get("dynamic_global_batch_size", args.global_batch_size)
     if not args.calculate_per_token_loss:
         loss = (
-            loss * num_microbatches / global_batch_size * mpu.get_data_parallel_world_size(with_context_parallel=True)
+            loss
+            * num_microbatches
+            / step_global_batch_size
+            * mpu.get_data_parallel_world_size(with_context_parallel=True)
         )
     else:
         loss = loss * mpu.get_context_parallel_world_size()

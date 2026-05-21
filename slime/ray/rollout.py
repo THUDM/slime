@@ -741,7 +741,7 @@ class RolloutManager:
         # 3. Compute schedule
         total_lengths = [len(t) for t in data["tokens"]]
         data["total_lengths"] = total_lengths
-        partitions, micro_batch_indices, num_microbatches = build_dp_schedule(
+        partitions, micro_batch_indices, num_microbatches, global_batch_sizes = build_dp_schedule(
             self.args,
             self.train_parallel_config,
             total_lengths,
@@ -775,8 +775,11 @@ class RolloutManager:
                 if key not in data:
                     continue
                 rollout_data[key] = data[key]
-            if dynamic_gbs is not None:
-                rollout_data["dynamic_global_batch_size"] = dynamic_gbs
+            # Per-step sample count (total across DP). Train side normalises by
+            # this instead of assuming each rank holds the same N samples; once
+            # uneven-DP partition lands, this is the only field that has to
+            # change shape.
+            rollout_data["global_batch_sizes"] = global_batch_sizes
             rollout_data["num_microbatches"] = num_microbatches
             rollout_data["micro_batch_indices"] = micro_batch_indices[r]
             rollout_data_refs.append(Box(ray.put(rollout_data)))

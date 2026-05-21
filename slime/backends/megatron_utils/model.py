@@ -412,6 +412,7 @@ def train_one_step(
     optimizer: MegatronOptimizer,
     opt_param_scheduler: OptimizerParamScheduler,
     num_microbatches: int,
+    step_global_batch_size: int,
     microbatch_pbar=None,
 ) -> tuple[dict[str, float], float]:
     """Execute a single pipeline-parallel training step.
@@ -428,6 +429,9 @@ def train_one_step(
         optimizer (MegatronOptimizer): Optimizer instance.
         opt_param_scheduler (OptimizerParamScheduler): LR/WD scheduler.
         num_microbatches (int): Number of microbatches to process.
+        step_global_batch_size (int): Sample count for this training step
+            (total across DP). Used both for loss scaling inside the closure
+            and for the LR scheduler ``increment``.
 
     Returns:
         tuple[dict[str, float], float]: Reduced loss dictionary (last stage only)
@@ -522,7 +526,7 @@ def train_one_step(
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             os.environ["ROUTING_REPLAY_STAGE"] = old_stage
 
-        return output_tensor, partial(loss_function, args, batch, num_microbatches)
+        return output_tensor, partial(loss_function, args, batch, num_microbatches, step_global_batch_size)
 
     # Forward pass.
     forward_backward_func = get_forward_backward_func()
@@ -564,8 +568,7 @@ def train_one_step(
         # Update learning rate. Use the per-step global_batch_size when dynamic
         # batching is on so the scheduler's samples-seen counter tracks reality.
         assert update_successful
-        increment = data_iterator[0].rollout_data.get("dynamic_global_batch_size", args.global_batch_size)
-        opt_param_scheduler.step(increment=increment)
+        opt_param_scheduler.step(increment=step_global_batch_size)
 
     # release grad
     for model_chunk in model:
@@ -605,6 +608,7 @@ def train(
     opt_param_scheduler: OptimizerParamScheduler,
     data_iterator: Sequence[DataIterator],
     num_microbatches: Sequence[int],
+    global_batch_sizes: Sequence[int],
 ) -> None:
     """Run training over a rollout consisting of multiple steps.
 
@@ -618,8 +622,16 @@ def train(
         opt_param_scheduler (OptimizerParamScheduler): LR/WD scheduler.
         data_iterator (Sequence[DataIterator]): Iterable(s) yielding training batches.
         num_microbatches (Sequence[int]): Microbatches per step in the rollout.
+        global_batch_sizes (Sequence[int]): Sample count per step (total across
+            DP). Same length as ``num_microbatches``; consumed by
+            ``train_one_step`` for loss scaling and LR scheduler increments.
     """
     args = get_args()
+
+    assert len(num_microbatches) == len(global_batch_sizes), (
+        f"num_microbatches and global_batch_sizes must have the same length, "
+        f"got {len(num_microbatches)} vs {len(global_batch_sizes)}"
+    )
 
     for iterator in data_iterator:
         iterator.reset()
@@ -715,6 +727,7 @@ def train(
             optimizer,
             opt_param_scheduler,
             num_microbatches[step_id],
+            global_batch_sizes[step_id],
             microbatch_pbar=microbatch_pbar,
         )
 

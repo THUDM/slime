@@ -51,9 +51,6 @@ def get_batch(
     assert "tokens" in keys
     batch = data_iterator.get_next(keys)
 
-    if "dynamic_global_batch_size" in data_iterator.rollout_data:
-        batch["dynamic_global_batch_size"] = data_iterator.rollout_data["dynamic_global_batch_size"]
-
     tokens = batch["tokens"]
     # use 0 as the pad token id should be fine?
     pad_token_id = 0
@@ -178,14 +175,21 @@ def gather_log_data(
     metric_name: str,
     args: Namespace,
     rollout_id: int,
-    log_dict: dict[str, float],
+    log_dict: dict[str, "float | tuple[float, float]"],
 ) -> dict[str, float] | None:
     """
-    Gather per-rank metrics, reduce by mean on the DP source rank, and log.
+    Gather per-rank metrics, reduce on the DP source rank, and log.
 
-    Expects `log_dict` to contain plain scalars. The DP source rank prints and
-    optionally logs to WandB/TensorBoard with a step derived from `rollout_id` and
-    batch sizes. Returns the reduced dict on the DP source rank; returns None on others.
+    Each value in ``log_dict`` is either:
+      * a plain scalar — reduced as a simple mean across DP ranks (legacy
+        path; correct only when every rank holds the same N samples);
+      * a ``(sum, count)`` tuple — reduced as ``Σsum / Σcount`` (the count is
+        the per-rank weight). This is the right shape when ranks may hold a
+        different number of samples, e.g. once uneven-DP partitioning lands.
+
+    On the DP source rank prints and optionally logs to WandB/TensorBoard with
+    a step derived from ``rollout_id`` and batch sizes. Returns the reduced
+    dict on the DP source rank; returns None on others.
     """
 
     if mpu.get_data_parallel_rank(with_context_parallel=True) == 0:
@@ -200,9 +204,21 @@ def gather_log_data(
             group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
         )
 
-        reduced_log_dict = {
-            f"{metric_name}/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
-        }
+        reduced_log_dict: dict[str, float] = {}
+        for key in log_dict:
+            values = [d[key] for d in gathered_log_dict]
+            first = values[0]
+            if isinstance(first, tuple) and len(first) == 2:
+                total_sum = sum(v[0] for v in values)
+                total_count = sum(v[1] for v in values)
+                if total_count == 0:
+                    reduced = 0.0
+                else:
+                    reduced = total_sum / total_count
+            else:
+                reduced = sum(values) / dp_size
+            reduced_log_dict[f"{metric_name}/{key}"] = reduced
+
         logger.info(f"{metric_name} {rollout_id}: {reduced_log_dict}")
 
         # Calculate step once to avoid duplication
@@ -298,15 +314,16 @@ def log_rollout_data(
                 "sample_indices",
                 "rollout_routed_experts",
                 "max_seq_lens",
-                "dynamic_global_batch_size",
+                "global_batch_sizes",
                 "num_microbatches",
                 "micro_batch_indices",
             ]:
                 continue
-            # Upload per sample mean for each rollout value
-            # There are the following assumptions:
-            # - Each dp rank has the same number of samples
+            # Emit (sum, count) so gather_log_data can do a weighted average across
+            # DP ranks. This stops the legacy "every rank has the same N samples"
+            # assumption from biasing means once uneven-DP partitioning lands.
             if isinstance(val, (list, tuple)):
+                count = len(val)
                 if isinstance(val[0], torch.Tensor):
                     # NOTE: Here we have to do the clone().detach(), otherwise the tensor will be
                     # modified in place and will cause problem for the next rollout.
@@ -320,7 +337,7 @@ def log_rollout_data(
                         "teacher_log_probs",
                         "opd_reverse_kl",
                     ]:
-                        val = torch.cat(val).clone().detach()
+                        tensor = torch.cat(val).clone().detach()
                         sum_of_sample_mean = get_sum_of_sample_mean(
                             total_lengths,
                             response_lengths,
@@ -328,17 +345,23 @@ def log_rollout_data(
                             qkv_format=args.qkv_format,
                             max_seq_lens=max_seq_lens,
                         )
-                        val = cp_size * sum_of_sample_mean(val) / len(loss_masks)
+                        # cp_size cancels Megatron's CP division; result is the
+                        # sum-of-per-sample-means over this rank's samples.
+                        per_rank_sum = cp_size * sum_of_sample_mean(tensor)
                     else:
-                        val = torch.cat(val).clone().detach()
-                        val = val.mean() * cp_size
+                        tensor = torch.cat(val).clone().detach()
+                        # val.mean() * cp_size is the per-sample mean for one rank;
+                        # multiply by count to get the per-rank sum.
+                        per_rank_sum = tensor.mean() * cp_size * count
+                    sum_value = per_rank_sum.item()
                 else:
-                    val = sum(val) / len(val)
+                    sum_value = sum(val)
+                log_dict[key] = (sum_value, count)
             elif isinstance(val, torch.Tensor):
-                val = val.float().mean()
+                # Scalar tensor (one per rank): treat as count=1.
+                log_dict[key] = (val.float().mean().item(), 1)
             else:
                 raise ValueError(f"Unsupported type: {type(val)} for key: {key}")
-            log_dict[key] = val.item() if isinstance(val, torch.Tensor) else val
 
         reduced_log_dict = gather_log_data("rollout", args, rollout_id, log_dict)
         if args.ci_test and reduced_log_dict is not None:

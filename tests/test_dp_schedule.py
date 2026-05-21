@@ -39,7 +39,17 @@ def make_tp(dp_size=1, cp_size=1, vpp_size=1, microbatch_group_size_per_vp_stage
     }
 
 
-def assert_invariants(partitions, micro_batch_indices, num_microbatches, *, dp_size, total_lengths, max_per_bin=None):
+def assert_invariants(
+    partitions,
+    micro_batch_indices,
+    num_microbatches,
+    *,
+    dp_size,
+    total_lengths,
+    max_per_bin=None,
+    global_batch_sizes=None,
+    global_batch_size=None,
+):
     """Check the invariants documented at the top of dp_schedule.py."""
     expected_per_rank = len(total_lengths) // dp_size
     seen_global: set[int] = set()
@@ -64,6 +74,17 @@ def assert_invariants(partitions, micro_batch_indices, num_microbatches, *, dp_s
         seen_global.update(partition)
     assert seen_global == set(range(len(total_lengths))), "some samples not assigned to any rank"
 
+    if global_batch_sizes is not None:
+        # Per-step gbs is what the train side normalises by; in the equal-size case
+        # it must equal the gbs the caller passed in for every step.
+        assert len(global_batch_sizes) == len(num_microbatches), (
+            f"global_batch_sizes/num_microbatches length mismatch: "
+            f"{len(global_batch_sizes)} vs {len(num_microbatches)}"
+        )
+        if global_batch_size is not None:
+            for s, gbs in enumerate(global_batch_sizes):
+                assert gbs == global_batch_size, f"step {s} gbs {gbs} != {global_batch_size}"
+
     if max_per_bin is None:
         return
 
@@ -83,10 +104,18 @@ def test_static_stride_single_step():
     args = make_args(micro_batch_size=2)
     tp = make_tp(dp_size=4)
 
-    partitions, mbi, nmb = build_dp_schedule(args, tp, total_lengths, global_batch_size=16)
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(args, tp, total_lengths, global_batch_size=16)
 
     assert nmb == [2]
-    assert_invariants(partitions, mbi, nmb, dp_size=4, total_lengths=total_lengths)
+    assert_invariants(
+        partitions,
+        mbi,
+        nmb,
+        dp_size=4,
+        total_lengths=total_lengths,
+        global_batch_sizes=gbs_per_step,
+        global_batch_size=16,
+    )
 
 
 @pytest.mark.unit
@@ -96,10 +125,18 @@ def test_static_balance_multi_step():
     args = make_args(micro_batch_size=2, balance_data=True)
     tp = make_tp(dp_size=2)
 
-    partitions, mbi, nmb = build_dp_schedule(args, tp, total_lengths, global_batch_size=8)
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(args, tp, total_lengths, global_batch_size=8)
 
     assert nmb == [2, 2]
-    assert_invariants(partitions, mbi, nmb, dp_size=2, total_lengths=total_lengths)
+    assert_invariants(
+        partitions,
+        mbi,
+        nmb,
+        dp_size=2,
+        total_lengths=total_lengths,
+        global_batch_sizes=gbs_per_step,
+        global_batch_size=8,
+    )
 
 
 @pytest.mark.unit
@@ -109,9 +146,18 @@ def test_dynamic_uniform():
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=10)
     tp = make_tp(dp_size=2)
 
-    partitions, mbi, nmb = build_dp_schedule(args, tp, total_lengths, global_batch_size=8)
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(args, tp, total_lengths, global_batch_size=8)
 
-    assert_invariants(partitions, mbi, nmb, dp_size=2, total_lengths=total_lengths, max_per_bin=10)
+    assert_invariants(
+        partitions,
+        mbi,
+        nmb,
+        dp_size=2,
+        total_lengths=total_lengths,
+        max_per_bin=10,
+        global_batch_sizes=gbs_per_step,
+        global_batch_size=8,
+    )
 
 
 @pytest.mark.unit
@@ -121,9 +167,18 @@ def test_dynamic_skewed_lengths():
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=10)
     tp = make_tp(dp_size=2)
 
-    partitions, mbi, nmb = build_dp_schedule(args, tp, total_lengths, global_batch_size=8)
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(args, tp, total_lengths, global_batch_size=8)
 
-    assert_invariants(partitions, mbi, nmb, dp_size=2, total_lengths=total_lengths, max_per_bin=10)
+    assert_invariants(
+        partitions,
+        mbi,
+        nmb,
+        dp_size=2,
+        total_lengths=total_lengths,
+        max_per_bin=10,
+        global_batch_sizes=gbs_per_step,
+        global_batch_size=8,
+    )
 
 
 @pytest.mark.unit
@@ -134,9 +189,18 @@ def test_dynamic_oversized_sample_lands_alone():
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=10)
     tp = make_tp(dp_size=2)
 
-    partitions, mbi, nmb = build_dp_schedule(args, tp, total_lengths, global_batch_size=8)
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(args, tp, total_lengths, global_batch_size=8)
 
-    assert_invariants(partitions, mbi, nmb, dp_size=2, total_lengths=total_lengths, max_per_bin=10)
+    assert_invariants(
+        partitions,
+        mbi,
+        nmb,
+        dp_size=2,
+        total_lengths=total_lengths,
+        max_per_bin=10,
+        global_batch_sizes=gbs_per_step,
+        global_batch_size=8,
+    )
     # Find the rank holding the oversized sample and verify it lives alone in some mbs.
     oversize_idx = total_lengths.index(15)
     found = False
@@ -159,11 +223,20 @@ def test_dynamic_with_vpp_rounds_to_mb_group():
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=8)
     tp = make_tp(dp_size=2, vpp_size=2, microbatch_group_size_per_vp_stage=2)
 
-    partitions, mbi, nmb = build_dp_schedule(args, tp, total_lengths, global_batch_size=16)
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(args, tp, total_lengths, global_batch_size=16)
 
     for n in nmb:
         assert n % 2 == 0, f"num_microbatches {n} is not a multiple of mb_group=2"
-    assert_invariants(partitions, mbi, nmb, dp_size=2, total_lengths=total_lengths, max_per_bin=8)
+    assert_invariants(
+        partitions,
+        mbi,
+        nmb,
+        dp_size=2,
+        total_lengths=total_lengths,
+        max_per_bin=8,
+        global_batch_sizes=gbs_per_step,
+        global_batch_size=16,
+    )
 
 
 @pytest.mark.unit

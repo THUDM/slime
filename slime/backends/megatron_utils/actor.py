@@ -395,6 +395,7 @@ class MegatronTrainRayActor(TrainRayActor):
         """Train critic and return CPU values (used as old-values for the next actor train)."""
         data_iterator = get_data_iterator(rollout_data)
         num_microbatches = rollout_data["num_microbatches"]
+        global_batch_sizes = rollout_data["global_batch_sizes"]
 
         # Compute current critic values (used as old_values for value loss and for actor advantages).
         rollout_data.update(forward_only(get_values, self.args, self.model, data_iterator, num_microbatches))
@@ -409,6 +410,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.opt_param_scheduler,
             data_iterator,
             num_microbatches,
+            global_batch_sizes,
         )
 
         if mpu.is_pipeline_last_stage() and "values" in rollout_data:
@@ -421,6 +423,7 @@ class MegatronTrainRayActor(TrainRayActor):
         # Create data iterator for log_probs and train.
         data_iterator = get_data_iterator(rollout_data)
         num_microbatches = rollout_data["num_microbatches"]
+        global_batch_sizes = rollout_data["global_batch_sizes"]
 
         if self.args.use_rollout_routing_replay:
             self.fill_routing_replay(data_iterator, num_microbatches, rollout_data)
@@ -517,6 +520,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     self.opt_param_scheduler,
                     data_iterator,
                     num_microbatches,
+                    global_batch_sizes,
                 )
 
             self.prof.step(rollout_id=rollout_id)
