@@ -12,7 +12,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from slime.utils.dp_schedule import build_dp_schedule, even_step_split, near_equal_step_split
+from slime.utils.dp_schedule import (
+    build_dp_schedule,
+    even_step_split,
+    near_equal_step_split,
+    validate_step_sample_indices,
+)
 
 
 def make_args(
@@ -323,8 +328,8 @@ def test_near_equal_step_split_even_and_uneven():
     assert near_equal_step_split(25, num_steps=3) == [list(range(0, 9)), list(range(9, 17)), list(range(17, 25))]
 
 
-@pytest.mark.unit
-def test_custom_uneven_steps_7_8_9():
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))
     """A custom splitter producing 7 / 8 / 9 sample steps from 24 samples — the
     schedule still gives every DP rank the same num_mbs per step (PP sync) but
     each step's reported gbs is the real per-step sample count."""
@@ -350,6 +355,42 @@ def test_custom_uneven_steps_7_8_9():
     for r in range(2):
         seen.update(partitions[r])
     assert seen == set(range(24))
+
+
+@pytest.mark.unit
+def test_validate_step_sample_indices_happy_path():
+    """Normal usage: complete cover, no overlap → returns normalised list."""
+    out = validate_step_sample_indices([range(0, 3), range(3, 8)], num_samples=8)
+    assert out == [[0, 1, 2], [3, 4, 5, 6, 7]]
+
+
+@pytest.mark.unit
+def test_validate_step_sample_indices_rejects_empty():
+    with pytest.raises(AssertionError, match="empty list of steps"):
+        validate_step_sample_indices([], num_samples=8)
+
+
+@pytest.mark.unit
+def test_validate_step_sample_indices_rejects_overlap():
+    with pytest.raises(AssertionError, match="reuses sample indices"):
+        validate_step_sample_indices([[0, 1, 2], [2, 3]], num_samples=4)
+
+
+@pytest.mark.unit
+def test_validate_step_sample_indices_rejects_out_of_range():
+    with pytest.raises(AssertionError, match="out-of-range"):
+        validate_step_sample_indices([[0, 1, 9]], num_samples=4)
+
+
+@pytest.mark.unit
+def test_validate_step_sample_indices_allows_dropping_with_warning(caplog):
+    """Dropping samples is allowed but should emit a warning."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="slime.utils.dp_schedule"):
+        out = validate_step_sample_indices([[0, 1]], num_samples=5)
+    assert out == [[0, 1]]
+    assert any("dropped 3 sample" in r.message for r in caplog.records)
 
 
 if __name__ == "__main__":

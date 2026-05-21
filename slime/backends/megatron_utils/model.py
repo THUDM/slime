@@ -618,7 +618,7 @@ def train(
     num_microbatches: Sequence[int],
     global_batch_sizes: Sequence[int],
     train_step_offset: int = 0,
-) -> int:
+) -> None:
     """Run training over a rollout consisting of multiple steps.
 
     The model is switched to train mode, training hooks are configured, and
@@ -635,12 +635,8 @@ def train(
             DP). Same length as ``num_microbatches``; consumed by
             ``train_one_step`` for loss scaling and LR scheduler increments.
         train_step_offset (int): Cumulative train-step count *before* this
-            rollout. Used as the base for the wandb step label so it stays
+            rollout, used as the base for the wandb step label so labels stay
             monotonic when ``num_steps_per_rollout`` varies across rollouts.
-
-    Returns:
-        int: ``train_step_offset + len(num_microbatches)`` — the actor uses
-            this to persist a resume-safe cumulative train-step counter.
     """
     args = get_args()
 
@@ -836,15 +832,12 @@ def train(
     if pre_hook_enabled:
         disable_forward_pre_hook(model)
 
-    return train_step_offset + num_steps_per_rollout
-
 
 def save(
     iteration: int,
     model: Sequence[DDP],
     optimizer: MegatronOptimizer,
     opt_param_scheduler: OptimizerParamScheduler,
-    train_step_count: int = 0,
 ) -> None:
     """Persist a training checkpoint safely with forward hooks disabled.
 
@@ -854,12 +847,6 @@ def save(
         model (Sequence[DDP]): Sequence of DDP-wrapped model chunks.
         optimizer (MegatronOptimizer): Optimizer instance.
         opt_param_scheduler (OptimizerParamScheduler): LR/WD scheduler.
-        train_step_count (int): Cumulative number of training steps the actor
-            has executed so far. Persisted in Megatron's
-            ``num_floating_point_operations_so_far`` field — slime doesn't
-            track FLOPs separately, so we repurpose the slot for a
-            resume-safe wandb step counter that survives variable-length
-            rollouts.
     """
     args = get_args()
     if should_disable_forward_pre_hook(args):
@@ -869,7 +856,7 @@ def save(
         model,
         optimizer,
         opt_param_scheduler,
-        num_floating_point_operations_so_far=train_step_count,
+        num_floating_point_operations_so_far=0,
         checkpointing_context=None,
         train_data_iterator=None,
         preprocess_common_state_dict_fn=None,
@@ -918,7 +905,7 @@ def save_hf_model(args, rollout_id: int, model: Sequence[DDP]) -> None:
 
 def initialize_model_and_optimizer(
     args: Namespace, role: str = "actor"
-) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int, int]:
+) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
     """Initialize model(s), optimizer, scheduler, and load from checkpoint.
 
     Args:
@@ -926,13 +913,9 @@ def initialize_model_and_optimizer(
         role (str): Logical role of the model (e.g., "actor", "critic").
 
     Returns:
-        tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int, int]:
-            DDP-wrapped model chunks, optimizer, scheduler, the iteration index
-            (slime uses this as ``rollout_id``), and the cumulative training-step
-            count carried in Megatron's ``num_floating_point_operations_so_far``
-            field (we repurpose it as ``train_step_count`` so wandb step labels
-            stay monotonic across resume — slime never uses the FLOPs counter
-            for anything else).
+        tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
+            DDP-wrapped model chunks, optimizer, scheduler, and iteration index
+            (slime stores ``rollout_id`` here).
     """
 
     if torch.version.hip:
@@ -947,7 +930,7 @@ def initialize_model_and_optimizer(
     model[0].role = role
     reinit_critic_output_layer = _critic_output_layer_needs_reinit(args, model, role)
     clear_memory()
-    iteration, train_step_count = load_checkpoint(
+    iteration, _ = load_checkpoint(
         model,
         optimizer,
         opt_param_scheduler,
@@ -960,4 +943,4 @@ def initialize_model_and_optimizer(
             optimizer.reload_model_params()
     clear_memory()
 
-    return model, optimizer, opt_param_scheduler, iteration, train_step_count
+    return model, optimizer, opt_param_scheduler, iteration

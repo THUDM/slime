@@ -78,14 +78,9 @@ class MegatronTrainRayActor(TrainRayActor):
                 logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
                 torch_memory_saver.memory_margin_bytes = x
 
-        self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id, loaded_train_step_count = (
-            initialize_model_and_optimizer(args, role)
+        self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id = initialize_model_and_optimizer(
+            args, role
         )
-        # Cumulative train-step counter, persisted across resume via Megatron's
-        # ``num_floating_point_operations_so_far`` slot (slime never uses the
-        # FLOPs counter). Used for monotonic wandb step labels when
-        # ``num_steps_per_rollout`` varies across rollouts.
-        self.train_step_count = loaded_train_step_count
 
         vpp_size = mpu.get_virtual_pipeline_model_parallel_world_size() or 1
         if vpp_size > 1:
@@ -375,7 +370,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 store_prefix=store_prefix,
             )
 
-    def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):
+    def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None, train_step_offset: int = 0):
         if self.args.debug_rollout_only:
             return None
 
@@ -385,10 +380,19 @@ class MegatronTrainRayActor(TrainRayActor):
         with timer("data_preprocess"):
             rollout_data = self._get_rollout_data(rollout_data_ref)
 
+        # ``train_step_offset`` is the cumulative train-step counter the
+        # rollout manager has tracked so far (loaded from rollout metadata on
+        # resume). Publish it on args so ``compute_rollout_step`` and the
+        # per-step wandb label use a counter that stays monotonic across
+        # variable-length rollouts.
+        self.args._wandb_train_step_offset = train_step_offset
+
         if self.role == "critic":
-            result = self.train_critic(rollout_id, rollout_data)
+            result = self.train_critic(rollout_id, rollout_data, train_step_offset=train_step_offset)
         else:
-            self.train_actor(rollout_id, rollout_data, external_data=external_data)
+            self.train_actor(
+                rollout_id, rollout_data, external_data=external_data, train_step_offset=train_step_offset
+            )
             result = None
 
         if self.args.offload_train:
@@ -396,8 +400,8 @@ class MegatronTrainRayActor(TrainRayActor):
 
         return result
 
-    def train_critic(self, rollout_id: int, rollout_data: RolloutBatch):
-        """Train critic and return CPU values (used as old-values for the next actor train)."""
+    def train_critic(self, rollout_id: int, rollout_data: RolloutBatch, *, train_step_offset: int = 0):
+        """Train critic; return CPU values (consumed as old-values for the next actor train)."""
         data_iterator = get_data_iterator(rollout_data)
         num_microbatches = rollout_data["num_microbatches"]
         global_batch_sizes = rollout_data["global_batch_sizes"]
@@ -408,7 +412,7 @@ class MegatronTrainRayActor(TrainRayActor):
         compute_advantages_and_returns(self.args, rollout_data)
 
         self.args.loss_type = "value_loss"
-        self.train_step_count = train(
+        train(
             rollout_id,
             self.model,
             self.optimizer,
@@ -416,7 +420,7 @@ class MegatronTrainRayActor(TrainRayActor):
             data_iterator,
             num_microbatches,
             global_batch_sizes,
-            train_step_offset=self.train_step_count,
+            train_step_offset=train_step_offset,
         )
 
         if mpu.is_pipeline_last_stage() and "values" in rollout_data:
@@ -425,7 +429,9 @@ class MegatronTrainRayActor(TrainRayActor):
             return {"values": tensors_to_cpu(rollout_data["values"])}
         return {}
 
-    def train_actor(self, rollout_id: int, rollout_data: RolloutBatch, external_data=None) -> None:
+    def train_actor(
+        self, rollout_id: int, rollout_data: RolloutBatch, external_data=None, *, train_step_offset: int = 0
+    ) -> None:
         # Create data iterator for log_probs and train.
         data_iterator = get_data_iterator(rollout_data)
         num_microbatches = rollout_data["num_microbatches"]
@@ -509,13 +515,6 @@ class MegatronTrainRayActor(TrainRayActor):
             if self.rollout_data_postprocess is not None:
                 self.rollout_data_postprocess(self.args, rollout_id, rollout_data)
 
-            # Publish the cumulative train-step counter on args so
-            # ``compute_rollout_step`` (wandb step label) can read it without
-            # threading another arg through every logger. We snapshot it
-            # *before* training so the rollout/* metrics get the step count as
-            # of the start of this rollout — same semantic as the old formula.
-            self.args._wandb_train_step_offset = self.train_step_count
-
             log_rollout_data(
                 rollout_id,
                 self.args,
@@ -526,7 +525,7 @@ class MegatronTrainRayActor(TrainRayActor):
             if self.args.use_routing_replay:
                 os.environ["ROUTING_REPLAY_STAGE"] = "replay_backward"
             with timer("actor_train"):
-                self.train_step_count = train(
+                train(
                     rollout_id,
                     self.model,
                     self.optimizer,
@@ -534,7 +533,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     data_iterator,
                     num_microbatches,
                     global_batch_sizes,
-                    train_step_offset=self.train_step_count,
+                    train_step_offset=train_step_offset,
                 )
 
             self.prof.step(rollout_id=rollout_id)
@@ -574,7 +573,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
             maybe_finalize_async_save(blocking=True)
 
-        save(rollout_id, self.model, self.optimizer, self.opt_param_scheduler, self.train_step_count)
+        save(rollout_id, self.model, self.optimizer, self.opt_param_scheduler)
 
         if force_sync and self.args.async_save:
             maybe_finalize_async_save(blocking=True)

@@ -44,13 +44,25 @@ def train(args):
 
         if args.use_critic:
             actor_trains_this_step = rollout_id >= args.num_critic_only_steps
-            value_refs = critic_model.async_train(rollout_id, rollout_data_curr_ref)
+            train_step_offset = ray.get(rollout_manager.get_train_step_count.remote())
+            value_refs = critic_model.async_train(
+                rollout_id, rollout_data_curr_ref, train_step_offset=train_step_offset
+            )
             if actor_trains_this_step:
-                ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref, external_data=value_refs))
+                ray.get(
+                    actor_model.async_train(
+                        rollout_id,
+                        rollout_data_curr_ref,
+                        external_data=value_refs,
+                        train_step_offset=train_step_offset,
+                    )
+                )
             else:
                 ray.get(value_refs)
         else:
-            ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))
+            train_step_offset = ray.get(rollout_manager.get_train_step_count.remote())
+            ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref, train_step_offset=train_step_offset))
+        ray.get(rollout_manager.advance_train_step_count.remote())
 
         if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
             if (not args.use_critic) or rollout_id >= args.num_critic_only_steps:

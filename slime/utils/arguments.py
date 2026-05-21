@@ -1297,16 +1297,10 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--disable-rollout-trim-samples",
-                action="store_true",
-                default=False,
-                help="disable trim samples in rollout buffer when converting samples to train data",
-            )
-            parser.add_argument(
                 "--use-dynamic-global-batch-size",
                 action="store_true",
                 default=False,
-                help="enable dynamic global batch size, disable trim samples in rollout buffer when converting samples to train data",
+                help="enable dynamic global batch size — one training step per rollout, using whatever sample count the rollout produced.",
             )
             parser.add_argument(
                 "--custom-rollout-step-split-path",

@@ -52,10 +52,13 @@ Invariants guaranteed by :func:`build_dp_schedule` (asserted by the tests):
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import Any
 
 from slime.utils.seqlen_balancing import expand_bins_by_splitting, first_fit_pack, get_seqlen_balanced_partitions
+
+logger = logging.getLogger(__name__)
 
 
 def near_equal_step_split(num_samples: int, *, num_steps: int) -> list[list[int]]:
@@ -90,6 +93,42 @@ def even_step_split(num_samples: int, global_batch_size: int) -> list[list[int]]
     """
     num_steps = num_samples // global_batch_size
     return [list(range(s * global_batch_size, (s + 1) * global_batch_size)) for s in range(num_steps)]
+
+
+def validate_step_sample_indices(
+    step_sample_indices: list[list[int]],
+    num_samples: int,
+) -> list[list[int]]:
+    """Validate (and normalise to ``list[list[int]]``) the output of a custom
+    step splitter.
+
+    Checks invariants the rest of the schedule relies on:
+      * non-empty list of steps;
+      * every sample index is in ``range(num_samples)``;
+      * no index appears in more than one step.
+
+    Returns the (possibly newly-listified) splits; logs a warning if the
+    splitter dropped any samples (this is allowed but unusual).
+    """
+    assert step_sample_indices, "custom_rollout_step_split returned an empty list of steps"
+    normalised: list[list[int]] = []
+    seen: set[int] = set()
+    for s, indices in enumerate(step_sample_indices):
+        indices = list(indices)
+        normalised.append(indices)
+        dup = set(indices) & seen
+        assert not dup, f"custom_rollout_step_split: step {s} reuses sample indices already placed: {sorted(dup)}"
+        seen.update(indices)
+    extra = seen - set(range(num_samples))
+    assert not extra, f"custom_rollout_step_split returned out-of-range sample indices: {sorted(extra)}"
+    missing = set(range(num_samples)) - seen
+    if missing:
+        logger.warning(
+            "custom_rollout_step_split dropped %d sample(s); first few: %s",
+            len(missing),
+            sorted(missing)[:5],
+        )
+    return normalised
 
 
 def _pack_step_into_mbs(

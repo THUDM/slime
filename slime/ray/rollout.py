@@ -18,7 +18,12 @@ from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupCo
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
-from slime.utils.dp_schedule import build_dp_schedule, even_step_split, near_equal_step_split
+from slime.utils.dp_schedule import (
+    build_dp_schedule,
+    even_step_split,
+    near_equal_step_split,
+    validate_step_sample_indices,
+)
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.logging_utils import configure_logger, init_tracking
@@ -359,6 +364,15 @@ class RolloutManager:
         data_source_cls = load_function(self.args.data_source_path)
         self.data_source = data_source_cls(args)
 
+        # Cumulative training-step counter — used as the wandb step base when
+        # ``num_steps_per_rollout`` varies across rollouts. Rehydrated from
+        # ``data_source.metadata`` on ``load``; advanced by
+        # ``advance_train_step_count`` after each rollout's training completes.
+        self.train_step_count = 0
+        # Number of training steps the most recent ``_split_train_data_by_dp``
+        # call produced; ``advance_train_step_count`` adds this to the counter.
+        self._last_num_train_steps = 0
+
         self.generate_rollout = load_function(self.args.rollout_function_path)
         self.eval_generate_rollout = load_function(self.args.eval_function_path)
         self.custom_reward_post_process_func = None
@@ -502,10 +516,46 @@ class RolloutManager:
         _log_eval_rollout_data(rollout_id, self.args, data, result.metrics)
 
     def save(self, rollout_id):
+        # Persist the cumulative train-step counter into the rollout metadata
+        # so the wandb step label stays monotonic across resume even when
+        # ``num_steps_per_rollout`` varies between rollouts.
+        self.data_source.metadata["train_step_count"] = self.train_step_count
         self.data_source.save(rollout_id)
 
     def load(self, rollout_id=None):
         self.data_source.load(rollout_id)
+        # ``data_source.metadata`` is populated by ``load`` (if a checkpoint
+        # exists); rehydrate our local counter from it. Resume from a legacy
+        # checkpoint that doesn't carry ``train_step_count`` falls back to the
+        # historical formula (``rollout_id * rb * nspp // gbs``) so wandb step
+        # labels stay roughly continuous across the upgrade.
+        stored = self.data_source.metadata.get("train_step_count")
+        if stored is not None:
+            self.train_step_count = int(stored)
+        elif rollout_id is not None and rollout_id >= 0:
+            self.train_step_count = (
+                (rollout_id + 1)
+                * self.args.rollout_batch_size
+                * self.args.n_samples_per_prompt
+                // self.args.global_batch_size
+            )
+        else:
+            self.train_step_count = 0
+
+    def get_train_step_count(self) -> int:
+        """Return the cumulative train-step counter (= base wandb step label for the
+        next rollout). Driver calls this before invoking ``actor.train``."""
+        return self.train_step_count
+
+    def advance_train_step_count(self) -> int:
+        """Advance the counter by the number of training steps the most recent
+        rollout produced. Driver calls this after ``actor.train`` returns.
+        Assumes actor and critic run the same number of training steps per
+        rollout (they share ``num_microbatches`` from the same schedule), so
+        we only advance once even when both train this rollout.
+        """
+        self.train_step_count += self._last_num_train_steps
+        return self.train_step_count
 
     def offload(self):
         self.health_monitoring_pause()
@@ -708,19 +758,22 @@ class RolloutManager:
         self.train_parallel_config = config
 
     def _split_train_data_by_dp(self, data):
-        """Resolve gbs, (optionally) trim ``data``, compute the DP/mbs schedule,
-        and package each rank's rollout_data into a Ray Box. The schedule itself
-        is computed by :func:`build_dp_schedule` so it stays unit-testable
-        without Ray/sglang."""
+        """Resolve gbs, compute the DP/mbs schedule, and package each rank's
+        rollout_data into a Ray Box. The schedule itself is computed by
+        :func:`build_dp_schedule` so it stays unit-testable without Ray/sglang.
+
+        No trimming happens here — uneven sample counts are handled by
+        :func:`near_equal_step_split` (remainder redistributed across steps)
+        or by the user's custom splitter.
+        """
         dp_size = self.train_parallel_config["dp_size"]
         num_samples = len(data["tokens"])
 
-        # 1. Resolve effective global_batch_size. With dynamic-gbs, use the real
-        # sample count so the train side normalises by it; the schedule then runs
-        # a single training step over the full rollout. We require at least
-        # ``dp_size`` samples so the schedule can place one mbs on every rank —
-        # fewer is treated as a configuration error rather than silently padded.
-        if self.args.use_dynamic_global_batch_size and not self.args.disable_rollout_trim_samples:
+        # 1. Resolve effective global_batch_size. ``--use-dynamic-global-batch-size``
+        # forces a single training step over the full rollout, so its gbs is the
+        # real sample count. Otherwise we fall back to the static
+        # ``--global-batch-size`` setting.
+        if self.args.use_dynamic_global_batch_size:
             assert num_samples >= dp_size, (
                 f"use_dynamic_global_batch_size requires num_samples ({num_samples}) >= dp_size "
                 f"({dp_size}); shrink dp_size or increase rollout_batch_size * n_samples_per_prompt."
@@ -734,28 +787,9 @@ class RolloutManager:
         else:
             global_batch_size = self.args.global_batch_size
 
-        # 2. Trim to a multiple of global_batch_size. Only static-gbs without a
-        # custom splitter still needs this — the dynamic-gbs path sets gbs to the
-        # real sample count (so no remainder), and the custom-splitter path
-        # decides itself which samples to drop.
-        if (
-            not self.args.disable_rollout_trim_samples
-            and not self.args.use_dynamic_global_batch_size
-            and self.args.num_steps_per_rollout is None
-            and self.args.custom_rollout_step_split_path is None
-        ):
-            trim_len = num_samples // global_batch_size * global_batch_size
-            if trim_len == 0:
-                raise ValueError(f"Not enough samples {num_samples} for global_batch_size {global_batch_size}")
-            if trim_len < num_samples:
-                logger.info(f"Trimmed samples from {num_samples} to {trim_len}")
-                for key, val in data.items():
-                    if isinstance(val, list):
-                        data[key] = val[:trim_len]
-
-        # 3. Compute step boundaries — the list of per-step sample-index groups.
-        # Custom path wins; otherwise pick the default based on which of
-        # ``--num-steps-per-rollout`` and ``--global-batch-size`` the user set:
+        # 2. Compute step boundaries. Custom splitter wins; otherwise pick the
+        # default based on which of ``--num-steps-per-rollout`` and
+        # ``--global-batch-size`` the user set:
         #   - ``--num-steps-per-rollout N``: split into N near-equal chunks.
         #   - ``--global-batch-size G``: target step size G; if ``num_samples %
         #     G != 0``, redistribute the remainder evenly across steps and warn.
@@ -767,24 +801,10 @@ class RolloutManager:
 
         if self.args.custom_rollout_step_split_path:
             custom_split = load_function(self.args.custom_rollout_step_split_path)
-            step_sample_indices = list(custom_split(self.args, total_lengths))
-            assert step_sample_indices, "custom_rollout_step_split returned an empty list of steps"
-            seen: set[int] = set()
-            for s, indices in enumerate(step_sample_indices):
-                indices = list(indices)
-                step_sample_indices[s] = indices
-                assert seen.isdisjoint(indices), (
-                    f"custom_rollout_step_split: step {s} reuses sample indices already placed: "
-                    f"{sorted(set(indices) & seen)}"
-                )
-                seen.update(indices)
-            extra = seen - set(range(num_samples))
-            assert not extra, f"custom_rollout_step_split returned out-of-range sample indices: {sorted(extra)}"
-            missing = set(range(num_samples)) - seen
-            if missing:
-                logger.warning(
-                    f"custom_rollout_step_split dropped {len(missing)} sample(s); " f"first few: {sorted(missing)[:5]}"
-                )
+            step_sample_indices = validate_step_sample_indices(
+                list(custom_split(self.args, total_lengths)),
+                num_samples=num_samples,
+            )
         elif self.args.num_steps_per_rollout is not None:
             num_steps = self.args.num_steps_per_rollout
             assert num_samples >= num_steps, (
@@ -810,6 +830,9 @@ class RolloutManager:
             total_lengths,
             step_sample_indices=step_sample_indices,
         )
+        # Remember how many train steps this rollout will produce so the driver
+        # can call ``advance_train_step_count`` after training completes.
+        self._last_num_train_steps = len(num_microbatches)
 
         # 4. Package per-rank rollout_data
         rollout_data_refs = []
