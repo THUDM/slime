@@ -1,7 +1,7 @@
 import socket
 import time
 from argparse import Namespace
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 
 import ray
 import torch
@@ -14,6 +14,7 @@ from tqdm import tqdm
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 
 from ..megatron_to_hf import convert_to_hf
+from ..sglang import DeltaSpec
 from .common import all_gather_param, named_params_and_buffers
 
 
@@ -21,6 +22,7 @@ class UpdateWeightFromDistributed:
     """
     Update distributed engines via NCCL. Each PP rank: group "slime-pp_{pp_rank}",
     only DP=TP=0 broadcasts. Non-expert (TP) and expert (EP) params separate.
+    Subclasses override ``_send_weights`` / ``_on_chunk`` to inject per-mode behaviour.
     """
 
     def __init__(
@@ -41,6 +43,14 @@ class UpdateWeightFromDistributed:
         self.quantization_config = quantization_config
         self.weight_version = 0
         self._model_update_groups = None
+        self.update_weight_metrics: dict[str, float] = {}
+
+    def pop_metrics(self) -> dict[str, float]:
+        """
+        Return and clear ``update_weight_metrics``. Drained by the actor onto the rollout/step log.
+        """
+        out, self.update_weight_metrics = self.update_weight_metrics, {}
+        return out
 
     def connect_rollout_engines(
         self,
@@ -89,7 +99,7 @@ class UpdateWeightFromDistributed:
     @torch.no_grad()
     def update_weights(self) -> None:
         """
-        Pause → flush → non-expert (TP) → expert (EP) → continue. Progress on PP source.
+        Pause → flush → _send_weights → continue. Progress on PP source.
         """
         self.weight_version += 1
 
@@ -106,36 +116,9 @@ class UpdateWeightFromDistributed:
                 )
         dist.barrier(group=get_gloo_group())
 
-        buffer_size = 0
-        converted_named_tensors = []
-        # non expert params
         pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_pp_src_rank else None
+        self._send_weights(pbar)
 
-        for name, param in named_params_and_buffers(self.args, self.model):
-            if ".experts." in name:
-                continue
-            buffer_size = self._update_weight_from_distributed(
-                name, param, converted_named_tensors, buffer_size, pbar=pbar
-            )
-
-        if converted_named_tensors:
-            self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
-
-        dist.barrier(group=get_gloo_group())
-
-        buffer_size = 0
-        named_tensors = []
-        for name, param in named_params_and_buffers(self.args, self.model):
-            if ".experts." not in name:
-                continue
-            buffer_size = self._update_expert_weight_from_distributed(
-                name, param, named_tensors, buffer_size, pbar=pbar
-            )
-
-        if named_tensors:
-            self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
-
-        dist.barrier(group=get_gloo_group())
         if dist.get_rank() == 0:
             # int4/fp4 post_process
             if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
@@ -147,59 +130,84 @@ class UpdateWeightFromDistributed:
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
-    def _update_weight_from_distributed(
+    def _send_weights(self, pbar: tqdm | None) -> None:
+        """
+        Non-expert (TP) pass → barrier → expert (EP) pass → barrier. Each iterator
+        yields broadcast-ready chunks (bucketing happens internally); subclasses
+        override ``_on_chunk`` to inject per-chunk behaviour.
+        """
+        for chunk_iter in (self._iter_non_expert_chunks(), self._iter_expert_chunks()):
+            for hf_chunk in chunk_iter:
+                self._on_chunk(hf_chunk)
+                self._update_bucket_weights_from_distributed(hf_chunk, pbar=pbar)
+            dist.barrier(group=get_gloo_group())
+
+    def _on_chunk(self, hf_chunk: list[tuple[str, torch.Tensor]]) -> None:
+        """
+        Hook for each HF chunk in ``_send_weights`` before its broadcast. No-op by default.
+        """
+
+    def _iter_non_expert_chunks(self) -> Iterator[list[tuple[str, torch.Tensor]]]:
+        """
+        Yield broadcast-sized HF chunks of non-expert params: TP all-gather +
+        HF convert per param, then bucket up to ``--update-weight-buffer-size``.
+        Empty on non-PP-src ranks (they still join all_gather_param).
+        """
+        buffer_size = 0
+        buffer: list[tuple[str, torch.Tensor]] = []
+        for name, param in named_params_and_buffers(self.args, self.model):
+            if ".experts." in name:
+                continue
+            param = all_gather_param(name, param)
+            if not self._is_pp_src_rank:
+                continue
+            hf_chunk = convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
+            chunk_bytes = sum(t.numel() * t.element_size() for _, t in hf_chunk)
+            if buffer and buffer_size + chunk_bytes > self.args.update_weight_buffer_size:
+                yield buffer
+                buffer = []
+                buffer_size = 0
+            buffer.extend(hf_chunk)
+            buffer_size += chunk_bytes
+        if buffer:
+            yield buffer
+
+    def _iter_expert_chunks(
         self,
-        name: str,
-        param: torch.nn.Parameter,
-        converted_named_tensors: list[tuple[str, torch.Tensor]],
-        buffer_size: int,
-        pbar: tqdm | None = None,
-    ) -> int | None:
+        params: Iterator[tuple[str, torch.Tensor]] | None = None,
+    ) -> Iterator[list[tuple[str, torch.Tensor]]]:
         """
-        Non-expert: gather TP → rm pad → HF → buffer (flush if full). All gather, PP source buffers.
-        Returns updated bytes on source, None on non-source.
+        Yield one HF chunk per EP-weighted batch of expert params: TP gather +
+        buffer until threshold, then EP gather + HF convert. ``params`` lets
+        callers restrict the iter to a subset (used by delta-sync sub-passes);
+        defaults to all expert params on this rank.
         """
-        param = all_gather_param(name, param)
-        if not self._is_pp_src_rank:
-            return
+        if params is None:
+            params = ((n, p) for n, p in named_params_and_buffers(self.args, self.model) if ".experts." in n)
+        buffer_size = 0
+        batch: list[tuple[str, torch.Tensor]] = []
+        for name, param in params:
+            param = all_gather_param(name, param)
+            param_size = param.numel() * param.element_size()
+            if (
+                buffer_size + param_size
+            ) * mpu.get_expert_model_parallel_world_size() > self.args.update_weight_buffer_size:
+                hf_chunk = self._ep_gather_and_convert(batch)
+                if hf_chunk:
+                    yield hf_chunk
+                batch = []
+                buffer_size = 0
+            batch.append((name, param))
+            buffer_size += param_size
+        if batch:
+            hf_chunk = self._ep_gather_and_convert(batch)
+            if hf_chunk:
+                yield hf_chunk
 
-        param_size = param.numel() * param.element_size()
-        if buffer_size + param_size > self.args.update_weight_buffer_size:
-            self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
-            buffer_size = 0
-        converted_named_tensors += convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
-        buffer_size += param_size
-        return buffer_size
-
-    def _update_expert_weight_from_distributed(
-        self,
-        name: str,
-        param: torch.nn.Parameter,
-        named_tensors: list[tuple[str, torch.Tensor]],
-        buffer_size: int,
-        pbar: tqdm | None = None,
-    ) -> int:
+    def _ep_gather_and_convert(self, named_tensors: list[tuple[str, torch.Tensor]]) -> list[tuple[str, torch.Tensor]]:
         """
-        Expert: gather TP → rm pad → buffer. EP gather + HF deferred. Threshold × EP size.
-        """
-        param = all_gather_param(name, param)
-
-        param_size = param.numel() * param.element_size()
-        if (
-            buffer_size + param_size
-        ) * mpu.get_expert_model_parallel_world_size() > self.args.update_weight_buffer_size:
-            self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
-            buffer_size = 0
-
-        named_tensors.append((name, param))
-        buffer_size += param_size
-        return buffer_size
-
-    def _update_expert_bucket_weights_from_distributed(
-        self, named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
-    ) -> None:
-        """
-        Gather EP → HF → broadcast. Clears buffer.
+        EP all-gather a buffered batch + HF convert on PP source. Returns HF tensors on
+        PP source, [] elsewhere. Clears ``named_tensors``.
         """
         names = [name for name, _ in named_tensors]
         all_names = [None] * mpu.get_expert_model_parallel_world_size()
@@ -224,20 +232,25 @@ class UpdateWeightFromDistributed:
 
         named_tensors.clear()
         if not self._is_pp_src_rank:
-            return
+            return []
 
         all_gathered_params = sum(all_gathered_params, [])
         converted_hf_tensors = []
         for name, param in all_gathered_params:
             converted_hf_tensors += convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
-
-        self._update_bucket_weights_from_distributed(converted_hf_tensors, pbar)
+        return converted_hf_tensors
 
     def _update_bucket_weights_from_distributed(
-        self, converted_named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
+        self,
+        converted_named_tensors: list[tuple[str, torch.Tensor]],
+        pbar: tqdm | None = None,
+        load_format: str | None = None,
+        delta: DeltaSpec | None = None,
     ) -> None:
         """
         Lock → broadcast → clear → unlock → pbar++. Lock prevents NCCL deadlock.
+        Delta sync passes ``load_format="delta"`` + a ``DeltaSpec`` describing the
+        per-param decoding of the (__positions__, __values__) bucket tensors.
         """
         # lock the rollout engines to prevent dead lock on broadcast.
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
@@ -249,6 +262,8 @@ class UpdateWeightFromDistributed:
             self.weight_version,
             self.rollout_engines,
             converted_named_tensors,
+            load_format=load_format,
+            delta=delta,
         )
 
         ray.get(refs)
@@ -321,9 +336,12 @@ def update_weights_from_distributed(
     weight_version: int,
     rollout_engines: Sequence[ActorHandle],
     converted_named_tensors: Sequence[tuple[str, torch.Tensor]],
+    load_format: str | None = None,
+    delta: DeltaSpec | None = None,
 ) -> list[ObjectRef]:
     """
     Send metadata (Ray), broadcast tensors (NCCL rank 0 → engines).
+    Delta sync passes ``load_format="delta"`` + ``delta`` (DeltaSpec).
     """
     refs = [
         engine.update_weights_from_distributed.remote(
@@ -332,6 +350,8 @@ def update_weights_from_distributed(
             shapes=[param.shape for _, param in converted_named_tensors],
             group_name=group_name,
             weight_version=str(weight_version),
+            load_format=load_format,
+            delta=delta,
         )
         for engine in rollout_engines
     ]
