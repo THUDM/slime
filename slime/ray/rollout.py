@@ -18,12 +18,7 @@ from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupCo
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
-from slime.utils.dp_schedule import (
-    build_dp_schedule,
-    even_step_split,
-    near_equal_step_split,
-    validate_step_sample_indices,
-)
+from slime.utils.dp_schedule import build_dp_schedule, near_equal_rollout_split, validate_step_sample_indices
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.logging_utils import configure_logger, init_tracking
@@ -753,49 +748,34 @@ class RolloutManager:
         rollout_data into a Ray Box. The schedule itself is computed by
         :func:`build_dp_schedule` so it stays unit-testable without Ray/sglang.
 
-        No trimming happens here — uneven sample counts are handled by
-        :func:`near_equal_step_split` (remainder redistributed across steps)
-        or by the user's custom splitter.
+        Default step split is by rollout id (``samples[i].index``): the fixed
+        ``num_steps = rollout_batch_size * n_samples_per_prompt //
+        global_batch_size`` is independent of the actual sample count, so
+        compact/subagent paths that produce >1 training sample per rollout
+        leave the training-step count unchanged.
         """
         dp_size = self.train_parallel_config["dp_size"]
-        global_batch_size = self.args.global_batch_size
 
-        # Compute step boundaries. Custom splitter wins; otherwise pick the
-        # default based on which of ``--num-steps-per-rollout`` and
-        # ``--global-batch-size`` the user set:
-        #   - ``--num-steps-per-rollout N``: split into N near-equal chunks.
-        #   - ``--global-batch-size G``: target step size G; if ``num_samples %
-        #     G != 0``, redistribute the remainder evenly across steps and warn.
-        # The train side scales loss / aggregates metrics per step, so uneven
-        # step sizes are fine as long as each step has >= dp_size samples.
+        # Compute step boundaries. Custom splitter wins; otherwise split by
+        # rollout id (sample.index) into a fixed number of steps so the train
+        # step count per rollout stays constant even when some rollouts emit
+        # multiple training samples (e.g. via compact / subagent). The train
+        # side scales loss / aggregates metrics per step, so uneven per-step
+        # sample counts are fine as long as each step has >= dp_size samples.
         total_lengths = [len(t) for t in data["tokens"]]
         data["total_lengths"] = total_lengths
         num_samples = len(total_lengths)
+        rollout_indices = data["sample_indices"]
 
         if self.args.custom_rollout_step_split_path:
             custom_split = load_function(self.args.custom_rollout_step_split_path)
             step_sample_indices = validate_step_sample_indices(
-                list(custom_split(self.args, total_lengths)),
+                list(custom_split(self.args, rollout_indices, total_lengths)),
                 num_samples=num_samples,
             )
-        elif self.args.num_steps_per_rollout is not None:
-            num_steps = self.args.num_steps_per_rollout
-            assert num_samples >= num_steps, (
-                f"num_samples ({num_samples}) < num_steps_per_rollout ({num_steps}); "
-                f"cannot place at least one sample per step."
-            )
-            step_sample_indices = near_equal_step_split(num_samples, num_steps=num_steps)
-        elif num_samples % global_batch_size != 0:
-            # gbs is a target; round to the nearest # of steps and redistribute.
-            num_steps = max(1, round(num_samples / global_batch_size))
-            logger.warning(
-                f"num_samples ({num_samples}) is not divisible by global_batch_size ({global_batch_size}); "
-                f"using {num_steps} step(s) of roughly {num_samples // num_steps} samples each "
-                f"(near-equal split, no samples dropped). Set --num-steps-per-rollout to silence."
-            )
-            step_sample_indices = near_equal_step_split(num_samples, num_steps=num_steps)
         else:
-            step_sample_indices = even_step_split(num_samples, global_batch_size)
+            num_steps = self.args.rollout_batch_size * self.args.n_samples_per_prompt // self.args.global_batch_size
+            step_sample_indices = near_equal_rollout_split(rollout_indices, num_steps=num_steps)
 
         partitions, micro_batch_indices, num_microbatches, global_batch_sizes = build_dp_schedule(
             self.args,

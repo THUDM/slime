@@ -12,12 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from slime.utils.dp_schedule import (
-    build_dp_schedule,
-    even_step_split,
-    near_equal_step_split,
-    validate_step_sample_indices,
-)
+from slime.utils.dp_schedule import build_dp_schedule, near_equal_rollout_split, validate_step_sample_indices
 
 
 def make_args(
@@ -97,9 +92,9 @@ def assert_invariants(
                 assert len(mbs) == 1, f"rank {r}: mbs sum {bin_total} > {max_per_bin} but contains {len(mbs)} samples"
 
 
-def _even(num_samples, gbs):
-    """Shorthand: default even split for the equal-divisible case."""
-    return even_step_split(num_samples, gbs)
+def _rollouts_one_to_one(num_samples, num_steps):
+    """Shorthand: 1 sample = 1 rollout; split into ``num_steps`` near-equal chunks."""
+    return near_equal_rollout_split(list(range(num_samples)), num_steps=num_steps)
 
 
 @pytest.mark.unit
@@ -109,7 +104,9 @@ def test_static_stride_single_step():
     args = make_args(micro_batch_size=2)
     tp = make_tp(dp_size=4)
 
-    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(args, tp, total_lengths, step_sample_indices=_even(16, 16))
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
+        args, tp, total_lengths, step_sample_indices=_rollouts_one_to_one(16, 1)
+    )
 
     assert nmb == [2]
     assert_invariants(
@@ -130,7 +127,9 @@ def test_static_balance_multi_step():
     args = make_args(micro_batch_size=2, balance_data=True)
     tp = make_tp(dp_size=2)
 
-    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(args, tp, total_lengths, step_sample_indices=_even(16, 8))
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
+        args, tp, total_lengths, step_sample_indices=_rollouts_one_to_one(16, 2)
+    )
 
     assert nmb == [2, 2]
     assert_invariants(
@@ -151,7 +150,9 @@ def test_dynamic_uniform():
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=10)
     tp = make_tp(dp_size=2)
 
-    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(args, tp, total_lengths, step_sample_indices=_even(8, 8))
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
+        args, tp, total_lengths, step_sample_indices=_rollouts_one_to_one(8, 1)
+    )
 
     assert_invariants(
         partitions,
@@ -172,7 +173,9 @@ def test_dynamic_skewed_lengths():
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=10)
     tp = make_tp(dp_size=2)
 
-    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(args, tp, total_lengths, step_sample_indices=_even(8, 8))
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
+        args, tp, total_lengths, step_sample_indices=_rollouts_one_to_one(8, 1)
+    )
 
     assert_invariants(
         partitions,
@@ -194,7 +197,9 @@ def test_dynamic_oversized_sample_lands_alone():
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=10)
     tp = make_tp(dp_size=2)
 
-    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(args, tp, total_lengths, step_sample_indices=_even(8, 8))
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
+        args, tp, total_lengths, step_sample_indices=_rollouts_one_to_one(8, 1)
+    )
 
     assert_invariants(
         partitions,
@@ -228,7 +233,9 @@ def test_dynamic_with_vpp_rounds_to_mb_group():
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=8)
     tp = make_tp(dp_size=2, vpp_size=2, microbatch_group_size_per_vp_stage=2)
 
-    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(args, tp, total_lengths, step_sample_indices=_even(32, 16))
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
+        args, tp, total_lengths, step_sample_indices=_rollouts_one_to_one(32, 2)
+    )
 
     for n in nmb:
         assert n % 2 == 0, f"num_microbatches {n} is not a multiple of mb_group=2"
@@ -321,40 +328,65 @@ def test_dynamic_low_K_padded_by_splitting():
 
 
 @pytest.mark.unit
-def test_near_equal_step_split_even_and_uneven():
-    """``near_equal_step_split`` distributes a remainder one-per-step from the front."""
-    assert near_equal_step_split(24, num_steps=3) == [list(range(0, 8)), list(range(8, 16)), list(range(16, 24))]
-    assert near_equal_step_split(23, num_steps=3) == [list(range(0, 8)), list(range(8, 16)), list(range(16, 23))]
-    assert near_equal_step_split(25, num_steps=3) == [list(range(0, 9)), list(range(9, 17)), list(range(17, 25))]
-
-
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__]))
-    """A custom splitter producing 7 / 8 / 9 sample steps from 24 samples — the
-    schedule still gives every DP rank the same num_mbs per step (PP sync) but
-    each step's reported gbs is the real per-step sample count."""
-    total_lengths = [4] * 24
-    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=12)
-    tp = make_tp(dp_size=2)
-
-    step_sample_indices = [
-        list(range(0, 7)),  # 7 samples
-        list(range(7, 15)),  # 8 samples
-        list(range(15, 24)),  # 9 samples
+def test_near_equal_rollout_split_one_to_one():
+    """1 rollout = 1 sample: behaves like a contiguous-chunk split."""
+    assert near_equal_rollout_split(list(range(24)), num_steps=3) == [
+        list(range(0, 8)),
+        list(range(8, 16)),
+        list(range(16, 24)),
     ]
-    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, step_sample_indices=step_sample_indices
-    )
+    assert near_equal_rollout_split(list(range(23)), num_steps=3) == [
+        list(range(0, 8)),
+        list(range(8, 16)),
+        list(range(16, 23)),
+    ]
+    assert near_equal_rollout_split(list(range(25)), num_steps=3) == [
+        list(range(0, 9)),
+        list(range(9, 17)),
+        list(range(17, 25)),
+    ]
 
-    assert gbs_per_step == [7, 8, 9]
-    # Each rank runs the same total num_mbs.
-    for r in range(2):
-        assert len(mbi[r]) == sum(nmb)
-    # Every sample placed exactly once.
-    seen: set[int] = set()
-    for r in range(2):
-        seen.update(partitions[r])
-    assert seen == set(range(24))
+
+@pytest.mark.unit
+def test_near_equal_rollout_split_keeps_rollouts_together():
+    """compact / subagent simulation: rollout 0 emits 3 samples, rollout 1 emits 2,
+    rollout 2 emits 4. Splitter must keep every rollout's samples in a single step
+    (so per-rollout loss aggregation is well-defined)."""
+    # rollout_indices in sample order: 3 from rollout 0, 2 from rollout 1, 4 from rollout 2
+    rollout_indices = [0, 0, 0, 1, 1, 2, 2, 2, 2]
+    out = near_equal_rollout_split(rollout_indices, num_steps=3)
+    # 3 rollouts split into 3 steps → 1 rollout per step.
+    assert len(out) == 3
+    assert out[0] == [0, 1, 2]  # rollout 0's samples
+    assert out[1] == [3, 4]  # rollout 1's samples
+    assert out[2] == [5, 6, 7, 8]  # rollout 2's samples
+    # Per-step sample counts vary even though per-step rollout counts are equal.
+    assert [len(step) for step in out] == [3, 2, 4]
+
+
+@pytest.mark.unit
+def test_near_equal_rollout_split_uneven_rollout_count():
+    """5 rollouts, 2 steps → 3 rollouts in step 0, 2 in step 1 (rollouts differ
+    by at most 1 per step)."""
+    rollout_indices = [0, 0, 1, 2, 2, 3, 4, 4]
+    out = near_equal_rollout_split(rollout_indices, num_steps=2)
+    assert len(out) == 2
+    # Step 0: rollouts 0, 1, 2 → sample positions 0, 1, 2, 3, 4
+    # Step 1: rollouts 3, 4 → sample positions 5, 6, 7
+    assert out[0] == [0, 1, 2, 3, 4]
+    assert out[1] == [5, 6, 7]
+
+
+@pytest.mark.unit
+def test_near_equal_rollout_split_rejects_too_few_rollouts():
+    with pytest.raises(AssertionError, match="num_rollouts"):
+        near_equal_rollout_split([0, 0, 0], num_steps=2)
+
+
+@pytest.mark.unit
+def test_near_equal_rollout_split_rejects_zero_steps():
+    with pytest.raises(AssertionError, match="num_steps"):
+        near_equal_rollout_split([0, 1, 2], num_steps=0)
 
 
 @pytest.mark.unit

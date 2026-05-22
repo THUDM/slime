@@ -437,9 +437,13 @@ def train_one_step(
         optimizer (MegatronOptimizer): Optimizer instance.
         opt_param_scheduler (OptimizerParamScheduler): LR/WD scheduler.
         num_microbatches (int): Number of microbatches to process.
-        step_global_batch_size (int): Sample count for this training step
-            (total across DP). Used both for loss scaling inside the closure
-            and for the LR scheduler ``increment``.
+        step_global_batch_size (int): Rollout count for this training step
+            (total across DP; one "rollout" = one execution of one of the
+            ``n_samples_per_prompt`` rollouts, which may emit >1 training
+            sample under compact / subagent). Used both as the loss
+            normalizer inside the closure and as the LR scheduler
+            ``increment``. In the common case (1 rollout = 1 sample) this
+            equals the per-step sample count, so behavior is unchanged.
 
     Returns:
         tuple[dict[str, float], float]: Reduced loss dictionary (last stage only)
@@ -492,6 +496,7 @@ def train_one_step(
                 "rollout_log_probs",
                 "max_seq_lens",
                 "teacher_log_probs",
+                "sample_indices",
             ],
             args.data_pad_size_multiplier,
             args.qkv_format,
@@ -631,9 +636,12 @@ def train(
         opt_param_scheduler (OptimizerParamScheduler): LR/WD scheduler.
         data_iterator (Sequence[DataIterator]): Iterable(s) yielding training batches.
         num_microbatches (Sequence[int]): Microbatches per step in the rollout.
-        global_batch_sizes (Sequence[int]): Sample count per step (total across
-            DP). Same length as ``num_microbatches``; consumed by
-            ``train_one_step`` for loss scaling and LR scheduler increments.
+        global_batch_sizes (Sequence[int]): Rollout count per step (total
+            across DP; one "rollout" = one execution of one of the
+            ``n_samples_per_prompt`` rollouts of a prompt). Same length as
+            ``num_microbatches``; consumed by ``train_one_step`` for loss
+            scaling and LR scheduler increments. Equals per-step sample count
+            in the common case (1 rollout = 1 sample).
         train_step_offset (int): Cumulative train-step count *before* this
             rollout, used as the base for the wandb step label so labels stay
             monotonic when ``num_steps_per_rollout`` varies across rollouts.

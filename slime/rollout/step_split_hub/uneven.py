@@ -1,9 +1,11 @@
 """Built-in rollout step splitters for ``--custom-rollout-step-split-path``.
 
-Each splitter has signature ``fn(args, total_lengths) -> list[list[int]]`` and
-returns a list of per-step sample-index groups. The schedule itself does the
-DP / micro-batch packing; the splitter only decides which samples land in which
-training step.
+Each splitter has signature ``fn(args, rollout_indices, total_lengths) ->
+list[list[int]]`` and returns a list of per-step sample-index groups. The
+schedule itself does the DP / micro-batch packing; the splitter only decides
+which samples land in which training step. ``rollout_indices[i]`` is the
+``sample.index`` of the i-th sample (rollout id; may repeat under compact /
+subagent), ``total_lengths[i]`` is its token count.
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ from __future__ import annotations
 from argparse import Namespace
 
 
-def uneven_3_steps_7_8_9(args: Namespace, total_lengths: list[int]) -> list[list[int]]:
+def uneven_3_steps_7_8_9(args: Namespace, rollout_indices: list[int], total_lengths: list[int]) -> list[list[int]]:
     """Split a 24-sample rollout into 3 uneven training steps of size 7 / 8 / 9.
 
     Used by ``test_qwen2.5_0.5B_uneven_bs_short`` to exercise the

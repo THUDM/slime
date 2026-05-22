@@ -8,9 +8,9 @@ under CPU-only CI.
 The scheduling philosophy is **pack first, distribute second**:
 
   1. The caller provides ``step_sample_indices`` — one list of global sample
-     indices per training step. The default split is even chunks of
-     ``global_batch_size``; users can plug a custom splitter (e.g. uneven
-     7/8/9 batches from 24 samples) via ``--custom-rollout-step-split-path``.
+     indices per training step. The default split groups samples by rollout id
+     (``samples[i].index``) into ``num_steps`` near-equal chunks of rollouts;
+     users can plug a custom splitter via ``--custom-rollout-step-split-path``.
   2. For each step, pack its samples into ``K`` micro-batches with a single
      first-fit pass (dynamic batch) or fixed-size chunking (static batch).
   3. Adjust ``K`` to a multiple of ``dp_size * (mb_group if vpp>1 else 1)``
@@ -61,38 +61,54 @@ from slime.utils.seqlen_balancing import expand_bins_by_splitting, first_fit_pac
 logger = logging.getLogger(__name__)
 
 
-def near_equal_step_split(num_samples: int, *, num_steps: int) -> list[list[int]]:
-    """Split ``num_samples`` contiguous samples into ``num_steps`` near-equal chunks.
+def near_equal_rollout_split(rollout_indices: list[int], *, num_steps: int) -> list[list[int]]:
+    """Split a rollout's samples into ``num_steps`` near-equal chunks **by rollout**.
 
-    Chunks differ in size by at most 1: the first ``num_samples % num_steps``
-    chunks get ``ceil(num_samples / num_steps)`` samples each, the rest get
-    ``floor(num_samples / num_steps)``. So 24 samples / 3 steps → ``[8, 8, 8]``;
-    23 samples / 3 steps → ``[8, 8, 7]``; 25 samples / 3 steps → ``[9, 8, 8]``.
+    A "rollout" = one execution of one of the ``n_samples_per_prompt`` rollouts
+    of a prompt. In the common case each rollout produces exactly one training
+    sample, but with compact/subagent paths one rollout may produce N training
+    samples that share the same ``sample.index``. The splitter groups samples
+    by rollout id and keeps all samples from the same rollout in the same step,
+    so loss aggregation that averages within a rollout is well-defined.
+
+    ``rollout_indices[i]`` is the rollout id of the i-th training sample (i.e.
+    ``samples[i].index``). Duplicates are allowed and indicate that two samples
+    came from the same rollout. Rollout ids are processed in first-occurrence
+    order, then split into ``num_steps`` near-equal chunks (by *rollout count*,
+    not sample count). Each step's per-sample chunk size therefore may vary
+    across steps when rollouts produced different numbers of samples.
+
+    Returns ``num_steps`` lists of global sample indices (positions in
+    ``rollout_indices``). Per-step sample counts may differ; per-step rollout
+    counts differ by at most 1.
     """
     assert num_steps >= 1, f"num_steps must be >= 1, got {num_steps}"
-    assert (
-        num_samples >= num_steps
-    ), f"num_samples ({num_samples}) < num_steps ({num_steps}); cannot place at least one sample per step."
-    base = num_samples // num_steps
-    extra = num_samples % num_steps
+
+    # Preserve first-occurrence order of rollout ids; grouping by-id keeps
+    # same-rollout samples together regardless of how the rollout function
+    # emitted them.
+    rollout_id_to_samples: dict[int, list[int]] = {}
+    for sample_pos, rid in enumerate(rollout_indices):
+        rollout_id_to_samples.setdefault(rid, []).append(sample_pos)
+    rollout_ids = list(rollout_id_to_samples.keys())
+    num_rollouts = len(rollout_ids)
+
+    assert num_rollouts >= num_steps, (
+        f"num_rollouts ({num_rollouts}) < num_steps ({num_steps}); " f"cannot place at least one rollout per step."
+    )
+
+    base = num_rollouts // num_steps
+    extra = num_rollouts % num_steps
     out: list[list[int]] = []
-    start = 0
+    rid_start = 0
     for i in range(num_steps):
         size = base + (1 if i < extra else 0)
-        out.append(list(range(start, start + size)))
-        start += size
+        step_sample_positions: list[int] = []
+        for rid in rollout_ids[rid_start : rid_start + size]:
+            step_sample_positions.extend(rollout_id_to_samples[rid])
+        out.append(step_sample_positions)
+        rid_start += size
     return out
-
-
-def even_step_split(num_samples: int, global_batch_size: int) -> list[list[int]]:
-    """Default step split: contiguous chunks of ``global_batch_size`` samples.
-
-    Returns ``num_steps = num_samples // global_batch_size`` lists, each holding
-    ``global_batch_size`` sample indices. Trailing samples that don't fill a
-    complete step are dropped by the caller before this function is invoked.
-    """
-    num_steps = num_samples // global_batch_size
-    return [list(range(s * global_batch_size, (s + 1) * global_batch_size)) for s in range(num_steps)]
 
 
 def validate_step_sample_indices(

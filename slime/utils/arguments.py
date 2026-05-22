@@ -1785,6 +1785,17 @@ def slime_validate_args(args):
             )
         args.global_batch_size = global_batch_size
 
+    # Default splitter splits by rollout id into a fixed number of training
+    # steps; this requires the total to be exactly divisible by gbs so the
+    # step count is unambiguous regardless of compact / subagent expansion.
+    if args.global_batch_size is not None:
+        total = args.rollout_batch_size * args.n_samples_per_prompt
+        assert total % args.global_batch_size == 0, (
+            f"rollout_batch_size * n_samples_per_prompt ({args.rollout_batch_size} * "
+            f"{args.n_samples_per_prompt} = {total}) must be divisible by "
+            f"global_batch_size ({args.global_batch_size})."
+        )
+
     if args.n_samples_per_prompt == 1:
         args.grpo_std_normalization = False
         logger.info("n_samples_per_prompt is set to 1, grpo_std_normalization will be set to False.")
