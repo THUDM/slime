@@ -66,7 +66,7 @@ from typing import Any, Awaitable, Callable
 import aiohttp
 from aiohttp import web
 
-from slime.utils.aiohttp_threaded import AppHandle, run_app_in_thread
+from aiohttp_threaded import AppHandle, run_app_in_thread  # U5: was slime.utils.aiohttp_threaded
 
 logger = logging.getLogger(__name__)
 
