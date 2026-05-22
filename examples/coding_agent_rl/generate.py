@@ -6,7 +6,8 @@ Wire-up:
 
 ``generate()`` below IS the agent. Read it top-to-bottom to see what one SWE
 rollout sample does. All sandbox-side details live in ``sandbox.py``; the LLM
-plumbing (Anthropic <-> SGLang /generate, token capture) lives in ``middleware.py``.
+plumbing (Anthropic <-> SGLang /generate, token capture, 3-kind segment split)
+lives in ``middleware.py``.
 
 Per-sample steps:
 
@@ -18,8 +19,11 @@ Per-sample steps:
     5. ``git diff`` to capture the model-produced patch.
     6. Boot a SECOND, fresh sandbox; apply diff; run the dataset's tests for
        reward. (No-test-cheating guarantee: reward only depends on the diff.)
-    7. Pull (prompt_ids, response_ids, loss_mask) from the middleware and fill
-       the Sample. No re-tokenization.
+    7. Pull (prompt_ids, response_ids, loss_mask, ...) segments from the
+       middleware (D4 default = list mode = one Sample per chain segment).
+    8. Fan out the rollout reward across segments via the configured reducer
+       (default uniform reward/K; user override via --swe-segment-reducer-path).
+       Failure is fail-soft (U4): sample marked abort, never blocks step.
 
 Dataset row ``metadata`` schema::
 
@@ -39,45 +43,21 @@ Env knobs (set in run.sh):
     SWE_MAX_RESPONSE_TOKENS  0     optional smoke-test cap before training (0 = off)
     SWE_TOOL_PARSER          glm47           (sglang FunctionCallParser name)
     SWE_REASONING_PARSER     glm45           (sglang ReasoningParser name)
-    SWE_SAVE_TRAJECTORY_TREE 0               save full per-turn request/response tree in metadata
-    SWE_LIST_TRAJECTORY      0               1 = fan a single rollout into one Sample per chain segment
-    SWE_LIST_TRAJECTORY_REWARD_MODE  uniform  uniform | copy | final_only
-    SWE_LIST_TRAJECTORY_MAX_SEGMENTS 8        cap segments per rollout (drops middle when exceeded)
+    SWE_DUMP_RAW_TRAJECTORY  0               1 = attach trajectory_raw_dump to seg 0
     SHIM_BIND_HOST           0.0.0.0
     SHIM_PORT                18001
     SLIME_HEAD_HOST          public host the sandboxes use to reach the middleware
-                              (REQUIRED for E2B — set to a host/IP that the
-                              sandboxes can route back to)
 
----
+CLI args:
 
-Forking this file (each step above is one or two lines below; modify in place):
-
-* Swap claude_code for codex: edit ``_provision_sandbox`` (the
-  ``install_claude_code`` line) and replace ``sandbox.run_claude_code(...)``
-  in ``generate()`` with your own helpers in sandbox.py (or another module).
-  Most likely you also need a new ``middleware.py`` if your agent speaks OpenAI
-  Chat Completions instead of Anthropic.
-
-* Swap E2B for local docker: re-import a different sandbox module (e.g.
-  ``from . import docker_backend as sandbox``). The orchestrator is sandbox-agnostic.
-
-* Swap GLM-4.7 for another model: set ``SWE_TOOL_PARSER`` + ``SWE_REASONING_PARSER``
-  env (and obviously change the HF checkpoint path in run.sh). No code change here.
-
-* Add a custom prompt or rollout-time guardrail: edit ``CC_PROMPT`` or add a
-  step between ``sandbox.run_claude_code`` and ``sandbox.git_diff``.
-
-* Tune sandbox boot concurrency / retries: ``SWE_BOOT_CONCURRENCY`` (default 16)
-  caps how many tasks may be boot+install-ing at once;  ``SWE_BOOT_RETRIES``
-  (default 2) is how many times each sample's provision is retried on
-  transient h2/SSL errors. See ``_provision_sandbox`` for context.
+    --swe-segment-reducer-path  dotted.path.to.reducer (overrides default uniform)
 """
 
 from __future__ import annotations
 
 import asyncio
 import copy
+import importlib
 import logging
 import os
 import secrets
@@ -86,7 +66,7 @@ import time
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from slime.utils.misc import SingletonMeta
 from slime.utils.processing_utils import load_tokenizer
@@ -95,19 +75,13 @@ from slime.utils.types import Sample
 from . import middleware, sandbox
 
 try:
-    # Optional: lets the middleware tap slime's weight-update signal so that
-    # in-flight /generate calls are aborted/resumed transparently.
     from slime.rollout.sglang_rollout import GenerateState as _SlimeGenerateState
-except Exception:  # pragma: no cover - allow import without slime trainer
+except Exception:  # pragma: no cover
     _SlimeGenerateState = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
 
-# Env knobs used here (sandbox-side knobs live in sandbox.py).
-# Tarball paths must point at host-local files; the defaults below are
-# placeholders — set SWE_HOST_NODE_TARBALL / SWE_HOST_CC_TARBALL in the launch
-# script. Both files are uploaded into every sandbox at provisioning time.
 SWE_HOST_NODE_TARBALL = Path(os.environ.get(
     "SWE_HOST_NODE_TARBALL",
     "/path/to/node-v22.20.0-linux-x64.tar.xz",
@@ -121,41 +95,15 @@ SWE_EVAL_TIMEOUT_SEC = int(os.environ.get("SWE_EVAL_TIMEOUT_SEC", "600"))
 SWE_MAX_RESPONSE_TOKENS = int(os.environ.get("SWE_MAX_RESPONSE_TOKENS", "0") or 0)
 SWE_TOOL_PARSER = os.environ.get("SWE_TOOL_PARSER", "") or None
 SWE_REASONING_PARSER = os.environ.get("SWE_REASONING_PARSER", "") or None
-SWE_SAVE_TRAJECTORY_TREE = os.environ.get("SWE_SAVE_TRAJECTORY_TREE", "0") == "1"
-# list_trajectory mode: fan a single rollout out into one trainable Sample
-# per chain segment (one segment per sub-agent / compact wipe + the final
-# chain). When 0 (default), generate() returns a single Sample whose
-# tokens = prompt_ids + final_response_ids -- the tree_trajectory mode.
-SWE_LIST_TRAJECTORY = os.environ.get("SWE_LIST_TRAJECTORY", "0") == "1"
-# Reward allocation across segments. Default "uniform" averages the rollout
-# reward across the K emitted segments (reward / K each). "copy" replicates
-# the rollout reward verbatim per segment (back-compat with the original
-# list_trajectory fan-out). "final_only" places the full reward on the
-# "final" segment and zero elsewhere — useful as a control that matches
-# tree_trajectory's reward sum.
-SWE_LIST_TRAJECTORY_REWARD_MODE = os.environ.get(
-    "SWE_LIST_TRAJECTORY_REWARD_MODE", "uniform"
-)  # uniform | copy | final_only
-# Hard cap on segments fanned out per rollout. Compact-heavy modes (esp.
-# compact_subagent) can produce 8-16 segments which explodes GBS and amplifies
-# per-prompt baseline dilution under GRPO. When exceeded we keep the FIRST
-# cap-1 segments and the LAST segment; the middle is dropped. See
-# MASTER_PLAN §A appendix entry for the GBS risk.
-SWE_LIST_TRAJECTORY_MAX_SEGMENTS = int(
-    os.environ.get("SWE_LIST_TRAJECTORY_MAX_SEGMENTS", "8") or 8
-)
+# Q5 / SPEC §6.2: renamed from SWE_SAVE_TRAJECTORY_TREE; semantics narrowed
+# to "attach trajectory_raw_dump to segment 0 metadata".
+SWE_DUMP_RAW_TRAJECTORY = os.environ.get("SWE_DUMP_RAW_TRAJECTORY", "0") == "1"
 SHIM_BIND_HOST = os.environ.get("SHIM_BIND_HOST", "0.0.0.0")
 SHIM_PORT = int(os.environ.get("SHIM_PORT", "18001"))
 
-# Cap concurrent sandbox boot+install. E2B's envd file-upload path goes through
-# per-sandbox h2 connections; at N>=64 we observed ~3% h2 ProtocolError, at
-# N=256 ~67% (server-side GOAWAY under load, then httpx h2 state machine
-# explodes — encode/httpx#2761 family of bugs). N=16 ran 80/80 uploads with 0
-# ProtocolErrors in repro. Run-agent + git_diff + eval don't need this cap
-# (they're sparse RPC).
 SWE_BOOT_CONCURRENCY = int(os.environ.get("SWE_BOOT_CONCURRENCY", "16"))
 SWE_BOOT_RETRIES = int(os.environ.get("SWE_BOOT_RETRIES", "2"))
-_BOOT_SEM: asyncio.Semaphore | None = None  # lazy-init: must bind to the right loop
+_BOOT_SEM: asyncio.Semaphore | None = None
 
 CC_PROMPT = os.environ.get(
     "SWE_CC_PROMPT",
@@ -167,7 +115,7 @@ CC_PROMPT = os.environ.get(
 
 
 # ---------------------------------------------------------------------------
-# Singleton: tokenizer + in-process middleware handle (one per worker process)
+# Singleton: tokenizer + in-process middleware handle + reducer
 # ---------------------------------------------------------------------------
 class _State(metaclass=SingletonMeta):
     def __init__(self, args) -> None:
@@ -187,10 +135,7 @@ class _State(metaclass=SingletonMeta):
             port=SHIM_PORT,
             public_host=public_host,
         )
-        # Tap slime's weight-update signal so that an /abort_request from the
-        # trainer pauses in-flight /generate calls until the new weights have
-        # been pushed to sglang. The middleware then re-issues the call with
-        # max_new_tokens decremented by the already-generated prefix.
+        self.segment_reducer: Callable = _load_reducer(args)
         if _SlimeGenerateState is not None:
             try:
                 slime_state = _SlimeGenerateState(args)
@@ -202,27 +147,18 @@ class _State(metaclass=SingletonMeta):
                 logger.info("[coding_agent_rl] abort-poll wired to GenerateState.aborted")
             except Exception as e:
                 logger.warning("[coding_agent_rl] could not wire abort-poll: %s", e)
-        logger.info("[coding_agent_rl] tokenizer=%s middleware=%s", args.hf_checkpoint, self.middleware.public_url)
+        logger.info(
+            "[coding_agent_rl] tokenizer=%s middleware=%s reducer=%s",
+            args.hf_checkpoint, self.middleware.public_url,
+            getattr(self.segment_reducer, "__qualname__", repr(self.segment_reducer)),
+        )
 
 
 # ---------------------------------------------------------------------------
-# Sandbox provisioning: boot + Node22 + Claude Code, semaphore-gated + retry
+# Sandbox provisioning
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def _provision_sandbox(image: str):
-    """Yield a sandbox with Node22 + Claude Code already installed.
-
-    Two layers of protection against the boot+upload failure modes observed
-    in production (see SWE_BOOT_CONCURRENCY docstring above):
-
-    * concurrency cap via ``_BOOT_SEM`` — only N tasks may be boot+install-ing
-      at once. After install, the semaphore is released, and the multi-minute
-      agent run proceeds without contention.
-
-    * one retry on any boot/install exception (ProtocolError, SSLError,
-      transient SandboxException). The retry creates a NEW sandbox; the old
-      one is killed via __aexit__ first.
-    """
     global _BOOT_SEM
     if _BOOT_SEM is None:
         _BOOT_SEM = asyncio.Semaphore(SWE_BOOT_CONCURRENCY)
@@ -248,7 +184,7 @@ async def _provision_sandbox(image: str):
                 "[coding_agent_rl] provision attempt %d/%d failed: %s: %s",
                 attempt + 1, SWE_BOOT_RETRIES, type(e).__name__, str(e)[:200],
             )
-            await asyncio.sleep(1 + attempt)  # tiny backoff before retry
+            await asyncio.sleep(1 + attempt)
     if sb is None:
         assert last_err is not None
         raise last_err
@@ -259,26 +195,100 @@ async def _provision_sandbox(image: str):
 
 
 # ---------------------------------------------------------------------------
-# Reward allocation across segments (pure function, smoke-tested)
+# Segment fan-out (D4 / U4: default uniform + fail-soft reducer wrapper)
 # ---------------------------------------------------------------------------
-def _segment_reward(reward: float, num_segments: int, seg_kind: str | None,
-                    mode: str) -> float:
-    """Allocate the rollout reward to a single segment under the given mode.
+def _default_uniform_fan_out(
+    segments: list[tuple[list[int], list[int], list[int], dict]],
+    reward: float,
+    sample_proto: Sample,
+    tokenizer,
+    instance_id: str,
+) -> list[Sample]:
+    """Default reducer (D4 / Q7). Splits reward uniformly: reward/K per
+    segment. Returns one Sample per non-empty segment, each carrying the
+    SPEC §6.1 metadata fields (segment_kind, finish_reason, num_aborts,
+    tito_masked_turns, segment_idx, num_segments, ...)."""
+    K = len(segments)
+    out: list[Sample] = []
+    for i, (prompt_ids, response_ids, loss_mask, seg_meta) in enumerate(segments):
+        sub = sample_proto if i == 0 else copy.copy(sample_proto)
+        # I1 mirrored at the Sample layer: response_length == len(loss_mask)
+        sub.tokens = list(prompt_ids) + list(response_ids)
+        sub.response_length = len(response_ids)
+        sub.loss_mask = list(loss_mask)
+        sub.response = tokenizer.decode(response_ids, skip_special_tokens=False)
+        sub.reward = float(reward) / max(1, K)
+        sub.status = Sample.Status.COMPLETED
+        # Merge segment meta fields (segment_kind, finish_reason, etc.).
+        merged: dict[str, Any] = {**(sub.metadata or {}),
+                                  "instance_id": instance_id,
+                                  **seg_meta,
+                                  "segment_idx": i,
+                                  "num_segments": K}
+        sub.metadata = merged
+        out.append(sub)
+    return out
 
-    Pure function so the smoke test can hit it without spinning up middleware.
+
+def _load_reducer(args) -> Callable:
+    """Load the segment reducer with import-time fail-soft (U4)."""
+    path = getattr(args, "swe_segment_reducer_path", None)
+    if not path:
+        return _default_uniform_fan_out
+    try:
+        module_name, attr = path.rsplit(".", 1)
+        fn = getattr(importlib.import_module(module_name), attr)
+        if not callable(fn):
+            raise TypeError(f"{path} is not callable")
+        return fn
+    except Exception as e:
+        logger.error(
+            "[coding_agent_rl] could not import segment reducer %r: %s "
+            "- falling back to default uniform", path, e,
+        )
+        return _default_uniform_fan_out
+
+
+def _fan_out_with_fail_soft(
+    state: "_State",
+    segments: list[tuple[list[int], list[int], list[int], dict]],
+    reward: float,
+    sample_proto: Sample,
+    instance_id: str,
+) -> list[Sample]:
+    """U4 - wrap the reducer so bad reducers don't kill the rollout step.
+
+    4 fail paths:
+      1. import path bad      -> _load_reducer logs error + falls back to default
+      2. reducer raises       -> log warning + sample abort + metric bump
+      3. returns non-list/None -> same as (2)
+      4. returns Sample missing required field -> trainer rejects later (not here)
     """
-    if mode == "uniform":
-        return float(reward) / max(1, num_segments)
-    if mode == "final_only":
-        return float(reward) if seg_kind == "final" else 0.0
-    # "copy" (back-compat with the original list_trajectory fan-out)
-    return float(reward)
+    reducer = state.segment_reducer
+    try:
+        out = reducer(segments, reward, sample_proto, state.tokenizer, instance_id)
+        if not isinstance(out, list) or not out:
+            raise ValueError(
+                f"reducer returned non-list or empty: {type(out).__name__}"
+            )
+        return out
+    except Exception as e:
+        logger.warning(
+            "[coding_agent_rl] reducer failed for instance=%s: %s - sample marked abort",
+            instance_id, e,
+        )
+        try:
+            from slime.utils.metric_utils import METRICS  # type: ignore
+            METRICS.reducer_failure_count.labels(reason=type(e).__name__).inc()
+        except Exception:
+            pass
+        return [_abort(sample_proto, reason=f"reducer_failure:{type(e).__name__}")]
 
 
 # ---------------------------------------------------------------------------
 # Main per-sample agent function
 # ---------------------------------------------------------------------------
-async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sample:
+async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
     state = _State(args)
     md = _metadata(sample)
     if not md["image"] or not md["workdir"]:
@@ -289,14 +299,12 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sam
     state.middleware.open_session(
         session_id,
         sampling_defaults=sampling_params,
-        record_tree=SWE_SAVE_TRAJECTORY_TREE,
+        record_raw_dump=SWE_DUMP_RAW_TRAJECTORY,
     )
 
     t0 = time.time()
     diff_text = ""
     try:
-        # --- 1) work sandbox: provision (concurrency-capped + retried) ------
-        #     -> ensure_agent_user / drop PROBLEM_STATEMENT.md / run agent
         async with _provision_sandbox(md["image"]) as sb:
             await sandbox.ensure_agent_user(sb, md["workdir"])
             await sb.write_text(
@@ -313,7 +321,6 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sam
             )
             diff_text = await sandbox.git_diff(sb, md["workdir"])
 
-        # --- 2) eval sandbox: fresh checkout, apply diff, run tests ---------
         reward, is_solved, applied_cleanly = await sandbox.evaluate(
             image=md["image"], workdir=md["workdir"], diff_text=diff_text,
             swepro=md["swepro"], f2p_script=md["f2p_script"],
@@ -325,118 +332,53 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]) -> Sam
                      md["instance_id"], e, traceback.format_exc())
         return _abort(sample, f"exception:{type(e).__name__}")
 
-    # --- 3) pull tokens from middleware, fill sample -----------------------
-    if SWE_LIST_TRAJECTORY:
-        segments, trajectory_tree = state.middleware.pop_session_split(session_id)
-        if not segments:
-            return _abort(sample, "middleware_session_empty")
-        # Drop empty-response segments (defensive: pop_session_split already
-        # filters but the final live chain might have 0 responses if claude-code
-        # exited before emitting anything new after the last wipe).
-        segments = [seg for seg in segments if seg[1]]
-        if not segments:
-            return _abort(sample, "middleware_session_empty")
-
-        # Segment cap: list_trajectory can fan out 8-16 segments under
-        # compact_subagent, which (a) blows GBS past --global-batch-size and
-        # (b) under GRPO whitening dilutes the per-prompt baseline by ~K/cap.
-        # Compromise: keep the first cap-1 (oldest) segments and the last
-        # (kind="final") segment; drop the middle. This loses some mid-chain
-        # context but preserves both the chain head and the terminal segment
-        # that carries the reward signal under final_only mode.
-        # See MASTER_PLAN §A GBS risk entry.
-        if len(segments) > SWE_LIST_TRAJECTORY_MAX_SEGMENTS:
-            logger.warning(
-                "[coding_agent_rl] %s: capping segments %d -> %d (dropping middle)",
-                md["instance_id"], len(segments), SWE_LIST_TRAJECTORY_MAX_SEGMENTS,
-            )
-            head = segments[: SWE_LIST_TRAJECTORY_MAX_SEGMENTS - 1]
-            tail = segments[-1:]
-            segments = head + tail
-
-        fanned: list[Sample] = []
-        instance_id = md["instance_id"]
-        elapsed = time.time() - t0
-        num_segments = len(segments)
-        for seg_idx, (prompt_ids, response_ids, loss_mask, seg_meta) in enumerate(segments):
-            response_ids, loss_mask = _cap_response_for_training(response_ids, loss_mask)
-            sub = sample if seg_idx == 0 else copy.deepcopy(sample)
-            sub.tokens = prompt_ids + response_ids
-            sub.response_length = len(response_ids)
-            sub.loss_mask = loss_mask
-            sub.response = state.tokenizer.decode(response_ids, skip_special_tokens=False)
-            seg_kind = seg_meta.get("kind")
-            sub.reward = _segment_reward(
-                reward, num_segments, seg_kind, SWE_LIST_TRAJECTORY_REWARD_MODE
-            )
-            sub.status = Sample.Status.COMPLETED
-            sub.metadata = {
-                **(sample.metadata or {}),
-                "instance_id": instance_id,
-                "is_solved": bool(is_solved),
-                "applied_cleanly": bool(applied_cleanly),
-                "elapsed_sec": elapsed,
-                "list_trajectory_segment_idx": seg_idx,
-                "list_trajectory_num_segments": num_segments,
-                "list_trajectory_segment_kind": seg_kind,
-                "list_trajectory_completed_turns_at_split": seg_meta.get("completed_turns"),
-                "list_trajectory_reward_mode": SWE_LIST_TRAJECTORY_REWARD_MODE,
-                # final-only meta: may be None; sub-agent B is wiring this
-                # field into the final-segment metadata so we just propagate
-                # whatever middleware put there.
-                "list_trajectory_finish_reason": seg_meta.get("finish_reason"),
-            }
-            if SWE_SAVE_TRAJECTORY_TREE and seg_idx == 0:
-                # attach the full tree only to the first segment to keep dumps
-                # compact; viz still gets the per-instance picture.
-                sub.metadata["trajectory_tree"] = trajectory_tree
-            fanned.append(sub)
-        logger.info(
-            "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs list_segments=%d mode=%s",
-            instance_id, reward, is_solved, applied_cleanly, elapsed,
-            len(fanned), SWE_LIST_TRAJECTORY_REWARD_MODE,
-        )
-        return fanned
-
-    prompt_ids, response_ids, loss_mask, trajectory_tree = state.middleware.pop_session(session_id)
-    if not prompt_ids:
+    # D4 / list mode is always on now (Q1 decision):
+    segments, raw_dump = state.middleware.pop_session_split(session_id)
+    if not segments:
         return _abort(sample, "middleware_session_empty")
-    response_ids, loss_mask = _cap_response_for_training(response_ids, loss_mask)
+    segments = [seg for seg in segments if seg[1]]
+    if not segments:
+        return _abort(sample, "middleware_session_empty")
 
-    sample.tokens = prompt_ids + response_ids
-    sample.response_length = len(response_ids)
-    sample.loss_mask = loss_mask
-    sample.response = state.tokenizer.decode(response_ids, skip_special_tokens=False)
-    sample.reward = float(reward)
-    sample.status = Sample.Status.COMPLETED
+    # Apply per-sample training cap to each segment's response.
+    segments = [_cap_segment(seg) for seg in segments]
+
+    instance_id = md["instance_id"]
+    elapsed = time.time() - t0
     sample.metadata = {
         **(sample.metadata or {}),
-        "instance_id": md["instance_id"],
+        "instance_id": instance_id,
         "is_solved": bool(is_solved),
         "applied_cleanly": bool(applied_cleanly),
-        "elapsed_sec": time.time() - t0,
+        "elapsed_sec": elapsed,
     }
-    if SWE_SAVE_TRAJECTORY_TREE:
-        sample.metadata["trajectory_tree"] = trajectory_tree
+    fanned = _fan_out_with_fail_soft(state, segments, reward, sample, instance_id)
+    # Attach raw_dump only to segment 0 (avoid duplication).
+    if SWE_DUMP_RAW_TRAJECTORY and fanned and isinstance(fanned[0], Sample):
+        md0 = fanned[0].metadata or {}
+        md0["trajectory_raw_dump"] = raw_dump
+        fanned[0].metadata = md0
+
     logger.info(
-        "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs tokens=%d",
-        md["instance_id"], reward, is_solved, applied_cleanly,
-        time.time() - t0, len(response_ids),
+        "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs segments=%d",
+        instance_id, reward, is_solved, applied_cleanly, elapsed, len(fanned),
     )
-    return sample
+    return fanned
 
 
-def _cap_response_for_training(response_ids: list[int], loss_mask: list[int]) -> tuple[list[int], list[int]]:
-    if SWE_MAX_RESPONSE_TOKENS <= 0 or len(response_ids) <= SWE_MAX_RESPONSE_TOKENS:
-        return response_ids, loss_mask
-    return response_ids[:SWE_MAX_RESPONSE_TOKENS], loss_mask[:SWE_MAX_RESPONSE_TOKENS]
+def _cap_segment(seg: tuple[list[int], list[int], list[int], dict]
+                 ) -> tuple[list[int], list[int], list[int], dict]:
+    p, r, m, meta = seg
+    if SWE_MAX_RESPONSE_TOKENS <= 0 or len(r) <= SWE_MAX_RESPONSE_TOKENS:
+        return seg
+    return p, r[:SWE_MAX_RESPONSE_TOKENS], m[:SWE_MAX_RESPONSE_TOKENS], meta
 
 
 # ---------------------------------------------------------------------------
 # Metadata helpers
 # ---------------------------------------------------------------------------
 def _metadata(sample: Sample) -> dict[str, Any]:
-    """Normalize the two dataset schemas (flat vs ``remote_env_info``) we see."""
+    """Normalize the two dataset schemas (flat vs ``remote_env_info``)."""
     m = sample.metadata or {}
     rem = m.get("remote_env_info") or {}
     label = sample.label if (isinstance(sample.label, str) and len(sample.label) < 256) else None
@@ -468,11 +410,6 @@ def _coerce_prompt(prompt) -> str:
 
 
 def _abort(sample: Sample, reason: str) -> Sample:
-    # Dummy 1-prompt + 1-response token so megatron's get_batch can compute
-    # `prompt_length = total_length - response_length >= 1` (else F.pad with
-    # negative length crashes the entire training job — see
-    # megatron_utils/data.py:141). loss_mask=[0] means this sample
-    # contributes no gradient, which is what we want for an abort.
     sample.tokens = [0, 0]
     sample.response = ""
     sample.response_length = 1
