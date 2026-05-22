@@ -35,6 +35,80 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
+def _cap_sample_total_tokens(samples: list[Sample], source: str = "") -> None:
+    """Cap per-sample total tokens at $SLIME_MAX_SAMPLE_TOKENS in-place.
+
+    Truncates from the response tail (keeps prompt intact) and aligns
+    loss_mask / rollout_log_probs / teacher_log_probs to the new
+    response_length. Required to avoid train-side OOM on long outlier
+    trajectories (see 0521/OOM_DIAGNOSIS.md §9 / Fix D). When the prompt
+    alone exceeds the cap, the response is collapsed to length 1 with
+    loss_mask=[0] — same convention used by examples/coding_agent_rl
+    generate._abort to keep megatron's get_batch happy.
+
+    Setting SLIME_MAX_SAMPLE_TOKENS=0 (default) disables the cap.
+    """
+    max_tokens = int(os.environ.get("SLIME_MAX_SAMPLE_TOKENS", "0") or 0)
+    if max_tokens <= 0 or not samples:
+        return
+
+    truncated = 0
+    collapsed = 0
+    max_before = 0
+    max_after = 0
+    for s in samples:
+        total = len(s.tokens)
+        max_before = max(max_before, total)
+        if total <= max_tokens:
+            max_after = max(max_after, total)
+            continue
+
+        prompt_len = total - s.response_length
+        new_response_len = max_tokens - prompt_len
+
+        if new_response_len < 1:
+            # Prompt itself exceeds cap. Collapse to a 1-token no-op response
+            # AND tail-truncate the prompt down to (cap - 1) tokens so total
+            # tokens == cap. loss_mask=[0] means the sample contributes no
+            # gradient, so prompt content is irrelevant — we only need the
+            # tensor shape to be valid. This mirrors examples/coding_agent_rl
+            # generate._abort's response_length>=1 convention.
+            kept_prompt_len = max(1, max_tokens - 1)
+            s.tokens = list(s.tokens[:kept_prompt_len]) + [0]
+            s.loss_mask = [0]
+            s.response_length = 1
+            if s.rollout_log_probs is not None:
+                s.rollout_log_probs = [0.0]
+            if s.teacher_log_probs is not None:
+                s.teacher_log_probs = [0.0]
+            collapsed += 1
+        else:
+            s.tokens = s.tokens[: prompt_len + new_response_len]
+            if s.loss_mask is not None:
+                s.loss_mask = s.loss_mask[:new_response_len]
+            if s.rollout_log_probs is not None:
+                s.rollout_log_probs = s.rollout_log_probs[:new_response_len]
+            if s.teacher_log_probs is not None:
+                s.teacher_log_probs = s.teacher_log_probs[:new_response_len]
+            s.response_length = new_response_len
+            truncated += 1
+        max_after = max(max_after, len(s.tokens))
+
+    if truncated or collapsed:
+        logger.warning(
+            "[%s] SLIME_MAX_SAMPLE_TOKENS=%d capped %d/%d samples "
+            "(truncated=%d, collapsed=%d); max total tokens %d -> %d",
+            source or "rollout",
+            max_tokens,
+            truncated + collapsed,
+            len(samples),
+            truncated,
+            collapsed,
+            max_before,
+            max_after,
+        )
+
+
 @dataclasses.dataclass
 class ServerGroup:
     """A group of homogeneous SGLang engines with the same configuration.
@@ -578,6 +652,7 @@ class RolloutManager:
                 logger.info(
                     f"Subsample loaded debug rollout data using {ratio=} and change num rows {original_num_rows} -> {len(data)}"
                 )
+            _cap_sample_total_tokens(data, source="load_debug")
             metrics = None
         else:
             data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
@@ -593,6 +668,8 @@ class RolloutManager:
             # flatten the data if it is a list of lists
             while isinstance(data[0], list):
                 data = list(itertools.chain.from_iterable(data))
+
+            _cap_sample_total_tokens(data, source="live_rollout")
 
         return data, metrics
 
