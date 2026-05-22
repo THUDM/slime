@@ -1236,7 +1236,7 @@ def _compute_zero_std_metrics(args, all_samples: list[Sample]):
 
 
 def _compute_spec_metrics(args, all_samples: list[Sample]):
-    if args.sglang_speculative_algorithm is None:
+    if getattr(args, "sglang_speculative_algorithm", None) is None:
         return {}
     num_samples = len(all_samples)
     metrics = {}
