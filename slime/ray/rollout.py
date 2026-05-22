@@ -583,6 +583,13 @@ class RolloutManager:
             data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
             metrics = data.metrics
             data = data.samples
+            # Enforce the rollout_id contract before flattening: any list[Sample]
+            # encountered in the nested output must have rollout_id set on every
+            # element. Default rollouts inherit it from the data source; compact /
+            # subagent paths that split one rollout into N training samples must
+            # set the same rollout_id on every sibling so the loss reducer counts
+            # the rollout once instead of N times.
+            _validate_rollout_id_annotated(data)
             # flatten the data if it is a list of lists
             while isinstance(data[0], list):
                 data = list(itertools.chain.from_iterable(data))
@@ -656,6 +663,12 @@ class RolloutManager:
             "raw_reward": raw_rewards,
             "truncated": [1 if sample.status == Sample.Status.TRUNCATED else 0 for sample in samples],
             "sample_indices": [sample.index for sample in samples],
+            # Rollout id (one per rollout execution). Default rollouts emit one
+            # sample per rollout, so we fall back to ``sample.index`` (unique).
+            # Compact / subagent paths that emit multiple training samples per
+            # rollout set ``rollout_id`` explicitly so all siblings share a
+            # value; the loss reducer then aggregates them as one rollout.
+            "rollout_ids": [s.rollout_id if s.rollout_id is not None else s.index for s in samples],
         }
 
         # loss mask
@@ -712,11 +725,12 @@ class RolloutManager:
         into a Ray Box. The schedule itself is computed by
         :func:`build_dp_schedule` so it stays unit-testable without Ray/sglang.
 
-        Step split is by rollout id (``samples[i].index``); each step holds
-        exactly ``args.global_batch_size`` rollouts so the training-step count
-        per rollout is fixed at
-        ``rollout_batch_size * n_samples_per_prompt // global_batch_size``
-        regardless of how many training samples each rollout produced.
+        Step split is by rollout id (``samples[i].rollout_id``, falling back
+        to ``samples[i].index``); each step holds exactly
+        ``args.global_batch_size`` rollouts so the training-step count per
+        rollout is fixed at ``rollout_batch_size * n_samples_per_prompt //
+        global_batch_size`` regardless of how many training samples each
+        rollout produced.
         """
         dp_size = self.train_parallel_config["dp_size"]
         total_lengths = [len(t) for t in data["tokens"]]
@@ -727,7 +741,7 @@ class RolloutManager:
             self.train_parallel_config,
             total_lengths,
             global_batch_size=self.args.global_batch_size,
-            rollout_indices=data["sample_indices"],
+            rollout_indices=data["rollout_ids"],
         )
 
         # Package per-rank rollout_data
@@ -744,6 +758,7 @@ class RolloutManager:
                 "loss_masks",
                 "round_number",
                 "sample_indices",
+                "rollout_ids",
                 "rollout_log_probs",
                 "rollout_routed_experts",
                 "prompt",
@@ -762,6 +777,38 @@ class RolloutManager:
             rollout_data["micro_batch_indices"] = micro_batch_indices[r]
             rollout_data_refs.append(Box(ray.put(rollout_data)))
         return rollout_data_refs
+
+
+def _validate_rollout_id_annotated(node, depth=0):
+    """Walk the rollout function's nested output and validate ``rollout_id`` only
+    when a compact / subagent pattern is detected.
+
+    "Compact" = the rollout function wraps multiple training samples from one
+    rollout execution into a ``list[Sample]``. In slime's convention the
+    default rollout shape is ``list[list[Sample]]`` (depth-2: prompt × rollout)
+    so its leaf ``list[Sample]`` lands at depth 1 and we skip validation,
+    preserving backward compatibility. A compact rollout adds a third level:
+    ``list[list[list[Sample]]]`` (prompt × rollout × samples-from-one-rollout),
+    so the leaf ``list[Sample]`` lands at depth ≥ 2. At that point we require
+    every sibling to carry a non-None ``rollout_id`` and to share the same
+    value, so the loss reducer counts the rollout once instead of N times.
+    """
+    if isinstance(node, Sample):
+        return
+    assert isinstance(node, list), f"unexpected rollout output node type: {type(node).__name__}"
+    if node and isinstance(node[0], Sample):
+        if depth >= 2 and len(node) > 1:
+            rids = [s.rollout_id for s in node]
+            missing = [i for i, r in enumerate(rids) if r is None]
+            assert not missing, (
+                f"Compact rollout returned {len(node)} samples but rollout_id is unset on "
+                f"positions {missing}. Set Sample.rollout_id on every sibling so the loss "
+                "reducer can aggregate them as one rollout instead of N."
+            )
+            assert len(set(rids)) == 1, f"Sibling samples from one compact rollout must share rollout_id; got {rids}."
+        return
+    for item in node:
+        _validate_rollout_id_annotated(item, depth + 1)
 
 
 def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):

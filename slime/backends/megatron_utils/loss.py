@@ -26,7 +26,7 @@ from slime.utils.types import RolloutBatch
 from .cp_utils import (
     all_gather_with_cp,
     get_logits_and_tokens_offset_with_cp,
-    get_sum_of_rollout_prompt_mean,
+    get_sum_of_sample_mean,
     slice_log_prob_with_cp,
 )
 
@@ -929,12 +929,12 @@ def policy_loss_function(
         pg_loss, modified_response_masks, tis_metrics = tis_func(**tis_kwargs)
 
         # [decouple IS and rejection] Rebuild sum_of_sample_mean with modified_response_masks for denominator correction
-        # modified_response_masks will be sliced with cp in get_sum_of_rollout_prompt_mean
-        sum_of_sample_mean = get_sum_of_rollout_prompt_mean(
+        # modified_response_masks will be sliced with cp in get_sum_of_sample_mean
+        sum_of_sample_mean = get_sum_of_sample_mean(
             total_lengths,
             response_lengths,
             modified_response_masks,
-            batch["sample_indices"],
+            batch["rollout_ids"],
             args.calculate_per_token_loss,
             args.qkv_format,
             max_seq_lens,
@@ -1165,13 +1165,13 @@ def loss_function(
           "values" (1D tensor: [count, metric1, metric2, ...]).
     """
     num_tokens = sum([torch.clamp_min(loss_mask.sum(), 1) for loss_mask in batch["loss_masks"]])
-    num_rollouts = len(set(batch["sample_indices"]))
+    num_rollouts = len(set(batch["rollout_ids"]))
 
-    sum_of_sample_mean = get_sum_of_rollout_prompt_mean(
+    sum_of_sample_mean = get_sum_of_sample_mean(
         batch["total_lengths"],
         batch["response_lengths"],
         batch["loss_masks"],
-        batch["sample_indices"],
+        batch["rollout_ids"],
         args.calculate_per_token_loss,
         args.qkv_format,
         batch.get("max_seq_lens", None),

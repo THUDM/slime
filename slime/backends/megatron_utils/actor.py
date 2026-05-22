@@ -392,7 +392,7 @@ class MegatronTrainRayActor(TrainRayActor):
         return result
 
     def train_critic(self, rollout_id: int, rollout_data: RolloutBatch):
-        """Train critic; return CPU values (consumed as old-values for the next actor train)."""
+        """Train critic and return CPU values (used as old-values for the next actor train)."""
         data_iterator = get_data_iterator(rollout_data)
         num_microbatches = rollout_data["num_microbatches"]
         global_batch_sizes = rollout_data["global_batch_sizes"]
