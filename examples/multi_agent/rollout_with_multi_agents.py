@@ -28,14 +28,6 @@ async def generate_with_multi_agents(args, sample: Sample, sampling_params, eval
     custom_multi_agent_func = load_function(args.custom_multi_agent_function_path)
     samples = await custom_multi_agent_func(args, sample)
 
-    # All samples returned here come from the same rollout execution (the agent
-    # system expanded one prompt-sample into multiple training samples). Stamp
-    # the shared rollout_id so the per-rollout loss reducer counts this rollout
-    # once instead of len(samples) times, and so the by-rollout step splitter
-    # keeps the siblings in the same training step.
-    for s in samples:
-        s.rollout_id = sample.index
-
     random.shuffle(samples)
 
     return samples

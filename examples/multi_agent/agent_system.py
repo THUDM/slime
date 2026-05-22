@@ -17,6 +17,12 @@ async def generate_response(args, prompt, key):
         tokenizer = args.tokenizer
         max_context_length = args.rollout_max_context_len
         sample = deepcopy(args.sample)
+        # Every sample emitted by this agent system is a training sample split
+        # out of one rollout execution (``args.sample``). Tag them with the
+        # input rollout's id so the per-rollout loss reducer aggregates the
+        # solver / rewriter / selector siblings as one rollout instead of N,
+        # and so the by-rollout step splitter keeps them in the same step.
+        sample.rollout_id = args.sample.index
 
         url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 

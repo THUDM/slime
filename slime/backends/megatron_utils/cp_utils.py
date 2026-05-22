@@ -54,7 +54,7 @@ def get_sum_of_sample_mean(
     total_lengths: list[int],
     response_lengths: list[int],
     loss_masks: list[torch.Tensor],
-    rollout_indices: list[int] | None = None,
+    sample_denoms: list[int] | list[torch.Tensor] | None = None,
     calculate_per_token_loss: bool = False,
     qkv_format: str = "thd",
     max_seq_lens: list[int] | None = None,
@@ -62,25 +62,30 @@ def get_sum_of_sample_mean(
     """
     Calculate correct sample mean for CP.
 
-    When ``rollout_indices`` is supplied, samples sharing the same rollout id
-    are treated as ONE logical sample: each sample's denominator becomes the
-    sum of mask totals across the whole rollout group, so a rollout that
-    compact / subagent split into N training samples still contributes one
-    term to the sum (token-weighted mean over the rollout) instead of N. In
-    the common 1-rollout-1-sample case every group is a singleton and the
-    group sum equals the sample's own mask sum, so behavior is identical to
-    the legacy per-sample-mean.
+    The default (``sample_denoms=None``) is the legacy per-sample mean: each
+    sample's denominator is its own ``loss_mask.sum()``. Callers that want a
+    per-rollout token-weighted mean pass pre-computed per-sample denominators
+    where every sample in the same rollout group carries the same value (the
+    sum of that rollout's mask totals across every sibling sample in the
+    step). Pre-computing at the step level rather than per-mb is required —
+    otherwise a rollout whose samples land in different micro-batches would
+    get a partial denominator on each side.
     """
-    # Per-sample denominator. Default = own mask sum (legacy per-sample mean).
-    # With rollout_indices: shared sum across each sample's rollout group, so
-    # the reducer emits per-rollout token-weighted means.
-    if rollout_indices is None:
+    if sample_denoms is None:
         sample_denoms = [m.sum() for m in loss_masks]
-    else:
-        group_sums: dict[int, torch.Tensor] = {}
-        for rid, m in zip(rollout_indices, loss_masks, strict=False):
-            group_sums[rid] = group_sums.get(rid, 0) + m.sum()
-        sample_denoms = [group_sums[rid] for rid in rollout_indices]
+    # Caller may pass plain Python ints (e.g. precomputed at rollout side); make
+    # sure denoms are tensors on the same device/dtype as the loss so division
+    # in the reducer stays on-device and dtype-consistent. Clamp >= 1 once here
+    # so the hot loop below doesn't repeat the work per call.
+    if loss_masks:
+        ref = loss_masks[0]
+        sample_denoms = [
+            torch.clamp_min(
+                d if isinstance(d, torch.Tensor) else torch.tensor(d, dtype=torch.float32, device=ref.device),
+                1,
+            )
+            for d in sample_denoms
+        ]
 
     cp_size = mpu.get_context_parallel_world_size()
     if cp_size == 1:
@@ -88,7 +93,7 @@ def get_sum_of_sample_mean(
         def sum_of_sample_mean(x: torch.Tensor) -> torch.Tensor:
             return sum(
                 [
-                    (x_i * loss_mask_i).sum() / torch.clamp_min(denom, 1)
+                    (x_i * loss_mask_i).sum() / denom
                     for x_i, loss_mask_i, denom in zip(
                         x.split(response_lengths, dim=0), loss_masks, sample_denoms, strict=False
                     )
@@ -123,7 +128,7 @@ def get_sum_of_sample_mean(
         def sum_of_sample_mean(x: torch.Tensor) -> torch.Tensor:
             return sum(
                 [
-                    (x_i * chunked_loss_mask).sum() / torch.clamp_min(denom, 1)
+                    (x_i * chunked_loss_mask).sum() / denom
                     for x_i, chunked_loss_mask, denom in zip(
                         x.split(cp_chunk_lengths, dim=0), chunked_loss_masks, sample_denoms, strict=False
                     )

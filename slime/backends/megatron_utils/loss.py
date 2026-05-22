@@ -929,12 +929,17 @@ def policy_loss_function(
         pg_loss, modified_response_masks, tis_metrics = tis_func(**tis_kwargs)
 
         # [decouple IS and rejection] Rebuild sum_of_sample_mean with modified_response_masks for denominator correction
-        # modified_response_masks will be sliced with cp in get_sum_of_sample_mean
+        # modified_response_masks will be sliced with cp in get_sum_of_sample_mean.
+        # NOTE: we don't pass the per-rollout aggregate ``rollout_mask_sums``
+        # here because those were precomputed off ``loss_masks``, not the
+        # post-RS ``modified_response_masks`` — so we fall back to per-sample
+        # mean for the TIS-rebuild loss. Reported mismatch / TIS metrics
+        # continue to use the pre-RS rollout-aware reducer captured above.
         sum_of_sample_mean = get_sum_of_sample_mean(
             total_lengths,
             response_lengths,
             modified_response_masks,
-            batch["rollout_ids"],
+            None,
             args.calculate_per_token_loss,
             args.qkv_format,
             max_seq_lens,
@@ -1165,13 +1170,17 @@ def loss_function(
           "values" (1D tensor: [count, metric1, metric2, ...]).
     """
     num_tokens = sum([torch.clamp_min(loss_mask.sum(), 1) for loss_mask in batch["loss_masks"]])
-    num_rollouts = len(set(batch["rollout_ids"]))
+    # Number of distinct rollouts this mb represents, expressed as a fraction
+    # per sample (``1 / rollout_size_for_sample``). Summed across mbs and DP it
+    # equals the step's real distinct-rollout count, regardless of whether a
+    # rollout's samples got split across micro-batches.
+    num_rollouts = sum(1.0 / c for c in batch["rollout_sample_counts"])
 
     sum_of_sample_mean = get_sum_of_sample_mean(
         batch["total_lengths"],
         batch["response_lengths"],
         batch["loss_masks"],
-        batch["rollout_ids"],
+        batch["rollout_mask_sums"],
         args.calculate_per_token_loss,
         args.qkv_format,
         batch.get("max_seq_lens", None),
