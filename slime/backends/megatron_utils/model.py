@@ -622,7 +622,6 @@ def train(
     data_iterator: Sequence[DataIterator],
     num_microbatches: Sequence[int],
     global_batch_sizes: Sequence[int],
-    train_step_offset: int = 0,
 ) -> None:
     """Run training over a rollout consisting of multiple steps.
 
@@ -642,9 +641,6 @@ def train(
             ``num_microbatches``; consumed by ``train_one_step`` for loss
             scaling and LR scheduler increments. Equals per-step sample count
             in the common case (1 rollout = 1 sample).
-        train_step_offset (int): Cumulative train-step count *before* this
-            rollout, used as the base for the wandb step label so labels stay
-            monotonic when ``num_steps_per_rollout`` varies across rollouts.
     """
     args = get_args()
 
@@ -787,7 +783,7 @@ def train(
             and mpu.get_tensor_model_parallel_rank() == 0
             and mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1
         ):
-            accumulated_step_id = train_step_offset + step_id
+            accumulated_step_id = rollout_id * num_steps_per_rollout + step_id
             role = getattr(model[0], "role", "actor")
             role_tag = "" if role == "actor" else f"{role}-"
             log_dict = {

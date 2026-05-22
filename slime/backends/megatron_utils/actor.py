@@ -380,20 +380,10 @@ class MegatronTrainRayActor(TrainRayActor):
         with timer("data_preprocess"):
             rollout_data = self._get_rollout_data(rollout_data_ref)
 
-        # The wandb step base for this rollout is computed once on the rollout
-        # manager side (it's the cumulative training-step counter, advanced by
-        # ``len(num_microbatches)`` per rollout) and ferried through
-        # rollout_data so we don't need extra ray.get round-trips. Publish it
-        # on args so ``compute_rollout_step`` can use it.
-        train_step_offset = rollout_data.get("train_step_offset", 0)
-        self.args._wandb_train_step_offset = train_step_offset
-
         if self.role == "critic":
-            result = self.train_critic(rollout_id, rollout_data, train_step_offset=train_step_offset)
+            result = self.train_critic(rollout_id, rollout_data)
         else:
-            self.train_actor(
-                rollout_id, rollout_data, external_data=external_data, train_step_offset=train_step_offset
-            )
+            self.train_actor(rollout_id, rollout_data, external_data=external_data)
             result = None
 
         if self.args.offload_train:
@@ -401,7 +391,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         return result
 
-    def train_critic(self, rollout_id: int, rollout_data: RolloutBatch, *, train_step_offset: int = 0):
+    def train_critic(self, rollout_id: int, rollout_data: RolloutBatch):
         """Train critic; return CPU values (consumed as old-values for the next actor train)."""
         data_iterator = get_data_iterator(rollout_data)
         num_microbatches = rollout_data["num_microbatches"]
@@ -421,7 +411,6 @@ class MegatronTrainRayActor(TrainRayActor):
             data_iterator,
             num_microbatches,
             global_batch_sizes,
-            train_step_offset=train_step_offset,
         )
 
         if mpu.is_pipeline_last_stage() and "values" in rollout_data:
@@ -430,9 +419,7 @@ class MegatronTrainRayActor(TrainRayActor):
             return {"values": tensors_to_cpu(rollout_data["values"])}
         return {}
 
-    def train_actor(
-        self, rollout_id: int, rollout_data: RolloutBatch, external_data=None, *, train_step_offset: int = 0
-    ) -> None:
+    def train_actor(self, rollout_id: int, rollout_data: RolloutBatch, external_data=None) -> None:
         # Create data iterator for log_probs and train.
         data_iterator = get_data_iterator(rollout_data)
         num_microbatches = rollout_data["num_microbatches"]
@@ -534,7 +521,6 @@ class MegatronTrainRayActor(TrainRayActor):
                     data_iterator,
                     num_microbatches,
                     global_batch_sizes,
-                    train_step_offset=train_step_offset,
                 )
 
             self.prof.step(rollout_id=rollout_id)

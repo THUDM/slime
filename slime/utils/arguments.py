@@ -1296,21 +1296,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "can process all samples including filtered ones."
                 ),
             )
-            parser.add_argument(
-                "--custom-rollout-step-split-path",
-                type=str,
-                default=None,
-                help=(
-                    "Path to a user-supplied function that partitions a rollout's samples "
-                    "into training steps. Signature: ``custom_split(args, total_lengths) -> "
-                    "list[list[int]]``, where each inner list is the sample indices for one "
-                    "step. Each step's length becomes that step's global_batch_size on the "
-                    "train side; every step must have at least dp_size samples. When unset, "
-                    "the default splitter uses --num-steps-per-rollout if given, otherwise "
-                    "--global-batch-size as a target step size (near-equal split with a "
-                    "warning if num_samples doesn't divide gbs evenly)."
-                ),
-            )
             return parser
 
         def add_custom_megatron_plugins_arguments(parser):
@@ -1784,17 +1769,6 @@ def slime_validate_args(args):
                 f"// num_steps_per_rollout {args.num_steps_per_rollout}"
             )
         args.global_batch_size = global_batch_size
-
-    # Default splitter splits by rollout id into a fixed number of training
-    # steps; this requires the total to be exactly divisible by gbs so the
-    # step count is unambiguous regardless of compact / subagent expansion.
-    if args.global_batch_size is not None:
-        total = args.rollout_batch_size * args.n_samples_per_prompt
-        assert total % args.global_batch_size == 0, (
-            f"rollout_batch_size * n_samples_per_prompt ({args.rollout_batch_size} * "
-            f"{args.n_samples_per_prompt} = {total}) must be divisible by "
-            f"global_batch_size ({args.global_batch_size})."
-        )
 
     if args.n_samples_per_prompt == 1:
         args.grpo_std_normalization = False

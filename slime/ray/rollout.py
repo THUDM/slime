@@ -18,7 +18,7 @@ from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupCo
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
-from slime.utils.dp_schedule import build_dp_schedule, near_equal_rollout_split, validate_step_sample_indices
+from slime.utils.dp_schedule import build_dp_schedule
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.logging_utils import configure_logger, init_tracking
@@ -359,13 +359,6 @@ class RolloutManager:
         data_source_cls = load_function(self.args.data_source_path)
         self.data_source = data_source_cls(args)
 
-        # Cumulative training-step counter — used as the wandb step base when
-        # ``num_steps_per_rollout`` varies across rollouts. Rehydrated from
-        # ``data_source.metadata`` on ``load`` and advanced inside
-        # ``_split_train_data_by_dp`` (after snapshotting it into rollout_data
-        # for the actor).
-        self.train_step_count = 0
-
         self.generate_rollout = load_function(self.args.rollout_function_path)
         self.eval_generate_rollout = load_function(self.args.eval_function_path)
         self.custom_reward_post_process_func = None
@@ -485,11 +478,6 @@ class RolloutManager:
     def generate(self, rollout_id):
         start_time = time.time()
         self.rollout_id = rollout_id
-        # Publish the wandb step base for rollout/* metrics so
-        # ``compute_rollout_step`` produces the right label whether it's
-        # called here or on the actor side. ``self.train_step_count`` is
-        # advanced inside ``_split_train_data_by_dp`` (post-snapshot).
-        self.args._wandb_train_step_offset = self.train_step_count
         self.health_monitoring_resume()
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
@@ -507,9 +495,6 @@ class RolloutManager:
             # if debug train only, we don't generate evaluation data
             return
         self.health_monitoring_resume()
-        # Publish wandb step base for eval/* metrics. Eval doesn't train, so
-        # we use the current cumulative counter as-is (no advance).
-        self.args._wandb_train_step_offset = self.train_step_count
 
         result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
         data = result.data
@@ -517,31 +502,10 @@ class RolloutManager:
         _log_eval_rollout_data(rollout_id, self.args, data, result.metrics)
 
     def save(self, rollout_id):
-        # Persist the cumulative train-step counter into the rollout metadata
-        # so the wandb step label stays monotonic across resume even when
-        # ``num_steps_per_rollout`` varies between rollouts.
-        self.data_source.metadata["train_step_count"] = self.train_step_count
         self.data_source.save(rollout_id)
 
     def load(self, rollout_id=None):
         self.data_source.load(rollout_id)
-        # ``data_source.metadata`` is populated by ``load`` (if a checkpoint
-        # exists); rehydrate our local counter from it. Resume from a legacy
-        # checkpoint that doesn't carry ``train_step_count`` falls back to the
-        # historical formula (``rollout_id * rb * nspp // gbs``) so wandb step
-        # labels stay roughly continuous across the upgrade.
-        stored = self.data_source.metadata.get("train_step_count")
-        if stored is not None:
-            self.train_step_count = int(stored)
-        elif rollout_id is not None and rollout_id >= 0:
-            self.train_step_count = (
-                (rollout_id + 1)
-                * self.args.rollout_batch_size
-                * self.args.n_samples_per_prompt
-                // self.args.global_batch_size
-            )
-        else:
-            self.train_step_count = 0
 
     def offload(self):
         self.health_monitoring_pause()
@@ -744,47 +708,29 @@ class RolloutManager:
         self.train_parallel_config = config
 
     def _split_train_data_by_dp(self, data):
-        """Resolve gbs, compute the DP/mbs schedule, and package each rank's
-        rollout_data into a Ray Box. The schedule itself is computed by
+        """Compute the DP/mbs schedule and package each rank's rollout_data
+        into a Ray Box. The schedule itself is computed by
         :func:`build_dp_schedule` so it stays unit-testable without Ray/sglang.
 
-        Default step split is by rollout id (``samples[i].index``): the fixed
-        ``num_steps = rollout_batch_size * n_samples_per_prompt //
-        global_batch_size`` is independent of the actual sample count, so
-        compact/subagent paths that produce >1 training sample per rollout
-        leave the training-step count unchanged.
+        Step split is by rollout id (``samples[i].index``); each step holds
+        exactly ``args.global_batch_size`` rollouts so the training-step count
+        per rollout is fixed at
+        ``rollout_batch_size * n_samples_per_prompt // global_batch_size``
+        regardless of how many training samples each rollout produced.
         """
         dp_size = self.train_parallel_config["dp_size"]
-
-        # Compute step boundaries. Custom splitter wins; otherwise split by
-        # rollout id (sample.index) into a fixed number of steps so the train
-        # step count per rollout stays constant even when some rollouts emit
-        # multiple training samples (e.g. via compact / subagent). The train
-        # side scales loss / aggregates metrics per step, so uneven per-step
-        # sample counts are fine as long as each step has >= dp_size samples.
         total_lengths = [len(t) for t in data["tokens"]]
         data["total_lengths"] = total_lengths
-        num_samples = len(total_lengths)
-        rollout_indices = data["sample_indices"]
-
-        if self.args.custom_rollout_step_split_path:
-            custom_split = load_function(self.args.custom_rollout_step_split_path)
-            step_sample_indices = validate_step_sample_indices(
-                list(custom_split(self.args, rollout_indices, total_lengths)),
-                num_samples=num_samples,
-            )
-        else:
-            num_steps = self.args.rollout_batch_size * self.args.n_samples_per_prompt // self.args.global_batch_size
-            step_sample_indices = near_equal_rollout_split(rollout_indices, num_steps=num_steps)
 
         partitions, micro_batch_indices, num_microbatches, global_batch_sizes = build_dp_schedule(
             self.args,
             self.train_parallel_config,
             total_lengths,
-            step_sample_indices=step_sample_indices,
+            global_batch_size=self.args.global_batch_size,
+            rollout_indices=data["sample_indices"],
         )
 
-        # 4. Package per-rank rollout_data
+        # Package per-rank rollout_data
         rollout_data_refs = []
         for r in range(dp_size):
             partition = partitions[r]
@@ -811,24 +757,10 @@ class RolloutManager:
                 if key not in data:
                     continue
                 rollout_data[key] = data[key]
-            # Per-step sample count (total across DP). Train side normalises by
-            # this instead of assuming each rank holds the same N samples; once
-            # uneven-DP partition lands, this is the only field that has to
-            # change shape.
             rollout_data["global_batch_sizes"] = global_batch_sizes
             rollout_data["num_microbatches"] = num_microbatches
             rollout_data["micro_batch_indices"] = micro_batch_indices[r]
-            # Snapshot the cumulative train-step counter as it stands before
-            # this rollout's training so the actor can use it as the wandb
-            # step base; we advance the counter below.
-            rollout_data["train_step_offset"] = self.train_step_count
             rollout_data_refs.append(Box(ray.put(rollout_data)))
-
-        # Advance the cumulative counter by the number of train steps this
-        # rollout will produce. Both actor and critic read the snapshot above,
-        # so this single increment is correct regardless of how many models
-        # train this rollout.
-        self.train_step_count += len(num_microbatches)
         return rollout_data_refs
 
 

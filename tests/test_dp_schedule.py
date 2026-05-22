@@ -2,17 +2,13 @@
 
 The tests assert the invariants documented at the top of dp_schedule.py against
 a range of static / dynamic / VPP / oversize / balance / uneven scenarios.
-
-Trim, dynamic-gbs resolution, custom step splitting, and per-rank rollout_data
-packaging all live in ``RolloutManager._split_train_data_by_dp``; these tests
-just exercise the schedule itself (``partitions``, ``micro_batch_indices``).
 """
 
 from types import SimpleNamespace
 
 import pytest
 
-from slime.utils.dp_schedule import build_dp_schedule, near_equal_rollout_split, validate_step_sample_indices
+from slime.utils.dp_schedule import build_dp_schedule
 
 
 def make_args(
@@ -45,40 +41,32 @@ def assert_invariants(
     num_microbatches,
     *,
     dp_size,
+    expected_global_sample_indices,
     total_lengths,
     max_per_bin=None,
-    global_batch_sizes=None,
-    expected_step_sizes=None,
 ):
     """Check the invariants documented at the top of dp_schedule.py.
 
-    No longer asserts equal-size per-rank partitions — Stage 2 allows uneven
-    sample counts per rank. It still checks the union/disjointness invariants
-    and the (more important) "same num_mbs per rank" PP-sync invariant.
+    ``expected_global_sample_indices`` is the set of global sample indices
+    that should end up covered (after trim). Trailing rollouts that don't
+    fit are excluded.
     """
     seen_global: set[int] = set()
     for r in range(dp_size):
         partition = partitions[r]
         mbi = micro_batch_indices[r]
 
-        # Same num_mbs per rank (PP sync); num_microbatches is shared, so each rank's
-        # flat mbs count must match sum(num_microbatches).
+        # Same num_mbs per rank (PP sync).
         assert len(mbi) == sum(num_microbatches), f"rank {r}: mbs count mismatch"
 
-        # Flattened micro_batch_indices == range(len(partition)) (each sample covered
-        # exactly once, by exactly one mbs).
+        # Flattened micro_batch_indices == range(len(partition)).
         flat = [i for mbs in mbi for i in mbs]
         assert flat == list(range(len(partition))), f"rank {r}: micro_batch_indices don't tile [0, n)"
 
-        # Disjoint partitions whose union covers every sample.
+        # Disjoint partitions whose union covers every kept sample.
         assert seen_global.isdisjoint(partition), f"rank {r}: overlap with other ranks"
         seen_global.update(partition)
-    assert seen_global == set(range(len(total_lengths))), "some samples not assigned to any rank"
-
-    if global_batch_sizes is not None and expected_step_sizes is not None:
-        assert global_batch_sizes == list(
-            expected_step_sizes
-        ), f"global_batch_sizes {global_batch_sizes} != expected {list(expected_step_sizes)}"
+    assert seen_global == set(expected_global_sample_indices), "covered sample set mismatch"
 
     if max_per_bin is None:
         return
@@ -92,54 +80,51 @@ def assert_invariants(
                 assert len(mbs) == 1, f"rank {r}: mbs sum {bin_total} > {max_per_bin} but contains {len(mbs)} samples"
 
 
-def _rollouts_one_to_one(num_samples, num_steps):
-    """Shorthand: 1 sample = 1 rollout; split into ``num_steps`` near-equal chunks."""
-    return near_equal_rollout_split(list(range(num_samples)), num_steps=num_steps)
-
-
 @pytest.mark.unit
 def test_static_stride_single_step():
-    """Static + strided DP split, single step."""
+    """Static + strided DP split, single step (1 rollout = 1 sample)."""
     total_lengths = [10] * 16
+    rollout_indices = list(range(16))
     args = make_args(micro_batch_size=2)
     tp = make_tp(dp_size=4)
 
     partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, step_sample_indices=_rollouts_one_to_one(16, 1)
+        args, tp, total_lengths, global_batch_size=16, rollout_indices=rollout_indices
     )
 
     assert nmb == [2]
+    assert gbs_per_step == [16]
     assert_invariants(
         partitions,
         mbi,
         nmb,
         dp_size=4,
+        expected_global_sample_indices=range(16),
         total_lengths=total_lengths,
-        global_batch_sizes=gbs_per_step,
-        expected_step_sizes=[16],
     )
 
 
 @pytest.mark.unit
 def test_static_balance_multi_step():
-    """Static + balance_data + 2 training steps. Each rank still runs same num_mbs per step."""
-    total_lengths = [1, 2, 3, 4, 5, 6, 7, 8, 8, 7, 6, 5, 4, 3, 2, 1]  # 2 steps of 8
+    """Static + balance_data + 2 training steps."""
+    total_lengths = [1, 2, 3, 4, 5, 6, 7, 8, 8, 7, 6, 5, 4, 3, 2, 1]
+    rollout_indices = list(range(16))
     args = make_args(micro_batch_size=2, balance_data=True)
     tp = make_tp(dp_size=2)
 
     partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, step_sample_indices=_rollouts_one_to_one(16, 2)
+        args, tp, total_lengths, global_batch_size=8, rollout_indices=rollout_indices
     )
 
     assert nmb == [2, 2]
+    assert gbs_per_step == [8, 8]
     assert_invariants(
         partitions,
         mbi,
         nmb,
         dp_size=2,
+        expected_global_sample_indices=range(16),
         total_lengths=total_lengths,
-        global_batch_sizes=gbs_per_step,
-        expected_step_sizes=[8, 8],
     )
 
 
@@ -147,58 +132,36 @@ def test_static_balance_multi_step():
 def test_dynamic_uniform():
     """Dynamic mbs on uniform-length samples."""
     total_lengths = [5] * 8
+    rollout_indices = list(range(8))
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=10)
     tp = make_tp(dp_size=2)
 
     partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, step_sample_indices=_rollouts_one_to_one(8, 1)
+        args, tp, total_lengths, global_batch_size=8, rollout_indices=rollout_indices
     )
 
+    assert gbs_per_step == [8]
     assert_invariants(
         partitions,
         mbi,
         nmb,
         dp_size=2,
+        expected_global_sample_indices=range(8),
         total_lengths=total_lengths,
         max_per_bin=10,
-        global_batch_sizes=gbs_per_step,
-        expected_step_sizes=[8],
-    )
-
-
-@pytest.mark.unit
-def test_dynamic_skewed_lengths():
-    """Skewed lengths (the case where K-K used to over-pack a single bin)."""
-    total_lengths = [9, 9, 9, 9, 1, 1, 1, 1]
-    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=10)
-    tp = make_tp(dp_size=2)
-
-    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, step_sample_indices=_rollouts_one_to_one(8, 1)
-    )
-
-    assert_invariants(
-        partitions,
-        mbi,
-        nmb,
-        dp_size=2,
-        total_lengths=total_lengths,
-        max_per_bin=10,
-        global_batch_sizes=gbs_per_step,
-        expected_step_sizes=[8],
     )
 
 
 @pytest.mark.unit
 def test_dynamic_oversized_sample_lands_alone():
-    """A single sample exceeding max_per_bin must end up alone in its mbs (with no
-    other samples crammed in)."""
-    total_lengths = [15, 3, 3, 3, 3, 3, 3, 3]  # 15 > C=10
+    """A sample larger than max_per_bin must end up alone in its mbs."""
+    total_lengths = [15, 3, 3, 3, 3, 3, 3, 3]
+    rollout_indices = list(range(8))
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=10)
     tp = make_tp(dp_size=2)
 
     partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, step_sample_indices=_rollouts_one_to_one(8, 1)
+        args, tp, total_lengths, global_batch_size=8, rollout_indices=rollout_indices
     )
 
     assert_invariants(
@@ -206,19 +169,16 @@ def test_dynamic_oversized_sample_lands_alone():
         mbi,
         nmb,
         dp_size=2,
+        expected_global_sample_indices=range(8),
         total_lengths=total_lengths,
         max_per_bin=10,
-        global_batch_sizes=gbs_per_step,
-        expected_step_sizes=[8],
     )
-    # Find the rank holding the oversized sample and verify it lives alone in some mbs.
     oversize_idx = total_lengths.index(15)
     found = False
     for r in range(2):
-        partition = partitions[r]
-        if oversize_idx not in partition:
+        if oversize_idx not in partitions[r]:
             continue
-        local = partition.index(oversize_idx)
+        local = partitions[r].index(oversize_idx)
         for mbs in mbi[r]:
             if local in mbs:
                 assert mbs == [local], f"oversized sample shares an mbs: {mbs}"
@@ -229,12 +189,13 @@ def test_dynamic_oversized_sample_lands_alone():
 @pytest.mark.unit
 def test_dynamic_with_vpp_rounds_to_mb_group():
     """num_microbatches per rank should be a multiple of mb_group when vpp_size > 1."""
-    total_lengths = [4] * 32  # 2 steps of 16; per step, ~8 bins of 8 needed at C=8
+    total_lengths = [4] * 32
+    rollout_indices = list(range(32))
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=8)
     tp = make_tp(dp_size=2, vpp_size=2, microbatch_group_size_per_vp_stage=2)
 
     partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, step_sample_indices=_rollouts_one_to_one(32, 2)
+        args, tp, total_lengths, global_batch_size=16, rollout_indices=rollout_indices
     )
 
     for n in nmb:
@@ -244,185 +205,83 @@ def test_dynamic_with_vpp_rounds_to_mb_group():
         mbi,
         nmb,
         dp_size=2,
+        expected_global_sample_indices=range(32),
         total_lengths=total_lengths,
         max_per_bin=8,
-        global_batch_sizes=gbs_per_step,
-        expected_step_sizes=[16, 16],
     )
 
 
 @pytest.mark.unit
-def test_dynamic_uneven_sample_count():
-    """Pack-first lets DP ranks hold different numbers of samples (here gbs=10,
-    dp=4 → ranks must still run the same ``num_mbs`` but sample counts may differ)."""
-    # 10 samples of length 5, max-per-bin 10 → first-fit packs into 5 bins of 2 each.
-    # 5 is not a multiple of dp_size=4, so the schedule splits the largest bin until
-    # K is the next multiple of 4 → K=8, num_mbs_per_rank=2.
-    total_lengths = [5] * 10
-    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=10)
-    tp = make_tp(dp_size=4)
-
-    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, step_sample_indices=[list(range(10))]
-    )
-
-    # Per-step gbs = real sample count.
-    assert gbs_per_step == [10]
-    # Same num_mbs across ranks (PP sync).
-    for r in range(4):
-        assert len(mbi[r]) == sum(nmb), f"rank {r}: {len(mbi[r])} mbs, want {sum(nmb)}"
-    # All 10 samples assigned exactly once across ranks.
-    seen: set[int] = set()
-    for r in range(4):
-        assert seen.isdisjoint(partitions[r])
-        seen.update(partitions[r])
-    assert seen == set(range(10))
-    # Per-rank mbs respect the cap.
-    for r in range(4):
-        for mbs in mbi[r]:
-            assert sum(total_lengths[partitions[r][i]] for i in mbs) <= 10
-
-
-@pytest.mark.unit
-def test_dynamic_uneven_balanced_distribution():
-    """``--balance_data`` distributes mbs across DP ranks by KK on mbs token sums."""
-    total_lengths = [4, 4, 4, 4, 4, 4, 4, 4, 4]
-    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=8, balance_data=True)
-    tp = make_tp(dp_size=2)
-
-    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, step_sample_indices=[list(range(9))]
-    )
-
-    assert gbs_per_step == [9]
-    for r in range(2):
-        assert len(mbi[r]) == sum(nmb)
-    seen: set[int] = set()
-    for r in range(2):
-        seen.update(partitions[r])
-    assert seen == set(range(9))
-    for r in range(2):
-        for mbs in mbi[r]:
-            assert sum(total_lengths[partitions[r][i]] for i in mbs) <= 8
-
-
-@pytest.mark.unit
-def test_dynamic_low_K_padded_by_splitting():
-    """Few-but-large samples: first-fit produces fewer bins than dp_size, schedule
-    must split the largest bins until K reaches dp_size."""
-    total_lengths = [3, 3, 3, 3]
-    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=12)
-    tp = make_tp(dp_size=4)
-
-    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, step_sample_indices=[list(range(4))]
-    )
-
-    assert nmb == [1]
-    for r in range(4):
-        assert len(partitions[r]) >= 1
-    seen: set[int] = set()
-    for r in range(4):
-        seen.update(partitions[r])
-    assert seen == set(range(4))
-
-
-@pytest.mark.unit
-def test_near_equal_rollout_split_one_to_one():
-    """1 rollout = 1 sample: behaves like a contiguous-chunk split."""
-    assert near_equal_rollout_split(list(range(24)), num_steps=3) == [
-        list(range(0, 8)),
-        list(range(8, 16)),
-        list(range(16, 24)),
-    ]
-    assert near_equal_rollout_split(list(range(23)), num_steps=3) == [
-        list(range(0, 8)),
-        list(range(8, 16)),
-        list(range(16, 23)),
-    ]
-    assert near_equal_rollout_split(list(range(25)), num_steps=3) == [
-        list(range(0, 9)),
-        list(range(9, 17)),
-        list(range(17, 25)),
-    ]
-
-
-@pytest.mark.unit
-def test_near_equal_rollout_split_keeps_rollouts_together():
+def test_rollout_grouping_keeps_samples_together():
     """compact / subagent simulation: rollout 0 emits 3 samples, rollout 1 emits 2,
-    rollout 2 emits 4. Splitter must keep every rollout's samples in a single step
-    (so per-rollout loss aggregation is well-defined)."""
-    # rollout_indices in sample order: 3 from rollout 0, 2 from rollout 1, 4 from rollout 2
+    rollout 2 emits 4. Splitter keeps every rollout's samples in a single step."""
     rollout_indices = [0, 0, 0, 1, 1, 2, 2, 2, 2]
-    out = near_equal_rollout_split(rollout_indices, num_steps=3)
-    # 3 rollouts split into 3 steps → 1 rollout per step.
-    assert len(out) == 3
-    assert out[0] == [0, 1, 2]  # rollout 0's samples
-    assert out[1] == [3, 4]  # rollout 1's samples
-    assert out[2] == [5, 6, 7, 8]  # rollout 2's samples
-    # Per-step sample counts vary even though per-step rollout counts are equal.
-    assert [len(step) for step in out] == [3, 2, 4]
+    total_lengths = [3] * 9
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=12)
+    tp = make_tp(dp_size=1)
+
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
+        args, tp, total_lengths, global_batch_size=1, rollout_indices=rollout_indices
+    )
+
+    # 3 rollouts / 1 per step → 3 steps, gbs constant.
+    assert gbs_per_step == [1, 1, 1]
+    # For each step, collect the samples (global indices) that landed in that step's mbs
+    # on rank 0, then verify they exactly equal the rollout's sample positions.
+    expected_per_step = [[0, 1, 2], [3, 4], [5, 6, 7, 8]]
+    rank0_partition = partitions[0]
+    mbs_cursor = 0
+    for step_i, n_mbs in enumerate(nmb):
+        step_locals = sorted(j for mbs in mbi[0][mbs_cursor : mbs_cursor + n_mbs] for j in mbs)
+        step_globals = [rank0_partition[j] for j in step_locals]
+        assert (
+            sorted(step_globals) == expected_per_step[step_i]
+        ), f"step {step_i} samples = {step_globals}, expected {expected_per_step[step_i]}"
+        mbs_cursor += n_mbs
+    assert_invariants(
+        partitions,
+        mbi,
+        nmb,
+        dp_size=1,
+        expected_global_sample_indices=range(9),
+        total_lengths=total_lengths,
+        max_per_bin=12,
+    )
 
 
 @pytest.mark.unit
-def test_near_equal_rollout_split_uneven_rollout_count():
-    """5 rollouts, 2 steps → 3 rollouts in step 0, 2 in step 1 (rollouts differ
-    by at most 1 per step)."""
+def test_trims_trailing_rollouts_that_dont_fill_a_step():
+    """5 rollouts, gbs=2 → 2 steps × 2 rollouts; trailing rollout 4 (sample positions 6, 7)
+    is dropped."""
     rollout_indices = [0, 0, 1, 2, 2, 3, 4, 4]
-    out = near_equal_rollout_split(rollout_indices, num_steps=2)
-    assert len(out) == 2
-    # Step 0: rollouts 0, 1, 2 → sample positions 0, 1, 2, 3, 4
-    # Step 1: rollouts 3, 4 → sample positions 5, 6, 7
-    assert out[0] == [0, 1, 2, 3, 4]
-    assert out[1] == [5, 6, 7]
+    total_lengths = [3] * 8
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=12)
+    tp = make_tp(dp_size=1)
+
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
+        args, tp, total_lengths, global_batch_size=2, rollout_indices=rollout_indices
+    )
+
+    assert gbs_per_step == [2, 2]
+    # Sample positions 6 and 7 belong to the trimmed rollout 4 and must be absent.
+    assert_invariants(
+        partitions,
+        mbi,
+        nmb,
+        dp_size=1,
+        expected_global_sample_indices=range(6),
+        total_lengths=total_lengths,
+        max_per_bin=12,
+    )
 
 
 @pytest.mark.unit
-def test_near_equal_rollout_split_rejects_too_few_rollouts():
+def test_rejects_when_fewer_rollouts_than_gbs():
+    """gbs=4 with only 3 distinct rollouts → cannot form one step."""
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=12)
+    tp = make_tp(dp_size=1)
     with pytest.raises(AssertionError, match="num_rollouts"):
-        near_equal_rollout_split([0, 0, 0], num_steps=2)
-
-
-@pytest.mark.unit
-def test_near_equal_rollout_split_rejects_zero_steps():
-    with pytest.raises(AssertionError, match="num_steps"):
-        near_equal_rollout_split([0, 1, 2], num_steps=0)
-
-
-@pytest.mark.unit
-def test_validate_step_sample_indices_happy_path():
-    """Normal usage: complete cover, no overlap → returns normalised list."""
-    out = validate_step_sample_indices([range(0, 3), range(3, 8)], num_samples=8)
-    assert out == [[0, 1, 2], [3, 4, 5, 6, 7]]
-
-
-@pytest.mark.unit
-def test_validate_step_sample_indices_rejects_empty():
-    with pytest.raises(AssertionError, match="empty list of steps"):
-        validate_step_sample_indices([], num_samples=8)
-
-
-@pytest.mark.unit
-def test_validate_step_sample_indices_rejects_overlap():
-    with pytest.raises(AssertionError, match="reuses sample indices"):
-        validate_step_sample_indices([[0, 1, 2], [2, 3]], num_samples=4)
-
-
-@pytest.mark.unit
-def test_validate_step_sample_indices_rejects_out_of_range():
-    with pytest.raises(AssertionError, match="out-of-range"):
-        validate_step_sample_indices([[0, 1, 9]], num_samples=4)
-
-
-@pytest.mark.unit
-def test_validate_step_sample_indices_allows_dropping_with_warning(caplog):
-    """Dropping samples is allowed but should emit a warning."""
-    import logging
-
-    with caplog.at_level(logging.WARNING, logger="slime.utils.dp_schedule"):
-        out = validate_step_sample_indices([[0, 1]], num_samples=5)
-    assert out == [[0, 1]]
-    assert any("dropped 3 sample" in r.message for r in caplog.records)
+        build_dp_schedule(args, tp, [3] * 6, global_batch_size=4, rollout_indices=[0, 0, 1, 1, 2, 2])
 
 
 if __name__ == "__main__":
