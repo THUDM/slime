@@ -29,6 +29,7 @@ from slime.utils.processing_utils import (
 )
 from slime.utils.trace_utils import build_sglang_meta_trace_attrs, trace_function, trace_span
 from slime.utils.types import Sample
+from slime.utils.url_utils import get_default_router_url_from_args, get_model_url_from_args
 
 from .rm_hub import async_rm, batched_async_rm
 
@@ -61,6 +62,10 @@ def _prepare_prompt_ids(sample: Sample, tokenizer, processor: Any) -> list[int]:
     return tokenizer.encode(sample.prompt, add_special_tokens=False)
 
 
+def _default_router_url(args: Namespace, endpoint: str) -> str:
+    return get_default_router_url_from_args(args, endpoint)
+
+
 def get_model_url(args: Namespace, model_name: str, endpoint: str = "/generate") -> str:
     """Return the router URL for a named model.
 
@@ -73,11 +78,7 @@ def get_model_url(args: Namespace, model_name: str, endpoint: str = "/generate")
     Falls back to the default router if *model_name* is not found or
     ``sglang_model_routers`` is not set.
     """
-    routers = getattr(args, "sglang_model_routers", None)
-    if routers and model_name in routers:
-        ip, port = routers[model_name]
-        return f"http://{ip}:{port}{endpoint}"
-    return f"http://{args.sglang_router_ip}:{args.sglang_router_port}{endpoint}"
+    return get_model_url_from_args(args, model_name, endpoint)
 
 
 class GenerateState(metaclass=SingletonMeta):
@@ -155,7 +156,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         assert isinstance(sample.prompt, str)
 
     state = GenerateState(args)
-    url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
+    url = get_model_url(args, "default", "/generate")
 
     assert (
         sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
@@ -356,12 +357,19 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
     assert not state.aborted
     state.aborted = True
 
-    if parse(sglang_router.__version__) <= parse("0.2.1"):
-        response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers")
-        urls = response["urls"]
-    else:
-        response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers")
-        urls = [worker["url"] for worker in response["workers"]]
+    try:
+        if parse(sglang_router.__version__) <= parse("0.2.1"):
+            response = await get(_default_router_url(args, "/list_workers"))
+            urls = response["urls"]
+        else:
+            response = await get(_default_router_url(args, "/workers"))
+            urls = [worker["url"] for worker in response["workers"]]
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        if not getattr(args, "rollout_external", False) or getattr(response, "status_code", None) != 404:
+            raise
+        urls = [get_default_router_url_from_args(args, "/").rstrip("/")]
+        logger.info("Router workers endpoint is unavailable for external direct engine; aborting via base URL.")
 
     logger.info(f"Abort request for {urls}")
     abort_tasks = [post(f"{url}/abort_request", {"abort_all": True}) for url in urls]

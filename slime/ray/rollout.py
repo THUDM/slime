@@ -25,6 +25,7 @@ from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, co
 from slime.utils.misc import Box, group_by, load_function
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.types import Sample
+from slime.utils.url_utils import parse_external_engine_addr
 
 from ..utils.metric_utils import has_repetition
 from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
@@ -57,6 +58,7 @@ class ServerGroup:
     model_path: str | None = None  # checkpoint path for update_weights_from_disk
     router_ip: str | None = None
     router_port: int | None = None
+    router_url: str | None = None
 
     @property
     def nodes_per_engine(self):
@@ -98,16 +100,22 @@ class ServerGroup:
             global_rank = self.rank_offset + i
             num_gpus = 0.2
             num_cpus = num_gpus
+            scheduling_strategy = None
+            base_gpu_id = 0
 
-            # Get the base GPU ID from placement group using gpu_offset.
-            gpu_index = self.gpu_offset + i * num_gpu_per_engine
-            base_gpu_id = int(reordered_gpu_ids[gpu_index])
+            if self.args.rollout_external:
+                num_gpus = 0
+                num_cpus = 0.2
+            else:
+                # Get the base GPU ID from placement group using gpu_offset.
+                gpu_index = self.gpu_offset + i * num_gpu_per_engine
+                base_gpu_id = int(reordered_gpu_ids[gpu_index])
 
-            scheduling_strategy = PlacementGroupSchedulingStrategy(
-                placement_group=pg,
-                placement_group_capture_child_tasks=True,
-                placement_group_bundle_index=reordered_bundle_indices[gpu_index],
-            )
+                scheduling_strategy = PlacementGroupSchedulingStrategy(
+                    placement_group=pg,
+                    placement_group_capture_child_tasks=True,
+                    placement_group_bundle_index=reordered_bundle_indices[gpu_index],
+                )
 
             env_vars = {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST} | {
                 key: os.environ.get(key, default_val)
@@ -123,13 +131,18 @@ class ServerGroup:
                     "SLIME_ENABLE_PROFILING": "true",
                 }.items()
             }
-            rollout_engine = RolloutRayActor.options(
-                num_cpus=num_cpus,
-                num_gpus=num_gpus,
-                scheduling_strategy=scheduling_strategy,
-                runtime_env={
+            actor_options = {
+                "num_cpus": num_cpus,
+                "num_gpus": num_gpus,
+                "runtime_env": {
                     "env_vars": env_vars,
                 },
+            }
+            if scheduling_strategy is not None:
+                actor_options["scheduling_strategy"] = scheduling_strategy
+
+            rollout_engine = RolloutRayActor.options(
+                **actor_options
             ).remote(
                 self.args,
                 rank=global_rank,
@@ -219,6 +232,7 @@ class RolloutServer:
     server_groups: list[ServerGroup]
     router_ip: str | None = None
     router_port: int | None = None
+    router_url: str | None = None
     model_name: str = "default"
     update_weights: bool = True
 
@@ -400,7 +414,11 @@ class RolloutManager:
         metrics are disabled or no servers are running.
         """
         srv = self.server
-        if srv is None or srv.router_ip is None:
+        if srv is None:
+            return None
+        if srv.router_url is not None:
+            return srv.router_url
+        if srv.router_ip is None:
             return None
         return f"http://{srv.router_ip}:{srv.router_port}"
 
@@ -808,13 +826,14 @@ class RolloutManager:
 def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):
     addr_and_ports = {}
     for rank, _ in rollout_engines:
-        addr = args.rollout_external_engine_addrs[rank]
-        [host, port] = addr.split(":")
+        addr = parse_external_engine_addr(args.rollout_external_engine_addrs[rank])
         addr_and_ports[rank] = dict(
-            dist_init_addr=addr,
+            dist_init_addr=addr.dist_init_addr,
             nccl_port=None,
-            host=host,
-            port=int(port),
+            host=addr.host,
+            port=addr.port,
+            server_url=addr.base_url,
+            external_addr_is_url=addr.is_url,
         )
     return addr_and_ports
 
@@ -915,6 +934,10 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
     ``force_new`` is False, skip launching and return the existing values.
     When ``force_new`` is True (multi-model), always allocate a fresh port.
     """
+    if not force_new and getattr(args, "sglang_router_url", None):
+        addr = parse_external_engine_addr(args.sglang_router_url)
+        return addr.host, addr.port
+
     if not force_new and args.sglang_router_ip is not None:
         return args.sglang_router_ip, args.sglang_router_port
 
@@ -1006,6 +1029,7 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
 
         has_pd = model_cfg.has_pd_disaggregation
         router_ip, router_port = _start_router(args, has_pd_disaggregation=has_pd, force_new=(model_idx > 0))
+        router_url = getattr(args, "sglang_router_url", None) if model_idx == 0 else None
 
         # Write back for backward compat (first model only).
         if model_idx == 0:
@@ -1050,6 +1074,7 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
                 model_path=overrides.get("model_path", args.hf_checkpoint),
                 router_ip=router_ip,
                 router_port=router_port,
+                router_url=router_url,
             )
             engine_offset += num_engines
             gpu_offset += group_cfg.num_gpus
@@ -1105,12 +1130,15 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
             server_groups=server_groups,
             router_ip=router_ip,
             router_port=router_port,
+            router_url=router_url,
             model_name=model_cfg.name,
             update_weights=model_cfg.update_weights,
         )
 
     # Expose per-model router info for custom rollout functions.
-    args.sglang_model_routers = {name: (srv.router_ip, srv.router_port) for name, srv in servers.items()}
+    args.sglang_model_routers = {
+        name: srv.router_url or (srv.router_ip, srv.router_port) for name, srv in servers.items()
+    }
 
     return servers
 

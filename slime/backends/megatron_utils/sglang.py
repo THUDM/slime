@@ -1,4 +1,7 @@
 # the file to manage all sglang deps in the megatron actor
+from dataclasses import dataclass
+from enum import Enum
+
 try:
     from sglang.srt.layers.quantization.fp8_utils import quant_weight_ue8m0, transform_scale_ue8m0
     from sglang.srt.model_loader.utils import should_deepgemm_weight_requant_ue8m0
@@ -13,7 +16,31 @@ except ImportError:
     from sglang.srt.patch_torch import monkey_patch_torch_reductions
 
 
-from sglang.srt.managers.io_struct import DeltaEncoding, DeltaParam, DeltaSpec
+try:
+    from sglang.srt.managers.io_struct import DeltaEncoding, DeltaParam, DeltaSpec
+except ImportError:
+
+    class DeltaEncoding(str, Enum):
+        INDICES = "indices"
+        DELTAS = "deltas"
+        DELTAS_ZSTD = "deltas_zstd"
+
+    @dataclass
+    class DeltaParam:
+        name: str
+        dtype: str
+        shape: list[int]
+        pos_start: int
+        pos_end: int
+        pos_width: int
+        val_start: int
+        val_end: int
+
+    @dataclass
+    class DeltaSpec:
+        encoding: DeltaEncoding
+        params: list[DeltaParam]
+
 from sglang.srt.utils import MultiprocessingSerializer
 
 

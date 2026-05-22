@@ -528,7 +528,10 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
                 nargs="+",
-                help="Address and ports of the external engines.",
+                help=(
+                    "Address and ports of the external engines. Entries can be host:port or "
+                    "http(s)://... base URLs for engines exposed through an external gateway."
+                ),
             )
             return parser
 

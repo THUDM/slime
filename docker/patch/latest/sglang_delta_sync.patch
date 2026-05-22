@@ -133,8 +133,9 @@ index a7347c1..f1e32fe 100644
          self.is_draft_worker = is_draft_worker
          self.memory_pool_config = memory_pool_config
          self.is_generation = model_config.is_generation
-@@ -1347,6 +1358,13 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -1347,6 +1358,14 @@ class ModelRunner(ModelRunnerKVCacheMixin):
          recapture_cuda_graph: bool = False,
++        weight_version: Optional[str] = None,
      ) -> tuple[bool, str]:
          """Update engine weights in-place from the disk."""
 +        # Delta sync (``load_format == "delta"``): bulk-apply every per-flush
@@ -168,7 +169,7 @@ index a7347c1..f1e32fe 100644
          try:
              weights = []
              handles = []
-@@ -1652,6 +1677,212 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -1652,6 +1678,212 @@ class ModelRunner(ModelRunnerKVCacheMixin):
              logger.error(error_msg)
              return False, error_msg
  
@@ -381,7 +382,7 @@ index a7347c1..f1e32fe 100644
      def update_weights_from_tensor(
          self,
          named_tensors: List[Tuple[str, Union[torch.Tensor, "LocalSerializedTensor"]]],
-@@ -3071,6 +3302,168 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -3071,6 +3298,168 @@ class ModelRunner(ModelRunnerKVCacheMixin):
  
          return True, "Success"
  

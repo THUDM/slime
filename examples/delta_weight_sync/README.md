@@ -10,6 +10,7 @@ Both modes are lossless by construction (selective overwrite via NaN sentinel; n
 ## Files
 
 - `run-glm4.7-355B-A32B-delta.sh`: 16-node (8 actor + 8 rollout) GLM-4.7-355B-A32B launcher. Disk transport active by default; NCCL block commented below it.
+- `modal_delta_sync.py`: single-file Modal deployment for Qwen3-4B. It runs an autoinference-style SGLang rollout container behind `@modal.experimental.http_server`, applies the local SGLang delta patch, mounts the delta Volume, and includes the H100 slime trainer function plus local entrypoints.
 
 ## Usage
 
@@ -26,6 +27,30 @@ DELTA_ARGS=(
    --update-weight-encoding deltas_zstd
    --update-weight-delta-dir /shared/fs/delta-updates
 )
+```
+
+**Modal Volume + `http_server`:**
+
+Deploy the Qwen3-4B rollout server with one warm container:
+
+```bash
+MIN_CONTAINERS=1 uv run modal deploy examples/delta_weight_sync/modal_delta_sync.py
+```
+
+Launch a two-step end-to-end training smoke against the deployed app:
+
+```bash
+uv run --with requests modal run examples/delta_weight_sync/modal_delta_sync.py::launch_run --num-rollout 2
+```
+
+For custom trainer invocations, use the deployed URL as both the generation router and the external engine admin endpoint:
+
+```bash
+--rollout-external
+--sglang-router-url https://your-rollout-url.modal.run
+--rollout-external-engine-addrs https://your-rollout-url.modal.run
+--update-weight-delta-dir /delta
+--custom-delta-pre-push-path modal_delta_sync.commit_delta_volume
 ```
 
 **NCCL (baseline):**
