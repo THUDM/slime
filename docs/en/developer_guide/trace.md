@@ -31,6 +31,24 @@ The script generates:
 
 By default it also starts a local static server so you can open the generated HTML immediately. If you only want the files, use `--no-serve`.
 
+## Log traces to Trackio
+
+To inspect rollout traces in Trackio during a run, install Trackio and enable it in the training command:
+
+```bash
+pip install trackio
+
+python train.py \
+    ... \
+    --use-trackio \
+    --trackio-project slime-traces \
+    --trackio-run-name my-run
+```
+
+slime logs rollout and evaluation samples as `trackio.Trace` records. Each trace includes the prompt/response conversation plus metadata such as rollout id, step, sample index, group index, reward, status, and slime's internal span events.
+
+By default slime logs up to 32 samples per rollout to avoid very large trace uploads. Use `--trackio-max-traces-per-rollout 0` to log all samples.
+
 ## How to read the viewer
 
 - Each row corresponds to one sample.
@@ -116,4 +134,3 @@ with trace_span(sample, "sglang_generate") as span:
 - Save a small number of rollouts first; the viewer is easiest to read when each dump contains a manageable number of samples.
 - The viewer is built from the saved `.pt` dump, so traces can be inspected offline on another machine.
 - For GPU/kernel-level SGLang profiling traces, see [Profiling](./profiling.md).
-

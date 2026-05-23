@@ -1109,6 +1109,32 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
             return parser
 
+        # trackio
+        def add_trackio_arguments(parser):
+            parser.add_argument("--use-trackio", action="store_true", default=False)
+            parser.add_argument(
+                "--trackio-project",
+                type=str,
+                default=None,
+                help="Trackio project name. Defaults to --wandb-project or 'slime'.",
+            )
+            parser.add_argument(
+                "--trackio-run-name",
+                type=str,
+                default=None,
+                help="Trackio run name. Defaults to --wandb-group or 'slime-rank-{rank}'.",
+            )
+            parser.add_argument(
+                "--trackio-max-traces-per-rollout",
+                type=int,
+                default=32,
+                help=(
+                    "Maximum rollout/eval samples to log as Trackio traces per rollout. "
+                    "Set to 0 or a negative value to log all samples."
+                ),
+            )
+            return parser
+
         # debug
         def add_debug_arguments(parser):
             parser.add_argument(
@@ -1381,6 +1407,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_on_policy_distillation_arguments(parser)
         parser = add_wandb_arguments(parser)
         parser = add_tensorboard_arguments(parser)
+        parser = add_trackio_arguments(parser)
         parser = add_router_arguments(parser)
         parser = add_debug_arguments(parser)
         parser = add_network_arguments(parser)
