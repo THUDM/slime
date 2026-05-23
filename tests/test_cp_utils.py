@@ -5,25 +5,34 @@ samples (compact / subagent) must contribute exactly one token-weighted mean
 to the sum, even when first-fit packing puts those siblings into different
 micro-batches at training time.
 
-The tests stub the megatron CP world size to 1 so they run on CPU. The CP > 1
-path mirrors the cp_size == 1 logic (same denominator, sliced masks); the
-correctness contract this file pins is denominator handling, which is
-identical across the two branches.
+The CPU-only CI image does not ship megatron, so we stub
+``megatron.core.mpu`` *before* importing the module under test. The stub
+forces ``cp_size == 1``; the CP > 1 branch in ``get_sum_of_sample_mean``
+mirrors the cp_size == 1 denominator logic (same per-sample denoms, sliced
+masks), so the contracts pinned here apply to both paths.
 """
 
 from __future__ import annotations
 
-import pytest
-import torch
+import sys
+import types
 
-from megatron.core import mpu
+# --- Stub megatron.core.mpu (must run before the cp_utils import below) ---
+_fake_mpu = types.ModuleType("megatron.core.mpu")
+_fake_mpu.get_context_parallel_world_size = lambda: 1
+_fake_mpu.get_context_parallel_rank = lambda: 0
+_fake_core = types.ModuleType("megatron.core")
+_fake_core.mpu = _fake_mpu
+_fake_megatron = types.ModuleType("megatron")
+_fake_megatron.core = _fake_core
+sys.modules.setdefault("megatron", _fake_megatron)
+sys.modules.setdefault("megatron.core", _fake_core)
+sys.modules.setdefault("megatron.core.mpu", _fake_mpu)
 
+import pytest  # noqa: E402
+import torch  # noqa: E402
 
-@pytest.fixture(autouse=True)
-def force_cp_size_one(monkeypatch):
-    """Stub the CP world size so the reducer takes its cp_size==1 branch."""
-    monkeypatch.setattr(mpu, "get_context_parallel_world_size", lambda: 1)
-    monkeypatch.setattr(mpu, "get_context_parallel_rank", lambda: 0)
+from slime.backends.megatron_utils.cp_utils import get_sum_of_sample_mean  # noqa: E402
 
 
 def _make_inputs(per_sample_lengths: list[int]):
@@ -39,11 +48,15 @@ def _make_inputs(per_sample_lengths: list[int]):
     return total_lengths, response_lengths, loss_masks
 
 
+def _denoms(*values: int) -> torch.Tensor:
+    """Wrap per-sample denoms as the float tensor that the actor side promotes
+    them to before calling the reducer."""
+    return torch.tensor(values, dtype=torch.float32)
+
+
 @pytest.mark.unit
 def test_default_reduces_to_per_sample_mean():
     """``sample_denoms=None`` reproduces the legacy per-sample-mean."""
-    from slime.backends.megatron_utils.cp_utils import get_sum_of_sample_mean
-
     total_lengths, response_lengths, loss_masks = _make_inputs([3, 3, 3])
     reducer = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks)
     x = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0])
@@ -55,12 +68,10 @@ def test_default_reduces_to_per_sample_mean():
 def test_per_rollout_denom_collapses_siblings_into_one_mean():
     """Pre-computed per-rollout mask sums make N sibling samples contribute one
     token-weighted mean instead of N per-sample means."""
-    from slime.backends.megatron_utils.cp_utils import get_sum_of_sample_mean
-
     # 4 samples: rollout R0 owns indices 0,1,2 (mask sums 3+3+3=9); rollout R1
     # owns index 3 (mask sum 3). Pre-computed per-sample denom = group sum.
     total_lengths, response_lengths, loss_masks = _make_inputs([3, 3, 3, 3])
-    sample_denoms = [9, 9, 9, 3]
+    sample_denoms = _denoms(9, 9, 9, 3)
     reducer = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks, sample_denoms)
     x = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0])
     # R0 token-mean: (1+2+...+9)/9 = 5.  R1 token-mean: (10+11+12)/3 = 11.  Sum = 16.
@@ -74,11 +85,9 @@ def test_split_across_mbs_recovers_full_per_rollout_mean():
     the same pre-computed denominators. This is exactly the bug that motivated
     the precomputation — if the denom were computed per-mb (partial mask sum),
     the two halves wouldn't add up."""
-    from slime.backends.megatron_utils.cp_utils import get_sum_of_sample_mean
-
     # 4 samples (same as above). Whole-step denoms = [9, 9, 9, 3].
     total_lengths, response_lengths, loss_masks = _make_inputs([3, 3, 3, 3])
-    sample_denoms = [9, 9, 9, 3]
+    sample_denoms = _denoms(9, 9, 9, 3)
     x = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0])
 
     whole = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks, sample_denoms)
@@ -101,19 +110,17 @@ def test_split_with_per_mb_denom_would_be_wrong():
     sum, NOT the precomputed whole-rollout sum), the two halves DON'T add up
     to the whole-step value. This pins down WHY the precomputation must
     happen at the step level."""
-    from slime.backends.megatron_utils.cp_utils import get_sum_of_sample_mean
-
     total_lengths, response_lengths, loss_masks = _make_inputs([3, 3, 3, 3])
     x = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0])
 
-    whole = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks, [9, 9, 9, 3])
+    whole = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks, _denoms(9, 9, 9, 3))
     whole_value = whole(x).item()
 
     # Wrong denom: each mb only sees its own samples of R0.
     # mb_a's "rollout mask sum" for R0 would be 3+3=6 (instead of 9). mb_b's
     # would be 3. Different from the true whole-rollout total.
-    mb_a_wrong = get_sum_of_sample_mean(total_lengths[:2], response_lengths[:2], loss_masks[:2], [6, 6])
-    mb_b_wrong = get_sum_of_sample_mean(total_lengths[2:], response_lengths[2:], loss_masks[2:], [3, 3])
+    mb_a_wrong = get_sum_of_sample_mean(total_lengths[:2], response_lengths[:2], loss_masks[:2], _denoms(6, 6))
+    mb_b_wrong = get_sum_of_sample_mean(total_lengths[2:], response_lengths[2:], loss_masks[2:], _denoms(3, 3))
     wrong_total = mb_a_wrong(x[:6]).item() + mb_b_wrong(x[6:]).item()
 
     assert wrong_total != pytest.approx(whole_value), (

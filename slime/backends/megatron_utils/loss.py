@@ -928,18 +928,17 @@ def policy_loss_function(
             tis_func = vanilla_tis_function
         pg_loss, modified_response_masks, tis_metrics = tis_func(**tis_kwargs)
 
-        # [decouple IS and rejection] Rebuild sum_of_sample_mean with modified_response_masks for denominator correction
-        # modified_response_masks will be sliced with cp in get_sum_of_sample_mean.
-        # NOTE: we don't pass the per-rollout aggregate ``rollout_mask_sums``
-        # here because those were precomputed off ``loss_masks``, not the
-        # post-RS ``modified_response_masks`` — so we fall back to per-sample
-        # mean for the TIS-rebuild loss. Reported mismatch / TIS metrics
-        # continue to use the pre-RS rollout-aware reducer captured above.
+        # [decouple IS and rejection] Rebuild sum_of_sample_mean with
+        # modified_response_masks for numerator correction (rejected tokens
+        # zeroed in pg_loss). Denominators stay the precomputed per-rollout
+        # totals from ``rollout_mask_sums`` (based on original loss_masks) —
+        # same normalizer as the outer reducer, so pg_loss and the rest of the
+        # reported metrics live in the same per-rollout-mean space.
         sum_of_sample_mean = get_sum_of_sample_mean(
             total_lengths,
             response_lengths,
             modified_response_masks,
-            None,
+            batch["rollout_mask_sums"],
             args.calculate_per_token_loss,
             args.qkv_format,
             max_seq_lens,

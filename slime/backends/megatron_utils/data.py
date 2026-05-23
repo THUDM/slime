@@ -305,6 +305,10 @@ def log_rollout_data(
         loss_masks = rollout_data["loss_masks"]
         total_lengths = rollout_data["total_lengths"]
         max_seq_lens = rollout_data.get("max_seq_lens", None)
+        # Same per-rollout denominators the training loss uses, so reported
+        # log_probs / returns / advantages / etc. live in the same per-rollout
+        # mean space (rather than per-sample) as the gradient signal.
+        rollout_mask_sums = rollout_data.get("rollout_mask_sums", None)
 
         for key, val in rollout_data.items():
             if key in [
@@ -345,6 +349,7 @@ def log_rollout_data(
                             total_lengths,
                             response_lengths,
                             loss_masks,
+                            rollout_mask_sums,
                             qkv_format=args.qkv_format,
                             max_seq_lens=max_seq_lens,
                         )
@@ -436,8 +441,14 @@ def log_rollout_data(
             for p, val in correct_response_length_percentile.items():
                 rollout_data[f"correct_length/{p}"] = [val] * num_correct_responses
             if len(correct_entropy) > 0:
+                # NOTE: per-sample-mean over the correct subset, not per-rollout.
+                # A rollout's siblings may not all be correct, and slicing
+                # ``rollout_mask_sums`` here would leave a denom that still
+                # includes incorrect siblings — meaningless for a "correct-only"
+                # entropy report. Per-sample-mean over the filtered subset is
+                # the cleanest semantic.
                 sum_of_sample_mean = get_sum_of_sample_mean(
-                    correct_total_lengths, correct_response_lengths, correct_loss_masks
+                    correct_total_lengths, correct_response_lengths, correct_loss_masks, sample_denoms=None
                 )
                 correct_entropy = sum_of_sample_mean(torch.cat(correct_entropy, dim=0))
                 rollout_data["correct_entropy"] = [correct_entropy.item()] * num_correct_responses
