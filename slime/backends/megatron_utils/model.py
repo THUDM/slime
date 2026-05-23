@@ -497,7 +497,6 @@ def train_one_step(
                 "max_seq_lens",
                 "teacher_log_probs",
                 "rollout_mask_sums",
-                "rollout_sample_counts",
             ],
             args.data_pad_size_multiplier,
             args.qkv_format,
@@ -603,7 +602,11 @@ def train_one_step(
 
         loss_reduced = {}
         values = values.tolist()
-        num_samples_or_tokens = values[0]
+        # For per-token-loss the divisor is the all-reduced sum of per-mb
+        # token counts. For per-rollout-mean it is the constant rollout count
+        # per step, plumbed directly as ``step_global_batch_size``; the loss
+        # closure leaves a 0 placeholder in values[0] for that path.
+        num_samples_or_tokens = values[0] if args.calculate_per_token_loss else step_global_batch_size
         for key, value in zip(keys, values[1:], strict=False):
             loss_reduced[key] = value * mpu.get_context_parallel_world_size() / num_samples_or_tokens
         return loss_reduced, grad_norm

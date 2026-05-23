@@ -309,6 +309,14 @@ def log_rollout_data(
         # log_probs / returns / advantages / etc. live in the same per-rollout
         # mean space (rather than per-sample) as the gradient signal.
         rollout_mask_sums = rollout_data.get("rollout_mask_sums", None)
+        # For per-rollout-mean metrics we want gather_log_data's
+        # ``sum_total / count_total`` to land on ``step_global_batch_size``
+        # (= rollout count per step) so the rollout report matches what
+        # train_one_step reports for the same samples. Spread the rollout
+        # count evenly across DP ranks; the gather sums across DP so the
+        # total comes out to ``sum(global_batch_sizes)`` exactly.
+        dp_world = mpu.get_data_parallel_world_size(with_context_parallel=False)
+        rollout_count_per_rank = sum(rollout_data["global_batch_sizes"]) / dp_world
 
         for key, val in rollout_data.items():
             if key in [
@@ -318,7 +326,6 @@ def log_rollout_data(
                 "sample_indices",
                 "rollout_ids",
                 "rollout_mask_sums",
-                "rollout_sample_counts",
                 "rollout_routed_experts",
                 "max_seq_lens",
                 "global_batch_sizes",
@@ -354,8 +361,13 @@ def log_rollout_data(
                             max_seq_lens=max_seq_lens,
                         )
                         # cp_size cancels Megatron's CP division; result is the
-                        # sum-of-per-sample-means over this rank's samples.
+                        # sum-of-per-rollout-means over this rank's samples.
                         per_rank_sum = cp_size * sum_of_sample_mean(tensor)
+                        # Override count: the train side divides per-rollout-mean
+                        # sums by step_global_batch_size, so we route the gather's
+                        # divisor to the same number — independent of how many
+                        # samples landed on this rank.
+                        count = rollout_count_per_rank
                     else:
                         tensor = torch.cat(val).clone().detach()
                         # val.mean() * cp_size is the per-sample mean for one rank;

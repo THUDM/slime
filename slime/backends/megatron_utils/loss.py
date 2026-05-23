@@ -1169,11 +1169,6 @@ def loss_function(
           "values" (1D tensor: [count, metric1, metric2, ...]).
     """
     num_tokens = sum([torch.clamp_min(loss_mask.sum(), 1) for loss_mask in batch["loss_masks"]])
-    # Number of distinct rollouts this mb represents, expressed as a fraction
-    # per sample (``1 / rollout_size_for_sample``). Summed across mbs and DP it
-    # equals the step's real distinct-rollout count, regardless of whether a
-    # rollout's samples got split across micro-batches.
-    num_rollouts = sum(1.0 / c for c in batch["rollout_sample_counts"])
 
     sum_of_sample_mean = get_sum_of_sample_mean(
         batch["total_lengths"],
@@ -1226,9 +1221,16 @@ def loss_function(
         (num_tokens if args.calculate_per_token_loss else torch.tensor(1, device=logits.device)),
         {
             "keys": list(log.keys()),
+            # values[0] is the consumer's reporting denominator after
+            # all-reduce. For per-token-loss it must equal step total tokens
+            # (only known by summing per-mb num_tokens across mbs / DP). For
+            # per-rollout-mean it is a constant — ``step_global_batch_size`` —
+            # so we leave a 0 placeholder here and let ``train_one_step``
+            # substitute the constant directly, instead of routing it through
+            # per-mb fractions.
             "values": torch.tensor(
                 [
-                    num_rollouts if not args.calculate_per_token_loss else num_tokens,
+                    num_tokens if args.calculate_per_token_loss else 0,
                 ]
                 + list(log.values()),
                 device=logits.device,

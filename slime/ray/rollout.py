@@ -687,29 +687,22 @@ class RolloutManager:
             loss_masks.append(sample.loss_mask)
         train_data["loss_masks"] = loss_masks
 
-        # Per-rollout aggregates, precomputed at the step level (where we can
+        # Per-rollout aggregate, precomputed at the step level (where we can
         # see every sample of every rollout) and broadcast per-sample so the
-        # per-mb loss reducer / num_rollouts contribution use the correct
-        # whole-rollout values even when a rollout's samples land in different
-        # micro-batches (first-fit packing can split a rollout across mbs):
+        # per-mb loss reducer uses the correct whole-rollout denominator even
+        # when a rollout's samples land in different micro-batches (first-fit
+        # packing can split a rollout across mbs):
         #
-        #   - ``rollout_mask_sums[i]``  — sum of loss-mask totals over every
-        #     sample in sample i's rollout. Used as the reducer's denominator
-        #     so summing partial contributions across mbs yields one
-        #     token-weighted mean per rollout.
-        #   - ``rollout_sample_counts[i]`` — count of samples in sample i's
-        #     rollout. The loss side contributes ``1 / count`` per sample to
-        #     ``num_rollouts``; summed across mbs and DP this equals the
-        #     step's real distinct-rollout count.
+        #   ``rollout_mask_sums[i]`` — sum of loss-mask totals over every
+        #   sample in sample i's rollout. Used as the reducer's denominator
+        #   so summing partial contributions across mbs yields one
+        #   token-weighted mean per rollout.
         rollout_id_list = train_data["rollout_ids"]
         mask_sums_per_sample = [sum(m) for m in loss_masks]
         rollout_total_mask: dict[int, int] = {}
-        rollout_sample_count: dict[int, int] = {}
         for rid, ms in zip(rollout_id_list, mask_sums_per_sample, strict=True):
             rollout_total_mask[rid] = rollout_total_mask.get(rid, 0) + ms
-            rollout_sample_count[rid] = rollout_sample_count.get(rid, 0) + 1
         train_data["rollout_mask_sums"] = [rollout_total_mask[rid] for rid in rollout_id_list]
-        train_data["rollout_sample_counts"] = [rollout_sample_count[rid] for rid in rollout_id_list]
 
         # Overwrite raw_reward when available. Mixed-source batches may only
         # populate this field for a subset of samples (e.g. SWE but not code).
@@ -784,7 +777,6 @@ class RolloutManager:
                 "sample_indices",
                 "rollout_ids",
                 "rollout_mask_sums",
-                "rollout_sample_counts",
                 "rollout_log_probs",
                 "rollout_routed_experts",
                 "prompt",
