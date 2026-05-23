@@ -27,6 +27,7 @@ from slime.utils import logging_utils
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
+from .cp_utils import reduce_train_step_metrics
 from .data import DataIterator, get_batch
 from .loss import loss_function
 from .model_provider import get_model_provider_func
@@ -589,39 +590,13 @@ def train_one_step(
     optimizer.zero_grad()
 
     if mpu.is_pipeline_last_stage(ignore_virtual=True):
-        # Average loss across microbatches.
-        keys = losses_reduced[0]["keys"]
-        values = None
-        for x in losses_reduced:
-            if values is None:
-                values = x["values"]
-            else:
-                values += x["values"]
-        assert len(keys) + 1 == values.numel()
-        torch.distributed.all_reduce(values, group=mpu.get_data_parallel_group(with_context_parallel=True))
-
-        loss_reduced = {}
-        values = values.tolist()
-        # For per-token-loss the divisor is the all-reduced sum of per-mb
-        # token counts. Because each CP rank computes its own copy of
-        # ``values[0] = num_tokens`` from the FULL loss masks (not chunked),
-        # the all-reduce across DP*CP inflates it by ``cp_size`` — the
-        # multiplier below cancels that inflation.
-        #
-        # For per-rollout-mean the divisor is the constant
-        # ``step_global_batch_size`` plumbed from the rollout side: not
-        # all-reduced, not CP-inflated, so no ``* cp_size`` is needed (and
-        # including it would skew the reported number by ``cp_size`` once CP
-        # is on; the parallel-check CI only verifies grad_norm, not these
-        # reports).
-        if args.calculate_per_token_loss:
-            num_samples_or_tokens = values[0]
-            cp_factor = mpu.get_context_parallel_world_size()
-        else:
-            num_samples_or_tokens = step_global_batch_size
-            cp_factor = 1
-        for key, value in zip(keys, values[1:], strict=False):
-            loss_reduced[key] = value * cp_factor / num_samples_or_tokens
+        loss_reduced = reduce_train_step_metrics(
+            losses_reduced,
+            calculate_per_token_loss=args.calculate_per_token_loss,
+            step_global_batch_size=step_global_batch_size,
+            cp_size=mpu.get_context_parallel_world_size(),
+            dp_with_cp_group=mpu.get_data_parallel_group(with_context_parallel=True),
+        )
         return loss_reduced, grad_norm
     return {}, grad_norm
 

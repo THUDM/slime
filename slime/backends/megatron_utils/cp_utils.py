@@ -136,6 +136,114 @@ def get_sum_of_sample_mean(
     return sum_of_sample_mean if not calculate_per_token_loss else sum_of_token
 
 
+def reduce_train_step_metrics(
+    losses_reduced: list[dict],
+    *,
+    calculate_per_token_loss: bool,
+    step_global_batch_size: int,
+    cp_size: int,
+    dp_with_cp_group,
+) -> dict[str, float]:
+    """Aggregate per-mb log dicts into the dict ``train_one_step`` reports.
+
+    Pipeline (1:1 with what the train loop used to do inline):
+      1. Sum each metric's per-mb ``values`` tensor locally on this rank.
+      2. All-reduce across the DP*CP group (``dp_with_cp_group``).
+      3. Apply the per-mode divisor / cp_factor:
+         - per-token-loss: divisor = ``values[0]`` = all-reduced ``num_tokens``,
+           CP-inflated by ``cp_size`` because every CP rank computes the same
+           num_tokens off the FULL (not chunked) masks; the
+           ``cp_factor = cp_size`` multiplier cancels that inflation, leaving
+           the genuine per-token average.
+         - per-rollout-mean: divisor = constant ``step_global_batch_size`` from
+           the rollout side, never all-reduced, so no CP inflation to cancel
+           and ``cp_factor = 1``.
+
+    Tests pass a mock ``dp_with_cp_group`` and monkeypatch ``dist.all_reduce``
+    to a no-op, then pre-aggregate virtual ranks themselves — this exercises
+    the same call shape as production while staying single-process.
+    """
+    keys = losses_reduced[0]["keys"]
+    values = None
+    for x in losses_reduced:
+        values = x["values"] if values is None else values + x["values"]
+    assert len(keys) + 1 == values.numel()
+    dist.all_reduce(values, group=dp_with_cp_group)
+    values = values.tolist()
+
+    if calculate_per_token_loss:
+        num_samples_or_tokens = values[0]
+        cp_factor = cp_size
+    else:
+        num_samples_or_tokens = step_global_batch_size
+        cp_factor = 1
+    return {key: value * cp_factor / num_samples_or_tokens for key, value in zip(keys, values[1:], strict=False)}
+
+
+def rollout_log_metric_contribution(
+    per_rank_reducer_sum: float,
+    *,
+    cp_size: int,
+    num_rollouts_in_rollout: int,
+    dp_size: int,
+) -> tuple[float, float]:
+    """``(sum, count)`` tuple to hand the gather step for a per-rollout-mean
+    metric on the rollout side (``log_rollout_data``).
+
+    Sum across DP*CP ranks of ``count`` lands on ``num_rollouts_in_rollout``
+    (``dp_size`` here is the no-CP DP width; the gather covers ``dp_size *
+    cp_size`` ranks, and each rank emits the same ``count``, so the totals
+    cancel out the ``cp_size`` in the sum). Result: ``Σsum / Σcount =
+    sum_DP_full / num_rollouts`` — the same number ``train_one_step`` reports
+    for the same samples (when ``num_steps_per_rollout == 1``).
+
+    Pair with :func:`gather_and_reduce_log_dict` to do the full end-to-end
+    in tests (single helper call per rank, returns the reduced number on
+    the source rank).
+    """
+    sum_value = cp_size * per_rank_reducer_sum
+    count = num_rollouts_in_rollout / dp_size
+    return sum_value, count
+
+
+def gather_and_reduce_log_dict(
+    log_dict: dict,
+    *,
+    dp_size: int,
+    dp_src_rank: int,
+    dp_group,
+) -> dict | None:
+    """``dist.gather_object`` per-rank log_dicts + per-key reduction.
+
+    Per key in the gathered dicts:
+      - ``(sum, count)`` tuple → ``Σsum / Σcount`` (per-rollout-mean shape;
+        pair with :func:`rollout_log_metric_contribution`).
+      - plain value → ``Σ / dp_size`` (legacy mean-across-ranks; the only
+        correct answer when ranks hold the same data).
+
+    Returns the reduced dict on ``dp_src_rank``, ``None`` elsewhere. The
+    caller adds whatever metric-name prefix / wandb plumbing it wants —
+    this helper stays free of side effects so CPU multi-process unit tests
+    can drive it directly with real ``torch.distributed``.
+    """
+    if dist.get_rank() == dp_src_rank:
+        gathered = [None] * dp_size
+        dist.gather_object(log_dict, gathered, dst=dp_src_rank, group=dp_group)
+        reduced: dict = {}
+        for key in log_dict:
+            values = [d[key] for d in gathered]
+            first = values[0]
+            if isinstance(first, tuple) and len(first) == 2:
+                total_sum = sum(v[0] for v in values)
+                total_count = sum(v[1] for v in values)
+                reduced[key] = total_sum / total_count if total_count else 0.0
+            else:
+                reduced[key] = sum(values) / dp_size
+        return reduced
+    dist.gather_object(log_dict, None, dst=dp_src_rank, group=dp_group)
+    return None
+
+
 def all_gather_with_cp(tensor: torch.Tensor, total_length: int, response_length: int) -> torch.Tensor:
     """
     Gather tensors across all ranks in the context parallel group.
