@@ -339,5 +339,113 @@ def test_cp_chunking_preserves_per_rollout_mean_report(monkeypatch):
     assert cp_total == pytest.approx(baseline)
 
 
+@pytest.mark.unit
+def test_train_one_step_per_rollout_mean_report_invariant_to_cp(monkeypatch):
+    """End-to-end check of train_one_step's report formula across CP sizes.
+
+    Mirrors the actual reduction order:
+      1. Each (DP, CP) rank computes per-mb reducer output.
+      2. Per-rank values are summed across mbs locally.
+      3. All-reduce sums across DP*CP ranks.
+      4. ``loss_reduced[k] = value * cp_factor / num_samples_or_tokens``,
+         where ``cp_factor = 1`` because ``step_global_batch_size`` is a
+         constant plumbed from the rollout side and NOT all-reduce-inflated.
+
+    cp_size = 1 vs cp_size = 2 must give the same reported number — otherwise
+    wandb metrics would drift the moment a user enables CP, even though the
+    backward path (grad_norm parallel-check test) stays CP-consistent.
+    """
+    from megatron.core import mpu as _mpu
+
+    # 2 samples in 1 rollout (sample_denom = total mask sum across both = 16).
+    # 1 mb, 1 DP rank (so the "all-reduce" is just summing CP rank contributions).
+    total_lengths = [12, 12]
+    response_lengths = [8, 8]
+    loss_masks = [torch.ones(r, dtype=torch.float32) for r in response_lengths]
+    sample_denoms = torch.tensor([16.0, 16.0], dtype=torch.float32)
+    x_full = [
+        torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
+        torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]),
+    ]
+    step_global_batch_size = 1  # one rollout in the step
+
+    def simulate(cp_size: int) -> float:
+        """Mirror train_one_step end-to-end for one mb on one DP rank."""
+        monkeypatch.setattr(_mpu, "get_context_parallel_world_size", lambda: cp_size)
+        value_after_allreduce = 0.0
+        for cp_rank in range(cp_size):
+            monkeypatch.setattr(_mpu, "get_context_parallel_rank", lambda r=cp_rank: r)
+            if cp_size == 1:
+                x_for_rank = torch.cat(x_full)
+            else:
+                # Same CP chunking the forward pass would feed in.
+                x_chunks_per_sample = []
+                for tl, rl, x in zip(total_lengths, response_lengths, x_full, strict=True):
+                    prompt_length = tl - rl
+                    _, _, _, tokens_offset = get_logits_and_tokens_offset_with_cp(tl, rl)
+                    c0 = x[tokens_offset[0][0] - prompt_length : tokens_offset[0][1] - prompt_length]
+                    c1 = x[tokens_offset[1][0] - prompt_length : tokens_offset[1][1] - prompt_length]
+                    x_chunks_per_sample.append(torch.cat([c0, c1]))
+                x_for_rank = torch.cat(x_chunks_per_sample)
+            reducer = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks, sample_denoms)
+            value_after_allreduce += reducer(x_for_rank).item()
+        # train_one_step's final formula for per-rollout-mean: cp_factor = 1
+        # (step_global_batch_size is constant, no CP inflation to cancel).
+        return value_after_allreduce / step_global_batch_size
+
+    assert simulate(1) == pytest.approx(simulate(2))
+
+
+@pytest.mark.unit
+def test_train_one_step_per_token_loss_report_invariant_to_cp(monkeypatch):
+    """Same end-to-end check for the per-token-loss path: divisor is
+    ``values[0] = num_tokens`` (computed in loss.py from FULL loss masks),
+    which each CP rank duplicates and all-reduce sums by ``cp_size``. The
+    ``* cp_size`` multiplier cancels that inflation, so the report stays
+    CP-invariant.
+    """
+    from megatron.core import mpu as _mpu
+
+    total_lengths = [12, 12]
+    response_lengths = [8, 8]
+    loss_masks = [torch.ones(r, dtype=torch.float32) for r in response_lengths]
+    # num_tokens computed in loss.py from full loss_masks (not chunked).
+    # Same on every CP rank; all_reduce sums to num_tokens * cp_size.
+    num_tokens_per_mb = sum(int(m.sum().item()) for m in loss_masks)  # = 16
+    x_full = [
+        torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
+        torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]),
+    ]
+
+    def simulate(cp_size: int) -> float:
+        monkeypatch.setattr(_mpu, "get_context_parallel_world_size", lambda: cp_size)
+        # Per-token-loss path uses ``sum_of_token`` (no per-sample denom).
+        value_after_allreduce = 0.0
+        num_tokens_after_allreduce = 0
+        for cp_rank in range(cp_size):
+            monkeypatch.setattr(_mpu, "get_context_parallel_rank", lambda r=cp_rank: r)
+            if cp_size == 1:
+                x_for_rank = torch.cat(x_full)
+            else:
+                x_chunks_per_sample = []
+                for tl, rl, x in zip(total_lengths, response_lengths, x_full, strict=True):
+                    prompt_length = tl - rl
+                    _, _, _, tokens_offset = get_logits_and_tokens_offset_with_cp(tl, rl)
+                    c0 = x[tokens_offset[0][0] - prompt_length : tokens_offset[0][1] - prompt_length]
+                    c1 = x[tokens_offset[1][0] - prompt_length : tokens_offset[1][1] - prompt_length]
+                    x_chunks_per_sample.append(torch.cat([c0, c1]))
+                x_for_rank = torch.cat(x_chunks_per_sample)
+            reducer = get_sum_of_sample_mean(
+                total_lengths, response_lengths, loss_masks, calculate_per_token_loss=True
+            )
+            value_after_allreduce += reducer(x_for_rank).item()
+            num_tokens_after_allreduce += num_tokens_per_mb  # each CP rank duplicates
+        # train_one_step formula for per-token-loss: cp_factor = cp_size to
+        # cancel num_tokens_after_allreduce being cp_size-inflated.
+        return value_after_allreduce * cp_size / num_tokens_after_allreduce
+
+    assert simulate(1) == pytest.approx(simulate(2))
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
