@@ -34,6 +34,7 @@
         {'test_file': 'test_qwen2.5_0.5B_debug_rollout_then_train.py', 'num_gpus': 8},
         {'test_file': 'test_qwen2.5_0.5B_opd_sglang.py', 'num_gpus': 8},
         {'test_file': 'test_qwen2.5_0.5B_fully_async_short.py', 'num_gpus': 4},
+        {'test_file': 'test_qwen3_4B_streaming_partial_rollout.py', 'num_gpus': 8},
       ],
     },
     'e2e-test-precision': {
@@ -50,12 +51,13 @@
       ],
     },
 
-    'e2e-test-plugin-contracts': {
-      'label': 'run-ci-plugin-contracts',
+    'cpu-unittest': {
+      'label': 'run-ci-cpu-unittest',
       'always': True,
       'cpu': True,
       'tests': [
         {'test_file': 'test_megatron_argument_validation.py', 'num_gpus': 0},
+        {'test_file': 'test_dp_schedule.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_rollout_contracts.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_runtime_hook_contracts.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_path_loading_contracts.py', 'num_gpus': 0},

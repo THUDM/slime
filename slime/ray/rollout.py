@@ -18,12 +18,12 @@ from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupCo
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
+from slime.utils.dp_schedule import build_dp_schedule, compute_dynamic_global_batch_size
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.logging_utils import configure_logger, init_tracking
 from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
 from slime.utils.misc import Box, group_by, load_function
-from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.types import Sample
 
 from ..utils.metric_utils import has_repetition
@@ -488,7 +488,7 @@ class RolloutManager:
             # if debug rollout only, we don't convert samples to train data and directly return
             return
         data = self._convert_samples_to_train_data(data)
-        return self._split_train_data_by_dp(data, self.train_parallel_config["dp_size"])
+        return self._split_train_data_by_dp(data)
 
     def eval(self, rollout_id):
         if self.args.debug_train_only:
@@ -587,51 +587,7 @@ class RolloutManager:
             while isinstance(data[0], list):
                 data = list(itertools.chain.from_iterable(data))
 
-            if not self.args.disable_rollout_trim_samples and not self.args.debug_rollout_only:
-                global_batch_size = self.args.global_batch_size
-                if self.args.use_dynamic_global_batch_size:
-                    logger.info(f"Collected {len(data)} samples from rollout to train with dynamic global batch size")
-                    # TODO: this is a temporary solution, we should directly save dynamic_global_batch_size to rollout data
-                    self._dynamic_global_batch_size = self._compute_dynamic_global_batch_size(len(data))
-                    global_batch_size = self._dynamic_global_batch_size
-
-                if len(data) % global_batch_size != 0:
-                    trim_len = (len(data) // global_batch_size) * global_batch_size
-                    if trim_len == 0:
-                        raise ValueError(f"Not enough samples {len(data)} for global_batch_size {global_batch_size}")
-                    origin_data_length = len(data)
-                    data = data[:trim_len]
-                    logger.info(f"trim number of samples from {origin_data_length} to {trim_len}")
-                logger.info(f"Final collected {len(data)} samples from rollout to train")
-
         return data, metrics
-
-    def _compute_dynamic_global_batch_size(self, num_samples: int) -> int:
-        """Calculate dynamic global_batch_size to ensure only one training step.
-
-        Strategy: global_batch_size = num_samples rounded down to a multiple of dp_size
-        This ensures num_steps_per_rollout = num_samples // global_batch_size = 1
-        """
-        dp_size = self.train_parallel_config["dp_size"]
-        original_gbs = self.args.global_batch_size
-
-        # Round down to a multiple of dp_size to ensure only one training step
-        dynamic_gbs = (num_samples // dp_size) * dp_size
-
-        if dynamic_gbs == 0:
-            # Too few samples, use at least dp_size
-            dynamic_gbs = dp_size
-            logger.warning(f"num_samples={num_samples} < dp_size={dp_size}, using dp_size as global_batch_size")
-
-        # Calculate how many samples will be discarded
-        wasted = num_samples - dynamic_gbs
-
-        if dynamic_gbs != original_gbs or wasted > 0:
-            logger.info(
-                f"Dynamic global_batch_size: {original_gbs} -> {dynamic_gbs} (num_samples={num_samples}, dp_size={dp_size}, num_steps=1, wasted={wasted})"
-            )
-
-        return dynamic_gbs
 
     def _save_debug_rollout_data(self, data, rollout_id, evaluation: bool):
         # TODO to be refactored (originally Buffer._set_data)
@@ -751,27 +707,52 @@ class RolloutManager:
     def set_train_parallel_config(self, config: dict):
         self.train_parallel_config = config
 
-    def _split_train_data_by_dp(self, data, dp_size):
-        """Split the train data by data parallel size."""
-        rollout_data = {}
+    def _split_train_data_by_dp(self, data):
+        """Resolve gbs, trim ``data``, compute the DP/mbs schedule, and package each
+        rank's rollout_data into a Ray Box. The schedule itself is computed by
+        :func:`build_dp_schedule` so it stays unit-testable without Ray/sglang."""
+        dp_size = self.train_parallel_config["dp_size"]
 
-        if "prompt" in data:
-            rollout_data["prompt"] = data["prompt"]
+        # 1. Resolve effective global_batch_size
+        dynamic_gbs: int | None = None
+        if self.args.use_dynamic_global_batch_size and not self.args.disable_rollout_trim_samples:
+            dynamic_gbs = compute_dynamic_global_batch_size(len(data["tokens"]), dp_size)
+            if dynamic_gbs != self.args.global_batch_size:
+                logger.info(
+                    f"Dynamic global_batch_size: {self.args.global_batch_size} -> {dynamic_gbs} "
+                    f"(num_samples={len(data['tokens'])}, dp_size={dp_size}, num_steps=1)"
+                )
+            global_batch_size = dynamic_gbs
+        else:
+            global_batch_size = self.args.global_batch_size
 
+        # 2. Trim data to a multiple of global_batch_size
+        if not self.args.disable_rollout_trim_samples:
+            num_samples = len(data["tokens"])
+            trim_len = num_samples // global_batch_size * global_batch_size
+            if trim_len == 0:
+                raise ValueError(f"Not enough samples {num_samples} for global_batch_size {global_batch_size}")
+            if trim_len < num_samples:
+                logger.info(f"Trimmed samples from {num_samples} to {trim_len}")
+                for key, val in data.items():
+                    if isinstance(val, list):
+                        data[key] = val[:trim_len]
+
+        # 3. Compute schedule
         total_lengths = [len(t) for t in data["tokens"]]
         data["total_lengths"] = total_lengths
+        partitions, micro_batch_indices, num_microbatches, global_batch_sizes = build_dp_schedule(
+            self.args,
+            self.train_parallel_config,
+            total_lengths,
+            global_batch_size=global_batch_size,
+        )
 
-        if self.args.balance_data:
-            partitions = get_seqlen_balanced_partitions(total_lengths, dp_size, equal_size=True)
-        else:
-            partitions = [range(i, len(total_lengths), dp_size) for i in range(dp_size)]
-
+        # 4. Package per-rank rollout_data
         rollout_data_refs = []
-
-        for i in range(dp_size):
-            rollout_data = {}
-            partition = partitions[i]
-            rollout_data["partition"] = partition
+        for r in range(dp_size):
+            partition = partitions[r]
+            rollout_data = {"partition": partition}
             for key in [
                 "tokens",
                 "multimodal_train_inputs",
@@ -788,19 +769,19 @@ class RolloutManager:
             ]:
                 if key not in data:
                     continue
-                val = [data[key][j] for j in partition]
-                rollout_data[key] = val
+                rollout_data[key] = [data[key][j] for j in partition]
             # keys that need to be splited at train side
-            for key in [
-                "raw_reward",
-                "total_lengths",
-            ]:
+            for key in ["raw_reward", "total_lengths"]:
                 if key not in data:
                     continue
                 rollout_data[key] = data[key]
-            # Pass dynamic global_batch_size to training side
-            if hasattr(self, "_dynamic_global_batch_size"):
-                rollout_data["dynamic_global_batch_size"] = self._dynamic_global_batch_size
+            # Per-step sample count (total across DP). Train side normalises by
+            # this instead of assuming each rank holds the same N samples; once
+            # uneven-DP partition lands, this is the only field that has to
+            # change shape.
+            rollout_data["global_batch_sizes"] = global_batch_sizes
+            rollout_data["num_microbatches"] = num_microbatches
+            rollout_data["micro_batch_indices"] = micro_batch_indices[r]
             rollout_data_refs.append(Box(ray.put(rollout_data)))
         return rollout_data_refs
 
@@ -1255,7 +1236,7 @@ def _compute_zero_std_metrics(args, all_samples: list[Sample]):
 
 
 def _compute_spec_metrics(args, all_samples: list[Sample]):
-    if args.sglang_speculative_algorithm is None:
+    if getattr(args, "sglang_speculative_algorithm", None) is None:
         return {}
     num_samples = len(all_samples)
     metrics = {}
