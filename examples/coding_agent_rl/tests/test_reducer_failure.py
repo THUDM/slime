@@ -253,6 +253,34 @@ def test_collapse_with_single_segment_keeps_it() -> None:
     assert sample.reward == 1.0
 
 
+def test_generate_guard_aborts_on_timeout() -> None:
+    """SWE_GENERATE_GUARD_SEC: when _generate_inner runs longer than guard
+    seconds, generate() should return an _abort sample with reason
+    'wall_clock_timeout' instead of raising."""
+    import asyncio as _asyncio
+
+    # Stub _generate_inner with a sleep > guard
+    original_inner = gen._generate_inner
+    original_guard = gen.SWE_GENERATE_GUARD_SEC
+
+    async def _slow_inner(args, sample, sampling_params):
+        await _asyncio.sleep(2.0)  # > guard
+        return sample
+
+    gen._generate_inner = _slow_inner
+    gen.SWE_GENERATE_GUARD_SEC = 1  # 1s guard
+
+    try:
+        sample = _FakeSample()
+        sample.metadata = {"instance_id": "guard-test"}
+        out = _asyncio.run(gen.generate(None, sample, {}))
+        assert out.status == _Status.ABORTED
+        assert "wall_clock_timeout" in (out.metadata.get("abort_reason") or "")
+    finally:
+        gen._generate_inner = original_inner
+        gen.SWE_GENERATE_GUARD_SEC = original_guard
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

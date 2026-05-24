@@ -92,6 +92,16 @@ SWE_HOST_CC_TARBALL = Path(os.environ.get(
 ))
 SWE_TIME_BUDGET_SEC = int(os.environ.get("SWE_TIME_BUDGET_SEC", "900"))
 SWE_EVAL_TIMEOUT_SEC = int(os.environ.get("SWE_EVAL_TIMEOUT_SEC", "600"))
+# Wall-clock guard for the entire generate() call. Defaults to
+# SWE_TIME_BUDGET_SEC + SWE_EVAL_TIMEOUT_SEC + 180 (buffer for sandbox boot,
+# diff capture, etc). When exceeded, the in-flight sample is aborted with
+# reason `wall_clock_timeout` and the rest of the rollout continues -- this
+# replaces the external builtin TimeoutError observed in run
+# planD_e2_pr1933_fanout_20260524_073011 (see r5 doc) that killed the whole
+# step when a single trajectory hung in sandbox.evaluate.
+SWE_GENERATE_GUARD_SEC = int(
+    os.environ.get("SWE_GENERATE_GUARD_SEC", "0") or 0
+) or (SWE_TIME_BUDGET_SEC + SWE_EVAL_TIMEOUT_SEC + 180)
 SWE_MAX_RESPONSE_TOKENS = int(os.environ.get("SWE_MAX_RESPONSE_TOKENS", "0") or 0)
 # SWE_LIST_TRAJECTORY: 0 (default) = collapse segments into 1 Sample
 # (main-repo behavior; avoids fan-out sample-count explosion that triggers
@@ -337,6 +347,44 @@ def _fan_out_with_fail_soft(
 # Main per-sample agent function
 # ---------------------------------------------------------------------------
 async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
+    """Wall-clock-guarded wrapper around the inner generate logic. See
+    SWE_GENERATE_GUARD_SEC docstring above."""
+    t0 = time.time()
+    try:
+        return await asyncio.wait_for(
+            _generate_inner(args, sample, sampling_params),
+            timeout=SWE_GENERATE_GUARD_SEC,
+        )
+    except asyncio.TimeoutError:
+        elapsed = time.time() - t0
+        # Diagnostic: dump current pending tasks so future debugging can
+        # see which await was stuck. Do not raise; let _abort handle it.
+        try:
+            pending = [
+                t for t in asyncio.all_tasks() if not t.done()
+            ]
+            stuck_summary = []
+            for t in pending[:5]:  # cap to avoid log spam
+                coro = getattr(t, "_coro", None)
+                name = getattr(coro, "__qualname__", repr(coro))
+                stuck_summary.append(name)
+            logger.warning(
+                "[coding_agent_rl] generate() wall_clock_timeout after %.1fs "
+                "(guard=%ds); %d tasks pending; sample of stuck: %s",
+                elapsed, SWE_GENERATE_GUARD_SEC, len(pending), stuck_summary,
+            )
+        except Exception:  # pragma: no cover - diag must never crash
+            pass
+        return _abort(sample, "wall_clock_timeout")
+    # Note: builtin TimeoutError (e.g., from concurrent.futures) was the
+    # observed failure mode in run 073011. wait_for raises asyncio.TimeoutError
+    # which is a subclass of builtin TimeoutError in Python >= 3.11 (PEP 657
+    # made them the same class); the except above catches both. Other
+    # exceptions still bubble up so _generate_inner's own try-except can
+    # handle them.
+
+
+async def _generate_inner(args, sample: Sample, sampling_params: dict[str, Any]):
     state = _State(args)
     md = _metadata(sample)
     if not md["image"] or not md["workdir"]:
