@@ -234,6 +234,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --recompute-num-layers 1 \
     --max-tokens-per-gpu "${MAX_TOKENS_PER_GPU}" \
     --log-probs-chunk-size "${LOG_PROBS_CHUNK_SIZE}" \
+    --use-dynamic-batch-size \
     --rollout-num-gpus 64 \
     --rollout-num-gpus-per-engine 8 \
     --sglang-mem-fraction-static "${SGLANG_MEM_FRACTION_STATIC}" \
