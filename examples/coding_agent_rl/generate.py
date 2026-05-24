@@ -248,6 +248,14 @@ def _default_uniform_fan_out(
     SPEC §6.1 metadata fields (segment_kind, finish_reason, num_aborts,
     tito_masked_turns, segment_idx, num_segments, ...)."""
     K = len(segments)
+    # PR #1933 port: all K segments from one trajectory must share the same
+    # rollout_id so the loss reducer counts the trajectory once (per-rollout
+    # mean) instead of K times (per-sample mean). sample_proto.index is the
+    # dataset row id used as the per-rollout unique identifier in the default
+    # rollout shape; reuse it as rollout_id. This also makes the
+    # _validate_rollout_id_annotated check (depth>=2 leaf) happy if/when SWE
+    # output is wrapped into a list-of-list-of-sample shape.
+    trajectory_rollout_id = getattr(sample_proto, "index", None)
     out: list[Sample] = []
     for i, (prompt_ids, response_ids, loss_mask, seg_meta) in enumerate(segments):
         sub = sample_proto if i == 0 else copy.copy(sample_proto)
@@ -258,6 +266,7 @@ def _default_uniform_fan_out(
         sub.response = tokenizer.decode(response_ids, skip_special_tokens=False)
         sub.reward = float(reward) / max(1, K)
         sub.status = Sample.Status.COMPLETED
+        sub.rollout_id = trajectory_rollout_id
         # Merge segment meta fields (segment_kind, finish_reason, etc.).
         merged: dict[str, Any] = {**(sub.metadata or {}),
                                   "instance_id": instance_id,
