@@ -93,6 +93,12 @@ SWE_HOST_CC_TARBALL = Path(os.environ.get(
 SWE_TIME_BUDGET_SEC = int(os.environ.get("SWE_TIME_BUDGET_SEC", "900"))
 SWE_EVAL_TIMEOUT_SEC = int(os.environ.get("SWE_EVAL_TIMEOUT_SEC", "600"))
 SWE_MAX_RESPONSE_TOKENS = int(os.environ.get("SWE_MAX_RESPONSE_TOKENS", "0") or 0)
+# SWE_LIST_TRAJECTORY: 0 (default) = collapse segments into 1 Sample
+# (main-repo behavior; avoids fan-out sample-count explosion that triggers
+# host pinned-memory pressure and GPU wake_up OOM). Single-sample mode
+# uses the FINAL segment (reward-bearing segment, post-final-compact-reset)
+# as the trajectory tokens. 1 = enable fan-out (one Sample per segment).
+SWE_LIST_TRAJECTORY = os.environ.get("SWE_LIST_TRAJECTORY", "0") == "1"
 SWE_TOOL_PARSER = os.environ.get("SWE_TOOL_PARSER", "") or None
 SWE_REASONING_PARSER = os.environ.get("SWE_REASONING_PARSER", "") or None
 # Q5 / SPEC §6.2: renamed from SWE_SAVE_TRAJECTORY_TREE; semantics narrowed
@@ -197,6 +203,39 @@ async def _provision_sandbox(image: str):
 # ---------------------------------------------------------------------------
 # Segment fan-out (D4 / U4: default uniform + fail-soft reducer wrapper)
 # ---------------------------------------------------------------------------
+def _collapse_to_final_segment(
+    sample: Sample,
+    segments: list[tuple[list[int], list[int], list[int], dict]],
+    reward: float,
+    tokenizer,
+) -> Sample:
+    """Stage 14 OOM fix: mutate `sample` to carry only the FINAL segment
+    (reward-bearing post-final-compact-reset segment).
+
+    Activated by ``SWE_LIST_TRAJECTORY=0`` (default). Avoids fan-out
+    sample-count explosion (16 -> ~80) that bloats ray.put + host pinned
+    mem and triggers GPU wake_up OOM. See OOM root-cause analysis
+    2026-05-24 in stage14_oom_rootcause_fanout.md.
+
+    The middle K-1 segments are intentionally dropped here. Long-term
+    alternative is per-segment fan-out + PR #1933 per-rollout reducer;
+    that is the Plan-D long-arm. This collapse is the short-arm.
+    """
+    prompt_ids, response_ids, loss_mask, seg_meta = segments[-1]
+    sample.tokens = list(prompt_ids) + list(response_ids)
+    sample.response_length = len(response_ids)
+    sample.loss_mask = list(loss_mask)
+    sample.response = tokenizer.decode(response_ids, skip_special_tokens=False)
+    sample.reward = float(reward)
+    sample.status = Sample.Status.COMPLETED
+    sample.metadata = {
+        **(sample.metadata or {}),
+        **seg_meta,
+        "num_segments_collapsed": len(segments),
+    }
+    return sample
+
+
 def _default_uniform_fan_out(
     segments: list[tuple[list[int], list[int], list[int], dict]],
     reward: float,
@@ -352,6 +391,22 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
         "applied_cleanly": bool(applied_cleanly),
         "elapsed_sec": elapsed,
     }
+
+    # SWE_LIST_TRAJECTORY=0 (default): collapse to single Sample using the
+    # FINAL segment. Avoids fan-out sample-count explosion (16 -> ~80) that
+    # bloats ray.put + host pinned mem and triggers GPU wake_up OOM. See
+    # OOM root-cause analysis 2026-05-24.
+    if not SWE_LIST_TRAJECTORY:
+        _collapse_to_final_segment(sample, segments, reward, state.tokenizer)
+        if SWE_DUMP_RAW_TRAJECTORY:
+            sample.metadata["trajectory_raw_dump"] = raw_dump
+        logger.info(
+            "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs "
+            "single-sample collapsed_segments=%d",
+            instance_id, reward, is_solved, applied_cleanly, elapsed, len(segments),
+        )
+        return sample
+
     fanned = _fan_out_with_fail_soft(state, segments, reward, sample, instance_id)
     # Attach raw_dump only to segment 0 (avoid duplication).
     if SWE_DUMP_RAW_TRAJECTORY and fanned and isinstance(fanned[0], Sample):

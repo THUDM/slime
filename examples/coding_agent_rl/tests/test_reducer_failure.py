@@ -13,8 +13,7 @@ import sys
 import types
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))  # worktree root for examples.* + slime.*
 
 
 # ---------------------------------------------------------------------------
@@ -76,8 +75,8 @@ _spec = _ilu.spec_from_file_location(
 )
 gen = _ilu.module_from_spec(_spec)
 # Stub the relative imports BEFORE exec_module runs.
-import middleware as _mw_stub  # noqa: E402
-import sandbox as _sb_stub  # noqa: E402
+from examples.coding_agent_rl import middleware as _mw_stub  # noqa: E402
+from examples.coding_agent_rl import sandbox as _sb_stub  # noqa: E402
 sys.modules["_gen_under_test.middleware"] = _mw_stub
 sys.modules["_gen_under_test.sandbox"] = _sb_stub
 _pkg = types.ModuleType("_gen_pkg")
@@ -198,6 +197,60 @@ def test_fan_out_happy_path_passthrough() -> None:
     assert len(out) == 1
     assert out[0].status == _Status.COMPLETED
     assert out[0].reward == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Stage 14: SWE_LIST_TRAJECTORY=0 collapse path (avoid fan-out OOM)
+# ---------------------------------------------------------------------------
+def test_collapse_to_final_segment_picks_last_segment() -> None:
+    """K segments -> sample.tokens == final segment only; reward unchanged
+    (not /K split); metadata records num_segments_collapsed."""
+    segs = [
+        ([1, 2], [10, 11], [1, 1], {"segment_kind": "subagent", "completed_turns": 3,
+                                      "finish_reason": "end_turn", "num_aborts": 0,
+                                      "tito_masked_turns": 0}),
+        ([1, 2], [20, 21], [1, 1], {"segment_kind": "pre_wipe", "completed_turns": 4,
+                                      "finish_reason": "compact", "num_aborts": 0,
+                                      "tito_masked_turns": 1}),
+        ([3, 4, 5], [30, 31, 32, 33], [1, 1, 1, 1],
+         {"segment_kind": "final", "completed_turns": 6,
+          "finish_reason": "stop", "num_aborts": 0,
+          "tito_masked_turns": 2}),
+    ]
+    sample = _FakeSample()
+    sample.metadata = {"foo": "bar"}
+    out = gen._collapse_to_final_segment(sample, segs, 0.875, _DummyTok())
+    # in-place mutation: returned object is the same sample
+    assert out is sample
+    # picks the FINAL (third) segment
+    assert sample.tokens == [3, 4, 5, 30, 31, 32, 33]
+    assert sample.response_length == 4
+    assert sample.loss_mask == [1, 1, 1, 1]
+    # reward is the trajectory-level scalar, NOT divided by K
+    assert sample.reward == 0.875
+    assert sample.status == _Status.COMPLETED
+    # final segment's metadata is merged in
+    assert sample.metadata["segment_kind"] == "final"
+    assert sample.metadata["finish_reason"] == "stop"
+    assert sample.metadata["tito_masked_turns"] == 2  # trajectory-cumulative
+    # Stage 14 audit field: how many segments were dropped to avoid fan-out
+    assert sample.metadata["num_segments_collapsed"] == 3
+    # carry-over preserved
+    assert sample.metadata["foo"] == "bar"
+
+
+def test_collapse_with_single_segment_keeps_it() -> None:
+    """K=1: collapse degenerates to identity (no segments lost)."""
+    segs = [
+        ([7], [70, 71], [1, 1], {"segment_kind": "final", "completed_turns": 2,
+                                   "finish_reason": "stop", "num_aborts": 0,
+                                   "tito_masked_turns": 0}),
+    ]
+    sample = _FakeSample()
+    gen._collapse_to_final_segment(sample, segs, 1.0, _DummyTok())
+    assert sample.tokens == [7, 70, 71]
+    assert sample.metadata["num_segments_collapsed"] == 1
+    assert sample.reward == 1.0
 
 
 if __name__ == "__main__":
