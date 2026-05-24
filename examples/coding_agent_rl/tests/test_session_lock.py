@@ -11,10 +11,9 @@ import asyncio
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))  # worktree root for examples.* + slime.*
 
-import middleware as mw  # noqa: E402
+from examples.coding_agent_rl import middleware as mw  # noqa: E402
 
 
 def test_session_lock_serializes_same_sid() -> None:

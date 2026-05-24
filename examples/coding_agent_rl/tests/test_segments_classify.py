@@ -12,10 +12,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))  # repo root for slime.*
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # examples/coding_agent_rl
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))  # worktree root for examples.* + slime.*
 
-import middleware as mw  # noqa: E402
+from examples.coding_agent_rl import middleware as mw  # noqa: E402
 
 
 def test_pre_wipe_detection() -> None:

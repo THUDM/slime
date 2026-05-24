@@ -66,7 +66,11 @@ from typing import Any, Awaitable, Callable
 import aiohttp
 from aiohttp import web
 
-from aiohttp_threaded import AppHandle, run_app_in_thread  # U5: was slime.utils.aiohttp_threaded
+# U5 (SPEC §10.3): aiohttp_threaded lives next to middleware.py (not in
+# slime/utils/). Relative import works in both ray-worker mode
+# (examples.coding_agent_rl.middleware) and smoke-test mode (pytest run from
+# the worktree root with examples/ as a real package).
+from .aiohttp_threaded import AppHandle, run_app_in_thread
 
 logger = logging.getLogger(__name__)
 
