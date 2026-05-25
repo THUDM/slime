@@ -25,6 +25,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 from typing import Any
@@ -35,6 +36,14 @@ from aiohttp import web
 from .aiohttp_threaded import AppHandle, run_app_in_thread
 
 logger = logging.getLogger(__name__)
+
+# Per-segment hard cap on prompt+response token count. Drops any segment
+# (subagent / pre_wipe / final) over this — claude-code auto-compact estimates
+# in its own tokenizer space, so a 100k autoCompactWindow can produce 130k+
+# Qwen-tokenized segments after sub-agent dispatch reads large files. Such
+# segments OOM fused CE on actor_train (single sample dynamic-batch can't
+# split). 0 disables the cap.
+_MAX_SEGMENT_TOKENS = int(os.environ.get("SWE_MAX_SEGMENT_TOKENS", "96000") or 0)
 
 # Qwen3 reasoning chat template auto-injects this before any completed
 # assistant `content` that has no `reasoning_content` entry. The raw-splice
@@ -495,22 +504,40 @@ def pop_session_split(session: Session) -> list[
     tuple[list[int], list[int], list[int], dict],
 ]:
     """Drain any in-flight sub-agent, then replay _emit_order chronologically
-    and append the final main-line segment. Empty-response segments dropped."""
+    and append the final main-line segment. Empty-response segments dropped;
+    oversized (prompt+response > SWE_MAX_SEGMENT_TOKENS) segments also dropped."""
     if session.active_sub is not None:
         _snapshot_chain(session, session.active_sub, "subagent")
         session.active_sub = None
 
     segments: list[tuple[list[int], list[int], list[int], dict]] = []
+    dropped: list[tuple[str, int]] = []
     for _kind, (p, r, m, meta) in session._emit_order:
-        if r:
-            segments.append((p, r, m, dict(meta)))
+        if not r:
+            continue
+        total = len(p) + len(r)
+        if _MAX_SEGMENT_TOKENS > 0 and total > _MAX_SEGMENT_TOKENS:
+            dropped.append((meta.get("segment_kind", "?"), total))
+            continue
+        segments.append((p, r, m, dict(meta)))
 
     if session.main.response_ids:
-        segments.append((
-            list(session.main.prompt_ids), list(session.main.response_ids),
-            list(session.main.loss_mask),
-            {"segment_kind": "final", "finish_reason": session.last_finish_reason},
-        ))
+        total = len(session.main.prompt_ids) + len(session.main.response_ids)
+        if _MAX_SEGMENT_TOKENS > 0 and total > _MAX_SEGMENT_TOKENS:
+            dropped.append(("final", total))
+        else:
+            segments.append((
+                list(session.main.prompt_ids), list(session.main.response_ids),
+                list(session.main.loss_mask),
+                {"segment_kind": "final", "finish_reason": session.last_finish_reason},
+            ))
+
+    if dropped:
+        logger.warning(
+            "[middleware] dropped %d oversized segments (cap=%d): %s",
+            len(dropped), _MAX_SEGMENT_TOKENS,
+            ", ".join(f"{k}={n}" for k, n in dropped),
+        )
     return segments
 
 

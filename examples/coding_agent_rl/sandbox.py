@@ -360,7 +360,7 @@ async def evaluate(
             await _setup_swepro_assets(ev, swepro)
             await apply_before_repo_set_cmd(ev, workdir, swepro)
         if pre_commands:
-            await _apply_pre_commands(ev, workdir, pre_commands)
+            await apply_pre_commands(ev, workdir, pre_commands)
 
         applied = await _apply_diff(ev, workdir, diff_text)
         if not applied:
@@ -384,7 +384,11 @@ async def _setup_swepro_assets(ev: E2BSandbox, swepro: dict) -> None:
                   user="root", check=True)
 
 
-async def _apply_pre_commands(ev: E2BSandbox, workdir: str, pre: list[str] | str) -> None:
+async def apply_pre_commands(ev: E2BSandbox, workdir: str, pre: list[str] | str) -> None:
+    # Public: also called by generate.py to keep the work sandbox baseline
+    # aligned with eval (sweb-style pre_commands typically `git checkout
+    # <base_sha> -f`, so skipping in work sandbox makes the model's diff
+    # context mismatch the eval base -> 100% apply failure).
     if isinstance(pre, str):
         body = pre.replace("\\n", "\n")
     else:

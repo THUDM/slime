@@ -387,12 +387,21 @@ async def _generate_inner(args, sample: Sample, sampling_params: dict[str, Any])
     try:
         async with _provision_sandbox(md["image"]) as sb:
             await sandbox.ensure_agent_user(sb, md["workdir"])
+            if md["swepro"]:
+                await sandbox.apply_before_repo_set_cmd(sb, md["workdir"], md["swepro"])
+            # Mirror eval: reset repo to the sweb base commit. Skipping this
+            # in work sandbox makes the model edit a different baseline than
+            # what `evaluate()` later apply-checks against, so `git apply`
+            # context lines mismatch and applied_cleanly is always False.
+            # Must run BEFORE writing PROBLEM_STATEMENT.md because typical
+            # pre_commands start with `git clean -fd` which would wipe the
+            # untracked PROBLEM_STATEMENT.md file.
+            if md["pre_commands"]:
+                await sandbox.apply_pre_commands(sb, md["workdir"], md["pre_commands"])
             await sb.write_text(
                 f"{md['workdir']}/PROBLEM_STATEMENT.md",
                 md["problem_statement"] or "", user="agent",
             )
-            if md["swepro"]:
-                await sandbox.apply_before_repo_set_cmd(sb, md["workdir"], md["swepro"])
 
             await sandbox.run_claude_code(
                 sb, workdir=md["workdir"], session_id=session_id,
