@@ -54,3 +54,7 @@ def test_validate_server_group_gpu_indices_reports_config_context():
     assert "len(reordered_gpu_ids)=4" in message
     assert "rollout_num_gpus=4" in message
     assert "rollout_num_gpus_per_engine=2" in message
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))
