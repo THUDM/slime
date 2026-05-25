@@ -5,6 +5,7 @@
         {'test_file': 'test_qwen3.5_0.8B_gsm8k_async_short.py', 'num_gpus': 4},
         {'test_file': 'test_qwen3.5_0.8B_gsm8k_short.py', 'num_gpus': 4},
         {'test_file': 'test_qwen2.5_0.5B_ppo_critic_only_short.py', 'num_gpus': 4},
+        {'test_file': 'test_qwen2.5_0.5B_fanout_short.py', 'num_gpus': 4},
       ],
     },
     'e2e-test-sglang-config': {
@@ -58,6 +59,17 @@
       'tests': [
         {'test_file': 'test_megatron_argument_validation.py', 'num_gpus': 0},
         {'test_file': 'test_dp_schedule.py', 'num_gpus': 0},
+        {'test_file': 'test_cp_utils.py', 'num_gpus': 0},
+        {'test_file': 'test_metric_report.py', 'num_gpus': 0},
+        {'test_file': 'test_metric_report_dist.py', 'num_gpus': 0},
+        {'test_file': 'test_loss_cp_invariance.py', 'num_gpus': 0},
+        {'test_file': 'test_rm_f1.py', 'num_gpus': 0},
+        {'test_file': 'test_rm_gpqa.py', 'num_gpus': 0},
+        {'test_file': 'test_rm_math.py', 'num_gpus': 0},
+        {'test_file': 'test_rm_math_dapo.py', 'num_gpus': 0},
+        {'test_file': 'test_rm_deepscaler.py', 'num_gpus': 0},
+        {'test_file': 'test_sample.py', 'num_gpus': 0},
+        {'test_file': 'test_rollout_validation.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_rollout_contracts.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_runtime_hook_contracts.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_path_loading_contracts.py', 'num_gpus': 0},
@@ -89,12 +101,16 @@
 name: PR Test
 
 on:
-  # Do not run CI on push to reduce CI time
-  # push:
-  #   branches: [main]
+  # Push to main triggers ONLY the cpu-unittest job (cheap GitHub-hosted
+  # runner, catches PR-pair regressions where two PRs pass individually
+  # but main is broken after both land). GPU jobs stay label-gated — see
+  # each job's `if:` below — so push events never burn the self-hosted
+  # fleet.
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
-    types: [synchronize, labeled]
+    types: [opened, reopened, synchronize, labeled]
   workflow_dispatch:
     inputs:
       infinite_run:
@@ -111,7 +127,7 @@ jobs:
 <% for job_name, config in jobs.items() %>
   << job_name >>:
 <% if config.get('always') %>
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
 <% else %>
     if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, '<< config.label >>'))
 <% endif %>

@@ -18,7 +18,7 @@ from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupCo
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
-from slime.utils.dp_schedule import build_dp_schedule, compute_dynamic_global_batch_size
+from slime.utils.dp_schedule import build_dp_schedule
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.logging_utils import configure_logger, init_tracking
@@ -27,6 +27,7 @@ from slime.utils.misc import Box, group_by, load_function
 from slime.utils.types import Sample
 
 from ..utils.metric_utils import has_repetition
+from .rollout_validation import validate_server_group_gpu_indices
 from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -87,6 +88,16 @@ class ServerGroup:
         num_gpu_per_engine = min(self.num_gpus_per_engine, self.args.num_gpus_per_node)
 
         pg, reordered_bundle_indices, reordered_gpu_ids = self.pg
+        validate_server_group_gpu_indices(
+            worker_type=self.worker_type,
+            gpu_offset=self.gpu_offset,
+            num_gpus_per_engine=self.num_gpus_per_engine,
+            num_gpu_per_engine=num_gpu_per_engine,
+            num_engines=len(self.all_engines),
+            num_available_gpus=len(reordered_gpu_ids),
+            rollout_num_gpus=self.args.rollout_num_gpus,
+            rollout_num_gpus_per_engine=self.args.rollout_num_gpus_per_engine,
+        )
 
         RolloutRayActor = ray.remote(SGLangEngine)
 
@@ -583,6 +594,13 @@ class RolloutManager:
             data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
             metrics = data.metrics
             data = data.samples
+            # Enforce the rollout_id contract before flattening: any list[Sample]
+            # encountered in the nested output must have rollout_id set on every
+            # element. Default rollouts inherit it from the data source; compact /
+            # subagent paths that split one rollout into N training samples must
+            # set the same rollout_id on every sibling so the loss reducer counts
+            # the rollout once instead of N times.
+            _validate_rollout_id_annotated(data)
             # flatten the data if it is a list of lists
             while isinstance(data[0], list):
                 data = list(itertools.chain.from_iterable(data))
@@ -656,6 +674,12 @@ class RolloutManager:
             "raw_reward": raw_rewards,
             "truncated": [1 if sample.status == Sample.Status.TRUNCATED else 0 for sample in samples],
             "sample_indices": [sample.index for sample in samples],
+            # Rollout id (one per rollout execution). Default rollouts emit one
+            # sample per rollout, so we fall back to ``sample.index`` (unique).
+            # Compact / subagent paths that emit multiple training samples per
+            # rollout set ``rollout_id`` explicitly so all siblings share a
+            # value; the loss reducer then aggregates them as one rollout.
+            "rollout_ids": [s.rollout_id if s.rollout_id is not None else s.index for s in samples],
         }
 
         # loss mask
@@ -673,6 +697,23 @@ class RolloutManager:
                 sample.loss_mask = [0] * sample.response_length
             loss_masks.append(sample.loss_mask)
         train_data["loss_masks"] = loss_masks
+
+        # Per-rollout aggregate, precomputed at the step level (where we can
+        # see every sample of every rollout) and broadcast per-sample so the
+        # per-mb loss reducer uses the correct whole-rollout denominator even
+        # when a rollout's samples land in different micro-batches (first-fit
+        # packing can split a rollout across mbs):
+        #
+        #   ``rollout_mask_sums[i]`` — sum of loss-mask totals over every
+        #   sample in sample i's rollout. Used as the reducer's denominator
+        #   so summing partial contributions across mbs yields one
+        #   token-weighted mean per rollout.
+        rollout_id_list = train_data["rollout_ids"]
+        mask_sums_per_sample = [sum(m) for m in loss_masks]
+        rollout_total_mask: dict[int, int] = {}
+        for rid, ms in zip(rollout_id_list, mask_sums_per_sample, strict=True):
+            rollout_total_mask[rid] = rollout_total_mask.get(rid, 0) + ms
+        train_data["rollout_mask_sums"] = [rollout_total_mask[rid] for rid in rollout_id_list]
 
         # Overwrite raw_reward when available. Mixed-source batches may only
         # populate this field for a subset of samples (e.g. SWE but not code).
@@ -708,47 +749,30 @@ class RolloutManager:
         self.train_parallel_config = config
 
     def _split_train_data_by_dp(self, data):
-        """Resolve gbs, trim ``data``, compute the DP/mbs schedule, and package each
-        rank's rollout_data into a Ray Box. The schedule itself is computed by
-        :func:`build_dp_schedule` so it stays unit-testable without Ray/sglang."""
+        """Compute the DP/mbs schedule and package each rank's rollout_data
+        into a Ray Box. The schedule itself is computed by
+        :func:`build_dp_schedule` so it stays unit-testable without Ray/sglang.
+
+        Step split is by rollout id (``samples[i].rollout_id``, falling back
+        to ``samples[i].index``); each step holds exactly
+        ``args.global_batch_size`` rollouts so the training-step count per
+        rollout is fixed at ``rollout_batch_size * n_samples_per_prompt //
+        global_batch_size`` regardless of how many training samples each
+        rollout produced.
+        """
         dp_size = self.train_parallel_config["dp_size"]
-
-        # 1. Resolve effective global_batch_size
-        dynamic_gbs: int | None = None
-        if self.args.use_dynamic_global_batch_size and not self.args.disable_rollout_trim_samples:
-            dynamic_gbs = compute_dynamic_global_batch_size(len(data["tokens"]), dp_size)
-            if dynamic_gbs != self.args.global_batch_size:
-                logger.info(
-                    f"Dynamic global_batch_size: {self.args.global_batch_size} -> {dynamic_gbs} "
-                    f"(num_samples={len(data['tokens'])}, dp_size={dp_size}, num_steps=1)"
-                )
-            global_batch_size = dynamic_gbs
-        else:
-            global_batch_size = self.args.global_batch_size
-
-        # 2. Trim data to a multiple of global_batch_size
-        if not self.args.disable_rollout_trim_samples:
-            num_samples = len(data["tokens"])
-            trim_len = num_samples // global_batch_size * global_batch_size
-            if trim_len == 0:
-                raise ValueError(f"Not enough samples {num_samples} for global_batch_size {global_batch_size}")
-            if trim_len < num_samples:
-                logger.info(f"Trimmed samples from {num_samples} to {trim_len}")
-                for key, val in data.items():
-                    if isinstance(val, list):
-                        data[key] = val[:trim_len]
-
-        # 3. Compute schedule
         total_lengths = [len(t) for t in data["tokens"]]
         data["total_lengths"] = total_lengths
+
         partitions, micro_batch_indices, num_microbatches, global_batch_sizes = build_dp_schedule(
             self.args,
             self.train_parallel_config,
             total_lengths,
-            global_batch_size=global_batch_size,
+            global_batch_size=self.args.global_batch_size,
+            rollout_indices=data["rollout_ids"],
         )
 
-        # 4. Package per-rank rollout_data
+        # Package per-rank rollout_data
         rollout_data_refs = []
         for r in range(dp_size):
             partition = partitions[r]
@@ -762,6 +786,8 @@ class RolloutManager:
                 "loss_masks",
                 "round_number",
                 "sample_indices",
+                "rollout_ids",
+                "rollout_mask_sums",
                 "rollout_log_probs",
                 "rollout_routed_experts",
                 "prompt",
@@ -775,15 +801,43 @@ class RolloutManager:
                 if key not in data:
                     continue
                 rollout_data[key] = data[key]
-            # Per-step sample count (total across DP). Train side normalises by
-            # this instead of assuming each rank holds the same N samples; once
-            # uneven-DP partition lands, this is the only field that has to
-            # change shape.
             rollout_data["global_batch_sizes"] = global_batch_sizes
             rollout_data["num_microbatches"] = num_microbatches
             rollout_data["micro_batch_indices"] = micro_batch_indices[r]
             rollout_data_refs.append(Box(ray.put(rollout_data)))
         return rollout_data_refs
+
+
+def _validate_rollout_id_annotated(node, depth=0):
+    """Walk the rollout function's nested output and validate ``rollout_id`` only
+    when a compact / subagent pattern is detected.
+
+    "Compact" = the rollout function wraps multiple training samples from one
+    rollout execution into a ``list[Sample]``. In slime's convention the
+    default rollout shape is ``list[list[Sample]]`` (depth-2: prompt × rollout)
+    so its leaf ``list[Sample]`` lands at depth 1 and we skip validation,
+    preserving backward compatibility. A compact rollout adds a third level:
+    ``list[list[list[Sample]]]`` (prompt × rollout × samples-from-one-rollout),
+    so the leaf ``list[Sample]`` lands at depth ≥ 2. At that point we require
+    every sibling to carry a non-None ``rollout_id`` and to share the same
+    value, so the loss reducer counts the rollout once instead of N times.
+    """
+    if isinstance(node, Sample):
+        return
+    assert isinstance(node, list), f"unexpected rollout output node type: {type(node).__name__}"
+    if node and isinstance(node[0], Sample):
+        if depth >= 2 and len(node) > 1:
+            rids = [s.rollout_id for s in node]
+            missing = [i for i, r in enumerate(rids) if r is None]
+            assert not missing, (
+                f"Compact rollout returned {len(node)} samples but rollout_id is unset on "
+                f"positions {missing}. Set Sample.rollout_id on every sibling so the loss "
+                "reducer can aggregate them as one rollout instead of N."
+            )
+            assert len(set(rids)) == 1, f"Sibling samples from one compact rollout must share rollout_id; got {rids}."
+        return
+    for item in node:
+        _validate_rollout_id_annotated(item, depth + 1)
 
 
 def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):
@@ -1236,7 +1290,7 @@ def _compute_zero_std_metrics(args, all_samples: list[Sample]):
 
 
 def _compute_spec_metrics(args, all_samples: list[Sample]):
-    if args.sglang_speculative_algorithm is None:
+    if getattr(args, "sglang_speculative_algorithm", None) is None:
         return {}
     num_samples = len(all_samples)
     metrics = {}

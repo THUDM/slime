@@ -15,7 +15,12 @@ from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step
 from slime.utils.types import RolloutBatch
 
 from ...utils import logging_utils
-from .cp_utils import get_sum_of_sample_mean, slice_with_cp
+from .cp_utils import (
+    gather_and_reduce_log_dict,
+    get_sum_of_sample_mean,
+    rollout_log_metric_contribution,
+    slice_with_cp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -178,63 +183,32 @@ def gather_log_data(
     log_dict: dict[str, "float | tuple[float, float]"],
 ) -> dict[str, float] | None:
     """
-    Gather per-rank metrics, reduce on the DP source rank, and log.
+    Gather per-rank metrics, reduce on the DP source rank, and log to W&B / TB.
 
     Each value in ``log_dict`` is either:
-      * a plain scalar — reduced as a simple mean across DP ranks (legacy
-        path; correct only when every rank holds the same N samples);
-      * a ``(sum, count)`` tuple — reduced as ``Σsum / Σcount`` (the count is
-        the per-rank weight). This is the right shape when ranks may hold a
-        different number of samples, e.g. once uneven-DP partitioning lands.
+      * a ``(sum, count)`` tuple → reduced as ``Σsum / Σcount``;
+      * a plain scalar → reduced as ``Σ / dp_size`` (mean across ranks).
 
-    On the DP source rank prints and optionally logs to WandB/TensorBoard with
-    a step derived from ``rollout_id`` and batch sizes. Returns the reduced
-    dict on the DP source rank; returns None on others.
+    The gather + reduce step is delegated to
+    :func:`cp_utils.gather_and_reduce_log_dict` so it can be exercised by
+    CPU multi-process unit tests directly. This function adds the
+    ``metric_name`` prefix and the W&B / TB logging side effects.
     """
-
-    if mpu.get_data_parallel_rank(with_context_parallel=True) == 0:
-        dp_size = mpu.get_data_parallel_world_size(with_context_parallel=True)
-
-        gathered_log_dict = [None] * dp_size
-        # Not sure if this will be a performance bottleneck.
-        dist.gather_object(
-            log_dict,
-            gathered_log_dict,
-            dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
-            group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
-        )
-
-        reduced_log_dict: dict[str, float] = {}
-        for key in log_dict:
-            values = [d[key] for d in gathered_log_dict]
-            first = values[0]
-            if isinstance(first, tuple) and len(first) == 2:
-                total_sum = sum(v[0] for v in values)
-                total_count = sum(v[1] for v in values)
-                if total_count == 0:
-                    reduced = 0.0
-                else:
-                    reduced = total_sum / total_count
-            else:
-                reduced = sum(values) / dp_size
-            reduced_log_dict[f"{metric_name}/{key}"] = reduced
-
-        logger.info(f"{metric_name} {rollout_id}: {reduced_log_dict}")
-
-        # Calculate step once to avoid duplication
-        step = compute_rollout_step(args, rollout_id)
-        reduced_log_dict["rollout/step"] = step
-        logging_utils.log(args, reduced_log_dict, step_key="rollout/step")
-
-        return reduced_log_dict
-    else:
-        dist.gather_object(
-            log_dict,
-            None,
-            dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
-            group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
-        )
+    reduced = gather_and_reduce_log_dict(
+        log_dict,
+        dp_size=mpu.get_data_parallel_world_size(with_context_parallel=True),
+        dp_src_rank=mpu.get_data_parallel_src_rank(with_context_parallel=True),
+        dp_group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
+    )
+    if reduced is None:
         return None
+    reduced_log_dict = {f"{metric_name}/{k}": v for k, v in reduced.items()}
+    logger.info(f"{metric_name} {rollout_id}: {reduced_log_dict}")
+    # Calculate step once to avoid duplication
+    step = compute_rollout_step(args, rollout_id)
+    reduced_log_dict["rollout/step"] = step
+    logging_utils.log(args, reduced_log_dict, step_key="rollout/step")
+    return reduced_log_dict
 
 
 class DataIterator:
@@ -305,6 +279,16 @@ def log_rollout_data(
         loss_masks = rollout_data["loss_masks"]
         total_lengths = rollout_data["total_lengths"]
         max_seq_lens = rollout_data.get("max_seq_lens", None)
+        # Same per-rollout denominators the training loss uses, so reported
+        # log_probs / returns / advantages / etc. live in the same per-rollout
+        # mean space (rather than per-sample) as the gradient signal.
+        rollout_mask_sums = rollout_data.get("rollout_mask_sums", None)
+        # For per-rollout-mean metrics: ``rollout_log_metric_contribution``
+        # produces the ``(sum, count)`` tuple so gather_log_data's
+        # ``Σsum / Σcount`` lands on ``sum_DP_full / num_rollouts`` — the
+        # same number train_one_step reports for the same samples.
+        dp_world = mpu.get_data_parallel_world_size(with_context_parallel=False)
+        num_rollouts_in_rollout = sum(rollout_data["global_batch_sizes"])
 
         for key, val in rollout_data.items():
             if key in [
@@ -312,6 +296,8 @@ def log_rollout_data(
                 "multimodal_train_inputs",
                 "loss_masks",
                 "sample_indices",
+                "rollout_ids",
+                "rollout_mask_sums",
                 "rollout_routed_experts",
                 "max_seq_lens",
                 "global_batch_sizes",
@@ -342,17 +328,24 @@ def log_rollout_data(
                             total_lengths,
                             response_lengths,
                             loss_masks,
+                            rollout_mask_sums,
                             qkv_format=args.qkv_format,
                             max_seq_lens=max_seq_lens,
                         )
-                        # cp_size cancels Megatron's CP division; result is the
-                        # sum-of-per-sample-means over this rank's samples.
-                        per_rank_sum = cp_size * sum_of_sample_mean(tensor)
-                    else:
-                        tensor = torch.cat(val).clone().detach()
-                        # val.mean() * cp_size is the per-sample mean for one rank;
-                        # multiply by count to get the per-rank sum.
-                        per_rank_sum = tensor.mean() * cp_size * count
+                        # Compute (sum, count) via the shared helper so this
+                        # path and the unit tests stay in sync.
+                        sum_value, count = rollout_log_metric_contribution(
+                            sum_of_sample_mean(tensor).item(),
+                            cp_size=cp_size,
+                            num_rollouts_in_rollout=num_rollouts_in_rollout,
+                            dp_size=dp_world,
+                        )
+                        log_dict[key] = (sum_value, count)
+                        continue
+                    tensor = torch.cat(val).clone().detach()
+                    # val.mean() * cp_size is the per-sample mean for one rank;
+                    # multiply by count to get the per-rank sum.
+                    per_rank_sum = tensor.mean() * cp_size * count
                     sum_value = per_rank_sum.item()
                 else:
                     sum_value = sum(val)
@@ -433,8 +426,14 @@ def log_rollout_data(
             for p, val in correct_response_length_percentile.items():
                 rollout_data[f"correct_length/{p}"] = [val] * num_correct_responses
             if len(correct_entropy) > 0:
+                # NOTE: per-sample-mean over the correct subset, not per-rollout.
+                # A rollout's siblings may not all be correct, and slicing
+                # ``rollout_mask_sums`` here would leave a denom that still
+                # includes incorrect siblings — meaningless for a "correct-only"
+                # entropy report. Per-sample-mean over the filtered subset is
+                # the cleanest semantic.
                 sum_of_sample_mean = get_sum_of_sample_mean(
-                    correct_total_lengths, correct_response_lengths, correct_loss_masks
+                    correct_total_lengths, correct_response_lengths, correct_loss_masks, sample_denoms=None
                 )
                 correct_entropy = sum_of_sample_mean(torch.cat(correct_entropy, dim=0))
                 rollout_data["correct_entropy"] = [correct_entropy.item()] * num_correct_responses

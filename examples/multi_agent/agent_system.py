@@ -192,6 +192,19 @@ async def run_agent_system(args, sample):
     args = deepcopy(args)  # Deep copy args because rollout_with_multi_agents mutates them.
     args.sample = sample
     args.results_dict = {"solver": [], "rewriter": [], "selector": []}
+    # Every sample emitted below is a training sample split out of this one
+    # rollout execution (the input ``sample``). Stamp the shared rollout id on
+    # every collected sample at each return point so the per-rollout loss
+    # reducer aggregates the solver / rewriter / selector siblings as one
+    # rollout instead of N, and the by-rollout step splitter keeps them in
+    # the same step. Captured here because ``sample`` gets shadowed by zip-
+    # loop variables further down.
+    input_rollout_id = sample.index
+
+    def _emit(samples_list):
+        for s in samples_list:
+            s.rollout_id = input_rollout_id
+        return samples_list
 
     problem_statement = sample.prompt
     tasks = [solver_worker(args, problem_statement, worker_id) for worker_id in range(args.num_parallel)]
@@ -210,7 +223,7 @@ async def run_agent_system(args, sample):
 
     if len(previous_solutions) == 0:
         reward_adjustment(args.results_dict["solver"], args.incorrect_reward_weight)
-        return args.results_dict["solver"]
+        return _emit(args.results_dict["solver"])
 
     # Rewriting
     tasks = [
@@ -232,7 +245,7 @@ async def run_agent_system(args, sample):
     if len(rewrited_solutions) == 0:
         reward_adjustment(args.results_dict["solver"], args.incorrect_reward_weight)
         reward_adjustment(args.results_dict["rewriter"], args.incorrect_reward_weight)
-        return args.results_dict["solver"] + args.results_dict["rewriter"]
+        return _emit(args.results_dict["solver"] + args.results_dict["rewriter"])
 
     # Selection
     selector = SelectorAgent()
@@ -240,7 +253,7 @@ async def run_agent_system(args, sample):
     if len(args.results_dict["selector"]) == 0:
         reward_adjustment(args.results_dict["solver"], args.incorrect_reward_weight)
         reward_adjustment(args.results_dict["rewriter"], args.incorrect_reward_weight)
-        return args.results_dict["solver"] + args.results_dict["rewriter"]
+        return _emit(args.results_dict["solver"] + args.results_dict["rewriter"])
 
     assert (
         len(args.results_dict["selector"]) == 1
@@ -269,4 +282,4 @@ async def run_agent_system(args, sample):
         reward_adjustment(args.results_dict["rewriter"], args.incorrect_reward_weight)
         reward_adjustment(args.results_dict["selector"], args.incorrect_reward_weight)
 
-    return args.results_dict["solver"] + args.results_dict["rewriter"] + args.results_dict["selector"]
+    return _emit(args.results_dict["solver"] + args.results_dict["rewriter"] + args.results_dict["selector"])

@@ -928,12 +928,17 @@ def policy_loss_function(
             tis_func = vanilla_tis_function
         pg_loss, modified_response_masks, tis_metrics = tis_func(**tis_kwargs)
 
-        # [decouple IS and rejection] Rebuild sum_of_sample_mean with modified_response_masks for denominator correction
-        # modified_response_masks will be sliced with cp in get_sum_of_sample_mean
+        # [decouple IS and rejection] Rebuild sum_of_sample_mean with
+        # modified_response_masks for numerator correction (rejected tokens
+        # zeroed in pg_loss). Denominators stay the precomputed per-rollout
+        # totals from ``rollout_mask_sums`` (based on original loss_masks) —
+        # same normalizer as the outer reducer, so pg_loss and the rest of the
+        # reported metrics live in the same per-rollout-mean space.
         sum_of_sample_mean = get_sum_of_sample_mean(
             total_lengths,
             response_lengths,
             modified_response_masks,
+            batch["rollout_mask_sums"],
             args.calculate_per_token_loss,
             args.qkv_format,
             max_seq_lens,
@@ -1164,12 +1169,12 @@ def loss_function(
           "values" (1D tensor: [count, metric1, metric2, ...]).
     """
     num_tokens = sum([torch.clamp_min(loss_mask.sum(), 1) for loss_mask in batch["loss_masks"]])
-    num_samples = len(batch["response_lengths"])
 
     sum_of_sample_mean = get_sum_of_sample_mean(
         batch["total_lengths"],
         batch["response_lengths"],
         batch["loss_masks"],
+        batch["rollout_mask_sums"],
         args.calculate_per_token_loss,
         args.qkv_format,
         batch.get("max_seq_lens", None),
@@ -1216,9 +1221,16 @@ def loss_function(
         (num_tokens if args.calculate_per_token_loss else torch.tensor(1, device=logits.device)),
         {
             "keys": list(log.keys()),
+            # values[0] is the consumer's reporting denominator after
+            # all-reduce. For per-token-loss it must equal step total tokens
+            # (only known by summing per-mb num_tokens across mbs / DP). For
+            # per-rollout-mean it is a constant — ``step_global_batch_size`` —
+            # so we leave a 0 placeholder here and let ``train_one_step``
+            # substitute the constant directly, instead of routing it through
+            # per-mb fractions.
             "values": torch.tensor(
                 [
-                    num_samples if not args.calculate_per_token_loss else num_tokens,
+                    num_tokens if args.calculate_per_token_loss else 0,
                 ]
                 + list(log.values()),
                 device=logits.device,

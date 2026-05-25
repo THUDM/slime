@@ -18,15 +18,20 @@ from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 from megatron.core.optimizer.optimizer import MegatronOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.pipeline_parallel import get_forward_backward_func
-from megatron.core.utils import get_model_config, unwrap_model
+from megatron.core.utils import get_model_config
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 from tqdm import tqdm
 
+try:
+    from megatron.core.pipeline_parallel.utils import unwrap_model
+except ImportError:
+    from megatron.core.utils import unwrap_model
 from slime.utils import logging_utils
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
+from .cp_utils import reduce_train_step_metrics
 from .data import DataIterator, get_batch
 from .loss import loss_function
 from .model_provider import get_model_provider_func
@@ -143,7 +148,15 @@ def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer)
     Returns:
         OptimizerParamScheduler: Initialized scheduler bound to ``optimizer``.
     """
-    # Iteration-based training.
+    # Iteration-based training. ``train_iters`` is an estimate of the total
+    # number of training steps — it's only used to size Megatron's LR decay
+    # schedule (and ``lr_decay_iters`` defaults to it). With variable per-rollout
+    # sample counts (dynamic sampling / filtering / custom step splitter) the
+    # *actual* total can drift; the schedule still tracks the true progress via
+    # ``opt_param_scheduler.num_steps`` (samples consumed, also persisted across
+    # resume), so the worst case is the cosine/linear schedule reaches its
+    # plateau slightly early or late. Pass ``--lr-decay-iters`` explicitly if you
+    # need exact decay control.
     args.train_iters = args.num_rollout * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
     if args.lr_decay_iters is None:
         args.lr_decay_iters = args.train_iters
@@ -429,9 +442,13 @@ def train_one_step(
         optimizer (MegatronOptimizer): Optimizer instance.
         opt_param_scheduler (OptimizerParamScheduler): LR/WD scheduler.
         num_microbatches (int): Number of microbatches to process.
-        step_global_batch_size (int): Sample count for this training step
-            (total across DP). Used both for loss scaling inside the closure
-            and for the LR scheduler ``increment``.
+        step_global_batch_size (int): Rollout count for this training step
+            (total across DP; one "rollout" = one execution of one of the
+            ``n_samples_per_prompt`` rollouts, which may emit >1 training
+            sample under compact / subagent). Used both as the loss
+            normalizer inside the closure and as the LR scheduler
+            ``increment``. In the common case (1 rollout = 1 sample) this
+            equals the per-step sample count, so behavior is unchanged.
 
     Returns:
         tuple[dict[str, float], float]: Reduced loss dictionary (last stage only)
@@ -484,6 +501,7 @@ def train_one_step(
                 "rollout_log_probs",
                 "max_seq_lens",
                 "teacher_log_probs",
+                "rollout_mask_sums",
             ],
             args.data_pad_size_multiplier,
             args.qkv_format,
@@ -576,22 +594,13 @@ def train_one_step(
     optimizer.zero_grad()
 
     if mpu.is_pipeline_last_stage(ignore_virtual=True):
-        # Average loss across microbatches.
-        keys = losses_reduced[0]["keys"]
-        values = None
-        for x in losses_reduced:
-            if values is None:
-                values = x["values"]
-            else:
-                values += x["values"]
-        assert len(keys) + 1 == values.numel()
-        torch.distributed.all_reduce(values, group=mpu.get_data_parallel_group(with_context_parallel=True))
-
-        loss_reduced = {}
-        values = values.tolist()
-        num_samples_or_tokens = values[0]
-        for key, value in zip(keys, values[1:], strict=False):
-            loss_reduced[key] = value * mpu.get_context_parallel_world_size() / num_samples_or_tokens
+        loss_reduced = reduce_train_step_metrics(
+            losses_reduced,
+            calculate_per_token_loss=args.calculate_per_token_loss,
+            step_global_batch_size=step_global_batch_size,
+            cp_size=mpu.get_context_parallel_world_size(),
+            dp_with_cp_group=mpu.get_data_parallel_group(with_context_parallel=True),
+        )
         return loss_reduced, grad_norm
     return {}, grad_norm
 
@@ -622,9 +631,12 @@ def train(
         opt_param_scheduler (OptimizerParamScheduler): LR/WD scheduler.
         data_iterator (Sequence[DataIterator]): Iterable(s) yielding training batches.
         num_microbatches (Sequence[int]): Microbatches per step in the rollout.
-        global_batch_sizes (Sequence[int]): Sample count per step (total across
-            DP). Same length as ``num_microbatches``; consumed by
-            ``train_one_step`` for loss scaling and LR scheduler increments.
+        global_batch_sizes (Sequence[int]): Rollout count per step (total
+            across DP; one "rollout" = one execution of one of the
+            ``n_samples_per_prompt`` rollouts of a prompt). Same length as
+            ``num_microbatches``; consumed by ``train_one_step`` for loss
+            scaling and LR scheduler increments. Equals per-step sample count
+            in the common case (1 rollout = 1 sample).
     """
     args = get_args()
 
@@ -781,6 +793,8 @@ def train(
             for param_group_id, param_group in enumerate(optimizer.param_groups):
                 log_dict[f"train/{role_tag}lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
 
+            # Per-step gbs — uneven step sizes are easy to miss without this.
+            log_dict[f"train/{role_tag}global_batch_size"] = global_batch_sizes[step_id]
             log_dict["train/step"] = accumulated_step_id
             logging_utils.log(args, log_dict, step_key="train/step")
 
@@ -820,7 +834,10 @@ def train(
 
 
 def save(
-    iteration: int, model: Sequence[DDP], optimizer: MegatronOptimizer, opt_param_scheduler: OptimizerParamScheduler
+    iteration: int,
+    model: Sequence[DDP],
+    optimizer: MegatronOptimizer,
+    opt_param_scheduler: OptimizerParamScheduler,
 ) -> None:
     """Persist a training checkpoint safely with forward hooks disabled.
 

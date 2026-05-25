@@ -10,6 +10,8 @@
 1. **高性能训练**：通过连接 Megatron 与 SGLang，支持各种模式的高效训练；
 2. **灵活的数据生成**：通过自定义数据生成接口以及 server based engine，实现任意的数据训练数据生成流程。
 
+在 agentic 场景下，multi-turn tool use、sandbox interaction、environment feedback 和 verifier/test-based reward 都可以被看作训练数据生成 workflow。slime 通过 custom generate、custom reward 和 server-based rollout engines，把这些 workflow 接入同一个 training / rollout / Data Buffer 闭环，而不是把 slime 变成一个通用 agent framework。
+
 slime 是 [GLM-5.1](https://z.ai/blog/glm-5.1)、[GLM-5](https://z.ai/blog/glm-5)、[GLM-4.7](https://z.ai/blog/glm-4.7)、[GLM-4.6](https://z.ai/blog/glm-4.6)、[GLM-4.5](https://z.ai/blog/glm-4.5) 背后的 RL 训练框架，除此之外，slime 还支持:
 - Qwen 系列 (Qwen3.6、Qwen3.5、Qwen3Next、Qwen3MoE、Qwen3、Qwen2.5)；
 - DeepSeek V3 系列 (DeepSeek V3, V3.1, DeepSeek R1)；
@@ -39,8 +41,8 @@ slime 是 [GLM-5.1](https://z.ai/blog/glm-5.1)、[GLM-5](https://z.ai/blog/glm-5
 **模块说明**：
 
 - **training (Megatron)**：负责主训练流程，从 Data Buffer 读取数据，训练完后将参数同步至 rollout 模块；
-- **rollout (SGLang + router)**：生成新数据（含 reward/verifier），存储至 Data Buffer；
-- **data buffer**：桥梁模块，管理 prompt 初始化、自定义数据与 rollout 生成方法。
+- **rollout (SGLang + router)**：生成新数据（含 reward/verifier），存储至 Data Buffer；通过 custom generate 可以在其上叠加 multi-turn loop、tool call、environment/sandbox 交互以及 verifier-based reward；
+- **data buffer**：桥梁模块，管理 prompt 初始化、自定义数据与 rollout 生成方法（包括以同一套接口产出 sample 的 agentic workflow）。
 
 ## 快速开始
 
@@ -49,6 +51,16 @@ slime 是 [GLM-5.1](https://z.ai/blog/glm-5.1)、[GLM-5](https://z.ai/blog/glm-5
 - [快速开始指南](./docs/zh/get_started/quick_start.md)
 
 我们还提供了一些未在快速开始中覆盖的使用示例，请查看 [examples](examples/)。
+
+### Agentic RL 示例
+
+下面这些 example 通过 customization 接口接入标准的 rollout / Data Buffer 闭环，而不是独立的 framework：
+
+- [`examples/multi_agent`](examples/multi_agent/README.md)：通过自定义 `--rollout-function-path` 实现多 agent 的 rollout。
+- [`examples/search-r1`](examples/search-r1/)：通过 `--custom-generate-function-path` 实现 search/RAG 风格的多轮生成。
+- [`examples/fully_async`](examples/fully_async/README.md)：fully-async rollout，适合不同样本生成耗时差异较大的 long-tail agentic 场景。
+
+如何为某种 agentic workflow 选择合适的接口，请参考 [自定义指南](docs/zh/get_started/customization.md)。
 
 ## 参数说明
 
