@@ -77,8 +77,16 @@ def execute():
     # fan-out is owned by compact_generate; this knob stays at 1 so a
     # regression that confuses sample count vs rollout count surfaces),
     # global_batch_size=4 → 2 training steps per rollout, num_rollout=3
-    # → 6 total training steps. ``--group-rm`` is required when
-    # custom_generate returns list[Sample] (sglang_rollout.py:280-293).
+    # → 6 total training steps.
+    #
+    # NB no ``--group-rm``: when custom_generate returns ``list[Sample]``
+    # the per-sample rm path inside ``generate_and_rm`` (sglang_rollout.py:
+    # 283-293) handles the fan-out correctly via ``batched_async_rm`` on
+    # the flat sibling list. ``--group-rm`` defers rm to
+    # ``generate_and_rm_group:345`` which assumes ``group`` is already
+    # flat ``list[Sample]`` — combining it with a list-returning
+    # custom_generate yields a ``list[list[Sample]]`` and crashes
+    # ``async_rm`` (`'list' object has no attribute 'metadata'`).
     rollout_args = (
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
         "--input-key prompt "
@@ -93,8 +101,17 @@ def execute():
         "--rollout-temperature 0.8 "
         "--global-batch-size 4 "
         "--balance-data "
-        "--group-rm "
         "--custom-generate-function-path slime.rollout._fanout_test_helpers.compact_generate "
+        # GRPO normalization needs per-prompt grouping. The default
+        # ``_post_process_rewards`` (slime/ray/rollout.py:618) reshapes
+        # by ``n_samples_per_prompt`` and falls back to "one big group"
+        # when the per-prompt count is uneven — fan-out trips exactly
+        # that fallback. The helper here groups by ``Sample.group_index``
+        # (the per-prompt counter the data source stamps; deepcopy in
+        # compact_generate preserves it across siblings) so each prompt's
+        # siblings normalize against each other, matching the GRPO
+        # semantics the default targets in the uniform case.
+        "--custom-reward-post-process-path slime.rollout._fanout_test_helpers.grpo_normalize_by_group_index "
     )
 
     perf_args = (
