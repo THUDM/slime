@@ -568,7 +568,13 @@ class Store:
             return self._d.pop(sid, None)
 
     def open_session(self, sid: str, *, defaults: dict[str, Any]) -> None:
-        s = self._d.setdefault(sid, Session())
+        # Fail-fast on duplicate sid: silently sharing state would interleave
+        # two independent rollouts into one chain and corrupt TITO bookkeeping.
+        if sid in self._d:
+            raise ValueError(
+                f"session_id {sid!r} already exists; sids must be unique per agent run",
+            )
+        s = self._d[sid] = Session()
         s.sampling_defaults = dict(defaults or {})
 
 
@@ -844,6 +850,8 @@ class MiddlewareHandle:
         self, session_id: str, *,
         sampling_defaults: dict[str, Any] | None = None,
     ) -> None:
+        """Register a new session. session_id must be globally unique for the
+        middleware's lifetime; raises ValueError on duplicate."""
         self.store.open_session(session_id, defaults=sampling_defaults or {})
 
     async def _pop_session_split(self, session_id: str) -> list[

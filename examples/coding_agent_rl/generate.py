@@ -265,7 +265,15 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
     # [1] Open a middleware session. claude-code inside the sandbox dials
     #     back to the middleware with this session_id (passed as the Bearer
     #     token) so its turns are grouped under one chain history.
-    session_id = sample.session_id or f"cagent-{md['instance_id']}-{secrets.token_hex(4)}"
+    #     Build sid from (instance_id, index, group_index) so it's unique by
+    #     construction within a rollout step; fall back to random hex if either
+    #     index is missing. open_session raises on duplicate as a safety net.
+    if sample.session_id:
+        session_id = sample.session_id
+    elif sample.index is not None and sample.group_index is not None:
+        session_id = f"cagent-{md['instance_id']}-{sample.index}-{sample.group_index}"
+    else:
+        session_id = f"cagent-{md['instance_id']}-{secrets.token_hex(8)}"
     sample.session_id = session_id
     state.middleware.open_session(session_id, sampling_defaults=sampling_params)
 
