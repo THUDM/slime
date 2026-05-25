@@ -20,9 +20,10 @@ Per-sample steps:
     6. Boot a SECOND, fresh sandbox; apply diff; run the dataset's tests for
        reward. (No-test-cheating guarantee: reward only depends on the diff.)
     7. Pull (prompt_ids, response_ids, loss_mask, ...) segments from the
-       middleware (D4 default = list mode = one Sample per chain segment).
-    8. Fan out the rollout reward across segments (uniform reward/K).
-       Failure is fail-soft (U4): sample marked abort, never blocks step.
+       middleware (one segment per chain reset; >=1 per trajectory).
+    8. Either collapse to one Sample (final segment, default) or fan out
+       one Sample per segment with reward/K. Fan-out is fail-soft: any bug
+       aborts THIS sample only, never blocks the training step.
 
 Dataset row ``metadata`` schema::
 
@@ -88,18 +89,17 @@ SWE_EVAL_TIMEOUT_SEC = int(os.environ.get("SWE_EVAL_TIMEOUT_SEC", "600"))
 # SWE_TIME_BUDGET_SEC + SWE_EVAL_TIMEOUT_SEC + 180 (buffer for sandbox boot,
 # diff capture, etc). When exceeded, the in-flight sample is aborted with
 # reason `wall_clock_timeout` and the rest of the rollout continues -- this
-# replaces the external builtin TimeoutError observed in run
-# planD_e2_pr1933_fanout_20260524_073011 (see r5 doc) that killed the whole
-# step when a single trajectory hung in sandbox.evaluate.
+# isolates a single hung trajectory (e.g. stuck in sandbox.evaluate) so it
+# does not kill the whole training step.
 SWE_GENERATE_GUARD_SEC = int(
     os.environ.get("SWE_GENERATE_GUARD_SEC", "0") or 0
 ) or (SWE_TIME_BUDGET_SEC + SWE_EVAL_TIMEOUT_SEC + 180)
 SWE_MAX_RESPONSE_TOKENS = int(os.environ.get("SWE_MAX_RESPONSE_TOKENS", "0") or 0)
 # SWE_LIST_TRAJECTORY: 0 (default) = collapse segments into 1 Sample
-# (main-repo behavior; avoids fan-out sample-count explosion that triggers
-# host pinned-memory pressure and GPU wake_up OOM). Single-sample mode
-# uses the FINAL segment (reward-bearing segment, post-final-compact-reset)
-# as the trajectory tokens. 1 = enable fan-out (one Sample per segment).
+# (avoids fan-out sample-count explosion that triggers host pinned-memory
+# pressure and GPU wake_up OOM). Single-sample mode uses the FINAL segment
+# (reward-bearing segment, post-final-compact-reset) as the trajectory
+# tokens. 1 = enable fan-out (one Sample per segment).
 SWE_LIST_TRAJECTORY = os.environ.get("SWE_LIST_TRAJECTORY", "0") == "1"
 SWE_TOOL_PARSER = os.environ.get("SWE_TOOL_PARSER", "") or None
 SWE_REASONING_PARSER = os.environ.get("SWE_REASONING_PARSER", "") or None
@@ -150,10 +150,10 @@ class _State(metaclass=SingletonMeta):
 
 
 # ---------------------------------------------------------------------------
-# Sandbox provisioning
+# Sandbox boot + agent toolchain install
 # ---------------------------------------------------------------------------
 @asynccontextmanager
-async def _provision_sandbox(image: str):
+async def _boot_agent_sandbox(image: str):
     global _BOOT_SEM
     if _BOOT_SEM is None:
         _BOOT_SEM = asyncio.Semaphore(SWE_BOOT_CONCURRENCY)
@@ -190,261 +190,216 @@ async def _provision_sandbox(image: str):
 
 
 # ---------------------------------------------------------------------------
-# Segment fan-out (D4 / U4: default uniform + fail-soft reducer wrapper)
+# Segment -> Sample conversion
+#
+# A "segment" is (prompt_ids, response_ids, loss_mask, seg_meta) produced by
+# middleware.pop_session_split(). One trajectory yields >=1 segments because
+# the agent may compact + reset mid-run.
+#
+# The collapse path (SWE_LIST_TRAJECTORY=0, default) is inlined in generate()
+# because it is only 4 lines. The fan-out path (SWE_LIST_TRAJECTORY=1) lives
+# in _fan_out_to_samples below because it has subtle metadata-sharing logic.
 # ---------------------------------------------------------------------------
-def _collapse_to_final_segment(
-    sample: Sample,
-    segments: list[tuple[list[int], list[int], list[int], dict]],
-    reward: float,
-    tokenizer,
-) -> Sample:
-    """Stage 14 OOM fix: mutate `sample` to carry only the FINAL segment
-    (reward-bearing post-final-compact-reset segment).
+Segment = tuple[list[int], list[int], list[int], dict]
 
-    Activated by ``SWE_LIST_TRAJECTORY=0`` (default). Avoids fan-out
-    sample-count explosion (16 -> ~80) that bloats ray.put + host pinned
-    mem and triggers GPU wake_up OOM. See OOM root-cause analysis
-    2026-05-24 in stage14_oom_rootcause_fanout.md.
 
-    The middle K-1 segments are intentionally dropped here. Long-term
-    alternative is per-segment fan-out + PR #1933 per-rollout reducer;
-    that is the Plan-D long-arm. This collapse is the short-arm.
-    """
-    prompt_ids, response_ids, loss_mask, seg_meta = segments[-1]
+def _write_segment_to_sample(sample: Sample, seg: Segment, reward: float, tokenizer) -> None:
+    """Populate the token / loss_mask / response / reward fields of `sample`
+    from one segment. Shared by both the collapse and fan-out paths."""
+    prompt_ids, response_ids, loss_mask, _ = seg
     sample.tokens = list(prompt_ids) + list(response_ids)
     sample.response_length = len(response_ids)
     sample.loss_mask = list(loss_mask)
     sample.response = tokenizer.decode(response_ids, skip_special_tokens=False)
     sample.reward = float(reward)
     sample.status = Sample.Status.COMPLETED
-    sample.metadata = {
-        **(sample.metadata or {}),
-        **seg_meta,
-        "num_segments_collapsed": len(segments),
-    }
-    return sample
 
 
-def _default_uniform_fan_out(
-    segments: list[tuple[list[int], list[int], list[int], dict]],
-    reward: float,
-    sample_proto: Sample,
-    tokenizer,
-    instance_id: str,
+def _fan_out_to_samples(
+    sample: Sample, segments: list[Segment], reward: float, tokenizer, instance_id: str,
 ) -> list[Sample]:
-    """Default reducer (D4 / Q7). Splits reward uniformly: reward/K per
-    segment. Returns one Sample per non-empty segment, each carrying the
-    segment meta fields (segment_kind, finish_reason, segment_idx,
-    num_segments, ...)."""
+    """SWE_LIST_TRAJECTORY=1 path. Emit one Sample per segment, splitting the
+    rollout reward uniformly (reward/K per segment).
+
+    All K samples share the same `rollout_id` so the loss reducer counts
+    this trajectory once (per-rollout mean) instead of K times
+    (per-sample mean). The dataset row id (`sample.index`) is reused as the
+    rollout_id.
+
+    The first segment reuses the input `sample` object; later ones get a
+    shallow copy -- avoids a copy in the common single-segment case."""
     K = len(segments)
-    # PR #1933 port: all K segments from one trajectory must share the same
-    # rollout_id so the loss reducer counts the trajectory once (per-rollout
-    # mean) instead of K times (per-sample mean). sample_proto.index is the
-    # dataset row id used as the per-rollout unique identifier in the default
-    # rollout shape; reuse it as rollout_id. This also makes the
-    # _validate_rollout_id_annotated check (depth>=2 leaf) happy if/when SWE
-    # output is wrapped into a list-of-list-of-sample shape.
-    trajectory_rollout_id = getattr(sample_proto, "index", None)
+    per_segment_reward = float(reward) / max(1, K)
+    rollout_id = getattr(sample, "index", None)
+
     out: list[Sample] = []
-    for i, (prompt_ids, response_ids, loss_mask, seg_meta) in enumerate(segments):
-        sub = sample_proto if i == 0 else copy.copy(sample_proto)
-        # I1 mirrored at the Sample layer: response_length == len(loss_mask)
-        sub.tokens = list(prompt_ids) + list(response_ids)
-        sub.response_length = len(response_ids)
-        sub.loss_mask = list(loss_mask)
-        sub.response = tokenizer.decode(response_ids, skip_special_tokens=False)
-        sub.reward = float(reward) / max(1, K)
-        sub.status = Sample.Status.COMPLETED
-        sub.rollout_id = trajectory_rollout_id
-        # Merge segment meta fields (segment_kind, finish_reason, etc.).
-        merged: dict[str, Any] = {**(sub.metadata or {}),
-                                  "instance_id": instance_id,
-                                  **seg_meta,
-                                  "segment_idx": i,
-                                  "num_segments": K}
-        sub.metadata = merged
+    for i, seg in enumerate(segments):
+        sub = sample if i == 0 else copy.copy(sample)
+        _write_segment_to_sample(sub, seg, per_segment_reward, tokenizer)
+        sub.rollout_id = rollout_id
+        sub.metadata = {
+            **(sub.metadata or {}),
+            "instance_id": instance_id,
+            **seg[3],
+            "segment_idx": i,
+            "num_segments": K,
+        }
         out.append(sub)
     return out
 
 
-def _fan_out_with_fail_soft(
-    state: "_State",
-    segments: list[tuple[list[int], list[int], list[int], dict]],
-    reward: float,
-    sample_proto: Sample,
-    instance_id: str,
-) -> list[Sample]:
-    """U4 - defensive wrapper around the default reducer so bugs in fan-out
-    don't kill the rollout step.
-
-    3 fail paths:
-      1. reducer raises       -> log warning + sample abort + metric bump
-      2. returns non-list/None -> same as (1)
-      3. returns Sample missing required field -> trainer rejects later (not here)
-    """
-    try:
-        out = _default_uniform_fan_out(
-            segments, reward, sample_proto, state.tokenizer, instance_id,
-        )
-        if not isinstance(out, list) or not out:
-            raise ValueError(
-                f"reducer returned non-list or empty: {type(out).__name__}"
-            )
-        return out
-    except Exception as e:
-        logger.warning(
-            "[coding_agent_rl] reducer failed for instance=%s: %s - sample marked abort",
-            instance_id, e,
-        )
-        try:
-            from slime.utils.metric_utils import METRICS  # type: ignore
-            METRICS.reducer_failure_count.labels(reason=type(e).__name__).inc()
-        except Exception:
-            pass
-        return [_abort(sample_proto, reason=f"reducer_failure:{type(e).__name__}")]
-
-
 # ---------------------------------------------------------------------------
 # Main per-sample agent function
+#
+# Read top-to-bottom. The [N] section comments below correspond to the 8-step
+# recipe in the module docstring at the top of this file.
 # ---------------------------------------------------------------------------
 async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
-    """Wall-clock-guarded wrapper around the inner generate logic. See
+    """Per-sample agent function with wall-clock guard. See
     SWE_GENERATE_GUARD_SEC docstring above."""
-    t0 = time.time()
-    try:
-        return await asyncio.wait_for(
-            _generate_inner(args, sample, sampling_params),
-            timeout=SWE_GENERATE_GUARD_SEC,
-        )
-    except asyncio.TimeoutError:
-        elapsed = time.time() - t0
-        # Diagnostic: dump current pending tasks so future debugging can
-        # see which await was stuck. Do not raise; let _abort handle it.
-        try:
-            pending = [
-                t for t in asyncio.all_tasks() if not t.done()
-            ]
-            stuck_summary = []
-            for t in pending[:5]:  # cap to avoid log spam
-                coro = getattr(t, "_coro", None)
-                name = getattr(coro, "__qualname__", repr(coro))
-                stuck_summary.append(name)
-            logger.warning(
-                "[coding_agent_rl] generate() wall_clock_timeout after %.1fs "
-                "(guard=%ds); %d tasks pending; sample of stuck: %s",
-                elapsed, SWE_GENERATE_GUARD_SEC, len(pending), stuck_summary,
-            )
-        except Exception:  # pragma: no cover - diag must never crash
-            pass
-        return _abort_result(sample, "wall_clock_timeout")
-    # Note: builtin TimeoutError (e.g., from concurrent.futures) was the
-    # observed failure mode in run 073011. wait_for raises asyncio.TimeoutError
-    # which is a subclass of builtin TimeoutError in Python >= 3.11 (PEP 657
-    # made them the same class); the except above catches both. Other
-    # exceptions still bubble up so _generate_inner's own try-except can
-    # handle them.
-
-
-async def _generate_inner(args, sample: Sample, sampling_params: dict[str, Any]):
     state = _State(args)
     md = _metadata(sample)
     if not md["image"] or not md["workdir"]:
         return _abort_result(sample, "missing_image_or_workdir")
 
+    # [1] Open a middleware session. claude-code inside the sandbox dials
+    #     back to the middleware with this session_id (passed as the Bearer
+    #     token) so its turns are grouped under one chain history.
     session_id = sample.session_id or f"cagent-{md['instance_id']}-{secrets.token_hex(4)}"
     sample.session_id = session_id
-    state.middleware.open_session(
-        session_id,
-        sampling_defaults=sampling_params,
-    )
-
-    t0 = time.time()
-    diff_text = ""
-    try:
-        async with _provision_sandbox(md["image"]) as sb:
-            await sandbox.ensure_agent_user(sb, md["workdir"])
-            if md["swepro"]:
-                await sandbox.apply_before_repo_set_cmd(sb, md["workdir"], md["swepro"])
-            # Mirror eval: reset repo to the sweb base commit. Skipping this
-            # in work sandbox makes the model edit a different baseline than
-            # what `evaluate()` later apply-checks against, so `git apply`
-            # context lines mismatch and applied_cleanly is always False.
-            # Must run BEFORE writing PROBLEM_STATEMENT.md because typical
-            # pre_commands start with `git clean -fd` which would wipe the
-            # untracked PROBLEM_STATEMENT.md file.
-            if md["pre_commands"]:
-                await sandbox.apply_pre_commands(sb, md["workdir"], md["pre_commands"])
-            await sb.write_text(
-                f"{md['workdir']}/PROBLEM_STATEMENT.md",
-                md["problem_statement"] or "", user="agent",
-            )
-
-            await sandbox.run_claude_code(
-                sb, workdir=md["workdir"], session_id=session_id,
-                middleware_url=state.middleware.public_url, prompt=CC_PROMPT,
-                time_budget_sec=SWE_TIME_BUDGET_SEC,
-            )
-            diff_text = await sandbox.git_diff(sb, md["workdir"])
-
-        reward, is_solved, applied_cleanly = await sandbox.evaluate(
-            image=md["image"], workdir=md["workdir"], diff_text=diff_text,
-            swepro=md["swepro"], eval_cmd=md["eval_cmd"],
-            pre_commands=md["pre_commands"],
-            timeout_sec=SWE_EVAL_TIMEOUT_SEC,
-        )
-    except Exception as e:
-        logger.error("[coding_agent_rl] %s: rollout failed: %s\n%s",
-                     md["instance_id"], e, traceback.format_exc())
-        return _abort_result(sample, f"exception:{type(e).__name__}")
-
-    # D4 / list mode is always on now (Q1 decision):
-    segments = state.middleware.pop_session_split(session_id)
-    if not segments:
-        return _abort_result(sample, "middleware_session_empty")
-    segments = [seg for seg in segments if seg[1]]
-    if not segments:
-        return _abort_result(sample, "middleware_session_empty")
-
-    # Apply per-sample training cap to each segment's response.
-    segments = [_cap_segment(seg) for seg in segments]
+    state.middleware.open_session(session_id, sampling_defaults=sampling_params)
 
     instance_id = md["instance_id"]
-    elapsed = time.time() - t0
-    sample.metadata = {
-        **(sample.metadata or {}),
-        "instance_id": instance_id,
-        "is_solved": bool(is_solved),
-        "applied_cleanly": bool(applied_cleanly),
-        "elapsed_sec": elapsed,
-    }
+    t0 = time.time()
+    try:
+        async with asyncio.timeout(SWE_GENERATE_GUARD_SEC):
+            # [2-3] Boot a fresh sandbox, install Node + Claude Code, create
+            #       the agent user, drop PROBLEM_STATEMENT.md, run the agent,
+            #       capture the resulting git diff.
+            async with _boot_agent_sandbox(md["image"]) as sb:
+                await sandbox.ensure_agent_user(sb, md["workdir"])
+                if md["swepro"]:
+                    await sandbox.apply_before_repo_set_cmd(sb, md["workdir"], md["swepro"])
+                if md["pre_commands"]:
+                    await sandbox.apply_pre_commands(sb, md["workdir"], md["pre_commands"])
+                await sb.write_text(
+                    f"{md['workdir']}/PROBLEM_STATEMENT.md",
+                    md["problem_statement"] or "", user="agent",
+                )
+                await sandbox.run_claude_code(
+                    sb, workdir=md["workdir"], session_id=session_id,
+                    middleware_url=state.middleware.public_url, prompt=CC_PROMPT,
+                    time_budget_sec=SWE_TIME_BUDGET_SEC,
+                )
+                diff_text = await sandbox.git_diff(sb, md["workdir"])
 
-    # SWE_LIST_TRAJECTORY=0 (default): collapse to single Sample using the
-    # FINAL segment. Avoids fan-out sample-count explosion (16 -> ~80) that
-    # bloats ray.put + host pinned mem and triggers GPU wake_up OOM. See
-    # OOM root-cause analysis 2026-05-24.
-    if not SWE_LIST_TRAJECTORY:
-        _collapse_to_final_segment(sample, segments, reward, state.tokenizer)
-        logger.info(
-            "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs "
-            "single-sample collapsed_segments=%d",
-            instance_id, reward, is_solved, applied_cleanly, elapsed, len(segments),
+            # [4] Second fresh sandbox runs the dataset's tests against the
+            #     captured diff. No-test-cheating guarantee: reward depends
+            #     only on the diff, never on what the agent sandbox did.
+            reward, is_solved, applied_cleanly = await sandbox.evaluate(
+                image=md["image"], workdir=md["workdir"], diff_text=diff_text,
+                swepro=md["swepro"], eval_cmd=md["eval_cmd"],
+                pre_commands=md["pre_commands"],
+                timeout_sec=SWE_EVAL_TIMEOUT_SEC,
+            )
+
+            # [5] Pull (prompt_ids, response_ids, loss_mask, seg_meta)
+            #     segments from the middleware. Drop empty-response segments
+            #     and apply the optional per-segment training cap in one go
+            #     (SWE_MAX_RESPONSE_TOKENS=0 disables the cap).
+            cap = SWE_MAX_RESPONSE_TOKENS
+            segments: list[Segment] = [
+                (p, r[:cap], m[:cap], meta) if cap and len(r) > cap else (p, r, m, meta)
+                for (p, r, m, meta) in (state.middleware.pop_session_split(session_id) or [])
+                if r
+            ]
+            if not segments:
+                return _abort_result(sample, "middleware_session_empty")
+
+            # [6] Top-level metadata that every output Sample will inherit.
+            elapsed = time.time() - t0
+            sample.metadata = {
+                **(sample.metadata or {}),
+                "instance_id": instance_id,
+                "is_solved": bool(is_solved),
+                "applied_cleanly": bool(applied_cleanly),
+                "elapsed_sec": elapsed,
+            }
+
+            # [7] segments -> Sample(s). Two modes:
+            #
+            #   collapse (SWE_LIST_TRAJECTORY=0, default): keep ONLY the
+            #     final (reward-bearing, post-final-compact-reset) segment
+            #     as a single Sample. The middle K-1 segments are dropped
+            #     intentionally -- avoids the sample-count explosion that
+            #     bloats ray.put + host pinned memory and can trigger GPU
+            #     wake_up OOM at large batch sizes.
+            #
+            #   fan-out (SWE_LIST_TRAJECTORY=1): emit one Sample per
+            #     segment, splitting reward uniformly. All K share the
+            #     same rollout_id so the loss reducer counts the
+            #     trajectory once. Fail-soft: any bug here aborts THIS
+            #     sample only, never the whole training step.
+            if not SWE_LIST_TRAJECTORY:
+                final_seg = segments[-1]
+                _write_segment_to_sample(sample, final_seg, reward, state.tokenizer)
+                sample.metadata = {
+                    **sample.metadata, **final_seg[3],
+                    "num_segments_collapsed": len(segments),
+                }
+                logger.info(
+                    "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs "
+                    "single-sample collapsed_segments=%d",
+                    instance_id, reward, is_solved, applied_cleanly, elapsed, len(segments),
+                )
+                return sample
+
+            try:
+                fanned = _fan_out_to_samples(
+                    sample, segments, reward, state.tokenizer, instance_id,
+                )
+                if not fanned:
+                    raise ValueError("fan-out produced no samples")
+            except Exception as e:
+                logger.warning(
+                    "[coding_agent_rl] fan-out failed for instance=%s: %s -- sample aborted",
+                    instance_id, e,
+                )
+                return [_abort(sample, reason=f"reducer_failure:{type(e).__name__}")]
+            logger.info(
+                "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs segments=%d",
+                instance_id, reward, is_solved, applied_cleanly, elapsed, len(fanned),
+            )
+            return fanned
+
+    except asyncio.TimeoutError:
+        _log_timeout_diagnostic(t0)
+        return _abort_result(sample, "wall_clock_timeout")
+    except Exception as e:
+        logger.error(
+            "[coding_agent_rl] %s: rollout failed: %s\n%s",
+            instance_id, e, traceback.format_exc(),
         )
-        return sample
-
-    fanned = _fan_out_with_fail_soft(state, segments, reward, sample, instance_id)
-    logger.info(
-        "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs segments=%d",
-        instance_id, reward, is_solved, applied_cleanly, elapsed, len(fanned),
-    )
-    return fanned
+        return _abort_result(sample, f"exception:{type(e).__name__}")
 
 
-def _cap_segment(seg: tuple[list[int], list[int], list[int], dict]
-                 ) -> tuple[list[int], list[int], list[int], dict]:
-    p, r, m, meta = seg
-    if SWE_MAX_RESPONSE_TOKENS <= 0 or len(r) <= SWE_MAX_RESPONSE_TOKENS:
-        return seg
-    return p, r[:SWE_MAX_RESPONSE_TOKENS], m[:SWE_MAX_RESPONSE_TOKENS], meta
+def _log_timeout_diagnostic(t0: float) -> None:
+    """Dump pending-task names when the wall-clock guard fires so future
+    debugging can see which await was stuck. Must never crash."""
+    try:
+        elapsed = time.time() - t0
+        pending = [t for t in asyncio.all_tasks() if not t.done()]
+        stuck = []
+        for t in pending[:5]:  # cap to avoid log spam
+            coro = getattr(t, "_coro", None)
+            stuck.append(getattr(coro, "__qualname__", repr(coro)))
+        logger.warning(
+            "[coding_agent_rl] generate() wall_clock_timeout after %.1fs "
+            "(guard=%ds); %d tasks pending; sample of stuck: %s",
+            elapsed, SWE_GENERATE_GUARD_SEC, len(pending), stuck,
+        )
+    except Exception:  # pragma: no cover - diag must never crash
+        pass
 
 
 # ---------------------------------------------------------------------------

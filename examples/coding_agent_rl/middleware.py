@@ -8,7 +8,7 @@ claude-code calls /v1/messages here as if it were Anthropic. Per session_id
   * verifies TITO (Tokenizer In / Tokenizer Out) per turn; zeros loss_mask on mismatch
   * emits 3 kinds of segments at the end (fan-out):
         - subagent    completed Task/Agent dispatch
-        - pre_wipe    chain frozen by auto-compact / wipe
+        - wipe        chain frozen by auto-compact / re-baselined
         - final       tail of the main chain
 
 Public API used by generate.py:
@@ -16,6 +16,18 @@ Public API used by generate.py:
     handle.public_url             public URL for sandbox -> shim
     handle.open_session(sid, ...) reset sampling defaults
     handle.pop_session_split(sid) -> list[segment]
+
+File layout (top to bottom):
+    1. Constants
+    2. Pure helpers:  hashing, SSE encoding
+    3. Pure:          Anthropic <-> chat-template translation
+    4. Pure:          raw-token splice rendering + TITO check
+    5. Pure:          assistant-output parsing (reasoning / tools / xml fallback)
+    6. State:         Chain / Session dataclasses (with their own methods)
+    7. State:         Store (session registry)
+    8. I/O:           upstream sglang /generate call
+    9. I/O:           per-request handler, split into one function per pipeline stage
+   10. Entry:         MiddlewareHandle + start()
 """
 
 from __future__ import annotations
@@ -37,8 +49,13 @@ from .aiohttp_threaded import AppHandle, run_app_in_thread
 
 logger = logging.getLogger(__name__)
 
+
+# =============================================================================
+# 1. Constants
+# =============================================================================
+
 # Per-segment hard cap on prompt+response token count. Drops any segment
-# (subagent / pre_wipe / final) over this — claude-code auto-compact estimates
+# (subagent / wipe / final) over this — claude-code auto-compact estimates
 # in its own tokenizer space, so a 100k autoCompactWindow can produce 130k+
 # Qwen-tokenized segments after sub-agent dispatch reads large files. Such
 # segments OOM fused CE on actor_train (single sample dynamic-batch can't
@@ -63,50 +80,7 @@ _SUBAGENT_TOOL_NAMES = frozenset({"Task", "Agent"})
 
 
 # =============================================================================
-# Dataclasses
-# =============================================================================
-
-
-@dataclasses.dataclass
-class Chain:
-    """One conversation chain. Either the main chain or an active sub-agent.
-
-    Owns its own splice/pending state because sub system_prompt differs from
-    main, so their cumulative prefixes are different."""
-
-    system_hash: str = ""
-    chat_messages: list[dict] = dataclasses.field(default_factory=list)
-    tools_schema: list[dict] | None = None
-    seen_msgs: int = 0
-    msg_hashes: list[str] = dataclasses.field(default_factory=list)
-    prompt_ids: list[int] = dataclasses.field(default_factory=list)
-    response_ids: list[int] = dataclasses.field(default_factory=list)
-    loss_mask: list[int] = dataclasses.field(default_factory=list)
-    asst_raw_tokens: dict[int, tuple[list[int], int]] = dataclasses.field(default_factory=dict)
-    pending_raw_tokens: list[tuple[list[int], int]] = dataclasses.field(default_factory=list)
-    dispatch_tool_use_id: str = ""   # empty for main; set for sub-agent
-    last_finish_reason: str = ""
-
-
-@dataclasses.dataclass
-class Session:
-    main: Chain = dataclasses.field(default_factory=Chain)
-    active_sub: Chain | None = None
-    pending_dispatch_id: str = ""
-
-    sampling_defaults: dict = dataclasses.field(default_factory=dict)
-    lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
-    last_finish_reason: str = ""
-
-    # Chronological completed segments. Each entry is
-    # (kind, (prompt_ids, response_ids, loss_mask, meta)) where kind is one of
-    # {"subagent", "pre_wipe"}.
-    _emit_order: list[tuple[str, tuple[list[int], list[int], list[int], dict]]] = \
-        dataclasses.field(default_factory=list)
-
-
-# =============================================================================
-# Primitives + Store
+# 2. Pure helpers: hashing & SSE
 # =============================================================================
 
 
@@ -131,39 +105,8 @@ def _sse(event: str, data: dict) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
-class Store:
-    def __init__(self) -> None:
-        self._d: dict[str, Session] = {}
-        self._guard = asyncio.Lock()
-
-    async def get(self, sid: str) -> Session:
-        async with self._guard:
-            return self._d.setdefault(sid, Session())
-
-    async def pop(self, sid: str) -> "Session | None":
-        async with self._guard:
-            return self._d.pop(sid, None)
-
-    def open_session(self, sid: str, *, defaults: dict[str, Any]) -> None:
-        s = self._d.setdefault(sid, Session())
-        s.sampling_defaults = dict(defaults or {})
-
-
-def _attach_pending_raw_tokens(
-    chain: Chain, base_index: int, new_translated_msgs: list[dict],
-) -> None:
-    """Pop pending_raw_tokens onto asst_raw_tokens for each new assistant
-    message. Pairs with the one-push-per-/generate site in _handle_messages."""
-    for offset, m in enumerate(new_translated_msgs):
-        if m.get("role") != "assistant":
-            continue
-        if not chain.pending_raw_tokens:
-            continue
-        chain.asst_raw_tokens[base_index + offset] = chain.pending_raw_tokens.pop(0)
-
-
 # =============================================================================
-# Anthropic <-> chat-template translation
+# 3. Pure: Anthropic <-> chat-template translation
 # =============================================================================
 
 
@@ -247,7 +190,7 @@ def _tools_schema(anthropic_tools: list[dict] | None) -> list[dict] | None:
 
 
 # =============================================================================
-# Raw-token splice
+# 4. Pure: raw-token splice rendering + TITO
 # =============================================================================
 
 
@@ -355,7 +298,7 @@ def verify_tito_for_turn(tok: Any, raw_text: str, output_ids: list[int]) -> bool
 
 
 # =============================================================================
-# Output parsing
+# 5. Pure: output parsing
 # =============================================================================
 
 
@@ -413,7 +356,224 @@ def _parse_xml_tool_calls(text: str, tools_schema: list[dict]) -> tuple[str, lis
 
 
 # =============================================================================
-# Engine: single /generate call (sync RL)
+# 6. State: Chain / Session dataclasses
+# =============================================================================
+
+
+@dataclasses.dataclass
+class Chain:
+    """One conversation chain. Either the main chain or an active sub-agent.
+
+    Owns its own splice/pending state because sub system_prompt differs from
+    main, so their cumulative prefixes are different."""
+
+    system_hash: str = ""
+    chat_messages: list[dict] = dataclasses.field(default_factory=list)
+    tools_schema: list[dict] | None = None
+    seen_msgs: int = 0
+    msg_hashes: list[str] = dataclasses.field(default_factory=list)
+    prompt_ids: list[int] = dataclasses.field(default_factory=list)
+    response_ids: list[int] = dataclasses.field(default_factory=list)
+    loss_mask: list[int] = dataclasses.field(default_factory=list)
+    asst_raw_tokens: dict[int, tuple[list[int], int]] = dataclasses.field(default_factory=dict)
+    pending_raw_tokens: list[tuple[list[int], int]] = dataclasses.field(default_factory=list)
+    dispatch_tool_use_id: str = ""   # empty for main; set for sub-agent
+    last_finish_reason: str = ""
+
+    def attach_pending_raw_tokens(
+        self, base_index: int, new_translated_msgs: list[dict],
+    ) -> None:
+        """Pop pending_raw_tokens onto asst_raw_tokens for each new assistant
+        message. Pairs with the one-push-per-/generate site in handler stage
+        ``_run_turn``."""
+        for offset, m in enumerate(new_translated_msgs):
+            if m.get("role") != "assistant":
+                continue
+            if not self.pending_raw_tokens:
+                continue
+            self.asst_raw_tokens[base_index + offset] = self.pending_raw_tokens.pop(0)
+
+    def update_prompt_and_response(
+        self, ideal_ids: list[int],
+        raw_ranges: list[tuple[int, int, int]], kind: str,
+    ) -> None:
+        # New chain or wipe: reset.
+        if kind != "append":
+            self.prompt_ids = ideal_ids
+            self.response_ids = []
+            self.loss_mask = []
+            return
+
+        # Append-mode sanity: ideal_ids should start with the existing prompt
+        # anchor. On divergence (template re-render mismatch), demote everything
+        # after the anchor to observation (loss=0) rather than crash.
+        if ideal_ids[:len(self.prompt_ids)] != self.prompt_ids:
+            logger.warning("[middleware] template re-render mismatch; rebaselining")
+            self.response_ids = ideal_ids[len(self.prompt_ids):]
+            self.loss_mask = [0] * len(self.response_ids)
+            return
+
+        # Linear append.
+        response = ideal_ids[len(self.prompt_ids):]
+        mask = [0] * len(response)
+        prompt_len = len(self.prompt_ids)
+        response_len = len(response)
+        for _splice_start, gen_start, splice_end in raw_ranges:
+            a = max(0, gen_start - prompt_len)
+            b = min(response_len, max(0, splice_end - prompt_len))
+            for k in range(a, b):
+                mask[k] = 1
+        self.response_ids = response
+        self.loss_mask = mask
+
+
+@dataclasses.dataclass
+class Session:
+    main: Chain = dataclasses.field(default_factory=Chain)
+    active_sub: Chain | None = None
+    pending_dispatch_id: str = ""
+
+    sampling_defaults: dict = dataclasses.field(default_factory=dict)
+    lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
+
+    # Chronological completed segments. Each entry is
+    # (kind, (prompt_ids, response_ids, loss_mask, meta)) where kind is one of
+    # {"subagent", "wipe", "final"}.
+    _emit_order: list[tuple[str, tuple[list[int], list[int], list[int], dict]]] = \
+        dataclasses.field(default_factory=list)
+
+    # -- segment bookkeeping --------------------------------------------------
+
+    def snapshot(self, chain: Chain, kind: str) -> None:
+        """Freeze chain into a 4-tuple and append to _emit_order under `kind`."""
+        self._emit_order.append((kind, (
+            list(chain.prompt_ids), list(chain.response_ids), list(chain.loss_mask),
+            {"segment_kind": kind, "finish_reason": chain.last_finish_reason},
+        )))
+
+    # -- sub-agent lifecycle --------------------------------------------------
+
+    def maybe_pop_subagent(self, all_msgs: list[dict]) -> None:
+        """Close active sub-agent when its dispatch tool_result appears on main."""
+        if not self.pending_dispatch_id or self.active_sub is None:
+            return
+        tool_use_id = self.pending_dispatch_id
+        for m in all_msgs:
+            if not isinstance(m, dict) or m.get("role") != "user":
+                continue
+            content = m.get("content")
+            if not isinstance(content, list):
+                continue
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_result" \
+                        and b.get("tool_use_id") == tool_use_id:
+                    self.snapshot(self.active_sub, "subagent")
+                    self.active_sub = None
+                    self.pending_dispatch_id = ""
+                    return
+
+    def arm_subagent_dispatch(self, dispatch_id: str) -> None:
+        """Mark a tool_use_id as the next sub-agent dispatch; open a fresh sub
+        chain if none is active."""
+        self.pending_dispatch_id = dispatch_id
+        if self.active_sub is None:
+            self.active_sub = Chain(dispatch_tool_use_id=dispatch_id)
+
+    # -- routing + classification --------------------------------------------
+
+    def pick_target(self, req_system_hash: str) -> tuple[Chain, bool]:
+        """Route to main or active sub-agent.
+
+        If a sub is active and its system_hash matches, route to sub. Otherwise
+        route to main (sub stays open; it'll close when its tool_result arrives
+        via maybe_pop_subagent)."""
+        if self.active_sub is not None \
+                and req_system_hash == self.active_sub.system_hash:
+            return self.active_sub, True
+        return self.main, False
+
+    def classify(
+        self, target: Chain, *,
+        req_system_hash: str, msg_hashes: list[str],
+    ) -> str:
+        """Returns "new" | "append" | "wipe". Side effect: snapshots the
+        existing chain as a "wipe" segment when overwriting a chain with
+        non-empty response."""
+        if target.seen_msgs == 0:
+            return "new"
+        is_append = (
+            req_system_hash == target.system_hash
+            and len(msg_hashes) >= target.seen_msgs
+            and msg_hashes[:target.seen_msgs] == target.msg_hashes[:target.seen_msgs]
+        )
+        if is_append:
+            return "append"
+        if target.response_ids:
+            self.snapshot(target, "wipe")
+        return "wipe"
+
+    # -- drain ---------------------------------------------------------------
+
+    def pop_split(self) -> list[
+        tuple[list[int], list[int], list[int], dict],
+    ]:
+        """Snapshot any in-flight sub-agent and the main chain, then replay
+        _emit_order chronologically. Empty-response segments dropped;
+        oversized (prompt+response > SWE_MAX_SEGMENT_TOKENS) ones also dropped.
+
+        One-shot: caller must not invoke twice on the same session (would
+        re-snapshot main). Current call site pops session from Store first."""
+        if self.active_sub is not None:
+            self.snapshot(self.active_sub, "subagent")
+            self.active_sub = None
+        if self.main.response_ids:
+            self.snapshot(self.main, "final")
+
+        segments: list[tuple[list[int], list[int], list[int], dict]] = []
+        dropped: list[tuple[str, int]] = []
+        for kind, (p, r, m, meta) in self._emit_order:
+            if not r:
+                continue
+            total = len(p) + len(r)
+            if _MAX_SEGMENT_TOKENS > 0 and total > _MAX_SEGMENT_TOKENS:
+                dropped.append((kind, total))
+                continue
+            segments.append((p, r, m, dict(meta)))
+
+        if dropped:
+            logger.warning(
+                "[middleware] dropped %d oversized segments (cap=%d): %s",
+                len(dropped), _MAX_SEGMENT_TOKENS,
+                ", ".join(f"{k}={n}" for k, n in dropped),
+            )
+        return segments
+
+
+# =============================================================================
+# 7. State: Store (session registry)
+# =============================================================================
+
+
+class Store:
+    def __init__(self) -> None:
+        self._d: dict[str, Session] = {}
+        self._guard = asyncio.Lock()
+
+    async def get(self, sid: str) -> Session:
+        async with self._guard:
+            return self._d.setdefault(sid, Session())
+
+    async def pop(self, sid: str) -> "Session | None":
+        async with self._guard:
+            return self._d.pop(sid, None)
+
+    def open_session(self, sid: str, *, defaults: dict[str, Any]) -> None:
+        s = self._d.setdefault(sid, Session())
+        s.sampling_defaults = dict(defaults or {})
+
+
+# =============================================================================
+# 8. I/O: upstream sglang /generate call
 # =============================================================================
 
 
@@ -438,268 +598,168 @@ async def _post_generate(
 
 
 # =============================================================================
-# Segments: sub-agent routing + pre_wipe snapshot + final emit
+# 9. I/O: per-request handler, one function per pipeline stage
 # =============================================================================
 
 
-def _snapshot_chain(session: Session, chain: Chain, kind: str) -> None:
-    """Freeze chain into a 4-tuple and append to _emit_order under `kind`."""
-    session._emit_order.append((kind, (
-        list(chain.prompt_ids), list(chain.response_ids), list(chain.loss_mask),
-        {"segment_kind": kind, "finish_reason": chain.last_finish_reason},
-    )))
+def _extract_session_id(request: web.Request) -> str:
+    return (request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+            or request.headers.get("x-session-id", ""))
 
 
-def maybe_pop_subagent(session: Session, all_msgs: list[dict]) -> None:
-    """Close active sub-agent when its dispatch tool_result appears on main."""
-    if not session.pending_dispatch_id or session.active_sub is None:
-        return
-    tool_use_id = session.pending_dispatch_id
-    for m in all_msgs:
-        if not isinstance(m, dict) or m.get("role") != "user":
-            continue
-        content = m.get("content")
-        if not isinstance(content, list):
-            continue
-        for b in content:
-            if isinstance(b, dict) and b.get("type") == "tool_result" \
-                    and b.get("tool_use_id") == tool_use_id:
-                _snapshot_chain(session, session.active_sub, "subagent")
-                session.active_sub = None
-                session.pending_dispatch_id = ""
-                return
-
-
-def pick_target(session: Session, req_system_hash: str) -> tuple[Chain, bool]:
-    """Route to main or active sub-agent.
-
-    If a sub is active and its system_hash matches, route to sub. Otherwise
-    route to main (sub stays open; it'll close when its tool_result arrives
-    via maybe_pop_subagent)."""
-    if session.active_sub is not None \
-            and req_system_hash == session.active_sub.system_hash:
-        return session.active_sub, True
-    return session.main, False
-
-
-def classify_and_apply(
-    target: Chain, session: Session, *,
-    req_system_hash: str, msg_hashes: list[str],
-) -> tuple[str | None, bool]:
-    """Returns (kind, is_append). kind in {None, "pre_wipe"}.
-    Side effect: snapshots pre_wipe on non-linear update with non-empty response."""
-    is_append = (
-        req_system_hash == target.system_hash
-        and len(msg_hashes) >= target.seen_msgs
-        and msg_hashes[:target.seen_msgs] == target.msg_hashes[:target.seen_msgs]
+def _err_response(err_type: str, message: str, status: int) -> web.Response:
+    return web.json_response(
+        {"type": "error", "error": {"type": err_type, "message": message}},
+        status=status,
     )
-    if target.seen_msgs == 0 or is_append:
-        return None, is_append
-    if target.response_ids:
-        _snapshot_chain(session, target, "pre_wipe")
-    return "pre_wipe", False
 
 
-def pop_session_split(session: Session) -> list[
-    tuple[list[int], list[int], list[int], dict],
-]:
-    """Drain any in-flight sub-agent, then replay _emit_order chronologically
-    and append the final main-line segment. Empty-response segments dropped;
-    oversized (prompt+response > SWE_MAX_SEGMENT_TOKENS) segments also dropped."""
-    if session.active_sub is not None:
-        _snapshot_chain(session, session.active_sub, "subagent")
-        session.active_sub = None
-
-    segments: list[tuple[list[int], list[int], list[int], dict]] = []
-    dropped: list[tuple[str, int]] = []
-    for _kind, (p, r, m, meta) in session._emit_order:
-        if not r:
-            continue
-        total = len(p) + len(r)
-        if _MAX_SEGMENT_TOKENS > 0 and total > _MAX_SEGMENT_TOKENS:
-            dropped.append((meta.get("segment_kind", "?"), total))
-            continue
-        segments.append((p, r, m, dict(meta)))
-
-    if session.main.response_ids:
-        total = len(session.main.prompt_ids) + len(session.main.response_ids)
-        if _MAX_SEGMENT_TOKENS > 0 and total > _MAX_SEGMENT_TOKENS:
-            dropped.append(("final", total))
-        else:
-            segments.append((
-                list(session.main.prompt_ids), list(session.main.response_ids),
-                list(session.main.loss_mask),
-                {"segment_kind": "final", "finish_reason": session.last_finish_reason},
-            ))
-
-    if dropped:
-        logger.warning(
-            "[middleware] dropped %d oversized segments (cap=%d): %s",
-            len(dropped), _MAX_SEGMENT_TOKENS,
-            ", ".join(f"{k}={n}" for k, n in dropped),
-        )
-    return segments
-
-
-# =============================================================================
-# Handler
-# =============================================================================
-
-
-def _update_prompt_and_response(
-    target: Chain, ideal_ids: list[int],
-    raw_ranges: list[tuple[int, int, int]], kind: str | None,
+def _ingest_request(
+    target: Chain, *, all_msgs: list[dict], body: dict,
+    msg_hashes: list[str], req_system_hash: str, kind: str,
 ) -> None:
-    # First turn or post-wipe: reset.
-    if not target.prompt_ids or kind == "pre_wipe":
-        target.prompt_ids = ideal_ids
-        target.response_ids = []
-        target.loss_mask = []
-        return
+    """Apply incoming messages to target chain.
+    kind="append": extend chat history and pop pending raw tokens onto the
+    new assistant turns. kind="new"|"wipe": replace chain state."""
+    if kind == "append":
+        new = _translate_messages(all_msgs[target.seen_msgs:], None)
+        base_idx = len(target.chat_messages)
+        target.chat_messages.extend(new)
+        target.attach_pending_raw_tokens(base_idx, new)
+    else:  # "new" or "wipe": full reset
+        target.chat_messages = _translate_messages(all_msgs, body.get("system"))
+        target.system_hash = req_system_hash
+        target.asst_raw_tokens.clear()
+        target.pending_raw_tokens.clear()
 
-    # Divergence: keep prompt anchor, treat everything after as obs (loss=0).
-    if ideal_ids[:len(target.prompt_ids)] != target.prompt_ids:
-        logger.warning("[middleware] template re-render mismatch; rebaselining")
-        target.response_ids = ideal_ids[len(target.prompt_ids):]
-        target.loss_mask = [0] * len(target.response_ids)
-        return
-
-    # Linear append.
-    response = ideal_ids[len(target.prompt_ids):]
-    mask = [0] * len(response)
-    prompt_len = len(target.prompt_ids)
-    response_len = len(response)
-    for _splice_start, gen_start, splice_end in raw_ranges:
-        a = max(0, gen_start - prompt_len)
-        b = min(response_len, max(0, splice_end - prompt_len))
-        for k in range(a, b):
-            mask[k] = 1
-    target.response_ids = response
-    target.loss_mask = mask
+    target.seen_msgs = len(all_msgs)
+    target.msg_hashes = msg_hashes
+    if target.tools_schema is None:
+        target.tools_schema = _tools_schema(body.get("tools"))
 
 
-async def _handle_messages(request: web.Request) -> web.StreamResponse:
-    A = request.app
-    tok = A["tokenizer"]
-    store: Store = A["store"]
+def _build_sampling_params(s: Session, body: dict) -> dict[str, Any]:
+    """Session defaults overlaid with per-request overrides."""
+    sp = {"skip_special_tokens": False, "spaces_between_special_tokens": False,
+          "no_stop_trim": True, "max_new_tokens": 4096,
+          **(s.sampling_defaults or {})}
+    for src_k, dst_k in (("max_tokens", "max_new_tokens"), ("temperature", "temperature"),
+                         ("top_p", "top_p"), ("top_k", "top_k")):
+        if src_k in body:
+            sp[dst_k] = body[src_k]
+    if body.get("stop_sequences"):
+        sp["stop"] = body["stop_sequences"]
+    return sp
 
-    body = await request.json()
-    sid = (request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-           or request.headers.get("x-session-id", ""))
-    if not sid:
-        return web.json_response({"type": "error", "error": {
-            "type": "missing_session",
-            "message": "Authorization Bearer <session_id> required",
-        }}, status=400)
-    s = await store.get(sid)
+
+def _decode_and_verify(
+    tok: Any, target: Chain, output_ids: list[int],
+) -> str:
+    """Decode output_ids; if the round-trip doesn't match, zero the loss_mask
+    over this turn (cause: tokenizer ambiguity). Returns raw decoded text."""
+    n = len(output_ids)
+    if n == 0:
+        return ""
+    raw_output = tok.decode(output_ids, skip_special_tokens=False)
+    if not verify_tito_for_turn(tok, raw_output, output_ids):
+        target.loss_mask[-n:] = [0] * n
+        logger.warning("[middleware] TITO mismatch; loss_mask zeroed (n=%d)", n)
+    return raw_output
+
+
+def _build_anthropic_blocks(
+    thinking: str, visible: str, tool_uses: list[dict],
+) -> tuple[list[dict], str]:
+    """Pack parsed output into Anthropic content blocks; return
+    (blocks, dispatch_id). dispatch_id is non-empty iff a sub-agent tool was
+    called."""
+    blocks: list[dict] = []
+    if thinking:
+        blocks.append({"type": "thinking", "thinking": thinking})
+    if visible:
+        blocks.append({"type": "text", "text": visible})
+    dispatch_id = ""
+    for tu in tool_uses:
+        tu_id = f"toolu_{secrets.token_hex(8)}"
+        blocks.append({"type": "tool_use", "id": tu_id,
+                       "name": tu["name"], "input": tu["input"]})
+        if tu["name"] in _SUBAGENT_TOOL_NAMES:
+            dispatch_id = tu_id
+    if not blocks:
+        blocks.append({"type": "text", "text": ""})
+    return blocks, dispatch_id
+
+
+class _UpstreamError(RuntimeError):
+    """sglang /generate failed; surfaces as a 502 to claude-code."""
+
+
+async def _run_turn(
+    s: Session, body: dict, app: web.Application,
+) -> tuple[list[dict], str, int, int]:
+    """One protected RL turn against sglang. Holds the session lock for the
+    whole turn (state mutation + upstream call). Raises _UpstreamError on
+    sglang failure."""
+    tok = app["tokenizer"]
 
     async with s.lock:
-        # 1. Fingerprints.
+        # Fingerprints + routing.
         all_msgs = body.get("messages") or []
         msg_hashes = [_hash_obj(m) for m in all_msgs]
-        system_value = body.get("system") if "system" in body else None
-        req_system_hash = _hash_obj(system_value) if "system" in body else s.main.system_hash
+        req_system_hash = (_hash_obj(body.get("system")) if "system" in body
+                           else s.main.system_hash)
 
-        # 2. Close any returning sub-agent BEFORE routing.
-        maybe_pop_subagent(s, all_msgs)
+        s.maybe_pop_subagent(all_msgs)
+        target, target_is_sub = s.pick_target(req_system_hash)
+        kind = s.classify(target, req_system_hash=req_system_hash, msg_hashes=msg_hashes)
 
-        # 3. Route + classify (may snapshot pre_wipe on target).
-        target, target_is_sub = pick_target(s, req_system_hash)
-        kind, is_append = classify_and_apply(
-            target, s, req_system_hash=req_system_hash, msg_hashes=msg_hashes,
-        )
-
-        # 4. Ingest new messages + attach pending raw tokens.
-        if target.seen_msgs == 0 or kind == "pre_wipe":
-            # Reset: pending was just cleared, no raw tokens to attach.
-            target.chat_messages = _translate_messages(all_msgs, body.get("system"))
-            target.system_hash = req_system_hash
-            target.asst_raw_tokens.clear()
-            target.pending_raw_tokens.clear()
-        else:  # is_append (only remaining case)
-            new = _translate_messages(all_msgs[target.seen_msgs:], None)
-            base_idx = len(target.chat_messages)
-            target.chat_messages.extend(new)
-            _attach_pending_raw_tokens(target, base_idx, new)
-
-        target.seen_msgs = len(all_msgs)
-        target.msg_hashes = msg_hashes
-        if target.tools_schema is None:
-            target.tools_schema = _tools_schema(body.get("tools"))
-
-        # 5. Render with raw splice + update prompt/response.
+        # Ingest + render.
+        _ingest_request(target, all_msgs=all_msgs, body=body,
+                        msg_hashes=msg_hashes, req_system_hash=req_system_hash, kind=kind)
         ideal_ids, raw_ranges = _render_with_raw_splice(
             tok, target.chat_messages, target.tools_schema, target.asst_raw_tokens,
         )
-        _update_prompt_and_response(target, ideal_ids, raw_ranges, kind)
+        target.update_prompt_and_response(ideal_ids, raw_ranges, kind)
 
-        # 6. Sampling params (request overrides session defaults).
-        sp = {"skip_special_tokens": False, "spaces_between_special_tokens": False,
-              "no_stop_trim": True, "max_new_tokens": 4096,
-              **(s.sampling_defaults or {})}
-        for src_k, dst_k in (("max_tokens", "max_new_tokens"), ("temperature", "temperature"),
-                             ("top_p", "top_p"), ("top_k", "top_k")):
-            if src_k in body:
-                sp[dst_k] = body[src_k]
-        if body.get("stop_sequences"):
-            sp["stop"] = body["stop_sequences"]
-
-        # 7. Single /generate call.
+        # Upstream call.
+        sp = _build_sampling_params(s, body)
         try:
-            output_ids, finish = await _post_generate(A["sglang_url"], ideal_ids, sp)
+            output_ids, finish = await _post_generate(app["sglang_url"], ideal_ids, sp)
         except Exception as e:
-            return web.json_response({"type": "error", "error": {
-                "type": "upstream_error", "message": str(e),
-            }}, status=502)
+            raise _UpstreamError(str(e)) from e
 
-        # 8. Extend response_ids + loss_mask.
+        # Commit output + record loss.
         target.response_ids.extend(output_ids)
         target.loss_mask.extend([1] * len(output_ids))
         target.last_finish_reason = finish
-        if not target_is_sub:
-            s.last_finish_reason = finish
 
-        # 9. Decode once, used by both TITO check and parser.
-        n = len(output_ids)
-        raw_output = tok.decode(output_ids, skip_special_tokens=False) if n > 0 else ""
-        if n > 0 and not verify_tito_for_turn(tok, raw_output, output_ids):
-            target.loss_mask[-n:] = [0] * n
-            logger.warning("[middleware] TITO mismatch; loss_mask zeroed (n=%d)", n)
-
-        # 10. Parse + queue raw tokens for next-round attach.
+        raw_output = _decode_and_verify(tok, target, output_ids)
         thinking, visible, tool_uses = _parse_output(
             raw_output,
-            tool_parser_name=A["tool_parser"], reasoning_parser_name=A["reasoning_parser"],
+            tool_parser_name=app["tool_parser"],
+            reasoning_parser_name=app["reasoning_parser"],
             tools_schema=target.tools_schema,
         )
-        gen_prefix = _detect_gen_prefix(ideal_ids, A["assistant_marker_ids"])
+
+        # Queue raw tokens for the next /generate to attach.
+        gen_prefix = _detect_gen_prefix(ideal_ids, app["assistant_marker_ids"])
         target.pending_raw_tokens.append((gen_prefix + list(output_ids), len(gen_prefix)))
 
-        # 11. Build Anthropic blocks + arm sub-agent dispatch in one pass.
-        blocks: list[dict] = []
-        if thinking:
-            blocks.append({"type": "thinking", "thinking": thinking})
-        if visible:
-            blocks.append({"type": "text", "text": visible})
-        dispatch_id = ""
-        for tu in tool_uses:
-            tu_id = f"toolu_{secrets.token_hex(8)}"
-            blocks.append({"type": "tool_use", "id": tu_id,
-                           "name": tu["name"], "input": tu["input"]})
-            if tu["name"] in _SUBAGENT_TOOL_NAMES:
-                dispatch_id = tu_id
-        if not blocks:
-            blocks.append({"type": "text", "text": ""})
+        blocks, dispatch_id = _build_anthropic_blocks(thinking, visible, tool_uses)
         if dispatch_id and not target_is_sub:
-            s.pending_dispatch_id = dispatch_id
-            if s.active_sub is None:
-                s.active_sub = Chain(dispatch_tool_use_id=dispatch_id)
+            s.arm_subagent_dispatch(dispatch_id)
 
         stop_reason = ("tool_use" if tool_uses
                        else "max_tokens" if finish == "length" else "end_turn")
 
-    # 12. Emit Anthropic SSE (outside lock). claude-code always streams.
-    in_tok, out_tok = len(ideal_ids), len(output_ids)
+    return blocks, stop_reason, len(ideal_ids), len(output_ids)
+
+
+async def _stream_anthropic_sse(
+    request: web.Request, body: dict, blocks: list[dict],
+    in_tok: int, out_tok: int, stop_reason: str,
+) -> web.StreamResponse:
+    """Emit the Anthropic Messages SSE stream. claude-code always streams."""
     out = web.StreamResponse(status=200, headers={
         "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive",
     })
@@ -736,9 +796,25 @@ async def _handle_messages(request: web.Request) -> web.StreamResponse:
     return out
 
 
-# =============================================================================
-# Shell + entry
-# =============================================================================
+async def _handle_messages(request: web.Request) -> web.StreamResponse:
+    body = await request.json()
+    sid = _extract_session_id(request)
+    if not sid:
+        return _err_response(
+            "missing_session", "Authorization Bearer <session_id> required", 400,
+        )
+
+    store: Store = request.app["store"]
+    s = await store.get(sid)
+
+    try:
+        blocks, stop_reason, in_tok, out_tok = await _run_turn(s, body, request.app)
+    except _UpstreamError as e:
+        return _err_response("upstream_error", str(e), 502)
+
+    return await _stream_anthropic_sse(
+        request, body, blocks, in_tok, out_tok, stop_reason,
+    )
 
 
 async def _count_tokens(request: web.Request) -> web.Response:
@@ -747,6 +823,11 @@ async def _count_tokens(request: web.Request) -> web.Response:
 
 async def _ok(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
+
+
+# =============================================================================
+# 10. Entry: MiddlewareHandle + start()
+# =============================================================================
 
 
 @dataclasses.dataclass
@@ -772,13 +853,13 @@ class MiddlewareHandle:
         if s is None:
             return []
         async with s.lock:
-            return pop_session_split(s)
+            return s.pop_split()
 
     def pop_session_split(self, session_id: str) -> list[
         tuple[list[int], list[int], list[int], dict],
     ]:
         """Return chronological segments (segment_kind in
-        {"subagent", "pre_wipe", "final"}). Session popped."""
+        {"subagent", "wipe", "final"}). Session popped."""
         fut = asyncio.run_coroutine_threadsafe(
             self._pop_session_split(session_id), self.app_handle.loop,
         )
