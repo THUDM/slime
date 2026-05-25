@@ -41,7 +41,7 @@ python tools/trace_timeline_viewer.py /path/to/debug/rollout_0.pt
 
 ## 给自定义代码打点
 
-在自定义 rollout 或 reward 逻辑中，可以直接复用 `slime.utils.trace_utils` 里的工具：
+在自定义 rollout 或 reward 逻辑中——包括 agentic workflow 里的 agent step、tool call、sandbox 执行、verifier 调用等——可以直接复用 `slime.utils.trace_utils` 里的工具：
 
 - `trace_span(target, name, attrs=...)`：记录一段持续时间。
 - `trace_event(target, name, attrs=...)`：记录一个瞬时事件。
