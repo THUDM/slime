@@ -11,6 +11,14 @@ class Sample:
 
     group_index: int | None = None
     index: int | None = None
+    # Id of the rollout this sample came from. Defaults to ``None`` and the
+    # downstream pipeline falls back to ``index`` (so the default rollout
+    # path, where one execution = one training sample, sees rollout_id ==
+    # index). Compact / subagent paths that split one rollout execution into
+    # multiple training samples should set the same ``rollout_id`` on every
+    # sibling, so loss aggregation averages within the rollout instead of
+    # over-counting it.
+    rollout_id: int | None = None
     # prompt
     prompt: str | list[dict[str, str]] = ""
     tokens: list[int] = field(default_factory=list)

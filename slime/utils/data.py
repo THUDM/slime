@@ -282,20 +282,6 @@ class Dataset:
         return len(self.samples)
 
 
-def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu):
-    # use first fit to get the number of micro batches
-    batches = []
-    for length in total_lengths:
-        for i in range(len(batches)):
-            if batches[i] + length <= max_tokens_per_gpu:
-                batches[i] += length
-                break
-        else:
-            batches.append(length)
-
-    return len(batches)
-
-
 def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
     assert len(rollout_data_ref) == dp_size
     rollout_data = ray.get(rollout_data_ref[dp_rank].inner)

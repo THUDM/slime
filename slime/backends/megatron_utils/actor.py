@@ -71,9 +71,6 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
             dist.barrier(group=get_gloo_group())
 
-        self.train_parallel_config = {
-            "dp_size": mpu.get_data_parallel_world_size(with_context_parallel=False),
-        }
         dist.barrier(group=get_gloo_group())
 
         if args.offload_train:
@@ -84,6 +81,20 @@ class MegatronTrainRayActor(TrainRayActor):
         self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id = initialize_model_and_optimizer(
             args, role
         )
+
+        vpp_size = mpu.get_virtual_pipeline_model_parallel_world_size() or 1
+        if vpp_size > 1:
+            from megatron.core.utils import get_model_config
+
+            microbatch_group_size_per_vp_stage = get_model_config(self.model[0]).microbatch_group_size_per_vp_stage
+        else:
+            microbatch_group_size_per_vp_stage = 1
+        self.train_parallel_config = {
+            "dp_size": mpu.get_data_parallel_world_size(with_context_parallel=False),
+            "cp_size": mpu.get_context_parallel_world_size(),
+            "vpp_size": vpp_size,
+            "microbatch_group_size_per_vp_stage": microbatch_group_size_per_vp_stage,
+        }
 
         start_rollout_id = loaded_rollout_id + 1
 
@@ -200,6 +211,12 @@ class MegatronTrainRayActor(TrainRayActor):
         rollout_data["loss_masks"] = [
             torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in rollout_data["loss_masks"]
         ]
+        if "rollout_mask_sums" in rollout_data:
+            # Promote precomputed per-rollout mask totals to GPU tensors here
+            # (matching loss_masks) so the loss reducer can just divide.
+            rollout_data["rollout_mask_sums"] = torch.tensor(
+                rollout_data["rollout_mask_sums"], dtype=torch.float32, device=torch.cuda.current_device()
+            )
         if "multimodal_train_inputs" in rollout_data:
             # Move multimodal training tensors to GPU in advance
             rollout_data["multimodal_train_inputs"] = [
@@ -382,7 +399,9 @@ class MegatronTrainRayActor(TrainRayActor):
 
     def train_critic(self, rollout_id: int, rollout_data: RolloutBatch):
         """Train critic and return CPU values (used as old-values for the next actor train)."""
-        data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
+        data_iterator = get_data_iterator(rollout_data)
+        num_microbatches = rollout_data["num_microbatches"]
+        global_batch_sizes = rollout_data["global_batch_sizes"]
 
         # Compute current critic values (used as old_values for value loss and for actor advantages).
         rollout_data.update(forward_only(get_values, self.args, self.model, data_iterator, num_microbatches))
@@ -397,6 +416,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.opt_param_scheduler,
             data_iterator,
             num_microbatches,
+            global_batch_sizes,
         )
 
         if mpu.is_pipeline_last_stage() and "values" in rollout_data:
@@ -407,7 +427,9 @@ class MegatronTrainRayActor(TrainRayActor):
 
     def train_actor(self, rollout_id: int, rollout_data: RolloutBatch, external_data=None) -> None:
         # Create data iterator for log_probs and train.
-        data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
+        data_iterator = get_data_iterator(rollout_data)
+        num_microbatches = rollout_data["num_microbatches"]
+        global_batch_sizes = rollout_data["global_batch_sizes"]
 
         if self.args.use_rollout_routing_replay:
             self.fill_routing_replay(data_iterator, num_microbatches, rollout_data)
@@ -504,6 +526,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     self.opt_param_scheduler,
                     data_iterator,
                     num_microbatches,
+                    global_batch_sizes,
                 )
 
             self.prof.step(rollout_id=rollout_id)
