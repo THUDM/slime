@@ -432,6 +432,7 @@
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#overview-of-customization-interfaces">Overview of Customization Interfaces</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agentic-workflows-through-customization-interfaces">Agentic workflows through customization interfaces</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#detailed-interface-reference">Detailed Interface Reference</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-function-rollout-function-path">1. Rollout Function (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-custom-generate-function-path">2. Custom Generate Function (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a></li>
@@ -550,6 +551,40 @@
 </tbody>
 </table>
 </div>
+</section>
+<section id="agentic-workflows-through-customization-interfaces">
+<h2>Agentic workflows through customization interfaces<a class="headerlink" href="#agentic-workflows-through-customization-interfaces" title="Link to this heading">#</a></h2>
+<p>Agentic workflows — multi-turn tool use, sandbox interaction, environment feedback, verifier/test-based rewards — are an important class of data generation workflows. They plug into slime through the existing customization interfaces; slime does not require a separate agent framework.</p>
+<p>For most agentic use cases, <strong>start with <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code> plus <code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code></strong>, and only override the full rollout function when the default rollout loop is insufficient.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head text-left"><p>If you need to …</p></th>
+<th class="head text-left"><p>Use</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-left"><p>Run a custom agent loop, tool calls, RAG, sandbox execution, browser/terminal interaction, or multi-turn generation for each sample, while reusing slime’s default rollout loop</p></td>
+<td class="text-left"><p>–custom-generate-function-path</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>Compute verifier rewards, test-based rewards, environment success checks, rule-based rewards, or call an external reward service</p></td>
+<td class="text-left"><p>–custom-rm-path</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>Replace the entire rollout orchestration (only when per-sample customization is not enough)</p></td>
+<td class="text-left"><p>–rollout-function-path</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>Control task sampling, buffering, requeueing, or custom prompt/task sources</p></td>
+<td class="text-left"><p>–data-source-path</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>Attach custom loss masks, metadata, or convert agentic outputs into training data</p></td>
+<td class="text-left"><p>–rollout-data-postprocess-path, –custom-convert-samples-to-train-data-path</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>Debug long-running custom generation, verifier calls, tool calls, or sandbox steps</p></td>
+<td class="text-left"><p>trace utilities in <a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">slime.utils.trace_utils</span></code></span></a></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>A native example of this pattern is <a class="reference internal" href="#../../../examples/search-r1/"><span class="xref myst"><code class="docutils literal notranslate"><span class="pre">examples/search-r1</span></code></span></a>, which adds search-augmented multi-turn generation via <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code> while keeping slime’s default <code class="docutils literal notranslate"><span class="pre">sglang_rollout</span></code> outer loop. See also <span class="xref myst"><code class="docutils literal notranslate"><span class="pre">examples/multi_agent</span></code></span> for a <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>-based multi-agent pattern and <span class="xref myst"><code class="docutils literal notranslate"><span class="pre">examples/fully_async</span></code></span> for long-tail agentic generation.</p>
 </section>
 <section id="detailed-interface-reference">
 <h2>Detailed Interface Reference<a class="headerlink" href="#detailed-interface-reference" title="Link to this heading">#</a></h2>
@@ -982,6 +1017,7 @@ Covers <code class="docutils literal notranslate"><span class="pre">--custom-rol
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#overview-of-customization-interfaces">Overview of Customization Interfaces</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agentic-workflows-through-customization-interfaces">Agentic workflows through customization interfaces</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#detailed-interface-reference">Detailed Interface Reference</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-function-rollout-function-path">1. Rollout Function (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-custom-generate-function-path">2. Custom Generate Function (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a></li>

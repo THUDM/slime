@@ -487,7 +487,7 @@
 </section>
 <section id="id3">
 <h2>给自定义代码打点<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
-<p>在自定义 rollout 或 reward 逻辑中，可以直接复用 <code class="docutils literal notranslate"><span class="pre">slime.utils.trace_utils</span></code> 里的工具：</p>
+<p>在自定义 rollout 或 reward 逻辑中——包括 agentic workflow 里的 agent step、tool call、sandbox 执行、verifier 调用等——可以直接复用 <code class="docutils literal notranslate"><span class="pre">slime.utils.trace_utils</span></code> 里的工具：</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">trace_span(target,</span> <span class="pre">name,</span> <span class="pre">attrs=...)</span></code>：记录一段持续时间。</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">trace_event(target,</span> <span class="pre">name,</span> <span class="pre">attrs=...)</span></code>：记录一个瞬时事件。</p></li>

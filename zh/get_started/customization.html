@@ -428,6 +428,7 @@
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">自定义接口概览</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#customization-agentic-workflow">通过 customization 接口实现 agentic workflow</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">详细接口参考</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-function-path">1. Rollout 函数 (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-path">2. 自定义生成函数 (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a></li>
@@ -546,6 +547,40 @@
 </tbody>
 </table>
 </div>
+</section>
+<section id="customization-agentic-workflow">
+<h2>通过 customization 接口实现 agentic workflow<a class="headerlink" href="#customization-agentic-workflow" title="链接到此标题。">#</a></h2>
+<p>agentic workflow——multi-turn tool use、sandbox interaction、environment feedback、verifier/test-based reward——是一类重要的训练数据生成 workflow。它们通过 slime 已有的 customization 接口接入，slime 本身并不需要变成一个单独的 agent framework。</p>
+<p>绝大多数 agentic 场景下，<strong>建议从 <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code> 加 <code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code> 开始</strong>，只有在默认 rollout 循环无法满足需求时再去覆盖整个 rollout function。</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head text-left"><p>想做的事</p></th>
+<th class="head text-left"><p>应使用的接口</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-left"><p>让每条 sample 跑自定义的 agent loop、tool call、RAG、sandbox 执行、browser/terminal 交互或多轮生成，同时复用 slime 默认 rollout loop</p></td>
+<td class="text-left"><p>--custom-generate-function-path</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>实现 verifier reward、test-based reward、environment 成功判定、rule-based reward 或调用外部 reward 服务</p></td>
+<td class="text-left"><p>--custom-rm-path</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>替换整个 rollout 编排（只在 per-sample 自定义不够用时使用）</p></td>
+<td class="text-left"><p>--rollout-function-path</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>控制任务采样、缓冲、回填，或自定义 prompt / task 数据源</p></td>
+<td class="text-left"><p>--data-source-path</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>给 agentic 输出附加自定义 loss mask、metadata，或转换成训练数据</p></td>
+<td class="text-left"><p>--rollout-data-postprocess-path、--custom-convert-samples-to-train-data-path</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>调试长耗时的 custom generation、verifier、tool call 或 sandbox 调用</p></td>
+<td class="text-left"><p><a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">slime.utils.trace_utils</span></code></span></a> 中的 trace 工具</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>这一模式的原生示例是 <a class="reference internal" href="#../../../examples/search-r1/"><span class="xref myst"><code class="docutils literal notranslate"><span class="pre">examples/search-r1</span></code></span></a>：通过 <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code> 接入搜索增强的多轮生成，外层仍然走 slime 默认的 <code class="docutils literal notranslate"><span class="pre">sglang_rollout</span></code>。互补的示例可参考 <span class="xref myst"><code class="docutils literal notranslate"><span class="pre">examples/multi_agent</span></code></span> 中基于 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> 的多 agent 模式，以及 <span class="xref myst"><code class="docutils literal notranslate"><span class="pre">examples/fully_async</span></code></span> 中适合 long-tail agentic 场景的 fully-async rollout。</p>
 </section>
 <section id="id3">
 <h2>详细接口参考<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
@@ -980,6 +1015,7 @@
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">自定义接口概览</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#customization-agentic-workflow">通过 customization 接口实现 agentic workflow</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">详细接口参考</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-function-path">1. Rollout 函数 (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-path">2. 自定义生成函数 (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a></li>
