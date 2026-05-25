@@ -99,9 +99,13 @@
 name: PR Test
 
 on:
-  # Do not run CI on push to reduce CI time
-  # push:
-  #   branches: [main]
+  # Push to main triggers ONLY the cpu-unittest job (cheap GitHub-hosted
+  # runner, catches PR-pair regressions where two PRs pass individually
+  # but main is broken after both land). GPU jobs stay label-gated — see
+  # each job's `if:` below — so push events never burn the self-hosted
+  # fleet.
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
     types: [opened, reopened, synchronize, labeled]
@@ -121,7 +125,7 @@ jobs:
 <% for job_name, config in jobs.items() %>
   << job_name >>:
 <% if config.get('always') %>
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
 <% else %>
     if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, '<< config.label >>'))
 <% endif %>
