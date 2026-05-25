@@ -15,12 +15,13 @@ checks live in ``test_metric_report.py`` and ``test_metric_report_dist.py``.
 
 from __future__ import annotations
 
+# Import the helpers BEFORE the slime imports so the megatron stub lands
+# in sys.modules first. pytest's prepend importmode puts this file's
+# directory (``tests/``) on sys.path, which is what makes the bare-name
+# import work without an ``__init__.py``.
+import _cp_dist_helpers  # noqa: F401
 import pytest
 import torch
-
-# Import the helpers BEFORE the slime imports so the megatron stub lands
-# in sys.modules first.
-from tests import _cp_dist_helpers  # noqa: F401
 
 from slime.backends.megatron_utils.cp_utils import (  # noqa: E402
     get_logits_and_tokens_offset_with_cp,

@@ -22,15 +22,16 @@ the contract a user touches when they flip any parallelism dial.
 
 from __future__ import annotations
 
-import pytest
-import torch
-
 # IMPORTANT: import the helpers (and the megatron stub it installs) BEFORE
 # any slime import. Spawned workers re-import this module from scratch, so
 # the same ordering must hold there — see ``stub_megatron_in_worker``
-# for the worker-side details.
-from tests import _cp_dist_helpers
-from tests._cp_dist_helpers import (
+# for the worker-side details. pytest's prepend importmode puts
+# ``tests/`` on sys.path so the bare-name import works without an
+# ``__init__.py``; mp.spawn children inherit the parent's sys.path.
+import _cp_dist_helpers
+import pytest
+import torch
+from _cp_dist_helpers import (
     FOUR_ROLLOUT_EXPECTED_REPORT,
     FOUR_ROLLOUT_RESPONSE_LENGTHS,
     FOUR_ROLLOUT_TOTAL_LENGTHS,

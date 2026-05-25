@@ -54,13 +54,14 @@ will.
 
 from __future__ import annotations
 
+# Megatron stub must land in sys.modules first; the slime imports inside
+# the worker pick it up via this same module. pytest's prepend importmode
+# puts ``tests/`` on sys.path so the bare-name import works without an
+# ``__init__.py``; mp.spawn children inherit the parent's sys.path.
+import _cp_dist_helpers
 import pytest
 import torch
-
-# Megatron stub must land in sys.modules first; the slime imports inside
-# the worker pick it up via this same module.
-from tests import _cp_dist_helpers
-from tests._cp_dist_helpers import (
+from _cp_dist_helpers import (
     FOUR_ROLLOUT_EXPECTED_REPORT,
     FOUR_ROLLOUT_RESPONSE_LENGTHS,
     FOUR_ROLLOUT_TOTAL_LENGTHS,
