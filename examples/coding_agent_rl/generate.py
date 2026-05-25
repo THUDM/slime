@@ -75,14 +75,18 @@ from . import middleware, sandbox
 logger = logging.getLogger(__name__)
 
 
-SWE_HOST_NODE_TARBALL = Path(os.environ.get(
-    "SWE_HOST_NODE_TARBALL",
-    "/path/to/node-v22.20.0-linux-x64.tar.xz",
-))
-SWE_HOST_CC_TARBALL = Path(os.environ.get(
-    "SWE_HOST_CC_TARBALL",
-    "/path/to/anthropic-ai-claude-code.tgz",
-))
+SWE_HOST_NODE_TARBALL = Path(
+    os.environ.get(
+        "SWE_HOST_NODE_TARBALL",
+        "/path/to/node-v22.20.0-linux-x64.tar.xz",
+    )
+)
+SWE_HOST_CC_TARBALL = Path(
+    os.environ.get(
+        "SWE_HOST_CC_TARBALL",
+        "/path/to/anthropic-ai-claude-code.tgz",
+    )
+)
 SWE_TIME_BUDGET_SEC = int(os.environ.get("SWE_TIME_BUDGET_SEC", "1800"))
 SWE_EVAL_TIMEOUT_SEC = int(os.environ.get("SWE_EVAL_TIMEOUT_SEC", "600"))
 # Wall-clock guard for the entire generate() call. Defaults to
@@ -91,9 +95,9 @@ SWE_EVAL_TIMEOUT_SEC = int(os.environ.get("SWE_EVAL_TIMEOUT_SEC", "600"))
 # reason `wall_clock_timeout` and the rest of the rollout continues -- this
 # isolates a single hung trajectory (e.g. stuck in sandbox.evaluate) so it
 # does not kill the whole training step.
-SWE_GENERATE_GUARD_SEC = int(
-    os.environ.get("SWE_GENERATE_GUARD_SEC", "0") or 0
-) or (SWE_TIME_BUDGET_SEC + SWE_EVAL_TIMEOUT_SEC + 180)
+SWE_GENERATE_GUARD_SEC = int(os.environ.get("SWE_GENERATE_GUARD_SEC", "0") or 0) or (
+    SWE_TIME_BUDGET_SEC + SWE_EVAL_TIMEOUT_SEC + 180
+)
 SWE_MAX_RESPONSE_TOKENS = int(os.environ.get("SWE_MAX_RESPONSE_TOKENS", "0") or 0)
 # SWE_LIST_TRAJECTORY: 0 (default) = collapse segments into 1 Sample
 # (avoids fan-out sample-count explosion that triggers host pinned-memory
@@ -145,7 +149,8 @@ class _State(metaclass=SingletonMeta):
         )
         logger.info(
             "[coding_agent_rl] tokenizer=%s middleware=%s",
-            args.hf_checkpoint, self.middleware.public_url,
+            args.hf_checkpoint,
+            self.middleware.public_url,
         )
 
 
@@ -177,7 +182,10 @@ async def _boot_agent_sandbox(image: str):
             last_err = e
             logger.warning(
                 "[coding_agent_rl] provision attempt %d/%d failed: %s: %s",
-                attempt + 1, SWE_BOOT_RETRIES, type(e).__name__, str(e)[:200],
+                attempt + 1,
+                SWE_BOOT_RETRIES,
+                type(e).__name__,
+                str(e)[:200],
             )
             await asyncio.sleep(1 + attempt)
     if sb is None:
@@ -216,7 +224,11 @@ def _write_segment_to_sample(sample: Sample, seg: Segment, reward: float, tokeni
 
 
 def _fan_out_to_samples(
-    sample: Sample, segments: list[Segment], reward: float, tokenizer, instance_id: str,
+    sample: Sample,
+    segments: list[Segment],
+    reward: float,
+    tokenizer,
+    instance_id: str,
 ) -> list[Sample]:
     """SWE_LIST_TRAJECTORY=1 path. Emit one Sample per segment, splitting the
     rollout reward uniformly (reward/K per segment).
@@ -292,11 +304,15 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
                     await sandbox.apply_pre_commands(sb, md["workdir"], md["pre_commands"])
                 await sb.write_text(
                     f"{md['workdir']}/PROBLEM_STATEMENT.md",
-                    md["problem_statement"] or "", user="agent",
+                    md["problem_statement"] or "",
+                    user="agent",
                 )
                 await sandbox.run_claude_code(
-                    sb, workdir=md["workdir"], session_id=session_id,
-                    middleware_url=state.middleware.public_url, prompt=CC_PROMPT,
+                    sb,
+                    workdir=md["workdir"],
+                    session_id=session_id,
+                    middleware_url=state.middleware.public_url,
+                    prompt=CC_PROMPT,
                     time_budget_sec=SWE_TIME_BUDGET_SEC,
                 )
                 diff_text = await sandbox.git_diff(sb, md["workdir"])
@@ -305,8 +321,11 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
             #     captured diff. No-test-cheating guarantee: reward depends
             #     only on the diff, never on what the agent sandbox did.
             reward, is_solved, applied_cleanly = await sandbox.evaluate(
-                image=md["image"], workdir=md["workdir"], diff_text=diff_text,
-                swepro=md["swepro"], eval_cmd=md["eval_cmd"],
+                image=md["image"],
+                workdir=md["workdir"],
+                diff_text=diff_text,
+                swepro=md["swepro"],
+                eval_cmd=md["eval_cmd"],
                 pre_commands=md["pre_commands"],
                 timeout_sec=SWE_EVAL_TIMEOUT_SEC,
             )
@@ -352,31 +371,47 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
                 final_seg = segments[-1]
                 _write_segment_to_sample(sample, final_seg, reward, state.tokenizer)
                 sample.metadata = {
-                    **sample.metadata, **final_seg[3],
+                    **sample.metadata,
+                    **final_seg[3],
                     "num_segments_collapsed": len(segments),
                 }
                 logger.info(
                     "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs "
                     "single-sample collapsed_segments=%d",
-                    instance_id, reward, is_solved, applied_cleanly, elapsed, len(segments),
+                    instance_id,
+                    reward,
+                    is_solved,
+                    applied_cleanly,
+                    elapsed,
+                    len(segments),
                 )
                 return sample
 
             try:
                 fanned = _fan_out_to_samples(
-                    sample, segments, reward, state.tokenizer, instance_id,
+                    sample,
+                    segments,
+                    reward,
+                    state.tokenizer,
+                    instance_id,
                 )
                 if not fanned:
                     raise ValueError("fan-out produced no samples")
             except Exception as e:
                 logger.warning(
                     "[coding_agent_rl] fan-out failed for instance=%s: %s -- sample aborted",
-                    instance_id, e,
+                    instance_id,
+                    e,
                 )
                 return [_abort(sample, reason=f"reducer_failure:{type(e).__name__}")]
             logger.info(
                 "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs segments=%d",
-                instance_id, reward, is_solved, applied_cleanly, elapsed, len(fanned),
+                instance_id,
+                reward,
+                is_solved,
+                applied_cleanly,
+                elapsed,
+                len(fanned),
             )
             return fanned
 
@@ -386,7 +421,9 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
     except Exception as e:
         logger.error(
             "[coding_agent_rl] %s: rollout failed: %s\n%s",
-            instance_id, e, traceback.format_exc(),
+            instance_id,
+            e,
+            traceback.format_exc(),
         )
         return _abort_result(sample, f"exception:{type(e).__name__}")
 
@@ -404,7 +441,10 @@ def _log_timeout_diagnostic(t0: float) -> None:
         logger.warning(
             "[coding_agent_rl] generate() wall_clock_timeout after %.1fs "
             "(guard=%ds); %d tasks pending; sample of stuck: %s",
-            elapsed, SWE_GENERATE_GUARD_SEC, len(pending), stuck,
+            elapsed,
+            SWE_GENERATE_GUARD_SEC,
+            len(pending),
+            stuck,
         )
     except Exception:  # pragma: no cover - diag must never crash
         pass
@@ -450,8 +490,7 @@ def _coerce_prompt(prompt) -> str:
                 if isinstance(c, str):
                     return c
                 if isinstance(c, list):
-                    return "\n".join(p.get("text", "") for p in c
-                                     if isinstance(p, dict) and p.get("type") == "text")
+                    return "\n".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
     return ""
 
 

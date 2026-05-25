@@ -21,7 +21,6 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +80,19 @@ def _is_transient_rpc_error(e: BaseException) -> bool:
     Excludes CommandExitException (real cmd failure) and SandboxException
     'resource does not exist' (sandbox already GC'd)."""
     name = type(e).__name__
-    if name in {"ProtocolError", "LocalProtocolError",
-                "WriteError", "ReadError", "ConnectError", "ConnectTimeout",
-                "ReadTimeout", "WriteTimeout", "PoolTimeout",
-                "RemoteProtocolError", "SSLError"}:
+    if name in {
+        "ProtocolError",
+        "LocalProtocolError",
+        "WriteError",
+        "ReadError",
+        "ConnectError",
+        "ConnectTimeout",
+        "ReadTimeout",
+        "WriteTimeout",
+        "PoolTimeout",
+        "RemoteProtocolError",
+        "SSLError",
+    }:
         return True
     msg = str(e)
     if name == "SandboxException":
@@ -107,10 +115,16 @@ async def _rpc_retry(op_name: str, coro_factory):
                 raise
             last_err = e
             if attempt + 1 < SWE_RPC_RETRIES:
-                backoff = _RPC_BACKOFF_BASE_SEC * (2 ** attempt)
-                logger.debug("[e2b] %s transient %s, retry %d/%d in %.1fs: %s",
-                             op_name, type(e).__name__, attempt + 1, SWE_RPC_RETRIES,
-                             backoff, str(e)[:120])
+                backoff = _RPC_BACKOFF_BASE_SEC * (2**attempt)
+                logger.debug(
+                    "[e2b] %s transient %s, retry %d/%d in %.1fs: %s",
+                    op_name,
+                    type(e).__name__,
+                    attempt + 1,
+                    SWE_RPC_RETRIES,
+                    backoff,
+                    str(e)[:120],
+                )
                 await asyncio.sleep(backoff)
     assert last_err is not None
     raise last_err
@@ -129,7 +143,7 @@ class E2BSandbox:
         self._sb = None
         self.sandbox_id = ""
 
-    async def __aenter__(self) -> "E2BSandbox":
+    async def __aenter__(self) -> E2BSandbox:
         if SANDBOX_IMAGE_METADATA_KEY is None:
             raise RuntimeError(
                 "SWE_SANDBOX_IMAGE_METADATA_KEY is not set. Export it before "
@@ -138,6 +152,7 @@ class E2BSandbox:
                 "correct image."
             )
         from e2b import AsyncSandbox  # type: ignore
+
         md = dict(SANDBOX_METADATA)
         md.setdefault(SANDBOX_IMAGE_METADATA_KEY, self.image)
         self._sb = await AsyncSandbox.create(timeout=self.timeout, metadata=md)
@@ -161,12 +176,17 @@ class E2BSandbox:
         check: bool = False,
     ) -> tuple[int, str, str]:
         from e2b.sandbox.commands.command_handle import CommandExitException
+
         try:
             res = await _rpc_retry(
                 f"exec({cmd[:60]!r})",
                 lambda: self._sb.commands.run(
-                    cmd, user=user, envs=env, timeout=timeout,
-                    on_stdout=lambda s: None, on_stderr=lambda s: None,
+                    cmd,
+                    user=user,
+                    envs=env,
+                    timeout=timeout,
+                    on_stdout=lambda s: None,
+                    on_stderr=lambda s: None,
                 ),
             )
             return res.exit_code, res.stdout or "", res.stderr or ""
@@ -181,9 +201,14 @@ class E2BSandbox:
         async def _do():
             with open(host_path, "rb") as fp:
                 await self._sb.files.write(
-                    sandbox_path, fp, user=user,
-                    gzip=False, use_octet_stream=True, request_timeout=600,
+                    sandbox_path,
+                    fp,
+                    user=user,
+                    gzip=False,
+                    use_octet_stream=True,
+                    request_timeout=600,
                 )
+
         await _rpc_retry(f"upload({Path(host_path).name})", _do)
 
     async def write_text(self, sandbox_path: str, content: str, *, user: str = "root") -> None:
@@ -226,7 +251,9 @@ async def install_node22(sb: E2BSandbox, host_tarball: Path) -> None:
         "ln -sf /opt/node22/bin/npm  /usr/local/bin/npm && "
         "ln -sf /opt/node22/bin/npx  /usr/local/bin/npx && "
         "hash -r 2>/dev/null || true && node --version && npm --version",
-        user="root", timeout=180, check=True,
+        user="root",
+        timeout=180,
+        check=True,
     )
 
 
@@ -235,7 +262,9 @@ async def install_claude_code(sb: E2BSandbox, host_tarball: Path) -> None:
     await sb.exec(
         "npm install -g --prefix=/usr/local --no-audit --no-fund /tmp/claude-code.tgz "
         "&& ls -la /usr/local/bin/claude && /usr/local/bin/claude --version",
-        user="root", timeout=300, check=True,
+        user="root",
+        timeout=300,
+        check=True,
     )
 
 
@@ -247,10 +276,12 @@ async def ensure_agent_user(sb: E2BSandbox, workdir: str) -> None:
         f"chown -R agent:agent /home/agent {workdir} && "
         f"git config --system --add safe.directory '*' && id agent && "
         f"mkdir -p /home/agent/.claude && "
-        f"echo '{{\"hasCompletedOnboarding\": true, \"bypassPermissionsModeAccepted\": true}}' "
+        f'echo \'{{"hasCompletedOnboarding": true, "bypassPermissionsModeAccepted": true}}\' '
         f"| tee /home/agent/.claude.json /home/agent/.claude/settings.json > /dev/null && "
         f"chown -R agent:agent /home/agent/.claude /home/agent/.claude.json",
-        user="root", check=True, timeout=60,
+        user="root",
+        check=True,
+        timeout=60,
     )
 
 
@@ -260,11 +291,11 @@ async def apply_before_repo_set_cmd(sb: E2BSandbox, workdir: str, swepro: dict) 
     if not before:
         return
     payload = f"set -e\ncd {workdir}\n{before}\n"
-    await sb.exec("mkdir -p /workspace/swepro_setup && chown agent:agent /workspace/swepro_setup",
-                  user="root", check=True)
+    await sb.exec(
+        "mkdir -p /workspace/swepro_setup && chown agent:agent /workspace/swepro_setup", user="root", check=True
+    )
     await sb.write_text("/workspace/swepro_setup/before.sh", payload, user="agent")
-    await sb.exec("bash /workspace/swepro_setup/before.sh",
-                  user="agent", check=False, timeout=600)
+    await sb.exec("bash /workspace/swepro_setup/before.sh", user="agent", check=False, timeout=600)
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +347,10 @@ async def run_claude_code(
     await sb.exec(
         f"runuser -u agent --whitelist-environment={env_keys}"
         f" -- bash -c 'setsid {launcher} < /dev/null > /dev/null 2>&1 &'",
-        user="root", env=env, timeout=30, check=True,
+        user="root",
+        env=env,
+        timeout=30,
+        check=True,
     )
 
     deadline = time.time() + time_budget_sec
@@ -325,7 +359,9 @@ async def run_claude_code(
         await asyncio.sleep(5)
         ec, out, _ = await sb.exec(
             f"test -f {done} && cat {done}",
-            user="agent", timeout=15, check=False,
+            user="agent",
+            timeout=15,
+            check=False,
         )
         if ec == 0:
             try:
@@ -394,8 +430,7 @@ async def _setup_swepro_assets(ev: E2BSandbox, swepro: dict) -> None:
         if host_p:
             text = Path(host_p).read_text()
             await ev.write_text(f"{_SWEPRO_DIR}/{dst}", text, user="root")
-    await ev.exec(f"chmod 755 {_SWEPRO_DIR}/* && chown -R agent:agent {_SWEPRO_DIR}",
-                  user="root", check=True)
+    await ev.exec(f"chmod 755 {_SWEPRO_DIR}/* && chown -R agent:agent {_SWEPRO_DIR}", user="root", check=True)
 
 
 async def apply_pre_commands(ev: E2BSandbox, workdir: str, pre: list[str] | str) -> None:
@@ -408,8 +443,7 @@ async def apply_pre_commands(ev: E2BSandbox, workdir: str, pre: list[str] | str)
     else:
         body = "\n".join(c for c in (pre or []) if c)
     await ev.write_text(_PRE, "set -e\n" + body, user="agent")
-    await ev.exec(f"chmod 755 {_PRE} && cd {workdir} && bash {_PRE}",
-                  user="agent", check=False, timeout=600)
+    await ev.exec(f"chmod 755 {_PRE} && cd {workdir} && bash {_PRE}", user="agent", check=False, timeout=600)
 
 
 async def _apply_diff(ev: E2BSandbox, workdir: str, diff_text: str) -> bool:
@@ -435,11 +469,15 @@ async def _run_swepro(ev: E2BSandbox, workdir: str, swepro: dict, timeout: int) 
     await ev.exec(
         f"cd {workdir} && bash {_SWEPRO_DIR}/run_script.sh "
         f"{json.dumps(test_arg)} > {stdout_f} 2> {stderr_f} || true",
-        user="agent", check=False, timeout=timeout,
+        user="agent",
+        check=False,
+        timeout=timeout,
     )
     await ev.exec(
         f"python3 {_SWEPRO_DIR}/parser.py {stdout_f} {stderr_f} {result_f}",
-        user="agent", check=False, timeout=120,
+        user="agent",
+        check=False,
+        timeout=120,
     )
     raw = await ev.read_text(result_f, user="agent")
     parsed = json.loads(raw) if raw else {"tests": []}
