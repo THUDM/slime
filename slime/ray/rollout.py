@@ -665,8 +665,15 @@ class RolloutManager:
             # set the same rollout_id on every sibling so the loss reducer counts
             # the rollout once instead of N times.
             _validate_rollout_id_annotated(data)
-            # flatten the data if it is a list of lists
-            while isinstance(data[0], list):
+            # Flatten one level: each task may return either a list[Sample]
+            # (fan-out / group) or a bare Sample (abort path). Normalize the
+            # bare Samples to single-element lists first so chain.from_iterable
+            # is safe, then collapse one nesting level.
+            if data and any(isinstance(x, list) for x in data):
+                data = [x if isinstance(x, list) else [x] for x in data]
+                data = list(itertools.chain.from_iterable(data))
+            # Defensive: handle any residual deeper nesting (e.g. list[list[list[Sample]]]).
+            while data and isinstance(data[0], list):
                 data = list(itertools.chain.from_iterable(data))
 
             _cap_sample_total_tokens(data, source="live_rollout")

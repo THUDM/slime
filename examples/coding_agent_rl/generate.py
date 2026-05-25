@@ -31,7 +31,6 @@ Dataset row ``metadata`` schema::
     workdir:           str        # repo path inside the sandbox
     problem_statement: str        # issue body (falls back to sample.prompt)
     swepro:            dict|None  # SWE-bench Pro test harness (preferred)
-    f2p_script:        str|None   # fallback: pytest script (exit 0 = solved)
     eval_cmd:          str|None   # last-resort: shell command (exit 0 = solved)
 
 Env knobs (set in run.sh):
@@ -43,7 +42,6 @@ Env knobs (set in run.sh):
     SWE_MAX_RESPONSE_TOKENS  0     optional smoke-test cap before training (0 = off)
     SWE_TOOL_PARSER          glm47           (sglang FunctionCallParser name)
     SWE_REASONING_PARSER     glm45           (sglang ReasoningParser name)
-    SWE_DUMP_RAW_TRAJECTORY  0               1 = attach trajectory_raw_dump to seg 0
     SHIM_BIND_HOST           0.0.0.0
     SHIM_PORT                18001
     SLIME_HEAD_HOST          public host the sandboxes use to reach the middleware
@@ -73,11 +71,6 @@ from slime.utils.processing_utils import load_tokenizer
 from slime.utils.types import Sample
 
 from . import middleware, sandbox
-
-try:
-    from slime.rollout.sglang_rollout import GenerateState as _SlimeGenerateState
-except Exception:  # pragma: no cover
-    _SlimeGenerateState = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -111,9 +104,6 @@ SWE_MAX_RESPONSE_TOKENS = int(os.environ.get("SWE_MAX_RESPONSE_TOKENS", "0") or 
 SWE_LIST_TRAJECTORY = os.environ.get("SWE_LIST_TRAJECTORY", "0") == "1"
 SWE_TOOL_PARSER = os.environ.get("SWE_TOOL_PARSER", "") or None
 SWE_REASONING_PARSER = os.environ.get("SWE_REASONING_PARSER", "") or None
-# Q5 / SPEC §6.2: renamed from SWE_SAVE_TRAJECTORY_TREE; semantics narrowed
-# to "attach trajectory_raw_dump to segment 0 metadata".
-SWE_DUMP_RAW_TRAJECTORY = os.environ.get("SWE_DUMP_RAW_TRAJECTORY", "0") == "1"
 SHIM_BIND_HOST = os.environ.get("SHIM_BIND_HOST", "0.0.0.0")
 SHIM_PORT = int(os.environ.get("SHIM_PORT", "18001"))
 
@@ -152,17 +142,6 @@ class _State(metaclass=SingletonMeta):
             public_host=public_host,
         )
         self.segment_reducer: Callable = _load_reducer(args)
-        if _SlimeGenerateState is not None:
-            try:
-                slime_state = _SlimeGenerateState(args)
-                self.middleware.install_abort_poll(
-                    lambda s=slime_state: bool(getattr(s, "aborted", False)),
-                    interval_sec=float(os.environ.get("SWE_ABORT_POLL_INTERVAL", "0.5")),
-                    max_wait_sec=float(os.environ.get("SWE_ABORT_MAX_WAIT_SEC", "1800")),
-                )
-                logger.info("[coding_agent_rl] abort-poll wired to GenerateState.aborted")
-            except Exception as e:
-                logger.warning("[coding_agent_rl] could not wire abort-poll: %s", e)
         logger.info(
             "[coding_agent_rl] tokenizer=%s middleware=%s reducer=%s",
             args.hf_checkpoint, self.middleware.public_url,
@@ -255,8 +234,8 @@ def _default_uniform_fan_out(
 ) -> list[Sample]:
     """Default reducer (D4 / Q7). Splits reward uniformly: reward/K per
     segment. Returns one Sample per non-empty segment, each carrying the
-    SPEC §6.1 metadata fields (segment_kind, finish_reason, num_aborts,
-    tito_masked_turns, segment_idx, num_segments, ...)."""
+    segment meta fields (segment_kind, finish_reason, segment_idx,
+    num_segments, ...)."""
     K = len(segments)
     # PR #1933 port: all K segments from one trajectory must share the same
     # rollout_id so the loss reducer counts the trajectory once (per-rollout
@@ -375,7 +354,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
             )
         except Exception:  # pragma: no cover - diag must never crash
             pass
-        return _abort(sample, "wall_clock_timeout")
+        return _abort_result(sample, "wall_clock_timeout")
     # Note: builtin TimeoutError (e.g., from concurrent.futures) was the
     # observed failure mode in run 073011. wait_for raises asyncio.TimeoutError
     # which is a subclass of builtin TimeoutError in Python >= 3.11 (PEP 657
@@ -388,14 +367,13 @@ async def _generate_inner(args, sample: Sample, sampling_params: dict[str, Any])
     state = _State(args)
     md = _metadata(sample)
     if not md["image"] or not md["workdir"]:
-        return _abort(sample, "missing_image_or_workdir")
+        return _abort_result(sample, "missing_image_or_workdir")
 
     session_id = sample.session_id or f"cagent-{md['instance_id']}-{secrets.token_hex(4)}"
     sample.session_id = session_id
     state.middleware.open_session(
         session_id,
         sampling_defaults=sampling_params,
-        record_raw_dump=SWE_DUMP_RAW_TRAJECTORY,
     )
 
     t0 = time.time()
@@ -419,22 +397,22 @@ async def _generate_inner(args, sample: Sample, sampling_params: dict[str, Any])
 
         reward, is_solved, applied_cleanly = await sandbox.evaluate(
             image=md["image"], workdir=md["workdir"], diff_text=diff_text,
-            swepro=md["swepro"], f2p_script=md["f2p_script"],
-            eval_cmd=md["eval_cmd"], pre_commands=md["pre_commands"],
+            swepro=md["swepro"], eval_cmd=md["eval_cmd"],
+            pre_commands=md["pre_commands"],
             timeout_sec=SWE_EVAL_TIMEOUT_SEC,
         )
     except Exception as e:
         logger.error("[coding_agent_rl] %s: rollout failed: %s\n%s",
                      md["instance_id"], e, traceback.format_exc())
-        return _abort(sample, f"exception:{type(e).__name__}")
+        return _abort_result(sample, f"exception:{type(e).__name__}")
 
     # D4 / list mode is always on now (Q1 decision):
-    segments, raw_dump = state.middleware.pop_session_split(session_id)
+    segments = state.middleware.pop_session_split(session_id)
     if not segments:
-        return _abort(sample, "middleware_session_empty")
+        return _abort_result(sample, "middleware_session_empty")
     segments = [seg for seg in segments if seg[1]]
     if not segments:
-        return _abort(sample, "middleware_session_empty")
+        return _abort_result(sample, "middleware_session_empty")
 
     # Apply per-sample training cap to each segment's response.
     segments = [_cap_segment(seg) for seg in segments]
@@ -455,8 +433,6 @@ async def _generate_inner(args, sample: Sample, sampling_params: dict[str, Any])
     # OOM root-cause analysis 2026-05-24.
     if not SWE_LIST_TRAJECTORY:
         _collapse_to_final_segment(sample, segments, reward, state.tokenizer)
-        if SWE_DUMP_RAW_TRAJECTORY:
-            sample.metadata["trajectory_raw_dump"] = raw_dump
         logger.info(
             "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs "
             "single-sample collapsed_segments=%d",
@@ -465,12 +441,6 @@ async def _generate_inner(args, sample: Sample, sampling_params: dict[str, Any])
         return sample
 
     fanned = _fan_out_with_fail_soft(state, segments, reward, sample, instance_id)
-    # Attach raw_dump only to segment 0 (avoid duplication).
-    if SWE_DUMP_RAW_TRAJECTORY and fanned and isinstance(fanned[0], Sample):
-        md0 = fanned[0].metadata or {}
-        md0["trajectory_raw_dump"] = raw_dump
-        fanned[0].metadata = md0
-
     logger.info(
         "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs segments=%d",
         instance_id, reward, is_solved, applied_cleanly, elapsed, len(fanned),
@@ -500,7 +470,6 @@ def _metadata(sample: Sample) -> dict[str, Any]:
         "workdir": m.get("workdir") or rem.get("workdir"),
         "problem_statement": m.get("problem_statement") or _coerce_prompt(sample.prompt),
         "swepro": m.get("swepro"),
-        "f2p_script": m.get("f2p_script") or rem.get("f2p_script"),
         "eval_cmd": m.get("eval_cmd"),
         "pre_commands": m.get("pre_commands") or rem.get("pre_commands"),
     }
@@ -531,3 +500,11 @@ def _abort(sample: Sample, reason: str) -> Sample:
     sample.metadata = {**(sample.metadata or {}), "abort_reason": reason}
     logger.warning("[coding_agent_rl] aborted: %s", reason)
     return sample
+
+
+def _abort_result(sample: Sample, reason: str):
+    """Return abort result matching the active fan-out mode so the framework
+    sees a uniform shape (`list[Sample]` when fan-out is on, bare `Sample`
+    otherwise). Mixing the two breaks `_get_rollout_data`'s flatten loop."""
+    s = _abort(sample, reason)
+    return [s] if SWE_LIST_TRAJECTORY else s

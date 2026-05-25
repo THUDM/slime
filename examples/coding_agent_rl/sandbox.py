@@ -66,7 +66,6 @@ SWE_RPC_RETRY_BASE_SEC = float(os.environ.get("SWE_RPC_RETRY_BASE_SEC", "1.0"))
 # Paths inside the sandbox (avoid clashes with image-shipped paths).
 _PATCH = "/workspace/__cagent_patch__.diff"
 _PRE = "/workspace/__cagent_pre__.sh"
-_F2P = "/workspace/__cagent_f2p__.py"
 _SWEPRO_DIR = "/workspace/swepro_eval"
 
 
@@ -343,7 +342,6 @@ async def evaluate(
     workdir: str,
     diff_text: str,
     swepro: dict | None = None,
-    f2p_script: str | None = None,
     eval_cmd: str | None = None,
     pre_commands: list[str] | str | None = None,
     timeout_sec: int = 600,
@@ -352,8 +350,8 @@ async def evaluate(
 
     No-test-cheating guarantee: the eval sandbox is built from the same image
     but starts CLEAN, so only the model-produced diff affects reward."""
-    if not (swepro or f2p_script or eval_cmd):
-        logger.warning("[e2b.evaluate] no swepro/f2p_script/eval_cmd; reward=0")
+    if not (swepro or eval_cmd):
+        logger.warning("[e2b.evaluate] no swepro/eval_cmd; reward=0")
         return 0.0, False, True
 
     async with E2BSandbox(image) as ev:
@@ -370,9 +368,6 @@ async def evaluate(
 
         if swepro:
             r, s = await _run_swepro(ev, workdir, swepro, timeout_sec)
-            return r, s, True
-        if f2p_script:
-            r, s = await _run_f2p(ev, workdir, f2p_script, timeout_sec)
             return r, s, True
         r, s = await _run_eval_cmd(ev, workdir, eval_cmd, timeout_sec)
         return r, s, True
@@ -434,15 +429,6 @@ async def _run_swepro(ev: E2BSandbox, workdir: str, swepro: dict, timeout: int) 
     required = set(swepro.get("fail_to_pass") or []) | set(swepro.get("pass_to_pass") or [])
     solved = bool(required) and required.issubset(passed)
     return (1.0 if solved else 0.0), solved
-
-
-async def _run_f2p(ev: E2BSandbox, workdir: str, script: str, timeout: int) -> tuple[float, bool]:
-    await ev.write_text(_F2P, script, user="agent")
-    ec, _, _ = await ev.exec(
-        f"cd {workdir} && python3 -m pytest -xvs {_F2P}",
-        user="agent", check=False, timeout=timeout,
-    )
-    return (1.0 if ec == 0 else 0.0), ec == 0
 
 
 async def _run_eval_cmd(ev: E2BSandbox, workdir: str, cmd: str, timeout: int) -> tuple[float, bool]:

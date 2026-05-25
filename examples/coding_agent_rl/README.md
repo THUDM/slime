@@ -24,7 +24,7 @@ the per-sample `generate()` is swapped.
 | File | Role |
 |---|---|
 | `generate.py` | Per-sample entrypoint slime calls. Reads top-to-bottom: provision sandbox → drop `PROBLEM_STATEMENT.md` → run agent → `git diff` → eval in a fresh sandbox → fill `Sample`. |
-| `sandbox.py` | Sandbox backend. Owns boot/kill, exec/upload, `install_node22` + `install_claude_code`, the long-running agent spawn (done-marker poll), `git diff`, and the fresh-sandbox eval runner (`swepro` / `f2p_script` / `eval_cmd`). |
+| `sandbox.py` | Sandbox backend. Owns boot/kill, exec/upload, `install_node22` + `install_claude_code`, the long-running agent spawn (done-marker poll), `git diff`, and the fresh-sandbox eval runner (`swepro` / `eval_cmd`). |
 | `middleware.py` | head-node aiohttp shim. Translates the agent's Anthropic Messages API into slime's SGLang `/generate` (token-native + logprobs) and keeps `(prompt_ids, response_ids, loss_mask)` per session so the trainer skips re-tokenization. Model-agnostic. |
 | `run_glm47_355b.sh` | Reference launch script: GLM-4.7-355B-A32B, 8 nodes / 64 GPUs, colocate, E2B sandbox. |
 
@@ -70,7 +70,7 @@ Each row needs `prompt`, `label`, `metadata`. `metadata` supports two layouts
     "workdir":           "/workspace/<repo>",    // repo path inside sandbox
     "problem_statement": "...",                  // optional; falls back to prompt
 
-    // test harness — pick ONE (priority: swepro > f2p_script > eval_cmd)
+    // test harness — pick ONE (priority: swepro > eval_cmd)
     "swepro": {                                  // SWE-bench Pro style
       "run_script_path":      "<host path to run.sh>",
       "parser_script_path":   "<host path to parser.py>",
@@ -79,7 +79,6 @@ Each row needs `prompt`, `label`, `metadata`. `metadata` supports two layouts
       "selected_test_files":  ["..."],
       "before_repo_set_cmd":  "pip install -e ."
     },
-    "f2p_script": "<a pytest script string; exit 0 == solved>",
     "eval_cmd":   "<any shell command; exit 0 == solved>",
 
     // optional setup commands run before evaluation (list[str] or && string)
@@ -88,7 +87,7 @@ Each row needs `prompt`, `label`, `metadata`. `metadata` supports two layouts
 }
 ```
 
-The alternative layout nests `image_url`, `workdir`, `f2p_script`,
+The alternative layout nests `image_url`, `workdir`,
 `pre_commands` under `metadata.remote_env_info` — both work.
 
 ## Env knobs
@@ -163,7 +162,7 @@ above it (`install_*`, `run_claude_code`, `evaluate`, ...) only uses those
 primitives — no E2B-specific code.
 
 **Add an eval mode.** Extend `evaluate()` in `sandbox.py` with another
-branch alongside the existing `swepro` / `f2p_script` / `eval_cmd` handlers.
+branch alongside the existing `swepro` / `eval_cmd` handlers.
 
 ## Design notes
 
