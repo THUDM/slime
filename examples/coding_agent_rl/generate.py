@@ -33,6 +33,11 @@ Dataset row ``metadata`` schema::
     swepro:            dict|None  # SWE-bench Pro test harness (preferred)
     eval_cmd:          str|None   # last-resort: shell command (exit 0 = solved)
 
+Also accepted (sweb-style rows): ``metadata.remote_env_info.f2p_script`` —
+a self-contained Python test file ending in ``sys.exit(pytest.main(...))``.
+When ``eval_cmd`` is absent, ``_metadata`` wraps this script into a base64
+materialize-and-run shell command so the existing eval path stays unchanged.
+
 Env knobs (set in run.sh):
 
     SWE_HOST_NODE_TARBALL    host path to a Node 22 tarball (REQUIRED)
@@ -54,6 +59,7 @@ CLI args:
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import importlib
 import logging
@@ -459,6 +465,17 @@ def _cap_segment(seg: tuple[list[int], list[int], list[int], dict]
 # ---------------------------------------------------------------------------
 # Metadata helpers
 # ---------------------------------------------------------------------------
+def _wrap_f2p_script(script: str | None) -> str | None:
+    # Materialize a self-contained pytest script (typical sweb f2p_script:
+    # ends with `sys.exit(pytest.main([...]))`) into the sandbox via base64
+    # so we sidestep all shell quoting; python's exit code carries the
+    # pytest pass/fail signal that `_run_eval_cmd` turns into reward.
+    if not script:
+        return None
+    b64 = base64.b64encode(script.encode("utf-8")).decode("ascii")
+    return f"echo {b64} | base64 -d > /tmp/slime_f2p.py && python /tmp/slime_f2p.py"
+
+
 def _metadata(sample: Sample) -> dict[str, Any]:
     """Normalize the two dataset schemas (flat vs ``remote_env_info``)."""
     m = sample.metadata or {}
@@ -470,7 +487,7 @@ def _metadata(sample: Sample) -> dict[str, Any]:
         "workdir": m.get("workdir") or rem.get("workdir"),
         "problem_statement": m.get("problem_statement") or _coerce_prompt(sample.prompt),
         "swepro": m.get("swepro"),
-        "eval_cmd": m.get("eval_cmd"),
+        "eval_cmd": m.get("eval_cmd") or _wrap_f2p_script(rem.get("f2p_script")),
         "pre_commands": m.get("pre_commands") or rem.get("pre_commands"),
     }
 
