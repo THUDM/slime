@@ -56,12 +56,19 @@ def _parse_sandbox_metadata() -> dict[str, str]:
 
 
 SANDBOX_METADATA = _parse_sandbox_metadata()
-SANDBOX_IMAGE_METADATA_KEY = os.environ.get(
-    "SWE_SANDBOX_IMAGE_METADATA_KEY", "glm-platform/image",
-)
+# No default: must be set explicitly via SWE_SANDBOX_IMAGE_METADATA_KEY.
+# Silently defaulting would route every sandbox to a wrong/missing image key
+# and produce a flood of opaque E2B errors instead of a single clear startup
+# failure.
+SANDBOX_IMAGE_METADATA_KEY = os.environ.get("SWE_SANDBOX_IMAGE_METADATA_KEY") or None
 SANDBOX_LIFETIME_SEC = int(os.environ.get("SWE_SANDBOX_LIFETIME_SEC", "3600"))
 SWE_RPC_RETRIES = int(os.environ.get("SWE_RPC_RETRIES", "3"))
-SWE_RPC_RETRY_BASE_SEC = float(os.environ.get("SWE_RPC_RETRY_BASE_SEC", "1.0"))
+# Exponential backoff base for _rpc_retry. Not env-tunable: with RETRIES=3 the
+# total sleep budget is base*(1+2) = 3s at base=1.0, which is the only
+# sensible operating point for E2B transient errors (h2 reset / SSL / pool
+# timeout). Smaller and you re-hit the same flap window; larger and you stall
+# the rollout step. No script in the repo has ever overridden this.
+_RPC_BACKOFF_BASE_SEC = 1.0
 
 # Paths inside the sandbox (avoid clashes with image-shipped paths).
 _PATCH = "/workspace/__cagent_patch__.diff"
@@ -100,7 +107,7 @@ async def _rpc_retry(op_name: str, coro_factory):
                 raise
             last_err = e
             if attempt + 1 < SWE_RPC_RETRIES:
-                backoff = SWE_RPC_RETRY_BASE_SEC * (2 ** attempt)
+                backoff = _RPC_BACKOFF_BASE_SEC * (2 ** attempt)
                 logger.debug("[e2b] %s transient %s, retry %d/%d in %.1fs: %s",
                              op_name, type(e).__name__, attempt + 1, SWE_RPC_RETRIES,
                              backoff, str(e)[:120])
@@ -123,6 +130,13 @@ class E2BSandbox:
         self.sandbox_id = ""
 
     async def __aenter__(self) -> "E2BSandbox":
+        if SANDBOX_IMAGE_METADATA_KEY is None:
+            raise RuntimeError(
+                "SWE_SANDBOX_IMAGE_METADATA_KEY is not set. Export it before "
+                "launching to the metadata key your E2B gateway uses for image "
+                "routing. Without it the sandbox cannot be routed to the "
+                "correct image."
+            )
         from e2b import AsyncSandbox  # type: ignore
         md = dict(SANDBOX_METADATA)
         md.setdefault(SANDBOX_IMAGE_METADATA_KEY, self.image)

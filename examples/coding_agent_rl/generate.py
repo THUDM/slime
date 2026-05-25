@@ -21,8 +21,7 @@ Per-sample steps:
        reward. (No-test-cheating guarantee: reward only depends on the diff.)
     7. Pull (prompt_ids, response_ids, loss_mask, ...) segments from the
        middleware (D4 default = list mode = one Sample per chain segment).
-    8. Fan out the rollout reward across segments via the configured reducer
-       (default uniform reward/K; user override via --swe-segment-reducer-path).
+    8. Fan out the rollout reward across segments (uniform reward/K).
        Failure is fail-soft (U4): sample marked abort, never blocks step.
 
 Dataset row ``metadata`` schema::
@@ -42,18 +41,14 @@ Env knobs (set in run.sh):
 
     SWE_HOST_NODE_TARBALL    host path to a Node 22 tarball (REQUIRED)
     SWE_HOST_CC_TARBALL      host path to the Claude Code npm tarball (REQUIRED)
-    SWE_TIME_BUDGET_SEC      900   per agent run, wallclock
+    SWE_TIME_BUDGET_SEC      1800  per agent run, wallclock
     SWE_EVAL_TIMEOUT_SEC     600   per eval test execution
     SWE_MAX_RESPONSE_TOKENS  0     optional smoke-test cap before training (0 = off)
     SWE_TOOL_PARSER          glm47           (sglang FunctionCallParser name)
     SWE_REASONING_PARSER     glm45           (sglang ReasoningParser name)
     SHIM_BIND_HOST           0.0.0.0
     SHIM_PORT                18001
-    SLIME_HEAD_HOST          public host the sandboxes use to reach the middleware
-
-CLI args:
-
-    --swe-segment-reducer-path  dotted.path.to.reducer (overrides default uniform)
+    SLIME_HEAD_HOST          public host the sandboxes use to reach the middleware (REQUIRED)
 """
 
 from __future__ import annotations
@@ -61,16 +56,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import copy
-import importlib
 import logging
 import os
 import secrets
-import socket
 import time
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from slime.utils.misc import SingletonMeta
 from slime.utils.processing_utils import load_tokenizer
@@ -89,7 +82,7 @@ SWE_HOST_CC_TARBALL = Path(os.environ.get(
     "SWE_HOST_CC_TARBALL",
     "/path/to/anthropic-ai-claude-code.tgz",
 ))
-SWE_TIME_BUDGET_SEC = int(os.environ.get("SWE_TIME_BUDGET_SEC", "900"))
+SWE_TIME_BUDGET_SEC = int(os.environ.get("SWE_TIME_BUDGET_SEC", "1800"))
 SWE_EVAL_TIMEOUT_SEC = int(os.environ.get("SWE_EVAL_TIMEOUT_SEC", "600"))
 # Wall-clock guard for the entire generate() call. Defaults to
 # SWE_TIME_BUDGET_SEC + SWE_EVAL_TIMEOUT_SEC + 180 (buffer for sandbox boot,
@@ -133,11 +126,14 @@ class _State(metaclass=SingletonMeta):
     def __init__(self, args) -> None:
         self.tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
         sglang_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
-        public_host = (
-            os.environ.get("SLIME_HEAD_HOST")
-            or os.environ.get("MLP_WORKER_0_HOST")
-            or socket.gethostname()
-        )
+        public_host = os.environ.get("SLIME_HEAD_HOST")
+        if not public_host:
+            raise RuntimeError(
+                "SLIME_HEAD_HOST is not set. Export it to the host IP that "
+                "sandboxes can reach for reverse-connection to the middleware. "
+                "Without it the sandbox cannot dial back and the rollout will "
+                "silently abort."
+            )
         self.middleware = middleware.start(
             tokenizer=self.tokenizer,
             sglang_url=sglang_url,
@@ -147,11 +143,9 @@ class _State(metaclass=SingletonMeta):
             port=SHIM_PORT,
             public_host=public_host,
         )
-        self.segment_reducer: Callable = _load_reducer(args)
         logger.info(
-            "[coding_agent_rl] tokenizer=%s middleware=%s reducer=%s",
+            "[coding_agent_rl] tokenizer=%s middleware=%s",
             args.hf_checkpoint, self.middleware.public_url,
-            getattr(self.segment_reducer, "__qualname__", repr(self.segment_reducer)),
         )
 
 
@@ -273,25 +267,6 @@ def _default_uniform_fan_out(
     return out
 
 
-def _load_reducer(args) -> Callable:
-    """Load the segment reducer with import-time fail-soft (U4)."""
-    path = getattr(args, "swe_segment_reducer_path", None)
-    if not path:
-        return _default_uniform_fan_out
-    try:
-        module_name, attr = path.rsplit(".", 1)
-        fn = getattr(importlib.import_module(module_name), attr)
-        if not callable(fn):
-            raise TypeError(f"{path} is not callable")
-        return fn
-    except Exception as e:
-        logger.error(
-            "[coding_agent_rl] could not import segment reducer %r: %s "
-            "- falling back to default uniform", path, e,
-        )
-        return _default_uniform_fan_out
-
-
 def _fan_out_with_fail_soft(
     state: "_State",
     segments: list[tuple[list[int], list[int], list[int], dict]],
@@ -299,17 +274,18 @@ def _fan_out_with_fail_soft(
     sample_proto: Sample,
     instance_id: str,
 ) -> list[Sample]:
-    """U4 - wrap the reducer so bad reducers don't kill the rollout step.
+    """U4 - defensive wrapper around the default reducer so bugs in fan-out
+    don't kill the rollout step.
 
-    4 fail paths:
-      1. import path bad      -> _load_reducer logs error + falls back to default
-      2. reducer raises       -> log warning + sample abort + metric bump
-      3. returns non-list/None -> same as (2)
-      4. returns Sample missing required field -> trainer rejects later (not here)
+    3 fail paths:
+      1. reducer raises       -> log warning + sample abort + metric bump
+      2. returns non-list/None -> same as (1)
+      3. returns Sample missing required field -> trainer rejects later (not here)
     """
-    reducer = state.segment_reducer
     try:
-        out = reducer(segments, reward, sample_proto, state.tokenizer, instance_id)
+        out = _default_uniform_fan_out(
+            segments, reward, sample_proto, state.tokenizer, instance_id,
+        )
         if not isinstance(out, list) or not out:
             raise ValueError(
                 f"reducer returned non-list or empty: {type(out).__name__}"

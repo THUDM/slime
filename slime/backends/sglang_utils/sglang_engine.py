@@ -304,46 +304,6 @@ class SGLangEngine(RayActor):
         else:
             raise TimeoutError("Timeout while flushing cache.")
 
-    def _wait_for_idle(self, timeout: float = 60.0, interval: float = 0.5) -> None:
-        """Poll /get_load until every DP rank reports 0 in-flight + waiting requests.
-
-        Why: SGLang scheduler asserts `is_fully_idle()` at the entry of
-        release_memory_occupation; if any DP still has a running/waiting req
-        (race after abort_request + flush_cache), the assertion fires and the
-        scheduler subprocess crashes with exit code -3, taking the engine down.
-        flush_cache alone is not sufficient because it only drains the radix
-        cache; it does not wait for in-flight forwards/aborts to settle.
-        """
-        if self.node_rank != 0:
-            return
-        deadline = time.time() + timeout
-        url = f"http://{self.server_host}:{self.server_port}/get_load"
-        last_busy = None
-        while time.time() < deadline:
-            try:
-                r = requests.get(url, timeout=5)
-                if r.status_code == 200:
-                    loads = r.json()
-                    if isinstance(loads, list):
-                        busy = [
-                            (l.get("dp_rank"),
-                             l.get("num_reqs", 0),
-                             l.get("num_waiting_reqs", 0))
-                            for l in loads
-                            if (l.get("num_reqs", 0) + l.get("num_waiting_reqs", 0)) > 0
-                        ]
-                        if not busy:
-                            return
-                        last_busy = busy
-            except Exception as e:
-                logger.debug(f"wait_for_idle poll error: {e}")
-            time.sleep(interval)
-        logger.warning(
-            "wait_for_idle: timed out after %.1fs; last_busy=%s; "
-            "calling release anyway (server may crash)",
-            timeout, last_busy,
-        )
-
     def get_url(self):
         if self.node_rank != 0:
             return None
@@ -393,7 +353,6 @@ class SGLangEngine(RayActor):
 
     def release_memory_occupation(self):
         self.flush_cache()
-        self._wait_for_idle()
         return self._make_request("release_memory_occupation")
 
     def resume_memory_occupation(self, tags: list[str] = None):
