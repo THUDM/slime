@@ -1296,18 +1296,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "can process all samples including filtered ones."
                 ),
             )
-            parser.add_argument(
-                "--disable-rollout-trim-samples",
-                action="store_true",
-                default=False,
-                help="disable trim samples in rollout buffer when converting samples to train data",
-            )
-            parser.add_argument(
-                "--use-dynamic-global-batch-size",
-                action="store_true",
-                default=False,
-                help="enable dynamic global batch size, disable trim samples in rollout buffer when converting samples to train data",
-            )
             return parser
 
         def add_custom_megatron_plugins_arguments(parser):
@@ -1763,11 +1751,11 @@ def slime_validate_args(args):
     if args.offload_rollout is None:
         args.offload_rollout = False
 
-    if args.offload_train:
-        args.disable_grad_buffers_cpu_backup = True
-
     if args.use_critic:
         args.offload_train = True
+
+    if args.offload_train:
+        args.disable_grad_buffers_cpu_backup = True
 
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path
