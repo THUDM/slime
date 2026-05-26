@@ -46,7 +46,6 @@
     },
     'e2e-test-ckpt': {
       'label': 'run-ci-ckpt',
-      'max_parallel': 1,
       'tests': [
         {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer gpu', 'num_gpus': 8},
         {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer cpu', 'num_gpus': 8},
@@ -145,9 +144,6 @@ jobs:
 <% endif %>
     strategy:
       fail-fast: false
-<% if config.get('max_parallel') %>
-      max-parallel: << config.max_parallel >>
-<% endif %>
       matrix:
         info: << config.tests | tojson >>
     defaults:
@@ -198,11 +194,7 @@ jobs:
           else
             TEST_ARGS_ARRAY=()
           fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
-          else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
-          fi
+          python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
 <% else %>
           docker run --rm \
             --privileged \
@@ -247,11 +239,11 @@ jobs:
               else
                 TEST_ARGS_ARRAY=()
               fi
-              if [ "$NUM_GPUS" = "0" ]; then
-                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
-              else
-                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              if [ "$NUM_GPUS" != "0" ]; then
+                CUDA_VISIBLE_DEVICES="$(seq -s, 0 "$((NUM_GPUS - 1))")"
+                export CUDA_VISIBLE_DEVICES
               fi
+              python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
             '
 <% endif %>
 <% endfor %>
@@ -363,9 +355,9 @@ jobs:
               else
                 TEST_ARGS_ARRAY=()
               fi
-              if [ "$NUM_GPUS" = "0" ]; then
-                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
-              else
-                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              if [ "$NUM_GPUS" != "0" ]; then
+                CUDA_VISIBLE_DEVICES="$(seq -s, 0 "$((NUM_GPUS - 1))")"
+                export CUDA_VISIBLE_DEVICES
               fi
+              python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
             '
