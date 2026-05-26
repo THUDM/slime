@@ -71,6 +71,7 @@ from slime.utils.processing_utils import load_tokenizer
 from slime.utils.types import Sample
 
 from . import middleware, sandbox
+from .aiohttp_threaded import run_app_in_thread
 
 logger = logging.getLogger(__name__)
 
@@ -138,19 +139,29 @@ class _State(metaclass=SingletonMeta):
                 "Without it the sandbox cannot dial back and the rollout will "
                 "silently abort."
             )
-        self.middleware = middleware.start(
+        app, self.store = middleware.start(
             tokenizer=self.tokenizer,
             sglang_url=sglang_url,
             tool_parser=SWE_TOOL_PARSER,
             reasoning_parser=SWE_REASONING_PARSER,
+        )
+        # handler_cancellation=True so a client disconnect cancels the handler
+        # coroutine, arming the fire-and-forget /abort_request inside the
+        # middleware. Without it a cancelled client leaves an inflight sglang
+        # /generate that races with the next release_memory_occupation and
+        # trips sglang's "server is idle" assertion.
+        self.app_handle = run_app_in_thread(
+            app,
             host=SHIM_BIND_HOST,
             port=SHIM_PORT,
-            public_host=public_host,
+            thread_name="anthropic-middleware",
+            runner_kwargs={"handler_cancellation": True},
         )
+        self.middleware_url = f"http://{public_host}:{self.app_handle.port}"
         logger.info(
             "[coding_agent_rl] tokenizer=%s middleware=%s",
             args.hf_checkpoint,
-            self.middleware.public_url,
+            self.middleware_url,
         )
 
 
@@ -287,7 +298,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
     else:
         session_id = f"cagent-{md['instance_id']}-{secrets.token_hex(8)}"
     sample.session_id = session_id
-    state.middleware.open_session(session_id, sampling_defaults=sampling_params)
+    middleware.open_session(state.store, session_id, sampling_defaults=sampling_params)
 
     instance_id = md["instance_id"]
     t0 = time.time()
@@ -311,7 +322,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
                     sb,
                     workdir=md["workdir"],
                     session_id=session_id,
-                    middleware_url=state.middleware.public_url,
+                    middleware_url=state.middleware_url,
                     prompt=CC_PROMPT,
                     time_budget_sec=SWE_TIME_BUDGET_SEC,
                 )
@@ -337,7 +348,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
             cap = SWE_MAX_RESPONSE_TOKENS
             segments: list[Segment] = [
                 (p, r[:cap], m[:cap], meta) if cap and len(r) > cap else (p, r, m, meta)
-                for (p, r, m, meta) in (state.middleware.pop_session_split(session_id) or [])
+                for (p, r, m, meta) in (middleware.pop_session_split(state.store, session_id) or [])
                 if r
             ]
             if not segments:
