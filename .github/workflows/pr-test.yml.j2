@@ -84,7 +84,6 @@
     'e2e-test-image': {
       'label': 'run-ci-image',
       'image': 'slimerl/slime-test:latest',
-      'max_parallel': 1,
       'tests': [
         {'test_file': 'test_qwen3.5_0.8B_gsm8k_async_short.py', 'num_gpus': 4},
         {'test_file': 'test_qwen3.5_0.8B_gsm8k_short.py', 'num_gpus': 4},
