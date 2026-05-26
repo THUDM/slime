@@ -40,6 +40,7 @@ import logging
 import os
 import re
 import secrets
+import uuid
 from typing import Any
 
 import aiohttp
@@ -615,24 +616,42 @@ async def _post_generate(
     input_ids: list[int],
     sampling_params: dict[str, Any],
 ) -> tuple[list[int], str]:
-    """Single non-streaming POST to sglang. Returns (output_ids, finish_reason)."""
+    """Single non-streaming POST to sglang. Returns (output_ids, finish_reason).
+
+    On client-side cancel or transport error we fire-and-forget /abort_request
+    so the inflight req drains immediately. Without this, a subsequent
+    release_memory_occupation can hit sglang's "server is idle" assertion and
+    crash the scheduler (race between cancelled client and pending generate)."""
+    rid = uuid.uuid4().hex
     timeout = aiohttp.ClientTimeout(total=None, sock_read=900)
-    async with aiohttp.ClientSession(timeout=timeout) as sess, sess.post(
-        f"{sglang_url}/generate",
-        json={
-            "input_ids": input_ids,
-            "sampling_params": sampling_params,
-            "return_logprob": True,
-        },
-    ) as r:
-        if r.status >= 400:
-            text = await r.text()
-            raise RuntimeError(f"sglang upstream {r.status}: {text[:400]}")
-        data = await r.json()
-    meta = data.get("meta_info") or {}
-    output_ids = [x[1] for x in (meta.get("output_token_logprobs") or [])]
-    finish = (meta.get("finish_reason") or {}).get("type", "stop") or "stop"
-    return output_ids, finish
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as sess, sess.post(
+            f"{sglang_url}/generate",
+            json={
+                "rid": rid,
+                "input_ids": input_ids,
+                "sampling_params": sampling_params,
+                "return_logprob": True,
+            },
+        ) as r:
+            if r.status >= 400:
+                text = await r.text()
+                raise RuntimeError(f"sglang upstream {r.status}: {text[:400]}")
+            data = await r.json()
+        meta = data.get("meta_info") or {}
+        output_ids = [x[1] for x in (meta.get("output_token_logprobs") or [])]
+        finish = (meta.get("finish_reason") or {}).get("type", "stop") or "stop"
+        return output_ids, finish
+    except (asyncio.CancelledError, aiohttp.ClientError, asyncio.TimeoutError):
+        # Best-effort abort. Use a fresh short-timeout session because the
+        # outer one may be tearing down. Swallow errors -- if abort itself
+        # fails (eg. sglang already dead) we don't make things worse.
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as s2:
+                await s2.post(f"{sglang_url}/abort_request", json={"rid": rid})
+        except Exception:
+            pass
+        raise
 
 
 # =============================================================================
