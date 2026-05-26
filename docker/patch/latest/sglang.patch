@@ -1169,7 +1169,7 @@ index ae6f732fe9..496e7bcea9 100644
                  BatchTokenIDOutput(
                      rids=rids,
 diff --git a/python/sglang/srt/managers/scheduler_profiler_mixin.py b/python/sglang/srt/managers/scheduler_profiler_mixin.py
-index c02ed7997d..61733c4127 100644
+index c02ed79..61733c4 100644
 --- a/python/sglang/srt/managers/scheduler_profiler_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_profiler_mixin.py
 @@ -349,7 +349,7 @@ class SchedulerProfilerMixin:
@@ -2005,7 +2005,7 @@ index eff3a5615a..5b1eec9953 100644
  def _model_load_weights_direct(model, named_tensors: List[Tuple[str, torch.Tensor]]):
      params_dict = dict(model.named_parameters())
 diff --git a/python/sglang/srt/models/glm4v_moe.py b/python/sglang/srt/models/glm4v_moe.py
-index 2f0074924d..1f991932c6 100644
+index 2f00749..1f99193 100644
 --- a/python/sglang/srt/models/glm4v_moe.py
 +++ b/python/sglang/srt/models/glm4v_moe.py
 @@ -52,11 +52,31 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
@@ -2138,7 +2138,7 @@ index 1b6c185bcb..58ad9c7803 100644
                  positions,
                  hidden_states,
 diff --git a/python/sglang/srt/multimodal/processors/glm4v.py b/python/sglang/srt/multimodal/processors/glm4v.py
-index a44f14b6ca..6d6c65ea49 100644
+index a44f14b..6d6c65e 100644
 --- a/python/sglang/srt/multimodal/processors/glm4v.py
 +++ b/python/sglang/srt/multimodal/processors/glm4v.py
 @@ -1,7 +1,13 @@

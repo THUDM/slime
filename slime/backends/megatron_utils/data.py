@@ -502,7 +502,7 @@ def log_passrate(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -
         gather_log_data("passrate", args, rollout_id, log_dict)
 
 
-def log_perf_data(rollout_id: int, args: Namespace) -> None:
+def log_perf_data(rollout_id: int, args: Namespace, extra_metrics: dict | None = None) -> None:
     train_metric_utils.log_perf_data_raw(
         rollout_id=rollout_id,
         args=args,
@@ -514,6 +514,7 @@ def log_perf_data(rollout_id: int, args: Namespace) -> None:
         compute_total_fwd_flops=lambda seq_lens: calculate_fwd_flops(seqlens=seq_lens, args=args)
         / dist.get_world_size()
         / 1e12,
+        extra_metrics=extra_metrics,
     )
 
 

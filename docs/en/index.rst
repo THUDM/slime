@@ -47,6 +47,7 @@ slime is the RL-framework behind GLM-4.7, GLM-4.6 and GLM-4.5. Apart from models
    advanced/reproducibility.md
    advanced/fault-tolerance.md
    advanced/pd-disaggregation.md
+   advanced/delta-weight-sync.md
    advanced/sglang-config.md
    advanced/megatron-config.md
    advanced/arch-support-beyond-megatron.md

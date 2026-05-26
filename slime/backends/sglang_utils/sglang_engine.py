@@ -367,15 +367,28 @@ class SGLangEngine(RayActor):
     def check_weights(self, action: str):
         return self._make_request("weights_checker", {"action": action})
 
-    def update_weights_from_disk(self, model_path: str, load_format: str | None = None):
+    def update_weights_from_disk(
+        self,
+        model_path: str,
+        load_format: str | None = None,
+        weight_version: str | None = None,
+        files: list[str] | None = None,
+    ):
         """Reload weights from *model_path* without restarting the engine.
 
-        Used for non-updatable (frozen) models that overlap with megatron:
-        after offload, weights are restored from disk instead of CPU cache.
+        Standard HF reload: ``model_path`` is the checkpoint directory.
+        Delta (``load_format="delta"``): ``model_path`` is the parent of the
+        per-sync version subdir and ``files`` is the basenames within it to read +
+        apply. Each delta call is independent — sender owns batching, sync
+        boundaries, cleanup.
         """
-        payload = {"model_path": model_path}
+        payload: dict = {"model_path": model_path}
         if load_format is not None:
             payload["load_format"] = load_format
+        if weight_version is not None:
+            payload["weight_version"] = weight_version
+        if files is not None:
+            payload["files"] = files
         return self._make_request("update_weights_from_disk", payload)
 
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
@@ -404,7 +417,15 @@ class SGLangEngine(RayActor):
             pass
 
     def update_weights_from_distributed(
-        self, names, dtypes, shapes, group_name, flush_cache=False, weight_version: str | None = None
+        self,
+        names,
+        dtypes,
+        shapes,
+        group_name,
+        flush_cache=False,
+        weight_version: str | None = None,
+        load_format: str | None = None,
+        delta=None,
     ):
         payload = {
             "names": names,
@@ -415,6 +436,21 @@ class SGLangEngine(RayActor):
         }
         if weight_version is not None:
             payload["weight_version"] = weight_version
+        if load_format is not None:
+            payload["load_format"] = load_format
+        if delta is not None:
+            # DeltaSpec → JSON string. Receiver reconstructs via DeltaEncoding(...) +
+            # DeltaParam(**p); avoids depending on FastAPI's nested-dataclass coercion.
+            import json
+            from dataclasses import asdict
+
+            payload["delta"] = json.dumps(
+                {
+                    "encoding": delta.encoding.value,
+                    "params": [asdict(p) for p in delta.params],
+                    "checksum": delta.checksum,
+                }
+            )
         return self._make_request(
             "update_weights_from_distributed",
             payload,
