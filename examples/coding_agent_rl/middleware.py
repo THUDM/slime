@@ -226,13 +226,13 @@ def _render_with_raw_splice(
     tokenizers used by Qwen3 / GLM-4.x). No fallback path."""
     valid = {i: tup for i, tup in asst_raw_tokens.items() if 0 <= i < len(chat_messages)}
     if not valid:
-        text = tok.apply_chat_template(
+        ids = tok.apply_chat_template(
             chat_messages,
             tools=tools_schema,
-            tokenize=False,
+            tokenize=True,
             add_generation_prompt=True,
         )
-        return tok.encode(text, add_special_tokens=False), []
+        return list(ids), []
 
     placeholders: dict[int, str] = {}
     render_msgs: list[dict] = []
