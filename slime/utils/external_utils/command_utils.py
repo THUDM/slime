@@ -6,8 +6,6 @@ import datetime
 import json
 import os
 import random
-import shlex
-import socket
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -108,13 +106,6 @@ def execute_train(
         config = ExecuteTrainConfig()
     external_ray = get_bool_env_var("SLIME_SCRIPT_EXTERNAL_RAY")
     master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
-    ray_port = os.environ.get("SLIME_SCRIPT_RAY_PORT")
-    ray_dashboard_port = os.environ.get("SLIME_SCRIPT_RAY_DASHBOARD_PORT")
-    ray_temp_dir = os.environ.get("SLIME_SCRIPT_RAY_TEMP_DIR")
-    if not external_ray:
-        ray_port = ray_port or str(_find_free_port())
-        ray_dashboard_port = ray_dashboard_port or str(_find_free_port(excluded_ports={int(ray_port)}))
-        ray_temp_dir = ray_temp_dir or f"/tmp/slime_ray_{os.getpid()}_{int(time.time())}"
 
     exec_command(
         "pkill -9 sglang; "
@@ -137,14 +128,7 @@ def execute_train(
         exec_command(
             # will prevent ray from buffering stdout/stderr
             f"export PYTHONBUFFERED=16 && "
-            f"ray stop --force; "
-            f"ray start --head "
-            f"--node-ip-address {master_addr} "
-            f"--port {ray_port} "
-            f"--dashboard-port {ray_dashboard_port} "
-            f"--temp-dir {shlex.quote(ray_temp_dir)} "
-            f"--num-gpus {num_gpus_per_node} "
-            f"--disable-usage-stats"
+            f"ray start --head --node-ip-address {master_addr} --num-gpus {num_gpus_per_node} --disable-usage-stats"
         )
 
     if (f := before_ray_job_submit) is not None:
@@ -184,7 +168,7 @@ def execute_train(
         exec_command(
             f"export no_proxy=127.0.0.1 && export PYTHONBUFFERED=16 && "
             f"{cmd_megatron_model_source}"
-            f'ray job submit --address="http://127.0.0.1:{ray_dashboard_port or 8265}" '
+            f'ray job submit --address="http://127.0.0.1:8265" '
             f"--runtime-env-json='{runtime_env_json}' "
             f"-- python3 {train_script} "
             f"{'${MODEL_ARGS[@]}' if megatron_model_type is not None else ''} "
@@ -197,16 +181,6 @@ def _parse_extra_env_vars(text: str):
         return json.loads(text)
     except ValueError:
         return {kv[0]: kv[1] for item in text.split(" ") if item.strip() != "" if (kv := item.split("=")) or True}
-
-
-def _find_free_port(excluded_ports: set[int] | None = None) -> int:
-    excluded_ports = excluded_ports or set()
-    while True:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(("", 0))
-            port = sock.getsockname()[1]
-        if port not in excluded_ports:
-            return port
 
 
 def check_has_nvlink():

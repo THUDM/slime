@@ -8,7 +8,7 @@ The workflow is defined in `.github/workflows/pr-test.yml` (auto-generated from 
 
 1. Runs on a self-hosted GPU runner via `docker run`; most tests use `slimerl/slime:latest`, while image validation uses `slimerl/slime-test:latest`.
 2. Installs slime with `pip install -e . --no-deps`.
-3. Limits visible GPUs according to the test's `num_gpus` matrix value.
+3. Acquires the required GPUs via `tests/ci/gpu_lock_exec.py --count <num_gpus>`.
 4. Executes the test file: `python <test_path>.py` or `python tests/<test_file>.py`, depending on whether the test lives under `tests/` or a subdirectory such as `tests/plugin_contracts/`.
 
 Each test file follows a standard pattern: a `prepare()` function downloads models/datasets, and an `execute()` function builds CLI arguments and calls `U.execute_train(...)`.

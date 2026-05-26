@@ -104,11 +104,11 @@ jobs:
               else
                 TEST_ARGS_ARRAY=()
               fi
-              if [ "$NUM_GPUS" != "0" ]; then
-                CUDA_VISIBLE_DEVICES="$(seq -s, 0 "$((NUM_GPUS - 1))")"
-                export CUDA_VISIBLE_DEVICES
+              if [ "$NUM_GPUS" = "0" ]; then
+                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              else
+                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
               fi
-              python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
             '
 
 
@@ -187,11 +187,11 @@ jobs:
               else
                 TEST_ARGS_ARRAY=()
               fi
-              if [ "$NUM_GPUS" != "0" ]; then
-                CUDA_VISIBLE_DEVICES="$(seq -s, 0 "$((NUM_GPUS - 1))")"
-                export CUDA_VISIBLE_DEVICES
+              if [ "$NUM_GPUS" = "0" ]; then
+                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              else
+                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
               fi
-              python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
             '
 
 
@@ -270,11 +270,11 @@ jobs:
               else
                 TEST_ARGS_ARRAY=()
               fi
-              if [ "$NUM_GPUS" != "0" ]; then
-                CUDA_VISIBLE_DEVICES="$(seq -s, 0 "$((NUM_GPUS - 1))")"
-                export CUDA_VISIBLE_DEVICES
+              if [ "$NUM_GPUS" = "0" ]; then
+                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              else
+                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
               fi
-              python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
             '
 
 
@@ -353,11 +353,11 @@ jobs:
               else
                 TEST_ARGS_ARRAY=()
               fi
-              if [ "$NUM_GPUS" != "0" ]; then
-                CUDA_VISIBLE_DEVICES="$(seq -s, 0 "$((NUM_GPUS - 1))")"
-                export CUDA_VISIBLE_DEVICES
+              if [ "$NUM_GPUS" = "0" ]; then
+                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              else
+                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
               fi
-              python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
             '
 
 
@@ -436,11 +436,11 @@ jobs:
               else
                 TEST_ARGS_ARRAY=()
               fi
-              if [ "$NUM_GPUS" != "0" ]; then
-                CUDA_VISIBLE_DEVICES="$(seq -s, 0 "$((NUM_GPUS - 1))")"
-                export CUDA_VISIBLE_DEVICES
+              if [ "$NUM_GPUS" = "0" ]; then
+                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              else
+                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
               fi
-              python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
             '
 
 
@@ -502,7 +502,11 @@ jobs:
           else
             TEST_ARGS_ARRAY=()
           fi
-          python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          fi
 
 
   e2e-test-image:
@@ -580,11 +584,11 @@ jobs:
               else
                 TEST_ARGS_ARRAY=()
               fi
-              if [ "$NUM_GPUS" != "0" ]; then
-                CUDA_VISIBLE_DEVICES="$(seq -s, 0 "$((NUM_GPUS - 1))")"
-                export CUDA_VISIBLE_DEVICES
+              if [ "$NUM_GPUS" = "0" ]; then
+                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              else
+                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
               fi
-              python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
             '
 
 
@@ -696,9 +700,9 @@ jobs:
               else
                 TEST_ARGS_ARRAY=()
               fi
-              if [ "$NUM_GPUS" != "0" ]; then
-                CUDA_VISIBLE_DEVICES="$(seq -s, 0 "$((NUM_GPUS - 1))")"
-                export CUDA_VISIBLE_DEVICES
+              if [ "$NUM_GPUS" = "0" ]; then
+                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              else
+                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
               fi
-              python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
             '
