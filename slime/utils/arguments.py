@@ -113,6 +113,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="The qkv layout for Megatron backend.",
             )
             parser.add_argument(
+                "--qwen-gdn-backend",
+                type=str,
+                choices=["fla", "flashqla"],
+                default="fla",
+                help="GDN implementation backend for Qwen linear-attention layers.",
+            )
+            parser.add_argument(
                 "--train-env-vars",
                 type=json.loads,
                 default="{}",
