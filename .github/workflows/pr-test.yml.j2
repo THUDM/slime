@@ -200,7 +200,7 @@ jobs:
             python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 <% else %>
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -316,7 +316,7 @@ jobs:
       - name: Execute
         shell: bash
         run: |
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \

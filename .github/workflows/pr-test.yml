@@ -61,7 +61,7 @@ jobs:
         shell: bash
         run: |
 
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -144,7 +144,7 @@ jobs:
         shell: bash
         run: |
 
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -227,7 +227,7 @@ jobs:
         shell: bash
         run: |
 
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -310,7 +310,7 @@ jobs:
         shell: bash
         run: |
 
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -393,7 +393,7 @@ jobs:
         shell: bash
         run: |
 
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -541,7 +541,7 @@ jobs:
         shell: bash
         run: |
 
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -657,7 +657,7 @@ jobs:
       - name: Execute
         shell: bash
         run: |
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
