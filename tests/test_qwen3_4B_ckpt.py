@@ -14,6 +14,8 @@ NUM_GPUS = 8
 
 parser = ArgumentParser()
 parser.add_argument("--async-save", action="store_true", help="Whether to test async save/load.")
+parser.add_argument("--save-optimizer", choices=["cpu", "gpu"], default="cpu", help="Optimizer placement for save.")
+parser.add_argument("--load-optimizer", choices=["cpu", "gpu"], default="cpu", help="Optimizer placement for load.")
 
 
 def prepare():
@@ -28,7 +30,22 @@ def prepare():
     )
 
 
-def execute(mode: str = ""):
+def optimizer_args(optimizer: str):
+    args = (
+        "--optimizer adam "
+        "--lr 1e-6 "
+        "--lr-decay-style constant "
+        "--weight-decay 0.1 "
+        "--adam-beta1 0.9 "
+        "--adam-beta2 0.98 "
+        "--use-precision-aware-optimizer "
+    )
+    if optimizer == "cpu":
+        args += "--optimizer-cpu-offload --overlap-cpu-optimizer-d2h-h2d "
+    return args
+
+
+def execute(mode: str = "", optimizer: str = "cpu"):
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}_torch_dist "
     if mode == "save":
         ckpt_args += f"--save /root/models/{MODEL_NAME}_slime "
@@ -78,18 +95,6 @@ def execute(mode: str = ""):
         "--eps-clip 0.2 "
     )
 
-    optimizer_args = (
-        "--optimizer adam "
-        "--lr 1e-6 "
-        "--lr-decay-style constant "
-        "--weight-decay 0.1 "
-        "--adam-beta1 0.9 "
-        "--adam-beta2 0.98 "
-        "--optimizer-cpu-offload "
-        "--overlap-cpu-optimizer-d2h-h2d "
-        "--use-precision-aware-optimizer "
-    )
-
     sglang_args = "--rollout-num-gpus-per-engine 2 --sglang-mem-fraction-static 0.8 --sglang-cuda-graph-max-bs 32 "
 
     ci_args = "--ci-test "
@@ -111,7 +116,7 @@ def execute(mode: str = ""):
     train_args = (
         f"{ckpt_args} "
         f"{rollout_args} "
-        f"{optimizer_args} "
+        f"{optimizer_args(optimizer)} "
         f"{ppo_args} "
         f"{U.get_default_wandb_args(__file__)} "
         f"{perf_args} "
@@ -133,5 +138,5 @@ if __name__ == "__main__":
     prepare()
     for proxy_var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
         os.environ.pop(proxy_var, None)
-    execute("save" if not args.async_save else "async_save")
-    execute("load")
+    execute("save" if not args.async_save else "async_save", optimizer=args.save_optimizer)
+    execute("load", optimizer=args.load_optimizer)
