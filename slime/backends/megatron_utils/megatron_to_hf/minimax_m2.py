@@ -53,9 +53,7 @@ def convert_minimax_m2_to_hf(args, name, param):
         # Attention: fused QKV -> split into Q/K/V (GQA: 48 heads, 8 kv heads)
         elif rest == "self_attention.linear_qkv.weight":
             param = param.view(args.num_query_groups, -1, head_dim, args.hidden_size)
-            q_param, k_param, v_param = torch.split(
-                param, split_size_or_sections=[value_num_per_group, 1, 1], dim=1
-            )
+            q_param, k_param, v_param = torch.split(param, split_size_or_sections=[value_num_per_group, 1, 1], dim=1)
             q_param = q_param.reshape(-1, args.hidden_size)
             k_param = k_param.reshape(-1, args.hidden_size)
             v_param = v_param.reshape(-1, args.hidden_size)

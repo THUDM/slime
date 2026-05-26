@@ -49,9 +49,7 @@ class MiniMaxM2SelfAttention(SelfAttention):
         )
 
     def get_query_key_value_tensors(self, hidden_states, key_value_states=None, *args, **kwargs):
-        query, key, value = super().get_query_key_value_tensors(
-            hidden_states, key_value_states, *args, **kwargs
-        )
+        query, key, value = super().get_query_key_value_tensors(hidden_states, key_value_states, *args, **kwargs)
         # query: [sq, b, num_heads_local, head_dim]
         # key:   [sq, b, num_kv_heads_local, head_dim]
 
