@@ -213,7 +213,7 @@ SGLANG_ARGS=(
    --sglang-ep-size ${ROLLOUT_EP_SIZE}
    --sglang-enable-dp-lm-head
    --sglang-moe-dense-tp-size 1
-   --sglang-tool-call-parser qwen25
+   --sglang-tool-call-parser qwen3_coder
    --sglang-reasoning-parser qwen3
 )
 
@@ -273,7 +273,7 @@ export SWE_MAX_RESPONSE_TOKENS="${SWE_MAX_RESPONSE_TOKENS:-32768}"
 export SWE_MAX_SEGMENT_TOKENS="${SWE_MAX_SEGMENT_TOKENS:-${MAX_CONTEXT_LEN}}"
 
 # --- model output parsers (must match the served model) ---
-export SWE_TOOL_PARSER="${SWE_TOOL_PARSER:-qwen25}"
+export SWE_TOOL_PARSER="${SWE_TOOL_PARSER:-qwen3_coder}"
 export SWE_REASONING_PARSER="${SWE_REASONING_PARSER:-qwen3}"
 
 # --- claude-code CLI extras ---
