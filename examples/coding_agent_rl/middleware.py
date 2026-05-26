@@ -516,15 +516,30 @@ class Session:
 
     # -- routing + classification --------------------------------------------
 
-    def pick_target(self, req_system_hash: str) -> tuple[Chain, bool]:
+    def pick_target(self, req_system_hash: str, msg_hashes: list[str]) -> tuple[Chain, bool]:
         """Route to main or active sub-agent.
 
-        If a sub is active and its system_hash matches, route to sub. Otherwise
-        route to main (sub stays open; it'll close when its tool_result arrives
-        via maybe_pop_subagent)."""
-        if self.active_sub is not None and req_system_hash == self.active_sub.system_hash:
-            return self.active_sub, True
-        return self.main, False
+        A request belongs to main iff it is a continuation of main's chat
+        history (same system_hash AND msg_hashes prefix matches main). When a
+        sub is active and the request is NOT main's continuation, it is sub's
+        dispatched conversation -- route to sub. When no sub is active,
+        everything goes to main.
+
+        We can't route by sub.system_hash equality alone: arm_subagent_dispatch
+        creates the sub Chain with system_hash="" because main doesn't yet know
+        what system prompt sub will use (sub hasn't dialled in yet). Comparing
+        a real hash to "" would always miss, causing sub requests to be
+        misrouted into main as wipes."""
+        if self.active_sub is None:
+            return self.main, False
+        main_continues = (
+            req_system_hash == self.main.system_hash
+            and len(msg_hashes) >= self.main.seen_msgs
+            and msg_hashes[: self.main.seen_msgs] == self.main.msg_hashes[: self.main.seen_msgs]
+        )
+        if main_continues:
+            return self.main, False
+        return self.active_sub, True
 
     def classify(
         self,
@@ -793,7 +808,7 @@ async def _run_turn(
         req_system_hash = _hash_obj(body.get("system")) if "system" in body else s.main.system_hash
 
         s.maybe_pop_subagent(all_msgs)
-        target, target_is_sub = s.pick_target(req_system_hash)
+        target, target_is_sub = s.pick_target(req_system_hash, msg_hashes)
         kind = s.classify(target, req_system_hash=req_system_hash, msg_hashes=msg_hashes)
 
         # Ingest + render.
