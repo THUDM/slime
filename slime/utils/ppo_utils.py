@@ -53,19 +53,23 @@ def compute_approx_kl(
 
 def compute_opsm_mask(
     args: Namespace,
-    full_log_probs: list[torch.Tensor],
-    full_old_log_probs: list[torch.Tensor],
+    local_log_probs: list[torch.Tensor],
+    local_old_log_probs: list[torch.Tensor],
     advantages: list[torch.Tensor],
+    local_loss_masks: list[torch.Tensor],
     loss_masks: list[torch.Tensor],
+    cp_group=None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute Off-Policy Sequence Masking (OPSM) mask.
 
     Args:
         args: Configuration containing `opsm_delta` threshold.
-        full_log_probs: Current policy log-probs per sample.
-        full_old_log_probs: Old policy log-probs per sample.
+        local_log_probs: Current policy log-probs per sample on this CP rank.
+        local_old_log_probs: Old policy log-probs per sample on this CP rank.
         advantages: Advantage values per sample.
-        loss_masks: Loss masks per sample.
+        local_loss_masks: Response loss masks on this CP rank.
+        loss_masks: Full response loss masks per sample.
+        cp_group: Optional context-parallel process group.
 
     Returns:
         Tuple of `(opsm_mask, opsm_clipfrac)` where `opsm_mask` is a
@@ -76,15 +80,22 @@ def compute_opsm_mask(
     device = advantages[0].device
     opsm_clipfrac = torch.tensor(0.0, device=device)
 
-    for full_log_prob, full_old_log_prob, advantage, loss_mask in zip(
-        full_log_probs, full_old_log_probs, advantages, loss_masks, strict=False
+    for local_log_prob, local_old_log_prob, advantage, local_loss_mask, loss_mask in zip(
+        local_log_probs, local_old_log_probs, advantages, local_loss_masks, loss_masks, strict=False
     ):
-        # Calculate sequence-level KL
-        seq_kl = ((full_old_log_prob - full_log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+        # Calculate sequence-level KL with only a scalar CP all-reduce.
+        local_kl_sum = ((local_old_log_prob - local_log_prob) * local_loss_mask).sum()
+        if cp_group is not None:
+            local_kl_sum = dist.nn.all_reduce(local_kl_sum, group=cp_group)
+        denom = torch.clamp_min(loss_mask.sum().to(device=local_kl_sum.device), 1)
+        seq_kl = local_kl_sum / denom
 
         # Create mask: 0 if (advantage < 0 and seq_kl > delta), else 1
         mask = ((advantage < 0) & (seq_kl > args.opsm_delta)).float()
-        opsm_clipfrac += mask.sum() / torch.clamp_min(loss_mask.sum(), 1)
+        local_masked_count = (mask * local_loss_mask).sum()
+        if cp_group is not None:
+            local_masked_count = dist.nn.all_reduce(local_masked_count, group=cp_group)
+        opsm_clipfrac += local_masked_count / denom
 
         opsm_mask_list.append(1 - mask)
 
@@ -93,29 +104,36 @@ def compute_opsm_mask(
 
 
 def compute_gspo_kl(
-    full_log_probs: list[torch.Tensor],
-    full_old_log_probs: list[torch.Tensor],
     local_log_probs: list[torch.Tensor],
+    local_old_log_probs: list[torch.Tensor],
+    local_loss_masks: list[torch.Tensor],
     loss_masks: list[torch.Tensor],
+    cp_group=None,
 ) -> torch.Tensor:
     """Compute GSPO-style per-sequence KL divergence.
 
     Args:
-        full_log_probs: Current policy log-probs per sample (full or CP-local).
-        full_old_log_probs: Old policy log-probs per sample (full or CP-local).
-        local_log_probs: Local (CP-local) log-probs for expansion shape reference.
+        local_log_probs: Current policy log-probs per sample on this CP rank.
+        local_old_log_probs: Old policy log-probs per sample on this CP rank.
+        local_loss_masks: Response loss masks on this CP rank.
         loss_masks: Loss masks per sample.
+        cp_group: Optional context-parallel process group.
 
     Returns:
         Concatenated tensor of per-token KL values where each token in a
         sequence has the same KL value (the sequence-level KL).
     """
-    # Compute sequence-level KL and expand to per-token
-    ppo_kl = [
-        ((old_logprob - log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
-        for log_prob, old_logprob, loss_mask in zip(full_log_probs, full_old_log_probs, loss_masks, strict=False)
-    ]
-    ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, local_log_probs, strict=False)]
+    # Compute sequence-level KL from local token chunks and all-reduce only the
+    # per-sample scalar numerator across CP ranks.
+    ppo_kl = []
+    for log_prob, old_logprob, local_loss_mask, loss_mask in zip(
+        local_log_probs, local_old_log_probs, local_loss_masks, loss_masks, strict=False
+    ):
+        local_kl_sum = ((old_logprob - log_prob) * local_loss_mask).sum()
+        if cp_group is not None:
+            local_kl_sum = dist.nn.all_reduce(local_kl_sum, group=cp_group)
+        denom = torch.clamp_min(loss_mask.sum().to(device=local_kl_sum.device), 1)
+        ppo_kl.append((local_kl_sum / denom).expand_as(log_prob))
     ppo_kl = torch.cat(ppo_kl, dim=0)
 
     return ppo_kl
