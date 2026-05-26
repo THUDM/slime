@@ -42,8 +42,14 @@ def run_app_in_thread(
     port: int = 0,
     thread_name: str = "aiohttp-app",
     start_timeout_sec: float = 15.0,
+    runner_kwargs: dict[str, Any] | None = None,
 ) -> AppHandle:
-    """Spin up ``app`` on a daemon thread; block until it is listening."""
+    """Spin up ``app`` on a daemon thread; block until it is listening.
+
+    ``runner_kwargs`` is forwarded to ``web.AppRunner`` (e.g. pass
+    ``{"handler_cancellation": True}`` to make a client disconnect cancel
+    the in-flight handler coroutine).
+    """
     started = threading.Event()
     err_box: list[BaseException] = []
     box: dict[str, Any] = {}
@@ -52,7 +58,7 @@ def run_app_in_thread(
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            runner = web.AppRunner(app)
+            runner = web.AppRunner(app, **(runner_kwargs or {}))
             loop.run_until_complete(runner.setup())
             site = web.TCPSite(runner, host, port)
             loop.run_until_complete(site.start())

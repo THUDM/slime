@@ -1054,7 +1054,19 @@ def start(
     app.router.add_post("/v1/messages/count_tokens", _count_tokens)
     app.router.add_get("/healthz", _ok)
     app.router.add_get("/v1/models", _ok)
-    handle = run_app_in_thread(app, host=host, port=port, thread_name="anthropic-middleware")
+    # handler_cancellation=True so a client disconnect actually cancels the
+    # handler coroutine (and the awaited _post_generate inside it), arming
+    # the fire-and-forget /abort_request path. Default False would let the
+    # handler keep running after the client drops, leaving an inflight sglang
+    # /generate that races with the next release_memory_occupation and trips
+    # sglang's "server is idle" assertion -- crashing the scheduler.
+    handle = run_app_in_thread(
+        app,
+        host=host,
+        port=port,
+        thread_name="anthropic-middleware",
+        runner_kwargs={"handler_cancellation": True},
+    )
     logger.info(
         "[coding_agent_rl.middleware] %s -> %s (tool=%s reasoning=%s)",
         handle.url,
