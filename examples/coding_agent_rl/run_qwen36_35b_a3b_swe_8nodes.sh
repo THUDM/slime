@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end SWE coding-agent RL on 8 nodes — "agent-only" variant.
+# End-to-end SWE coding-agent RL on 8 nodes.
 #
 # Same model and training loop as run_qwen36_35b_a3b_swe_8node.sh, with three
 # extra layers that actively encourage the rollout to dispatch sub-agents.
