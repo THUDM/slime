@@ -424,9 +424,13 @@ class Chain:
             self.loss_mask = []
             return
 
-        # Append-mode sanity: ideal_ids should start with the existing prompt
-        # anchor. On divergence (template re-render mismatch), demote everything
-        # after the anchor to observation (loss=0) rather than crash.
+        # Cross-turn analog of per-turn TITO (verify_tito_for_turn): the
+        # re-rendered prefix must be byte-identical to the anchor we set on
+        # turn 0. If chat_template / tokenizer drifts between renders (tools
+        # list change, raw-splice side-effect on historical assistant turns,
+        # template non-determinism), raw-splice token accounting becomes
+        # unsound for this chain — demote the tail to observation (loss=0)
+        # rather than train on a token sequence the model never emitted.
         if ideal_ids[: len(self.prompt_ids)] != self.prompt_ids:
             logger.warning("[middleware] template re-render mismatch; rebaselining")
             self.response_ids = ideal_ids[len(self.prompt_ids) :]
