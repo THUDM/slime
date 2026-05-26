@@ -29,6 +29,23 @@ Below is a summary of all available customization interfaces and their purposes.
 | [`--custom-megatron-before-log-prob-hook-path`](#17-megatron-hooks) | Custom logic before log probability computation. |
 | [`--custom-megatron-before-train-step-hook-path`](#17-megatron-hooks) | Custom logic before each training step. |
 
+## Agentic workflows through customization interfaces
+
+Agentic workflows — multi-turn tool use, sandbox interaction, environment feedback, verifier/test-based rewards — are an important class of data generation workflows. They plug into slime through the existing customization interfaces; slime does not require a separate agent framework.
+
+For most agentic use cases, **start with `--custom-generate-function-path` plus `--custom-rm-path`**, and only override the full rollout function when the default rollout loop is insufficient.
+
+| If you need to … | Use |
+| :--- | :--- |
+| Run a custom agent loop, tool calls, RAG, sandbox execution, browser/terminal interaction, or multi-turn generation for each sample, while reusing slime's default rollout loop | [`--custom-generate-function-path`](#2-custom-generate-function---custom-generate-function-path) |
+| Compute verifier rewards, test-based rewards, environment success checks, rule-based rewards, or call an external reward service | [`--custom-rm-path`](#3-reward-model---custom-rm-path) |
+| Replace the entire rollout orchestration (only when per-sample customization is not enough) | [`--rollout-function-path`](#1-rollout-function---rollout-function-path) |
+| Control task sampling, buffering, requeueing, or custom prompt/task sources | [`--data-source-path`](#15-data-source---data-source-path) |
+| Attach custom loss masks, metadata, or convert agentic outputs into training data | [`--rollout-data-postprocess-path`](#8-rollout-data-postprocess---rollout-data-postprocess-path), [`--custom-convert-samples-to-train-data-path`](#13-samples-to-train-data-conversion---custom-convert-samples-to-train-data-path) |
+| Debug long-running custom generation, verifier calls, tool calls, or sandbox steps | trace utilities in [`slime.utils.trace_utils`](../developer_guide/trace.md) |
+
+A native example of this pattern is [`examples/search-r1`](../../../examples/search-r1/), which adds search-augmented multi-turn generation via `--custom-generate-function-path` while keeping slime's default `sglang_rollout` outer loop. See also [`examples/multi_agent`](../../../examples/multi_agent/README.md) for a `--rollout-function-path`-based multi-agent pattern and [`examples/fully_async`](../../../examples/fully_async/README.md) for long-tail agentic generation.
+
 ## Detailed Interface Reference
 
 ### 1. Rollout Function (`--rollout-function-path`)

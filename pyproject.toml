@@ -24,6 +24,8 @@ line_length = 119
 
 [tool.ruff]
 line-length = 320  # TODO
+
+[tool.ruff.lint]
 select = [
     "E",      # Pycodestyle Errors (Structural/Fundamental Errors like bad indentation)
     "F",      # Pyflakes (Core Errors: Unused imports, undefined names)

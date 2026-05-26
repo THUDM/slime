@@ -5,12 +5,16 @@
 name: PR Test
 
 on:
-  # Do not run CI on push to reduce CI time
-  # push:
-  #   branches: [main]
+  # Push to main triggers ONLY the cpu-unittest job (cheap GitHub-hosted
+  # runner, catches PR-pair regressions where two PRs pass individually
+  # but main is broken after both land). GPU jobs stay label-gated — see
+  # each job's `if:` below — so push events never burn the self-hosted
+  # fleet.
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
-    types: [synchronize, labeled]
+    types: [opened, reopened, synchronize, labeled]
   workflow_dispatch:
     inputs:
       infinite_run:
@@ -35,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        info: [{"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"}, {"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_ppo_critic_only_short.py"}]
+        info: [{"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"}, {"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_ppo_critic_only_short.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_fanout_short.py"}]
     defaults:
       run:
         working-directory: ${{ github.workspace }}
@@ -57,7 +61,7 @@ jobs:
         shell: bash
         run: |
 
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -140,7 +144,7 @@ jobs:
         shell: bash
         run: |
 
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -223,7 +227,7 @@ jobs:
         shell: bash
         run: |
 
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -306,7 +310,7 @@ jobs:
         shell: bash
         run: |
 
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -367,7 +371,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        info: [{"num_gpus": 8, "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--async-save", "test_file": "test_qwen3_4B_ckpt.py"}]
+        info: [{"num_gpus": 8, "test_args": "--save-optimizer gpu --load-optimizer gpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer gpu --load-optimizer cpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer cpu --load-optimizer cpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer cpu --load-optimizer gpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--async-save", "test_file": "test_qwen3_4B_ckpt.py"}]
     defaults:
       run:
         working-directory: ${{ github.workspace }}
@@ -389,7 +393,7 @@ jobs:
         shell: bash
         run: |
 
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -442,7 +446,7 @@ jobs:
 
   cpu-unittest:
 
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
 
 
     runs-on: ubuntu-latest
@@ -450,7 +454,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        info: [{"num_gpus": 0, "test_file": "test_megatron_argument_validation.py"}, {"num_gpus": 0, "test_file": "test_dp_schedule.py"}, {"num_gpus": 0, "test_file": "test_cp_utils.py"}, {"num_gpus": 0, "test_file": "test_metric_report.py"}, {"num_gpus": 0, "test_file": "test_metric_report_dist.py"}, {"num_gpus": 0, "test_file": "test_loss_cp_invariance.py"}, {"num_gpus": 0, "test_file": "plugin_contracts/test_plugin_rollout_contracts.py"}, {"num_gpus": 0, "test_file": "plugin_contracts/test_plugin_runtime_hook_contracts.py"}, {"num_gpus": 0, "test_file": "plugin_contracts/test_plugin_path_loading_contracts.py"}, {"num_gpus": 0, "test_file": "plugin_contracts/test_plugin_generate_contracts.py"}]
+        info: [{"num_gpus": 0, "test_file": "test_megatron_argument_validation.py"}, {"num_gpus": 0, "test_file": "test_dp_schedule.py"}, {"num_gpus": 0, "test_file": "test_cp_utils.py"}, {"num_gpus": 0, "test_file": "test_metric_report.py"}, {"num_gpus": 0, "test_file": "test_metric_report_dist.py"}, {"num_gpus": 0, "test_file": "test_loss_cp_invariance.py"}, {"num_gpus": 0, "test_file": "test_rm_f1.py"}, {"num_gpus": 0, "test_file": "test_rm_gpqa.py"}, {"num_gpus": 0, "test_file": "test_rm_math.py"}, {"num_gpus": 0, "test_file": "test_rm_math_dapo.py"}, {"num_gpus": 0, "test_file": "test_rm_deepscaler.py"}, {"num_gpus": 0, "test_file": "test_sample.py"}, {"num_gpus": 0, "test_file": "test_rollout_validation.py"}, {"num_gpus": 0, "test_file": "plugin_contracts/test_plugin_rollout_contracts.py"}, {"num_gpus": 0, "test_file": "plugin_contracts/test_plugin_runtime_hook_contracts.py"}, {"num_gpus": 0, "test_file": "plugin_contracts/test_plugin_path_loading_contracts.py"}, {"num_gpus": 0, "test_file": "plugin_contracts/test_plugin_generate_contracts.py"}]
     defaults:
       run:
         working-directory: ${{ github.workspace }}
@@ -515,7 +519,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        info: [{"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"}, {"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"}, {"num_gpus": 8, "test_file": "test_quick_start_glm4_9B.py"}, {"num_gpus": 8, "test_file": "test_glm4.7_30B_A3B_pd_mooncake.py"}, {"num_gpus": 8, "test_file": "test_qwen3_30B_A3B.py"}, {"num_gpus": 8, "test_file": "test_qwen3.6_35B_A3B_pd_mooncake.py", "use_deepep": "1"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ppo.py"}, {"num_gpus": 8, "test_file": "test_moonlight_16B_A3B.py"}, {"num_gpus": 8, "test_file": "test_mimo_7B_mtp_only_grad.py"}, {"num_gpus": 8, "test_file": "test_qwen3_0.6B_parallel_check.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--async-save", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_debug_rollout_then_train.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_opd_sglang.py"}]
+        info: [{"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"}, {"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"}, {"num_gpus": 8, "test_file": "test_quick_start_glm4_9B.py"}, {"num_gpus": 8, "test_file": "test_glm4.7_30B_A3B_pd_mooncake.py"}, {"num_gpus": 8, "test_file": "test_qwen3_30B_A3B.py"}, {"num_gpus": 8, "test_file": "test_qwen3.6_35B_A3B_pd_mooncake.py", "use_deepep": "1"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_ppo.py"}, {"num_gpus": 8, "test_file": "test_moonlight_16B_A3B.py"}, {"num_gpus": 8, "test_file": "test_mimo_7B_mtp_only_grad.py"}, {"num_gpus": 8, "test_file": "test_qwen3_0.6B_parallel_check.py"}, {"num_gpus": 8, "test_args": "--save-optimizer gpu --load-optimizer gpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer gpu --load-optimizer cpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer cpu --load-optimizer cpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer cpu --load-optimizer gpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--async-save", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_debug_rollout_then_train.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_opd_sglang.py"}]
     defaults:
       run:
         working-directory: ${{ github.workspace }}
@@ -537,7 +541,7 @@ jobs:
         shell: bash
         run: |
 
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -653,7 +657,7 @@ jobs:
       - name: Execute
         shell: bash
         run: |
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
