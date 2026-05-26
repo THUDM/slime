@@ -226,12 +226,16 @@ def _render_with_raw_splice(
     tokenizers used by Qwen3 / GLM-4.x). No fallback path."""
     valid = {i: tup for i, tup in asst_raw_tokens.items() if 0 <= i < len(chat_messages)}
     if not valid:
-        ids = tok.apply_chat_template(
+        # Qwen3.x fast tokenizers return a BatchEncoding here, not a list[int];
+        # list(BatchEncoding) yields its dict keys (["input_ids", ...]), which
+        # then poisons sglang /generate as non-integer input_ids -> 502 storm.
+        enc = tok.apply_chat_template(
             chat_messages,
             tools=tools_schema,
             tokenize=True,
             add_generation_prompt=True,
         )
+        ids = enc["input_ids"] if hasattr(enc, "__getitem__") and "input_ids" in enc else enc
         return list(ids), []
 
     placeholders: dict[int, str] = {}
