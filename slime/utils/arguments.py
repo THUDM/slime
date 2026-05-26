@@ -136,6 +136,67 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default="raw",
                 help="The method to convert megatron weights to hugging face weights for SGLang.",
             )
+            # Delta weight sync.
+            parser.add_argument(
+                "--update-weight-mode",
+                choices=["full", "delta"],
+                default="full",
+                help=(
+                    "Weight sync strategy. 'full' (default) broadcasts every parameter "
+                    "every sync. 'delta' detects byte-level changes against a pinned-CPU "
+                    "snapshot of the previous broadcast and ships only the changed positions + values."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-transport",
+                choices=["nccl", "disk"],
+                default="nccl",
+                help=(
+                    "Per-flush carrier for --update-weight-mode=delta. 'nccl' broadcasts each "
+                    "bucket; 'disk' writes each bucket as a safetensors file under "
+                    "--update-weight-delta-dir and pushes once at end-of-sync."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-encoding",
+                choices=["indices", "deltas", "deltas_zstd"],
+                default="indices",
+                help=(
+                    "Position encoding for partial flushes. 'indices': int32 absolute "
+                    "positions (largest, lowest compute). 'deltas': uint16 gap-deltas "
+                    "with uint32 fallback (smaller). 'deltas_zstd': 'deltas' with the "
+                    "safetensors blob wrapped in zstd L1 (smallest, heaviest compute — "
+                    "best for shared-FS bandwidth ≤ ~300 MB/s)."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-delta-dir",
+                type=str,
+                default=None,
+                help=(
+                    "Filesystem directory for per-sync delta safetensors. Writable by the "
+                    "trainer, readable by every rollout engine. Required when "
+                    "--update-weight-transport=disk. One subdirectory per sync "
+                    "(``weight_v{N:06d}``), removed after every engine has acknowledged."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-delta-keep-files",
+                action="store_true",
+                default=False,
+                help="Skip post-apply cleanup of per-sync version directories. Useful for debugging.",
+            )
+            parser.add_argument(
+                "--custom-delta-pre-push-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a custom function called by --update-weight-transport=disk after each "
+                    "trainer rank's files are durably on local disk, before rank 0 fires the engine "
+                    "RPCs. Signature: ``def hook(args, version_dir: str, rollout_engines) -> None``. "
+                    "Called from every trainer rank; the hook gates itself."
+                ),
+            )
             parser.add_argument(
                 "--custom-model-provider-path",
                 type=str,
@@ -1834,3 +1895,16 @@ def slime_validate_args(args):
 
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")
+
+    if args.update_weight_mode == "delta":
+        if args.colocate:
+            raise ValueError(
+                "--update-weight-mode=delta is not supported with --colocate. Colocate transfers "
+                "weights via CUDA IPC (only a handle crosses processes), so the delta bookkeeping "
+                "(snapshot + diff + sparse encode) is pure overhead."
+            )
+        if args.update_weight_transport == "disk" and not args.update_weight_delta_dir:
+            raise ValueError(
+                "--update-weight-transport=disk requires --update-weight-delta-dir to point at "
+                "a filesystem shared between the trainer and the rollout engines."
+            )
