@@ -263,8 +263,8 @@ def _translate_anthropic(msgs: list[dict], system: Any) -> list[dict]:
     return translated
 
 
-def _build_tools_schema(anth_tools: list[dict] | None) -> list[dict] | None:
-    """Anthropic tools spec -> chat-template tool schema. Pure function."""
+def _anthropic_tools_to_chat_tools(anth_tools: list[dict] | None) -> list[dict] | None:
+    """Convert Anthropic tools to tokenizer chat-template tool schema."""
     if not anth_tools:
         return None
     ts: list[dict] = []
@@ -294,7 +294,7 @@ def _replace_chat_messages(target: Chain, body: dict) -> None:
     target.seen_msgs = len(all_msgs)
     target.msg_hashes = [_hash(m) for m in all_msgs]
     if target.tools_schema is None:
-        target.tools_schema = _build_tools_schema(body.get("tools"))
+        target.tools_schema = _anthropic_tools_to_chat_tools(body.get("tools"))
 
 
 def _extend_chat_messages(target: Chain, body: dict) -> None:
@@ -306,7 +306,7 @@ def _extend_chat_messages(target: Chain, body: dict) -> None:
     target.seen_msgs = len(all_msgs)
     target.msg_hashes = [_hash(m) for m in all_msgs]
     if target.tools_schema is None:
-        target.tools_schema = _build_tools_schema(body.get("tools"))
+        target.tools_schema = _anthropic_tools_to_chat_tools(body.get("tools"))
 
 
 def _render_token_ids(target: Chain, tok) -> list[int]:
