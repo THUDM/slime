@@ -43,6 +43,43 @@ def test_merge_turns_preserves_matched_prefix_on_prompt_drift():
 
 
 @pytest.mark.unit
+def test_merge_turns_drops_middle_turn_when_next_prompt_skips_it():
+    segment = merge_turns(
+        [
+            _turn([10], [11]),
+            _turn([10, 11, 21], [12]),
+            _turn([10, 11, 22], [13]),
+            _turn([10, 11, 22, 13, 31], [14]),
+        ]
+    )
+
+    assert segment is not None
+    assert segment.prompt_ids == [10]
+    assert segment.response_ids == [11, 22, 13, 31, 14]
+    assert segment.loss_mask == [1, 0, 1, 0, 1]
+    assert segment.rollout_log_probs == [-0.11, 0.0, -0.13, 0.0, -0.14]
+
+
+@pytest.mark.unit
+def test_merge_turns_handles_consecutive_prompt_drifts():
+    segment = merge_turns(
+        [
+            _turn([10], [11]),
+            _turn([10, 11, 21], [12]),
+            _turn([10, 11, 22], [13]),
+            _turn([10, 11, 23], [14]),
+            _turn([10, 11, 23, 14, 31], [15]),
+        ]
+    )
+
+    assert segment is not None
+    assert segment.prompt_ids == [10]
+    assert segment.response_ids == [11, 23, 14, 31, 15]
+    assert segment.loss_mask == [1, 0, 1, 0, 1]
+    assert segment.rollout_log_probs == [-0.11, 0.0, -0.14, 0.0, -0.15]
+
+
+@pytest.mark.unit
 def test_merge_turns_masks_whole_output_when_prompt_drift_splits_it():
     segment = merge_turns(
         [
@@ -72,6 +109,23 @@ def test_merge_turns_masks_whole_output_when_prompt_drift_changes_token_count():
     assert segment.response_ids == [11, 12, 99, 100, 14, 15]
     assert segment.loss_mask == [0, 0, 0, 0, 0, 1]
     assert segment.rollout_log_probs == [0.0, 0.0, 0.0, 0.0, 0.0, -0.15]
+
+
+@pytest.mark.unit
+def test_merge_turns_restarts_when_prompt_base_changes():
+    segment = merge_turns(
+        [
+            _turn([10], [11]),
+            _turn([20, 21], [22]),
+            _turn([20, 21, 22, 23], [24]),
+        ]
+    )
+
+    assert segment is not None
+    assert segment.prompt_ids == [20, 21]
+    assert segment.response_ids == [22, 23, 24]
+    assert segment.loss_mask == [1, 0, 1]
+    assert segment.rollout_log_probs == [-0.22, 0.0, -0.24]
 
 
 if __name__ == "__main__":
