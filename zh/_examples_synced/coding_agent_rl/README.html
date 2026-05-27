@@ -56,7 +56,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 05 月 26 日"/>
+    <meta name="docbuild:last-update" content="2026 年 05 月 27 日"/>
   </head>
   
   
@@ -453,7 +453,7 @@
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">generate.py</span></code> — per-sample <code class="docutils literal notranslate"><span class="pre">generate()</span></code> registered via <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>. Boots the sandbox, runs claude-code, captures the diff, scores it, and emits one or more <code class="docutils literal notranslate"><span class="pre">Sample</span></code>s back to slime.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">middleware.py</span></code> — Anthropic Messages API ↔ SGLang <code class="docutils literal notranslate"><span class="pre">/generate</span></code> shim. claude-code talks to it as if it were Anthropic; the shim renders chat with raw-token splice, masks model-generated tokens (<code class="docutils literal notranslate"><span class="pre">loss_mask=1</span></code>) vs template/observation (<code class="docutils literal notranslate"><span class="pre">0</span></code>), TITO-verifies each turn, and emits <strong>three kinds of segments</strong> per trajectory: <code class="docutils literal notranslate"><span class="pre">subagent</span></code> (completed <code class="docutils literal notranslate"><span class="pre">Task/Agent</span></code> dispatch), <code class="docutils literal notranslate"><span class="pre">wipe</span></code> (chain frozen by auto-compact), <code class="docutils literal notranslate"><span class="pre">final</span></code> (tail of the main chain).</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">sandbox.py</span></code> — E2B sandbox helpers (boot/kill, exec, file I/O, install bootstraps, agent spawn, diff capture, fresh-sandbox evaluator). Public 5-primitive contract on <code class="docutils literal notranslate"><span class="pre">E2BSandbox</span></code>: <code class="docutils literal notranslate"><span class="pre">exec</span> <span class="pre">/</span> <span class="pre">upload</span> <span class="pre">/</span> <span class="pre">write_text</span> <span class="pre">/</span> <span class="pre">read_text</span> <span class="pre">/</span> <span class="pre">__a*</span></code> — reimplement these on Docker / Modal / local VM and the rest plugs in unchanged.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">sandbox.py</span></code> — coding-agent/SWE helpers built on <code class="docutils literal notranslate"><span class="pre">slime.agent.sandbox</span></code>: install bootstraps, spawn claude-code, capture patches, and run the fresh-sandbox evaluator. The shared sandbox contract lives in <code class="docutils literal notranslate"><span class="pre">slime.agent.sandbox.Sandbox</span></code>.</p></li>
 </ul>
 <section id="environment-setup">
 <h2>Environment Setup<a class="headerlink" href="#environment-setup" title="链接到此标题。">#</a></h2>
@@ -466,7 +466,7 @@
 <li><p>Claude Code CLI npm tarball (<code class="docutils literal notranslate"><span class="pre">anthropic-ai-claude-code-local-linux-x64.tgz</span></code>) — exported as <code class="docutils literal notranslate"><span class="pre">SWE_HOST_CC_TARBALL</span></code>.</p></li>
 </ul>
 </li>
-<li><p><strong>A sandbox metadata file</strong> (<code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_METADATA_FILE</span></code>) — JSON dict whose keys are passed as routing tags when booting an E2B sandbox. Must contain the image key referenced by <code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_IMAGE_METADATA_KEY</span></code> (e.g. <code class="docutils literal notranslate"><span class="pre">image</span></code>).</p></li>
+<li><p><strong>A sandbox metadata file</strong> (<code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_METADATA_FILE</span></code>, or the generic <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_SANDBOX_METADATA_FILE</span></code>) — JSON dict whose keys are passed as routing tags when booting an E2B sandbox. Must contain the image key referenced by <code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_IMAGE_METADATA_KEY</span></code> / <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY</span></code> (e.g. <code class="docutils literal notranslate"><span class="pre">image</span></code>).</p></li>
 <li><p><strong>Network reachability</strong>: each sandbox dials back to the slime head node's middleware over <code class="docutils literal notranslate"><span class="pre">http://${SLIME_HEAD_HOST}:${SHIM_PORT}</span></code>. The head host must be reachable from inside the sandboxes (set <code class="docutils literal notranslate"><span class="pre">SLIME_HEAD_HOST</span></code> to a routable IP, not <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code>).</p></li>
 </ol>
 </section>
@@ -558,11 +558,11 @@ bash<span class="w"> </span>examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nod
 <td><p>—</p></td>
 <td><p>E2B (or compatible) API key.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_METADATA_FILE</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_METADATA_FILE</span></code> / <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_SANDBOX_METADATA_FILE</span></code></p></td>
 <td><p>—</p></td>
 <td><p>JSON dict of routing metadata passed at sandbox boot.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_IMAGE_METADATA_KEY</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_IMAGE_METADATA_KEY</span></code> / <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY</span></code></p></td>
 <td><p>—</p></td>
 <td><p>Which key in the metadata file holds the image reference (e.g. <code class="docutils literal notranslate"><span class="pre">image</span></code>).</p></td>
 </tr>
@@ -628,11 +628,11 @@ bash<span class="w"> </span>examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nod
 </section>
 <section id="porting-to-a-new-sandbox-backend">
 <h2>Porting to a New Sandbox Backend<a class="headerlink" href="#porting-to-a-new-sandbox-backend" title="链接到此标题。">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">sandbox.py</span></code>'s <code class="docutils literal notranslate"><span class="pre">E2BSandbox</span></code> class exposes a 5-primitive contract:</p>
+<p><code class="docutils literal notranslate"><span class="pre">slime.agent.sandbox.Sandbox</span></code> exposes the shared sandbox contract, and
+<code class="docutils literal notranslate"><span class="pre">slime.agent.sandbox.E2BSandbox</span></code> is the E2B implementation:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">await</span> <span class="n">sb</span><span class="o">.</span><span class="n">exec</span><span class="p">(</span><span class="n">cmd</span><span class="p">,</span> <span class="n">user</span><span class="o">=...</span><span class="p">,</span> <span class="n">check</span><span class="o">=...</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=...</span><span class="p">)</span>
-<span class="k">await</span> <span class="n">sb</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span><span class="n">host_path</span><span class="p">,</span> <span class="n">sandbox_path</span><span class="p">,</span> <span class="n">user</span><span class="o">=...</span><span class="p">)</span>
-<span class="k">await</span> <span class="n">sb</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">sandbox_path</span><span class="p">,</span> <span class="n">text</span><span class="p">,</span> <span class="n">user</span><span class="o">=...</span><span class="p">)</span>
-<span class="k">await</span> <span class="n">sb</span><span class="o">.</span><span class="n">read_text</span><span class="p">(</span><span class="n">sandbox_path</span><span class="p">,</span> <span class="n">user</span><span class="o">=...</span><span class="p">)</span>
+<span class="k">await</span> <span class="n">sb</span><span class="o">.</span><span class="n">write_file</span><span class="p">(</span><span class="n">sandbox_path</span><span class="p">,</span> <span class="n">content_or_host_path</span><span class="p">,</span> <span class="n">user</span><span class="o">=...</span><span class="p">)</span>
+<span class="k">await</span> <span class="n">sb</span><span class="o">.</span><span class="n">read_file</span><span class="p">(</span><span class="n">sandbox_path</span><span class="p">,</span> <span class="n">user</span><span class="o">=...</span><span class="p">)</span>
 <span class="k">async</span> <span class="k">with</span> <span class="n">E2BSandbox</span><span class="p">(</span><span class="o">...</span><span class="p">)</span> <span class="k">as</span> <span class="n">sb</span><span class="p">:</span> <span class="o">...</span>
 </pre></div>
 </div>
@@ -709,7 +709,7 @@ bash<span class="w"> </span>examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nod
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 05 月 26 日.
+  最后更新于 2026 年 05 月 27 日.
   <br/>
 </p>
   </div>

@@ -6,7 +6,7 @@ Three files implement the loop:
 
 - `generate.py` — per-sample `generate()` registered via `--custom-generate-function-path`. Boots the sandbox, runs claude-code, captures the diff, scores it, and emits one or more `Sample`s back to slime.
 - `middleware.py` — Anthropic Messages API ↔ SGLang `/generate` shim. claude-code talks to it as if it were Anthropic; the shim renders chat with raw-token splice, masks model-generated tokens (`loss_mask=1`) vs template/observation (`0`), TITO-verifies each turn, and emits **three kinds of segments** per trajectory: `subagent` (completed `Task/Agent` dispatch), `wipe` (chain frozen by auto-compact), `final` (tail of the main chain).
-- `sandbox.py` — E2B sandbox helpers (boot/kill, exec, file I/O, install bootstraps, agent spawn, diff capture, fresh-sandbox evaluator). Public 5-primitive contract on `E2BSandbox`: `exec / upload / write_text / read_text / __a*` — reimplement these on Docker / Modal / local VM and the rest plugs in unchanged.
+- `sandbox.py` — coding-agent/SWE helpers built on `slime.agent.sandbox`: install bootstraps, spawn claude-code, capture patches, and run the fresh-sandbox evaluator. The shared sandbox contract lives in `slime.agent.sandbox.Sandbox`.
 
 ## Environment Setup
 
@@ -16,7 +16,7 @@ The slime training stack itself follows the standard setup. On top of that you n
 2. **Host-side tarballs** that get uploaded into each sandbox at boot:
    - Node 22 (`node-v22.x-linux-x64.tar.xz`) — exported as `SWE_HOST_NODE_TARBALL`.
    - Claude Code CLI npm tarball (`anthropic-ai-claude-code-local-linux-x64.tgz`) — exported as `SWE_HOST_CC_TARBALL`.
-3. **A sandbox metadata file** (`SWE_SANDBOX_METADATA_FILE`) — JSON dict whose keys are passed as routing tags when booting an E2B sandbox. Must contain the image key referenced by `SWE_SANDBOX_IMAGE_METADATA_KEY` (e.g. `image`).
+3. **A sandbox metadata file** (`SWE_SANDBOX_METADATA_FILE`, or the generic `SLIME_AGENT_SANDBOX_METADATA_FILE`) — JSON dict whose keys are passed as routing tags when booting an E2B sandbox. Must contain the image key referenced by `SWE_SANDBOX_IMAGE_METADATA_KEY` / `SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY` (e.g. `image`).
 4. **Network reachability**: each sandbox dials back to the slime head node's middleware over `http://${SLIME_HEAD_HOST}:${SHIM_PORT}`. The head host must be reachable from inside the sandboxes (set `SLIME_HEAD_HOST` to a routable IP, not `127.0.0.1`).
 
 ## Dataset Format
@@ -100,8 +100,8 @@ All set in the launcher; tune per cluster.
 | `SLIME_HEAD_HOST` | `${MASTER_ADDR}` | Public IP the sandbox uses to reach the middleware. **Must be routable from inside the sandbox.** |
 | `SHIM_BIND_HOST` / `SHIM_PORT` | `0.0.0.0` / `18001` | Bind address of the middleware shim on the head node. |
 | `E2B_API_KEY` | — | E2B (or compatible) API key. |
-| `SWE_SANDBOX_METADATA_FILE` | — | JSON dict of routing metadata passed at sandbox boot. |
-| `SWE_SANDBOX_IMAGE_METADATA_KEY` | — | Which key in the metadata file holds the image reference (e.g. `image`). |
+| `SWE_SANDBOX_METADATA_FILE` / `SLIME_AGENT_SANDBOX_METADATA_FILE` | — | JSON dict of routing metadata passed at sandbox boot. |
+| `SWE_SANDBOX_IMAGE_METADATA_KEY` / `SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY` | — | Which key in the metadata file holds the image reference (e.g. `image`). |
 | `SWE_HOST_NODE_TARBALL` | — | Host path to Node 22 tarball uploaded into each sandbox. |
 | `SWE_HOST_CC_TARBALL` | — | Host path to the Claude Code CLI npm tarball. |
 | `SWE_TIME_BUDGET_SEC` | `1800` | Wallclock budget for one agent run. |
@@ -123,13 +123,13 @@ All set in the launcher; tune per cluster.
 
 ## Porting to a New Sandbox Backend
 
-`sandbox.py`'s `E2BSandbox` class exposes a 5-primitive contract:
+`slime.agent.sandbox.Sandbox` exposes the shared sandbox contract, and
+`slime.agent.sandbox.E2BSandbox` is the E2B implementation:
 
 ```python
 await sb.exec(cmd, user=..., check=..., timeout=...)
-await sb.upload(host_path, sandbox_path, user=...)
-await sb.write_text(sandbox_path, text, user=...)
-await sb.read_text(sandbox_path, user=...)
+await sb.write_file(sandbox_path, content_or_host_path, user=...)
+await sb.read_file(sandbox_path, user=...)
 async with E2BSandbox(...) as sb: ...
 ```
 
