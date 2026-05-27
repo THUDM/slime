@@ -9,8 +9,8 @@ Wire-up:
     1. ``sandbox.run_claude_code`` prepares the agent sandbox and runs claude-code.
     2. ``sandbox.git_diff`` captures the model-produced patch.
     3. ``sandbox.evaluate`` scores that patch in a second clean sandbox.
-    4. ``_merge_samples`` combines reward + middleware token segments into
-       the ``Sample`` shape slime expects.
+    4. ``_merge_samples`` combines reward + middleware ``TokenSegment``s,
+       delegating segment-to-``Sample`` fan-out to ``slime.agent.trajectory``.
 
 All sandbox-side details live in ``sandbox.py``; the LLM plumbing
 (Anthropic <-> SGLang /generate, token capture, 3-kind segment split) lives in
@@ -35,9 +35,6 @@ Env knobs (set in run.sh):
     SWE_HOST_CC_TARBALL      host path to the Claude Code npm tarball (REQUIRED)
     SWE_TIME_BUDGET_SEC      1800  per agent run, wallclock
     SWE_EVAL_TIMEOUT_SEC     600   per eval test execution
-    SWE_MAX_RESPONSE_TOKENS  0     optional smoke-test cap before training (0 = off)
-    SWE_TOOL_PARSER          glm47           (sglang FunctionCallParser name)
-    SWE_REASONING_PARSER     glm45           (sglang ReasoningParser name)
     SHIM_BIND_HOST           0.0.0.0
     SHIM_PORT                18001
     SLIME_HEAD_HOST          public host the sandboxes use to reach the middleware (REQUIRED)
@@ -47,7 +44,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import copy
 import logging
 import os
 import secrets
@@ -56,6 +52,7 @@ import traceback
 from dataclasses import dataclass
 from typing import Any
 
+from slime.agent.trajectory import fan_out_sample_segments
 from slime.utils.misc import SingletonMeta
 from slime.utils.processing_utils import load_tokenizer
 from slime.utils.types import Sample
@@ -77,9 +74,6 @@ SWE_EVAL_TIMEOUT_SEC = int(os.environ.get("SWE_EVAL_TIMEOUT_SEC", "600"))
 SWE_GENERATE_GUARD_SEC = int(os.environ.get("SWE_GENERATE_GUARD_SEC", "0") or 0) or (
     SWE_TIME_BUDGET_SEC + SWE_EVAL_TIMEOUT_SEC + 180
 )
-SWE_MAX_RESPONSE_TOKENS = int(os.environ.get("SWE_MAX_RESPONSE_TOKENS", "0") or 0)
-SWE_TOOL_PARSER = os.environ.get("SWE_TOOL_PARSER", "") or None
-SWE_REASONING_PARSER = os.environ.get("SWE_REASONING_PARSER", "") or None
 SHIM_BIND_HOST = os.environ.get("SHIM_BIND_HOST", "0.0.0.0")
 SHIM_PORT = int(os.environ.get("SHIM_PORT", "18001"))
 
@@ -90,6 +84,9 @@ SHIM_PORT = int(os.environ.get("SHIM_PORT", "18001"))
 class _State(metaclass=SingletonMeta):
     def __init__(self, args) -> None:
         self.tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
+        self.max_context_len = int(getattr(args, "rollout_max_context_len", 0) or 0)
+        self.tool_parser = getattr(args, "sglang_tool_call_parser", None) or None
+        self.reasoning_parser = getattr(args, "sglang_reasoning_parser", None) or None
         sglang_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
         public_host = os.environ.get("SLIME_HEAD_HOST")
         if not public_host:
@@ -102,8 +99,8 @@ class _State(metaclass=SingletonMeta):
         app, self.store = middleware.start(
             tokenizer=self.tokenizer,
             sglang_url=sglang_url,
-            tool_parser=SWE_TOOL_PARSER,
-            reasoning_parser=SWE_REASONING_PARSER,
+            tool_parser=self.tool_parser,
+            reasoning_parser=self.reasoning_parser,
         )
         # handler_cancellation=True so a client disconnect cancels the handler
         # coroutine, arming the fire-and-forget /abort_request inside the
@@ -119,77 +116,26 @@ class _State(metaclass=SingletonMeta):
         )
         self.middleware_url = f"http://{public_host}:{self.app_handle.port}"
         logger.info(
-            "[coding_agent_rl] tokenizer=%s middleware=%s",
+            "[coding_agent_rl] tokenizer=%s middleware=%s max_context_len=%s tool_parser=%s reasoning_parser=%s",
             args.hf_checkpoint,
             self.middleware_url,
+            self.max_context_len,
+            self.tool_parser,
+            self.reasoning_parser,
         )
 
 
 # ---------------------------------------------------------------------------
-# Segment -> Sample conversion
-#
-# A "segment" is (prompt_ids, response_ids, loss_mask, seg_meta) produced by
-# middleware.pop_session_split(). One trajectory yields >=1 segments because
-# the agent may compact + reset mid-run.
-#
-# _merge_samples emits one Sample per segment, with reward split as reward / K.
+# Trajectory -> Sample conversion
+# middleware.pop_session_split() returns TokenSegments. One trajectory yields
+# >=1 segments because the agent may compact + reset mid-run; trajectory.py
+# handles the mechanical segment -> Sample fan-out.
 # ---------------------------------------------------------------------------
-Segment = tuple[list[int], list[int], list[int], dict]
-
-
 @dataclass(frozen=True)
 class RewardResult:
     reward: float
     is_solved: bool
     applied_cleanly: bool
-
-
-def _write_segment_to_sample(sample: Sample, seg: Segment, reward: float, tokenizer) -> None:
-    """Populate the token / loss_mask / response / reward fields of `sample`
-    from one segment."""
-    prompt_ids, response_ids, loss_mask, _ = seg
-    sample.tokens = list(prompt_ids) + list(response_ids)
-    sample.response_length = len(response_ids)
-    sample.loss_mask = list(loss_mask)
-    sample.response = tokenizer.decode(response_ids, skip_special_tokens=False)
-    sample.reward = float(reward)
-    sample.status = Sample.Status.COMPLETED
-
-
-def _fan_out_to_samples(
-    sample: Sample,
-    segments: list[Segment],
-    reward: float,
-    tokenizer,
-    instance_id: str,
-) -> list[Sample]:
-    """Emit one Sample per segment, splitting reward uniformly (reward/K).
-
-    All K samples share the same `rollout_id` so the loss reducer counts
-    this trajectory once (per-rollout mean) instead of K times
-    (per-sample mean). The dataset row id (`sample.index`) is reused as the
-    rollout_id.
-
-    The first segment reuses the input `sample` object; later ones get a
-    shallow copy -- avoids a copy in the common single-segment case."""
-    K = len(segments)
-    per_segment_reward = float(reward) / max(1, K)
-    rollout_id = getattr(sample, "index", None)
-
-    out: list[Sample] = []
-    for i, seg in enumerate(segments):
-        sub = sample if i == 0 else copy.copy(sample)
-        _write_segment_to_sample(sub, seg, per_segment_reward, tokenizer)
-        sub.rollout_id = rollout_id
-        sub.metadata = {
-            **(sub.metadata or {}),
-            "instance_id": instance_id,
-            **seg[3],
-            "segment_idx": i,
-            "num_segments": K,
-        }
-        out.append(sub)
-    return out
 
 
 def _start_session(
@@ -209,19 +155,13 @@ def _start_session(
     else:
         session_id = f"cagent-{md['instance_id']}-{secrets.token_hex(8)}"
     sample.session_id = session_id
-    middleware.open_session(state.store, session_id, sampling_defaults=sampling_params)
+    middleware.open_session(
+        state.store,
+        session_id,
+        sampling_defaults=sampling_params,
+        max_context_tokens=state.max_context_len,
+    )
     return session_id
-
-
-def _pop_segments(state: _State, session_id: str) -> list[Segment]:
-    # Drop empty-response segments and apply the optional per-segment response
-    # cap in one place. SWE_MAX_RESPONSE_TOKENS=0 disables truncation.
-    cap = SWE_MAX_RESPONSE_TOKENS
-    return [
-        (p, r[:cap], m[:cap], meta) if cap and len(r) > cap else (p, r, m, meta)
-        for (p, r, m, meta) in (middleware.pop_session_split(state.store, session_id) or [])
-        if r
-    ]
 
 
 def _merge_samples(
@@ -233,11 +173,11 @@ def _merge_samples(
     elapsed_sec: float,
     instance_id: str,
 ):
-    segments = _pop_segments(state, session_id)
+    segments = middleware.pop_session_split(state.store, session_id) or []
     if not segments:
         return _abort_result(sample, "middleware_session_empty")
 
-    sample.metadata = {
+    trajectory_metadata = {
         **(sample.metadata or {}),
         "instance_id": instance_id,
         "is_solved": reward_result.is_solved,
@@ -246,25 +186,16 @@ def _merge_samples(
     }
 
     # All K samples share rollout_id so the loss reducer counts this
-    # trajectory once. Fail-soft: reducer bugs abort this sample only, not the
-    # whole step.
-    try:
-        fanned = _fan_out_to_samples(
-            sample,
-            segments,
-            reward_result.reward,
-            state.tokenizer,
-            instance_id,
-        )
-        if not fanned:
-            raise ValueError("fan-out produced no samples")
-    except Exception as e:
-        logger.warning(
-            "[coding_agent_rl] fan-out failed for instance=%s: %s -- sample aborted",
-            instance_id,
-            e,
-        )
-        return [_abort(sample, reason=f"reducer_failure:{type(e).__name__}")]
+    # trajectory once.
+    fanned = fan_out_sample_segments(
+        sample,
+        segments,
+        reward_result.reward,
+        state.tokenizer,
+        metadata=trajectory_metadata,
+    )
+    if not fanned:
+        raise ValueError("fan-out produced no samples")
 
     logger.info(
         "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs segments=%d",

@@ -13,8 +13,7 @@
 #       subagent_type=investigator).
 #   (3) Agent/Task tools stay in the allowed set; WebFetch/WebSearch are
 #       disabled (sandbox has no outbound internet); --disable-slash-commands
-#       removes /compact as a competing branching pathway so sibling-vs-compact
-#       stay isolated in the saved trajectory tree.
+#       removes /compact as a competing branching pathway.
 #
 # Fan-out semantics:
 #   * generate() returns list[Sample] (one Sample per trajectory segment);
@@ -24,10 +23,6 @@
 #     than rollout_batch_size * n_samples_per_prompt. If pinned-memory or
 #     GPU wake_up OOM appears, lower rollout_batch_size or n_samples_per_prompt
 #     first — not max-tokens-per-gpu.
-#   * SWE_MAX_RESPONSE_TOKENS caps EACH segment's response independently;
-#     per-segment length is bounded, per-trajectory total can reach
-#     K * SWE_MAX_RESPONSE_TOKENS.
-#
 # Run from a long-lived shell / tmux session on the Ray head node; do not wrap
 # in a short-lived nohup launcher or Ray child processes get cleaned up with it.
 
@@ -259,21 +254,12 @@ export SWE_TIME_BUDGET_SEC="${SWE_TIME_BUDGET_SEC:-1800}"
 export SWE_EVAL_TIMEOUT_SEC="${SWE_EVAL_TIMEOUT_SEC:-600}"
 export SWE_BOOT_CONCURRENCY="${SWE_BOOT_CONCURRENCY:-6}"
 
-# --- trajectory fan-out & token caps ---
+# --- trajectory fan-out ---
 # generate() emits one Sample per segment (reducer splits reward/K);
 # rollout_id is shared so the per-rollout-mean loss reducer still counts
 # the trajectory once.
-# SAVE_TRAJECTORY_TREE=1: persist tree metadata so sub-agent fan-out shows
-#   up in viz.
-# MAX_SEGMENT_TOKENS = MAX_CONTEXT_LEN: drop segments whose (prompt+response)
-#   exceeds the trainer dp budget (max-tokens-per-gpu * CP).
-export SWE_SAVE_TRAJECTORY_TREE="${SWE_SAVE_TRAJECTORY_TREE:-1}"
-export SWE_MAX_RESPONSE_TOKENS="${SWE_MAX_RESPONSE_TOKENS:-32768}"
-export SWE_MAX_SEGMENT_TOKENS="${SWE_MAX_SEGMENT_TOKENS:-${MAX_CONTEXT_LEN}}"
-
-# --- model output parsers (must match the served model) ---
-export SWE_TOOL_PARSER="${SWE_TOOL_PARSER:-qwen3_coder}"
-export SWE_REASONING_PARSER="${SWE_REASONING_PARSER:-qwen3}"
+# --rollout-max-response-len caps one model turn. The custom generate function
+# uses --rollout-max-context-len as the multi-turn prompt+response budget.
 
 # --- claude-code CLI extras ---
 # SETTINGS_JSON: autoCompactWindow (80k) < MAX_CONTEXT_LEN (96k) so the CLI
@@ -282,8 +268,7 @@ export SWE_REASONING_PARSER="${SWE_REASONING_PARSER:-qwen3}"
 #   as a concrete, narrowly-scoped dispatch target.
 # SWE_CLAUDE_EXTRA_ARGS: WebFetch/WebSearch are off (sandbox has no outbound
 #   internet); --disable-slash-commands keeps the model from emitting /compact
-#   as a competing branching pathway, so sibling-vs-compact stay isolated in
-#   the saved trajectory tree.
+#   as a competing branching pathway.
 SETTINGS_JSON='{"permissions":{"defaultMode":"bypassPermissions"},"autoCompactEnabled":true,"autoCompactWindow":80000}'
 AGENTS_JSON='{"investigator":{"description":"Searches the repo for relevant files before any edit","prompt":"You are an investigator sub-agent. Use Grep/Read/Glob to find every file relevant to the user task, then return a short bulleted summary. Do NOT edit anything.","tools":["Grep","Read","Glob"]}}'
 export SWE_CLAUDE_EXTRA_ARGS="--settings '${SETTINGS_JSON}' --disable-slash-commands --agents '${AGENTS_JSON}' --disallowedTools WebFetch WebSearch"
@@ -333,10 +318,6 @@ keys = (
     "E2B_API_KEY", "SLIME_HEAD_HOST",
     "SWE_HOST_NODE_TARBALL", "SWE_HOST_CC_TARBALL",
     "SWE_TIME_BUDGET_SEC", "SWE_EVAL_TIMEOUT_SEC", "SWE_BOOT_CONCURRENCY",
-    "SWE_SAVE_TRAJECTORY_TREE",
-    "SWE_MAX_RESPONSE_TOKENS",
-    "SWE_MAX_SEGMENT_TOKENS",
-    "SWE_TOOL_PARSER", "SWE_REASONING_PARSER",
     "SHIM_BIND_HOST", "SHIM_PORT",
     "SWE_CLAUDE_EXTRA_ARGS",
     "SWE_CC_PROMPT",
