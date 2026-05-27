@@ -1,0 +1,623 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Agentic RL Training Roadmap &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=3c74b3bc" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../_static/documentation_options.js?v=e645c8fa"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'get_started/agent';</script>
+    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="FAQ" href="qa.html" />
+    <link rel="prev" title="Customization Guide" href="customization.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="0.0.1" />
+    <meta name="docbuild:last-update" content="May 27, 2026"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <img src="../_static/logo.jpg" class="logo__image only-dark pst-js-only" alt="slime - Home"/>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="quick_start.html">Quick Start</a></li>
+<li class="toctree-l1"><a class="reference internal" href="usage.html">Usage Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="customization.html">Customization Guide</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Agentic RL Training Roadmap</a></li>
+<li class="toctree-l1"><a class="reference internal" href="qa.html">FAQ</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">Qwen3-4B with 8xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">GLM4-9B with 8xH100</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">GLM-4.7-Flash with 8×H100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">GLM-4.7 with 64xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Advanced Features</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../advanced/on-policy-distillation.html">On-Policy Distillation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">Speculative Decoding</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/low-precision.html">Low Precision Training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/reproducibility.html">Reproducibility</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/fault-tolerance.html">Fault Tolerance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD Disaggregation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/delta-weight-sync.html">Delta Weight Sync</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/sglang-config.html">SGLang Config: Advanced Engine Deployment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/megatron-config.html">Megatron Config: Role-Based Training Overrides</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Usage</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI (Continuous Integration)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debugging</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace Viewer</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">Profiling</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Hardware Platforms</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Blogs</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: Redefining High-Performance RL Training Frameworks</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime: An SGLang-Native Post-Training Framework for RL Scaling</a></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="Source repository"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/get_started/agent.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/get_started/agent.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fget_started/agent.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="Open an issue"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Download this page">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/get_started/agent.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="Download source file"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="Print to PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button pst-navbar-icon"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button>
+
+
+<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+</button>
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>Agentic RL Training Roadmap</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#where-to-start">Where To Start</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recommended-integration-pattern">Recommended Integration Pattern</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agent-serving-and-performance">Agent Serving And Performance</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reference-example">Reference Example</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="agentic-rl-training-roadmap">
+<h1>Agentic RL Training Roadmap<a class="headerlink" href="#agentic-rl-training-roadmap" title="Link to this heading">#</a></h1>
+<p>slime is not limited to single-turn RL. Its main advantage for agentic training is the combination of high-performance training, SGLang rollout serving, and pluggable data-generation interfaces. This makes it suitable for multi-turn tool use, sandbox interaction, subagent branches, context compaction, and test-based rewards.</p>
+<p>This page is a roadmap: use it to decide which docs and examples to read when plugging an agent workflow into slime.</p>
+<section id="where-to-start">
+<h2>Where To Start<a class="headerlink" href="#where-to-start" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head text-left"><p>Goal</p></th>
+<th class="head text-left"><p>Recommended entry point</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-left"><p>Run a custom agent loop, tool calls, RAG, browser/terminal/sandbox interaction for each sample</p></td>
+<td class="text-left"><p><a class="reference internal" href="customization.html#custom-generate-function-custom-generate-function-path"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code></span></a>, <a class="reference internal" href="quick_start.html#writing-custom-generation-function"><span class="std std-ref">writing a custom generation function</span></a></p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>Implement verifier rewards, test-based rewards, environment success checks, or an external reward service</p></td>
+<td class="text-left"><p><a class="reference internal" href="customization.html#reward-model-custom-rm-path"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code></span></a>, <a class="reference internal" href="quick_start.html#writing-custom-reward-function"><span class="std std-ref">writing a custom reward function</span></a></p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>Return multiple training samples from one prompt, such as subagent, multi-agent, or context-compaction segments</p></td>
+<td class="text-left"><p><a class="reference internal" href="customization.html#returning-multiple-training-samples-for-one-prompt"><span class="std std-ref">fan-out return from custom generate</span></a>, <a class="reference internal" href="../_examples_synced/multi_agent/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/multi_agent</span></code></span></a></p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>Avoid blocking training on long-tail agent rollouts</p></td>
+<td class="text-left"><p><a class="reference internal" href="../_examples_synced/fully_async/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/fully_async</span></code></span></a></p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>Study a full end-to-end agent example with sandboxing, real code edits, and test-based grading</p></td>
+<td class="text-left"><p><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/coding_agent_rl</span></code></span></a></p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>Improve SGLang serving throughput for multi-turn agents</p></td>
+<td class="text-left"><p><a class="reference internal" href="../advanced/pd-disaggregation.html"><span class="std std-doc">PD Disaggregation</span></a>, <a class="reference internal" href="../advanced/sglang-config.html"><span class="std std-doc">SGLang Config</span></a></p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>Enable SGLang optimization flags, router policies, or multi-model serving</p></td>
+<td class="text-left"><p><a class="reference internal" href="usage.html#how-to-use-sglang"><span class="std std-ref">How to Use SGLang</span></a>, <a class="reference internal" href="../advanced/sglang-config.html"><span class="std std-doc">SGLang Config</span></a>, <a class="reference internal" href="../advanced/speculative-decoding.html"><span class="std std-doc">Speculative Decoding</span></a>, <a class="reference internal" href="../advanced/low-precision.html"><span class="std std-doc">Low Precision Training</span></a></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="recommended-integration-pattern">
+<h2>Recommended Integration Pattern<a class="headerlink" href="#recommended-integration-pattern" title="Link to this heading">#</a></h2>
+<p>Most agentic RL tasks should start with <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>. This function converts one agent execution into slime-trainable <code class="docutils literal notranslate"><span class="pre">Sample</span></code> objects: fill <code class="docutils literal notranslate"><span class="pre">tokens</span></code>, <code class="docutils literal notranslate"><span class="pre">response_length</span></code>, <code class="docutils literal notranslate"><span class="pre">loss_mask</span></code>, and <code class="docutils literal notranslate"><span class="pre">status</span></code>, then either fill <code class="docutils literal notranslate"><span class="pre">reward</span></code> directly or let <code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code> compute it.</p>
+<p>If one prompt rollout corresponds to one training sample, return a single <code class="docutils literal notranslate"><span class="pre">Sample</span></code>. If one rollout splits into multiple trainable segments, such as subagent trajectories, main-agent continuations, or pre/post-compaction segments, return <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code> and set the same <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code> on all sibling samples. slime then keeps those samples together for train-step splitting and loss aggregation instead of counting them as independent rollouts.</p>
+<p>Reach for <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> only when you need to replace the whole rollout orchestration. Common reasons include custom data-source scheduling, cross-rollout background queues, fully asynchronous generation, or workflows that cannot fit the default <code class="docutils literal notranslate"><span class="pre">sglang_rollout</span></code> prompt-by-sample structure.</p>
+</section>
+<section id="agent-serving-and-performance">
+<h2>Agent Serving And Performance<a class="headerlink" href="#agent-serving-and-performance" title="Link to this heading">#</a></h2>
+<p>Agentic rollouts tend to depend more heavily on serving configuration than ordinary single-turn generation: contexts are longer, requests are multi-turn, latency has a heavier tail, and the workflow may need actor, reference, reward, or tool-side models at the same time.</p>
+<ul class="simple">
+<li><p>Regular SGLang server arguments are passed as <code class="docutils literal notranslate"><span class="pre">--sglang-*</span></code>. For example, SGLang’s <code class="docutils literal notranslate"><span class="pre">--context-length</span></code> becomes <code class="docutils literal notranslate"><span class="pre">--sglang-context-length</span></code>, and <code class="docutils literal notranslate"><span class="pre">--mem-fraction-static</span></code> becomes <code class="docutils literal notranslate"><span class="pre">--sglang-mem-fraction-static</span></code>.</p></li>
+<li><p>Router arguments are passed as <code class="docutils literal notranslate"><span class="pre">--router-*</span></code>. For multi-turn agents, consider <code class="docutils literal notranslate"><span class="pre">--router-policy</span> <span class="pre">consistent_hashing</span></code> so requests for the same <code class="docutils literal notranslate"><span class="pre">sample.session_id</span></code> go to the same worker and improve prefix-cache hit rate. See <a class="reference internal" href="../advanced/sglang-config.html#session-affinity-routing-for-multi-turn-agents"><span class="std std-ref">Session-Affinity Routing for Multi-Turn Agents</span></a>.</p></li>
+<li><p>Use <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> for more complex topologies: PD disaggregation, multi-model serving, heterogeneous server groups, and per-group SGLang overrides.</p></li>
+<li><p>For multi-turn or agentic RL, evaluate PD disaggregation. Prefill and decode have different workload shapes, and separating them makes it easier to scale each resource independently.</p></li>
+<li><p>For rollout-throughput optimization, also see <a class="reference internal" href="../advanced/speculative-decoding.html"><span class="std std-doc">Speculative Decoding</span></a> and <a class="reference internal" href="../advanced/low-precision.html"><span class="std std-doc">Low Precision Training</span></a>.</p></li>
+</ul>
+</section>
+<section id="reference-example">
+<h2>Reference Example<a class="headerlink" href="#reference-example" title="Link to this heading">#</a></h2>
+<p>The full coding-agent example is <a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/coding_agent_rl</span></code></span></a>. It shows an end-to-end agent RL setup that is close to a real software-engineering workflow: each sample boots an isolated sandbox, the agent uses tools to edit code, the rollout captures a <code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">diff</span></code>, and a clean sandbox runs the tests to produce the reward.</p>
+<p>This example also demonstrates agent fan-out training. Its middleware splits one trajectory into <code class="docutils literal notranslate"><span class="pre">subagent</span></code>, <code class="docutils literal notranslate"><span class="pre">wipe</span></code> (the chain frozen before compaction), and <code class="docutils literal notranslate"><span class="pre">final</span></code> segments. <code class="docutils literal notranslate"><span class="pre">generate()</span></code> returns <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code>, and all segments share the same <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code>.</p>
+<p>For smaller starting points, see <a class="reference internal" href="../_examples_synced/search-r1/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/search-r1</span></code></span></a> for multi-turn tool use, <a class="reference internal" href="../_examples_synced/retool/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/retool</span></code></span></a> for tool-augmented generation, and <a class="reference internal" href="../_examples_synced/multi_agent/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/multi_agent</span></code></span></a> for the multi-agent pattern.</p>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="customization.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Customization Guide</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="qa.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">FAQ</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#where-to-start">Where To Start</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recommended-integration-pattern">Recommended Integration Pattern</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agent-serving-and-performance">Agent Serving And Performance</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reference-example">Reference Example</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  Last updated on May 27, 2026.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

@@ -53,7 +53,7 @@
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="搜索" href="../search.html" />
-    <link rel="next" title="常见 Q&amp;A" href="qa.html" />
+    <link rel="next" title="Agentic RL 训练路线图" href="agent.html" />
     <link rel="prev" title="使用文档" href="usage.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
@@ -156,6 +156,7 @@
 <li class="toctree-l1"><a class="reference internal" href="quick_start.html">快速使用</a></li>
 <li class="toctree-l1"><a class="reference internal" href="usage.html">使用文档</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">自定义指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="agent.html">Agentic RL 训练路线图</a></li>
 <li class="toctree-l1"><a class="reference internal" href="qa.html">常见 Q&amp;A</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
@@ -190,6 +191,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
 <ul class="nav bd-sidenav">
@@ -432,7 +434,10 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#customization-agentic-workflow">通过 customization 接口实现 agentic workflow</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">详细接口参考</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-function-path">1. Rollout 函数 (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-path">2. 自定义生成函数 (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-path">2. 自定义生成函数 (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#prompt">一个 prompt 产生多个训练样本</a></li>
+</ul>
+</li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rm-path">3. 奖励模型 (<code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling-filter-path">4. 动态采样过滤器 (<code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#buffer-buffer-filter-path">5. Buffer 过滤器 (<code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>)</a></li>
@@ -607,7 +612,7 @@
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（使用内置生成函数）</p>
 <p><strong>用途</strong>: 仅覆盖默认 rollout 函数中的生成步骤。</p>
 <p><strong>函数签名</strong>:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">custom_generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Sample</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">custom_generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Sample</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]</span>
 </pre></div>
 </div>
 <p><strong>使用场景</strong>:</p>
@@ -616,7 +621,36 @@
 <li><p>添加检索增强生成（RAG）</p></li>
 <li><p>多轮对话处理</p></li>
 </ul>
+<section id="prompt">
+<h4>一个 prompt 产生多个训练样本<a class="headerlink" href="#prompt" title="链接到此标题。">#</a></h4>
+<p>在 subagent、multi-agent、context compact 等 agentic 场景中，一次 prompt rollout 可能会自然拆成多个可训练片段。例如：主 agent 调用 subagent 后，subagent 的轨迹和主 agent 的后续轨迹都需要参与训练；或者发生 compact 后，compact 前后的上下文被切成多个 segment。</p>
+<p>这种情况下不需要重写整个 rollout 函数，<code class="docutils literal notranslate"><span class="pre">custom_generate</span></code> 可以直接返回 <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code>。关键是：这些由同一次 rollout 拆出来的 sibling samples 必须设置相同的 <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code>，这样 slime 会在训练切分和 loss 聚合时把它们视作同一次 rollout，而不是重复计数为多次独立 rollout。</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">copy</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.types</span><span class="w"> </span><span class="kn">import</span> <span class="n">Sample</span>
+
+
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">custom_generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]:</span>
+    <span class="n">segments</span> <span class="o">=</span> <span class="k">await</span> <span class="n">run_agent_and_split_segments</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">)</span>
+    <span class="n">rollout_id</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">rollout_id</span> <span class="k">if</span> <span class="n">sample</span><span class="o">.</span><span class="n">rollout_id</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">sample</span><span class="o">.</span><span class="n">index</span>
+
+    <span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">segment</span> <span class="ow">in</span> <span class="n">segments</span><span class="p">:</span>
+        <span class="n">s</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">copy</span><span class="p">(</span><span class="n">sample</span><span class="p">)</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">tokens</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">tokens</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">response</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">response</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">response_length</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">response_length</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">loss_mask</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">loss_mask</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">reward</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">reward</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">COMPLETED</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">rollout_id</span> <span class="o">=</span> <span class="n">rollout_id</span>
+        <span class="n">samples</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">s</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">samples</span>
+</pre></div>
+</div>
+<p>如果一个完整 trajectory 只有一个总奖励、但被拆成了 <code class="docutils literal notranslate"><span class="pre">K</span></code> 个训练片段，常见做法是在这些片段之间分配这个奖励（例如每个片段写入 <code class="docutils literal notranslate"><span class="pre">reward</span> <span class="pre">/</span> <span class="pre">K</span></code>），避免把同一次 rollout 的奖励重复放大。</p>
 <p><strong>示例</strong>: 参见 <a class="reference download internal" download="" href="../_downloads/bee5a872ccae7eb6b44c1ed0e0f6eb4a/generate_with_search.py"><span class="xref download myst">examples/search-r1/generate_with_search.py</span></a></p>
+</section>
 </section>
 <hr class="docutils" />
 <section id="custom-rm-path">
@@ -989,11 +1023,11 @@
       </div>
     </a>
     <a class="right-next"
-       href="qa.html"
+       href="agent.html"
        title="下一页">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">下一页</p>
-        <p class="prev-next-title">常见 Q&amp;A</p>
+        <p class="prev-next-title">Agentic RL 训练路线图</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -1019,7 +1053,10 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#customization-agentic-workflow">通过 customization 接口实现 agentic workflow</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">详细接口参考</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-function-path">1. Rollout 函数 (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-path">2. 自定义生成函数 (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-path">2. 自定义生成函数 (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#prompt">一个 prompt 产生多个训练样本</a></li>
+</ul>
+</li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rm-path">3. 奖励模型 (<code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling-filter-path">4. 动态采样过滤器 (<code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#buffer-buffer-filter-path">5. Buffer 过滤器 (<code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>)</a></li>

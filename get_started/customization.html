@@ -53,7 +53,7 @@
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="FAQ" href="qa.html" />
+    <link rel="next" title="Agentic RL Training Roadmap" href="agent.html" />
     <link rel="prev" title="Usage Guide" href="usage.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
@@ -156,6 +156,7 @@
 <li class="toctree-l1"><a class="reference internal" href="quick_start.html">Quick Start</a></li>
 <li class="toctree-l1"><a class="reference internal" href="usage.html">Usage Guide</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Customization Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="agent.html">Agentic RL Training Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="qa.html">FAQ</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
@@ -190,6 +191,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
 <ul class="nav bd-sidenav">
@@ -436,7 +438,10 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agentic-workflows-through-customization-interfaces">Agentic workflows through customization interfaces</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#detailed-interface-reference">Detailed Interface Reference</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-function-rollout-function-path">1. Rollout Function (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-custom-generate-function-path">2. Custom Generate Function (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-custom-generate-function-path">2. Custom Generate Function (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#returning-multiple-training-samples-for-one-prompt">Returning multiple training samples for one prompt</a></li>
+</ul>
+</li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reward-model-custom-rm-path">3. Reward Model (<code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling-filter-dynamic-sampling-filter-path">4. Dynamic Sampling Filter (<code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#buffer-filter-buffer-filter-path">5. Buffer Filter (<code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>)</a></li>
@@ -611,7 +616,7 @@
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code> (uses built-in generate function)</p>
 <p><strong>Purpose</strong>: Override only the generation step within the default rollout function.</p>
 <p><strong>Signature</strong>:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">custom_generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Sample</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">custom_generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Sample</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]</span>
 </pre></div>
 </div>
 <p><strong>Use Cases</strong>:</p>
@@ -620,7 +625,36 @@
 <li><p>Adding retrieval-augmented generation (RAG)</p></li>
 <li><p>Multi-turn conversation handling</p></li>
 </ul>
+<section id="returning-multiple-training-samples-for-one-prompt">
+<h4>Returning multiple training samples for one prompt<a class="headerlink" href="#returning-multiple-training-samples-for-one-prompt" title="Link to this heading">#</a></h4>
+<p>In agentic settings such as subagents, multi-agent execution, or context compaction, one prompt rollout can naturally split into multiple trainable segments. For example, a subagent trajectory and the main-agent continuation may both need to be trained, or the context before and after compaction may be represented as separate segments.</p>
+<p>You do not need to replace the whole rollout function for this. A <code class="docutils literal notranslate"><span class="pre">custom_generate</span></code> function may return <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code>. The key contract is that sibling samples produced by the same rollout must share the same <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code>, so slime keeps them together for train-step splitting and loss aggregation instead of counting them as independent rollouts.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">copy</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.types</span><span class="w"> </span><span class="kn">import</span> <span class="n">Sample</span>
+
+
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">custom_generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]:</span>
+    <span class="n">segments</span> <span class="o">=</span> <span class="k">await</span> <span class="n">run_agent_and_split_segments</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">)</span>
+    <span class="n">rollout_id</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">rollout_id</span> <span class="k">if</span> <span class="n">sample</span><span class="o">.</span><span class="n">rollout_id</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">sample</span><span class="o">.</span><span class="n">index</span>
+
+    <span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">segment</span> <span class="ow">in</span> <span class="n">segments</span><span class="p">:</span>
+        <span class="n">s</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">copy</span><span class="p">(</span><span class="n">sample</span><span class="p">)</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">tokens</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">tokens</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">response</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">response</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">response_length</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">response_length</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">loss_mask</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">loss_mask</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">reward</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">reward</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">COMPLETED</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">rollout_id</span> <span class="o">=</span> <span class="n">rollout_id</span>
+        <span class="n">samples</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">s</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">samples</span>
+</pre></div>
+</div>
+<p>If one full trajectory has a single total reward but is split into <code class="docutils literal notranslate"><span class="pre">K</span></code> training segments, a common pattern is to distribute that reward across the segments, for example by assigning <code class="docutils literal notranslate"><span class="pre">reward</span> <span class="pre">/</span> <span class="pre">K</span></code> to each segment, so the same rollout reward is not amplified.</p>
 <p><strong>Example</strong>: See <a class="reference download internal" download="" href="../_downloads/bee5a872ccae7eb6b44c1ed0e0f6eb4a/generate_with_search.py"><span class="xref download myst">examples/search-r1/generate_with_search.py</span></a></p>
+</section>
 </section>
 <hr class="docutils" />
 <section id="reward-model-custom-rm-path">
@@ -991,11 +1025,11 @@ Covers <code class="docutils literal notranslate"><span class="pre">--custom-rol
       </div>
     </a>
     <a class="right-next"
-       href="qa.html"
+       href="agent.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">FAQ</p>
+        <p class="prev-next-title">Agentic RL Training Roadmap</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -1021,7 +1055,10 @@ Covers <code class="docutils literal notranslate"><span class="pre">--custom-rol
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agentic-workflows-through-customization-interfaces">Agentic workflows through customization interfaces</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#detailed-interface-reference">Detailed Interface Reference</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-function-rollout-function-path">1. Rollout Function (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-custom-generate-function-path">2. Custom Generate Function (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-custom-generate-function-path">2. Custom Generate Function (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#returning-multiple-training-samples-for-one-prompt">Returning multiple training samples for one prompt</a></li>
+</ul>
+</li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reward-model-custom-rm-path">3. Reward Model (<code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling-filter-dynamic-sampling-filter-path">4. Dynamic Sampling Filter (<code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#buffer-filter-buffer-filter-path">5. Buffer Filter (<code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>)</a></li>
