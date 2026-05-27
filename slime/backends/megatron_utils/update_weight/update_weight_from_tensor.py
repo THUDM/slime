@@ -48,6 +48,7 @@ class UpdateWeightFromTensor:
         self.model_name = model_name
         self.quantization_config = quantization_config
         self.weight_version = 0
+        self.update_weight_metrics: dict[str, float] = {}
 
         self._hf_weight_iterator = HfWeightIteratorBase.create(
             args=args, model=model, model_name=model_name, quantization_config=quantization_config
@@ -133,6 +134,14 @@ class UpdateWeightFromTensor:
             end = start + colocate_gpu_counts[i]
             if start <= dist.get_rank() < end:
                 self._ipc_engine = engine
+
+    def pop_metrics(self) -> dict[str, float]:
+        """
+        Return and clear ``update_weight_metrics``. Empty under colocate today;
+        kept symmetric with UpdateWeightFromDistributed so the actor can drain unconditionally.
+        """
+        out, self.update_weight_metrics = self.update_weight_metrics, {}
+        return out
 
     @torch.no_grad()
     def update_weights(self) -> None:

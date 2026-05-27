@@ -10,6 +10,8 @@
 1.  **High-Performance Training**: Supports efficient training in various modes by connecting Megatron with SGLang;
 2.  **Flexible Data Generation**: Enables arbitrary training data generation workflows through custom data generation interfaces and server-based engines.
 
+In the agentic era, slime treats multi-turn tool use, sandbox interaction, environment feedback, and verifier/test-based rewards as data generation workflows. These workflows plug into the same training / rollout / Data Buffer loop through custom generation, custom reward, and server-based rollout engines, rather than requiring a separate agent framework.
+
 slime is the RL-framework behind [GLM-5.1](https://z.ai/blog/glm-5.1), [GLM-5](https://z.ai/blog/glm-5), [GLM-4.7](https://z.ai/blog/glm-4.7), [GLM-4.6](https://z.ai/blog/glm-4.6), [GLM-4.5](https://z.ai/blog/glm-4.5) and apart from models from Z.ai, we also supports the following models:
 - Qwen series (Qwen3.6, Qwen3.5, Qwen3Next, Qwen3MoE, Qwen3, Qwen2.5);
 - DeepSeek V3 series (DeepSeek V3, V3.1, DeepSeek R1);
@@ -37,8 +39,8 @@ slime is the RL-framework behind [GLM-5.1](https://z.ai/blog/glm-5.1), [GLM-5](h
 **Module Descriptions**:
 
 - **training (Megatron)**: Responsible for the main training process, reads data from the Data Buffer, and synchronizes parameters to the rollout module after training.
-- **rollout (SGLang + router)**: Generates new data (including rewards/verifier outputs) and stores it in the Data Buffer.
-- **data buffer**: A bridge module that manages prompt initialization, custom data, and rollout generation methods.
+- **rollout (SGLang + router)**: Generates new data (including rewards/verifier outputs) and stores it in the Data Buffer. Custom generate functions can wrap this with multi-turn loops, tool calls, environment/sandbox interaction, and verifier-based reward.
+- **data buffer**: A bridge module that manages prompt initialization, custom data, and rollout generation methods (including agentic workflows that produce samples through the same interface).
 
 ## Quick Start
 
@@ -46,6 +48,16 @@ For a comprehensive quick start guide covering environment setup, data preparati
 - [Quick Start Guide](./docs/en/get_started/quick_start.md)
 
 We also provide examples for some use cases not covered in the quick start guide; please check [examples](examples/).
+
+### Agentic RL examples
+
+For agentic RL workloads, the following examples plug into the standard rollout / Data Buffer loop through customization interfaces — they are not separate frameworks:
+
+- [`examples/multi_agent`](examples/multi_agent/README.md): Multi-agent rollout via a custom `--rollout-function-path`.
+- [`examples/search-r1`](examples/search-r1/): Search/RAG-style multi-turn generation via `--custom-generate-function-path`.
+- [`examples/fully_async`](examples/fully_async/README.md): Fully-async rollout, useful for long-tail agentic generation where some samples take much longer than others.
+
+See the [Customization Guide](docs/en/get_started/customization.md) for which interface to use for a given agentic workflow.
 
 ## Projects Built upon slime
 

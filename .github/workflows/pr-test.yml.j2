@@ -5,6 +5,7 @@
         {'test_file': 'test_qwen3.5_0.8B_gsm8k_async_short.py', 'num_gpus': 4},
         {'test_file': 'test_qwen3.5_0.8B_gsm8k_short.py', 'num_gpus': 4},
         {'test_file': 'test_qwen2.5_0.5B_ppo_critic_only_short.py', 'num_gpus': 4},
+        {'test_file': 'test_qwen2.5_0.5B_fanout_short.py', 'num_gpus': 4},
       ],
     },
     'e2e-test-sglang-config': {
@@ -46,7 +47,10 @@
     'e2e-test-ckpt': {
       'label': 'run-ci-ckpt',
       'tests': [
-        {'test_file': 'test_qwen3_4B_ckpt.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer gpu', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer cpu', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer cpu', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer gpu', 'num_gpus': 8},
         {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--async-save', 'num_gpus': 8},
       ],
     },
@@ -58,6 +62,17 @@
       'tests': [
         {'test_file': 'test_megatron_argument_validation.py', 'num_gpus': 0},
         {'test_file': 'test_dp_schedule.py', 'num_gpus': 0},
+        {'test_file': 'test_cp_utils.py', 'num_gpus': 0},
+        {'test_file': 'test_metric_report.py', 'num_gpus': 0},
+        {'test_file': 'test_metric_report_dist.py', 'num_gpus': 0},
+        {'test_file': 'test_loss_cp_invariance.py', 'num_gpus': 0},
+        {'test_file': 'test_rm_f1.py', 'num_gpus': 0},
+        {'test_file': 'test_rm_gpqa.py', 'num_gpus': 0},
+        {'test_file': 'test_rm_math.py', 'num_gpus': 0},
+        {'test_file': 'test_rm_math_dapo.py', 'num_gpus': 0},
+        {'test_file': 'test_rm_deepscaler.py', 'num_gpus': 0},
+        {'test_file': 'test_sample.py', 'num_gpus': 0},
+        {'test_file': 'test_rollout_validation.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_rollout_contracts.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_runtime_hook_contracts.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_path_loading_contracts.py', 'num_gpus': 0},
@@ -79,7 +94,10 @@
         {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8},
         {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_ckpt.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer gpu', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer cpu', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer cpu', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer gpu', 'num_gpus': 8},
         {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--async-save', 'num_gpus': 8},
         {'test_file': 'test_qwen2.5_0.5B_debug_rollout_then_train.py', 'num_gpus': 8},
         {'test_file': 'test_qwen2.5_0.5B_opd_sglang.py', 'num_gpus': 8},
@@ -89,12 +107,16 @@
 name: PR Test
 
 on:
-  # Do not run CI on push to reduce CI time
-  # push:
-  #   branches: [main]
+  # Push to main triggers ONLY the cpu-unittest job (cheap GitHub-hosted
+  # runner, catches PR-pair regressions where two PRs pass individually
+  # but main is broken after both land). GPU jobs stay label-gated — see
+  # each job's `if:` below — so push events never burn the self-hosted
+  # fleet.
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
-    types: [synchronize, labeled]
+    types: [opened, reopened, synchronize, labeled]
   workflow_dispatch:
     inputs:
       infinite_run:
@@ -111,7 +133,7 @@ jobs:
 <% for job_name, config in jobs.items() %>
   << job_name >>:
 <% if config.get('always') %>
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
 <% else %>
     if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, '<< config.label >>'))
 <% endif %>
@@ -178,7 +200,7 @@ jobs:
             python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 <% else %>
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -294,7 +316,7 @@ jobs:
       - name: Execute
         shell: bash
         run: |
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \

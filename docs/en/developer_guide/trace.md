@@ -41,7 +41,7 @@ By default it also starts a local static server so you can open the generated HT
 
 ## Instrument custom code
 
-For custom rollout or reward code, reuse helpers from `slime.utils.trace_utils`:
+For custom rollout or reward code — including custom agent steps, tool calls, sandbox execution, and verifier calls in agentic workflows — reuse helpers from `slime.utils.trace_utils`:
 
 - `trace_span(target, name, attrs=...)`: record a duration span.
 - `trace_event(target, name, attrs=...)`: record an instant event.
