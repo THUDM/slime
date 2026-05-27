@@ -4,26 +4,17 @@ Wire-up:
 
     --custom-generate-function-path examples.coding_agent_rl.generate.generate
 
-``generate()`` below IS the agent. Read it top-to-bottom to see what one SWE
-rollout sample does. All sandbox-side details live in ``sandbox.py``; the LLM
-plumbing (Anthropic <-> SGLang /generate, token capture, 3-kind segment split)
-lives in ``middleware.py``.
+``generate()`` is intentionally a small four-stage orchestrator:
 
-Per-sample steps:
+    1. ``_run_claude_code`` prepares the agent sandbox and runs claude-code.
+    2. ``_get_diff`` captures the model-produced patch.
+    3. ``sandbox.evaluate`` scores that patch in a second clean sandbox.
+    4. ``_merge_samples`` combines reward + middleware token segments into
+       the ``Sample`` shape slime expects.
 
-    1. Boot a fresh sandbox from the dataset image.
-    2. Install Node 22 + Claude Code CLI.
-    3. Create the agent user, drop PROBLEM_STATEMENT.md.
-    4. Run claude-code pointed at the head-node middleware (the middleware
-       captures tokens by session_id, passed via the Bearer token).
-    5. ``git diff`` to capture the model-produced patch.
-    6. Boot a SECOND, fresh sandbox; apply diff; run the dataset's tests for
-       reward. (No-test-cheating guarantee: reward only depends on the diff.)
-    7. Pull (prompt_ids, response_ids, loss_mask, ...) segments from the
-       middleware (one segment per chain reset; >=1 per trajectory).
-    8. Either collapse to one Sample (final segment, default) or fan out
-       one Sample per segment with reward/K. Fan-out is fail-soft: any bug
-       aborts THIS sample only, never blocks the training step.
+All sandbox-side details live in ``sandbox.py``; the LLM plumbing
+(Anthropic <-> SGLang /generate, token capture, 3-kind segment split) lives in
+``middleware.py``.
 
 Dataset row ``metadata`` schema::
 
@@ -62,7 +53,9 @@ import os
 import secrets
 import time
 import traceback
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -216,11 +209,18 @@ async def _boot_agent_sandbox(image: str):
 # middleware.pop_session_split(). One trajectory yields >=1 segments because
 # the agent may compact + reset mid-run.
 #
-# The collapse path (SWE_LIST_TRAJECTORY=0, default) is inlined in generate()
-# because it is only 4 lines. The fan-out path (SWE_LIST_TRAJECTORY=1) lives
-# in _fan_out_to_samples below because it has subtle metadata-sharing logic.
+# _merge_samples owns both output modes:
+#   * collapse (SWE_LIST_TRAJECTORY=0, default): one Sample from final segment
+#   * fan-out  (SWE_LIST_TRAJECTORY=1): one Sample per segment, reward / K
 # ---------------------------------------------------------------------------
 Segment = tuple[list[int], list[int], list[int], dict]
+
+
+@dataclass(frozen=True)
+class RewardResult:
+    reward: float
+    is_solved: bool
+    applied_cleanly: bool
 
 
 def _write_segment_to_sample(sample: Sample, seg: Segment, reward: float, tokenizer) -> None:
@@ -272,11 +272,154 @@ def _fan_out_to_samples(
     return out
 
 
+def _start_session(
+    state: _State,
+    sample: Sample,
+    md: dict[str, Any],
+    sampling_params: dict[str, Any],
+) -> str:
+    # claude-code inside the sandbox dials back to the middleware with this
+    # session_id (passed as the Bearer token) so its turns are grouped under
+    # one chain history. Build from (instance_id, index, group_index) when
+    # possible; fall back to random hex if either index is missing.
+    if sample.session_id:
+        session_id = sample.session_id
+    elif sample.index is not None and sample.group_index is not None:
+        session_id = f"cagent-{md['instance_id']}-{sample.index}-{sample.group_index}"
+    else:
+        session_id = f"cagent-{md['instance_id']}-{secrets.token_hex(8)}"
+    sample.session_id = session_id
+    middleware.open_session(state.store, session_id, sampling_defaults=sampling_params)
+    return session_id
+
+
+@asynccontextmanager
+async def _run_claude_code(
+    md: dict[str, Any],
+    *,
+    session_id: str,
+    middleware_url: str,
+) -> AsyncIterator[E2BSandbox]:
+    """Run claude-code and yield the live sandbox for post-run diff capture."""
+    async with _boot_agent_sandbox(md["image"]) as sb:
+        await sandbox.ensure_agent_user(sb, md["workdir"])
+        if md["swepro"]:
+            await sandbox.apply_before_repo_set_cmd(sb, md["workdir"], md["swepro"])
+        if md["pre_commands"]:
+            await sandbox.apply_pre_commands(sb, md["workdir"], md["pre_commands"])
+        await sb.write_file(
+            f"{md['workdir']}/PROBLEM_STATEMENT.md",
+            md["problem_statement"] or "",
+            user="agent",
+        )
+        await sandbox.run_claude_code(
+            sb,
+            workdir=md["workdir"],
+            session_id=session_id,
+            middleware_url=middleware_url,
+            prompt=CC_PROMPT,
+            time_budget_sec=SWE_TIME_BUDGET_SEC,
+        )
+        yield sb
+
+
+async def _get_diff(sb: E2BSandbox, md: dict[str, Any]) -> str:
+    return await sandbox.git_diff(sb, md["workdir"])
+
+
+def _pop_segments(state: _State, session_id: str) -> list[Segment]:
+    # Drop empty-response segments and apply the optional per-segment response
+    # cap in one place. SWE_MAX_RESPONSE_TOKENS=0 disables truncation.
+    cap = SWE_MAX_RESPONSE_TOKENS
+    return [
+        (p, r[:cap], m[:cap], meta) if cap and len(r) > cap else (p, r, m, meta)
+        for (p, r, m, meta) in (middleware.pop_session_split(state.store, session_id) or [])
+        if r
+    ]
+
+
+def _merge_samples(
+    *,
+    sample: Sample,
+    state: _State,
+    session_id: str,
+    reward_result: RewardResult,
+    elapsed_sec: float,
+    instance_id: str,
+):
+    segments = _pop_segments(state, session_id)
+    if not segments:
+        return _abort_result(sample, "middleware_session_empty")
+
+    sample.metadata = {
+        **(sample.metadata or {}),
+        "instance_id": instance_id,
+        "is_solved": reward_result.is_solved,
+        "applied_cleanly": reward_result.applied_cleanly,
+        "elapsed_sec": elapsed_sec,
+    }
+
+    # Collapse mode keeps ONLY the final (reward-bearing, post-final-compact
+    # reset) segment. Earlier segments are intentionally dropped to avoid
+    # sample-count explosion and host pinned-memory pressure at large batches.
+    if not SWE_LIST_TRAJECTORY:
+        final_seg = segments[-1]
+        _write_segment_to_sample(sample, final_seg, reward_result.reward, state.tokenizer)
+        sample.metadata = {
+            **sample.metadata,
+            **final_seg[3],
+            "num_segments_collapsed": len(segments),
+        }
+        logger.info(
+            "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs "
+            "single-sample collapsed_segments=%d",
+            instance_id,
+            reward_result.reward,
+            reward_result.is_solved,
+            reward_result.applied_cleanly,
+            elapsed_sec,
+            len(segments),
+        )
+        return sample
+
+    # Fan-out mode emits one Sample per segment, splitting reward uniformly.
+    # All K share rollout_id so the loss reducer counts this trajectory once.
+    # Fail-soft: reducer bugs abort this sample only, not the whole step.
+    try:
+        fanned = _fan_out_to_samples(
+            sample,
+            segments,
+            reward_result.reward,
+            state.tokenizer,
+            instance_id,
+        )
+        if not fanned:
+            raise ValueError("fan-out produced no samples")
+    except Exception as e:
+        logger.warning(
+            "[coding_agent_rl] fan-out failed for instance=%s: %s -- sample aborted",
+            instance_id,
+            e,
+        )
+        return [_abort(sample, reason=f"reducer_failure:{type(e).__name__}")]
+
+    logger.info(
+        "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs segments=%d",
+        instance_id,
+        reward_result.reward,
+        reward_result.is_solved,
+        reward_result.applied_cleanly,
+        elapsed_sec,
+        len(fanned),
+    )
+    return fanned
+
+
 # ---------------------------------------------------------------------------
 # Main per-sample agent function
 #
-# Read top-to-bottom. The [N] section comments below correspond to the 8-step
-# recipe in the module docstring at the top of this file.
+# The four calls inside the timeout are the high-level rollout recipe:
+# run_claude_code -> get_diff -> sandbox.evaluate -> merge_samples.
 # ---------------------------------------------------------------------------
 async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
     """Per-sample agent function with wall-clock guard. See
@@ -286,52 +429,18 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
     if not md["image"] or not md["workdir"]:
         return _abort_result(sample, "missing_image_or_workdir")
 
-    # [1] Open a middleware session. claude-code inside the sandbox dials
-    #     back to the middleware with this session_id (passed as the Bearer
-    #     token) so its turns are grouped under one chain history.
-    #     Build sid from (instance_id, index, group_index) so it's unique by
-    #     construction within a rollout step; fall back to random hex if either
-    #     index is missing. open_session raises on duplicate as a safety net.
-    if sample.session_id:
-        session_id = sample.session_id
-    elif sample.index is not None and sample.group_index is not None:
-        session_id = f"cagent-{md['instance_id']}-{sample.index}-{sample.group_index}"
-    else:
-        session_id = f"cagent-{md['instance_id']}-{secrets.token_hex(8)}"
-    sample.session_id = session_id
-    middleware.open_session(state.store, session_id, sampling_defaults=sampling_params)
-
     instance_id = md["instance_id"]
+    session_id = _start_session(state, sample, md, sampling_params)
     t0 = time.time()
     try:
         async with asyncio.timeout(SWE_GENERATE_GUARD_SEC):
-            # [2-3] Boot a fresh sandbox, install Node + Claude Code, create
-            #       the agent user, drop PROBLEM_STATEMENT.md, run the agent,
-            #       capture the resulting git diff.
-            async with _boot_agent_sandbox(md["image"]) as sb:
-                await sandbox.ensure_agent_user(sb, md["workdir"])
-                if md["swepro"]:
-                    await sandbox.apply_before_repo_set_cmd(sb, md["workdir"], md["swepro"])
-                if md["pre_commands"]:
-                    await sandbox.apply_pre_commands(sb, md["workdir"], md["pre_commands"])
-                await sb.write_file(
-                    f"{md['workdir']}/PROBLEM_STATEMENT.md",
-                    md["problem_statement"] or "",
-                    user="agent",
-                )
-                await sandbox.run_claude_code(
-                    sb,
-                    workdir=md["workdir"],
-                    session_id=session_id,
-                    middleware_url=state.middleware_url,
-                    prompt=CC_PROMPT,
-                    time_budget_sec=SWE_TIME_BUDGET_SEC,
-                )
-                diff_text = await sandbox.git_diff(sb, md["workdir"])
+            async with _run_claude_code(
+                md,
+                session_id=session_id,
+                middleware_url=state.middleware_url,
+            ) as sb:
+                diff_text = await _get_diff(sb, md)
 
-            # [4] Second fresh sandbox runs the dataset's tests against the
-            #     captured diff. No-test-cheating guarantee: reward depends
-            #     only on the diff, never on what the agent sandbox did.
             reward, is_solved, applied_cleanly = await sandbox.evaluate(
                 image=md["image"],
                 workdir=md["workdir"],
@@ -341,91 +450,19 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
                 pre_commands=md["pre_commands"],
                 timeout_sec=SWE_EVAL_TIMEOUT_SEC,
             )
-
-            # [5] Pull (prompt_ids, response_ids, loss_mask, seg_meta)
-            #     segments from the middleware. Drop empty-response segments
-            #     and apply the optional per-segment training cap in one go
-            #     (SWE_MAX_RESPONSE_TOKENS=0 disables the cap).
-            cap = SWE_MAX_RESPONSE_TOKENS
-            segments: list[Segment] = [
-                (p, r[:cap], m[:cap], meta) if cap and len(r) > cap else (p, r, m, meta)
-                for (p, r, m, meta) in (middleware.pop_session_split(state.store, session_id) or [])
-                if r
-            ]
-            if not segments:
-                return _abort_result(sample, "middleware_session_empty")
-
-            # [6] Top-level metadata that every output Sample will inherit.
-            elapsed = time.time() - t0
-            sample.metadata = {
-                **(sample.metadata or {}),
-                "instance_id": instance_id,
-                "is_solved": bool(is_solved),
-                "applied_cleanly": bool(applied_cleanly),
-                "elapsed_sec": elapsed,
-            }
-
-            # [7] segments -> Sample(s). Two modes:
-            #
-            #   collapse (SWE_LIST_TRAJECTORY=0, default): keep ONLY the
-            #     final (reward-bearing, post-final-compact-reset) segment
-            #     as a single Sample. The middle K-1 segments are dropped
-            #     intentionally -- avoids the sample-count explosion that
-            #     bloats ray.put + host pinned memory and can trigger GPU
-            #     wake_up OOM at large batch sizes.
-            #
-            #   fan-out (SWE_LIST_TRAJECTORY=1): emit one Sample per
-            #     segment, splitting reward uniformly. All K share the
-            #     same rollout_id so the loss reducer counts the
-            #     trajectory once. Fail-soft: any bug here aborts THIS
-            #     sample only, never the whole training step.
-            if not SWE_LIST_TRAJECTORY:
-                final_seg = segments[-1]
-                _write_segment_to_sample(sample, final_seg, reward, state.tokenizer)
-                sample.metadata = {
-                    **sample.metadata,
-                    **final_seg[3],
-                    "num_segments_collapsed": len(segments),
-                }
-                logger.info(
-                    "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs "
-                    "single-sample collapsed_segments=%d",
-                    instance_id,
-                    reward,
-                    is_solved,
-                    applied_cleanly,
-                    elapsed,
-                    len(segments),
-                )
-                return sample
-
-            try:
-                fanned = _fan_out_to_samples(
-                    sample,
-                    segments,
-                    reward,
-                    state.tokenizer,
-                    instance_id,
-                )
-                if not fanned:
-                    raise ValueError("fan-out produced no samples")
-            except Exception as e:
-                logger.warning(
-                    "[coding_agent_rl] fan-out failed for instance=%s: %s -- sample aborted",
-                    instance_id,
-                    e,
-                )
-                return [_abort(sample, reason=f"reducer_failure:{type(e).__name__}")]
-            logger.info(
-                "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs segments=%d",
-                instance_id,
-                reward,
-                is_solved,
-                applied_cleanly,
-                elapsed,
-                len(fanned),
+            reward_result = RewardResult(
+                reward=float(reward),
+                is_solved=bool(is_solved),
+                applied_cleanly=bool(applied_cleanly),
             )
-            return fanned
+            return _merge_samples(
+                sample=sample,
+                state=state,
+                session_id=session_id,
+                reward_result=reward_result,
+                elapsed_sec=time.time() - t0,
+                instance_id=instance_id,
+            )
 
     except asyncio.TimeoutError:
         _log_timeout_diagnostic(t0)
