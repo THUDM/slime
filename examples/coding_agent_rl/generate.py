@@ -66,6 +66,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+from slime.agent.sandbox import E2BSandbox
 from slime.utils.misc import SingletonMeta
 from slime.utils.processing_utils import load_tokenizer
 from slime.utils.types import Sample
@@ -177,7 +178,7 @@ async def _boot_agent_sandbox(image: str):
     sb = None
     last_err: Exception | None = None
     for attempt in range(SWE_BOOT_RETRIES):
-        cand = sandbox.E2BSandbox(image)
+        cand = E2BSandbox(image)
         try:
             async with _BOOT_SEM:
                 await cand.__aenter__()
@@ -313,7 +314,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
                     await sandbox.apply_before_repo_set_cmd(sb, md["workdir"], md["swepro"])
                 if md["pre_commands"]:
                     await sandbox.apply_pre_commands(sb, md["workdir"], md["pre_commands"])
-                await sb.write_text(
+                await sb.write_file(
                     f"{md['workdir']}/PROBLEM_STATEMENT.md",
                     md["problem_statement"] or "",
                     user="agent",
