@@ -72,7 +72,7 @@ index 55179ff30..6629f41a6 100644
                  )
  
 diff --git a/megatron/core/distributed/param_and_grad_buffer.py b/megatron/core/distributed/param_and_grad_buffer.py
-index 088374fbf..557e7e41b 100644
+index 088374fbf..4dd967f05 100644
 --- a/megatron/core/distributed/param_and_grad_buffer.py
 +++ b/megatron/core/distributed/param_and_grad_buffer.py
 @@ -599,6 +599,8 @@ class _ParamAndGradBuffer:
@@ -107,14 +107,14 @@ index 088374fbf..557e7e41b 100644
              nccl_allocator.init()
              pool = nccl_allocator.create_nccl_mem_pool(
                  symmetric=not self.ddp_config.disable_symmetric_registration
-@@ -773,14 +784,45 @@ class _ParamAndGradBuffer:
+@@ -773,14 +784,47 @@ class _ParamAndGradBuffer:
              torch.distributed.barrier()
          else:
              # If nccl_ub is False, mem_alloc_context is nullcontext.
 +            # Individual param/grad contexts below handle TMS regions separately.
              mem_alloc_context = nullcontext
  
-+        def _make_no_backup_context(tag, disable, flag_name):
++        def _make_no_backup_context(tag, disable, flag_name="disable_grad_buffers_cpu_backup"):
 +            if disable:
 +                try:
 +                    from torch_memory_saver import torch_memory_saver
@@ -130,14 +130,16 @@ index 088374fbf..557e7e41b 100644
 +                )
 +            return nullcontext
 +        grad_mem_alloc_context = _make_no_backup_context(
-+            "grad_buffer", disable_grad_buffers_cpu_backup, "disable_grad_buffers_cpu_backup"
++            "grad_buffer", disable_grad_buffers_cpu_backup
 +        )
 +        param_mem_alloc_context = _make_no_backup_context(
 +            "param_buffer", disable_param_buffers_cpu_backup, "disable_param_buffers_cpu_backup"
 +        )
++
 +        def _allocate_zeros(mem_alloc_context, *args, **kwargs):
 +            with mem_alloc_context():
 +                return torch.zeros(*args, **kwargs)
++
          with mem_alloc_context():
              # For MXFP8 param: Create a shared buffer for param AG and grad RS for memory efficiency
              # The buffer is mapped to weight gradients whose dtype is either bf16 or FP32.
@@ -154,7 +156,7 @@ index 088374fbf..557e7e41b 100644
                      self.numel,
                      dtype=self.grad_dtype,
                      device=torch.cuda.current_device(),
-@@ -797,18 +839,20 @@ class _ParamAndGradBuffer:
+@@ -797,18 +841,20 @@ class _ParamAndGradBuffer:
              else:
                  # Only re-map param tensors if using distributed optimizer.
                  if self.ddp_config.use_distributed_optimizer:
