@@ -50,79 +50,134 @@ index a5b6c009b..22794d7e6 100644
          )
 
 diff --git a/megatron/core/distributed/distributed_data_parallel.py b/megatron/core/distributed/distributed_data_parallel.py
-index 55179ff30..43ef12a29 100644
+index 55179ff30..6629f41a6 100644
 --- a/megatron/core/distributed/distributed_data_parallel.py
 +++ b/megatron/core/distributed/distributed_data_parallel.py
-@@ -45,6 +45,7 @@ class DistributedDataParallel(_BaseDataParallel):
+@@ -45,6 +45,8 @@ class DistributedDataParallel(_BaseDataParallel):
          module: torch.nn.Module,
          disable_bucketing: bool = False,
          pg_collection: Optional[ProcessGroupCollection] = None,
 +        disable_grad_buffers_cpu_backup: bool = False,
++        disable_param_buffers_cpu_backup: bool = False,
      ):
          super().__init__(config=config, module=module)
          if has_config_logger_enabled(config):
-@@ -209,6 +210,7 @@ class DistributedDataParallel(_BaseDataParallel):
+@@ -209,6 +211,8 @@ class DistributedDataParallel(_BaseDataParallel):
                          param_and_grad_dtype_to_indices[(param_dtype, grad_dtype)],
                          self.ddp_config.nccl_ub,
                          pg_collection,
 +                        disable_grad_buffers_cpu_backup=disable_grad_buffers_cpu_backup,
++                        disable_param_buffers_cpu_backup=disable_param_buffers_cpu_backup,
                      )
                  )
 
 diff --git a/megatron/core/distributed/param_and_grad_buffer.py b/megatron/core/distributed/param_and_grad_buffer.py
-index 088374fbf..7a416f8e4 100644
+index 088374fbf..a9982e176 100644
 --- a/megatron/core/distributed/param_and_grad_buffer.py
 +++ b/megatron/core/distributed/param_and_grad_buffer.py
-@@ -599,6 +599,7 @@ class _ParamAndGradBuffer:
+@@ -599,6 +599,8 @@ class _ParamAndGradBuffer:
          param_indices: List[int],
          nccl_ub: bool,
          pg_collection: Optional[ProcessGroupCollection] = None,
 +        disable_grad_buffers_cpu_backup: bool = False,
++        disable_param_buffers_cpu_backup: bool = False,
      ):
 
          if pg_collection is None:
-@@ -755,6 +756,9 @@ class _ParamAndGradBuffer:
+@@ -629,6 +631,9 @@ class _ParamAndGradBuffer:
+         self.data_parallel_world_size = self.data_parallel_group.size()
+         self.gradient_scaling_factor = gradient_scaling_factor
+         self.nccl_ub = nccl_ub
++        disable_param_buffers_cpu_backup = (
++            disable_param_buffers_cpu_backup and self.ddp_config.use_distributed_optimizer
++        )
+
+         # Data structures to store underlying buckets and relevant indexing data.
+         self.buckets = []
+@@ -755,6 +760,12 @@ class _ParamAndGradBuffer:
 
          if self.nccl_ub:
              # If nccl_ub is True, use nccl_allocator to allocate memory for param_data/grad_data.
 +            assert not disable_grad_buffers_cpu_backup, (
 +                "disable_grad_buffers_cpu_backup is not supported with nccl_ub=True"
 +            )
++            assert not disable_param_buffers_cpu_backup, (
++                "disable_param_buffers_cpu_backup is not supported with nccl_ub=True"
++            )
              nccl_allocator.init()
              pool = nccl_allocator.create_nccl_mem_pool(
                  symmetric=not self.ddp_config.disable_symmetric_registration
-@@ -773,8 +777,30 @@ class _ParamAndGradBuffer:
+@@ -773,19 +784,48 @@ class _ParamAndGradBuffer:
              torch.distributed.barrier()
          else:
              # If nccl_ub is False, mem_alloc_context is nullcontext.
 +            # Individual param/grad contexts below handle TMS regions separately.
              mem_alloc_context = nullcontext
 
-+        def _make_no_backup_context(tag, disable):
++        def _make_no_backup_context(tag, disable, flag_name="disable_grad_buffers_cpu_backup"):
 +            if disable:
 +                try:
 +                    from torch_memory_saver import torch_memory_saver
 +                except ImportError as e:
 +                    raise ImportError(
-+                        "disable_grad_buffers_cpu_backup=True requires torch_memory_saver. "
++                        f"{flag_name}=True requires torch_memory_saver. "
 +                        "Install with: pip install torch-memory-saver"
 +                    ) from e
-+
 +                return partial(
 +                    torch_memory_saver.region,
 +                    tag=tag,
 +                    enable_cpu_backup=False,
 +                )
 +            return nullcontext
-+
 +        grad_mem_alloc_context = _make_no_backup_context(
 +            "grad_buffer", disable_grad_buffers_cpu_backup
++        )
++        param_mem_alloc_context = _make_no_backup_context(
++            "param_buffer", disable_param_buffers_cpu_backup, "disable_param_buffers_cpu_backup"
 +        )
 +
          with mem_alloc_context():
              # For MXFP8 param: Create a shared buffer for param AG and grad RS for memory efficiency
              # The buffer is mapped to weight gradients whose dtype is either bf16 or FP32.
-@@ -803,12 +829,13 @@ class _ParamAndGradBuffer:
+             # It can be temporarily reused by param AG.
+             if self.ddp_config.use_distributed_optimizer and any(is_mxfp8tensor(p) for p in params):
+-                self.shared_buffer = torch.zeros(
+-                    self.numel,
+-                    dtype=self.grad_dtype,
+-                    device=torch.cuda.current_device(),
+-                    requires_grad=False,
++                shared_mem_alloc_context = (
++                    param_mem_alloc_context
++                    if disable_param_buffers_cpu_backup
++                    else grad_mem_alloc_context
+                 )
++                with shared_mem_alloc_context():
++                    self.shared_buffer = torch.zeros(
++                        self.numel,
++                        dtype=self.grad_dtype,
++                        device=torch.cuda.current_device(),
++                        requires_grad=False,
++                    )
+                 # For FP32 weight grads, only half of the buffer is used to store params in bf16.
+                 if self.grad_dtype == torch.float32:
+                     self.param_data = self.shared_buffer[: math.ceil(self.numel / 2)].view(
+@@ -797,18 +837,20 @@ class _ParamAndGradBuffer:
+             else:
+                 # Only re-map param tensors if using distributed optimizer.
+                 if self.ddp_config.use_distributed_optimizer:
+-                    self.param_data = torch.zeros(
++                    with param_mem_alloc_context():
++                        self.param_data = torch.zeros(
++                            self.numel,
++                            dtype=self.param_dtype,
++                            device=torch.cuda.current_device(),
++                            requires_grad=False,
++                        )
++                with grad_mem_alloc_context():
++                    self.grad_data = torch.zeros(
+                         self.numel,
+-                        dtype=self.param_dtype,
++                        dtype=self.grad_dtype,
                          device=torch.cuda.current_device(),
                          requires_grad=False,
                      )
@@ -132,13 +187,6 @@ index 088374fbf..7a416f8e4 100644
 -                    device=torch.cuda.current_device(),
 -                    requires_grad=False,
 -                )
-+                with grad_mem_alloc_context():
-+                    self.grad_data = torch.zeros(
-+                        self.numel,
-+                        dtype=self.grad_dtype,
-+                        device=torch.cuda.current_device(),
-+                        requires_grad=False,
-+                    )
 
          self.grad_data_size = 0
          self.param_data_size = 0
@@ -931,10 +979,10 @@ index 17df57dda..260a5f6c8 100644
          )
          self._vocab = self._tokenizer.get_vocab()
 diff --git a/megatron/training/training.py b/megatron/training/training.py
-index e9736ac08..a83482bf1 100644
+index e9736ac08..6567ed426 100644
 --- a/megatron/training/training.py
 +++ b/megatron/training/training.py
-@@ -1327,6 +1327,12 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
+@@ -1327,6 +1327,14 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
          # Wait for the default stream to complete before starting ddp_stream
          ddp_stream.wait_stream(torch.cuda.current_stream())
          # Make ddp_stream start after whatever the default stream already queued
@@ -943,11 +991,13 @@ index e9736ac08..a83482bf1 100644
 +            dp_extra_kwargs['disable_grad_buffers_cpu_backup'] = getattr(
 +                args, 'disable_grad_buffers_cpu_backup', False
 +            )
-+
++            dp_extra_kwargs['disable_param_buffers_cpu_backup'] = getattr(
++                args, 'disable_param_buffers_cpu_backup', False
++            )
          with torch.cuda.stream(ddp_stream):
              model = [
                  DP(
-@@ -1337,6 +1343,7 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
+@@ -1337,6 +1345,7 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
                      # model chunks is overlapped with compute anyway.
                      disable_bucketing=(model_chunk_idx > 0)
                      or args.overlap_param_gather_with_optimizer_step,
