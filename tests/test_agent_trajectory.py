@@ -13,11 +13,14 @@ from slime.agent.trajectory import TurnRecord, merge_turns
 NUM_GPUS = 0
 
 
-def _turn(prompt_ids: list[int], output_ids: list[int]) -> TurnRecord:
+def _turn(prompt_ids: list[int], output_ids: list[int], output_log_probs: list[float] | None = None) -> TurnRecord:
     return TurnRecord(
         prompt_ids=prompt_ids,
         output_ids=output_ids,
         finish_reason="stop",
+        output_log_probs=(
+            output_log_probs if output_log_probs is not None else [-token_id / 100 for token_id in output_ids]
+        ),
     )
 
 
@@ -36,6 +39,39 @@ def test_merge_turns_preserves_matched_prefix_on_prompt_drift():
     assert segment.prompt_ids == [10]
     assert segment.response_ids == [11, 21, 12, 22, 14]
     assert segment.loss_mask == [1, 0, 1, 0, 1]
+    assert segment.rollout_log_probs == [-0.11, 0.0, -0.12, 0.0, -0.14]
+
+
+@pytest.mark.unit
+def test_merge_turns_masks_whole_output_when_prompt_drift_splits_it():
+    segment = merge_turns(
+        [
+            _turn([10], [11, 12, 13, 14]),
+            _turn([10, 11, 12, 99, 14], [15]),
+        ]
+    )
+
+    assert segment is not None
+    assert segment.prompt_ids == [10]
+    assert segment.response_ids == [11, 12, 99, 14, 15]
+    assert segment.loss_mask == [0, 0, 0, 0, 1]
+    assert segment.rollout_log_probs == [0.0, 0.0, 0.0, 0.0, -0.15]
+
+
+@pytest.mark.unit
+def test_merge_turns_masks_whole_output_when_prompt_drift_changes_token_count():
+    segment = merge_turns(
+        [
+            _turn([10], [11, 12, 13, 14]),
+            _turn([10, 11, 12, 99, 100, 14], [15]),
+        ]
+    )
+
+    assert segment is not None
+    assert segment.prompt_ids == [10]
+    assert segment.response_ids == [11, 12, 99, 100, 14, 15]
+    assert segment.loss_mask == [0, 0, 0, 0, 0, 1]
+    assert segment.rollout_log_probs == [0.0, 0.0, 0.0, 0.0, 0.0, -0.15]
 
 
 if __name__ == "__main__":

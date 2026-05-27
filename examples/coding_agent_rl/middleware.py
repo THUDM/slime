@@ -6,8 +6,7 @@ Each turn:
 * fingerprints the incoming Anthropic conversation against per-session state
   to decide whether it continues the main chain or an active sub-agent chain,
   and whether the request appends to / wipes / restarts that chain;
-* re-renders the chosen chain through the model's chat template, splicing
-  cached raw tokens back in so re-tokenization drift can't corrupt later turns;
+* renders the chosen message chain through the model's chat template;
 * posts to sglang ``/generate`` and records prompt_ids/output_ids as a
   TurnRecord;
 * parses the decoded output back into Anthropic blocks and streams them to
@@ -25,23 +24,22 @@ Read `_handle_request` (§3) top-to-bottom -- that's the online turn:
     _build_prompt      replace/extend chat_messages -> render token ids
     _generate          POST sglang /generate -> TurnRecord
     _build_reply       output_ids -> Anthropic blocks
-    append turn        remember the prompt/output boundary for next-turn splice and later merge
+    append turn        remember the prompt/output boundary for later merge
 
 `pop_session_split()` drains frozen TurnRecords and merges them into training
 segments. The online path serves and records; the pop path linearizes.
 
 `_build_prompt` is itself a thin orchestrator over three helpers:
     _replace_chat_messages / _extend_chat_messages    translate Anthropic blocks -> chat_messages
-    _render_token_ids                                 chat template + raw splice -> input ids
+    _render_token_ids                                 chat template -> input ids
 
 Design notes:
 * `kind` (new/wipe/append) is consumed at the dispatch site:
   `_replace_chat_messages` vs `_extend_chat_messages` is picked at call time.
 * `_render_token_ids` only reads target; the caller owns all state mutation.
-* Raw-splice is template-generic: each generated assistant turn stores the
-  actual prompt ids sent to `/generate`; the next render derives the splice
-  boundary by longest-common-prefix against the placeholder render, not by a
-  hardcoded assistant marker.
+* Loss-mask repair happens in `trajectory.merge_turns`: later prompt tokens are
+  compared with earlier generated tokens, and unmatched historical outputs stop
+  being trainable.
 * `_hash` strips Anthropic `cache_control` keys before hashing so the same
   logical message hashes identically across turns even as cache_control moves.
 * Server lifecycle (binding a port, running the loop, `handler_cancellation`)
@@ -71,10 +69,6 @@ logger = logging.getLogger(__name__)
 
 # Tool names claude-code uses to dispatch a sub-agent.
 _SUBAGENT_TOOLS = {"Task", "Agent"}
-
-# Raw-splice placeholder bracket. \x07 (BEL) keeps BPE boundaries clean.
-_RAW_PH_PREFIX = "\x07RAWSPLICE_"
-_RAW_PH_SUFFIX = "_END\x07"
 
 
 def _strip_cache_control(obj: Any) -> Any:
@@ -110,10 +104,6 @@ class Chain:
 
     # Online turn log. pop_session_split() merges these into training tensors.
     turns: list[TurnRecord] = dataclasses.field(default_factory=list)
-
-    # Raw token bookkeeping for splice rendering
-    asst_raw_tokens: dict[int, TurnRecord] = dataclasses.field(default_factory=dict)
-    pending_turns: list[TurnRecord] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -295,13 +285,11 @@ def _build_tools_schema(anth_tools: list[dict] | None) -> list[dict] | None:
 
 
 def _replace_chat_messages(target: Chain, body: dict) -> None:
-    """new/wipe: full reset of chat state + raw token caches."""
+    """new/wipe: full reset of chat state and turn log."""
     all_msgs = body.get("messages") or []
     target.chat_messages = _translate_anthropic(all_msgs, body.get("system"))
     if "system" in body:
         target.system_hash = _hash(body.get("system"))
-    target.asst_raw_tokens.clear()
-    target.pending_turns.clear()
     target.turns.clear()
     target.seen_msgs = len(all_msgs)
     target.msg_hashes = [_hash(m) for m in all_msgs]
@@ -310,17 +298,10 @@ def _replace_chat_messages(target: Chain, body: dict) -> None:
 
 
 def _extend_chat_messages(target: Chain, body: dict) -> None:
-    """append: translate only the new tail; promote pending raw assistant
-    turns onto target.asst_raw_tokens at the matching assistant indices."""
+    """append: translate only the new tail."""
     all_msgs = body.get("messages") or []
     translated = _translate_anthropic(all_msgs[target.seen_msgs :], None)
-
-    base_idx = len(target.chat_messages)
     target.chat_messages.extend(translated)
-    for offset, m in enumerate(translated):
-        if m.get("role") != "assistant" or not target.pending_turns:
-            continue
-        target.asst_raw_tokens[base_idx + offset] = target.pending_turns.pop(0)
 
     target.seen_msgs = len(all_msgs)
     target.msg_hashes = [_hash(m) for m in all_msgs]
@@ -328,96 +309,25 @@ def _extend_chat_messages(target: Chain, body: dict) -> None:
         target.tools_schema = _build_tools_schema(body.get("tools"))
 
 
-def _common_prefix_len(a: list[int], b: list[int]) -> int:
-    n = min(len(a), len(b))
-    i = 0
-    while i < n and a[i] == b[i]:
-        i += 1
-    return i
-
-
 def _render_token_ids(target: Chain, tok) -> list[int]:
-    """Render target.chat_messages through the chat template. For each
-    historical assistant in target.asst_raw_tokens, splice the original
-    generation prompt suffix + raw output back in so re-tokenization drift
-    can't corrupt later prompts. Pure read of target.
+    """Render the current Claude Code message history into model input ids.
+
+    We intentionally tokenize the messages as-is on every request. If a later
+    prompt no longer token-matches an earlier raw model output, trajectory
+    merging will mask/drop the unmatched history instead of rewriting the
+    online prompt.
     """
-    valid = {i: tup for i, tup in target.asst_raw_tokens.items() if 0 <= i < len(target.chat_messages)}
-
-    if not valid:
-        # Qwen3.x fast tokenizers return a BatchEncoding here, not a list[int];
-        # list(BatchEncoding) yields dict keys (["input_ids", ...]) and poisons
-        # sglang /generate. Unwrap input_ids defensively.
-        enc = tok.apply_chat_template(
-            target.chat_messages,
-            tools=target.tools_schema,
-            tokenize=True,
-            add_generation_prompt=True,
-        )
-        ids = enc["input_ids"] if hasattr(enc, "__getitem__") and "input_ids" in enc else enc
-        return list(ids)
-
-    placeholders: dict[int, str] = {}
-    render_msgs: list[dict] = []
-    for i, m in enumerate(target.chat_messages):
-        if i in valid:
-            ph = f"{_RAW_PH_PREFIX}{i}_{secrets.token_hex(6)}{_RAW_PH_SUFFIX}"
-            placeholders[i] = ph
-            render_msgs.append({"role": "assistant", "content": ph})
-        else:
-            render_msgs.append(m)
-
-    text = tok.apply_chat_template(
-        render_msgs,
+    # Qwen3.x fast tokenizers return a BatchEncoding here, not a list[int];
+    # list(BatchEncoding) yields dict keys (["input_ids", ...]) and poisons
+    # sglang /generate. Unwrap input_ids defensively.
+    enc = tok.apply_chat_template(
+        target.chat_messages,
         tools=target.tools_schema,
-        tokenize=False,
+        tokenize=True,
         add_generation_prompt=True,
     )
-    enc = tok(text, add_special_tokens=False, return_offsets_mapping=True)
-    template_ids = list(enc["input_ids"])
-    offsets = list(enc["offset_mapping"])
-
-    placeholder_ranges: list[tuple[int, int, int]] = []
-    for asst_idx, ph in placeholders.items():
-        char_start = text.find(ph)
-        if char_start < 0:
-            logger.warning("[middleware] raw-splice: placeholder for asst %d not found", asst_idx)
-            continue
-        char_end = char_start + len(ph)
-        tok_start = tok_end = None
-        for j, (cs, ce) in enumerate(offsets):
-            if tok_start is None and ce > char_start:
-                tok_start = j
-            if cs < char_end:
-                tok_end = j + 1
-            elif cs >= char_end:
-                break
-        if tok_start is None or tok_end is None:
-            logger.warning("[middleware] raw-splice: no tokens overlap placeholder for asst %d", asst_idx)
-            continue
-        placeholder_ranges.append((tok_start, tok_end, asst_idx))
-    placeholder_ranges.sort()
-
-    ideal_ids: list[int] = []
-    cursor = 0
-    for tok_start, tok_end, asst_idx in placeholder_ranges:
-        ideal_ids.extend(template_ids[cursor:tok_start])
-        raw = valid[asst_idx]
-        replace_start = _common_prefix_len(ideal_ids, raw.prompt_ids)
-        if replace_start == 0 and ideal_ids and raw.prompt_ids:
-            logger.warning("[middleware] raw-splice: no shared prefix for asst %d", asst_idx)
-
-        # Replace the completed-template assistant body (including any
-        # template-injected pre-content prefix) with the exact suffix of the
-        # original generation prompt plus the exact generated tokens.
-        prompt_suffix = raw.prompt_ids[replace_start:]
-        ideal_ids = ideal_ids[:replace_start]
-        ideal_ids.extend(prompt_suffix)
-        ideal_ids.extend(raw.output_ids)
-        cursor = tok_end
-    ideal_ids.extend(template_ids[cursor:])
-
-    return ideal_ids
+    ids = enc["input_ids"] if hasattr(enc, "__getitem__") and "input_ids" in enc else enc
+    return list(ids)
 
 
 def _build_prompt(target: Chain, body: dict, kind: str, tok) -> list[int]:
@@ -431,8 +341,8 @@ async def _generate(prompt_ids: list[int], s: Session, body: dict, app) -> TurnR
 
     1. build sampling_params (session defaults overlaid with body overrides)
     2. POST sglang /generate; on cancel/error fire /abort_request
-    3. keep the exact output token ids; trajectory merge later validates that
-       later prompts can stitch onto earlier outputs
+    3. keep the exact prompt/output token ids; trajectory merge later compares
+       later prompt tokens with earlier outputs to build the loss mask
     """
     # ---- (a) Build sampling_params --------------------------------------
     sp: dict[str, Any] = {
@@ -488,7 +398,9 @@ async def _generate(prompt_ids: list[int], s: Session, body: dict, app) -> TurnR
                 raise RuntimeError(f"sglang upstream {r.status}: {text[:400]}")
             data = await r.json()
         meta = data.get("meta_info") or {}
-        output_ids = [x[1] for x in (meta.get("output_token_logprobs") or [])]
+        output_token_logprobs = meta.get("output_token_logprobs") or []
+        output_ids = [x[1] for x in output_token_logprobs]
+        output_log_probs = [float(x[0]) for x in output_token_logprobs]
         finish = (meta.get("finish_reason") or {}).get("type", "stop") or "stop"
     except (asyncio.CancelledError, aiohttp.ClientError, asyncio.TimeoutError):
         # Best-effort abort with fresh short-timeout session; swallow errors.
@@ -503,6 +415,7 @@ async def _generate(prompt_ids: list[int], s: Session, body: dict, app) -> TurnR
         prompt_ids=list(prompt_ids),
         output_ids=output_ids,
         finish_reason=finish,
+        output_log_probs=output_log_probs,
     )
 
 
@@ -585,7 +498,6 @@ async def _handle_request(request: web.Request) -> web.StreamResponse:
             turn = await _generate(ideal_ids, s, body, app)
             blocks, stop, did = _build_reply(target, turn.output_ids, turn.finish_reason, app)
             target.turns.append(turn)
-            target.pending_turns.append(turn)
             if did and not is_sub:  # sub doesn't nest
                 _start_sub_chain(s, did)
             in_tok, out_tok = len(ideal_ids), len(turn.output_ids)
@@ -675,7 +587,7 @@ def open_session(
 ) -> None:
     """Register a new session. Fail-fast on duplicate sid: silently sharing
     state would interleave two independent rollouts into one chain and corrupt
-    raw-token bookkeeping. `sampling_defaults` seeds the session's default sglang
+    chain bookkeeping. `sampling_defaults` seeds the session's default sglang
     sampling_params (overlaid by per-request body in `_generate`).
     `max_context_tokens` caps each turn's prompt+response budget and drops
     oversized final segments; 0 disables this guard."""
