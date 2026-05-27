@@ -7,7 +7,7 @@ Wire-up:
 ``generate()`` is intentionally a small four-stage orchestrator:
 
     1. ``sandbox.run_claude_code`` prepares the agent sandbox and runs claude-code.
-    2. ``_get_diff`` captures the model-produced patch.
+    2. ``sandbox.git_diff`` captures the model-produced patch.
     3. ``sandbox.evaluate`` scores that patch in a second clean sandbox.
     4. ``_merge_samples`` combines reward + middleware token segments into
        the ``Sample`` shape slime expects.
@@ -213,10 +213,6 @@ def _start_session(
     return session_id
 
 
-async def _get_diff(sb, md: dict[str, Any]) -> str:
-    return await sandbox.git_diff(sb, md["workdir"])
-
-
 def _pop_segments(state: _State, session_id: str) -> list[Segment]:
     # Drop empty-response segments and apply the optional per-segment response
     # cap in one place. SWE_MAX_RESPONSE_TOKENS=0 disables truncation.
@@ -286,7 +282,7 @@ def _merge_samples(
 # Main per-sample agent function
 #
 # The four calls inside the timeout are the high-level rollout recipe:
-# run_claude_code -> get_diff -> sandbox.evaluate -> merge_samples.
+# run_claude_code -> git_diff -> sandbox.evaluate -> merge_samples.
 # ---------------------------------------------------------------------------
 async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
     """Per-sample agent function with wall-clock guard. See
@@ -312,7 +308,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
                     swepro=md["swepro"],
                     pre_commands=md["pre_commands"],
                 )
-                diff_text = await _get_diff(sb, md)
+                diff_text = await sandbox.git_diff(sb, md["workdir"])
 
             reward, is_solved, applied_cleanly = await sandbox.evaluate(
                 image=md["image"],
