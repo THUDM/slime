@@ -396,7 +396,10 @@ async def _generate(prompt_ids: list[int], s: Session, body: dict, app) -> TurnR
             if r.status >= 400:
                 text = await r.text()
                 raise RuntimeError(f"sglang upstream {r.status}: {text[:400]}")
-            data = await r.json()
+            # SGLang's /generate can return JSON with application/octet-stream
+            # as the Content-Type; aiohttp rejects that unless we disable the
+            # header check.
+            data = await r.json(content_type=None)
         meta = data.get("meta_info") or {}
         output_token_logprobs = meta.get("output_token_logprobs") or []
         output_ids = [x[1] for x in output_token_logprobs]
