@@ -665,6 +665,24 @@ class RolloutManager:
         assert len(raw_rewards) == len(samples)
         assert len(rewards) == len(samples)
 
+        if self.args.advantage_estimator in ["grpo", "gspo"]:
+            keep = [r != 0.0 for r in rewards]
+            total_before = len(keep)
+            num_dropped = total_before - sum(keep)
+            if num_dropped:
+                samples = [s for s, k in zip(samples, keep, strict=True) if k]
+                raw_rewards = [r for r, k in zip(raw_rewards, keep, strict=True) if k]
+                rewards = [r for r, k in zip(rewards, keep, strict=True) if k]
+            logger.info(f"dropped {num_dropped}/{total_before} zero-advantage samples")
+            logging_utils.log(
+                self.args,
+                {
+                    "rollout/dropped_ratio": num_dropped / total_before if total_before else 0.0,
+                    "rollout/step": compute_rollout_step(self.args, self.rollout_id),
+                },
+                step_key="rollout/step",
+            )
+
         train_data = {
             "tokens": [sample.tokens for sample in samples],
             "response_lengths": [sample.response_length for sample in samples],
