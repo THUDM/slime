@@ -16,6 +16,8 @@ import shlex
 import shutil
 import tempfile
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from slime.agent.sandbox import E2BSandbox, Sandbox
@@ -28,10 +30,81 @@ _PATCH = "/workspace/__cagent_patch__.diff"
 _PRE = "/workspace/__cagent_pre__.sh"
 _SWEPRO_DIR = "/workspace/swepro_eval"
 
+SWE_HOST_NODE_TARBALL = Path(
+    os.environ.get(
+        "SWE_HOST_NODE_TARBALL",
+        "/path/to/node-v22.20.0-linux-x64.tar.xz",
+    )
+)
+SWE_HOST_CC_TARBALL = Path(
+    os.environ.get(
+        "SWE_HOST_CC_TARBALL",
+        "/path/to/anthropic-ai-claude-code.tgz",
+    )
+)
+SWE_BOOT_CONCURRENCY = int(os.environ.get("SWE_BOOT_CONCURRENCY", "16"))
+SWE_BOOT_RETRIES = int(os.environ.get("SWE_BOOT_RETRIES", "2"))
+CC_PROMPT = os.environ.get(
+    "SWE_CC_PROMPT",
+    "Read PROBLEM_STATEMENT.md in the current directory and resolve the issue. "
+    "Edit source files only (do NOT touch tests). After editing, run the relevant "
+    "tests to verify your fix passes. Do NOT modify PROBLEM_STATEMENT.md and do "
+    "NOT commit. When finished, print a one-line summary and exit.",
+)
+
+_BOOT_SEM: asyncio.Semaphore | None = None
+
 
 # ---------------------------------------------------------------------------
 # Sandbox bootstrap (Node + Claude Code + agent user)
 # ---------------------------------------------------------------------------
+@asynccontextmanager
+async def boot_agent_sandbox(image: str) -> AsyncIterator[E2BSandbox]:
+    """Boot a fresh E2B sandbox and install the Claude Code toolchain.
+
+    This is the provisioning wrapper for the work sandbox: create the sandbox
+    from the dataset image, install Node 22 + Claude Code CLI from host
+    tarballs, retry transient boot/install failures, and close the sandbox when
+    the caller leaves the context.
+    """
+    global _BOOT_SEM
+    if _BOOT_SEM is None:
+        _BOOT_SEM = asyncio.Semaphore(SWE_BOOT_CONCURRENCY)
+
+    sb = None
+    last_err: Exception | None = None
+    for attempt in range(SWE_BOOT_RETRIES):
+        cand = E2BSandbox(image)
+        try:
+            async with _BOOT_SEM:
+                await cand.__aenter__()
+                try:
+                    await install_node22(cand, SWE_HOST_NODE_TARBALL)
+                    await install_claude_code(cand, SWE_HOST_CC_TARBALL)
+                except BaseException:
+                    await cand.__aexit__(None, None, None)
+                    raise
+            sb = cand
+            break
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                "[coding_agent_rl] provision attempt %d/%d failed: %s: %s",
+                attempt + 1,
+                SWE_BOOT_RETRIES,
+                type(e).__name__,
+                str(e)[:200],
+            )
+            await asyncio.sleep(1 + attempt)
+    if sb is None:
+        assert last_err is not None
+        raise last_err
+    try:
+        yield sb
+    finally:
+        await sb.__aexit__(None, None, None)
+
+
 async def install_node22(sb: Sandbox, host_tarball: Path) -> None:
     """Node 22 over the base image (Debian 12 ships 16; cli.js needs >= 20).
     Decompresses .xz on the host (cached) so sandboxes without xz-utils can
@@ -101,9 +174,42 @@ async def apply_before_repo_set_cmd(sb: Sandbox, workdir: str, swepro: dict) -> 
 
 
 # ---------------------------------------------------------------------------
-# Agent run (claude-code spawn + done-marker poll)
+# Agent run (workspace prep + claude-code spawn + done-marker poll)
 # ---------------------------------------------------------------------------
 async def run_claude_code(
+    sb: Sandbox,
+    *,
+    workdir: str,
+    session_id: str,
+    middleware_url: str,
+    time_budget_sec: int,
+    problem_statement: str = "",
+    swepro: dict | None = None,
+    pre_commands: list[str] | str | None = None,
+    prompt: str | None = None,
+) -> int:
+    """Prepare the SWE workspace, write PROBLEM_STATEMENT.md, then run CC."""
+    await ensure_agent_user(sb, workdir)
+    if swepro:
+        await apply_before_repo_set_cmd(sb, workdir, swepro)
+    if pre_commands:
+        await apply_pre_commands(sb, workdir, pre_commands)
+    await sb.write_file(
+        f"{workdir}/PROBLEM_STATEMENT.md",
+        problem_statement or "",
+        user="agent",
+    )
+    return await _spawn_claude_code(
+        sb,
+        workdir=workdir,
+        session_id=session_id,
+        middleware_url=middleware_url,
+        prompt=prompt or CC_PROMPT,
+        time_budget_sec=time_budget_sec,
+    )
+
+
+async def _spawn_claude_code(
     sb: Sandbox,
     *,
     workdir: str,

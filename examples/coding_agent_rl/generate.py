@@ -6,7 +6,7 @@ Wire-up:
 
 ``generate()`` is intentionally a small four-stage orchestrator:
 
-    1. ``_run_claude_code`` prepares the agent sandbox and runs claude-code.
+    1. ``sandbox.run_claude_code`` prepares the agent sandbox and runs claude-code.
     2. ``_get_diff`` captures the model-produced patch.
     3. ``sandbox.evaluate`` scores that patch in a second clean sandbox.
     4. ``_merge_samples`` combines reward + middleware token segments into
@@ -53,13 +53,9 @@ import os
 import secrets
 import time
 import traceback
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
-from slime.agent.sandbox import E2BSandbox
 from slime.utils.misc import SingletonMeta
 from slime.utils.processing_utils import load_tokenizer
 from slime.utils.types import Sample
@@ -70,18 +66,6 @@ from .aiohttp_threaded import run_app_in_thread
 logger = logging.getLogger(__name__)
 
 
-SWE_HOST_NODE_TARBALL = Path(
-    os.environ.get(
-        "SWE_HOST_NODE_TARBALL",
-        "/path/to/node-v22.20.0-linux-x64.tar.xz",
-    )
-)
-SWE_HOST_CC_TARBALL = Path(
-    os.environ.get(
-        "SWE_HOST_CC_TARBALL",
-        "/path/to/anthropic-ai-claude-code.tgz",
-    )
-)
 SWE_TIME_BUDGET_SEC = int(os.environ.get("SWE_TIME_BUDGET_SEC", "1800"))
 SWE_EVAL_TIMEOUT_SEC = int(os.environ.get("SWE_EVAL_TIMEOUT_SEC", "600"))
 # Wall-clock guard for the entire generate() call. Defaults to
@@ -98,18 +82,6 @@ SWE_TOOL_PARSER = os.environ.get("SWE_TOOL_PARSER", "") or None
 SWE_REASONING_PARSER = os.environ.get("SWE_REASONING_PARSER", "") or None
 SHIM_BIND_HOST = os.environ.get("SHIM_BIND_HOST", "0.0.0.0")
 SHIM_PORT = int(os.environ.get("SHIM_PORT", "18001"))
-
-SWE_BOOT_CONCURRENCY = int(os.environ.get("SWE_BOOT_CONCURRENCY", "16"))
-SWE_BOOT_RETRIES = int(os.environ.get("SWE_BOOT_RETRIES", "2"))
-_BOOT_SEM: asyncio.Semaphore | None = None
-
-CC_PROMPT = os.environ.get(
-    "SWE_CC_PROMPT",
-    "Read PROBLEM_STATEMENT.md in the current directory and resolve the issue. "
-    "Edit source files only (do NOT touch tests). After editing, run the relevant "
-    "tests to verify your fix passes. Do NOT modify PROBLEM_STATEMENT.md and do "
-    "NOT commit. When finished, print a one-line summary and exit.",
-)
 
 
 # ---------------------------------------------------------------------------
@@ -151,49 +123,6 @@ class _State(metaclass=SingletonMeta):
             args.hf_checkpoint,
             self.middleware_url,
         )
-
-
-# ---------------------------------------------------------------------------
-# Sandbox boot + agent toolchain install
-# ---------------------------------------------------------------------------
-@asynccontextmanager
-async def _boot_agent_sandbox(image: str):
-    global _BOOT_SEM
-    if _BOOT_SEM is None:
-        _BOOT_SEM = asyncio.Semaphore(SWE_BOOT_CONCURRENCY)
-
-    sb = None
-    last_err: Exception | None = None
-    for attempt in range(SWE_BOOT_RETRIES):
-        cand = E2BSandbox(image)
-        try:
-            async with _BOOT_SEM:
-                await cand.__aenter__()
-                try:
-                    await sandbox.install_node22(cand, SWE_HOST_NODE_TARBALL)
-                    await sandbox.install_claude_code(cand, SWE_HOST_CC_TARBALL)
-                except BaseException:
-                    await cand.__aexit__(None, None, None)
-                    raise
-            sb = cand
-            break
-        except Exception as e:
-            last_err = e
-            logger.warning(
-                "[coding_agent_rl] provision attempt %d/%d failed: %s: %s",
-                attempt + 1,
-                SWE_BOOT_RETRIES,
-                type(e).__name__,
-                str(e)[:200],
-            )
-            await asyncio.sleep(1 + attempt)
-    if sb is None:
-        assert last_err is not None
-        raise last_err
-    try:
-        yield sb
-    finally:
-        await sb.__aexit__(None, None, None)
 
 
 # ---------------------------------------------------------------------------
@@ -284,37 +213,7 @@ def _start_session(
     return session_id
 
 
-@asynccontextmanager
-async def _run_claude_code(
-    md: dict[str, Any],
-    *,
-    session_id: str,
-    middleware_url: str,
-) -> AsyncIterator[E2BSandbox]:
-    """Run claude-code and yield the live sandbox for post-run diff capture."""
-    async with _boot_agent_sandbox(md["image"]) as sb:
-        await sandbox.ensure_agent_user(sb, md["workdir"])
-        if md["swepro"]:
-            await sandbox.apply_before_repo_set_cmd(sb, md["workdir"], md["swepro"])
-        if md["pre_commands"]:
-            await sandbox.apply_pre_commands(sb, md["workdir"], md["pre_commands"])
-        await sb.write_file(
-            f"{md['workdir']}/PROBLEM_STATEMENT.md",
-            md["problem_statement"] or "",
-            user="agent",
-        )
-        await sandbox.run_claude_code(
-            sb,
-            workdir=md["workdir"],
-            session_id=session_id,
-            middleware_url=middleware_url,
-            prompt=CC_PROMPT,
-            time_budget_sec=SWE_TIME_BUDGET_SEC,
-        )
-        yield sb
-
-
-async def _get_diff(sb: E2BSandbox, md: dict[str, Any]) -> str:
+async def _get_diff(sb, md: dict[str, Any]) -> str:
     return await sandbox.git_diff(sb, md["workdir"])
 
 
@@ -402,11 +301,17 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
     t0 = time.time()
     try:
         async with asyncio.timeout(SWE_GENERATE_GUARD_SEC):
-            async with _run_claude_code(
-                md,
-                session_id=session_id,
-                middleware_url=state.middleware_url,
-            ) as sb:
+            async with sandbox.boot_agent_sandbox(md["image"]) as sb:
+                await sandbox.run_claude_code(
+                    sb,
+                    workdir=md["workdir"],
+                    session_id=session_id,
+                    middleware_url=state.middleware_url,
+                    time_budget_sec=SWE_TIME_BUDGET_SEC,
+                    problem_statement=md["problem_statement"],
+                    swepro=md["swepro"],
+                    pre_commands=md["pre_commands"],
+                )
                 diff_text = await _get_diff(sb, md)
 
             reward, is_solved, applied_cleanly = await sandbox.evaluate(
