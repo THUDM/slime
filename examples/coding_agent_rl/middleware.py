@@ -9,8 +9,7 @@ Each turn:
 * re-renders the chosen chain through the model's chat template, splicing
   cached raw tokens back in so re-tokenization drift can't corrupt later turns;
 * posts to sglang ``/generate`` and records prompt_ids/output_ids as a
-  TurnRecord, with per-turn TITO (decode -> encode round-trip) deciding the
-  output loss mask;
+  TurnRecord;
 * parses the decoded output back into Anthropic blocks and streams them to
   claude-code as a Messages SSE response.
 
@@ -65,7 +64,7 @@ import aiohttp
 from aiohttp import web
 
 from slime.agent.parsing import parse_model_output
-from slime.agent.trajectory import TokenSegment, TurnRecord, merge_turns
+from slime.agent.trajectory import TokenSegment, TurnRecord, TurnSegment, make_turn_segment, merge_turn_segments
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +124,7 @@ class Session:
     sampling_defaults: dict = dataclasses.field(default_factory=dict)
     max_context_tokens: int = 0
     lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
-    segments: list[tuple] = dataclasses.field(default_factory=list)  # frozen output
+    segments: list[TurnSegment] = dataclasses.field(default_factory=list)  # frozen output
 
 
 _Store = dict[str, Session]
@@ -135,16 +134,6 @@ _Store = dict[str, Session]
 # pop_session_split; _closed is a permanent tombstone (late requests 503).
 _inflight: dict[str, set[asyncio.Task]] = {}
 _closed: set[str] = set()
-
-
-def _make_segment(chain: Chain, kind: str) -> tuple:
-    """Freeze a chain's turn log for later training-sample merge."""
-    turns = list(chain.turns)
-    return (
-        kind,
-        turns,
-        {"segment_kind": kind, "finish_reason": turns[-1].finish_reason if turns else ""},
-    )
 
 
 # =============================================================================
@@ -183,7 +172,7 @@ def _select_chain(s: Session, body: dict) -> tuple[Chain, bool, str]:
             )
             if done:
                 if s.active_sub.turns:
-                    s.segments.append(_make_segment(s.active_sub, "subagent"))
+                    s.segments.append(make_turn_segment(s.active_sub.turns, kind="subagent"))
                 s.active_sub = None
                 s.pending_dispatch_id = ""
                 break
@@ -213,7 +202,7 @@ def _select_chain(s: Session, body: dict) -> tuple[Chain, bool, str]:
             kind = "append"
         else:
             if target.turns:
-                s.segments.append(_make_segment(target, "wipe"))
+                s.segments.append(make_turn_segment(target.turns, kind="wipe"))
             kind = "wipe"
 
     return target, is_sub, kind
@@ -431,22 +420,6 @@ def _render_token_ids(target: Chain, tok) -> list[int]:
     return ideal_ids
 
 
-def verify_tito_for_turn(tok, decoded_text: str, output_ids: list[int]) -> bool:
-    """Per-turn TITO (tokenize-in tokenize-out): tokenizing ``decoded_text``
-    must yield ``output_ids`` byte-identical. False means the tokenizer can't
-    round-trip these bytes -- caller should zero the loss_mask tail rather
-    than train on phantom tokens.
-
-    Module-level so tests can monkeypatch it; pure predicate, no logging or
-    state mutation."""
-    if not output_ids:
-        return True
-    retok = tok.encode(decoded_text, add_special_tokens=False)
-    if hasattr(retok, "ids"):
-        retok = list(retok.ids)
-    return list(retok) == list(output_ids)
-
-
 def _build_prompt(target: Chain, body: dict, kind: str, tok) -> list[int]:
     """Replace/extend chat_messages and render input ids for sglang."""
     (_extend_chat_messages if kind == "append" else _replace_chat_messages)(target, body)
@@ -458,8 +431,8 @@ async def _generate(prompt_ids: list[int], s: Session, body: dict, app) -> TurnR
 
     1. build sampling_params (session defaults overlaid with body overrides)
     2. POST sglang /generate; on cancel/error fire /abort_request
-    3. per-turn TITO: decode(output_ids) re-encoded must equal output_ids;
-       on mismatch zero out the loss_mask tail for this turn
+    3. keep the exact output token ids; trajectory merge later validates that
+       later prompts can stitch onto earlier outputs
     """
     # ---- (a) Build sampling_params --------------------------------------
     sp: dict[str, Any] = {
@@ -527,19 +500,10 @@ async def _generate(prompt_ids: list[int], s: Session, body: dict, app) -> TurnR
             pass
         raise
 
-    # ---- (c) Per-turn TITO ----------------------------------------------
-    output_loss_mask = [1] * len(output_ids)
-    if output_ids:
-        tok = app["tokenizer"]
-        raw = tok.decode(output_ids, skip_special_tokens=False)
-        if not verify_tito_for_turn(tok, raw, output_ids):
-            output_loss_mask = [0] * len(output_ids)
-            logger.warning("[middleware] TITO mismatch; loss_mask zeroed (n=%d)", len(output_ids))
-
     return TurnRecord(
         prompt_ids=list(prompt_ids),
         output_ids=output_ids,
-        output_loss_mask=output_loss_mask,
+        output_loss_mask=[1] * len(output_ids),
         finish_reason=finish,
     )
 
@@ -556,7 +520,6 @@ def _build_reply(target: Chain, output_ids: list[int], finish: str, app) -> tupl
     """
     tok = app["tokenizer"]
 
-    # Per-turn TITO already verified inside _generate.
     raw_output = tok.decode(output_ids, skip_special_tokens=False) if output_ids else ""
     parsed = parse_model_output(
         raw_output,
@@ -722,7 +685,7 @@ def open_session(
 ) -> None:
     """Register a new session. Fail-fast on duplicate sid: silently sharing
     state would interleave two independent rollouts into one chain and corrupt
-    TITO bookkeeping. `sampling_defaults` seeds the session's default sglang
+    raw-token bookkeeping. `sampling_defaults` seeds the session's default sglang
     sampling_params (overlaid by per-request body in `_generate`).
     `max_context_tokens` caps each turn's prompt+response budget and drops
     oversized final segments; 0 disables this guard."""
@@ -741,20 +704,11 @@ def pop_session_split(store: _Store, sid: str) -> list[TokenSegment]:
     if s is None:
         return []
     if s.active_sub is not None and s.active_sub.turns:
-        s.segments.append(_make_segment(s.active_sub, "subagent"))
+        s.segments.append(make_turn_segment(s.active_sub.turns, kind="subagent"))
     if s.main.turns:
-        s.segments.append(_make_segment(s.main, "final"))
+        s.segments.append(make_turn_segment(s.main.turns, kind="final"))
 
-    out: list[TokenSegment] = []
-    max_context_tokens = s.max_context_tokens
-    for _kind, turns, meta in s.segments:
-        segment = merge_turns(turns, metadata=meta)
-        if segment is None:
-            continue
-        total_tokens = len(segment.prompt_ids) + len(segment.response_ids)
-        if segment.response_ids and (max_context_tokens <= 0 or total_tokens <= max_context_tokens):
-            out.append(segment)
-    return out
+    return merge_turn_segments(s.segments, max_context_tokens=s.max_context_tokens)
 
 
 async def shutdown_session(sid: str, *, wait_timeout: float = 5.0) -> None:
