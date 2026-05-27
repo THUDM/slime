@@ -107,12 +107,16 @@ All set in the launcher; tune per cluster.
 | `SWE_TIME_BUDGET_SEC` | `1800` | Wallclock budget for one agent run. |
 | `SWE_EVAL_TIMEOUT_SEC` | `600` | Wallclock cap on the evaluator sandbox. |
 | `SWE_BOOT_CONCURRENCY` | `6` | Cap on simultaneous sandbox boots (eases h2/SSL long-tail). |
-| `SWE_MAX_RESPONSE_TOKENS` | `32768` | Per-segment response cap. Total trajectory can reach `K * SWE_MAX_RESPONSE_TOKENS`. |
-| `SWE_MAX_SEGMENT_TOKENS` | `MAX_CONTEXT_LEN` | Drop any segment whose `prompt+response` exceeds the trainer's DP budget. |
-| `SWE_SAVE_TRAJECTORY_TREE` | `1` | Persist tree metadata so sub-agent fan-out shows up in the trace viewer. |
-| `SWE_TOOL_PARSER` / `SWE_REASONING_PARSER` | `qwen3_coder` / `qwen3` | Must match the parsers loaded by SGLang. |
 | `SWE_CLAUDE_EXTRA_ARGS` | (see launcher) | Extra flags appended to the `claude` CLI invocation — registers the read-only `investigator` sub-agent, disables `WebFetch`/`WebSearch`, disables slash commands. |
 | `SWE_CC_PROMPT` | unset | Optional override for the user-turn prompt. Setting this to require sub-agent dispatch is the most reliable way to maximize fan-out. |
+
+`--rollout-max-response-len` is the per-turn generation cap passed to each
+SGLang `/generate` call as `max_new_tokens`. `--rollout-max-context-len` is the
+multi-turn prompt+response budget: each turn clamps `max_new_tokens` to the
+remaining context, and oversized emitted segments are dropped before training.
+The middleware reuses `--sglang-tool-call-parser` and
+`--sglang-reasoning-parser` for output parsing, so those flags must match the
+served model.
 
 ## Fan-out Semantics
 

@@ -590,22 +590,6 @@ bash<span class="w"> </span>examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nod
 <td><p><code class="docutils literal notranslate"><span class="pre">6</span></code></p></td>
 <td><p>Cap on simultaneous sandbox boots (eases h2/SSL long-tail).</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_MAX_RESPONSE_TOKENS</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">32768</span></code></p></td>
-<td><p>Per-segment response cap. Total trajectory can reach <code class="docutils literal notranslate"><span class="pre">K</span> <span class="pre">*</span> <span class="pre">SWE_MAX_RESPONSE_TOKENS</span></code>.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_MAX_SEGMENT_TOKENS</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">MAX_CONTEXT_LEN</span></code></p></td>
-<td><p>Drop any segment whose <code class="docutils literal notranslate"><span class="pre">prompt+response</span></code> exceeds the trainer’s DP budget.</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_SAVE_TRAJECTORY_TREE</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
-<td><p>Persist tree metadata so sub-agent fan-out shows up in the trace viewer.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_TOOL_PARSER</span></code> / <code class="docutils literal notranslate"><span class="pre">SWE_REASONING_PARSER</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">qwen3_coder</span></code> / <code class="docutils literal notranslate"><span class="pre">qwen3</span></code></p></td>
-<td><p>Must match the parsers loaded by SGLang.</p></td>
-</tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_CLAUDE_EXTRA_ARGS</span></code></p></td>
 <td><p>(see launcher)</p></td>
 <td><p>Extra flags appended to the <code class="docutils literal notranslate"><span class="pre">claude</span></code> CLI invocation — registers the read-only <code class="docutils literal notranslate"><span class="pre">investigator</span></code> sub-agent, disables <code class="docutils literal notranslate"><span class="pre">WebFetch</span></code>/<code class="docutils literal notranslate"><span class="pre">WebSearch</span></code>, disables slash commands.</p></td>
@@ -617,6 +601,13 @@ bash<span class="w"> </span>examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nod
 </tbody>
 </table>
 </div>
+<p><code class="docutils literal notranslate"><span class="pre">--rollout-max-response-len</span></code> is the per-turn generation cap passed to each
+SGLang <code class="docutils literal notranslate"><span class="pre">/generate</span></code> call as <code class="docutils literal notranslate"><span class="pre">max_new_tokens</span></code>. <code class="docutils literal notranslate"><span class="pre">--rollout-max-context-len</span></code> is the
+multi-turn prompt+response budget: each turn clamps <code class="docutils literal notranslate"><span class="pre">max_new_tokens</span></code> to the
+remaining context, and oversized emitted segments are dropped before training.
+The middleware reuses <code class="docutils literal notranslate"><span class="pre">--sglang-tool-call-parser</span></code> and
+<code class="docutils literal notranslate"><span class="pre">--sglang-reasoning-parser</span></code> for output parsing, so those flags must match the
+served model.</p>
 </section>
 <section id="fan-out-semantics">
 <h2>Fan-out Semantics<a class="headerlink" href="#fan-out-semantics" title="Link to this heading">#</a></h2>
