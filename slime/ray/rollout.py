@@ -665,6 +665,16 @@ class RolloutManager:
         assert len(raw_rewards) == len(samples)
         assert len(rewards) == len(samples)
 
+        # Rollout id (one per rollout execution). Default rollouts emit one
+        # sample per rollout, so we fall back to ``sample.index`` (unique).
+        # Compact / subagent paths that emit multiple training samples per
+        # rollout set ``rollout_id`` explicitly so all siblings share a
+        # value; the loss reducer then aggregates them as one rollout.
+        if samples[0].rollout_id is None:
+            rollout_ids = list(range(len(samples)))
+        else:
+            rollout_ids = [sample.rollout_id for sample in samples]
+
         train_data = {
             "tokens": [sample.tokens for sample in samples],
             "response_lengths": [sample.response_length for sample in samples],
@@ -674,12 +684,7 @@ class RolloutManager:
             "raw_reward": raw_rewards,
             "truncated": [1 if sample.status == Sample.Status.TRUNCATED else 0 for sample in samples],
             "sample_indices": [sample.index for sample in samples],
-            # Rollout id (one per rollout execution). Default rollouts emit one
-            # sample per rollout, so we fall back to ``sample.index`` (unique).
-            # Compact / subagent paths that emit multiple training samples per
-            # rollout set ``rollout_id`` explicitly so all siblings share a
-            # value; the loss reducer then aggregates them as one rollout.
-            "rollout_ids": [s.rollout_id if s.rollout_id is not None else s.index for s in samples],
+            "rollout_ids": rollout_ids,
         }
 
         # loss mask
