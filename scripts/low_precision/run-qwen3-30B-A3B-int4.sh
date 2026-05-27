@@ -12,7 +12,7 @@ pkill -9 python
 
 set -ex
 
-# will prevent ray from buffering stdout/stderrs
+# will prevent ray from buffering stdout/stderr
 export PYTHONUNBUFFERED=1
 
 NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
