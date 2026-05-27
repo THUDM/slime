@@ -7,10 +7,10 @@ Each turn:
   to decide whether it continues the main chain or an active sub-agent chain,
   and whether the request appends to / wipes / restarts that chain;
 * re-renders the chosen chain through the model's chat template, splicing
-  cached raw tokens back in so re-tokenization drift can't corrupt loss_mask;
-* posts to sglang ``/generate``, commits output_ids onto the chain's
-  response_ids/loss_mask, and verifies per-turn TITO (decode -> encode
-  round-trip);
+  cached raw tokens back in so re-tokenization drift can't corrupt later turns;
+* posts to sglang ``/generate`` and records prompt_ids/output_ids as a
+  TurnRecord, with per-turn TITO (decode -> encode round-trip) deciding the
+  output loss mask;
 * parses the decoded output back into Anthropic blocks and streams them to
   claude-code as a Messages SSE response.
 
@@ -20,23 +20,28 @@ Public surface:
     pop_session_split(store, sid)    drain a session's trajectory for training
     Chain, Session                   dataclasses (exposed for type hints)
 
-Read `_handle_request` (§3) top-to-bottom -- that's the whole turn:
+Read `_handle_request` (§3) top-to-bottom -- that's the online turn:
     _select_chain      pick main vs active sub; snapshot wipe/sub-done into segments
-    _build_prompt      replace/extend chat_messages -> render token ids -> update prompt+mask
-    _generate          POST sglang /generate, commit output, per-turn TITO
-    _build_reply       output_ids -> Anthropic blocks, queue pending raw tokens
+    _build_prompt      replace/extend chat_messages -> render token ids
+    _generate          POST sglang /generate -> TurnRecord
+    _build_reply       output_ids -> Anthropic blocks
+    _record_turn       remember the prompt/output boundary for next-turn splice and later merge
+
+`pop_session_split()` drains frozen TurnRecords and merges them into training
+segments. The online path serves and records; the pop path linearizes.
 
 `_build_prompt` is itself a thin orchestrator over three helpers:
     _replace_chat_messages / _extend_chat_messages    translate Anthropic blocks -> chat_messages
-    _render_token_ids                                 chat template + raw splice -> (ideal_ids, raw_ranges)
-    _update_prompt_and_mask                           update prompt_ids / response_ids / loss_mask
+    _render_token_ids                                 chat template + raw splice -> input ids
 
 Design notes:
-* `kind` (new/wipe/append) is consumed at the dispatch sites:
-  `_replace_chat_messages` vs `_extend_chat_messages` is picked at call time,
-  and `_update_prompt_and_mask` only branches on append vs full. Nothing
-  else sees `kind`.
+* `kind` (new/wipe/append) is consumed at the dispatch site:
+  `_replace_chat_messages` vs `_extend_chat_messages` is picked at call time.
 * `_render_token_ids` only reads target; the caller owns all state mutation.
+* Raw-splice is template-generic: each generated assistant turn stores the
+  actual prompt ids sent to `/generate`; the next render derives the splice
+  boundary by longest-common-prefix against the placeholder render, not by a
+  hardcoded assistant marker.
 * `_hash` strips Anthropic `cache_control` keys before hashing so the same
   logical message hashes identically across turns even as cache_control moves.
 * Server lifecycle (binding a port, running the loop, `handler_cancellation`)
@@ -51,8 +56,6 @@ import dataclasses
 import hashlib
 import json
 import logging
-import os
-import re
 import secrets
 import uuid
 from typing import Any
@@ -60,24 +63,14 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
+from slime.agent.parsing import parse_model_output
+from slime.agent.trajectory import TokenSegment, TurnRecord, merge_turns
 
 logger = logging.getLogger(__name__)
 
 
-# Per-segment hard cap on prompt+response token count. Drops any segment over
-# this -- claude-code auto-compact estimates in its own tokenizer space, so a
-# 100k autoCompactWindow can produce 130k+ Qwen-tokenized segments after
-# sub-agent dispatch reads large files. Such segments OOM fused CE on
-# actor_train. 0 disables the cap.
-_MAX_SEGMENT_TOKENS = int(os.environ.get("SWE_MAX_SEGMENT_TOKENS", "96000") or 0)
-
 # Tool names claude-code uses to dispatch a sub-agent.
 _SUBAGENT_TOOLS = {"Task", "Agent"}
-
-# Qwen3 reasoning chat template auto-injects this before any completed
-# assistant `content` that has no `reasoning_content` entry. The raw-splice
-# renderer must swallow it so spliced output isn't doubled.
-_EMPTY_THINK_STUB_TEXT = "<think>\n\n</think>\n\n"
 
 # Raw-splice placeholder bracket. \x07 (BEL) keeps BPE boundaries clean.
 _RAW_PH_PREFIX = "\x07RAWSPLICE_"
@@ -104,9 +97,6 @@ def _hash(obj: Any) -> str:
 # 1. Data structures
 # =============================================================================
 
-# Raw token slice: (full_tokens_including_template_gen_prefix, gen_prefix_len)
-_RawSlice = tuple[list[int], int]
-
 
 @dataclasses.dataclass
 class Chain:
@@ -118,16 +108,12 @@ class Chain:
     seen_msgs: int = 0
     msg_hashes: list[str] = dataclasses.field(default_factory=list)
 
-    # Token-level state (the actual training target)
-    prompt_ids: list[int] = dataclasses.field(default_factory=list)
-    response_ids: list[int] = dataclasses.field(default_factory=list)
-    loss_mask: list[int] = dataclasses.field(default_factory=list)
+    # Online turn log. pop_session_split() merges these into training tensors.
+    turns: list[TurnRecord] = dataclasses.field(default_factory=list)
 
     # Raw token bookkeeping for splice rendering
-    asst_raw_tokens: dict[int, _RawSlice] = dataclasses.field(default_factory=dict)
-    pending_raw_tokens: list[_RawSlice] = dataclasses.field(default_factory=list)
-
-    last_finish_reason: str = ""
+    asst_raw_tokens: dict[int, TurnRecord] = dataclasses.field(default_factory=dict)
+    pending_turns: list[TurnRecord] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -136,6 +122,7 @@ class Session:
     active_sub: Chain | None = None  # at most one sub-agent at a time
     pending_dispatch_id: str = ""  # tool_use_id we're waiting to close
     sampling_defaults: dict = dataclasses.field(default_factory=dict)
+    max_context_tokens: int = 0
     lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
     segments: list[tuple] = dataclasses.field(default_factory=list)  # frozen output
 
@@ -144,14 +131,12 @@ _Store = dict[str, Session]
 
 
 def _make_segment(chain: Chain, kind: str) -> tuple:
-    """Snapshot the chain's current token state into a segment tuple
-    (kind, prompt_ids, response_ids, loss_mask, meta) for the train loop."""
+    """Freeze a chain's turn log for later training-sample merge."""
+    turns = list(chain.turns)
     return (
         kind,
-        list(chain.prompt_ids),
-        list(chain.response_ids),
-        list(chain.loss_mask),
-        {"segment_kind": kind, "finish_reason": chain.last_finish_reason},
+        turns,
+        {"segment_kind": kind, "finish_reason": turns[-1].finish_reason if turns else ""},
     )
 
 
@@ -190,7 +175,8 @@ def _select_chain(s: Session, body: dict) -> tuple[Chain, bool, str]:
                 for b in content
             )
             if done:
-                s.segments.append(_make_segment(s.active_sub, "subagent"))
+                if s.active_sub.turns:
+                    s.segments.append(_make_segment(s.active_sub, "subagent"))
                 s.active_sub = None
                 s.pending_dispatch_id = ""
                 break
@@ -219,7 +205,7 @@ def _select_chain(s: Session, body: dict) -> tuple[Chain, bool, str]:
         if is_append:
             kind = "append"
         else:
-            if target.response_ids:
+            if target.turns:
                 s.segments.append(_make_segment(target, "wipe"))
             kind = "wipe"
 
@@ -319,7 +305,8 @@ def _replace_chat_messages(target: Chain, body: dict) -> None:
     if "system" in body:
         target.system_hash = _hash(body.get("system"))
     target.asst_raw_tokens.clear()
-    target.pending_raw_tokens.clear()
+    target.pending_turns.clear()
+    target.turns.clear()
     target.seen_msgs = len(all_msgs)
     target.msg_hashes = [_hash(m) for m in all_msgs]
     if target.tools_schema is None:
@@ -327,17 +314,17 @@ def _replace_chat_messages(target: Chain, body: dict) -> None:
 
 
 def _extend_chat_messages(target: Chain, body: dict) -> None:
-    """append: translate only the new tail; promote each pending raw-token
-    slice onto target.asst_raw_tokens at the matching assistant index."""
+    """append: translate only the new tail; promote pending raw assistant
+    turns onto target.asst_raw_tokens at the matching assistant indices."""
     all_msgs = body.get("messages") or []
     translated = _translate_anthropic(all_msgs[target.seen_msgs :], None)
 
     base_idx = len(target.chat_messages)
     target.chat_messages.extend(translated)
     for offset, m in enumerate(translated):
-        if m.get("role") != "assistant" or not target.pending_raw_tokens:
+        if m.get("role") != "assistant" or not target.pending_turns:
             continue
-        target.asst_raw_tokens[base_idx + offset] = target.pending_raw_tokens.pop(0)
+        target.asst_raw_tokens[base_idx + offset] = target.pending_turns.pop(0)
 
     target.seen_msgs = len(all_msgs)
     target.msg_hashes = [_hash(m) for m in all_msgs]
@@ -345,16 +332,21 @@ def _extend_chat_messages(target: Chain, body: dict) -> None:
         target.tools_schema = _build_tools_schema(body.get("tools"))
 
 
-def _render_token_ids(target: Chain, tok) -> tuple[list[int], list[tuple[int, int, int]]]:
-    """Render target.chat_messages through the chat template. For each
-    historical assistant in target.asst_raw_tokens, splice the cached raw
-    token slice back in so re-tokenization drift can't corrupt loss_mask.
+def _common_prefix_len(a: list[int], b: list[int]) -> int:
+    n = min(len(a), len(b))
+    i = 0
+    while i < n and a[i] == b[i]:
+        i += 1
+    return i
 
-    Pure read of target. Returns (ideal_ids, raw_ranges) where each raw_range
-    is (splice_start, gen_start, splice_end) in ideal_ids space.
+
+def _render_token_ids(target: Chain, tok) -> list[int]:
+    """Render target.chat_messages through the chat template. For each
+    historical assistant in target.asst_raw_tokens, splice the original
+    generation prompt suffix + raw output back in so re-tokenization drift
+    can't corrupt later prompts. Pure read of target.
     """
     valid = {i: tup for i, tup in target.asst_raw_tokens.items() if 0 <= i < len(target.chat_messages)}
-    raw_ranges: list[tuple[int, int, int]] = []
 
     if not valid:
         # Qwen3.x fast tokenizers return a BatchEncoding here, not a list[int];
@@ -367,7 +359,7 @@ def _render_token_ids(target: Chain, tok) -> tuple[list[int], list[tuple[int, in
             add_generation_prompt=True,
         )
         ids = enc["input_ids"] if hasattr(enc, "__getitem__") and "input_ids" in enc else enc
-        return list(ids), raw_ranges
+        return list(ids)
 
     placeholders: dict[int, str] = {}
     render_msgs: list[dict] = []
@@ -389,9 +381,6 @@ def _render_token_ids(target: Chain, tok) -> tuple[list[int], list[tuple[int, in
     template_ids = list(enc["input_ids"])
     offsets = list(enc["offset_mapping"])
 
-    stub_ids = tok.encode(_EMPTY_THINK_STUB_TEXT, add_special_tokens=False)
-    stub_ids = list(stub_ids.ids) if hasattr(stub_ids, "ids") else list(stub_ids)
-
     placeholder_ranges: list[tuple[int, int, int]] = []
     for asst_idx, ph in placeholders.items():
         char_start = text.find(ph)
@@ -410,10 +399,6 @@ def _render_token_ids(target: Chain, tok) -> tuple[list[int], list[tuple[int, in
         if tok_start is None or tok_end is None:
             logger.warning("[middleware] raw-splice: no tokens overlap placeholder for asst %d", asst_idx)
             continue
-        # Roll back over the empty-think stub if the template injected one.
-        n_stub = len(stub_ids)
-        if n_stub and tok_start >= n_stub and template_ids[tok_start - n_stub : tok_start] == stub_ids:
-            tok_start -= n_stub
         placeholder_ranges.append((tok_start, tok_end, asst_idx))
     placeholder_ranges.sort()
 
@@ -421,15 +406,22 @@ def _render_token_ids(target: Chain, tok) -> tuple[list[int], list[tuple[int, in
     cursor = 0
     for tok_start, tok_end, asst_idx in placeholder_ranges:
         ideal_ids.extend(template_ids[cursor:tok_start])
-        rs = len(ideal_ids)
-        full_raw, gen_off = valid[asst_idx]
-        ideal_ids.extend(full_raw)
-        re_ = len(ideal_ids)
-        raw_ranges.append((rs, rs + gen_off, re_))
+        raw = valid[asst_idx]
+        replace_start = _common_prefix_len(ideal_ids, raw.prompt_ids)
+        if replace_start == 0 and ideal_ids and raw.prompt_ids:
+            logger.warning("[middleware] raw-splice: no shared prefix for asst %d", asst_idx)
+
+        # Replace the completed-template assistant body (including any
+        # template-injected pre-content prefix) with the exact suffix of the
+        # original generation prompt plus the exact generated tokens.
+        prompt_suffix = raw.prompt_ids[replace_start:]
+        ideal_ids = ideal_ids[:replace_start]
+        ideal_ids.extend(prompt_suffix)
+        ideal_ids.extend(raw.output_ids)
         cursor = tok_end
     ideal_ids.extend(template_ids[cursor:])
 
-    return ideal_ids, raw_ranges
+    return ideal_ids
 
 
 def verify_tito_for_turn(tok, decoded_text: str, output_ids: list[int]) -> bool:
@@ -448,76 +440,19 @@ def verify_tito_for_turn(tok, decoded_text: str, output_ids: list[int]) -> bool:
     return list(retok) == list(output_ids)
 
 
-def verify_tito_cross_turn(target: Chain, ideal_ids: list[int]) -> bool:
-    """Cross-turn TITO: ``ideal_ids`` must start with ``target.prompt_ids``
-    (the turn-0 anchor) byte-identically. False means the chat template
-    drifted between turns -- caller should rebaseline with an all-zero
-    loss_mask rather than train on tokens the model never emitted.
-
-    Pure predicate; no logging or state mutation."""
-    return ideal_ids[: len(target.prompt_ids)] == target.prompt_ids
-
-
-def _update_prompt_and_mask(
-    target: Chain, ideal_ids: list[int], raw_ranges: list[tuple[int, int, int]], kind: str
-) -> None:
-    """Update target.prompt_ids / response_ids / loss_mask given freshly
-    rendered ideal_ids.
-
-    On append, the re-rendered prefix must be byte-identical to the anchor
-    set on turn 0 (cross-turn TITO). On drift we demote the tail mask to 0
-    rather than train on tokens the model never emitted.
-    """
-    if kind != "append":
-        target.prompt_ids = ideal_ids
-        target.response_ids = []
-        target.loss_mask = []
-        return
-
-    prompt_len = len(target.prompt_ids)
-    if not verify_tito_cross_turn(target, ideal_ids):
-        logger.warning("[middleware] template re-render mismatch; rebaselining")
-        target.response_ids = ideal_ids[prompt_len:]
-        target.loss_mask = [0] * len(target.response_ids)
-        return
-
-    response = ideal_ids[prompt_len:]
-    mask = [0] * len(response)
-    response_len = len(response)
-    for _splice_start, gen_start, splice_end in raw_ranges:
-        a = max(0, gen_start - prompt_len)
-        b = min(response_len, max(0, splice_end - prompt_len))
-        for k in range(a, b):
-            mask[k] = 1
-    target.response_ids = response
-    target.loss_mask = mask
-
-
 def _build_prompt(target: Chain, body: dict, kind: str, tok) -> list[int]:
-    """Replace/extend chat_messages -> render token ids -> update prompt+mask.
-    Returns ideal_ids to feed sglang.
-
-    Thin orchestrator over `_replace_chat_messages` / `_extend_chat_messages`,
-    `_render_token_ids`, and `_update_prompt_and_mask`. Each step is
-    independently testable; the only coupling is the (ideal_ids, raw_ranges)
-    tuple passed between render and update.
-    """
+    """Replace/extend chat_messages and render input ids for sglang."""
     (_extend_chat_messages if kind == "append" else _replace_chat_messages)(target, body)
-    ideal_ids, raw_ranges = _render_token_ids(target, tok)
-    _update_prompt_and_mask(target, ideal_ids, raw_ranges, kind)
-    return ideal_ids
+    return _render_token_ids(target, tok)
 
 
-async def _generate(target: Chain, ideal_ids: list[int], s: Session, body: dict, app) -> tuple[list[int], str]:
-    """Call sglang and commit output to target chain.
+async def _generate(prompt_ids: list[int], s: Session, body: dict, app) -> TurnRecord:
+    """Call sglang and return a TurnRecord.
 
     1. build sampling_params (session defaults overlaid with body overrides)
     2. POST sglang /generate; on cancel/error fire /abort_request
-    3. extend target.response_ids with output_ids; loss_mask += [1]*N
-    4. per-turn TITO: decode(output_ids) re-encoded must equal output_ids;
+    3. per-turn TITO: decode(output_ids) re-encoded must equal output_ids;
        on mismatch zero out the loss_mask tail for this turn
-
-    Returns (output_ids, finish_reason).
     """
     # ---- (a) Build sampling_params --------------------------------------
     sp: dict[str, Any] = {
@@ -527,16 +462,31 @@ async def _generate(target: Chain, ideal_ids: list[int], s: Session, body: dict,
         "max_new_tokens": 4096,
         **(s.sampling_defaults or {}),
     }
-    for src_k, dst_k in (
-        ("max_tokens", "max_new_tokens"),
-        ("temperature", "temperature"),
-        ("top_p", "top_p"),
-        ("top_k", "top_k"),
-    ):
+    if "max_tokens" in body:
+        # Claude's request cap may be lower, but rollout_max_response_len is
+        # the per-turn ceiling from slime. Keep the stricter of the two.
+        sp["max_new_tokens"] = min(int(sp.get("max_new_tokens", body["max_tokens"])), int(body["max_tokens"]))
+    for src_k, dst_k in (("temperature", "temperature"), ("top_p", "top_p"), ("top_k", "top_k")):
         if src_k in body:
             sp[dst_k] = body[src_k]
     if body.get("stop_sequences"):
         sp["stop"] = body["stop_sequences"]
+
+    if s.max_context_tokens > 0:
+        remaining_context = s.max_context_tokens - len(prompt_ids)
+        if remaining_context <= 0:
+            logger.warning(
+                "[middleware] prompt exceeds max_context_tokens (%d >= %d); returning length stop",
+                len(prompt_ids),
+                s.max_context_tokens,
+            )
+            return TurnRecord(
+                prompt_ids=list(prompt_ids),
+                output_ids=[],
+                output_loss_mask=[],
+                finish_reason="length",
+            )
+        sp["max_new_tokens"] = min(int(sp.get("max_new_tokens", remaining_context)), remaining_context)
 
     # ---- (b) POST sglang /generate (with abort on cancel/error) --------
     # Without abort, a cancelled client + inflight request can race with the
@@ -549,7 +499,7 @@ async def _generate(target: Chain, ideal_ids: list[int], s: Session, body: dict,
             f"{sglang_url}/generate",
             json={
                 "rid": rid,
-                "input_ids": ideal_ids,
+                "input_ids": prompt_ids,
                 "sampling_params": sp,
                 "return_logprob": True,
             },
@@ -570,20 +520,21 @@ async def _generate(target: Chain, ideal_ids: list[int], s: Session, body: dict,
             pass
         raise
 
-    # ---- (c) Commit + per-turn TITO -------------------------------------
-    target.response_ids.extend(output_ids)
-    target.loss_mask.extend([1] * len(output_ids))
-    target.last_finish_reason = finish
-
-    n = len(output_ids)
-    if n > 0:
+    # ---- (c) Per-turn TITO ----------------------------------------------
+    output_loss_mask = [1] * len(output_ids)
+    if output_ids:
         tok = app["tokenizer"]
         raw = tok.decode(output_ids, skip_special_tokens=False)
         if not verify_tito_for_turn(tok, raw, output_ids):
-            target.loss_mask[-n:] = [0] * n
-            logger.warning("[middleware] TITO mismatch; loss_mask zeroed (n=%d)", n)
+            output_loss_mask = [0] * len(output_ids)
+            logger.warning("[middleware] TITO mismatch; loss_mask zeroed (n=%d)", len(output_ids))
 
-    return output_ids, finish
+    return TurnRecord(
+        prompt_ids=list(prompt_ids),
+        output_ids=output_ids,
+        output_loss_mask=output_loss_mask,
+        finish_reason=finish,
+    )
 
 
 def _build_reply(target: Chain, output_ids: list[int], finish: str, app) -> tuple[list[dict], str, str]:
@@ -592,73 +543,26 @@ def _build_reply(target: Chain, output_ids: list[int], finish: str, app) -> tupl
     1. parse decoded text -> (thinking, visible, tool_uses) via sglang parsers
     2. pack into Anthropic content blocks; tag dispatch_id when a tool_use
        names Task/Agent (sub-agent trigger)
-    3. queue this turn's raw tokens onto target.pending_raw_tokens for the
-       next append to splice
-    4. derive stop_reason: 'tool_use' | 'max_tokens' | 'end_turn'
+    3. derive stop_reason: 'tool_use' | 'max_tokens' | 'end_turn'
 
     Returns (blocks, stop_reason, dispatch_id).
     """
     tok = app["tokenizer"]
-    tool_parser_name = app["tool_parser"]
-    reasoning_parser_name = app["reasoning_parser"]
-    tools_schema = target.tools_schema
 
-    # (a) Decode raw text. Per-turn TITO already verified inside _generate.
+    # Per-turn TITO already verified inside _generate.
     raw_output = tok.decode(output_ids, skip_special_tokens=False) if output_ids else ""
+    parsed = parse_model_output(
+        raw_output,
+        tools_schema=target.tools_schema,
+        tool_parser_name=app["tool_parser"],
+        reasoning_parser_name=app["reasoning_parser"],
+    )
+    blocks, dispatch_id = _anthropic_blocks(parsed.reasoning, parsed.text, parsed.tool_uses)
+    return blocks, _stop_reason(parsed.tool_uses, finish), dispatch_id
 
-    # (b) Parse: reasoning -> tool calls -> xml fallback.
-    thinking, body_text = "", raw_output
-    if reasoning_parser_name:
-        from sglang.srt.parser.reasoning_parser import ReasoningParser
 
-        r, b = ReasoningParser(model_type=reasoning_parser_name, stream_reasoning=False).parse_non_stream(raw_output)
-        thinking, body_text = r or "", b or ""
-        if not thinking and "</think>" in body_text:
-            thinking, body_text = body_text.split("</think>", 1)
-
-    tool_uses: list[dict] = []
-    if tool_parser_name and tools_schema:
-        from sglang.srt.entrypoints.openai.protocol import Function, Tool
-        from sglang.srt.function_call.function_call_parser import FunctionCallParser
-
-        sg_tools = [Tool(type="function", function=Function(**d["function"])) for d in tools_schema]
-        body_text, calls = FunctionCallParser(tools=sg_tools, tool_call_parser=tool_parser_name).parse_non_stream(
-            body_text
-        )
-        for c in calls:
-            try:
-                args = json.loads(c.parameters or "{}")
-            except json.JSONDecodeError:
-                args = {"_raw_arguments": c.parameters}
-            tool_uses.append({"name": c.name or "tool", "input": args})
-
-    # XML fallback when structured parser didn't catch anything (Qwen's
-    # occasional Anthropic-style XML tool-call format). re.finditer + manual
-    # concat instead of re.sub(repl) so we avoid a nested def for the callback.
-    if not tool_uses and tools_schema:
-        valid_tools = {t.get("function", {}).get("name") for t in tools_schema}
-        cleaned_parts: list[str] = []
-        last = 0
-        for m in re.finditer(
-            r"<tool_call>\s*<function=([^>]+)>(.*?)</function>\s*</tool_call>",
-            body_text,
-            flags=re.DOTALL,
-        ):
-            name, inner = m.group(1), m.group(2)
-            if name in valid_tools:
-                args = {
-                    p.group(1): p.group(2).strip()
-                    for p in re.finditer(r"<parameter=([^>]+)>(.*?)</parameter>", inner, flags=re.DOTALL)
-                }
-                tool_uses.append({"name": name, "input": args})
-                cleaned_parts.append(body_text[last : m.start()])
-                last = m.end()
-        cleaned_parts.append(body_text[last:])
-        body_text = "".join(cleaned_parts).replace("<|im_end|>", "")
-
-    visible = (body_text or "").strip()
-
-    # (c) Pack Anthropic content blocks.
+def _anthropic_blocks(thinking: str, visible: str, tool_uses: list[dict]) -> tuple[list[dict], str]:
+    """Pack parsed model output into Anthropic content blocks."""
     blocks: list[dict] = []
     if thinking:
         blocks.append({"type": "thinking", "thinking": thinking})
@@ -672,35 +576,25 @@ def _build_reply(target: Chain, output_ids: list[int], finish: str, app) -> tupl
             dispatch_id = tu_id
     if not blocks:
         blocks.append({"type": "text", "text": ""})
+    return blocks, dispatch_id
 
-    # (d) Queue raw tokens for the next splice. Reconstruct pre-output ideal_ids
-    # = target.prompt_ids + (target.response_ids minus the freshly appended
-    # output_ids tail set by _generate). Find the last `<|im_start|>assistant\n`
-    # marker; everything after it is the template-injected generation prefix
-    # (e.g. `<think>\n` for Qwen3) that we stitch onto the front of raw output_ids.
-    n_out = len(output_ids)
-    pre_out_response = target.response_ids[:-n_out] if n_out else list(target.response_ids)
-    ideal_ids = list(target.prompt_ids) + list(pre_out_response)
 
-    marker_ids = app["assistant_marker_ids"]
-    gen_prefix: list[int] = []
-    if marker_ids:
-        n = len(marker_ids)
-        for start in range(len(ideal_ids) - n, -1, -1):
-            if ideal_ids[start : start + n] == marker_ids:
-                gen_prefix = list(ideal_ids[start + n :])
-                break
-    target.pending_raw_tokens.append((gen_prefix + list(output_ids), len(gen_prefix)))
-
-    # (e) Stop reason.
+def _stop_reason(tool_uses: list[dict], finish: str) -> str:
     if tool_uses:
-        stop_reason = "tool_use"
-    elif finish == "length":
-        stop_reason = "max_tokens"
-    else:
-        stop_reason = "end_turn"
+        return "tool_use"
+    if finish == "length":
+        return "max_tokens"
+    return "end_turn"
 
-    return blocks, stop_reason, dispatch_id
+
+def _record_turn(target: Chain, turn: TurnRecord) -> None:
+    """Save one completed assistant generation.
+
+    pending_turns feeds next-turn raw splice. turns is the immutable log later
+    replayed by pop_session_split() into the training sequence.
+    """
+    target.turns.append(turn)
+    target.pending_turns.append(turn)
 
 
 def _start_sub_chain(s: Session, dispatch_id: str) -> None:
@@ -725,12 +619,13 @@ async def _handle_request(request: web.Request) -> web.StreamResponse:
 
     async with s.lock:  # same sid -> serialized
         target, is_sub, kind = _select_chain(s, body)
-        ideal_ids = _build_prompt(target, body, kind, app["tokenizer"])
-        output_ids, finish = await _generate(target, ideal_ids, s, body, app)
-        blocks, stop, did = _build_reply(target, output_ids, finish, app)
+        prompt_ids = _build_prompt(target, body, kind, app["tokenizer"])
+        turn = await _generate(prompt_ids, s, body, app)
+        blocks, stop, did = _build_reply(target, turn.output_ids, turn.finish_reason, app)
+        _record_turn(target, turn)
         if did and not is_sub:  # sub doesn't nest
             _start_sub_chain(s, did)
-        in_tok, out_tok = len(ideal_ids), len(output_ids)
+        in_tok, out_tok = len(prompt_ids), len(turn.output_ids)
 
     return await _stream_response(request, blocks, stop, in_tok, out_tok)
 
@@ -807,33 +702,48 @@ async def _stream_response(request, blocks, stop_reason, in_tok, out_tok) -> web
 # =============================================================================
 
 
-def open_session(store: _Store, sid: str, *, sampling_defaults: dict | None = None) -> None:
+def open_session(
+    store: _Store,
+    sid: str,
+    *,
+    sampling_defaults: dict | None = None,
+    max_context_tokens: int = 0,
+) -> None:
     """Register a new session. Fail-fast on duplicate sid: silently sharing
     state would interleave two independent rollouts into one chain and corrupt
     TITO bookkeeping. `sampling_defaults` seeds the session's default sglang
-    sampling_params (overlaid by per-request body in `_generate`)."""
+    sampling_params (overlaid by per-request body in `_generate`).
+    `max_context_tokens` caps each turn's prompt+response budget and drops
+    oversized final segments; 0 disables this guard."""
     if sid in store:
         raise ValueError(f"session_id {sid!r} already exists; sids must be unique per agent run")
     s = store[sid] = Session()
     s.sampling_defaults = dict(sampling_defaults or {})
+    s.max_context_tokens = int(max_context_tokens or 0)
 
 
-def pop_session_split(store: _Store, sid: str) -> list[tuple]:
+def pop_session_split(store: _Store, sid: str) -> list[TokenSegment]:
     """Snapshot whatever chains are still alive (active_sub + main) into
     segments, drop empty and oversized ones. Called by the train loop at
     trajectory end."""
     s = store.pop(sid, None)
     if s is None:
         return []
-    if s.active_sub is not None:
+    if s.active_sub is not None and s.active_sub.turns:
         s.segments.append(_make_segment(s.active_sub, "subagent"))
-    if s.main.response_ids:
+    if s.main.turns:
         s.segments.append(_make_segment(s.main, "final"))
-    return [
-        (p, r, m, meta)
-        for kind, p, r, m, meta in s.segments
-        if r and (_MAX_SEGMENT_TOKENS <= 0 or len(p) + len(r) <= _MAX_SEGMENT_TOKENS)
-    ]
+
+    out: list[TokenSegment] = []
+    max_context_tokens = s.max_context_tokens
+    for _kind, turns, meta in s.segments:
+        segment = merge_turns(turns, metadata=meta)
+        if segment is None:
+            continue
+        total_tokens = len(segment.prompt_ids) + len(segment.response_ids)
+        if segment.response_ids and (max_context_tokens <= 0 or total_tokens <= max_context_tokens):
+            out.append(segment)
+    return out
 
 
 # Trivial endpoints claude-code probes during a session: count_tokens runs
@@ -868,15 +778,6 @@ def start(*, tokenizer, sglang_url, tool_parser=None, reasoning_parser=None):
     app["tool_parser"] = tool_parser
     app["reasoning_parser"] = reasoning_parser
     app["store"] = store
-    # Search marker for the chat template's assistant role start. _build_reply
-    # uses this to locate the last `<|im_start|>assistant\n` in ideal_ids;
-    # everything after it is the template-injected generation prefix (e.g.
-    # `<think>\n` for Qwen3) we stitch onto raw output_ids when queueing
-    # pending_raw_tokens.
-    app["assistant_marker_ids"] = tokenizer.encode(
-        "<|im_start|>assistant\n",
-        add_special_tokens=False,
-    )
     app.router.add_post("/v1/messages", _handle_request)
     app.router.add_post("/v1/messages/count_tokens", _count_tokens)
     app.router.add_get("/healthz", _ok)

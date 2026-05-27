@@ -19,6 +19,7 @@ slime is the RL-framework behind GLM-4.7, GLM-4.6 and GLM-4.5. Apart from models
    get_started/quick_start.md
    get_started/usage.md
    get_started/customization.md
+   get_started/agent.md
    get_started/qa.md
 
 .. toctree::
@@ -61,6 +62,7 @@ slime is the RL-framework behind GLM-4.7, GLM-4.6 and GLM-4.5. Apart from models
    _examples_synced/fully_async/README.md
    _examples_synced/retool/README.md
    _examples_synced/multi_agent/README.md
+   _examples_synced/coding_agent_rl/README.md
 
 .. toctree::
    :maxdepth: 1

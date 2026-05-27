@@ -76,13 +76,45 @@ def generate_rollout(args, rollout_id, data_source, evaluation=False) -> Rollout
 
 **函数签名**:
 ```python
-async def custom_generate(args, sample: Sample, sampling_params: dict) -> Sample
+async def custom_generate(args, sample: Sample, sampling_params: dict) -> Sample | list[Sample]
 ```
 
 **使用场景**:
 - 实现工具调用（tool-calling）或函数调用（function-calling）能力
 - 添加检索增强生成（RAG）
 - 多轮对话处理
+
+#### 一个 prompt 产生多个训练样本
+
+在 subagent、multi-agent、context compact 等 agentic 场景中，一次 prompt rollout 可能会自然拆成多个可训练片段。例如：主 agent 调用 subagent 后，subagent 的轨迹和主 agent 的后续轨迹都需要参与训练；或者发生 compact 后，compact 前后的上下文被切成多个 segment。
+
+这种情况下不需要重写整个 rollout 函数，`custom_generate` 可以直接返回 `list[Sample]`。关键是：这些由同一次 rollout 拆出来的 sibling samples 必须设置相同的 `rollout_id`，这样 slime 会在训练切分和 loss 聚合时把它们视作同一次 rollout，而不是重复计数为多次独立 rollout。
+
+```python
+import copy
+
+from slime.utils.types import Sample
+
+
+async def custom_generate(args, sample: Sample, sampling_params: dict) -> list[Sample]:
+    segments = await run_agent_and_split_segments(args, sample, sampling_params)
+    rollout_id = sample.rollout_id if sample.rollout_id is not None else sample.index
+
+    samples: list[Sample] = []
+    for segment in segments:
+        s = copy.copy(sample)
+        s.tokens = segment.tokens
+        s.response = segment.response
+        s.response_length = segment.response_length
+        s.loss_mask = segment.loss_mask
+        s.reward = segment.reward
+        s.status = Sample.Status.COMPLETED
+        s.rollout_id = rollout_id
+        samples.append(s)
+    return samples
+```
+
+如果一个完整 trajectory 只有一个总奖励、但被拆成了 `K` 个训练片段，常见做法是在这些片段之间分配这个奖励（例如每个片段写入 `reward / K`），避免把同一次 rollout 的奖励重复放大。
 
 **示例**: 参见 [examples/search-r1/generate_with_search.py](../../../examples/search-r1/generate_with_search.py)
 
