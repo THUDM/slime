@@ -94,12 +94,6 @@ SWE_GENERATE_GUARD_SEC = int(os.environ.get("SWE_GENERATE_GUARD_SEC", "0") or 0)
     SWE_TIME_BUDGET_SEC + SWE_EVAL_TIMEOUT_SEC + 180
 )
 SWE_MAX_RESPONSE_TOKENS = int(os.environ.get("SWE_MAX_RESPONSE_TOKENS", "0") or 0)
-# SWE_LIST_TRAJECTORY: 0 (default) = collapse segments into 1 Sample
-# (avoids fan-out sample-count explosion that triggers host pinned-memory
-# pressure and GPU wake_up OOM). Single-sample mode uses the FINAL segment
-# (reward-bearing segment, post-final-compact-reset) as the trajectory
-# tokens. 1 = enable fan-out (one Sample per segment).
-SWE_LIST_TRAJECTORY = os.environ.get("SWE_LIST_TRAJECTORY", "0") == "1"
 SWE_TOOL_PARSER = os.environ.get("SWE_TOOL_PARSER", "") or None
 SWE_REASONING_PARSER = os.environ.get("SWE_REASONING_PARSER", "") or None
 SHIM_BIND_HOST = os.environ.get("SHIM_BIND_HOST", "0.0.0.0")
@@ -209,9 +203,7 @@ async def _boot_agent_sandbox(image: str):
 # middleware.pop_session_split(). One trajectory yields >=1 segments because
 # the agent may compact + reset mid-run.
 #
-# _merge_samples owns both output modes:
-#   * collapse (SWE_LIST_TRAJECTORY=0, default): one Sample from final segment
-#   * fan-out  (SWE_LIST_TRAJECTORY=1): one Sample per segment, reward / K
+# _merge_samples emits one Sample per segment, with reward split as reward / K.
 # ---------------------------------------------------------------------------
 Segment = tuple[list[int], list[int], list[int], dict]
 
@@ -225,7 +217,7 @@ class RewardResult:
 
 def _write_segment_to_sample(sample: Sample, seg: Segment, reward: float, tokenizer) -> None:
     """Populate the token / loss_mask / response / reward fields of `sample`
-    from one segment. Shared by both the collapse and fan-out paths."""
+    from one segment."""
     prompt_ids, response_ids, loss_mask, _ = seg
     sample.tokens = list(prompt_ids) + list(response_ids)
     sample.response_length = len(response_ids)
@@ -242,8 +234,7 @@ def _fan_out_to_samples(
     tokenizer,
     instance_id: str,
 ) -> list[Sample]:
-    """SWE_LIST_TRAJECTORY=1 path. Emit one Sample per segment, splitting the
-    rollout reward uniformly (reward/K per segment).
+    """Emit one Sample per segment, splitting reward uniformly (reward/K).
 
     All K samples share the same `rollout_id` so the loss reducer counts
     this trajectory once (per-rollout mean) instead of K times
@@ -359,32 +350,9 @@ def _merge_samples(
         "elapsed_sec": elapsed_sec,
     }
 
-    # Collapse mode keeps ONLY the final (reward-bearing, post-final-compact
-    # reset) segment. Earlier segments are intentionally dropped to avoid
-    # sample-count explosion and host pinned-memory pressure at large batches.
-    if not SWE_LIST_TRAJECTORY:
-        final_seg = segments[-1]
-        _write_segment_to_sample(sample, final_seg, reward_result.reward, state.tokenizer)
-        sample.metadata = {
-            **sample.metadata,
-            **final_seg[3],
-            "num_segments_collapsed": len(segments),
-        }
-        logger.info(
-            "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs "
-            "single-sample collapsed_segments=%d",
-            instance_id,
-            reward_result.reward,
-            reward_result.is_solved,
-            reward_result.applied_cleanly,
-            elapsed_sec,
-            len(segments),
-        )
-        return sample
-
-    # Fan-out mode emits one Sample per segment, splitting reward uniformly.
-    # All K share rollout_id so the loss reducer counts this trajectory once.
-    # Fail-soft: reducer bugs abort this sample only, not the whole step.
+    # All K samples share rollout_id so the loss reducer counts this
+    # trajectory once. Fail-soft: reducer bugs abort this sample only, not the
+    # whole step.
     try:
         fanned = _fan_out_to_samples(
             sample,
@@ -556,8 +524,5 @@ def _abort(sample: Sample, reason: str) -> Sample:
 
 
 def _abort_result(sample: Sample, reason: str):
-    """Return abort result matching the active fan-out mode so the framework
-    sees a uniform shape (`list[Sample]` when fan-out is on, bare `Sample`
-    otherwise). Mixing the two breaks `_get_rollout_data`'s flatten loop."""
-    s = _abort(sample, reason)
-    return [s] if SWE_LIST_TRAJECTORY else s
+    """Return a uniform list shape for this fan-out generate function."""
+    return [_abort(sample, reason)]

@@ -16,7 +16,7 @@
 #       removes /compact as a competing branching pathway so sibling-vs-compact
 #       stay isolated in the saved trajectory tree.
 #
-# Fan-out semantics (SWE_LIST_TRAJECTORY=1):
+# Fan-out semantics:
 #   * generate() returns list[Sample] (one Sample per trajectory segment);
 #     the per-trajectory reward is split as reward/K across segments.
 #   * Sub-agent dispatch increases K (each sub-agent turn block becomes its
@@ -260,14 +260,13 @@ export SWE_EVAL_TIMEOUT_SEC="${SWE_EVAL_TIMEOUT_SEC:-600}"
 export SWE_BOOT_CONCURRENCY="${SWE_BOOT_CONCURRENCY:-6}"
 
 # --- trajectory fan-out & token caps ---
-# LIST_TRAJECTORY=1: emit one Sample per segment (reducer splits reward/K);
-#   rollout_id is shared so the per-rollout-mean loss reducer still counts
-#   the trajectory once.
+# generate() emits one Sample per segment (reducer splits reward/K);
+# rollout_id is shared so the per-rollout-mean loss reducer still counts
+# the trajectory once.
 # SAVE_TRAJECTORY_TREE=1: persist tree metadata so sub-agent fan-out shows
 #   up in viz.
 # MAX_SEGMENT_TOKENS = MAX_CONTEXT_LEN: drop segments whose (prompt+response)
 #   exceeds the trainer dp budget (max-tokens-per-gpu * CP).
-export SWE_LIST_TRAJECTORY="${SWE_LIST_TRAJECTORY:-1}"
 export SWE_SAVE_TRAJECTORY_TREE="${SWE_SAVE_TRAJECTORY_TREE:-1}"
 export SWE_MAX_RESPONSE_TOKENS="${SWE_MAX_RESPONSE_TOKENS:-32768}"
 export SWE_MAX_SEGMENT_TOKENS="${SWE_MAX_SEGMENT_TOKENS:-${MAX_CONTEXT_LEN}}"
@@ -334,7 +333,6 @@ keys = (
     "E2B_API_KEY", "SLIME_HEAD_HOST",
     "SWE_HOST_NODE_TARBALL", "SWE_HOST_CC_TARBALL",
     "SWE_TIME_BUDGET_SEC", "SWE_EVAL_TIMEOUT_SEC", "SWE_BOOT_CONCURRENCY",
-    "SWE_LIST_TRAJECTORY",
     "SWE_SAVE_TRAJECTORY_TREE",
     "SWE_MAX_RESPONSE_TOKENS",
     "SWE_MAX_SEGMENT_TOKENS",
