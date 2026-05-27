@@ -109,13 +109,12 @@ All set in the launcher; tune per cluster.
 | `SWE_BOOT_CONCURRENCY` | `6` | Cap on simultaneous sandbox boots (eases h2/SSL long-tail). |
 | `SWE_MAX_RESPONSE_TOKENS` | `32768` | Per-segment response cap. Total trajectory can reach `K * SWE_MAX_RESPONSE_TOKENS`. |
 | `SWE_MAX_SEGMENT_TOKENS` | `MAX_CONTEXT_LEN` | Drop any segment whose `prompt+response` exceeds the trainer's DP budget. |
-| `SWE_LIST_TRAJECTORY` | `1` | Emit one `Sample` per segment (reducer splits `reward / K`). `0` collapses to the final segment only. |
 | `SWE_SAVE_TRAJECTORY_TREE` | `1` | Persist tree metadata so sub-agent fan-out shows up in the trace viewer. |
 | `SWE_TOOL_PARSER` / `SWE_REASONING_PARSER` | `qwen3_coder` / `qwen3` | Must match the parsers loaded by SGLang. |
 | `SWE_CLAUDE_EXTRA_ARGS` | (see launcher) | Extra flags appended to the `claude` CLI invocation — registers the read-only `investigator` sub-agent, disables `WebFetch`/`WebSearch`, disables slash commands. |
 | `SWE_CC_PROMPT` | unset | Optional override for the user-turn prompt. Setting this to require sub-agent dispatch is the most reliable way to maximize fan-out. |
 
-## Fan-out Semantics (`SWE_LIST_TRAJECTORY=1`)
+## Fan-out Semantics
 
 - `generate()` returns `list[Sample]` — one Sample per trajectory **segment** (`subagent` / `wipe` / `final`).
 - Per-trajectory reward is split as `reward / K` across segments; `rollout_id` is shared so the per-rollout-mean loss reducer still counts the trajectory once.

@@ -433,7 +433,7 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-script">Running the Script</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#new-arguments">New Arguments</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#swe-specific-environment-knobs">SWE-specific Environment Knobs</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fan-out-semantics-swe-list-trajectory-1">Fan-out Semantics (<code class="docutils literal notranslate"><span class="pre">SWE_LIST_TRAJECTORY=1</span></code>)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fan-out-semantics">Fan-out Semantics</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#porting-to-a-new-sandbox-backend">Porting to a New Sandbox Backend</a></li>
 </ul>
             </nav>
@@ -594,23 +594,19 @@ bash<span class="w"> </span>examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nod
 <td><p><code class="docutils literal notranslate"><span class="pre">MAX_CONTEXT_LEN</span></code></p></td>
 <td><p>Drop any segment whose <code class="docutils literal notranslate"><span class="pre">prompt+response</span></code> exceeds the trainer's DP budget.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_LIST_TRAJECTORY</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
-<td><p>Emit one <code class="docutils literal notranslate"><span class="pre">Sample</span></code> per segment (reducer splits <code class="docutils literal notranslate"><span class="pre">reward</span> <span class="pre">/</span> <span class="pre">K</span></code>). <code class="docutils literal notranslate"><span class="pre">0</span></code> collapses to the final segment only.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_SAVE_TRAJECTORY_TREE</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_SAVE_TRAJECTORY_TREE</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
 <td><p>Persist tree metadata so sub-agent fan-out shows up in the trace viewer.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_TOOL_PARSER</span></code> / <code class="docutils literal notranslate"><span class="pre">SWE_REASONING_PARSER</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_TOOL_PARSER</span></code> / <code class="docutils literal notranslate"><span class="pre">SWE_REASONING_PARSER</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">qwen3_coder</span></code> / <code class="docutils literal notranslate"><span class="pre">qwen3</span></code></p></td>
 <td><p>Must match the parsers loaded by SGLang.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_CLAUDE_EXTRA_ARGS</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_CLAUDE_EXTRA_ARGS</span></code></p></td>
 <td><p>(see launcher)</p></td>
 <td><p>Extra flags appended to the <code class="docutils literal notranslate"><span class="pre">claude</span></code> CLI invocation — registers the read-only <code class="docutils literal notranslate"><span class="pre">investigator</span></code> sub-agent, disables <code class="docutils literal notranslate"><span class="pre">WebFetch</span></code>/<code class="docutils literal notranslate"><span class="pre">WebSearch</span></code>, disables slash commands.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_CC_PROMPT</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_CC_PROMPT</span></code></p></td>
 <td><p>unset</p></td>
 <td><p>Optional override for the user-turn prompt. Setting this to require sub-agent dispatch is the most reliable way to maximize fan-out.</p></td>
 </tr>
@@ -618,8 +614,8 @@ bash<span class="w"> </span>examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nod
 </table>
 </div>
 </section>
-<section id="fan-out-semantics-swe-list-trajectory-1">
-<h2>Fan-out Semantics (<code class="docutils literal notranslate"><span class="pre">SWE_LIST_TRAJECTORY=1</span></code>)<a class="headerlink" href="#fan-out-semantics-swe-list-trajectory-1" title="链接到此标题。">#</a></h2>
+<section id="fan-out-semantics">
+<h2>Fan-out Semantics<a class="headerlink" href="#fan-out-semantics" title="链接到此标题。">#</a></h2>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">generate()</span></code> returns <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code> — one Sample per trajectory <strong>segment</strong> (<code class="docutils literal notranslate"><span class="pre">subagent</span></code> / <code class="docutils literal notranslate"><span class="pre">wipe</span></code> / <code class="docutils literal notranslate"><span class="pre">final</span></code>).</p></li>
 <li><p>Per-trajectory reward is split as <code class="docutils literal notranslate"><span class="pre">reward</span> <span class="pre">/</span> <span class="pre">K</span></code> across segments; <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code> is shared so the per-rollout-mean loss reducer still counts the trajectory once.</p></li>
@@ -674,7 +670,7 @@ bash<span class="w"> </span>examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nod
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-script">Running the Script</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#new-arguments">New Arguments</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#swe-specific-environment-knobs">SWE-specific Environment Knobs</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fan-out-semantics-swe-list-trajectory-1">Fan-out Semantics (<code class="docutils literal notranslate"><span class="pre">SWE_LIST_TRAJECTORY=1</span></code>)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fan-out-semantics">Fan-out Semantics</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#porting-to-a-new-sandbox-backend">Porting to a New Sandbox Backend</a></li>
 </ul>
   </nav></div>
