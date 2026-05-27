@@ -331,7 +331,7 @@ index 634f2eae5b..0eb700b551 100644
                              # Only the last chunk we need to send the aux data
                              ret = self.send_aux(
 diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
-index 0e2ed6a190..55f1da5c1f 100644
+index 0e2ed6a190..78658f13fb 100644
 --- a/python/sglang/srt/disaggregation/prefill.py
 +++ b/python/sglang/srt/disaggregation/prefill.py
 @@ -20,6 +20,8 @@ Life cycle of a request in the prefill server
@@ -406,7 +406,42 @@ index 0e2ed6a190..55f1da5c1f 100644
  
  class SchedulerDisaggregationPrefillMixin:
      """
-@@ -586,13 +623,18 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -514,6 +551,34 @@ class SchedulerDisaggregationPrefillMixin:
+         for i, (req, next_token_id) in enumerate(
+             zip(batch.reqs, next_token_ids, strict=True)
+         ):
++            # An AbortReq may arrive while this prefill batch is already running.
++            # Honor it before exposing KV to the decode side.
++            req.check_finished()
++            if req.finished():
++                if req.is_chunked <= 0:
++                    req.time_stats.set_prefill_finished_time()
++                else:
++                    req.time_stats.set_last_chunked_prefill_finish_time()
++
++                if req.return_logprob:
++                    assert extend_logprob_start_len_per_req is not None
++                    assert extend_input_len_per_req is not None
++                    extend_logprob_start_len = extend_logprob_start_len_per_req[i]
++                    extend_input_len = extend_input_len_per_req[i]
++                    logprob_pt += extend_input_len - extend_logprob_start_len
++
++                release_kv_cache(req, self.tree_cache)
++                req.time_stats.set_completion_time()
++                if req.grammar is not None:
++                    req.grammar.finished = True
++                self.stream_output([req], req.return_logprob, None)
++                release_req_to_metadata_buffer(
++                    req, self.req_to_metadata_buffer_idx_allocator
++                )
++                if hasattr(req.disagg_kv_sender, "clear"):
++                    req.disagg_kv_sender.clear()
++                continue
++
+             if req.is_chunked <= 0:
+                 req.time_stats.set_prefill_finished_time()
+ 
+@@ -586,13 +651,18 @@ class SchedulerDisaggregationPrefillMixin:
                      self.send_kv_chunk(req, last_chunk=False, end_idx=req.tmp_end_idx)
                  req.time_stats.set_last_chunked_prefill_finish_time()
  
@@ -432,7 +467,7 @@ index 0e2ed6a190..55f1da5c1f 100644
  
      def process_disagg_prefill_inflight_queue(
          self: Scheduler, rids_to_check: Optional[List[str]] = None
-@@ -612,6 +654,11 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -612,6 +682,11 @@ class SchedulerDisaggregationPrefillMixin:
              self.attn_tp_cpu_group,
          )
  
@@ -444,7 +479,7 @@ index 0e2ed6a190..55f1da5c1f 100644
          undone_reqs: List[Req] = []
          # Check .poll() for the reqs in disagg_prefill_inflight_queue. If Success, respond to the client and remove it from the queue
          for req, poll in zip(self.disagg_prefill_inflight_queue, polls):
-@@ -637,7 +684,29 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -637,7 +712,29 @@ class SchedulerDisaggregationPrefillMixin:
                      continue
  
              if poll in [KVPoll.WaitingForInput, KVPoll.Transferring]:
@@ -1136,7 +1171,7 @@ index feecc54416..28b189cc59 100755
                  break
  
 diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
-index 143054cd6e..48a4d1b02c 100644
+index 143054cd6e..40e05e2453 100644
 --- a/python/sglang/srt/managers/scheduler.py
 +++ b/python/sglang/srt/managers/scheduler.py
 @@ -124,6 +124,7 @@ from sglang.srt.managers.io_struct import (
@@ -1155,6 +1190,24 @@ index 143054cd6e..48a4d1b02c 100644
                  (GetWeightsByNameReqInput, self.get_weights_by_name),
                  (ReleaseMemoryOccupationReqInput, self.release_memory_occupation),
                  (ResumeMemoryOccupationReqInput, self.resume_memory_occupation),
+@@ -3649,9 +3651,16 @@ class Scheduler(
+                 recv_req.abort_all or req.rid.startswith(recv_req.rid)
+             ):
+                 # Abort method 3: set `to_finish`
+-                # The request will still run one decode forward pass.
++                # Decode requests may still run one forward pass. PD prefill
++                # consumes this before sending KV to the decode side.
+                 # Then we reuse all existing code to clean up the KV cache allocation.
+                 logger.debug(f"Abort running request. {req.rid=}")
++                if (
++                    self.disaggregation_mode == DisaggregationMode.PREFILL
++                    and hasattr(req, "disagg_kv_sender")
++                    and hasattr(req.disagg_kv_sender, "abort")
++                ):
++                    req.disagg_kv_sender.abort()
+                 req.to_finish = FINISH_ABORT()
+ 
+     def _pause_engine(self) -> Tuple[List[Req], int]:
 diff --git a/python/sglang/srt/managers/scheduler_output_processor_mixin.py b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
 index ae6f732fe9..496e7bcea9 100644
 --- a/python/sglang/srt/managers/scheduler_output_processor_mixin.py
@@ -1169,7 +1222,7 @@ index ae6f732fe9..496e7bcea9 100644
                  BatchTokenIDOutput(
                      rids=rids,
 diff --git a/python/sglang/srt/managers/scheduler_profiler_mixin.py b/python/sglang/srt/managers/scheduler_profiler_mixin.py
-index c02ed79..61733c4 100644
+index c02ed7997d..61733c4127 100644
 --- a/python/sglang/srt/managers/scheduler_profiler_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_profiler_mixin.py
 @@ -349,7 +349,7 @@ class SchedulerProfilerMixin:
@@ -2005,7 +2058,7 @@ index eff3a5615a..5b1eec9953 100644
  def _model_load_weights_direct(model, named_tensors: List[Tuple[str, torch.Tensor]]):
      params_dict = dict(model.named_parameters())
 diff --git a/python/sglang/srt/models/glm4v_moe.py b/python/sglang/srt/models/glm4v_moe.py
-index 2f00749..1f99193 100644
+index 2f0074924d..1f991932c6 100644
 --- a/python/sglang/srt/models/glm4v_moe.py
 +++ b/python/sglang/srt/models/glm4v_moe.py
 @@ -52,11 +52,31 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
@@ -2138,7 +2191,7 @@ index 1b6c185bcb..58ad9c7803 100644
                  positions,
                  hidden_states,
 diff --git a/python/sglang/srt/multimodal/processors/glm4v.py b/python/sglang/srt/multimodal/processors/glm4v.py
-index a44f14b..6d6c65e 100644
+index a44f14b6ca..6d6c65ea49 100644
 --- a/python/sglang/srt/multimodal/processors/glm4v.py
 +++ b/python/sglang/srt/multimodal/processors/glm4v.py
 @@ -1,7 +1,13 @@
@@ -2567,4 +2620,3 @@ index 55566973af..46c1771af8 100644
          assert expect_name == actual_name, f"{expect_name=} {actual_name=}"
          assert (
              expect_should_compare == actual_should_compare
-
