@@ -2,14 +2,23 @@ diff --git a/megatron/core/dist_checkpointing/strategies/common.py b/megatron/co
 index 41c21d93d..ef80f72d6 100644
 --- a/megatron/core/dist_checkpointing/strategies/common.py
 +++ b/megatron/core/dist_checkpointing/strategies/common.py
-@@ -89 +89 @@ class TorchCommonLoadStrategy(LoadCommonStrategy):
+@@ -86,7 +86,7 @@ class TorchCommonLoadStrategy(LoadCommonStrategy):
+                 msc = MultiStorageClientFeature.import_package()
+                 return msc.torch.load(load_path, map_location='cpu')
+             else:
 -                return torch.load(load_path, map_location='cpu')
 +                return torch.load(load_path, map_location='cpu', weights_only=False)
+         except FileNotFoundError as e:
+             err_msg = f'Common file {load_path} does not exist'
+             if MultiStorageClientFeature.is_enabled():
 diff --git a/megatron/core/dist_checkpointing/strategies/torch.py b/megatron/core/dist_checkpointing/strategies/torch.py
 index a5b6c009b..22794d7e6 100644
 --- a/megatron/core/dist_checkpointing/strategies/torch.py
 +++ b/megatron/core/dist_checkpointing/strategies/torch.py
-@@ -506,4 +506,6 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
+@@ -503,10 +503,12 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
+     def _validate_global_shapes(self, metadata, sharded_tensors):
+         for sh_ten in sharded_tensors:
+             if sh_ten.key not in metadata.state_dict_metadata:
 -                raise KeyError(
 -                    f"{sh_ten.key} from model not in state dict:"
 -                    f" {sorted(metadata.state_dict_metadata.keys())}"
@@ -20,42 +29,91 @@ index a5b6c009b..22794d7e6 100644
 +                # )
 +                print(f"{sh_ten.key} from model not in state dict, will skip")
 +                continue
-@@ -533 +535 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
+             loaded_shape = metadata.state_dict_metadata[sh_ten.key].size
+             expected_shape = sh_ten.global_shape
+             if loaded_shape != expected_shape:
+@@ -530,7 +532,7 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
+         tensor_metadata = self.metadata.state_dict_metadata
+         metadata_with_sizes = [
+             (tensor_metadata[key], tensor_metadata[key].size, sharded_tensor)
 -            for key, sharded_tensor in self.allow_shape_mismatch_sharded_tensors.items()
 +            for key, sharded_tensor in self.allow_shape_mismatch_sharded_tensors.items() if key in tensor_metadata
-@@ -804,0 +807 @@ class TorchDistLoadShardedStrategy(LoadShardedStrategy):
+         ]
+         try:
+             # Temporarily set sizes to expected shapes
+@@ -802,6 +804,7 @@ class TorchDistLoadShardedStrategy(LoadShardedStrategy):
+             planner=MCoreLoadPlanner(
+                 shapes_validation_sharded_tensors=flexible_shape_sharded_tensors,
+                 allow_shape_mismatch_sharded_tensors=allow_shape_mismatch_sharded_tensors,
 +                allow_partial_load=True,
+             ),
+         )
+ 
 diff --git a/megatron/core/distributed/distributed_data_parallel.py b/megatron/core/distributed/distributed_data_parallel.py
 index 55179ff30..6629f41a6 100644
 --- a/megatron/core/distributed/distributed_data_parallel.py
 +++ b/megatron/core/distributed/distributed_data_parallel.py
-@@ -47,0 +48,2 @@ class DistributedDataParallel(_BaseDataParallel):
+@@ -45,6 +45,8 @@ class DistributedDataParallel(_BaseDataParallel):
+         module: torch.nn.Module,
+         disable_bucketing: bool = False,
+         pg_collection: Optional[ProcessGroupCollection] = None,
 +        disable_grad_buffers_cpu_backup: bool = False,
 +        disable_param_buffers_cpu_backup: bool = False,
-@@ -211,0 +214,2 @@ class DistributedDataParallel(_BaseDataParallel):
+     ):
+         super().__init__(config=config, module=module)
+         if has_config_logger_enabled(config):
+@@ -209,6 +211,8 @@ class DistributedDataParallel(_BaseDataParallel):
+                         param_and_grad_dtype_to_indices[(param_dtype, grad_dtype)],
+                         self.ddp_config.nccl_ub,
+                         pg_collection,
 +                        disable_grad_buffers_cpu_backup=disable_grad_buffers_cpu_backup,
 +                        disable_param_buffers_cpu_backup=disable_param_buffers_cpu_backup,
+                     )
+                 )
+ 
 diff --git a/megatron/core/distributed/param_and_grad_buffer.py b/megatron/core/distributed/param_and_grad_buffer.py
-index 088374fbf..3dc244472 100644
+index 088374fbf..557e7e41b 100644
 --- a/megatron/core/distributed/param_and_grad_buffer.py
 +++ b/megatron/core/distributed/param_and_grad_buffer.py
-@@ -601,0 +602,2 @@ class _ParamAndGradBuffer:
+@@ -599,6 +599,8 @@ class _ParamAndGradBuffer:
+         param_indices: List[int],
+         nccl_ub: bool,
+         pg_collection: Optional[ProcessGroupCollection] = None,
 +        disable_grad_buffers_cpu_backup: bool = False,
 +        disable_param_buffers_cpu_backup: bool = False,
-@@ -631,0 +634,3 @@ class _ParamAndGradBuffer:
+     ):
+ 
+         if pg_collection is None:
+@@ -629,6 +631,9 @@ class _ParamAndGradBuffer:
+         self.data_parallel_world_size = self.data_parallel_group.size()
+         self.gradient_scaling_factor = gradient_scaling_factor
+         self.nccl_ub = nccl_ub
 +        disable_param_buffers_cpu_backup = (
 +            disable_param_buffers_cpu_backup and self.ddp_config.use_distributed_optimizer
 +        )
-@@ -757,0 +763,6 @@ class _ParamAndGradBuffer:
+ 
+         # Data structures to store underlying buckets and relevant indexing data.
+         self.buckets = []
+@@ -755,6 +760,12 @@ class _ParamAndGradBuffer:
+ 
+         if self.nccl_ub:
+             # If nccl_ub is True, use nccl_allocator to allocate memory for param_data/grad_data.
 +            assert not disable_grad_buffers_cpu_backup, (
 +                "disable_grad_buffers_cpu_backup is not supported with nccl_ub=True"
 +            )
 +            assert not disable_param_buffers_cpu_backup, (
 +                "disable_param_buffers_cpu_backup is not supported with nccl_ub=True"
 +            )
-@@ -775,0 +787 @@ class _ParamAndGradBuffer:
+             nccl_allocator.init()
+             pool = nccl_allocator.create_nccl_mem_pool(
+                 symmetric=not self.ddp_config.disable_symmetric_registration
+@@ -773,14 +784,45 @@ class _ParamAndGradBuffer:
+             torch.distributed.barrier()
+         else:
+             # If nccl_ub is False, mem_alloc_context is nullcontext.
 +            # Individual param/grad contexts below handle TMS regions separately.
-@@ -777,0 +790,24 @@ class _ParamAndGradBuffer:
+             mem_alloc_context = nullcontext
+ 
 +        def _make_no_backup_context(tag, disable, flag_name):
 +            if disable:
 +                try:
@@ -80,7 +138,11 @@ index 088374fbf..3dc244472 100644
 +        def _allocate_zeros(mem_alloc_context, *args, **kwargs):
 +            with mem_alloc_context():
 +                return torch.zeros(*args, **kwargs)
-@@ -783 +819,7 @@ class _ParamAndGradBuffer:
+         with mem_alloc_context():
+             # For MXFP8 param: Create a shared buffer for param AG and grad RS for memory efficiency
+             # The buffer is mapped to weight gradients whose dtype is either bf16 or FP32.
+             # It can be temporarily reused by param AG.
+             if self.ddp_config.use_distributed_optimizer and any(is_mxfp8tensor(p) for p in params):
 -                self.shared_buffer = torch.zeros(
 +                shared_mem_alloc_context = (
 +                    param_mem_alloc_context
@@ -89,21 +151,53 @@ index 088374fbf..3dc244472 100644
 +                )
 +                self.shared_buffer = _allocate_zeros(
 +                    shared_mem_alloc_context,
-@@ -800 +842,2 @@ class _ParamAndGradBuffer:
+                     self.numel,
+                     dtype=self.grad_dtype,
+                     device=torch.cuda.current_device(),
+@@ -797,18 +839,20 @@ class _ParamAndGradBuffer:
+             else:
+                 # Only re-map param tensors if using distributed optimizer.
+                 if self.ddp_config.use_distributed_optimizer:
 -                    self.param_data = torch.zeros(
 +                    self.param_data = _allocate_zeros(
 +                        param_mem_alloc_context,
-@@ -806 +849,2 @@ class _ParamAndGradBuffer:
+                         self.numel,
+                         dtype=self.param_dtype,
+                         device=torch.cuda.current_device(),
+                         requires_grad=False,
+                     )
 -                self.grad_data = torch.zeros(
-+                self.grad_data = _allocate_zeros(
-+                    grad_mem_alloc_context,
+-                    self.numel,
+-                    dtype=self.grad_dtype,
+-                    device=torch.cuda.current_device(),
+-                    requires_grad=False,
+-                )
++                with grad_mem_alloc_context():
++                    self.grad_data = torch.zeros(
++                        self.numel,
++                        dtype=self.grad_dtype,
++                        device=torch.cuda.current_device(),
++                        requires_grad=False,
++                    )
+ 
+         self.grad_data_size = 0
+         self.param_data_size = 0
 diff --git a/megatron/core/extensions/transformer_engine.py b/megatron/core/extensions/transformer_engine.py
 index ef8527e9e..acf4426f6 100644
 --- a/megatron/core/extensions/transformer_engine.py
 +++ b/megatron/core/extensions/transformer_engine.py
-@@ -641,0 +642 @@ class TELinear(te.pytorch.Linear):
+@@ -639,6 +639,7 @@ class TELinear(te.pytorch.Linear):
+         self.te_quant_params: Optional[TEQuantizationParams] = None
+ 
+         for param in self.parameters():
 +            setattr(param, "parallel_mode", parallel_mode)
-@@ -1457,0 +1459,39 @@ if HAVE_TE and is_te_min_version("1.9.0.dev0"):
+             if is_expert:
+                 # Reduce the gradient on the expert_data_parallel group for expert linear layers
+                 setattr(param, "allreduce", not self.expert_parallel)
+@@ -1455,6 +1456,45 @@ class TEDotProductAttention(te.pytorch.DotProductAttention):
+ 
+ 
+ if HAVE_TE and is_te_min_version("1.9.0.dev0"):
 +    def ceil_div(x: int, y: int) -> int:
 +        return (x + y - 1) // y
 +    class _FakeInt4QuantizationSTE(torch.autograd.Function):
@@ -143,7 +237,13 @@ index ef8527e9e..acf4426f6 100644
 +        if hasattr(x, 'main_grad'):
 +            x_out.main_grad = x.main_grad
 +        return x_out
-@@ -1673,0 +1714,10 @@ if HAVE_TE and is_te_min_version("1.9.0.dev0"):
+ 
+     class TEGroupedLinear(te.pytorch.GroupedLinear):
+         """
+@@ -1671,6 +1711,16 @@ if HAVE_TE and is_te_min_version("1.9.0.dev0"):
+                 return out
+             return out, None
+ 
 +        def _get_weight_tensors(self):
 +            """Get the weight tensors of the module."""
 +            weight_tensors = super()._get_weight_tensors()
@@ -154,13 +254,25 @@ index ef8527e9e..acf4426f6 100644
 +                    for w in weight_tensors
 +                ]
 +            return weight_tensors
+         def _encode_extra_state(self, state):
+             # TE 2.0 changed the format of extra_state to be a byte tensor
+             if is_te_min_version("2.0.0"):
 diff --git a/megatron/core/fusions/fused_mla_yarn_rope_apply.py b/megatron/core/fusions/fused_mla_yarn_rope_apply.py
 index 1fd5dcfae..c3d5c8b82 100644
 --- a/megatron/core/fusions/fused_mla_yarn_rope_apply.py
 +++ b/megatron/core/fusions/fused_mla_yarn_rope_apply.py
-@@ -387,0 +388 @@ def rotary_fwd_kv_kernel(
+@@ -385,6 +385,7 @@ def rotary_fwd_kv_kernel(
+     SIN,
+     emb_dim: tl.constexpr,
+     k_dim: tl.constexpr,
 +    k_dim_ceil: tl.constexpr,
-@@ -437,7 +438,12 @@ def rotary_fwd_kv_kernel(
+     v_dim: tl.constexpr,
+     head_num: tl.constexpr,
+     batch_size,
+@@ -434,21 +435,27 @@ def rotary_fwd_kv_kernel(
+     cos_right = tl.load(COS + token_idx * emb_dim + emb_dim // 2 + tl.arange(0, emb_dim // 2))
+     sin_right = tl.load(SIN + token_idx * emb_dim + emb_dim // 2 + tl.arange(0, emb_dim // 2))
+ 
 -    KV_ptr = KV + pid_m * stride_kv_seq + pid_head * BLOCK_H * stride_kv_nheads
 -    kv_off = tl.arange(0, BLOCK_H)[:, None] * stride_kv_nheads
 -    mask = kv_off < head_num * stride_kv_nheads
@@ -180,12 +292,12 @@ index 1fd5dcfae..c3d5c8b82 100644
 +    else:
 +        v = tl.zeros((BLOCK_H, 1), dtype=KV.dtype.element_ty)
 +    k = tl.load(KV_ptr + k_off, mask=mask_k)
-@@ -445,2 +451,2 @@ def rotary_fwd_kv_kernel(
+ 
 -    K_ptr = O_KEY + pid_m * stride_k_seq + pid_head * BLOCK_H * stride_k_nheads
 -    V_ptr = O_VALUE + pid_m * stride_v_seq + pid_head * BLOCK_H * stride_v_nheads
 +    K_ptr = O_KEY + pid_m * stride_k_seq # + pid_head * BLOCK_H * stride_k_nheads
 +    V_ptr = O_VALUE + pid_m * stride_v_seq # + pid_head * BLOCK_H * stride_v_nheads
-@@ -448,4 +454,5 @@ def rotary_fwd_kv_kernel(
+ 
 -    k_out_off = tl.arange(0, BLOCK_H)[:, None] * stride_k_nheads + tl.arange(0, k_dim)[None, :]
 -    v_out_off = tl.arange(0, BLOCK_H)[:, None] * stride_v_nheads + tl.arange(0, v_dim)[None, :]
 -    tl.store(K_ptr + k_out_off, k, mask=mask)
@@ -195,32 +307,47 @@ index 1fd5dcfae..c3d5c8b82 100644
 +    if v_dim > 0:
 +        v_out_off = ki_range * stride_v_nheads + tl.arange(0, v_dim)[None, :]
 +        tl.store(V_ptr + v_out_off, v, mask=mask_v)
-@@ -462,0 +470,2 @@ def rotary_fwd_kv_kernel(
+ 
+     EMB = K_POS_EMB + pid_m * stride_emb_seq
+     # x1 = t[..., 0::2], x2 = t[..., 1::2]
+@@ -460,14 +467,16 @@ def rotary_fwd_kv_kernel(
+     x_left = x_left.expand_dims(0).broadcast_to(BLOCK_H, emb_dim // 2)
+     x_right = x_right.expand_dims(0).broadcast_to(BLOCK_H, emb_dim // 2)
+ 
 +    x_range = tl.arange(0, BLOCK_H)[:, None] + pid_head * BLOCK_H
 +    mask_x = x_range < head_num
-@@ -464 +473 @@ def rotary_fwd_kv_kernel(
+     x_left_off = (
 -        tl.arange(0, BLOCK_H)[:, None] * stride_k_nheads
 +        x_range * stride_k_nheads
-@@ -469,2 +478,2 @@ def rotary_fwd_kv_kernel(
+         + k_dim
+         + tl.arange(0, emb_dim // 2)[None, :]
+     )
+     x_right_off = x_left_off + emb_dim // 2
 -    tl.store(K_ptr + x_left_off, x_left, mask=mask)
 -    tl.store(K_ptr + x_right_off, x_right, mask=mask)
 +    tl.store(K_ptr + x_left_off, x_left, mask=mask_x)
 +    tl.store(K_ptr + x_right_off, x_right, mask=mask_x)
-@@ -495,0 +505 @@ def rotary_bwd_kv_kernel(
+ 
+ 
+ @triton.autotune(
+@@ -493,6 +502,7 @@ def rotary_bwd_kv_kernel(
+     SIN,
+     emb_dim: tl.constexpr,
+     k_dim: tl.constexpr,
 +    k_dim_ceil: tl.constexpr,
-@@ -536,5 +546,6 @@ def rotary_bwd_kv_kernel(
+     v_dim: tl.constexpr,
+     head_num: tl.constexpr,
+     batch_size,
+@@ -533,27 +543,30 @@ def rotary_bwd_kv_kernel(
+     else:
+         token_idx = _get_thd_token_idx(cu_seqlens_kv, pid_m, seq_num, cp_rank, cp_size)
+ 
 -    dKV_ptr = dKV + pid_m * stride_dkv_seq + pid_head * BLOCK_H * stride_dkv_nheads
 -    dkv_off = tl.arange(0, BLOCK_H)[:, None] * stride_dkv_nheads
 -    mask = dkv_off < head_num * stride_dkv_nheads
 -    dk_out_off = dkv_off + tl.arange(0, k_dim)[None, :]
 -    dv_out_off = dkv_off + k_dim + tl.arange(0, v_dim)[None, :]
-+    dKV_ptr = dKV + pid_m * stride_dkv_seq # + pid_head * BLOCK_H * stride_dkv_nheads
-+    ki_range = tl.arange(0, BLOCK_H)[:, None] + pid_head * BLOCK_H
-+    kj_range = tl.arange(0, k_dim_ceil)[None, :]
-+    mask_k = (ki_range < head_num) & (kj_range < k_dim)
-+    mask_v = ki_range < head_num
-+    dk_out_off = ki_range * stride_dkv_nheads + kj_range
-@@ -542,8 +553,10 @@ def rotary_bwd_kv_kernel(
+-
 -    dK_ptr = dK + pid_m * stride_dk_seq + pid_head * BLOCK_H * stride_dk_nheads
 -    dV_ptr = dV + pid_m * stride_dv_seq + pid_head * BLOCK_H * stride_dv_nheads
 -    dk_in_off = tl.arange(0, BLOCK_H)[:, None] * stride_dk_nheads + tl.arange(0, k_dim)[None, :]
@@ -229,6 +356,13 @@ index 1fd5dcfae..c3d5c8b82 100644
 -    dv = tl.load(dV_ptr + dv_in_off, mask=mask)
 -    tl.store(dKV_ptr + dk_out_off, dk, mask=mask)
 -    tl.store(dKV_ptr + dv_out_off, dv, mask=mask)
++    dKV_ptr = dKV + pid_m * stride_dkv_seq # + pid_head * BLOCK_H * stride_dkv_nheads
++    ki_range = tl.arange(0, BLOCK_H)[:, None] + pid_head * BLOCK_H
++    kj_range = tl.arange(0, k_dim_ceil)[None, :]
++    mask_k = (ki_range < head_num) & (kj_range < k_dim)
++    mask_v = ki_range < head_num
++    dk_out_off = ki_range * stride_dkv_nheads + kj_range
++
 +    dK_ptr = dK + pid_m * stride_dk_seq # + pid_head * BLOCK_H * stride_dk_nheads
 +    dV_ptr = dV + pid_m * stride_dv_seq # + pid_head * BLOCK_H * stride_dv_nheads
 +    dk_in_off = ki_range * stride_dk_nheads + kj_range
@@ -239,80 +373,198 @@ index 1fd5dcfae..c3d5c8b82 100644
 +        dv_in_off = ki_range * stride_dv_nheads + tl.arange(0, v_dim)[None, :]
 +        dv = tl.load(dV_ptr + dv_in_off, mask=mask_v)
 +        tl.store(dKV_ptr + dv_out_off, dv, mask=mask_v)
-@@ -555,2 +568,2 @@ def rotary_bwd_kv_kernel(
+ 
+     if pid_head == 0:
+         x_left_accum = tl.zeros((BLOCK_H, emb_dim // 2), dtype=tl.float32)
+         x_right_accum = tl.zeros((BLOCK_H, emb_dim // 2), dtype=tl.float32)
+         for i in tl.static_range(triton.cdiv(head_num, BLOCK_H)):
 -            dK_ptr = dK + pid_m * stride_dk_seq + i * BLOCK_H * stride_dk_nheads
 -            x_off = tl.arange(0, BLOCK_H)[:, None] * stride_dk_nheads + k_dim
 +            dK_ptr = dK + pid_m * stride_dk_seq # + i * BLOCK_H * stride_dk_nheads
 +            x_off = tl.arange(0, BLOCK_H)[:, None] * stride_dk_nheads + k_dim + i * BLOCK_H * stride_dk_nheads
-@@ -634,0 +648 @@ class ApplyMLARotaryEmbKV(torch.autograd.Function):
+             mask = x_off < head_num * stride_dk_nheads
+             x_left_off = x_off + tl.arange(0, emb_dim // 2)[None, :]
+             x_right_off = x_left_off + emb_dim // 2
+@@ -632,6 +645,7 @@ class ApplyMLARotaryEmbKV(torch.autograd.Function):
+ 
+         o_key = kv.new_empty(total_seqlen, nheads, emb_dim + k_dim)
+         o_value = kv.new_empty(total_seqlen, nheads, v_dim)
 +        k_dim_ceil = triton.next_power_of_2(k_dim)
-@@ -645,0 +660 @@ class ApplyMLARotaryEmbKV(torch.autograd.Function):
+ 
+         grid = lambda META: (total_seqlen, triton.cdiv(nheads, META["BLOCK_H"]))
+         rotary_fwd_kv_kernel[grid](
+@@ -643,6 +657,7 @@ class ApplyMLARotaryEmbKV(torch.autograd.Function):
+             sin,
+             emb_dim,
+             k_dim,
 +            k_dim_ceil,
-@@ -702,0 +718 @@ class ApplyMLARotaryEmbKV(torch.autograd.Function):
+             v_dim,
+             nheads,
+             batch_size,
+@@ -700,6 +715,7 @@ class ApplyMLARotaryEmbKV(torch.autograd.Function):
+ 
+         d_kv = dk.new_empty(total_seqlen, nheads, ctx.k_dim + ctx.v_dim)
+         d_emb = dk.new_empty(total_seqlen, 1, ctx.emb_dim)
 +        k_dim_ceil = triton.next_power_of_2(ctx.k_dim)
-@@ -713,0 +730 @@ class ApplyMLARotaryEmbKV(torch.autograd.Function):
+ 
+         grid = lambda META: (total_seqlen, triton.cdiv(nheads, META["BLOCK_H"]))
+         rotary_bwd_kv_kernel[grid](
+@@ -711,6 +727,7 @@ class ApplyMLARotaryEmbKV(torch.autograd.Function):
+             sin,
+             ctx.emb_dim,
+             ctx.k_dim,
 +            k_dim_ceil,
+             ctx.v_dim,
+             nheads,
+             batch_size,
 diff --git a/megatron/core/inference/contexts/dynamic_context.py b/megatron/core/inference/contexts/dynamic_context.py
 index 5dc2d5030..2b241c86d 100644
 --- a/megatron/core/inference/contexts/dynamic_context.py
 +++ b/megatron/core/inference/contexts/dynamic_context.py
-@@ -64,2 +64,2 @@ try:
+@@ -61,8 +61,8 @@ except ImportError:
+ try:
+     from torch_memory_saver import torch_memory_saver
+ 
 -    torch_memory_saver.hook_mode = "torch"
 -    HAVE_TORCH_MEMORY_SAVER = True
 +    # torch_memory_saver.hook_mode = "torch"
 +    HAVE_TORCH_MEMORY_SAVER = False
+ except ImportError:
+     HAVE_TORCH_MEMORY_SAVER = False
+ 
 diff --git a/megatron/core/models/common/embeddings/rotary_pos_embedding.py b/megatron/core/models/common/embeddings/rotary_pos_embedding.py
 index 05a7e8f60..881cfbcaa 100644
 --- a/megatron/core/models/common/embeddings/rotary_pos_embedding.py
 +++ b/megatron/core/models/common/embeddings/rotary_pos_embedding.py
-@@ -310,0 +311 @@ class MultimodalRotaryEmbedding(nn.Module):
+@@ -308,6 +308,7 @@ class MultimodalRotaryEmbedding(nn.Module):
+         self,
+         position_ids: torch.Tensor,
+         mrope_section: List[int],
 +        packed_seq: bool = False,
-@@ -355 +356,3 @@ class MultimodalRotaryEmbedding(nn.Module):
+         cp_group: Optional[torch.distributed.ProcessGroup] = None,
+     ) -> Tensor:
+         """Forward pass of multimodal RoPE embedding.
+@@ -352,7 +353,9 @@ class MultimodalRotaryEmbedding(nn.Module):
+         emb = emb[..., None, :].transpose(0, 1).contiguous()
+         if cp_group is None:
+             cp_group = self.cp_group
 -        if cp_group is not None and cp_group.size() > 1:
 +        # For THD (packed sequence) format, skip CP slicing here — it is handled
 +        # per-sequence inside _apply_rotary_pos_emb_thd instead (same as RotaryEmbedding).
 +        if cp_group is not None and cp_group.size() > 1 and not packed_seq:
+             # slice rotary_pos_emb along sequence dimension and select the parition of the current
+             # CP rank
+             emb = get_pos_emb_on_this_cp_rank(emb, 0, cp_group)
 diff --git a/megatron/core/models/gpt/gpt_layer_specs.py b/megatron/core/models/gpt/gpt_layer_specs.py
 index 5bb479ad3..a9d3583e5 100755
 --- a/megatron/core/models/gpt/gpt_layer_specs.py
 +++ b/megatron/core/models/gpt/gpt_layer_specs.py
-@@ -184,0 +185,2 @@ def get_gpt_layer_with_transformer_engine_spec(
+@@ -182,6 +182,8 @@ def get_gpt_layer_with_transformer_engine_spec(
+     fallback_to_eager_attn: bool = False,
+     use_kitchen_attention: bool = False,
+     kitchen_attention_backend: str = "sdpa",
 +    post_self_attn_layernorm: bool = False,
 +    post_mlp_layernorm: bool = False,
-@@ -265,0 +268 @@ def get_gpt_layer_with_transformer_engine_spec(
+ ) -> ModuleSpec:
+     """Use this spec to use lower-level Transformer Engine modules (required for fp8 training).
+ 
+@@ -263,9 +265,11 @@ def get_gpt_layer_with_transformer_engine_spec(
+                     ),
+                 ),
+                 self_attn_bda=get_bias_dropout_add,
 +                post_self_attn_layernorm=TENorm if post_self_attn_layernorm else IdentityOp,
-@@ -268,0 +272 @@ def get_gpt_layer_with_transformer_engine_spec(
+                 pre_mlp_layernorm=backend.layer_norm() if num_experts else IdentityOp,
+                 mlp=mlp,
+                 mlp_bda=get_bias_dropout_add,
 +                post_mlp_layernorm=TENorm if post_mlp_layernorm else IdentityOp,
-@@ -291,0 +296 @@ def get_gpt_layer_with_transformer_engine_spec(
+             ),
+         )
+     else:
+@@ -289,9 +293,11 @@ def get_gpt_layer_with_transformer_engine_spec(
+                     ),
+                 ),
+                 self_attn_bda=get_bias_dropout_add,
 +                post_self_attn_layernorm=TENorm if post_self_attn_layernorm else IdentityOp,
-@@ -294,0 +300 @@ def get_gpt_layer_with_transformer_engine_spec(
+                 pre_mlp_layernorm=backend.layer_norm() if num_experts else IdentityOp,
+                 mlp=mlp,
+                 mlp_bda=get_bias_dropout_add,
 +                post_mlp_layernorm=TENorm if post_mlp_layernorm else IdentityOp,
-@@ -539,0 +546,2 @@ def get_gpt_decoder_layer_specs(
+                 sharded_state_dict_keys_map={
+                     "mlp.0.weight": "mlp.linear_fc1.layer_norm_weight",
+                     "mlp.0.bias": "mlp.linear_fc1.layer_norm_bias",
+@@ -537,6 +543,8 @@ def get_gpt_decoder_layer_specs(
+             qk_l2_norm=qk_l2_norm,
+             use_kitchen=config.use_kitchen,
+             use_te_activation_func=config.use_te_activation_func,
 +            post_self_attn_layernorm=config.post_self_attn_layernorm,
 +            post_mlp_layernorm=config.post_mlp_layernorm,
-@@ -549,0 +558,2 @@ def get_gpt_decoder_layer_specs(
+         )
+         moe_layer_spec = get_gpt_layer_with_transformer_engine_spec(
+             num_experts=config.num_moe_experts,
+@@ -547,6 +555,8 @@ def get_gpt_decoder_layer_specs(
+             qk_l2_norm=qk_l2_norm,
+             use_kitchen=config.use_kitchen,
+             use_te_activation_func=config.use_te_activation_func,
 +            post_self_attn_layernorm=config.post_self_attn_layernorm,
 +            post_mlp_layernorm=config.post_mlp_layernorm,
+         )
+     else:
+         dense_layer_spec = get_gpt_layer_local_spec(
 diff --git a/megatron/core/models/gpt/gpt_model.py b/megatron/core/models/gpt/gpt_model.py
 index 5b31ddedf..5b8632969 100644
 --- a/megatron/core/models/gpt/gpt_model.py
 +++ b/megatron/core/models/gpt/gpt_model.py
-@@ -396,0 +397,2 @@ class GPTModel(LanguageModule):
+@@ -394,6 +394,8 @@ class GPTModel(LanguageModule):
+                 rotary_pos_emb = self.rotary_pos_emb(
+                     position_ids,
+                     self.mrope_section,
 +                    packed_seq=packed_seq_params is not None
 +                    and packed_seq_params.qkv_format == 'thd',
-@@ -490,0 +493 @@ class GPTModel(LanguageModule):
+                     cp_group=packed_seq_params.cp_group if packed_seq_params is not None else None,
+                 )
+             else:
+@@ -488,6 +490,7 @@ class GPTModel(LanguageModule):
+         inference_params: Optional[BaseInferenceContext] = None,
+         loss_mask: Optional[Tensor] = None,
+         padding_mask: Optional[Tensor] = None,
 +        mtp_kwargs: Optional[dict] = None,
-@@ -562,0 +566 @@ class GPTModel(LanguageModule):
+     ) -> Tensor:
+         """Forward function of the GPT Model This function passes the input tensors
+         through the embedding layer, and then the decoder and finally into the post
+@@ -560,6 +563,7 @@ class GPTModel(LanguageModule):
+             runtime_gather_output=runtime_gather_output,
+             extra_block_kwargs=extra_block_kwargs,
+             inference_context=inference_context,
 +            mtp_kwargs=mtp_kwargs,
-@@ -583,0 +588 @@ class GPTModel(LanguageModule):
+         )
+ 
+     def _postprocess(
+@@ -581,6 +585,7 @@ class GPTModel(LanguageModule):
+         runtime_gather_output=None,
+         extra_block_kwargs=None,
+         inference_context=None,
 +        mtp_kwargs=None,
-@@ -594,0 +600,2 @@ class GPTModel(LanguageModule):
+     ):
+         """Postprocesses decoder hidden states to generate logits or compute loss.
+ 
+@@ -592,10 +597,12 @@ class GPTModel(LanguageModule):
+             assert runtime_gather_output, "Inference must always gather TP logits"
+ 
+         # logits and loss
 +        mtp_kwargs = mtp_kwargs or {}
 +        mtp_labels = mtp_kwargs.get('mtp_labels')
-@@ -598 +605 @@ class GPTModel(LanguageModule):
+         output_weight = None
+         if self.share_embeddings_and_output_weights:
+             output_weight = self.shared_embedding_or_output_weight()
 -        if mtp_in_postprocess:
 +        if mtp_in_postprocess and mtp_labels is not None:
-@@ -617,2 +624,9 @@ class GPTModel(LanguageModule):
+             hidden_states = self.mtp(
+                 input_ids=input_ids,
+                 position_ids=position_ids,
+@@ -614,13 +621,33 @@ class GPTModel(LanguageModule):
+         if not self.post_process:
+             return hidden_states
+ 
 -        if self.config.mtp_num_layers is not None:
 -            mtp_labels = labels.clone()
 +        if self.config.mtp_num_layers and mtp_labels is not None:
@@ -324,7 +576,11 @@ index 5b31ddedf..5b8632969 100644
 +                cp_group=self.cp_group,
 +                packed_seq_params=packed_seq_params,
 +            )
-@@ -623,0 +638,13 @@ class GPTModel(LanguageModule):
+             hidden_states_list = torch.chunk(hidden_states, 1 + self.config.mtp_num_layers, dim=0)
+             hidden_states = hidden_states_list[0]
+             if loss_mask is None:
+                 # if loss_mask is not provided, use all ones as loss_mask
+                 loss_mask = torch.ones_like(mtp_labels)
 +            else:
 +                loss_mask, _ = roll_tensor(
 +                    loss_mask,
@@ -338,74 +594,143 @@ index 5b31ddedf..5b8632969 100644
 +                mtp_output_weight = self.output_layer.weight
 +            if mtp_output_weight is not None:
 +                mtp_output_weight = mtp_output_weight.detach()
-@@ -644 +671 @@ class GPTModel(LanguageModule):
+             for mtp_layer_number in range(self.config.mtp_num_layers):
+                 # Calc loss for the current Multi-Token Prediction (MTP) layers.
+                 mtp_labels, _ = roll_tensor(
+@@ -641,7 +668,7 @@ class GPTModel(LanguageModule):
+                 # Compute mtp loss without storing logits to save memory.
+                 output_layer_kwargs = dict(
+                     input_=hidden_states_list[mtp_layer_number + 1],
 -                    weight=output_weight,
 +                    weight=mtp_output_weight,
+                     runtime_gather_output=runtime_gather_output,
+                 )
+                 if self.fuse_linear_cross_entropy:
 diff --git a/megatron/core/optimizer/distrib_optimizer.py b/megatron/core/optimizer/distrib_optimizer.py
 index a4364f5e9..6636187c7 100644
 --- a/megatron/core/optimizer/distrib_optimizer.py
 +++ b/megatron/core/optimizer/distrib_optimizer.py
-@@ -688,0 +689,2 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+@@ -686,6 +686,8 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+                 # TE FusedAdam will not accumulate step for empty param groups, so we need to
+                 # align the step across param groups.
+                 param_group["step"] = int(step)
 +            if "step" in param_group and param_group["step"] is None:
 +                del param_group["step"]
-@@ -970,0 +973,5 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+ 
+         # Grad scaler state.
+         if self.grad_scaler:
+@@ -968,6 +970,11 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+                     bucket_state = []
+                     for model_param, param_range_map in gbuf_range_map["param_map"].items():
+                         tensors = self._get_main_param_and_optimizer_states(model_param)
 +                        if "step" in tensors:
 +                            # Step is restored from optimizer param_groups. Keeping it in
 +                            # bucket state makes it common checkpoint state whose list
 +                            # skeleton depends on save-time optimizer placement.
 +                            del tensors["step"]
-@@ -1669,0 +1677,5 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+                         tensors.update(
+                             {
+                                 "gbuf_local_start": param_range_map["gbuf_local"].start,
+@@ -1667,6 +1674,11 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+                             if key == 'padding':
+                                 tensors[key] = LocalNonpersistentObject(tensors[key])
+                                 continue
 +                            if key == 'step':
 +                                # The optimizer state of STEP is a 0-dim tensor and is handled
 +                                # separately via param_groups, not as part of the gradient buffer.
 +                                tensors[key] = LocalNonpersistentObject(tensors[key])
 +                                continue
-@@ -1803,0 +1816,4 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+                             assert tensors[key].shape == (gbuf_local_end - gbuf_local_start,), (
+                                 tensors[key].shape,
+                                 gbuf_local_start,
+@@ -1801,6 +1813,10 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+                     for src_tensors, (model_param, param_range_map) in zip(
+                         bucket_state, gbuf_range_map["param_map"].items()
+                     ):
 +                        # Local metadata used for checkpoint merging/filtering, not optimizer state.
 +                        src_tensors.pop('padding', None)
 +                        # Step is restored from optimizer param_groups.
 +                        src_tensors.pop('step', None)
+                         # Main param & optimizer states.
+                         self._set_main_param_and_optimizer_states(model_param, src_tensors)
+ 
 diff --git a/megatron/core/parallel_state.py b/megatron/core/parallel_state.py
 index 7bb964078..2fe9a8cdc 100644
 --- a/megatron/core/parallel_state.py
 +++ b/megatron/core/parallel_state.py
-@@ -13,0 +14 @@ import torch
+@@ -11,6 +11,7 @@ from typing import Callable, List, Optional
+ 
+ import numpy as np
+ import torch
 +import torch.distributed as dist
+ 
+ from .utils import GlobalMemoryBuffer, GlobalSymmetricMemoryBuffer, is_torch_min_version
+ 
 diff --git a/megatron/core/pipeline_parallel/p2p_communication.py b/megatron/core/pipeline_parallel/p2p_communication.py
 index ac839c21f..f18309217 100644
 --- a/megatron/core/pipeline_parallel/p2p_communication.py
 +++ b/megatron/core/pipeline_parallel/p2p_communication.py
-@@ -29 +29 @@ def _batched_p2p_ops(
+@@ -26,22 +26,22 @@ def _batched_p2p_ops(
+     ops = []
+     if tensor_send_prev is not None:
+         send_prev_op = torch.distributed.P2POp(
 -            torch.distributed.isend, tensor_send_prev, prev_pipeline_rank, group
 +            torch.distributed.isend, tensor_send_prev, prev_pipeline_rank,
-@@ -34 +34 @@ def _batched_p2p_ops(
+         )
+         ops.append(send_prev_op)
+     if tensor_recv_prev is not None:
+         recv_prev_op = torch.distributed.P2POp(
 -            torch.distributed.irecv, tensor_recv_prev, prev_pipeline_rank, group
 +            torch.distributed.irecv, tensor_recv_prev, prev_pipeline_rank,
-@@ -39 +39 @@ def _batched_p2p_ops(
+         )
+         ops.append(recv_prev_op)
+     if tensor_send_next is not None:
+         send_next_op = torch.distributed.P2POp(
 -            torch.distributed.isend, tensor_send_next, next_pipeline_rank, group
 +            torch.distributed.isend, tensor_send_next, next_pipeline_rank,
-@@ -44 +44 @@ def _batched_p2p_ops(
+         )
+         ops.append(send_next_op)
+     if tensor_recv_next is not None:
+         recv_next_op = torch.distributed.P2POp(
 -            torch.distributed.irecv, tensor_recv_next, next_pipeline_rank, group
 +            torch.distributed.irecv, tensor_recv_next, next_pipeline_rank,
+         )
+         ops.append(recv_next_op)
+     if len(ops) > 0:
 diff --git a/megatron/core/transformer/moe/moe_utils.py b/megatron/core/transformer/moe/moe_utils.py
 index 75825cd37..3c71a28d0 100644
 --- a/megatron/core/transformer/moe/moe_utils.py
 +++ b/megatron/core/transformer/moe/moe_utils.py
-@@ -713,0 +714,2 @@ def topk_routing_with_score_function(
+@@ -711,6 +711,8 @@ def topk_routing_with_score_function(
+                 scores, topk, num_groups, group_topk, _compute_topk
+             )
+ 
 +    from slime.utils.routing_replay import get_routing_replay_compute_topk
 +    compute_topk = get_routing_replay_compute_topk(compute_topk)
+     if score_function == "softmax":
+         if use_pre_softmax:
+             scores = torch.softmax(logits, dim=-1, dtype=torch.float32).type_as(logits)
 diff --git a/megatron/core/transformer/moe/router.py b/megatron/core/transformer/moe/router.py
 index a2f3e90bd..39e1fc2a9 100644
 --- a/megatron/core/transformer/moe/router.py
 +++ b/megatron/core/transformer/moe/router.py
-@@ -209,0 +210,2 @@ class TopKRouter(Router):
+@@ -207,6 +207,8 @@ class TopKRouter(Router):
+         if self.config.moe_enable_routing_replay:
+             self.router_replay = RouterReplay()
+ 
 +        from slime.utils.routing_replay import register_routing_replay
 +        register_routing_replay(self)
+     def _maintain_float32_expert_bias(self):
+         """
+         Maintain the expert bias in float32.
 diff --git a/megatron/core/transformer/multi_token_prediction.py b/megatron/core/transformer/multi_token_prediction.py
 index b0476155a..29c643d3e 100755
 --- a/megatron/core/transformer/multi_token_prediction.py
 +++ b/megatron/core/transformer/multi_token_prediction.py
-@@ -712,7 +712,8 @@ class MultiTokenPredictionLayer(MegatronModule):
+@@ -709,17 +709,21 @@ class MultiTokenPredictionLayer(MegatronModule):
+             cp_group=self.cp_group,
+             packed_seq_params=packed_seq_params,
+         )
 -        position_ids, _ = roll_tensor(
 -            position_ids,
 -            shifts=-1,
@@ -421,14 +746,21 @@ index b0476155a..29c643d3e 100755
 +                cp_group=self.cp_group,
 +                packed_seq_params=packed_seq_params,
 +            )
-@@ -720,0 +722 @@ class MultiTokenPredictionLayer(MegatronModule):
+         # embedding
+         decoder_input = embedding(input_ids=input_ids, position_ids=position_ids)
 +        decoder_input = decoder_input.detach()
-@@ -722 +724,3 @@ class MultiTokenPredictionLayer(MegatronModule):
+ 
 -        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True)
 +        hidden_states = make_viewless_tensor(
 +            inp=hidden_states, requires_grad=True, keep_graph=False
 +        )
-@@ -823,0 +828,31 @@ class MultiTokenPredictionLayer(MegatronModule):
+ 
+         return input_ids, position_ids, decoder_input, hidden_states
+ 
+@@ -821,22 +825,52 @@ class MultiTokenPredictionLayer(MegatronModule):
+         return hidden_states
+ 
+     def _checkpointed_forward(self, forward_func, *args, **kwargs):
 +        """Wrap forward_func with activation checkpointing while only passing tensors."""
 +        positional_specs = []
 +        keyword_specs = []
@@ -460,75 +792,150 @@ index b0476155a..29c643d3e 100755
 +                    rebuilt_kwargs[key] = payload
 +            return forward_func(*rebuilt_args, **rebuilt_kwargs)
 +        tensor_args_tuple = tuple(tensor_args)
-@@ -830 +865 @@ class MultiTokenPredictionLayer(MegatronModule):
+         def checkpoint_handler():
+             """Determines whether to use the `te_checkpoint` or `tensor_parallel.checkpoint`"""
+             if self.config.fp8:
+                 from megatron.core.extensions.transformer_engine import te_checkpoint
+ 
+                 return te_checkpoint(
 -                    forward_func,
 +                    run,
-@@ -834,2 +869 @@ class MultiTokenPredictionLayer(MegatronModule):
+                     self.config.distribute_saved_activations,
+                     tensor_parallel.random.get_cuda_rng_tracker,
+                     parallel_state.get_tensor_model_parallel_group(),
 -                    *args,
 -                    **kwargs,
 +                    *tensor_args_tuple,
-@@ -839 +873 @@ class MultiTokenPredictionLayer(MegatronModule):
+                 )
+             else:
+                 return tensor_parallel.checkpoint(
 -                    forward_func, self.config.distribute_saved_activations, *args, *kwargs.values()
 +                    run, self.config.distribute_saved_activations, *tensor_args_tuple
+                 )
+ 
+         if self.config.recompute_method == 'uniform':
 diff --git a/megatron/core/transformer/transformer_config.py b/megatron/core/transformer/transformer_config.py
 index dce438520..ff0a401d1 100644
 --- a/megatron/core/transformer/transformer_config.py
 +++ b/megatron/core/transformer/transformer_config.py
-@@ -231,0 +232,2 @@ class TransformerConfig(ModelParallelConfig):
+@@ -229,6 +229,8 @@ class TransformerConfig(ModelParallelConfig):
+     attention_output_gate: bool = False
+     """Whether to apply output gate to the attention layers."""
+ 
 +    post_self_attn_layernorm: bool = False
 +    post_mlp_layernorm: bool = False
+     test_mode: bool = False
+     """Whether to run real-time tests."""
+ 
 diff --git a/megatron/core/transformer/transformer_layer.py b/megatron/core/transformer/transformer_layer.py
 index 12c248684..5ece02b41 100644
 --- a/megatron/core/transformer/transformer_layer.py
 +++ b/megatron/core/transformer/transformer_layer.py
-@@ -226,0 +227 @@ class TransformerLayerSubmodules:
+@@ -224,6 +224,7 @@ class TransformerLayerSubmodules:
+     input_layernorm: Union[ModuleSpec, type] = IdentityOp
+     self_attention: Union[ModuleSpec, type] = IdentityOp
+     self_attn_bda: Union[ModuleSpec, type] = IdentityFuncOp
 +    post_self_attn_layernorm: Union[ModuleSpec, type] = IdentityOp
-@@ -234,0 +236 @@ class TransformerLayerSubmodules:
+ 
+     pre_cross_attn_layernorm: Union[ModuleSpec, type] = IdentityOp
+     cross_attention: Union[ModuleSpec, type] = IdentityOp
+@@ -232,6 +233,7 @@ class TransformerLayerSubmodules:
+     pre_mlp_layernorm: Union[ModuleSpec, type] = IdentityOp
+     mlp: Union[ModuleSpec, type] = IdentityOp
+     mlp_bda: Union[ModuleSpec, type] = IdentityFuncOp
 +    post_mlp_layernorm: Union[ModuleSpec, type] = IdentityOp
-@@ -313,0 +316,6 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
+ 
+     # Mapping for sharded tensor keys to be applied in `sharded_state_dict` method
+     sharded_state_dict_keys_map: Dict[str, str] = field(default_factory=dict)
+@@ -311,6 +313,12 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
+         # [Module 3: BiasDropoutFusion]
+         self.self_attn_bda = build_module(submodules.self_attn_bda)
+ 
 +        self.post_self_attn_layernorm = build_module(
 +            submodules.post_self_attn_layernorm,
 +            config=self.config,
 +            hidden_size=self.config.hidden_size,
 +            eps=self.config.layernorm_epsilon,
 +        )
-@@ -378,0 +387,6 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
+         # [Module 4: Post SelfAttention] Optional Layernorm after self-attn
+         self.pre_cross_attn_layernorm = build_module(
+             submodules.pre_cross_attn_layernorm,
+@@ -376,6 +384,12 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
+ 
+         self.is_moe_layer = isinstance(self.mlp, MoELayer)
+ 
 +        self.post_mlp_layernorm = build_module(
 +            submodules.post_mlp_layernorm,
 +            config=self.config,
 +            hidden_size=self.config.hidden_size,
 +            eps=self.config.layernorm_epsilon
 +        )
-@@ -617,0 +632,3 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
+         self.recompute_input_layernorm = False
+         self.recompute_pre_mlp_layernorm = False
+         self.recompute_mlp = False
+@@ -615,6 +629,9 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
+                 attention_output_with_bias[0]
+             )
+ 
 +        attention_output, attention_output_bias = attention_output_with_bias
 +        attention_output = self.post_self_attn_layernorm(attention_output)
 +        attention_output_with_bias = (attention_output, attention_output_bias)
-@@ -796,0 +814,3 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
+         # TODO: could we move `bias_dropout_add_exec_handler` itself
+         # inside the module provided in the `bias_dropout_add_spec` module?
+         nvtx_range_push(suffix="self_attn_bda")
+@@ -794,6 +811,9 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
+             self.config.inference_fuse_tp_communication
+         )
+ 
 +        mlp_output, mlp_output_bias = mlp_output_with_bias
 +        mlp_output = self.post_mlp_layernorm(mlp_output)
 +        mlp_output_with_bias = (mlp_output, mlp_output_bias)
+         if self.recompute_pre_mlp_layernorm:
+             # discard the output of the pre-mlp layernorm and register the recompute
+             # as a gradient hook of mlp_output_with_bias[0]
 diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
 index 1af066a82..d9054188c 100644
 --- a/megatron/training/arguments.py
 +++ b/megatron/training/arguments.py
-@@ -1390,0 +1391,2 @@ def core_transformer_config_from_args(args, config_class=None):
+@@ -1388,6 +1388,8 @@ def core_transformer_config_from_args(args, config_class=None):
+ 
+     kw_args['inference_sampling_seed'] = args.seed
+ 
 +    kw_args['post_self_attn_layernorm'] = args.post_self_attn_layernorm
 +    kw_args['post_mlp_layernorm'] = args.post_mlp_layernorm
-@@ -1703,0 +1706,2 @@ def _add_network_size_args(parser):
+     # handle quantization config
+     # NOTE: Kitchen arguments are only added to the namespace when
+     # Kitchen library is available.
+@@ -1701,6 +1703,8 @@ def _add_network_size_args(parser):
+     group.add_argument('--make-vocab-size-divisible-by', type=int, default=128,
+                        help='Pad the vocab size to be divisible by this value.'
+                        'This is added for computational efficieny reasons.')
 +    group.add_argument('--use-gated-attention', action='store_true',
 +                       help='If set, use gated attention as in Qwen3Next')
+     group.add_argument('--openai-gelu', action='store_true',
+                        help='Use OpenAIs GeLU implementation. This option'
+                        'should not be used unless for backward compatibility'
 diff --git a/megatron/training/tokenizer/tokenizer.py b/megatron/training/tokenizer/tokenizer.py
 index 17df57dda..260a5f6c8 100644
 --- a/megatron/training/tokenizer/tokenizer.py
 +++ b/megatron/training/tokenizer/tokenizer.py
-@@ -139 +139 @@ class _HuggingFaceTokenizer(MegatronLegacyTokenizer):
+@@ -136,7 +136,7 @@ class _HuggingFaceTokenizer(MegatronLegacyTokenizer):
+         # TODO(bnorick): download tokenizer once to lustre and use force offline to make sure all tasks read it from there
+         self._tokenizer = transformers.AutoTokenizer.from_pretrained(
+             pretrained_model_name_or_path=pretrained_model_name_or_path,
 -            trust_remote_code=trust_remote_code,
 +            trust_remote_code=True,
+             **kwargs,
+         )
+         self._vocab = self._tokenizer.get_vocab()
 diff --git a/megatron/training/training.py b/megatron/training/training.py
 index e9736ac08..6567ed426 100644
 --- a/megatron/training/training.py
 +++ b/megatron/training/training.py
-@@ -1329,0 +1330,8 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
+@@ -1327,6 +1327,14 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
+         # Wait for the default stream to complete before starting ddp_stream
+         ddp_stream.wait_stream(torch.cuda.current_stream())
+         # Make ddp_stream start after whatever the default stream already queued
 +        dp_extra_kwargs = {}
 +        if DP is DDP:
 +            dp_extra_kwargs['disable_grad_buffers_cpu_backup'] = getattr(
@@ -537,5 +944,14 @@ index e9736ac08..6567ed426 100644
 +            dp_extra_kwargs['disable_param_buffers_cpu_backup'] = getattr(
 +                args, 'disable_param_buffers_cpu_backup', False
 +            )
-@@ -1339,0 +1348 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
+         with torch.cuda.stream(ddp_stream):
+             model = [
+                 DP(
+@@ -1337,6 +1345,7 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
+                     # model chunks is overlapped with compute anyway.
+                     disable_bucketing=(model_chunk_idx > 0)
+                     or args.overlap_param_gather_with_optimizer_step,
 +                    **dp_extra_kwargs,
+                 )
+                 for (model_chunk_idx, model_chunk) in enumerate(model)
+             ]
