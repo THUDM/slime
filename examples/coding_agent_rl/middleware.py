@@ -25,7 +25,7 @@ Read `_handle_request` (§3) top-to-bottom -- that's the online turn:
     _build_prompt      replace/extend chat_messages -> render token ids
     _generate          POST sglang /generate -> TurnRecord
     _build_reply       output_ids -> Anthropic blocks
-    _record_turn       remember the prompt/output boundary for next-turn splice and later merge
+    append turn        remember the prompt/output boundary for next-turn splice and later merge
 
 `pop_session_split()` drains frozen TurnRecords and merges them into training
 segments. The online path serves and records; the pop path linearizes.
@@ -555,16 +555,6 @@ def _stop_reason(tool_uses: list[dict], finish: str) -> str:
     return "end_turn"
 
 
-def _record_turn(target: Chain, turn: TurnRecord) -> None:
-    """Save one completed assistant generation.
-
-    pending_turns feeds next-turn raw splice. turns is the immutable log later
-    replayed by pop_session_split() into the training sequence.
-    """
-    target.turns.append(turn)
-    target.pending_turns.append(turn)
-
-
 def _start_sub_chain(s: Session, dispatch_id: str) -> None:
     """Start a fresh sub chain on this session and remember the tool_use_id
     we'll watch for on main to know when this sub is done. The matching
@@ -592,11 +582,13 @@ async def _handle_request(request: web.Request) -> web.StreamResponse:
         async with s.lock:  # same sid -> serialized
             target, is_sub, kind = _select_chain(s, body)
             ideal_ids = _build_prompt(target, body, kind, app["tokenizer"])
-            output_ids, finish = await _generate(target, ideal_ids, s, body, app)
-            blocks, stop, did = _build_reply(target, output_ids, finish, app)
+            turn = await _generate(ideal_ids, s, body, app)
+            blocks, stop, did = _build_reply(target, turn.output_ids, turn.finish_reason, app)
+            target.turns.append(turn)
+            target.pending_turns.append(turn)
             if did and not is_sub:  # sub doesn't nest
                 _start_sub_chain(s, did)
-            in_tok, out_tok = len(ideal_ids), len(output_ids)
+            in_tok, out_tok = len(ideal_ids), len(turn.output_ids)
         return await _stream_response(request, blocks, stop, in_tok, out_tok)
     finally:
         _inflight.get(sid, set()).discard(task)
