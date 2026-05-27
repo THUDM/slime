@@ -295,6 +295,8 @@ class SGLangEngine(RayActor):
                 response = requests.get(f"http://{self.server_host}:{self.server_port}/flush_cache")
                 if response.status_code == 200:
                     break
+                logger.info(f"Error flushing cache: HTTP {response.status_code} {response.text!r}")
+                time.sleep(1)
             except NewConnectionError as e:
                 raise e
             except Exception as e:
