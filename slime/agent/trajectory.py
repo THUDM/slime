@@ -18,13 +18,11 @@ class TurnRecord:
     """Exact token snapshot for one assistant generation.
 
     ``prompt_ids`` is the full tokenized prompt sent to the generator for that
-    turn. ``output_ids`` is the raw generated output. ``output_loss_mask`` marks
-    which generated tokens remain trainable when this turn is merged.
+    turn. ``output_ids`` is the raw generated output.
     """
 
     prompt_ids: list[int]
     output_ids: list[int]
-    output_loss_mask: list[int]
     finish_reason: str
 
 
@@ -69,17 +67,6 @@ def _common_prefix_len(a: list[int], b: list[int]) -> int:
     return i
 
 
-def _output_mask(turn: TurnRecord) -> list[int]:
-    if len(turn.output_loss_mask) == len(turn.output_ids):
-        return list(turn.output_loss_mask)
-    logger.warning(
-        "[trajectory] turn mask length mismatch; zeroing output mask (%d ids, %d mask)",
-        len(turn.output_ids),
-        len(turn.output_loss_mask),
-    )
-    return [0] * len(turn.output_ids)
-
-
 def merge_turns(turns: list[TurnRecord], *, metadata: dict[str, Any] | None = None) -> TokenSegment | None:
     """Replay turn records into one linear training segment.
 
@@ -119,7 +106,7 @@ def merge_turns(turns: list[TurnRecord], *, metadata: dict[str, Any] | None = No
                 loss_mask.extend([0] * len(context_tail))
 
         response_ids.extend(turn.output_ids)
-        loss_mask.extend(_output_mask(turn))
+        loss_mask.extend([1] * len(turn.output_ids))
 
     return TokenSegment(
         prompt_ids=prompt_ids,

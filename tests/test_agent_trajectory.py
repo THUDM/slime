@@ -17,7 +17,6 @@ def _turn(prompt_ids: list[int], output_ids: list[int]) -> TurnRecord:
     return TurnRecord(
         prompt_ids=prompt_ids,
         output_ids=output_ids,
-        output_loss_mask=[1] * len(output_ids),
         finish_reason="stop",
     )
 

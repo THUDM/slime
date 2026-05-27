@@ -463,7 +463,6 @@ async def _generate(prompt_ids: list[int], s: Session, body: dict, app) -> TurnR
             return TurnRecord(
                 prompt_ids=list(prompt_ids),
                 output_ids=[],
-                output_loss_mask=[],
                 finish_reason="length",
             )
         sp["max_new_tokens"] = min(int(sp.get("max_new_tokens", remaining_context)), remaining_context)
@@ -503,7 +502,6 @@ async def _generate(prompt_ids: list[int], s: Session, body: dict, app) -> TurnR
     return TurnRecord(
         prompt_ids=list(prompt_ids),
         output_ids=output_ids,
-        output_loss_mask=[1] * len(output_ids),
         finish_reason=finish,
     )
 
