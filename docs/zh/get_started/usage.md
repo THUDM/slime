@@ -192,6 +192,7 @@ sglang 的加载非常简单，只需要：
 
   注意：在策略蒸馏 (OPD) 现在与 advantage estimator 正交，使用 `--use-opd` 和 `--opd-kl-coef` 可以在任意 estimator 之上启用 OPD。
 - `--calculate-per-token-loss`：slime 中默认的方案是 per sample loss，即 `mean(sum(sample_i) / len(sample_i))`，如果需要计算 per token loss，即 `sum(sum(sample_i)) / sum(len(sample_i))`，可以开启 `--calculate-per-token-loss`；
+- `--policy-loss-type`：选择 `--loss-type policy_loss` 下使用的 policy-gradient surrogate objective。默认值 `clip` 保持现有 PPO 风格的 hard clipping；设置为 `sapo` 时使用 Soft Adaptive Policy Optimization 的平滑温度控制目标；
 - `--use-tis`：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置；
 
 #### GRPO 算法
@@ -215,6 +216,27 @@ GRPO 的主要特点：
 - `--n-samples-per-prompt`：每个 prompt 采样的 response 数量，用于组内比较；
 - `--normalize-advantages`：是否对 advantage 进行归一化；
 - `--eps-clip`：PPO 风格的 clip 范围。
+
+#### SAPO Policy Objective
+
+SAPO（Soft Adaptive Policy Optimization）使用平滑的温度控制 surrogate objective 替代 policy objective 中的 hard clipping。它复用 GRPO/GSPO 的 advantage estimator 和 rollout 流程，因此通过 `--policy-loss-type` 启用，而不是作为新的 `--advantage-estimator`。
+
+如果想在 GRPO 中使用 SAPO，可以设置：
+
+```bash
+--advantage-estimator grpo \
+--policy-loss-type sapo \
+--sapo-tau-pos 1.0 \
+--sapo-tau-neg 1.05
+```
+
+相关参数：
+
+- `--sapo-tau-pos`：正 advantage token 使用的温度参数，默认值为 `1.0`；
+- `--sapo-tau-neg`：零或负 advantage token 使用的温度参数，默认值为 `1.05`；
+- `--eps-clip` 和 `--eps-clip-high`：启用 SAPO 时仍用于报告旧 hard-clipping 语义下的 `pg_clipfrac` 诊断指标。
+
+与 `--advantage-estimator gspo` 一起使用时，SAPO 会平滑 slime 当前的 sequence-level GSPO ratio，而不是使用 token-level ratio。
 
 #### PPO 算法
 
