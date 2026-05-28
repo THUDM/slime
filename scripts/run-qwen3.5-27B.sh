@@ -33,6 +33,9 @@ ACTOR_NUM_NODES=${ACTOR_NUM_NODES:-4}
 ACTOR_NUM_GPUS_PER_NODE=${ACTOR_NUM_GPUS_PER_NODE:-8}
 CP_SIZE=${CP_SIZE:-4}
 SOCKET_IFNAME=${SOCKET_IFNAME:-eth0}
+ROLLOUT_TP_SIZE=${ROLLOUT_TP_SIZE:-8}
+ROLLOUT_DP_SIZE=${ROLLOUT_DP_SIZE:-8}
+ROLLOUT_MEM_UTILIZATION=${ROLLOUT_MEM_UTILIZATION:-0.75}
 
 NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
 if [ "$NVLINK_COUNT" -gt 0 ]; then
@@ -130,6 +133,7 @@ SGLANG_ARGS=(
    --sglang-speculative-num-steps 3
    --sglang-speculative-eagle-topk 1
    --sglang-speculative-num-draft-tokens 4
+   --sglang-mamba-scheduler-strategy extra_buffer
 )
 
 MISC_ARGS=(

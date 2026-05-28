@@ -24,6 +24,7 @@ sglang servers, router, weight_update and the full colocate
 offload/onload dance still run. That is exactly what we want when
 measuring real GPU memory.
 """
+
 import logging
 import os
 from pathlib import Path
@@ -78,10 +79,7 @@ def generate_rollout(args, rollout_id, data_source, evaluation: bool = False):
         samples = [Sample.from_dict(s) for s in blob["samples"]]
         # See train-path note: don't overwrite rollout_id.
         reward_key = args.eval_reward_key or args.reward_key
-        rewards = [
-            s.reward if (not reward_key or s.reward is None) else s.reward[reward_key]
-            for s in samples
-        ]
+        rewards = [s.reward if (not reward_key or s.reward is None) else s.reward[reward_key] for s in samples]
         return RolloutFnEvalOutput(
             data={
                 "forge_eval": {
@@ -109,6 +107,8 @@ def generate_rollout(args, rollout_id, data_source, evaluation: bool = False):
     # slime/utils/dp_schedule.py.
     logger.info(
         "forge_load: loaded %d samples for rollout_id=%d from %s",
-        len(samples), rollout_id, Path(path).name,
+        len(samples),
+        rollout_id,
+        Path(path).name,
     )
     return RolloutFnTrainOutput(samples=samples)

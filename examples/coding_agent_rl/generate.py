@@ -275,6 +275,11 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
             traceback.format_exc(),
         )
         return _abort_result(sample, f"exception:{type(e).__name__}")
+    finally:
+        # Close the sid before next train step's release_memory_occupation;
+        # stragglers from this trajectory would otherwise race its idle assert.
+        await middleware.shutdown_session(session_id)
+        middleware.pop_session_split(state.store, session_id)  # idempotent
 
 
 def _log_timeout_diagnostic(t0: float) -> None:

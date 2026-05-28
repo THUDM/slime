@@ -210,6 +210,12 @@ SGLANG_ARGS=(
    --sglang-moe-dense-tp-size 1
    --sglang-tool-call-parser qwen3_coder
    --sglang-reasoning-parser qwen3
+   --sglang-speculative-algorithm EAGLE
+   --sglang-speculative-num-steps 3
+   --sglang-speculative-eagle-topk 1
+   --sglang-speculative-num-draft-tokens 4
+   --sglang-mamba-scheduler-strategy extra_buffer
+   --prefill-num-servers 1
 )
 
 MISC_ARGS=(

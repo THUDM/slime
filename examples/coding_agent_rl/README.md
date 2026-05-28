@@ -5,7 +5,7 @@ This directory provides an example of running end-to-end **SWE (Software-Enginee
 Three files implement the loop:
 
 - `generate.py` — per-sample `generate()` registered via `--custom-generate-function-path`. Boots the sandbox, runs claude-code, captures the diff, scores it, and emits one or more `Sample`s back to slime.
-- `middleware.py` — Anthropic Messages API ↔ SGLang `/generate` shim. claude-code talks to it as if it were Anthropic; the shim renders chat with raw-token splice, masks model-generated tokens (`loss_mask=1`) vs template/observation (`0`), TITO-verifies each turn, and emits **three kinds of segments** per trajectory: `subagent` (completed `Task/Agent` dispatch), `wipe` (chain frozen by auto-compact), `final` (tail of the main chain).
+- `middleware.py` — Anthropic Messages API ↔ SGLang `/generate` shim. claude-code talks to it as if it were Anthropic; the shim tokenizes the current message history each turn, records prompt/output token snapshots, preserves model-generated tokens (`loss_mask=1`) only while later prompts stitch onto them, masks template/observation tokens (`0`), and emits **three kinds of segments** per trajectory: `subagent` (completed `Task/Agent` dispatch), `wipe` (chain frozen by auto-compact), `final` (tail of the main chain).
 - `sandbox.py` — coding-agent/SWE helpers built on `slime.agent.sandbox`: install bootstraps, spawn claude-code, capture patches, and run the fresh-sandbox evaluator. The shared sandbox contract lives in `slime.agent.sandbox.Sandbox`.
 
 ## Environment Setup
