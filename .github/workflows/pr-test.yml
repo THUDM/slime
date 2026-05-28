@@ -481,7 +481,7 @@ jobs:
         shell: bash
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx pybase64 pylatexenc sympy aiohttp pillow
+          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx pybase64 pylatexenc sympy aiohttp pillow safetensors
 
       - name: Install
         shell: bash
