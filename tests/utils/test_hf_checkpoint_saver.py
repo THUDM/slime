@@ -1,0 +1,72 @@
+import json
+from pathlib import Path
+
+import pytest
+import torch
+from safetensors.torch import load_file
+
+from slime.backends.megatron_utils.hf_checkpoint_saver import (
+    _clear_existing_hf_weights,
+    _copy_hf_assets,
+    _SafetensorShardWriter,
+)
+
+
+def test_copy_hf_assets_keeps_quantized_config_and_skips_weights(tmp_path: Path):
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+
+    config = {"model_type": "tiny", "quantization_config": {"quant_method": "fp8"}}
+    (src / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    (src / "tokenizer.json").write_text("{}", encoding="utf-8")
+    (src / "model.safetensors.index.json").write_text("{}", encoding="utf-8")
+    (src / "model-00001-of-00001.safetensors").write_bytes(b"weight")
+    (src / "pytorch_model.bin").write_bytes(b"weight")
+
+    _copy_hf_assets(str(src), dst)
+
+    assert json.loads((dst / "config.json").read_text(encoding="utf-8")) == config
+    assert (dst / "tokenizer.json").exists()
+    assert not (dst / "model.safetensors.index.json").exists()
+    assert not (dst / "model-00001-of-00001.safetensors").exists()
+    assert not (dst / "pytorch_model.bin").exists()
+
+
+def test_clear_existing_hf_weights_removes_old_weight_files_only(tmp_path: Path):
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "model.safetensors.index.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "model-00001-of-00001.safetensors").write_bytes(b"weight")
+    (tmp_path / "pytorch_model.bin").write_bytes(b"weight")
+
+    _clear_existing_hf_weights(tmp_path)
+
+    assert (tmp_path / "config.json").exists()
+    assert not (tmp_path / "model.safetensors.index.json").exists()
+    assert not (tmp_path / "model-00001-of-00001.safetensors").exists()
+    assert not (tmp_path / "pytorch_model.bin").exists()
+
+
+def test_safetensor_shard_writer_writes_hf_index(tmp_path: Path):
+    writer = _SafetensorShardWriter(tmp_path, enabled=True)
+    writer.write([("layers.0.weight", torch.ones(2, 2)), ("layers.0.weight_scale", torch.ones(1))])
+    writer.write([("layers.1.weight", torch.zeros(2, 2))])
+    writer.finalize()
+
+    index = json.loads((tmp_path / "model.safetensors.index.json").read_text(encoding="utf-8"))
+    assert index["metadata"]["total_size"] == 36
+    assert index["weight_map"] == {
+        "layers.0.weight": "model-00001-of-00002.safetensors",
+        "layers.0.weight_scale": "model-00001-of-00002.safetensors",
+        "layers.1.weight": "model-00002-of-00002.safetensors",
+    }
+
+    shard0 = load_file(tmp_path / "model-00001-of-00002.safetensors")
+    shard1 = load_file(tmp_path / "model-00002-of-00002.safetensors")
+    assert torch.equal(shard0["layers.0.weight"], torch.ones(2, 2))
+    assert torch.equal(shard1["layers.1.weight"], torch.zeros(2, 2))
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

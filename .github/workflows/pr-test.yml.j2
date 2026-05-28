@@ -74,6 +74,7 @@
         {'test_file': 'test_sample.py', 'num_gpus': 0},
         {'test_file': 'test_agent_trajectory.py', 'num_gpus': 0},
         {'test_file': 'test_rollout_validation.py', 'num_gpus': 0},
+        {'test_file': 'utils/test_hf_checkpoint_saver.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_rollout_contracts.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_runtime_hook_contracts.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_path_loading_contracts.py', 'num_gpus': 0},
@@ -173,7 +174,7 @@ jobs:
         shell: bash
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx pybase64 pylatexenc sympy aiohttp pillow
+          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx pybase64 pylatexenc sympy aiohttp pillow safetensors
 
       - name: Install
         shell: bash
