@@ -16,7 +16,6 @@ _HF_WEIGHT_FILE_NAMES = {
     "flax_model.msgpack",
 }
 _HF_WEIGHT_FILE_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth", ".ckpt", ".msgpack")
-_SUPPORTED_SAVE_QUANT_METHODS = {"fp8", "compressed-tensors"}
 
 
 def save_hf_model_direct(args, rollout_id: int, model) -> None:
@@ -66,7 +65,6 @@ def save_hf_model_direct(args, rollout_id: int, model) -> None:
     if dist.is_available() and dist.is_initialized():
         dist.broadcast_object_list(payload, src=0)
     model_name, quantization_config = payload[0]
-    _validate_quantization_config_for_save(quantization_config)
 
     hf_weight_iterator = HfWeightIteratorDirect(
         args=args,
@@ -77,7 +75,9 @@ def save_hf_model_direct(args, rollout_id: int, model) -> None:
     megatron_local_weights = dict(named_params_and_buffers(args, model, convert_to_global_name=True))
     writer = _SafetensorShardWriter(path, enabled=is_save_rank)
 
-    for hf_named_tensors in hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights):
+    for hf_named_tensors in hf_weight_iterator.get_hf_weight_chunks(
+        megatron_local_weights, progress_desc="Save HF checkpoint"
+    ):
         write_error = None
         try:
             writer.write(hf_named_tensors)
@@ -179,23 +179,6 @@ def _copy_hf_assets(origin_hf_dir: str, output_dir: Path) -> None:
 def _is_hf_weight_file(path: Path) -> bool:
     name = path.name
     return name in _HF_WEIGHT_FILE_NAMES or name.endswith(_HF_WEIGHT_FILE_SUFFIXES)
-
-
-def _validate_quantization_config_for_save(quantization_config) -> None:
-    if not quantization_config:
-        return
-
-    if isinstance(quantization_config, dict):
-        quant_method = quantization_config.get("quant_method")
-    else:
-        quant_method = getattr(quantization_config, "quant_method", None)
-
-    if quant_method not in _SUPPORTED_SAVE_QUANT_METHODS:
-        supported_methods = ", ".join(sorted(_SUPPORTED_SAVE_QUANT_METHODS))
-        raise ValueError(
-            "raw --save-hf can only preserve quantization methods supported by the raw converter "
-            f"({supported_methods}); got {quant_method!r}"
-        )
 
 
 def _is_global_rank_zero() -> bool:

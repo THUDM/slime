@@ -9,7 +9,6 @@ from slime.backends.megatron_utils.hf_checkpoint_saver import (
     _clear_existing_hf_weights,
     _copy_hf_assets,
     _SafetensorShardWriter,
-    _validate_quantization_config_for_save,
 )
 
 
@@ -67,16 +66,6 @@ def test_safetensor_shard_writer_writes_hf_index(tmp_path: Path):
     shard1 = load_file(tmp_path / "model-00002-of-00002.safetensors")
     assert torch.equal(shard0["layers.0.weight"], torch.ones(2, 2))
     assert torch.equal(shard1["layers.1.weight"], torch.zeros(2, 2))
-
-
-def test_validate_quantization_config_for_save_rejects_unsupported_methods():
-    _validate_quantization_config_for_save(None)
-    _validate_quantization_config_for_save({})
-    _validate_quantization_config_for_save({"quant_method": "fp8"})
-    _validate_quantization_config_for_save({"quant_method": "compressed-tensors"})
-
-    with pytest.raises(ValueError, match="mxfp4"):
-        _validate_quantization_config_for_save({"quant_method": "mxfp4"})
 
 
 if __name__ == "__main__":
