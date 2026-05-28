@@ -14,8 +14,8 @@ try:
 except ImportError:
     pass
 
-from .qwen_gdn_backend import get_chunk_gated_delta_rule
 from .hf_attention import HuggingfaceAttention, _load_hf_config
+from .qwen_gdn_backend import get_chunk_gated_delta_rule
 
 
 def _get_text_config(hf_config):

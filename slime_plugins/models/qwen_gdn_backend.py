@@ -38,8 +38,7 @@ def get_chunk_gated_delta_rule(backend: str):
             from flash_qla import chunk_gated_delta_rule
         except ImportError as exc:
             raise ImportError(
-                "Qwen GDN backend 'flashqla' requires FlashQLA. "
-                "Install it from https://github.com/QwenLM/FlashQLA."
+                "Qwen GDN backend 'flashqla' requires FlashQLA. " "Install it from https://github.com/QwenLM/FlashQLA."
             ) from exc
         _validate_flashqla_runtime()
         return chunk_gated_delta_rule
