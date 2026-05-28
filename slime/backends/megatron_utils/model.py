@@ -874,6 +874,19 @@ def save_hf_model(args, rollout_id: int, model: Sequence[DDP]) -> None:
         model (Sequence[DDP]): Sequence of DDP-wrapped model chunks.
         rollout_id (int): Rollout ID for path formatting.
     """
+    if args.megatron_to_hf_mode != "bridge":
+        try:
+            from slime.backends.megatron_utils.hf_checkpoint_saver import save_hf_model_direct
+
+            save_hf_model_direct(args, rollout_id, model)
+        except Exception as e:
+            if (
+                mpu.get_data_parallel_rank(with_context_parallel=True) == 0
+                and mpu.get_tensor_model_parallel_rank() == 0
+            ):
+                logger.error(f"Failed to save HuggingFace format: {e}")
+        return
+
     should_log = (
         mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
     )
