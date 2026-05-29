@@ -73,7 +73,6 @@
         {'test_file': 'test_rm_deepscaler.py', 'num_gpus': 0},
         {'test_file': 'test_sample.py', 'num_gpus': 0},
         {'test_file': 'test_agent_trajectory.py', 'num_gpus': 0},
-        {'test_file': 'test_agent_adapters.py', 'num_gpus': 0},
         {'test_file': 'test_rollout_validation.py', 'num_gpus': 0},
         {'test_file': 'utils/test_hf_checkpoint_saver.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_rollout_contracts.py', 'num_gpus': 0},
@@ -83,12 +82,13 @@
       ],
     },
 
-    'agent-sdk-adapter-test': {
-      'label': 'run-ci-agent-sdk-adapter',
+    'agent-adapter-test': {
+      'label': 'run-ci-agent-adapter',
       'always': True,
       'cpu': True,
       'extra_pip_deps': 'openai openai-agents anthropic',
       'tests': [
+        {'test_file': 'test_agent_adapters.py', 'num_gpus': 0},
         {'test_file': 'test_agent_sdk_adapters.py', 'num_gpus': 0},
       ],
     },
@@ -120,10 +120,10 @@
 name: PR Test
 
 on:
-  # Push to main triggers ONLY the cpu-unittest job (cheap GitHub-hosted
-  # runner, catches PR-pair regressions where two PRs pass individually
-  # but main is broken after both land). GPU jobs stay label-gated — see
-  # each job's `if:` below — so push events never burn the self-hosted
+  # Push to main triggers the default GitHub-hosted jobs (cheap CPU/unit and
+  # agent adapter checks), catching PR-pair regressions where two PRs pass
+  # individually but main is broken after both land. GPU jobs stay label-gated
+  # — see each job's `if:` below — so push events never burn the self-hosted
   # fleet.
   push:
     branches: [main]

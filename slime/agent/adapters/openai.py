@@ -1,15 +1,10 @@
-"""OpenAI-compatible agent adapters for slime rollouts.
+"""OpenAI-compatible adapters for agent rollouts.
 
-This module exposes two HTTP surfaces backed by the same token-capturing
-trajectory state:
-
-* ``/v1/chat/completions`` for OpenAI Chat Completions clients.
-* ``/v1/responses`` for OpenAI Responses API clients.
-
-Both endpoints render incoming message history with the served model's chat
-template, call SGLang ``/generate`` with ``input_ids``, and keep the exact
-prompt/output token ids as ``TurnRecord`` objects. ``pop_session_split()``
-then turns those records into training ``TokenSegment`` objects.
+The adapter exposes ``/v1/chat/completions`` and ``/v1/responses``. Both
+endpoints render incoming messages with the served model's chat template, call
+SGLang ``/generate`` with ``input_ids``, and record the exact sampled token
+ids/logprobs as ``TurnRecord`` objects. ``pop_session_split()`` converts those
+records into trainable ``TokenSegment`` objects.
 """
 
 from __future__ import annotations
@@ -261,13 +256,9 @@ def _extend_chat_messages(target: Chain, messages: list[dict], tools_schema: lis
         target.tools_schema = tools_schema
 
 
-def _render_token_ids(target: Chain, tok) -> list[int]:
-    return render_token_ids(target, tok)
-
-
 def _build_prompt(target: Chain, messages: list[dict], tools_schema: list[dict] | None, kind: str, tok) -> list[int]:
     (_extend_chat_messages if kind == "append" else _replace_chat_messages)(target, messages, tools_schema)
-    return _render_token_ids(target, tok)
+    return render_token_ids(target, tok)
 
 
 async def _generate(

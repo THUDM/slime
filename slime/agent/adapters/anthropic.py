@@ -1,50 +1,13 @@
-"""Anthropic Messages API adapter that translates agent requests into
-sglang ``/generate`` calls while tracking the token-level training target
-for slime RL rollouts.
+"""Anthropic Messages adapter for agent rollouts.
 
-Each turn:
-* fingerprints the incoming Anthropic conversation against per-session state
-  to decide whether it continues the main chain or an active sub-agent chain,
-  and whether the request appends to / wipes / restarts that chain;
-* renders the chosen message chain through the model's chat template;
-* posts to sglang ``/generate`` and records prompt_ids/output_ids as a
-  TurnRecord;
-* parses the decoded output back into Anthropic blocks and streams them to
-  claude-code as a Messages SSE response.
+The adapter exposes ``/v1/messages`` and ``/v1/messages/count_tokens``. It
+renders each Anthropic message history with the served model's chat template,
+calls SGLang ``/generate`` with ``input_ids``, and records the exact sampled
+token ids/logprobs as ``TurnRecord`` objects. ``pop_session_split()`` converts
+those records into trainable ``TokenSegment`` objects.
 
-Public surface:
-    start(...)                       build the aiohttp app + store
-    open_session(store, sid, ...)    register a session with sampling defaults
-    pop_session_split(store, sid)    drain a session's trajectory for training
-    shutdown_session(sid, ...)       tombstone sid + drain in-flight handlers
-    Chain, Session                   dataclasses (exposed for type hints)
-
-Read `_handle_request` (§3) top-to-bottom -- that's the online turn:
-    _select_chain      pick main vs active sub; snapshot wipe/sub-done into segments
-    _build_prompt      replace/extend chat_messages -> render token ids
-    _generate          POST sglang /generate -> TurnRecord
-    _build_reply       output_ids -> Anthropic blocks
-    append turn        remember the prompt/output boundary for later merge
-
-`pop_session_split()` drains frozen TurnRecords and merges them into training
-segments. The online path serves and records; the pop path linearizes.
-
-`_build_prompt` is itself a thin orchestrator over three helpers:
-    _replace_chat_messages / _extend_chat_messages    translate Anthropic blocks -> chat_messages
-    _render_token_ids                                 chat template -> input ids
-
-Design notes:
-* `kind` (new/wipe/append) is consumed at the dispatch site:
-  `_replace_chat_messages` vs `_extend_chat_messages` is picked at call time.
-* `_render_token_ids` only reads target; the caller owns all state mutation.
-* Loss-mask repair happens in `trajectory.merge_turns`: later prompt tokens are
-  compared with earlier generated tokens, and unmatched historical outputs stop
-  being trainable.
-* `_hash` strips Anthropic `cache_control` keys before hashing so the same
-  logical message hashes identically across turns even as cache_control moves.
-* Server lifecycle (binding a port, running the loop, `handler_cancellation`)
-  lives in the caller, not here -- see `start()` for the required runner
-  contract.
+It also handles Claude Code sub-agent and compaction patterns by splitting one
+session into ``subagent``, ``wipe``, and ``final`` segments.
 """
 
 from __future__ import annotations
@@ -281,21 +244,10 @@ def _extend_chat_messages(target: Chain, body: dict) -> None:
         target.tools_schema = _anthropic_tools_to_chat_tools(body.get("tools"))
 
 
-def _render_token_ids(target: Chain, tok) -> list[int]:
-    """Render the current Claude Code message history into model input ids.
-
-    We intentionally tokenize the messages as-is on every request. If a later
-    prompt no longer token-matches an earlier raw model output, trajectory
-    merging will mask/drop the unmatched history instead of rewriting the
-    online prompt.
-    """
-    return render_token_ids(target, tok)
-
-
 def _build_prompt(target: Chain, body: dict, kind: str, tok) -> list[int]:
     """Replace/extend chat_messages and render input ids for sglang."""
     (_extend_chat_messages if kind == "append" else _replace_chat_messages)(target, body)
-    return _render_token_ids(target, tok)
+    return render_token_ids(target, tok)
 
 
 async def _generate(
@@ -315,7 +267,7 @@ async def _generate(
         app,
         max_token_keys=("max_tokens",),
         stop_keys=("stop_sequences",),
-        log_prefix="middleware",
+        log_prefix="anthropic_adapter",
         logger=logger,
         session_id=session_id,
     )
