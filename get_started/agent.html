@@ -499,10 +499,25 @@
 <h2>Agent Runtime Adapters<a class="headerlink" href="#agent-runtime-adapters" title="Link to this heading">#</a></h2>
 <p>slime includes protocol adapters for existing agent runtimes:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.adapters.anthropic</span></code>: Anthropic Messages API, used by Claude Code style agents.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.adapters.openai</span></code>: OpenAI Chat Completions and Responses APIs, used by OpenAI SDK / OpenAI Agents SDK style clients.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.adapters.AnthropicAdapter</span></code>: Anthropic Messages API, used by Claude Code style agents.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.adapters.OpenAIAdapter</span></code>: OpenAI Chat Completions and Responses APIs, used by OpenAI SDK / OpenAI Agents SDK style clients.</p></li>
 </ul>
 <p>Adapters are a convenience layer, not a separate agent framework. Their contract is message history in, sampled tokens out: they render the chat template, call SGLang with <code class="docutils literal notranslate"><span class="pre">input_ids</span></code> and <code class="docutils literal notranslate"><span class="pre">return_logprob=True</span></code>, and export the returned token ids/logprobs as trainable trajectory segments. They avoid re-tokenizing response text to recover the training target.</p>
+<p>Instantiate the protocol-specific adapter in your custom generate function, run its <code class="docutils literal notranslate"><span class="pre">app</span></code> with aiohttp, then manage each rollout through the adapter instance:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.agent.adapters</span><span class="w"> </span><span class="kn">import</span> <span class="n">AnthropicAdapter</span>
+
+<span class="n">adapter</span> <span class="o">=</span> <span class="n">AnthropicAdapter</span><span class="p">(</span>
+    <span class="n">tokenizer</span><span class="o">=</span><span class="n">tokenizer</span><span class="p">,</span>
+    <span class="n">sglang_url</span><span class="o">=</span><span class="n">sglang_url</span><span class="p">,</span>
+    <span class="n">tool_parser</span><span class="o">=</span><span class="n">tool_parser</span><span class="p">,</span>
+    <span class="n">reasoning_parser</span><span class="o">=</span><span class="n">reasoning_parser</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">adapter</span><span class="o">.</span><span class="n">open_session</span><span class="p">(</span><span class="n">session_id</span><span class="p">,</span> <span class="n">sampling_defaults</span><span class="o">=</span><span class="n">sampling_params</span><span class="p">)</span>
+<span class="c1"># Agent client sends requests to adapter.app.</span>
+<span class="n">segments</span> <span class="o">=</span> <span class="k">await</span> <span class="n">adapter</span><span class="o">.</span><span class="n">finish_session</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span>
+</pre></div>
+</div>
 <p>For multi-turn agents, use a stable <code class="docutils literal notranslate"><span class="pre">session_id</span></code>. The adapters pass it as <code class="docutils literal notranslate"><span class="pre">X-SMG-Routing-Key</span></code> so SGLang can route one session to the same worker and reuse prefix cache.</p>
 </section>
 <section id="agent-serving-and-performance">

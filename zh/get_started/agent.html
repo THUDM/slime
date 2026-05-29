@@ -495,10 +495,25 @@
 <h2>Agent Runtime Adapters<a class="headerlink" href="#agent-runtime-adapters" title="链接到此标题。">#</a></h2>
 <p>slime 提供已有 agent runtime 可用的协议 adapter：</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.adapters.anthropic</span></code>：Anthropic Messages API，用于 Claude Code 风格 agent。</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.adapters.openai</span></code>：OpenAI Chat Completions 和 Responses API，用于 OpenAI SDK / OpenAI Agents SDK 风格 client。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.adapters.AnthropicAdapter</span></code>：Anthropic Messages API，用于 Claude Code 风格 agent。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.adapters.OpenAIAdapter</span></code>：OpenAI Chat Completions 和 Responses API，用于 OpenAI SDK / OpenAI Agents SDK 风格 client。</p></li>
 </ul>
 <p>adapter 是一个便利层，不是单独的 agent framework。它的 contract 是 message history in，sampled tokens out：adapter 会渲染 chat template，用 <code class="docutils literal notranslate"><span class="pre">input_ids</span></code> 和 <code class="docutils literal notranslate"><span class="pre">return_logprob=True</span></code> 调 SGLang，并把返回的 token ids/logprobs 导出为可训练的 trajectory segments；不会从 response text 重新分词恢复训练目标。</p>
+<p>在自定义 generate 函数里实例化对应协议的 adapter，用 aiohttp 跑它的 <code class="docutils literal notranslate"><span class="pre">app</span></code>，然后通过 adapter 实例管理每次 rollout：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.agent.adapters</span><span class="w"> </span><span class="kn">import</span> <span class="n">AnthropicAdapter</span>
+
+<span class="n">adapter</span> <span class="o">=</span> <span class="n">AnthropicAdapter</span><span class="p">(</span>
+    <span class="n">tokenizer</span><span class="o">=</span><span class="n">tokenizer</span><span class="p">,</span>
+    <span class="n">sglang_url</span><span class="o">=</span><span class="n">sglang_url</span><span class="p">,</span>
+    <span class="n">tool_parser</span><span class="o">=</span><span class="n">tool_parser</span><span class="p">,</span>
+    <span class="n">reasoning_parser</span><span class="o">=</span><span class="n">reasoning_parser</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">adapter</span><span class="o">.</span><span class="n">open_session</span><span class="p">(</span><span class="n">session_id</span><span class="p">,</span> <span class="n">sampling_defaults</span><span class="o">=</span><span class="n">sampling_params</span><span class="p">)</span>
+<span class="c1"># Agent client 向 adapter.app 发送请求。</span>
+<span class="n">segments</span> <span class="o">=</span> <span class="k">await</span> <span class="n">adapter</span><span class="o">.</span><span class="n">finish_session</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span>
+</pre></div>
+</div>
 <p>多轮 agent 应使用稳定的 <code class="docutils literal notranslate"><span class="pre">session_id</span></code>。adapter 会把它作为 <code class="docutils literal notranslate"><span class="pre">X-SMG-Routing-Key</span></code> 传给 SGLang，让同一个 session 尽量落到同一个 worker，复用 prefix cache。</p>
 </section>
 <section id="agent-serving">

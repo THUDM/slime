@@ -30,10 +30,27 @@ Reach for `--rollout-function-path` only when you need to replace the whole roll
 
 slime includes protocol adapters for existing agent runtimes:
 
-- `slime.agent.adapters.anthropic`: Anthropic Messages API, used by Claude Code style agents.
-- `slime.agent.adapters.openai`: OpenAI Chat Completions and Responses APIs, used by OpenAI SDK / OpenAI Agents SDK style clients.
+- `slime.agent.adapters.AnthropicAdapter`: Anthropic Messages API, used by Claude Code style agents.
+- `slime.agent.adapters.OpenAIAdapter`: OpenAI Chat Completions and Responses APIs, used by OpenAI SDK / OpenAI Agents SDK style clients.
 
 Adapters are a convenience layer, not a separate agent framework. Their contract is message history in, sampled tokens out: they render the chat template, call SGLang with `input_ids` and `return_logprob=True`, and export the returned token ids/logprobs as trainable trajectory segments. They avoid re-tokenizing response text to recover the training target.
+
+Instantiate the protocol-specific adapter in your custom generate function, run its `app` with aiohttp, then manage each rollout through the adapter instance:
+
+```python
+from slime.agent.adapters import AnthropicAdapter
+
+adapter = AnthropicAdapter(
+    tokenizer=tokenizer,
+    sglang_url=sglang_url,
+    tool_parser=tool_parser,
+    reasoning_parser=reasoning_parser,
+)
+
+adapter.open_session(session_id, sampling_defaults=sampling_params)
+# Agent client sends requests to adapter.app.
+segments = await adapter.finish_session(session_id)
+```
 
 For multi-turn agents, use a stable `session_id`. The adapters pass it as `X-SMG-Routing-Key` so SGLang can route one session to the same worker and reuse prefix cache.
 
