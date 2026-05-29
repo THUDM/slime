@@ -432,6 +432,7 @@
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">从哪里开始</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">推荐接入方式</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agent-runtime-adapters">Agent Runtime Adapters</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agent-serving">Agent Serving 与性能配置</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">参考样例</a></li>
 </ul>
@@ -486,8 +487,19 @@
 <section id="id2">
 <h2>推荐接入方式<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
 <p>大多数 agentic RL 任务应该先从 <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code> 开始。这个函数负责把一次 agent 运行转换成 slime 可训练的 <code class="docutils literal notranslate"><span class="pre">Sample</span></code>：填好 <code class="docutils literal notranslate"><span class="pre">tokens</span></code>、<code class="docutils literal notranslate"><span class="pre">response_length</span></code>、<code class="docutils literal notranslate"><span class="pre">loss_mask</span></code>、<code class="docutils literal notranslate"><span class="pre">status</span></code>，并在需要时填好 <code class="docutils literal notranslate"><span class="pre">reward</span></code> 或交给 <code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code> 计算。</p>
+<p>agent workflow 本身可以使用字符串、chat messages、tool calls、环境 observation 或框架自己的事件格式。但训练目标仍然应该是 token based：尽量保留模型实际采样得到的 token ids，并用 <code class="docutils literal notranslate"><span class="pre">loss_mask</span></code> 区分可训练的模型输出和 prompt、template、tool observation、环境文本。</p>
 <p>如果一次 prompt rollout 只对应一个训练样本，返回一个 <code class="docutils literal notranslate"><span class="pre">Sample</span></code> 即可。如果一次 rollout 会拆成多个训练片段，例如 subagent 轨迹、main-agent 轨迹、compact 前后的片段，则返回 <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code>，并给这些 sibling samples 设置相同的 <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code>。这样 slime 会在训练 step 切分和 loss 聚合时把它们视作同一次 rollout，而不是重复计数。</p>
 <p>只有当你需要替换整个 rollout 编排时，才优先考虑 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>。典型场景包括：自定义数据源调度、跨 rollout 的后台队列、完全异步生成，或者默认 <code class="docutils literal notranslate"><span class="pre">sglang_rollout</span></code> 的 prompt × sample 结构已经无法表达你的 workflow。</p>
+</section>
+<section id="agent-runtime-adapters">
+<h2>Agent Runtime Adapters<a class="headerlink" href="#agent-runtime-adapters" title="链接到此标题。">#</a></h2>
+<p>slime 提供已有 agent runtime 可用的协议 adapter：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.adapters.anthropic</span></code>：Anthropic Messages API，用于 Claude Code 风格 agent。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.adapters.openai</span></code>：OpenAI Chat Completions 和 Responses API，用于 OpenAI SDK / OpenAI Agents SDK 风格 client。</p></li>
+</ul>
+<p>adapter 是一个便利层，不是单独的 agent framework。它的 contract 是 message history in，sampled tokens out：adapter 会渲染 chat template，用 <code class="docutils literal notranslate"><span class="pre">input_ids</span></code> 和 <code class="docutils literal notranslate"><span class="pre">return_logprob=True</span></code> 调 SGLang，并把返回的 token ids/logprobs 导出为可训练的 trajectory segments；不会从 response text 重新分词恢复训练目标。</p>
+<p>多轮 agent 应使用稳定的 <code class="docutils literal notranslate"><span class="pre">session_id</span></code>。adapter 会把它作为 <code class="docutils literal notranslate"><span class="pre">X-SMG-Routing-Key</span></code> 传给 SGLang，让同一个 session 尽量落到同一个 worker，复用 prefix cache。</p>
 </section>
 <section id="agent-serving">
 <h2>Agent Serving 与性能配置<a class="headerlink" href="#agent-serving" title="链接到此标题。">#</a></h2>
@@ -557,6 +569,7 @@
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">从哪里开始</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">推荐接入方式</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agent-runtime-adapters">Agent Runtime Adapters</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agent-serving">Agent Serving 与性能配置</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">参考样例</a></li>
 </ul>

@@ -452,17 +452,17 @@
   <section class="tex2jax_ignore mathjax_ignore" id="coding-agent-rl">
 <h1>Coding-Agent RL<a class="headerlink" href="#coding-agent-rl" title="链接到此标题。">#</a></h1>
 <p>This directory provides an example of running end-to-end <strong>SWE (Software-Engineering) coding-agent RL</strong> with slime: a real coding agent (claude-code CLI) drives <code class="docutils literal notranslate"><span class="pre">Read/Edit/Grep/Bash/Agent</span></code> tools inside a fresh sandbox per sample, the model produces a <code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">diff</span></code>, and the diff is graded against the dataset's test harness in a second clean sandbox (no test-cheating).</p>
-<p>Three files implement the loop:</p>
+<p>Two example files and one shared adapter implement the loop:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">generate.py</span></code> — per-sample <code class="docutils literal notranslate"><span class="pre">generate()</span></code> registered via <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>. Boots the sandbox, runs claude-code, captures the diff, scores it, and emits one or more <code class="docutils literal notranslate"><span class="pre">Sample</span></code>s back to slime.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">middleware.py</span></code> — Anthropic Messages API ↔ SGLang <code class="docutils literal notranslate"><span class="pre">/generate</span></code> shim. claude-code talks to it as if it were Anthropic; the shim tokenizes the current message history each turn, records prompt/output token snapshots, preserves model-generated tokens (<code class="docutils literal notranslate"><span class="pre">loss_mask=1</span></code>) only while later prompts stitch onto them, masks template/observation tokens (<code class="docutils literal notranslate"><span class="pre">0</span></code>), and emits <strong>three kinds of segments</strong> per trajectory: <code class="docutils literal notranslate"><span class="pre">subagent</span></code> (completed <code class="docutils literal notranslate"><span class="pre">Task/Agent</span></code> dispatch), <code class="docutils literal notranslate"><span class="pre">wipe</span></code> (chain frozen by auto-compact), <code class="docutils literal notranslate"><span class="pre">final</span></code> (tail of the main chain).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.adapters.anthropic</span></code> — the shared Anthropic Messages adapter. claude-code talks to it as if it were Anthropic; the adapter tokenizes the current message history each turn, records prompt/output token snapshots, preserves model-generated tokens (<code class="docutils literal notranslate"><span class="pre">loss_mask=1</span></code>) only while later prompts stitch onto them, masks template/observation tokens (<code class="docutils literal notranslate"><span class="pre">0</span></code>), and emits <strong>three kinds of segments</strong> per trajectory: <code class="docutils literal notranslate"><span class="pre">subagent</span></code> (completed <code class="docutils literal notranslate"><span class="pre">Task/Agent</span></code> dispatch), <code class="docutils literal notranslate"><span class="pre">wipe</span></code> (chain frozen by auto-compact), <code class="docutils literal notranslate"><span class="pre">final</span></code> (tail of the main chain).</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">sandbox.py</span></code> — coding-agent/SWE helpers built on <code class="docutils literal notranslate"><span class="pre">slime.agent.sandbox</span></code>: install bootstraps, spawn claude-code, capture patches, and run the fresh-sandbox evaluator. The shared sandbox contract lives in <code class="docutils literal notranslate"><span class="pre">slime.agent.sandbox.Sandbox</span></code>.</p></li>
 </ul>
 <section id="environment-setup">
 <h2>Environment Setup<a class="headerlink" href="#environment-setup" title="链接到此标题。">#</a></h2>
 <p>The slime training stack itself follows the standard setup. On top of that you need:</p>
 <ol class="arabic simple">
-<li><p><strong>An E2B-compatible sandbox cluster</strong> (or any provider that speaks the E2B SDK). Configure via <code class="docutils literal notranslate"><span class="pre">E2B_API_KEY</span></code> (e.g. the standard <code class="docutils literal notranslate"><span class="pre">e2b_xxx</span></code> key from https://e2b.dev, or any internal endpoint that accepts the same SDK).</p></li>
+<li><p><strong>An E2B-compatible sandbox cluster</strong> (or any provider that speaks the E2B SDK). Configure via <code class="docutils literal notranslate"><span class="pre">E2B_API_KEY</span></code> (e.g. the standard <code class="docutils literal notranslate"><span class="pre">e2b_xxx</span></code> key from https://e2b.dev, or any internal endpoint that accepts the same SDK). The official SDK validates this value locally, so internal gateways that ignore auth still need a syntactically valid <code class="docutils literal notranslate"><span class="pre">e2b_</span></code> + 40 hex-character placeholder.</p></li>
 <li><p><strong>Host-side tarballs</strong> that get uploaded into each sandbox at boot:</p>
 <ul class="simple">
 <li><p>Node 22 (<code class="docutils literal notranslate"><span class="pre">node-v22.x-linux-x64.tar.xz</span></code>) — exported as <code class="docutils literal notranslate"><span class="pre">SWE_HOST_NODE_TARBALL</span></code>.</p></li>
@@ -470,7 +470,7 @@
 </ul>
 </li>
 <li><p><strong>A sandbox metadata file</strong> (<code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_METADATA_FILE</span></code>, or the generic <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_SANDBOX_METADATA_FILE</span></code>) — JSON dict whose keys are passed as routing tags when booting an E2B sandbox. Must contain the image key referenced by <code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_IMAGE_METADATA_KEY</span></code> / <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY</span></code> (e.g. <code class="docutils literal notranslate"><span class="pre">image</span></code>).</p></li>
-<li><p><strong>Network reachability</strong>: each sandbox dials back to the slime head node's middleware over <code class="docutils literal notranslate"><span class="pre">http://${SLIME_HEAD_HOST}:${SHIM_PORT}</span></code>. The head host must be reachable from inside the sandboxes (set <code class="docutils literal notranslate"><span class="pre">SLIME_HEAD_HOST</span></code> to a routable IP, not <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code>).</p></li>
+<li><p><strong>Network reachability</strong>: each sandbox dials back to the slime head node's Anthropic adapter over <code class="docutils literal notranslate"><span class="pre">http://${SLIME_HEAD_HOST}:${SHIM_PORT}</span></code>. The head host must be reachable from inside the sandboxes (set <code class="docutils literal notranslate"><span class="pre">SLIME_HEAD_HOST</span></code> to a routable IP, not <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code>).</p></li>
 </ol>
 </section>
 <section id="dataset-format">
@@ -551,11 +551,11 @@ bash<span class="w"> </span>examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nod
 <tbody>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_HEAD_HOST</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">${MASTER_ADDR}</span></code></p></td>
-<td><p>Public IP the sandbox uses to reach the middleware. <strong>Must be routable from inside the sandbox.</strong></p></td>
+<td><p>Public IP the sandbox uses to reach the Anthropic adapter. <strong>Must be routable from inside the sandbox.</strong></p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SHIM_BIND_HOST</span></code> / <code class="docutils literal notranslate"><span class="pre">SHIM_PORT</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0.0.0.0</span></code> / <code class="docutils literal notranslate"><span class="pre">18001</span></code></p></td>
-<td><p>Bind address of the middleware shim on the head node.</p></td>
+<td><p>Bind address of the adapter shim on the head node.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">E2B_API_KEY</span></code></p></td>
 <td><p>—</p></td>
@@ -604,7 +604,7 @@ bash<span class="w"> </span>examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nod
 SGLang <code class="docutils literal notranslate"><span class="pre">/generate</span></code> call as <code class="docutils literal notranslate"><span class="pre">max_new_tokens</span></code>. <code class="docutils literal notranslate"><span class="pre">--rollout-max-context-len</span></code> is the
 multi-turn prompt+response budget: each turn clamps <code class="docutils literal notranslate"><span class="pre">max_new_tokens</span></code> to the
 remaining context, and oversized emitted segments are dropped before training.
-The middleware reuses <code class="docutils literal notranslate"><span class="pre">--sglang-tool-call-parser</span></code> and
+The Anthropic adapter reuses <code class="docutils literal notranslate"><span class="pre">--sglang-tool-call-parser</span></code> and
 <code class="docutils literal notranslate"><span class="pre">--sglang-reasoning-parser</span></code> for output parsing, so those flags must match the
 served model.</p>
 </section>
@@ -615,18 +615,18 @@ Anthropic Messages requests, receives streamed text/thinking/tool-use blocks,
 and later sends back rendered tool observations. Training, however, must stay
 token based. A trajectory is only a valid RL target when the optimized tokens
 are the same tokens the rollout model actually sampled.</p>
-<p>The middleware therefore follows a <strong>string in, token out</strong> contract:</p>
+<p>The Anthropic adapter therefore follows a <strong>string in, token out</strong> contract:</p>
 <ul class="simple">
 <li><p>Each incoming message history is rendered with the served model's chat
 template and sent to SGLang as <code class="docutils literal notranslate"><span class="pre">input_ids</span></code>.</p></li>
-<li><p>SGLang is called with <code class="docutils literal notranslate"><span class="pre">return_logprob=True</span></code>; the middleware records the exact
+<li><p>SGLang is called with <code class="docutils literal notranslate"><span class="pre">return_logprob=True</span></code>; the adapter records the exact
 <code class="docutils literal notranslate"><span class="pre">prompt_ids</span></code>, sampled <code class="docutils literal notranslate"><span class="pre">output_ids</span></code>, and per-token rollout logprobs for that
 turn.</p></li>
 <li><p>At training export time, samples are assembled from those saved token ids.
 The decoded <code class="docutils literal notranslate"><span class="pre">response</span></code> field is only a readable sidecar; it is not
 re-tokenized to recover the training sequence.</p></li>
 </ul>
-<p>Multi-turn agents still force the middleware to tokenize later message
+<p>Multi-turn agents still force the adapter to tokenize later message
 histories, because tool observations and claude-code's own compacted messages
 arrive as strings. <code class="docutils literal notranslate"><span class="pre">slime.agent.trajectory.merge_turns</span></code> stitches those later
 prompts against the saved token stream:</p>
@@ -665,7 +665,7 @@ restarts.</p>
 <span class="k">async</span> <span class="k">with</span> <span class="n">E2BSandbox</span><span class="p">(</span><span class="o">...</span><span class="p">)</span> <span class="k">as</span> <span class="n">sb</span><span class="p">:</span> <span class="o">...</span>
 </pre></div>
 </div>
-<p>Reimplement those on Docker / Modal / a local VM and everything in <code class="docutils literal notranslate"><span class="pre">generate.py</span></code> and <code class="docutils literal notranslate"><span class="pre">middleware.py</span></code> keeps working unchanged.</p>
+<p>Reimplement those on Docker / Modal / a local VM and everything in <code class="docutils literal notranslate"><span class="pre">generate.py</span></code> keeps working unchanged.</p>
 </section>
 </section>
 

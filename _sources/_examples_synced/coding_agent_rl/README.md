@@ -2,22 +2,22 @@
 
 This directory provides an example of running end-to-end **SWE (Software-Engineering) coding-agent RL** with slime: a real coding agent (claude-code CLI) drives `Read/Edit/Grep/Bash/Agent` tools inside a fresh sandbox per sample, the model produces a `git diff`, and the diff is graded against the dataset's test harness in a second clean sandbox (no test-cheating).
 
-Three files implement the loop:
+Two example files and one shared adapter implement the loop:
 
 - `generate.py` — per-sample `generate()` registered via `--custom-generate-function-path`. Boots the sandbox, runs claude-code, captures the diff, scores it, and emits one or more `Sample`s back to slime.
-- `middleware.py` — Anthropic Messages API ↔ SGLang `/generate` shim. claude-code talks to it as if it were Anthropic; the shim tokenizes the current message history each turn, records prompt/output token snapshots, preserves model-generated tokens (`loss_mask=1`) only while later prompts stitch onto them, masks template/observation tokens (`0`), and emits **three kinds of segments** per trajectory: `subagent` (completed `Task/Agent` dispatch), `wipe` (chain frozen by auto-compact), `final` (tail of the main chain).
+- `slime.agent.adapters.anthropic` — the shared Anthropic Messages adapter. claude-code talks to it as if it were Anthropic; the adapter tokenizes the current message history each turn, records prompt/output token snapshots, preserves model-generated tokens (`loss_mask=1`) only while later prompts stitch onto them, masks template/observation tokens (`0`), and emits **three kinds of segments** per trajectory: `subagent` (completed `Task/Agent` dispatch), `wipe` (chain frozen by auto-compact), `final` (tail of the main chain).
 - `sandbox.py` — coding-agent/SWE helpers built on `slime.agent.sandbox`: install bootstraps, spawn claude-code, capture patches, and run the fresh-sandbox evaluator. The shared sandbox contract lives in `slime.agent.sandbox.Sandbox`.
 
 ## Environment Setup
 
 The slime training stack itself follows the standard setup. On top of that you need:
 
-1. **An E2B-compatible sandbox cluster** (or any provider that speaks the E2B SDK). Configure via `E2B_API_KEY` (e.g. the standard `e2b_xxx` key from https://e2b.dev, or any internal endpoint that accepts the same SDK).
+1. **An E2B-compatible sandbox cluster** (or any provider that speaks the E2B SDK). Configure via `E2B_API_KEY` (e.g. the standard `e2b_xxx` key from https://e2b.dev, or any internal endpoint that accepts the same SDK). The official SDK validates this value locally, so internal gateways that ignore auth still need a syntactically valid `e2b_` + 40 hex-character placeholder.
 2. **Host-side tarballs** that get uploaded into each sandbox at boot:
    - Node 22 (`node-v22.x-linux-x64.tar.xz`) — exported as `SWE_HOST_NODE_TARBALL`.
    - Claude Code CLI npm tarball (`anthropic-ai-claude-code-local-linux-x64.tgz`) — exported as `SWE_HOST_CC_TARBALL`.
 3. **A sandbox metadata file** (`SWE_SANDBOX_METADATA_FILE`, or the generic `SLIME_AGENT_SANDBOX_METADATA_FILE`) — JSON dict whose keys are passed as routing tags when booting an E2B sandbox. Must contain the image key referenced by `SWE_SANDBOX_IMAGE_METADATA_KEY` / `SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY` (e.g. `image`).
-4. **Network reachability**: each sandbox dials back to the slime head node's middleware over `http://${SLIME_HEAD_HOST}:${SHIM_PORT}`. The head host must be reachable from inside the sandboxes (set `SLIME_HEAD_HOST` to a routable IP, not `127.0.0.1`).
+4. **Network reachability**: each sandbox dials back to the slime head node's Anthropic adapter over `http://${SLIME_HEAD_HOST}:${SHIM_PORT}`. The head host must be reachable from inside the sandboxes (set `SLIME_HEAD_HOST` to a routable IP, not `127.0.0.1`).
 
 ## Dataset Format
 
@@ -97,8 +97,8 @@ All set in the launcher; tune per cluster.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `SLIME_HEAD_HOST` | `${MASTER_ADDR}` | Public IP the sandbox uses to reach the middleware. **Must be routable from inside the sandbox.** |
-| `SHIM_BIND_HOST` / `SHIM_PORT` | `0.0.0.0` / `18001` | Bind address of the middleware shim on the head node. |
+| `SLIME_HEAD_HOST` | `${MASTER_ADDR}` | Public IP the sandbox uses to reach the Anthropic adapter. **Must be routable from inside the sandbox.** |
+| `SHIM_BIND_HOST` / `SHIM_PORT` | `0.0.0.0` / `18001` | Bind address of the adapter shim on the head node. |
 | `E2B_API_KEY` | — | E2B (or compatible) API key. |
 | `SWE_SANDBOX_METADATA_FILE` / `SLIME_AGENT_SANDBOX_METADATA_FILE` | — | JSON dict of routing metadata passed at sandbox boot. |
 | `SWE_SANDBOX_IMAGE_METADATA_KEY` / `SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY` | — | Which key in the metadata file holds the image reference (e.g. `image`). |
@@ -114,7 +114,7 @@ All set in the launcher; tune per cluster.
 SGLang `/generate` call as `max_new_tokens`. `--rollout-max-context-len` is the
 multi-turn prompt+response budget: each turn clamps `max_new_tokens` to the
 remaining context, and oversized emitted segments are dropped before training.
-The middleware reuses `--sglang-tool-call-parser` and
+The Anthropic adapter reuses `--sglang-tool-call-parser` and
 `--sglang-reasoning-parser` for output parsing, so those flags must match the
 served model.
 
@@ -126,18 +126,18 @@ and later sends back rendered tool observations. Training, however, must stay
 token based. A trajectory is only a valid RL target when the optimized tokens
 are the same tokens the rollout model actually sampled.
 
-The middleware therefore follows a **string in, token out** contract:
+The Anthropic adapter therefore follows a **string in, token out** contract:
 
 - Each incoming message history is rendered with the served model's chat
   template and sent to SGLang as `input_ids`.
-- SGLang is called with `return_logprob=True`; the middleware records the exact
+- SGLang is called with `return_logprob=True`; the adapter records the exact
   `prompt_ids`, sampled `output_ids`, and per-token rollout logprobs for that
   turn.
 - At training export time, samples are assembled from those saved token ids.
   The decoded `response` field is only a readable sidecar; it is not
   re-tokenized to recover the training sequence.
 
-Multi-turn agents still force the middleware to tokenize later message
+Multi-turn agents still force the adapter to tokenize later message
 histories, because tool observations and claude-code's own compacted messages
 arrive as strings. `slime.agent.trajectory.merge_turns` stitches those later
 prompts against the saved token stream:
@@ -176,4 +176,4 @@ await sb.read_file(sandbox_path, user=...)
 async with E2BSandbox(...) as sb: ...
 ```
 
-Reimplement those on Docker / Modal / a local VM and everything in `generate.py` and `middleware.py` keeps working unchanged.
+Reimplement those on Docker / Modal / a local VM and everything in `generate.py` keeps working unchanged.

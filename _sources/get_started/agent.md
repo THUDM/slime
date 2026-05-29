@@ -20,9 +20,22 @@ This page is a roadmap: use it to decide which docs and examples to read when pl
 
 Most agentic RL tasks should start with `--custom-generate-function-path`. This function converts one agent execution into slime-trainable `Sample` objects: fill `tokens`, `response_length`, `loss_mask`, and `status`, then either fill `reward` directly or let `--custom-rm-path` compute it.
 
+The agent workflow itself may speak in strings, chat messages, tool calls, environment observations, or framework-specific events. The training target, however, should stay token based. Preserve the model-sampled token ids and use `loss_mask` to separate trainable model output from prompt, template, tool-observation, or environment text.
+
 If one prompt rollout corresponds to one training sample, return a single `Sample`. If one rollout splits into multiple trainable segments, such as subagent trajectories, main-agent continuations, or pre/post-compaction segments, return `list[Sample]` and set the same `rollout_id` on all sibling samples. slime then keeps those samples together for train-step splitting and loss aggregation instead of counting them as independent rollouts.
 
 Reach for `--rollout-function-path` only when you need to replace the whole rollout orchestration. Common reasons include custom data-source scheduling, cross-rollout background queues, fully asynchronous generation, or workflows that cannot fit the default `sglang_rollout` prompt-by-sample structure.
+
+## Agent Runtime Adapters
+
+slime includes protocol adapters for existing agent runtimes:
+
+- `slime.agent.adapters.anthropic`: Anthropic Messages API, used by Claude Code style agents.
+- `slime.agent.adapters.openai`: OpenAI Chat Completions and Responses APIs, used by OpenAI SDK / OpenAI Agents SDK style clients.
+
+Adapters are a convenience layer, not a separate agent framework. Their contract is message history in, sampled tokens out: they render the chat template, call SGLang with `input_ids` and `return_logprob=True`, and export the returned token ids/logprobs as trainable trajectory segments. They avoid re-tokenizing response text to recover the training target.
+
+For multi-turn agents, use a stable `session_id`. The adapters pass it as `X-SMG-Routing-Key` so SGLang can route one session to the same worker and reuse prefix cache.
 
 ## Agent Serving And Performance
 

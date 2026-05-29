@@ -436,6 +436,7 @@
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#where-to-start">Where To Start</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recommended-integration-pattern">Recommended Integration Pattern</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agent-runtime-adapters">Agent Runtime Adapters</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agent-serving-and-performance">Agent Serving And Performance</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reference-example">Reference Example</a></li>
 </ul>
@@ -490,8 +491,19 @@
 <section id="recommended-integration-pattern">
 <h2>Recommended Integration Pattern<a class="headerlink" href="#recommended-integration-pattern" title="Link to this heading">#</a></h2>
 <p>Most agentic RL tasks should start with <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>. This function converts one agent execution into slime-trainable <code class="docutils literal notranslate"><span class="pre">Sample</span></code> objects: fill <code class="docutils literal notranslate"><span class="pre">tokens</span></code>, <code class="docutils literal notranslate"><span class="pre">response_length</span></code>, <code class="docutils literal notranslate"><span class="pre">loss_mask</span></code>, and <code class="docutils literal notranslate"><span class="pre">status</span></code>, then either fill <code class="docutils literal notranslate"><span class="pre">reward</span></code> directly or let <code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code> compute it.</p>
+<p>The agent workflow itself may speak in strings, chat messages, tool calls, environment observations, or framework-specific events. The training target, however, should stay token based. Preserve the model-sampled token ids and use <code class="docutils literal notranslate"><span class="pre">loss_mask</span></code> to separate trainable model output from prompt, template, tool-observation, or environment text.</p>
 <p>If one prompt rollout corresponds to one training sample, return a single <code class="docutils literal notranslate"><span class="pre">Sample</span></code>. If one rollout splits into multiple trainable segments, such as subagent trajectories, main-agent continuations, or pre/post-compaction segments, return <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code> and set the same <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code> on all sibling samples. slime then keeps those samples together for train-step splitting and loss aggregation instead of counting them as independent rollouts.</p>
 <p>Reach for <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> only when you need to replace the whole rollout orchestration. Common reasons include custom data-source scheduling, cross-rollout background queues, fully asynchronous generation, or workflows that cannot fit the default <code class="docutils literal notranslate"><span class="pre">sglang_rollout</span></code> prompt-by-sample structure.</p>
+</section>
+<section id="agent-runtime-adapters">
+<h2>Agent Runtime Adapters<a class="headerlink" href="#agent-runtime-adapters" title="Link to this heading">#</a></h2>
+<p>slime includes protocol adapters for existing agent runtimes:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.adapters.anthropic</span></code>: Anthropic Messages API, used by Claude Code style agents.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.adapters.openai</span></code>: OpenAI Chat Completions and Responses APIs, used by OpenAI SDK / OpenAI Agents SDK style clients.</p></li>
+</ul>
+<p>Adapters are a convenience layer, not a separate agent framework. Their contract is message history in, sampled tokens out: they render the chat template, call SGLang with <code class="docutils literal notranslate"><span class="pre">input_ids</span></code> and <code class="docutils literal notranslate"><span class="pre">return_logprob=True</span></code>, and export the returned token ids/logprobs as trainable trajectory segments. They avoid re-tokenizing response text to recover the training target.</p>
+<p>For multi-turn agents, use a stable <code class="docutils literal notranslate"><span class="pre">session_id</span></code>. The adapters pass it as <code class="docutils literal notranslate"><span class="pre">X-SMG-Routing-Key</span></code> so SGLang can route one session to the same worker and reuse prefix cache.</p>
 </section>
 <section id="agent-serving-and-performance">
 <h2>Agent Serving And Performance<a class="headerlink" href="#agent-serving-and-performance" title="Link to this heading">#</a></h2>
@@ -561,6 +573,7 @@
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#where-to-start">Where To Start</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recommended-integration-pattern">Recommended Integration Pattern</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agent-runtime-adapters">Agent Runtime Adapters</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agent-serving-and-performance">Agent Serving And Performance</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reference-example">Reference Example</a></li>
 </ul>
