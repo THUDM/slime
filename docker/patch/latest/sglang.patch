@@ -937,6 +937,20 @@ index 97a5bfc..4cca7a0 100644
              else loaded_weight
          )
  
+diff --git a/python/sglang/srt/layers/moe/moe_runner/deep_gemm.py b/python/sglang/srt/layers/moe/moe_runner/deep_gemm.py
+index 61af5533f5..661735e5c9 100644
+--- a/python/sglang/srt/layers/moe/moe_runner/deep_gemm.py
++++ b/python/sglang/srt/layers/moe/moe_runner/deep_gemm.py
+@@ -866,5 +866,7 @@ def _varlen_deep_gemm_silu_mul_quant(
+-    if envs.SGLANG_OPT_USE_JIT_EP_ACTIVATION.get():
+-        assert N % 4 == 0 and G % 4 == 0
++    use_jit_ep_activation = (
++        envs.SGLANG_OPT_USE_JIT_EP_ACTIVATION.get() and N % 4 == 0 and G % 4 == 0
++    )
++    if use_jit_ep_activation:
+         packed_ue8m0 = deep_gemm_wrapper.DEEPGEMM_SCALE_UE8M0
+         down_input_scale = torch.empty(
+             (E, G // 4, N) if packed_ue8m0 else (E, N, G),
 diff --git a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
 index 81056a1..b8cfe41 100644
 --- a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
