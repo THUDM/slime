@@ -219,8 +219,9 @@ index 634f2eae5b..0eb700b551 100644
 +        if self.kv_args.aux_data_ptrs:
 +            self.engine.batch_deregister(self.kv_args.aux_data_ptrs)
 +
-+        if self.kv_args.state_data_ptrs:
-+            self.engine.batch_deregister(self.kv_args.state_data_ptrs)
++        for ptrs in self.kv_args.state_data_ptrs:
++            if ptrs:
++                self.engine.batch_deregister(ptrs)
 +
      # ------------------------------------------------------------------
      # Staging buffer methods (all delegate to staging_handler.py)
