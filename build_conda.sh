@@ -19,7 +19,15 @@ export BASE_DIR=${BASE_DIR:-"/root"}
 cd $BASE_DIR
 
 # install cuda 12.9 as it's the default cuda version for torch
-micromamba install -n slime cuda cuda-nvtx cuda-nvtx-dev nccl -c nvidia/label/cuda-12.9.1 -y
+micromamba install -n slime \
+  cuda=12.9.1 \
+  cuda-nvtx=12.9.79 \
+  cuda-nvtx-dev=12.9.79 \
+  nccl \
+  -c nvidia/label/cuda-12.9.1 \
+  -c nvidia \
+  -c conda-forge \
+  -y
 micromamba install -n slime -c conda-forge cudnn -y
 
 pip install cuda-python==12.9
