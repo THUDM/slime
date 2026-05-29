@@ -3,8 +3,9 @@
 The adapter exposes ``/v1/chat/completions`` and ``/v1/responses``. Both
 endpoints render incoming messages with the served model's chat template, call
 SGLang ``/generate`` with ``input_ids``, and record the exact sampled token
-ids/logprobs as ``TurnRecord`` objects. ``pop_session_split()`` converts those
-records into trainable ``TokenSegment`` objects.
+ids/logprobs as ``TurnRecord`` objects. New code should use ``OpenAIAdapter``
+and call ``finish_session()`` at trajectory end to drain trainable
+``TokenSegment`` objects.
 """
 
 from __future__ import annotations
@@ -19,16 +20,11 @@ from typing import Any
 
 from aiohttp import web
 
+from slime.agent.adapters.common import ADAPTER_KEY, REASONING_PARSER_KEY, TOKENIZER_KEY, TOOL_PARSER_KEY
 from slime.agent.adapters.common import AdapterChain as Chain
-from slime.agent.adapters.common import call_sglang_generate
+from slime.agent.adapters.common import BaseAdapter, call_sglang_generate
 from slime.agent.adapters.common import json_arguments as _json_arguments
-from slime.agent.adapters.common import (
-    ok_response,
-    register_session,
-    render_token_ids,
-    request_session_id,
-    shutdown_session_tasks,
-)
+from slime.agent.adapters.common import ok_response, render_token_ids, request_session_id
 from slime.agent.adapters.common import stable_hash as _hash
 from slime.agent.parsing import ParsedModelOutput, parse_model_output
 from slime.agent.trajectory import TokenSegment, TurnRecord, TurnSegment, make_turn_segment, merge_turn_segments
@@ -45,10 +41,31 @@ class Session:
     segments: list[TurnSegment] = dataclasses.field(default_factory=list)
 
 
-_Store = dict[str, Session]
+class OpenAIAdapter(BaseAdapter):
+    """OpenAI-compatible HTTP adapter with session lifecycle helpers."""
 
-_inflight: dict[str, set[asyncio.Task]] = {}
-_closed: set[str] = set()
+    session_cls = Session
+
+    def __init__(self, *, tokenizer, sglang_url, tool_parser=None, reasoning_parser=None) -> None:
+        super().__init__(
+            tokenizer=tokenizer,
+            sglang_url=sglang_url,
+            tool_parser=tool_parser,
+            reasoning_parser=reasoning_parser,
+        )
+        self.app.router.add_post("/v1/chat/completions", _handle_chat_completions)
+        self.app.router.add_post("/v1/responses", _handle_responses)
+        self.app.router.add_get("/healthz", _ok)
+        self.app.router.add_get("/v1/models", _ok)
+
+    async def finish_session(self, sid: str, *, wait_timeout: float = 5.0) -> list[TokenSegment]:
+        await self.shutdown_session(sid, wait_timeout=wait_timeout)
+        s = self.store.pop(sid, None)
+        if s is None:
+            return []
+        if s.main.turns:
+            s.segments.append(make_turn_segment(s.main.turns, kind="final"))
+        return merge_turn_segments(s.segments, max_context_tokens=s.max_context_tokens)
 
 
 def _flatten_content(content: Any) -> str:
@@ -278,12 +295,13 @@ async def _generate(
 
 
 def _parse_turn(target: Chain, turn: TurnRecord, app) -> ParsedModelOutput:
-    raw_output = app["tokenizer"].decode(turn.output_ids, skip_special_tokens=False) if turn.output_ids else ""
+    tok = app[TOKENIZER_KEY]
+    raw_output = tok.decode(turn.output_ids, skip_special_tokens=False) if turn.output_ids else ""
     return parse_model_output(
         raw_output,
         tools_schema=target.tools_schema,
-        tool_parser_name=app["tool_parser"],
-        reasoning_parser_name=app["reasoning_parser"],
+        tool_parser_name=app[TOOL_PARSER_KEY],
+        reasoning_parser_name=app[REASONING_PARSER_KEY],
     )
 
 
@@ -349,24 +367,25 @@ async def _run_turn(
     request: web.Request, body: dict, messages: list[dict]
 ) -> tuple[TurnRecord, ParsedModelOutput, int, int]:
     sid = _request_session_id(request, body)
-    if sid in _closed:
+    adapter = request.app[ADAPTER_KEY]
+    if sid in adapter.closed:
         raise web.HTTPServiceUnavailable(text="session closed")
     app = request.app
-    s = app["store"].setdefault(sid, Session())
+    s = adapter.store.setdefault(sid, Session())
     task = asyncio.current_task()
-    _inflight.setdefault(sid, set()).add(task)
+    adapter.inflight.setdefault(sid, set()).add(task)
     try:
         async with s.lock:
             target = s.main
             tools_schema = _normalize_tools(body.get("tools"))
             kind = _select_kind(s, messages)
-            prompt_ids = _build_prompt(target, messages, tools_schema, kind, app["tokenizer"])
+            prompt_ids = _build_prompt(target, messages, tools_schema, kind, app[TOKENIZER_KEY])
             turn = await _generate(prompt_ids, s, body, app, session_id=sid)
             parsed = _parse_turn(target, turn, app)
             target.turns.append(turn)
             return turn, parsed, len(prompt_ids), len(turn.output_ids)
     finally:
-        _inflight.get(sid, set()).discard(task)
+        adapter.inflight.get(sid, set()).discard(task)
 
 
 async def _handle_chat_completions(request: web.Request) -> web.StreamResponse:
@@ -549,50 +568,5 @@ async def _stream_response(
     return out
 
 
-def open_session(
-    store: _Store,
-    sid: str,
-    *,
-    sampling_defaults: dict | None = None,
-    max_context_tokens: int = 0,
-) -> None:
-    register_session(
-        store,
-        sid,
-        Session,
-        sampling_defaults=sampling_defaults,
-        max_context_tokens=max_context_tokens,
-    )
-
-
-def pop_session_split(store: _Store, sid: str) -> list[TokenSegment]:
-    s = store.pop(sid, None)
-    if s is None:
-        return []
-    if s.main.turns:
-        s.segments.append(make_turn_segment(s.main.turns, kind="final"))
-    return merge_turn_segments(s.segments, max_context_tokens=s.max_context_tokens)
-
-
-async def shutdown_session(sid: str, *, wait_timeout: float = 5.0) -> None:
-    await shutdown_session_tasks(sid, _closed, _inflight, wait_timeout=wait_timeout)
-
-
 async def _ok(request: web.Request) -> web.Response:
     return await ok_response(request)
-
-
-def start(*, tokenizer, sglang_url, tool_parser=None, reasoning_parser=None):
-    """Build an aiohttp app exposing OpenAI-compatible agent endpoints."""
-    store: _Store = {}
-    app = web.Application(client_max_size=64 * 1024 * 1024)
-    app["tokenizer"] = tokenizer
-    app["sglang_url"] = sglang_url.rstrip("/") if isinstance(sglang_url, str) else sglang_url
-    app["tool_parser"] = tool_parser
-    app["reasoning_parser"] = reasoning_parser
-    app["store"] = store
-    app.router.add_post("/v1/chat/completions", _handle_chat_completions)
-    app.router.add_post("/v1/responses", _handle_responses)
-    app.router.add_get("/healthz", _ok)
-    app.router.add_get("/v1/models", _ok)
-    return app, store

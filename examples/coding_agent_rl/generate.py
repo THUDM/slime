@@ -13,8 +13,8 @@ Wire-up:
        delegating segment-to-``Sample`` fan-out to ``slime.agent.trajectory``.
 
 All sandbox-side details live in ``sandbox.py``; the LLM plumbing
-(Anthropic <-> SGLang /generate, token capture, 3-kind segment split) lives in
-``slime.agent.adapters.anthropic``.
+(Anthropic <-> SGLang /generate, token capture, 3-kind segment split) uses
+``slime.agent.adapters.AnthropicAdapter``.
 
 Dataset row ``metadata`` schema::
 
@@ -52,8 +52,8 @@ import traceback
 from dataclasses import dataclass
 from typing import Any
 
-from slime.agent.adapters import anthropic as anthropic_adapter
-from slime.agent.trajectory import fan_out_sample_segments
+from slime.agent.adapters import AnthropicAdapter
+from slime.agent.trajectory import TokenSegment, fan_out_sample_segments
 from slime.utils.misc import SingletonMeta
 from slime.utils.processing_utils import load_tokenizer
 from slime.utils.types import Sample
@@ -80,7 +80,7 @@ SHIM_PORT = int(os.environ.get("SHIM_PORT", "18001"))
 
 
 # ---------------------------------------------------------------------------
-# Singleton: tokenizer + in-process Anthropic adapter handle + reducer
+# Singleton: tokenizer + in-process Anthropic adapter + reducer
 # ---------------------------------------------------------------------------
 class _State(metaclass=SingletonMeta):
     def __init__(self, args) -> None:
@@ -97,7 +97,7 @@ class _State(metaclass=SingletonMeta):
                 "Without it the sandbox cannot dial back and the rollout will "
                 "silently abort."
             )
-        app, self.store = anthropic_adapter.start(
+        self.adapter = AnthropicAdapter(
             tokenizer=self.tokenizer,
             sglang_url=sglang_url,
             tool_parser=self.tool_parser,
@@ -109,7 +109,7 @@ class _State(metaclass=SingletonMeta):
         # /generate that races with the next release_memory_occupation and
         # trips sglang's "server is idle" assertion.
         self.app_handle = run_app_in_thread(
-            app,
+            self.adapter.app,
             host=SHIM_BIND_HOST,
             port=SHIM_PORT,
             thread_name="anthropic-adapter",
@@ -128,9 +128,9 @@ class _State(metaclass=SingletonMeta):
 
 # ---------------------------------------------------------------------------
 # Trajectory -> Sample conversion
-# anthropic_adapter.pop_session_split() returns TokenSegments. One trajectory yields
-# >=1 segments because the agent may compact + reset mid-run; trajectory.py
-# handles the mechanical segment -> Sample fan-out.
+# adapter.finish_session() returns TokenSegments. One trajectory yields >=1
+# segments because the agent may compact + reset mid-run; trajectory.py handles
+# the mechanical segment -> Sample fan-out.
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class RewardResult:
@@ -156,8 +156,7 @@ def _start_session(
     else:
         session_id = f"cagent-{md['instance_id']}-{secrets.token_hex(8)}"
     sample.session_id = session_id
-    anthropic_adapter.open_session(
-        state.store,
+    state.adapter.open_session(
         session_id,
         sampling_defaults=sampling_params,
         max_context_tokens=state.max_context_len,
@@ -169,12 +168,11 @@ def _merge_samples(
     *,
     sample: Sample,
     state: _State,
-    session_id: str,
+    segments: list[TokenSegment],
     reward_result: RewardResult,
     elapsed_sec: float,
     instance_id: str,
 ):
-    segments = anthropic_adapter.pop_session_split(state.store, session_id) or []
     if not segments:
         return _abort_result(sample, "adapter_session_empty")
 
@@ -256,10 +254,11 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
                 is_solved=bool(is_solved),
                 applied_cleanly=bool(applied_cleanly),
             )
+            segments = await state.adapter.finish_session(session_id)
             return _merge_samples(
                 sample=sample,
                 state=state,
-                session_id=session_id,
+                segments=segments,
                 reward_result=reward_result,
                 elapsed_sec=time.time() - t0,
                 instance_id=instance_id,
@@ -279,8 +278,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
     finally:
         # Close the sid before next train step's release_memory_occupation;
         # stragglers from this trajectory would otherwise race its idle assert.
-        await anthropic_adapter.shutdown_session(session_id)
-        anthropic_adapter.pop_session_split(state.store, session_id)  # idempotent
+        await state.adapter.finish_session(session_id)  # idempotent
 
 
 def _log_timeout_diagnostic(t0: float) -> None:

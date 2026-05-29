@@ -12,6 +12,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from slime.agent.adapters import anthropic, openai
+from slime.agent.adapters.common import SGLANG_URL_KEY
 from slime.agent.trajectory import TurnRecord
 
 
@@ -225,9 +226,9 @@ def test_openai_chat_completion_endpoint_records_token_segments(monkeypatch):
     async def run_case():
         monkeypatch.setattr(openai, "_generate", fake_generate)
         tokenizer = ToyTokenizer({(101,): "hello"})
-        app, store = openai.start(tokenizer=tokenizer, sglang_url="http://unused")
-        openai.open_session(store, "sid-chat", sampling_defaults={"max_new_tokens": 8})
-        client = TestClient(TestServer(app))
+        adapter = openai.OpenAIAdapter(tokenizer=tokenizer, sglang_url="http://unused")
+        adapter.open_session("sid-chat", sampling_defaults={"max_new_tokens": 8})
+        client = TestClient(TestServer(adapter.app))
         await client.start_server()
         try:
             resp = await client.post(
@@ -243,7 +244,7 @@ def test_openai_chat_completion_endpoint_records_token_segments(monkeypatch):
         finally:
             await client.close()
 
-        segments = openai.pop_session_split(store, "sid-chat")
+        segments = await adapter.finish_session("sid-chat")
         assert resp.status == 200
         assert data["object"] == "chat.completion"
         assert data["choices"][0]["message"] == {"role": "assistant", "content": "hello"}
@@ -263,9 +264,9 @@ def test_openai_chat_completion_streaming_returns_sse_chunks_and_records_segment
     async def run_case():
         monkeypatch.setattr(openai, "_generate", fake_generate)
         tokenizer = ToyTokenizer({(401,): "streamed text"})
-        app, store = openai.start(tokenizer=tokenizer, sglang_url="http://unused")
-        openai.open_session(store, "sid-chat-stream", sampling_defaults={"max_new_tokens": 8})
-        client = TestClient(TestServer(app))
+        adapter = openai.OpenAIAdapter(tokenizer=tokenizer, sglang_url="http://unused")
+        adapter.open_session("sid-chat-stream", sampling_defaults={"max_new_tokens": 8})
+        client = TestClient(TestServer(adapter.app))
         await client.start_server()
         try:
             resp = await client.post(
@@ -283,7 +284,7 @@ def test_openai_chat_completion_streaming_returns_sse_chunks_and_records_segment
 
         events = _parse_sse(raw)
         chunks = [payload for _, payload in events if isinstance(payload, dict)]
-        segments = openai.pop_session_split(store, "sid-chat-stream")
+        segments = await adapter.finish_session("sid-chat-stream")
         assert resp.status == 200
         assert chunks[0]["object"] == "chat.completion.chunk"
         assert chunks[0]["choices"][0]["delta"] == {"role": "assistant"}
@@ -309,9 +310,9 @@ def test_openai_chat_completion_streaming_returns_tool_call_delta(monkeypatch):
         monkeypatch.setattr(openai, "_generate", fake_generate)
         raw = "use it <tool_call><function=lookup><parameter=query>slime</parameter></function></tool_call>"
         tokenizer = ToyTokenizer({(451,): raw})
-        app, store = openai.start(tokenizer=tokenizer, sglang_url="http://unused")
-        openai.open_session(store, "sid-chat-tool-stream", sampling_defaults={"max_new_tokens": 8})
-        client = TestClient(TestServer(app))
+        adapter = openai.OpenAIAdapter(tokenizer=tokenizer, sglang_url="http://unused")
+        adapter.open_session("sid-chat-tool-stream", sampling_defaults={"max_new_tokens": 8})
+        client = TestClient(TestServer(adapter.app))
         await client.start_server()
         try:
             resp = await client.post(
@@ -339,7 +340,7 @@ def test_openai_chat_completion_streaming_returns_tool_call_delta(monkeypatch):
 
         chunks = [payload for _, payload in _parse_sse(raw_sse) if isinstance(payload, dict)]
         tool_delta = next(c["choices"][0]["delta"] for c in chunks if "tool_calls" in c["choices"][0]["delta"])
-        segments = openai.pop_session_split(store, "sid-chat-tool-stream")
+        segments = await adapter.finish_session("sid-chat-tool-stream")
         assert resp.status == 200
         assert any(c["choices"][0]["delta"] == {"content": "use it"} for c in chunks)
         assert tool_delta["tool_calls"][0]["index"] == 0
@@ -360,9 +361,9 @@ def test_openai_responses_endpoint_returns_function_calls(monkeypatch):
         monkeypatch.setattr(openai, "_generate", fake_generate)
         raw = "look <tool_call><function=lookup><parameter=query>slime</parameter></function></tool_call>"
         tokenizer = ToyTokenizer({(301,): raw})
-        app, store = openai.start(tokenizer=tokenizer, sglang_url="http://unused")
-        openai.open_session(store, "sid-responses", sampling_defaults={"max_new_tokens": 8})
-        client = TestClient(TestServer(app))
+        adapter = openai.OpenAIAdapter(tokenizer=tokenizer, sglang_url="http://unused")
+        adapter.open_session("sid-responses", sampling_defaults={"max_new_tokens": 8})
+        client = TestClient(TestServer(adapter.app))
         await client.start_server()
         try:
             resp = await client.post(
@@ -387,7 +388,7 @@ def test_openai_responses_endpoint_returns_function_calls(monkeypatch):
 
         output_types = [item["type"] for item in data["output"]]
         function_call = next(item for item in data["output"] if item["type"] == "function_call")
-        segments = openai.pop_session_split(store, "sid-responses")
+        segments = await adapter.finish_session("sid-responses")
         assert resp.status == 200
         assert data["object"] == "response"
         assert output_types == ["message", "function_call"]
@@ -410,9 +411,9 @@ def test_openai_responses_streaming_preserves_function_call_output(monkeypatch):
         monkeypatch.setattr(openai, "_generate", fake_generate)
         raw = "<tool_call><function=lookup><parameter=query>slime</parameter></function></tool_call>"
         tokenizer = ToyTokenizer({(551,): raw})
-        app, store = openai.start(tokenizer=tokenizer, sglang_url="http://unused")
-        openai.open_session(store, "sid-responses-tool-stream", sampling_defaults={"max_new_tokens": 8})
-        client = TestClient(TestServer(app))
+        adapter = openai.OpenAIAdapter(tokenizer=tokenizer, sglang_url="http://unused")
+        adapter.open_session("sid-responses-tool-stream", sampling_defaults={"max_new_tokens": 8})
+        client = TestClient(TestServer(adapter.app))
         await client.start_server()
         try:
             resp = await client.post(
@@ -439,7 +440,7 @@ def test_openai_responses_streaming_preserves_function_call_output(monkeypatch):
         created = next(payload for name, payload in events if name == "response.created")
         completed = next(payload for name, payload in events if name == "response.completed")
         completed_call = next(item for item in completed["response"]["output"] if item["type"] == "function_call")
-        segments = openai.pop_session_split(store, "sid-responses-tool-stream")
+        segments = await adapter.finish_session("sid-responses-tool-stream")
         assert resp.status == 200
         assert created["type"] == "response.created"
         assert [item["type"] for item in created["response"]["output"]] == ["function_call"]
@@ -458,9 +459,9 @@ def test_openai_responses_streaming_returns_sse_events_and_records_segments(monk
     async def run_case():
         monkeypatch.setattr(openai, "_generate", fake_generate)
         tokenizer = ToyTokenizer({(501,): "response text"})
-        app, store = openai.start(tokenizer=tokenizer, sglang_url="http://unused")
-        openai.open_session(store, "sid-responses-stream", sampling_defaults={"max_new_tokens": 8})
-        client = TestClient(TestServer(app))
+        adapter = openai.OpenAIAdapter(tokenizer=tokenizer, sglang_url="http://unused")
+        adapter.open_session("sid-responses-stream", sampling_defaults={"max_new_tokens": 8})
+        client = TestClient(TestServer(adapter.app))
         await client.start_server()
         try:
             resp = await client.post(
@@ -481,7 +482,7 @@ def test_openai_responses_streaming_returns_sse_events_and_records_segments(monk
         event_names = [name for name, _ in events]
         text_delta = next(payload for name, payload in events if name == "response.output_text.delta")
         completed = next(payload for name, payload in events if name == "response.completed")
-        segments = openai.pop_session_split(store, "sid-responses-stream")
+        segments = await adapter.finish_session("sid-responses-stream")
         assert resp.status == 200
         assert event_names == ["response.created", "response.output_text.delta", "response.completed"]
         assert text_delta == {"type": "response.output_text.delta", "delta": "response text"}
@@ -503,9 +504,9 @@ def test_anthropic_messages_endpoint_returns_non_stream_json_and_records_segment
     async def run_case():
         monkeypatch.setattr(anthropic, "_generate", fake_generate)
         tokenizer = ToyTokenizer({(581,): "plain response"})
-        app, store = anthropic.start(tokenizer=tokenizer, sglang_url="http://unused")
-        anthropic.open_session(store, "sid-anthropic-json", sampling_defaults={"max_new_tokens": 8})
-        client = TestClient(TestServer(app))
+        adapter = anthropic.AnthropicAdapter(tokenizer=tokenizer, sglang_url="http://unused")
+        adapter.open_session("sid-anthropic-json", sampling_defaults={"max_new_tokens": 8})
+        client = TestClient(TestServer(adapter.app))
         await client.start_server()
         try:
             resp = await client.post(
@@ -522,7 +523,7 @@ def test_anthropic_messages_endpoint_returns_non_stream_json_and_records_segment
         finally:
             await client.close()
 
-        segments = anthropic.pop_session_split(store, "sid-anthropic-json")
+        segments = await adapter.finish_session("sid-anthropic-json")
         assert resp.status == 200
         assert data["type"] == "message"
         assert data["model"] == "actor"
@@ -546,9 +547,9 @@ def test_anthropic_messages_endpoint_streams_blocks_and_records_segments(monkeyp
             "delegate <tool_call><function=Task><parameter=description>inspect</parameter></function></tool_call>"
         )
         tokenizer = ToyTokenizer({(601,): raw_output})
-        app, store = anthropic.start(tokenizer=tokenizer, sglang_url="http://unused")
-        anthropic.open_session(store, "sid-anthropic-stream", sampling_defaults={"max_new_tokens": 8})
-        client = TestClient(TestServer(app))
+        adapter = anthropic.AnthropicAdapter(tokenizer=tokenizer, sglang_url="http://unused")
+        adapter.open_session("sid-anthropic-stream", sampling_defaults={"max_new_tokens": 8})
+        client = TestClient(TestServer(adapter.app))
         await client.start_server()
         try:
             resp = await client.post(
@@ -578,7 +579,7 @@ def test_anthropic_messages_endpoint_streams_blocks_and_records_segments(monkeyp
         starts = [payload for name, payload in events if name == "content_block_start"]
         deltas = [payload for name, payload in events if name == "content_block_delta"]
         message_delta = next(payload for name, payload in events if name == "message_delta")
-        segments = anthropic.pop_session_split(store, "sid-anthropic-stream")
+        segments = await adapter.finish_session("sid-anthropic-stream")
         assert resp.status == 200
         assert names[0] == "message_start"
         assert names[-1] == "message_stop"
@@ -621,9 +622,9 @@ def test_openai_responses_multiturn_uses_sglang_tokens_for_training_segment():
                 (40,): "done",
             },
         )
-        app, store = openai.start(tokenizer=tokenizer, sglang_url=str(upstream_server.make_url("")).rstrip("/"))
-        openai.open_session(store, "sid-openai-token", sampling_defaults={"max_new_tokens": 99})
-        client = TestClient(TestServer(app))
+        adapter = openai.OpenAIAdapter(tokenizer=tokenizer, sglang_url=str(upstream_server.make_url("")).rstrip("/"))
+        adapter.open_session("sid-openai-token", sampling_defaults={"max_new_tokens": 99})
+        client = TestClient(TestServer(adapter.app))
         await client.start_server()
         try:
             first = await client.post(
@@ -674,7 +675,7 @@ def test_openai_responses_multiturn_uses_sglang_tokens_for_training_segment():
             await client.close()
             await upstream_server.close()
 
-        segments = openai.pop_session_split(store, "sid-openai-token")
+        segments = await adapter.finish_session("sid-openai-token")
         assert first.status == 200
         assert second.status == 200
         assert function_call["name"] == "lookup"
@@ -717,9 +718,12 @@ def test_anthropic_messages_multiturn_uses_sglang_tokens_for_training_segment():
                 (140, 141): "anthropic done",
             },
         )
-        app, store = anthropic.start(tokenizer=tokenizer, sglang_url=str(upstream_server.make_url("")).rstrip("/"))
-        anthropic.open_session(store, "sid-anthropic-token", sampling_defaults={"max_new_tokens": 99})
-        client = TestClient(TestServer(app))
+        adapter = anthropic.AnthropicAdapter(
+            tokenizer=tokenizer,
+            sglang_url=str(upstream_server.make_url("")).rstrip("/"),
+        )
+        adapter.open_session("sid-anthropic-token", sampling_defaults={"max_new_tokens": 99})
+        client = TestClient(TestServer(adapter.app))
         await client.start_server()
         try:
             first = await client.post(
@@ -773,7 +777,7 @@ def test_anthropic_messages_multiturn_uses_sglang_tokens_for_training_segment():
             await client.close()
             await upstream_server.close()
 
-        segments = anthropic.pop_session_split(store, "sid-anthropic-token")
+        segments = await adapter.finish_session("sid-anthropic-token")
         assert first.status == 200
         assert second.status == 200
         assert tool_use["name"] == "lookup"
@@ -819,7 +823,7 @@ def test_openai_generate_posts_input_ids_and_extracts_logprobs():
                 [11, 12],
                 session,
                 {"max_tokens": 3, "temperature": 0.25, "stop": ["</s>"]},
-                {"sglang_url": str(server.make_url("")).rstrip("/")},
+                {SGLANG_URL_KEY: str(server.make_url("")).rstrip("/")},
             )
         finally:
             await server.close()

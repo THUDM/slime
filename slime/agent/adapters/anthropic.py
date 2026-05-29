@@ -3,8 +3,9 @@
 The adapter exposes ``/v1/messages`` and ``/v1/messages/count_tokens``. It
 renders each Anthropic message history with the served model's chat template,
 calls SGLang ``/generate`` with ``input_ids``, and records the exact sampled
-token ids/logprobs as ``TurnRecord`` objects. ``pop_session_split()`` converts
-those records into trainable ``TokenSegment`` objects.
+token ids/logprobs as ``TurnRecord`` objects. New code should use
+``AnthropicAdapter`` and call ``finish_session()`` at trajectory end to drain
+trainable ``TokenSegment`` objects.
 
 It also handles Claude Code sub-agent and compaction patterns by splitting one
 session into ``subagent``, ``wipe``, and ``final`` segments.
@@ -21,14 +22,14 @@ from typing import Any
 
 from aiohttp import web
 
+from slime.agent.adapters.common import ADAPTER_KEY, REASONING_PARSER_KEY, TOKENIZER_KEY, TOOL_PARSER_KEY
 from slime.agent.adapters.common import AdapterChain as Chain
 from slime.agent.adapters.common import (
+    BaseAdapter,
     call_sglang_generate,
     ok_response,
-    register_session,
     render_token_ids,
     request_session_id,
-    shutdown_session_tasks,
 )
 from slime.agent.adapters.common import stable_hash as _hash
 from slime.agent.parsing import parse_model_output
@@ -52,13 +53,34 @@ class Session:
     segments: list[TurnSegment] = dataclasses.field(default_factory=list)  # frozen output
 
 
-_Store = dict[str, Session]
+class AnthropicAdapter(BaseAdapter):
+    """Anthropic Messages-compatible HTTP adapter with session lifecycle helpers."""
 
+    session_cls = Session
 
-# Drain state for shutdown_session. Module-level so it survives
-# pop_session_split; _closed is a permanent tombstone (late requests 503).
-_inflight: dict[str, set[asyncio.Task]] = {}
-_closed: set[str] = set()
+    def __init__(self, *, tokenizer, sglang_url, tool_parser=None, reasoning_parser=None) -> None:
+        super().__init__(
+            tokenizer=tokenizer,
+            sglang_url=sglang_url,
+            tool_parser=tool_parser,
+            reasoning_parser=reasoning_parser,
+        )
+        self.app.router.add_post("/v1/messages", _handle_request)
+        self.app.router.add_post("/v1/messages/count_tokens", _count_tokens)
+        self.app.router.add_get("/healthz", _ok)
+        self.app.router.add_get("/v1/models", _ok)
+
+    async def finish_session(self, sid: str, *, wait_timeout: float = 5.0) -> list[TokenSegment]:
+        await self.shutdown_session(sid, wait_timeout=wait_timeout)
+        s = self.store.pop(sid, None)
+        if s is None:
+            return []
+        if s.active_sub is not None and s.active_sub.turns:
+            s.segments.append(make_turn_segment(s.active_sub.turns, kind="subagent"))
+        if s.main.turns:
+            s.segments.append(make_turn_segment(s.main.turns, kind="final"))
+
+        return merge_turn_segments(s.segments, max_context_tokens=s.max_context_tokens)
 
 
 # =============================================================================
@@ -283,14 +305,14 @@ def _build_reply(target: Chain, output_ids: list[int], finish: str, app) -> tupl
 
     Returns (blocks, stop_reason, dispatch_id).
     """
-    tok = app["tokenizer"]
+    tok = app[TOKENIZER_KEY]
 
     raw_output = tok.decode(output_ids, skip_special_tokens=False) if output_ids else ""
     parsed = parse_model_output(
         raw_output,
         tools_schema=target.tools_schema,
-        tool_parser_name=app["tool_parser"],
-        reasoning_parser_name=app["reasoning_parser"],
+        tool_parser_name=app[TOOL_PARSER_KEY],
+        reasoning_parser_name=app[REASONING_PARSER_KEY],
     )
     blocks, dispatch_id = _anthropic_blocks(parsed.reasoning, parsed.text, parsed.tool_uses)
     return blocks, _stop_reason(parsed.tool_uses, finish), dispatch_id
@@ -343,16 +365,17 @@ def _request_session_id(request: web.Request) -> str:
 async def _handle_request(request: web.Request) -> web.StreamResponse:
     body = await request.json()
     sid = _request_session_id(request)
-    if sid in _closed:  # session drained; refuse stragglers
+    adapter = request.app[ADAPTER_KEY]
+    if sid in adapter.closed:  # session drained; refuse stragglers
         return web.Response(status=503, text="session closed")
     app = request.app
-    s = app["store"].setdefault(sid, Session())
+    s = adapter.store.setdefault(sid, Session())
     task = asyncio.current_task()
-    _inflight.setdefault(sid, set()).add(task)
+    adapter.inflight.setdefault(sid, set()).add(task)
     try:
         async with s.lock:  # same sid -> serialized
             target, is_sub, kind = _select_chain(s, body)
-            ideal_ids = _build_prompt(target, body, kind, app["tokenizer"])
+            ideal_ids = _build_prompt(target, body, kind, app[TOKENIZER_KEY])
             turn = await _generate(ideal_ids, s, body, app, session_id=sid)
             blocks, stop, did = _build_reply(target, turn.output_ids, turn.finish_reason, app)
             target.turns.append(turn)
@@ -363,7 +386,7 @@ async def _handle_request(request: web.Request) -> web.StreamResponse:
             return await _stream_response(request, blocks, stop, in_tok, out_tok)
         return web.json_response(_message_response(body, blocks, stop, in_tok, out_tok))
     finally:
-        _inflight.get(sid, set()).discard(task)
+        adapter.inflight.get(sid, set()).discard(task)
 
 
 def _message_response(body: dict, blocks: list[dict], stop_reason: str, in_tok: int, out_tok: int) -> dict:
@@ -446,56 +469,6 @@ async def _stream_response(request, blocks, stop_reason, in_tok, out_tok) -> web
     return out
 
 
-# =============================================================================
-# 4. Public API
-# =============================================================================
-
-
-def open_session(
-    store: _Store,
-    sid: str,
-    *,
-    sampling_defaults: dict | None = None,
-    max_context_tokens: int = 0,
-) -> None:
-    """Register a new session. Fail-fast on duplicate sid: silently sharing
-    state would interleave two independent rollouts into one chain and corrupt
-    chain bookkeeping. `sampling_defaults` seeds the session's default sglang
-    sampling_params (overlaid by per-request body in `_generate`).
-    `max_context_tokens` caps each turn's prompt+response budget and drops
-    oversized final segments; 0 disables this guard."""
-    register_session(
-        store,
-        sid,
-        Session,
-        sampling_defaults=sampling_defaults,
-        max_context_tokens=max_context_tokens,
-    )
-
-
-def pop_session_split(store: _Store, sid: str) -> list[TokenSegment]:
-    """Snapshot whatever chains are still alive (active_sub + main) into
-    segments, drop empty and oversized ones. Called by the train loop at
-    trajectory end."""
-    s = store.pop(sid, None)
-    if s is None:
-        return []
-    if s.active_sub is not None and s.active_sub.turns:
-        s.segments.append(make_turn_segment(s.active_sub.turns, kind="subagent"))
-    if s.main.turns:
-        s.segments.append(make_turn_segment(s.main.turns, kind="final"))
-
-    return merge_turn_segments(s.segments, max_context_tokens=s.max_context_tokens)
-
-
-async def shutdown_session(sid: str, *, wait_timeout: float = 5.0) -> None:
-    """Tombstone sid (late requests 503) and drain in-flight local handlers
-    (cancel fires /abort_request to sglang). Does NOT wait for sglang idle --
-    sglang_engine.release_memory_occupation already calls flush_cache() with
-    60×1s polling. Idempotent."""
-    await shutdown_session_tasks(sid, _closed, _inflight, wait_timeout=wait_timeout)
-
-
 # Trivial endpoints claude-code probes during a session: count_tokens runs
 # every turn (return 0 -- client uses it as a hint, not a hard budget),
 # healthz/v1/models are startup readiness checks.
@@ -505,31 +478,3 @@ async def _count_tokens(request: web.Request) -> web.Response:
 
 async def _ok(request: web.Request) -> web.Response:
     return await ok_response(request)
-
-
-def start(*, tokenizer, sglang_url, tool_parser=None, reasoning_parser=None):
-    """Build the aiohttp app + store. Caller is responsible for running the
-    server (e.g. `aiohttp.web.run_app` or a daemon-thread wrapper).
-
-    The runner MUST set ``handler_cancellation=True`` so a client disconnect
-    actually cancels the handler coroutine, arming the fire-and-forget
-    /abort_request inside `_generate`. Without it a cancelled client leaves an
-    inflight sglang /generate that races with the next release_memory_occupation
-    and trips sglang's "server is idle" assertion -- crashing the scheduler.
-
-    Use `open_session(store, sid, ...)` to register a session before
-    claude-code dials in (fail-fast on duplicate sid, seeds sampling defaults).
-    Use `pop_session_split(store, sid)` to drain its trajectory at rollout end.
-    """
-    store: _Store = {}
-    app = web.Application(client_max_size=64 * 1024 * 1024)
-    app["tokenizer"] = tokenizer
-    app["sglang_url"] = sglang_url.rstrip("/") if isinstance(sglang_url, str) else sglang_url
-    app["tool_parser"] = tool_parser
-    app["reasoning_parser"] = reasoning_parser
-    app["store"] = store
-    app.router.add_post("/v1/messages", _handle_request)
-    app.router.add_post("/v1/messages/count_tokens", _count_tokens)
-    app.router.add_get("/healthz", _ok)
-    app.router.add_get("/v1/models", _ok)
-    return app, store
