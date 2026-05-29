@@ -6,19 +6,24 @@ def calculate_lm_head_flops(seqlen, hidden_size, vocab_size):
     return 2 * seqlen * hidden_size * vocab_size
 
 
+def _is_multi_latent_attention(args):
+    return bool(getattr(args, "multi_latent_attention", False))
+
+
 def calculate_qkv_projection_flops(args, seqlen, hidden_size, num_attention_heads, num_query_groups):
-    if args.q_lora_rank is None:
-        q_flops = 2 * seqlen * hidden_size * num_attention_heads * args.kv_channels
-    else:
+    is_mla = _is_multi_latent_attention(args)
+    if is_mla and args.q_lora_rank is not None:
         q_flops = (
             2
             * seqlen
             * args.q_lora_rank
             * (args.hidden_size + args.num_attention_heads * (args.qk_head_dim + args.qk_pos_emb_head_dim))
         )
-    if args.kv_lora_rank is None:
-        kv_flops = 2 * 2 * seqlen * hidden_size * num_query_groups * args.kv_channels
     else:
+        q_head_dim = args.qk_head_dim + args.qk_pos_emb_head_dim if is_mla else args.kv_channels
+        q_flops = 2 * seqlen * hidden_size * num_attention_heads * q_head_dim
+
+    if is_mla and args.kv_lora_rank is not None:
         kv_flops = (
             2
             * seqlen
@@ -28,18 +33,21 @@ def calculate_qkv_projection_flops(args, seqlen, hidden_size, num_attention_head
                 + args.hidden_size * args.qk_pos_emb_head_dim
             )
         )
+    else:
+        kv_flops = 2 * 2 * seqlen * hidden_size * num_query_groups * args.kv_channels
 
     return q_flops + kv_flops
 
 
 def calculate_attention_flops(args, seqlen, num_attention_heads):
+    is_mla = _is_multi_latent_attention(args)
     # QK^T with causal
-    if args.qk_pos_emb_head_dim:
+    if is_mla:
         flops = 2 * num_attention_heads * seqlen * seqlen * (args.qk_head_dim + args.qk_pos_emb_head_dim) / 2
     else:
         flops = 2 * num_attention_heads * seqlen * seqlen * args.kv_channels / 2
     # A*V
-    if args.v_head_dim:
+    if is_mla:
         flops += num_attention_heads * seqlen * seqlen * args.v_head_dim
     else:
         flops += num_attention_heads * seqlen * seqlen * args.kv_channels
