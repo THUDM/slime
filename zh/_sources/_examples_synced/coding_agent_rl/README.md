@@ -117,8 +117,9 @@ All set in the launcher; tune per cluster.
 
 `--rollout-max-response-len` is the per-turn generation cap passed to each
 SGLang `/generate` call as `max_new_tokens`. `--rollout-max-context-len` is the
-multi-turn prompt+response budget: each turn clamps `max_new_tokens` to the
-remaining context, and oversized emitted segments are dropped before training.
+multi-turn prompt+response budget enforced only during generation: each turn
+clamps `max_new_tokens` to the remaining context. Trajectory merge/export keeps
+the emitted segments and does not drop them for length.
 The Anthropic adapter reuses `--sglang-tool-call-parser` and
 `--sglang-reasoning-parser` for output parsing, so those flags must match the
 served model.
