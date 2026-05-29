@@ -118,6 +118,46 @@ The middleware reuses `--sglang-tool-call-parser` and
 `--sglang-reasoning-parser` for output parsing, so those flags must match the
 served model.
 
+## String-in, Token-out Trajectories
+
+The coding-agent environment is string/message based: claude-code sends
+Anthropic Messages requests, receives streamed text/thinking/tool-use blocks,
+and later sends back rendered tool observations. Training, however, must stay
+token based. A trajectory is only a valid RL target when the optimized tokens
+are the same tokens the rollout model actually sampled.
+
+The middleware therefore follows a **string in, token out** contract:
+
+- Each incoming message history is rendered with the served model's chat
+  template and sent to SGLang as `input_ids`.
+- SGLang is called with `return_logprob=True`; the middleware records the exact
+  `prompt_ids`, sampled `output_ids`, and per-token rollout logprobs for that
+  turn.
+- At training export time, samples are assembled from those saved token ids.
+  The decoded `response` field is only a readable sidecar; it is not
+  re-tokenized to recover the training sequence.
+
+Multi-turn agents still force the middleware to tokenize later message
+histories, because tool observations and claude-code's own compacted messages
+arrive as strings. `slime.agent.trajectory.merge_turns` stitches those later
+prompts against the saved token stream:
+
+- New prompt suffixes that are tool/user/environment context are appended with
+  `loss_mask=0`.
+- Fresh model outputs from SGLang are appended with `loss_mask=1`.
+- If a later prompt no longer token-matches an earlier sampled output, the
+  unmatched suffix is dropped. If the drift cuts through the middle of a
+  previous model output, the retained prefix of that whole output turn is also
+  assigned `loss_mask=0`.
+
+That last case is the important correctness guard. A re-tokenization mismatch
+can make a string-level conversation look continuous while token-level
+provenance is broken. slime keeps the context needed to continue the agent, but
+does not backprop through tokens whose sampled origin can no longer be proven.
+The unit tests in `tests/test_agent_trajectory.py` cover matched prefixes,
+skipped turns, split-output drift, changed token counts, and prompt-base
+restarts.
+
 ## Fan-out Semantics
 
 - `generate()` returns `list[Sample]` — one Sample per trajectory **segment** (`subagent` / `wipe` / `final`).

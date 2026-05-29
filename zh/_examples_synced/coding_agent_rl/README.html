@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 05 月 28 日"/>
+    <meta name="docbuild:last-update" content="2026 年 05 月 29 日"/>
   </head>
   
   
@@ -435,6 +435,7 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-script">Running the Script</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#new-arguments">New Arguments</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#swe-specific-environment-knobs">SWE-specific Environment Knobs</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#string-in-token-out-trajectories">String-in, Token-out Trajectories</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fan-out-semantics">Fan-out Semantics</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#porting-to-a-new-sandbox-backend">Porting to a New Sandbox Backend</a></li>
 </ul>
@@ -607,6 +608,45 @@ The middleware reuses <code class="docutils literal notranslate"><span class="pr
 <code class="docutils literal notranslate"><span class="pre">--sglang-reasoning-parser</span></code> for output parsing, so those flags must match the
 served model.</p>
 </section>
+<section id="string-in-token-out-trajectories">
+<h2>String-in, Token-out Trajectories<a class="headerlink" href="#string-in-token-out-trajectories" title="链接到此标题。">#</a></h2>
+<p>The coding-agent environment is string/message based: claude-code sends
+Anthropic Messages requests, receives streamed text/thinking/tool-use blocks,
+and later sends back rendered tool observations. Training, however, must stay
+token based. A trajectory is only a valid RL target when the optimized tokens
+are the same tokens the rollout model actually sampled.</p>
+<p>The middleware therefore follows a <strong>string in, token out</strong> contract:</p>
+<ul class="simple">
+<li><p>Each incoming message history is rendered with the served model's chat
+template and sent to SGLang as <code class="docutils literal notranslate"><span class="pre">input_ids</span></code>.</p></li>
+<li><p>SGLang is called with <code class="docutils literal notranslate"><span class="pre">return_logprob=True</span></code>; the middleware records the exact
+<code class="docutils literal notranslate"><span class="pre">prompt_ids</span></code>, sampled <code class="docutils literal notranslate"><span class="pre">output_ids</span></code>, and per-token rollout logprobs for that
+turn.</p></li>
+<li><p>At training export time, samples are assembled from those saved token ids.
+The decoded <code class="docutils literal notranslate"><span class="pre">response</span></code> field is only a readable sidecar; it is not
+re-tokenized to recover the training sequence.</p></li>
+</ul>
+<p>Multi-turn agents still force the middleware to tokenize later message
+histories, because tool observations and claude-code's own compacted messages
+arrive as strings. <code class="docutils literal notranslate"><span class="pre">slime.agent.trajectory.merge_turns</span></code> stitches those later
+prompts against the saved token stream:</p>
+<ul class="simple">
+<li><p>New prompt suffixes that are tool/user/environment context are appended with
+<code class="docutils literal notranslate"><span class="pre">loss_mask=0</span></code>.</p></li>
+<li><p>Fresh model outputs from SGLang are appended with <code class="docutils literal notranslate"><span class="pre">loss_mask=1</span></code>.</p></li>
+<li><p>If a later prompt no longer token-matches an earlier sampled output, the
+unmatched suffix is dropped. If the drift cuts through the middle of a
+previous model output, the retained prefix of that whole output turn is also
+assigned <code class="docutils literal notranslate"><span class="pre">loss_mask=0</span></code>.</p></li>
+</ul>
+<p>That last case is the important correctness guard. A re-tokenization mismatch
+can make a string-level conversation look continuous while token-level
+provenance is broken. slime keeps the context needed to continue the agent, but
+does not backprop through tokens whose sampled origin can no longer be proven.
+The unit tests in <code class="docutils literal notranslate"><span class="pre">tests/test_agent_trajectory.py</span></code> cover matched prefixes,
+skipped turns, split-output drift, changed token counts, and prompt-base
+restarts.</p>
+</section>
 <section id="fan-out-semantics">
 <h2>Fan-out Semantics<a class="headerlink" href="#fan-out-semantics" title="链接到此标题。">#</a></h2>
 <ul class="simple">
@@ -681,6 +721,7 @@ served model.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-script">Running the Script</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#new-arguments">New Arguments</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#swe-specific-environment-knobs">SWE-specific Environment Knobs</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#string-in-token-out-trajectories">String-in, Token-out Trajectories</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fan-out-semantics">Fan-out Semantics</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#porting-to-a-new-sandbox-backend">Porting to a New Sandbox Backend</a></li>
 </ul>
@@ -716,7 +757,7 @@ served model.</p>
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 05 月 28 日.
+  最后更新于 2026 年 05 月 29 日.
   <br/>
 </p>
   </div>
