@@ -20,9 +20,22 @@ slime 的核心定位并不只是跑单轮 RL，而是把高性能训练、SGLan
 
 大多数 agentic RL 任务应该先从 `--custom-generate-function-path` 开始。这个函数负责把一次 agent 运行转换成 slime 可训练的 `Sample`：填好 `tokens`、`response_length`、`loss_mask`、`status`，并在需要时填好 `reward` 或交给 `--custom-rm-path` 计算。
 
+agent workflow 本身可以使用字符串、chat messages、tool calls、环境 observation 或框架自己的事件格式。但训练目标仍然应该是 token based：尽量保留模型实际采样得到的 token ids，并用 `loss_mask` 区分可训练的模型输出和 prompt、template、tool observation、环境文本。
+
 如果一次 prompt rollout 只对应一个训练样本，返回一个 `Sample` 即可。如果一次 rollout 会拆成多个训练片段，例如 subagent 轨迹、main-agent 轨迹、compact 前后的片段，则返回 `list[Sample]`，并给这些 sibling samples 设置相同的 `rollout_id`。这样 slime 会在训练 step 切分和 loss 聚合时把它们视作同一次 rollout，而不是重复计数。
 
 只有当你需要替换整个 rollout 编排时，才优先考虑 `--rollout-function-path`。典型场景包括：自定义数据源调度、跨 rollout 的后台队列、完全异步生成，或者默认 `sglang_rollout` 的 prompt × sample 结构已经无法表达你的 workflow。
+
+## Agent Runtime Adapters
+
+slime 提供已有 agent runtime 可用的协议 adapter：
+
+- `slime.agent.adapters.anthropic`：Anthropic Messages API，用于 Claude Code 风格 agent。
+- `slime.agent.adapters.openai`：OpenAI Chat Completions 和 Responses API，用于 OpenAI SDK / OpenAI Agents SDK 风格 client。
+
+adapter 是一个便利层，不是单独的 agent framework。它的 contract 是 message history in，sampled tokens out：adapter 会渲染 chat template，用 `input_ids` 和 `return_logprob=True` 调 SGLang，并把返回的 token ids/logprobs 导出为可训练的 trajectory segments；不会从 response text 重新分词恢复训练目标。
+
+多轮 agent 应使用稳定的 `session_id`。adapter 会把它作为 `X-SMG-Routing-Key` 传给 SGLang，让同一个 session 尽量落到同一个 worker，复用 prefix cache。
 
 ## Agent Serving 与性能配置
 

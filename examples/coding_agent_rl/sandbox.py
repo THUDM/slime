@@ -181,7 +181,7 @@ async def run_claude_code(
     *,
     workdir: str,
     session_id: str,
-    middleware_url: str,
+    adapter_url: str,
     time_budget_sec: int,
     problem_statement: str = "",
     swepro: dict | None = None,
@@ -203,7 +203,7 @@ async def run_claude_code(
         sb,
         workdir=workdir,
         session_id=session_id,
-        middleware_url=middleware_url,
+        adapter_url=adapter_url,
         prompt=prompt or CC_PROMPT,
         time_budget_sec=time_budget_sec,
     )
@@ -214,7 +214,7 @@ async def _spawn_claude_code(
     *,
     workdir: str,
     session_id: str,
-    middleware_url: str,
+    adapter_url: str,
     prompt: str,
     time_budget_sec: int,
 ) -> int:
@@ -244,7 +244,7 @@ async def _spawn_claude_code(
     await sb.exec(f"chmod +x {launcher}", user="agent", timeout=30)
 
     env = {
-        "ANTHROPIC_BASE_URL": middleware_url,
+        "ANTHROPIC_BASE_URL": adapter_url,
         "ANTHROPIC_AUTH_TOKEN": session_id,
         "ANTHROPIC_MODEL": "slime-actor",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",

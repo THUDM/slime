@@ -9,12 +9,12 @@ Wire-up:
     1. ``sandbox.run_claude_code`` prepares the agent sandbox and runs claude-code.
     2. ``sandbox.git_diff`` captures the model-produced patch.
     3. ``sandbox.evaluate`` scores that patch in a second clean sandbox.
-    4. ``_merge_samples`` combines reward + middleware ``TokenSegment``s,
+    4. ``_merge_samples`` combines reward + adapter ``TokenSegment``s,
        delegating segment-to-``Sample`` fan-out to ``slime.agent.trajectory``.
 
 All sandbox-side details live in ``sandbox.py``; the LLM plumbing
 (Anthropic <-> SGLang /generate, token capture, 3-kind segment split) lives in
-``middleware.py``.
+``slime.agent.adapters.anthropic``.
 
 Dataset row ``metadata`` schema::
 
@@ -37,7 +37,7 @@ Env knobs (set in run.sh):
     SWE_EVAL_TIMEOUT_SEC     600   per eval test execution
     SHIM_BIND_HOST           0.0.0.0
     SHIM_PORT                18001
-    SLIME_HEAD_HOST          public host the sandboxes use to reach the middleware (REQUIRED)
+    SLIME_HEAD_HOST          public host the sandboxes use to reach the adapter (REQUIRED)
 """
 
 from __future__ import annotations
@@ -52,12 +52,13 @@ import traceback
 from dataclasses import dataclass
 from typing import Any
 
+from slime.agent.adapters import anthropic as anthropic_adapter
 from slime.agent.trajectory import fan_out_sample_segments
 from slime.utils.misc import SingletonMeta
 from slime.utils.processing_utils import load_tokenizer
 from slime.utils.types import Sample
 
-from . import middleware, sandbox
+from . import sandbox
 from .aiohttp_threaded import run_app_in_thread
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,7 @@ SHIM_PORT = int(os.environ.get("SHIM_PORT", "18001"))
 
 
 # ---------------------------------------------------------------------------
-# Singleton: tokenizer + in-process middleware handle + reducer
+# Singleton: tokenizer + in-process Anthropic adapter handle + reducer
 # ---------------------------------------------------------------------------
 class _State(metaclass=SingletonMeta):
     def __init__(self, args) -> None:
@@ -92,11 +93,11 @@ class _State(metaclass=SingletonMeta):
         if not public_host:
             raise RuntimeError(
                 "SLIME_HEAD_HOST is not set. Export it to the host IP that "
-                "sandboxes can reach for reverse-connection to the middleware. "
+                "sandboxes can reach for reverse-connection to the Anthropic adapter. "
                 "Without it the sandbox cannot dial back and the rollout will "
                 "silently abort."
             )
-        app, self.store = middleware.start(
+        app, self.store = anthropic_adapter.start(
             tokenizer=self.tokenizer,
             sglang_url=sglang_url,
             tool_parser=self.tool_parser,
@@ -104,21 +105,21 @@ class _State(metaclass=SingletonMeta):
         )
         # handler_cancellation=True so a client disconnect cancels the handler
         # coroutine, arming the fire-and-forget /abort_request inside the
-        # middleware. Without it a cancelled client leaves an inflight sglang
+        # adapter. Without it a cancelled client leaves an inflight sglang
         # /generate that races with the next release_memory_occupation and
         # trips sglang's "server is idle" assertion.
         self.app_handle = run_app_in_thread(
             app,
             host=SHIM_BIND_HOST,
             port=SHIM_PORT,
-            thread_name="anthropic-middleware",
+            thread_name="anthropic-adapter",
             runner_kwargs={"handler_cancellation": True},
         )
-        self.middleware_url = f"http://{public_host}:{self.app_handle.port}"
+        self.adapter_url = f"http://{public_host}:{self.app_handle.port}"
         logger.info(
-            "[coding_agent_rl] tokenizer=%s middleware=%s max_context_len=%s tool_parser=%s reasoning_parser=%s",
+            "[coding_agent_rl] tokenizer=%s adapter=%s max_context_len=%s tool_parser=%s reasoning_parser=%s",
             args.hf_checkpoint,
-            self.middleware_url,
+            self.adapter_url,
             self.max_context_len,
             self.tool_parser,
             self.reasoning_parser,
@@ -127,7 +128,7 @@ class _State(metaclass=SingletonMeta):
 
 # ---------------------------------------------------------------------------
 # Trajectory -> Sample conversion
-# middleware.pop_session_split() returns TokenSegments. One trajectory yields
+# anthropic_adapter.pop_session_split() returns TokenSegments. One trajectory yields
 # >=1 segments because the agent may compact + reset mid-run; trajectory.py
 # handles the mechanical segment -> Sample fan-out.
 # ---------------------------------------------------------------------------
@@ -144,7 +145,7 @@ def _start_session(
     md: dict[str, Any],
     sampling_params: dict[str, Any],
 ) -> str:
-    # claude-code inside the sandbox dials back to the middleware with this
+    # claude-code inside the sandbox dials back to the adapter with this
     # session_id (passed as the Bearer token) so its turns are grouped under
     # one chain history. Build from (instance_id, index, group_index) when
     # possible; fall back to random hex if either index is missing.
@@ -155,7 +156,7 @@ def _start_session(
     else:
         session_id = f"cagent-{md['instance_id']}-{secrets.token_hex(8)}"
     sample.session_id = session_id
-    middleware.open_session(
+    anthropic_adapter.open_session(
         state.store,
         session_id,
         sampling_defaults=sampling_params,
@@ -173,9 +174,9 @@ def _merge_samples(
     elapsed_sec: float,
     instance_id: str,
 ):
-    segments = middleware.pop_session_split(state.store, session_id) or []
+    segments = anthropic_adapter.pop_session_split(state.store, session_id) or []
     if not segments:
-        return _abort_result(sample, "middleware_session_empty")
+        return _abort_result(sample, "adapter_session_empty")
 
     trajectory_metadata = {
         **(sample.metadata or {}),
@@ -233,7 +234,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
                     sb,
                     workdir=md["workdir"],
                     session_id=session_id,
-                    middleware_url=state.middleware_url,
+                    adapter_url=state.adapter_url,
                     time_budget_sec=SWE_TIME_BUDGET_SEC,
                     problem_statement=md["problem_statement"],
                     swepro=md["swepro"],
@@ -278,8 +279,8 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
     finally:
         # Close the sid before next train step's release_memory_occupation;
         # stragglers from this trajectory would otherwise race its idle assert.
-        await middleware.shutdown_session(session_id)
-        middleware.pop_session_split(state.store, session_id)  # idempotent
+        await anthropic_adapter.shutdown_session(session_id)
+        anthropic_adapter.pop_session_split(state.store, session_id)  # idempotent
 
 
 def _log_timeout_diagnostic(t0: float) -> None:

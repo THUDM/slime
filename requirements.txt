@@ -1,4 +1,5 @@
 accelerate
+anthropic
 blobfile
 datasets
 e2b
@@ -7,6 +8,8 @@ mcp[cli]
 memray  # needed for debugging (but is lightweight), we can put it to dev mode when using pyproject.toml
 numba
 omegaconf
+openai
+openai-agents
 pillow
 pylatexenc
 pyyaml

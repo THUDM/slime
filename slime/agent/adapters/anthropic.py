@@ -1,66 +1,36 @@
-"""Anthropic Messages API shim that translates claude-code requests into
-sglang ``/generate`` calls while tracking the token-level training target
-for slime RL rollouts.
+"""Anthropic Messages adapter for agent rollouts.
 
-Each turn:
-* fingerprints the incoming Anthropic conversation against per-session state
-  to decide whether it continues the main chain or an active sub-agent chain,
-  and whether the request appends to / wipes / restarts that chain;
-* renders the chosen message chain through the model's chat template;
-* posts to sglang ``/generate`` and records prompt_ids/output_ids as a
-  TurnRecord;
-* parses the decoded output back into Anthropic blocks and streams them to
-  claude-code as a Messages SSE response.
+The adapter exposes ``/v1/messages`` and ``/v1/messages/count_tokens``. It
+renders each Anthropic message history with the served model's chat template,
+calls SGLang ``/generate`` with ``input_ids``, and records the exact sampled
+token ids/logprobs as ``TurnRecord`` objects. ``pop_session_split()`` converts
+those records into trainable ``TokenSegment`` objects.
 
-Public surface:
-    start(...)                       build the aiohttp app + store
-    open_session(store, sid, ...)    register a session with sampling defaults
-    pop_session_split(store, sid)    drain a session's trajectory for training
-    shutdown_session(sid, ...)       tombstone sid + drain in-flight handlers
-    Chain, Session                   dataclasses (exposed for type hints)
-
-Read `_handle_request` (§3) top-to-bottom -- that's the online turn:
-    _select_chain      pick main vs active sub; snapshot wipe/sub-done into segments
-    _build_prompt      replace/extend chat_messages -> render token ids
-    _generate          POST sglang /generate -> TurnRecord
-    _build_reply       output_ids -> Anthropic blocks
-    append turn        remember the prompt/output boundary for later merge
-
-`pop_session_split()` drains frozen TurnRecords and merges them into training
-segments. The online path serves and records; the pop path linearizes.
-
-`_build_prompt` is itself a thin orchestrator over three helpers:
-    _replace_chat_messages / _extend_chat_messages    translate Anthropic blocks -> chat_messages
-    _render_token_ids                                 chat template -> input ids
-
-Design notes:
-* `kind` (new/wipe/append) is consumed at the dispatch site:
-  `_replace_chat_messages` vs `_extend_chat_messages` is picked at call time.
-* `_render_token_ids` only reads target; the caller owns all state mutation.
-* Loss-mask repair happens in `trajectory.merge_turns`: later prompt tokens are
-  compared with earlier generated tokens, and unmatched historical outputs stop
-  being trainable.
-* `_hash` strips Anthropic `cache_control` keys before hashing so the same
-  logical message hashes identically across turns even as cache_control moves.
-* Server lifecycle (binding a port, running the loop, `handler_cancellation`)
-  lives in the caller, not here -- see `start()` for the required runner
-  contract.
+It also handles Claude Code sub-agent and compaction patterns by splitting one
+session into ``subagent``, ``wipe``, and ``final`` segments.
 """
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses
-import hashlib
 import json
 import logging
 import secrets
-import uuid
 from typing import Any
 
-import aiohttp
 from aiohttp import web
 
+from slime.agent.adapters.common import AdapterChain as Chain
+from slime.agent.adapters.common import (
+    call_sglang_generate,
+    ok_response,
+    register_session,
+    render_token_ids,
+    request_session_id,
+    shutdown_session_tasks,
+)
+from slime.agent.adapters.common import stable_hash as _hash
 from slime.agent.parsing import parse_model_output
 from slime.agent.trajectory import TokenSegment, TurnRecord, TurnSegment, make_turn_segment, merge_turn_segments
 
@@ -69,41 +39,6 @@ logger = logging.getLogger(__name__)
 
 # Tool names claude-code uses to dispatch a sub-agent.
 _SUBAGENT_TOOLS = {"Task", "Agent"}
-
-
-def _strip_cache_control(obj: Any) -> Any:
-    """Drop Anthropic prompt-caching ``cache_control`` keys before hashing -
-    cache_control moves across turns so the same logical message would
-    otherwise hash differently each request."""
-    if isinstance(obj, dict):
-        return {k: _strip_cache_control(v) for k, v in obj.items() if k != "cache_control"}
-    if isinstance(obj, list):
-        return [_strip_cache_control(x) for x in obj]
-    return obj
-
-
-def _hash(obj: Any) -> str:
-    payload = json.dumps(_strip_cache_control(obj), sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
-    return hashlib.sha1(payload).hexdigest()[:12]
-
-
-# =============================================================================
-# 1. Data structures
-# =============================================================================
-
-
-@dataclasses.dataclass
-class Chain:
-    """One conversation chain (main, or an active sub-agent)."""
-
-    system_hash: str = ""
-    chat_messages: list[dict] = dataclasses.field(default_factory=list)
-    tools_schema: list[dict] | None = None
-    seen_msgs: int = 0
-    msg_hashes: list[str] = dataclasses.field(default_factory=list)
-
-    # Online turn log. pop_session_split() merges these into training tensors.
-    turns: list[TurnRecord] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -309,34 +244,15 @@ def _extend_chat_messages(target: Chain, body: dict) -> None:
         target.tools_schema = _anthropic_tools_to_chat_tools(body.get("tools"))
 
 
-def _render_token_ids(target: Chain, tok) -> list[int]:
-    """Render the current Claude Code message history into model input ids.
-
-    We intentionally tokenize the messages as-is on every request. If a later
-    prompt no longer token-matches an earlier raw model output, trajectory
-    merging will mask/drop the unmatched history instead of rewriting the
-    online prompt.
-    """
-    # Qwen3.x fast tokenizers return a BatchEncoding here, not a list[int];
-    # list(BatchEncoding) yields dict keys (["input_ids", ...]) and poisons
-    # sglang /generate. Unwrap input_ids defensively.
-    enc = tok.apply_chat_template(
-        target.chat_messages,
-        tools=target.tools_schema,
-        tokenize=True,
-        add_generation_prompt=True,
-    )
-    ids = enc["input_ids"] if hasattr(enc, "__getitem__") and "input_ids" in enc else enc
-    return list(ids)
-
-
 def _build_prompt(target: Chain, body: dict, kind: str, tok) -> list[int]:
     """Replace/extend chat_messages and render input ids for sglang."""
     (_extend_chat_messages if kind == "append" else _replace_chat_messages)(target, body)
-    return _render_token_ids(target, tok)
+    return render_token_ids(target, tok)
 
 
-async def _generate(prompt_ids: list[int], s: Session, body: dict, app) -> TurnRecord:
+async def _generate(
+    prompt_ids: list[int], s: Session, body: dict, app, *, session_id: str | None = None
+) -> TurnRecord:
     """Call sglang and return a TurnRecord.
 
     1. build sampling_params (session defaults overlaid with body overrides)
@@ -344,81 +260,16 @@ async def _generate(prompt_ids: list[int], s: Session, body: dict, app) -> TurnR
     3. keep the exact prompt/output token ids; trajectory merge later compares
        later prompt tokens with earlier outputs to build the loss mask
     """
-    # ---- (a) Build sampling_params --------------------------------------
-    sp: dict[str, Any] = {
-        "skip_special_tokens": False,
-        "spaces_between_special_tokens": False,
-        "no_stop_trim": True,
-        "max_new_tokens": 4096,
-        **(s.sampling_defaults or {}),
-    }
-    if "max_tokens" in body:
-        # Claude's request cap may be lower, but rollout_max_response_len is
-        # the per-turn ceiling from slime. Keep the stricter of the two.
-        sp["max_new_tokens"] = min(int(sp.get("max_new_tokens", body["max_tokens"])), int(body["max_tokens"]))
-    for src_k, dst_k in (("temperature", "temperature"), ("top_p", "top_p"), ("top_k", "top_k")):
-        if src_k in body:
-            sp[dst_k] = body[src_k]
-    if body.get("stop_sequences"):
-        sp["stop"] = body["stop_sequences"]
-
-    if s.max_context_tokens > 0:
-        remaining_context = s.max_context_tokens - len(prompt_ids)
-        if remaining_context <= 0:
-            logger.warning(
-                "[middleware] prompt exceeds max_context_tokens (%d >= %d); returning length stop",
-                len(prompt_ids),
-                s.max_context_tokens,
-            )
-            return TurnRecord(
-                prompt_ids=list(prompt_ids),
-                output_ids=[],
-                finish_reason="length",
-            )
-        sp["max_new_tokens"] = min(int(sp.get("max_new_tokens", remaining_context)), remaining_context)
-
-    # ---- (b) POST sglang /generate (with abort on cancel/error) --------
-    # Without abort, a cancelled client + inflight request can race with the
-    # next release_memory_occupation and trip sglang's "server is idle" assert.
-    sglang_url = app["sglang_url"]
-    rid = uuid.uuid4().hex
-    timeout = aiohttp.ClientTimeout(total=None, sock_read=900)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as sess, sess.post(
-            f"{sglang_url}/generate",
-            json={
-                "rid": rid,
-                "input_ids": prompt_ids,
-                "sampling_params": sp,
-                "return_logprob": True,
-            },
-        ) as r:
-            if r.status >= 400:
-                text = await r.text()
-                raise RuntimeError(f"sglang upstream {r.status}: {text[:400]}")
-            # SGLang's /generate can return JSON with application/octet-stream
-            # as the Content-Type; aiohttp rejects that unless we disable the
-            # header check.
-            data = await r.json(content_type=None)
-        meta = data.get("meta_info") or {}
-        output_token_logprobs = meta.get("output_token_logprobs") or []
-        output_ids = [x[1] for x in output_token_logprobs]
-        output_log_probs = [float(x[0]) for x in output_token_logprobs]
-        finish = (meta.get("finish_reason") or {}).get("type", "stop") or "stop"
-    except (asyncio.CancelledError, aiohttp.ClientError, asyncio.TimeoutError):
-        # Best-effort abort with fresh short-timeout session; swallow errors.
-        try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as s2:
-                await s2.post(f"{sglang_url}/abort_request", json={"rid": rid})
-        except Exception:
-            pass
-        raise
-
-    return TurnRecord(
-        prompt_ids=list(prompt_ids),
-        output_ids=output_ids,
-        finish_reason=finish,
-        output_log_probs=output_log_probs,
+    return await call_sglang_generate(
+        prompt_ids,
+        s,
+        body,
+        app,
+        max_token_keys=("max_tokens",),
+        stop_keys=("stop_sequences",),
+        log_prefix="anthropic_adapter",
+        logger=logger,
+        session_id=session_id,
     )
 
 
@@ -485,9 +336,13 @@ def _start_sub_chain(s: Session, dispatch_id: str) -> None:
 # =============================================================================
 
 
+def _request_session_id(request: web.Request) -> str:
+    return request_session_id(request, include_x_api_key=True)
+
+
 async def _handle_request(request: web.Request) -> web.StreamResponse:
     body = await request.json()
-    sid = request.headers["Authorization"].removeprefix("Bearer ").strip()
+    sid = _request_session_id(request)
     if sid in _closed:  # session drained; refuse stragglers
         return web.Response(status=503, text="session closed")
     app = request.app
@@ -498,15 +353,30 @@ async def _handle_request(request: web.Request) -> web.StreamResponse:
         async with s.lock:  # same sid -> serialized
             target, is_sub, kind = _select_chain(s, body)
             ideal_ids = _build_prompt(target, body, kind, app["tokenizer"])
-            turn = await _generate(ideal_ids, s, body, app)
+            turn = await _generate(ideal_ids, s, body, app, session_id=sid)
             blocks, stop, did = _build_reply(target, turn.output_ids, turn.finish_reason, app)
             target.turns.append(turn)
             if did and not is_sub:  # sub doesn't nest
                 _start_sub_chain(s, did)
             in_tok, out_tok = len(ideal_ids), len(turn.output_ids)
-        return await _stream_response(request, blocks, stop, in_tok, out_tok)
+        if body.get("stream") is True or "text/event-stream" in request.headers.get("Accept", ""):
+            return await _stream_response(request, blocks, stop, in_tok, out_tok)
+        return web.json_response(_message_response(body, blocks, stop, in_tok, out_tok))
     finally:
         _inflight.get(sid, set()).discard(task)
+
+
+def _message_response(body: dict, blocks: list[dict], stop_reason: str, in_tok: int, out_tok: int) -> dict:
+    return {
+        "id": f"msg_{secrets.token_hex(12)}",
+        "type": "message",
+        "role": "assistant",
+        "model": body.get("model", "slime-actor"),
+        "content": blocks,
+        "stop_reason": stop_reason,
+        "stop_sequence": None,
+        "usage": {"input_tokens": in_tok, "output_tokens": out_tok},
+    }
 
 
 async def _stream_response(request, blocks, stop_reason, in_tok, out_tok) -> web.StreamResponse:
@@ -594,11 +464,13 @@ def open_session(
     sampling_params (overlaid by per-request body in `_generate`).
     `max_context_tokens` caps each turn's prompt+response budget and drops
     oversized final segments; 0 disables this guard."""
-    if sid in store:
-        raise ValueError(f"session_id {sid!r} already exists; sids must be unique per agent run")
-    s = store[sid] = Session()
-    s.sampling_defaults = dict(sampling_defaults or {})
-    s.max_context_tokens = int(max_context_tokens or 0)
+    register_session(
+        store,
+        sid,
+        Session,
+        sampling_defaults=sampling_defaults,
+        max_context_tokens=max_context_tokens,
+    )
 
 
 def pop_session_split(store: _Store, sid: str) -> list[TokenSegment]:
@@ -621,15 +493,7 @@ async def shutdown_session(sid: str, *, wait_timeout: float = 5.0) -> None:
     (cancel fires /abort_request to sglang). Does NOT wait for sglang idle --
     sglang_engine.release_memory_occupation already calls flush_cache() with
     60×1s polling. Idempotent."""
-    _closed.add(sid)
-    tasks = [t for t in _inflight.pop(sid, ()) if not t.done()]
-    if not tasks:
-        return
-    _, pending = await asyncio.wait(tasks, timeout=wait_timeout)
-    for t in pending:
-        t.cancel()
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
+    await shutdown_session_tasks(sid, _closed, _inflight, wait_timeout=wait_timeout)
 
 
 # Trivial endpoints claude-code probes during a session: count_tokens runs
@@ -640,7 +504,7 @@ async def _count_tokens(request: web.Request) -> web.Response:
 
 
 async def _ok(request: web.Request) -> web.Response:
-    return web.json_response({"ok": True})
+    return await ok_response(request)
 
 
 def start(*, tokenizer, sglang_url, tool_parser=None, reasoning_parser=None):
