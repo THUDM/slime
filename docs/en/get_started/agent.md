@@ -1,49 +1,56 @@
-# Agentic RL
+# Agentic RL Training Roadmap
 
-slime supports agentic RL by letting a custom generate function run an agent and
-return trainable `Sample`s. The agent may speak in strings/messages, but the
-training target stays token based.
+slime is not limited to single-turn RL. Its main advantage for agentic training is the combination of high-performance training, SGLang rollout serving, and pluggable data-generation interfaces. This makes it suitable for multi-turn tool use, sandbox interaction, subagent branches, context compaction, and test-based rewards.
 
-## Basic Pattern
+This page is a roadmap: use it to decide which docs and examples to read when plugging an agent workflow into slime.
 
-- Use `--custom-generate-function-path` to run the agent or environment for one
-  dataset row.
-- Fill `tokens`, `response_length`, `loss_mask`, `reward`, and `status`, or use
-  `--custom-rm-path` to compute reward separately.
-- Return `list[Sample]` when one rollout is split into subagent, compaction, or
-  final segments. Give sibling samples the same `rollout_id`.
-- Use `--rollout-function-path` only when the default rollout orchestration is
-  not enough.
+## Where To Start
 
-## Adapters
+| Goal | Recommended entry point |
+| :--- | :--- |
+| Run a custom agent loop, tool calls, RAG, browser/terminal/sandbox interaction for each sample | [`--custom-generate-function-path`](customization.md#2-custom-generate-function---custom-generate-function-path), [writing a custom generation function](quick_start.md#writing-custom-generation-function) |
+| Implement verifier rewards, test-based rewards, environment success checks, or an external reward service | [`--custom-rm-path`](customization.md#3-reward-model---custom-rm-path), [writing a custom reward function](quick_start.md#writing-custom-reward-function) |
+| Return multiple training samples from one prompt, such as subagent, multi-agent, or context-compaction segments | [fan-out return from custom generate](customization.md#returning-multiple-training-samples-for-one-prompt), [`examples/multi_agent`](../_examples_synced/multi_agent/README.md) |
+| Avoid blocking training on long-tail agent rollouts | [`examples/fully_async`](../_examples_synced/fully_async/README.md) |
+| Study a full end-to-end agent example with sandboxing, real code edits, and test-based grading | [`examples/coding_agent_rl`](../_examples_synced/coding_agent_rl/README.md) |
+| Improve SGLang serving throughput for multi-turn agents | [PD Disaggregation](../advanced/pd-disaggregation.md), [SGLang Config](../advanced/sglang-config.md) |
+| Enable SGLang optimization flags, router policies, or multi-model serving | [How to Use SGLang](usage.md#how-to-use-sglang), [SGLang Config](../advanced/sglang-config.md), [Speculative Decoding](../advanced/speculative-decoding.md), [Low Precision Training](../advanced/low-precision.md) |
+
+## Recommended Integration Pattern
+
+Most agentic RL tasks should start with `--custom-generate-function-path`. This function converts one agent execution into slime-trainable `Sample` objects: fill `tokens`, `response_length`, `loss_mask`, and `status`, then either fill `reward` directly or let `--custom-rm-path` compute it.
+
+The agent workflow itself may speak in strings, chat messages, tool calls, environment observations, or framework-specific events. The training target, however, should stay token based. Preserve the model-sampled token ids and use `loss_mask` to separate trainable model output from prompt, template, tool-observation, or environment text.
+
+If one prompt rollout corresponds to one training sample, return a single `Sample`. If one rollout splits into multiple trainable segments, such as subagent trajectories, main-agent continuations, or pre/post-compaction segments, return `list[Sample]` and set the same `rollout_id` on all sibling samples. slime then keeps those samples together for train-step splitting and loss aggregation instead of counting them as independent rollouts.
+
+Reach for `--rollout-function-path` only when you need to replace the whole rollout orchestration. Common reasons include custom data-source scheduling, cross-rollout background queues, fully asynchronous generation, or workflows that cannot fit the default `sglang_rollout` prompt-by-sample structure.
+
+## Agent Runtime Adapters
 
 slime includes protocol adapters for existing agent runtimes:
 
-- `slime.agent.adapters.anthropic`: Anthropic Messages API, used by Claude Code
-  style agents.
-- `slime.agent.adapters.openai`: OpenAI Chat Completions and Responses APIs,
-  used by OpenAI SDK / OpenAI Agents SDK style clients.
+- `slime.agent.adapters.anthropic`: Anthropic Messages API, used by Claude Code style agents.
+- `slime.agent.adapters.openai`: OpenAI Chat Completions and Responses APIs, used by OpenAI SDK / OpenAI Agents SDK style clients.
 
-Adapters follow a simple contract: message history in, sampled tokens out. They
-render the chat template, call SGLang with `input_ids` and `return_logprob=True`,
-and export the returned token ids/logprobs as training segments. They do not
-re-tokenize response text to recover the training target.
+Adapters are a convenience layer, not a separate agent framework. Their contract is message history in, sampled tokens out: they render the chat template, call SGLang with `input_ids` and `return_logprob=True`, and export the returned token ids/logprobs as trainable trajectory segments. They avoid re-tokenizing response text to recover the training target.
 
-For multi-turn agents, use a stable `session_id`. The adapters pass it as
-`X-SMG-Routing-Key` so SGLang can route one session to the same worker and reuse
-prefix cache.
+For multi-turn agents, use a stable `session_id`. The adapters pass it as `X-SMG-Routing-Key` so SGLang can route one session to the same worker and reuse prefix cache.
 
-## Example
+## Agent Serving And Performance
 
-[`examples/coding_agent_rl`](../_examples_synced/coding_agent_rl/README.md)
-shows a full SWE-style loop: boot a sandbox, run Claude Code through the
-Anthropic adapter, capture a `git diff`, run tests for reward, and export the
-recorded token trajectory.
+Agentic rollouts tend to depend more heavily on serving configuration than ordinary single-turn generation: contexts are longer, requests are multi-turn, latency has a heavier tail, and the workflow may need actor, reference, reward, or tool-side models at the same time.
 
-Serving tips: use `--router-policy consistent_hashing` for multi-turn agents,
-consider PD disaggregation for long contexts, and use `--sglang-config` for
-multi-model or heterogeneous serving.
+- Regular SGLang server arguments are passed as `--sglang-*`. For example, SGLang's `--context-length` becomes `--sglang-context-length`, and `--mem-fraction-static` becomes `--sglang-mem-fraction-static`.
+- Router arguments are passed as `--router-*`. For multi-turn agents, consider `--router-policy consistent_hashing` so requests for the same `sample.session_id` go to the same worker and improve prefix-cache hit rate. See [Session-Affinity Routing for Multi-Turn Agents](../advanced/sglang-config.md#session-affinity-routing-for-multi-turn-agents).
+- Use `--sglang-config` for more complex topologies: PD disaggregation, multi-model serving, heterogeneous server groups, and per-group SGLang overrides.
+- For multi-turn or agentic RL, evaluate PD disaggregation. Prefill and decode have different workload shapes, and separating them makes it easier to scale each resource independently.
+- For rollout-throughput optimization, also see [Speculative Decoding](../advanced/speculative-decoding.md) and [Low Precision Training](../advanced/low-precision.md).
 
-See also: [custom generate](customization.md#2-custom-generate-function---custom-generate-function-path),
-[custom reward](customization.md#3-reward-model---custom-rm-path), and
-[SGLang Config](../advanced/sglang-config.md).
+## Reference Example
+
+The full coding-agent example is [`examples/coding_agent_rl`](../_examples_synced/coding_agent_rl/README.md). It shows an end-to-end agent RL setup that is close to a real software-engineering workflow: each sample boots an isolated sandbox, the agent uses tools to edit code, the rollout captures a `git diff`, and a clean sandbox runs the tests to produce the reward.
+
+This example also demonstrates agent fan-out training. Its middleware splits one trajectory into `subagent`, `wipe` (the chain frozen before compaction), and `final` segments. `generate()` returns `list[Sample]`, and all segments share the same `rollout_id`.
+
+For smaller starting points, see [`examples/search-r1`](../_examples_synced/search-r1/README.md) for multi-turn tool use, [`examples/retool`](../_examples_synced/retool/README.md) for tool-augmented generation, and [`examples/multi_agent`](../_examples_synced/multi_agent/README.md) for the multi-agent pattern.
