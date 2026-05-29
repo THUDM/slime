@@ -151,19 +151,14 @@ def merge_turns(turns: list[TurnRecord], *, metadata: dict[str, Any] | None = No
     )
 
 
-def merge_turn_segments(
-    segments: list[TurnSegment],
-    *,
-    max_context_tokens: int = 0,
-) -> list[TokenSegment]:
-    """Merge frozen turn segments and drop empty or oversized outputs."""
+def merge_turn_segments(segments: list[TurnSegment]) -> list[TokenSegment]:
+    """Merge frozen turn segments and keep every non-empty output."""
     out: list[TokenSegment] = []
     for turn_segment in segments:
         token_segment = merge_turns(turn_segment.turns, metadata=turn_segment.metadata)
         if token_segment is None:
             continue
-        total_tokens = len(token_segment.prompt_ids) + len(token_segment.response_ids)
-        if token_segment.response_ids and (max_context_tokens <= 0 or total_tokens <= max_context_tokens):
+        if token_segment.response_ids:
             out.append(token_segment)
     return out
 

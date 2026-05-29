@@ -239,7 +239,16 @@ export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-${MLP_SOCKET_IFNAME:-eth0}}"
 # ============ SWE / claude-code rollout knobs ============
 
 # --- sandbox provisioning (E2B) ---
-export E2B_API_KEY="${E2B_API_KEY:-glm-platform}"
+# The E2B SDK validates the API key format locally before it reaches
+# E2B-compatible gateways. If your internal gateway ignores auth, use any
+# syntactically valid e2b_... hex placeholder.
+E2B_DUMMY_API_KEY="e2b_0000000000000000000000000000000000000000"
+E2B_API_KEY="${E2B_API_KEY:-${E2B_DUMMY_API_KEY}}"
+if [[ ! "${E2B_API_KEY}" =~ ^e2b_[0-9a-fA-F]{40}$ ]]; then
+  echo "WARN: E2B_API_KEY does not pass local E2B SDK format validation; using dummy key." >&2
+  E2B_API_KEY="${E2B_DUMMY_API_KEY}"
+fi
+export E2B_API_KEY
 export SWE_SANDBOX_METADATA_FILE="${SANDBOX_METADATA_FILE}"
 export SWE_SANDBOX_IMAGE_METADATA_KEY="${SWE_SANDBOX_IMAGE_METADATA_KEY:-glm-platform/image}"
 # Host-side tarballs injected into each sandbox at boot.

@@ -82,6 +82,17 @@
       ],
     },
 
+    'agent-adapter-test': {
+      'label': 'run-ci-agent-adapter',
+      'always': True,
+      'cpu': True,
+      'extra_pip_deps': 'openai openai-agents anthropic',
+      'tests': [
+        {'test_file': 'test_agent_adapters.py', 'num_gpus': 0},
+        {'test_file': 'test_agent_sdk_adapters.py', 'num_gpus': 0},
+      ],
+    },
+
     'e2e-test-image': {
       'label': 'run-ci-image',
       'image': 'slimerl/slime-test:latest',
@@ -109,10 +120,10 @@
 name: PR Test
 
 on:
-  # Push to main triggers ONLY the cpu-unittest job (cheap GitHub-hosted
-  # runner, catches PR-pair regressions where two PRs pass individually
-  # but main is broken after both land). GPU jobs stay label-gated — see
-  # each job's `if:` below — so push events never burn the self-hosted
+  # Push to main triggers the default GitHub-hosted jobs (cheap CPU/unit and
+  # agent adapter checks), catching PR-pair regressions where two PRs pass
+  # individually but main is broken after both land. GPU jobs stay label-gated
+  # — see each job's `if:` below — so push events never burn the self-hosted
   # fleet.
   push:
     branches: [main]
@@ -175,6 +186,9 @@ jobs:
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install pytest numpy packaging pyyaml omegaconf tqdm httpx pybase64 pylatexenc sympy aiohttp pillow safetensors
+<% if config.get('extra_pip_deps') %>
+          pip install << config.extra_pip_deps >>
+<% endif %>
 
       - name: Install
         shell: bash

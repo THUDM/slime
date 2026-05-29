@@ -5,10 +5,10 @@
 name: PR Test
 
 on:
-  # Push to main triggers ONLY the cpu-unittest job (cheap GitHub-hosted
-  # runner, catches PR-pair regressions where two PRs pass individually
-  # but main is broken after both land). GPU jobs stay label-gated — see
-  # each job's `if:` below — so push events never burn the self-hosted
+  # Push to main triggers the default GitHub-hosted jobs (cheap CPU/unit and
+  # agent adapter checks), catching PR-pair regressions where two PRs pass
+  # individually but main is broken after both land. GPU jobs stay label-gated
+  # — see each job's `if:` below — so push events never burn the self-hosted
   # fleet.
   push:
     branches: [main]
@@ -482,6 +482,75 @@ jobs:
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install pytest numpy packaging pyyaml omegaconf tqdm httpx pybase64 pylatexenc sympy aiohttp pillow safetensors
+
+
+      - name: Install
+        shell: bash
+        run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps
+
+
+      - name: Execute
+        shell: bash
+        run: |
+
+          TEST_PATH="${{ matrix.info.test_file }}"
+          if [[ "$TEST_PATH" != tests/* ]]; then
+            TEST_PATH="tests/$TEST_PATH"
+          fi
+          TEST_ARGS="${{ matrix.info.test_args || '' }}"
+          if [[ -n "$TEST_ARGS" ]]; then
+            read -r -a TEST_ARGS_ARRAY < <(printf '%s\n' "$TEST_ARGS")
+          else
+            TEST_ARGS_ARRAY=()
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+          fi
+
+
+  agent-adapter-test:
+
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        info: [{"num_gpus": 0, "test_file": "test_agent_adapters.py"}, {"num_gpus": 0, "test_file": "test_agent_sdk_adapters.py"}]
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    env:
+      GITHUB_COMMIT_NAME: ${{ github.sha }}_${{ github.event.pull_request.number || 'non-pr' }}
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      SLIME_TEST_ENABLE_INFINITE_RUN: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.infinite_run) || 'false' }}
+      SLIME_TEST_USE_DEEPEP: ${{ matrix.info.use_deepep || '0' }}
+      SLIME_TEST_USE_FP8_ROLLOUT: ${{ matrix.info.use_fp8_rollout || '0' }}
+      SLIME_TEST_ENABLE_EVAL: ${{ matrix.info.enable_eval || '1' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx pybase64 pylatexenc sympy aiohttp pillow safetensors
+
+          pip install openai openai-agents anthropic
+
 
       - name: Install
         shell: bash
