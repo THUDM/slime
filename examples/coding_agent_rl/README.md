@@ -12,7 +12,7 @@ Two example files and one shared adapter implement the loop:
 
 The slime training stack itself follows the standard setup. On top of that you need:
 
-1. **An E2B-compatible sandbox cluster** (or any provider that speaks the E2B SDK). Configure via `E2B_API_KEY` (e.g. the standard `e2b_xxx` key from https://e2b.dev, or any internal endpoint that accepts the same SDK).
+1. **An E2B-compatible sandbox cluster** (or any provider that speaks the E2B SDK). Configure via `E2B_API_KEY` (e.g. the standard `e2b_xxx` key from https://e2b.dev, or any internal endpoint that accepts the same SDK). The official SDK validates this value locally, so internal gateways that ignore auth still need a syntactically valid `e2b_` + 40 hex-character placeholder.
 2. **Host-side tarballs** that get uploaded into each sandbox at boot:
    - Node 22 (`node-v22.x-linux-x64.tar.xz`) — exported as `SWE_HOST_NODE_TARBALL`.
    - Claude Code CLI npm tarball (`anthropic-ai-claude-code-local-linux-x64.tgz`) — exported as `SWE_HOST_CC_TARBALL`.
