@@ -12,8 +12,8 @@ source ~/.bashrc
 micromamba create -n slime python=3.12 pip -c conda-forge -y
 micromamba activate slime
 export CUDA_HOME="$CONDA_PREFIX"
-export SGLANG_COMMIT="bbe9c7eeb520b0a67e92d133dfc137a3688dc7f2"
-export MEGATRON_COMMIT="3714d81d418c9f1bca4594fc35f9e8289f652862"
+export SGLANG_COMMIT="5a15cde858ea09b77116212a39356f2fc51b8584"
+export MEGATRON_COMMIT="1dcf0dafa884ad52ffb243625717a3471643e087"
 
 export BASE_DIR=${BASE_DIR:-"/root"}
 cd $BASE_DIR
@@ -49,8 +49,10 @@ NVCC_APPEND_FLAGS="--threads 4" \
   --no-build-isolation \
   --config-settings "--build-option=--cpp_ext --cuda_ext --parallel 8" git+https://github.com/NVIDIA/apex.git@10417aceddd7d5d05d7cbf7b0fc2daad1105f8b4
 
-pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@dc6876905830430b5054325fa4211ff302169c6b --no-cache-dir --force-reinstall
-pip install git+https://github.com/fzyzcjy/Megatron-Bridge.git@dev_rl --no-build-isolation
+TMS_CUDA_MAJOR="${TMS_CUDA_MAJOR:-$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')}"
+export TMS_CUDA_MAJOR
+pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@a193d9dd1b877d33c64a41cfb3db9f867df2d926 --no-cache-dir --force-reinstall
+pip install git+https://github.com/radixark/Megatron-Bridge.git@bridge --no-deps --no-build-isolation
 pip install nvidia-modelopt[torch]>=0.37.0 --no-build-isolation
 pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-5f8d397/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
 
@@ -81,6 +83,6 @@ pip install "numpy<2"
 
 # apply patch
 cd $BASE_DIR/sglang
-git apply $SLIME_DIR/docker/patch/v0.5.9/sglang.patch
+git apply $SLIME_DIR/docker/patch/v0.5.12.post1/sglang.patch
 cd $BASE_DIR/Megatron-LM
-git apply $SLIME_DIR/docker/patch/v0.5.9/megatron.patch
+git apply $SLIME_DIR/docker/patch/v0.5.12.post1/megatron.patch
