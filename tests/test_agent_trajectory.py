@@ -7,7 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from slime.agent.trajectory import TurnRecord, merge_turns
+from slime.agent.trajectory import TurnRecord, TurnSegment, merge_turn_segments, merge_turns
 
 
 NUM_GPUS = 0
@@ -126,6 +126,17 @@ def test_merge_turns_restarts_when_prompt_base_changes():
     assert segment.response_ids == [22, 23, 24]
     assert segment.loss_mask == [1, 0, 1]
     assert segment.rollout_log_probs == [-0.22, 0.0, -0.24]
+
+
+@pytest.mark.unit
+def test_merge_turn_segments_keeps_oversized_segments():
+    segments = [TurnSegment(turns=[_turn([10, 11, 12], [13, 14])])]
+
+    merged = merge_turn_segments(segments)
+
+    assert len(merged) == 1
+    assert merged[0].prompt_ids == [10, 11, 12]
+    assert merged[0].response_ids == [13, 14]
 
 
 if __name__ == "__main__":

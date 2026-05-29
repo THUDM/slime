@@ -80,7 +80,7 @@ class AnthropicAdapter(BaseAdapter):
         if s.main.turns:
             s.segments.append(make_turn_segment(s.main.turns, kind="final"))
 
-        return merge_turn_segments(s.segments, max_context_tokens=s.max_context_tokens)
+        return merge_turn_segments(s.segments)
 
 
 # =============================================================================
