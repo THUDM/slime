@@ -108,9 +108,8 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.args,
                 self.model,
                 convert_to_global_name=args.megatron_to_hf_mode == "raw",
-                translate_gpu_to_cpu=not self.args.enable_weights_backuper,
             ),
-            single_tag=None if args.enable_weights_backuper else "actor",
+            single_tag=None,
         )
         self._active_model_tag: str | None = "actor"
         self.weights_backuper.backup("actor")
@@ -202,6 +201,8 @@ class MegatronTrainRayActor(TrainRayActor):
 
         clear_memory()
         reload_process_groups()
+        if self.role == "actor":
+            self._switch_model("actor")
         print_memory("after wake_up model")
 
     def _get_rollout_data(self, rollout_data_ref: Box) -> RolloutBatch:
@@ -221,11 +222,11 @@ class MegatronTrainRayActor(TrainRayActor):
         rollout_data["loss_masks"] = [
             torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in rollout_data["loss_masks"]
         ]
-        if "rollout_mask_sums" in rollout_data:
-            # Promote precomputed per-rollout mask totals to GPU tensors here
+        if "group_mask_sums" in rollout_data:
+            # Promote precomputed per-group mask totals to GPU tensors here
             # (matching loss_masks) so the loss reducer can just divide.
-            rollout_data["rollout_mask_sums"] = torch.tensor(
-                rollout_data["rollout_mask_sums"], dtype=torch.float32, device=torch.cuda.current_device()
+            rollout_data["group_mask_sums"] = torch.tensor(
+                rollout_data["group_mask_sums"], dtype=torch.float32, device=torch.cuda.current_device()
             )
         if "multimodal_train_inputs" in rollout_data:
             # Move multimodal training tensors to GPU in advance
@@ -403,6 +404,7 @@ class MegatronTrainRayActor(TrainRayActor):
             result = None
 
         if self.args.offload_train:
+            del rollout_data
             self.sleep()
 
         return result

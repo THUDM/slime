@@ -13,8 +13,6 @@ import tempfile
 
 import slime.utils.external_utils.command_utils as U
 
-TIGHT_DEVICE_MEMORY = U.get_bool_env_var("SLIME_TEST_TIGHT_DEVICE_MEMORY", "1")
-
 MODEL_NAME = "Qwen2.5-0.5B-Instruct"
 MODEL_TYPE = "qwen2.5-0.5B"
 NUM_GPUS = 8
@@ -40,11 +38,11 @@ def _common_args(debug_data_dir: str):
         "--rollout-shuffle "
         "--rm-type math "
         f"--num-rollout {NUM_ROLLOUT} "
-        "--rollout-batch-size 8 "
+        "--rollout-batch-size 4 "
         "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 256 "
         "--rollout-temperature 0.8 "
-        "--global-batch-size 32 "
+        "--global-batch-size 16 "
     )
 
     perf_args = (
@@ -88,9 +86,7 @@ def execute_rollout_only(debug_data_dir: str):
     """Phase 1: rollout-only, save data."""
 
     sglang_args = (
-        "--rollout-num-gpus-per-engine 1 "
-        f"--sglang-mem-fraction-static {0.6 if TIGHT_DEVICE_MEMORY else 0.7} "
-        "--sglang-cuda-graph-max-bs 32 "
+        "--rollout-num-gpus-per-engine 1 " "--sglang-mem-fraction-static 0.7 " "--sglang-cuda-graph-max-bs 16 "
     )
 
     phase1_args = (

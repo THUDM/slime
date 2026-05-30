@@ -26,6 +26,8 @@ import pytest
 
 from slime.rollout.rm_hub.gpqa import DEFAULT_VALID_LETTERS, _extract_letter_from_response, compute_gpqa_reward
 
+NUM_GPUS = 0
+
 # ---------------------------------------------------------------------------
 # _extract_letter_from_response
 # ---------------------------------------------------------------------------

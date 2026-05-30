@@ -73,6 +73,9 @@ from _cp_dist_helpers import (
 )
 
 
+NUM_GPUS = 0
+
+
 def _grad_norm_worker(
     rank: int,
     world_size: int,

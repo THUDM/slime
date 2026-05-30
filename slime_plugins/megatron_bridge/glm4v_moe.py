@@ -21,7 +21,7 @@ import torch
 from megatron.bridge.models.conversion.mapping_registry import MegatronMappingRegistry
 from megatron.bridge.models.conversion.model_bridge import MegatronModelBridge
 from megatron.bridge.models.conversion.param_mapping import AutoMapping, GatedMLPMapping, QKVMapping, ReplicatedMapping
-from megatron.bridge.models.qwen.qwen_provider import Qwen3MoEModelProvider
+from megatron.bridge.models.gpt_provider import GPTModelProvider
 from megatron.bridge.utils.common_utils import hook_hf_module_setattr_for_tp_grad_sync
 from megatron.core import parallel_state, tensor_parallel
 from megatron.core.models.gpt import GPTModel as MCoreGPTModel
@@ -475,10 +475,10 @@ class Glm4vMoeVLModel(MegatronModule):
 # Model Provider (dataclass that doubles as TransformerConfig)
 # ---------------------------------------------------------------------------
 @dataclass
-class Glm4vMoeVLModelProvider(Qwen3MoEModelProvider):
+class Glm4vMoeVLModelProvider(GPTModelProvider):
     """Provider that creates Glm4vMoeVLModel.
 
-    Inherits from Qwen3MoEModelProvider to reuse MoE + TransformerConfig infra.
+    Inherits from GPTModelProvider to reuse MoE + TransformerConfig infra.
     Defined at module level (not inside a function) so that the class is
     picklable -- megatron-bridge broadcasts config objects across PP ranks
     via ``torch.distributed.broadcast_object_list`` which requires pickling.
@@ -579,7 +579,11 @@ class Glm4vMoeBridge(MegatronModelBridge):
             kv_channels=getattr(text_config, "head_dim", 128),
             init_method_std=text_config.initializer_range,
             layernorm_epsilon=text_config.rms_norm_eps,
+            normalization="RMSNorm",
             gated_linear_unit=True,
+            add_bias_linear=False,
+            hidden_dropout=0.0,
+            autocast_dtype=model_dtype,
             make_vocab_size_divisible_by=self.make_vocab_size_divisible_by(text_config.vocab_size),
             rotary_base=rotary_base,
             rotary_percent=partial_rotary_factor,
@@ -596,6 +600,8 @@ class Glm4vMoeBridge(MegatronModelBridge):
             moe_shared_expert_intermediate_size=shared_expert_intermediate,
             moe_layer_freq=moe_layer_freq_list,
             moe_grouped_gemm=True,
+            moe_token_dispatcher_type="alltoall",
+            moe_permute_fusion=True,
             moe_router_load_balancing_type="seq_aux_loss",
             moe_aux_loss_coeff=0,
             moe_router_score_function="sigmoid",

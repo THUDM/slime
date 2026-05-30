@@ -29,6 +29,9 @@ from slime.backends.megatron_utils.cp_utils import (  # noqa: E402
 )
 
 
+NUM_GPUS = 0
+
+
 def _make_inputs(per_sample_lengths: list[int]):
     """Build (total_lengths, response_lengths, loss_masks) for samples of the given lengths.
 

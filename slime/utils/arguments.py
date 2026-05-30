@@ -113,6 +113,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="The qkv layout for Megatron backend.",
             )
             parser.add_argument(
+                "--qwen-gdn-backend",
+                type=str,
+                choices=["fla", "flashqla"],
+                default="fla",
+                help="GDN implementation backend for Qwen linear-attention layers.",
+            )
+            parser.add_argument(
                 "--train-env-vars",
                 type=json.loads,
                 default="{}",
@@ -123,12 +130,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=int,
                 default=1024**3,
                 help="Add margin for train memory allocation. By default we will reserve 1GB as margin.",
-            )
-            parser.add_argument(
-                "--disable-weights-backuper",
-                action="store_false",
-                dest="enable_weights_backuper",
-                help="Whether to disable weights backuper to save host memory.",
             )
             parser.add_argument(
                 "--megatron-to-hf-mode",
@@ -799,6 +800,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Path to save the model in HuggingFace format when using Megatron backend. "
                     "The model will be saved to `save_hf.format(rollout_id)`. "
+                    "In raw Megatron-to-HF mode, weights are saved with the same quantization config "
+                    "as `--hf-checkpoint`. "
                 ),
             )
             reset_arg(parser, "--seed", type=int, default=1234)
@@ -1184,6 +1187,21 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             # --load-debug-rollout-data, --debug-rollout-only, --debug-train-only
             # are parsed early in _pre_parse_mode() and merged later.
             parser.add_argument(
+                "--load-forge-rollout-data",
+                type=str,
+                default=None,
+                help=(
+                    "Path (or {rollout_id} template) to a dumped rollout .pt file replayed by "
+                    "slime.rollout.forge_load.generate_rollout. Mirrors --load-debug-rollout-data's "
+                    "format(rollout_id=...) convention: a path without the placeholder is treated as "
+                    "a literal file and reused across every rollout_id; a path containing {rollout_id} "
+                    "loads a per-rollout file (with eval_<id>.pt for the eval pipeline). Unlike "
+                    "--load-debug-rollout-data, this does NOT force debug_train_only / skip_sglang -- "
+                    "sglang servers, router, weight_update and the colocate offload/onload dance all "
+                    "stay live, which is the point (memory measurement at long context)."
+                ),
+            )
+            parser.add_argument(
                 "--load-debug-rollout-data-subsample",
                 type=float,
                 default=None,
@@ -1543,6 +1561,8 @@ def _apply_megatron_role_overrides(base_args, overrides, role):
         role_args.use_opd = False
         role_args.custom_advantage_function_path = None
         role_args.untie_embeddings_and_output_weights = True
+        if "disable_param_buffers_cpu_backup" not in overrides:
+            role_args.disable_param_buffers_cpu_backup = False
 
     return role_args
 
@@ -1815,6 +1835,7 @@ def slime_validate_args(args):
 
     if args.offload_train:
         args.disable_grad_buffers_cpu_backup = True
+        args.disable_param_buffers_cpu_backup = True
 
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path

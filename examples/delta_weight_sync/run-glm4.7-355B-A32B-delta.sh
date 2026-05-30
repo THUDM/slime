@@ -15,7 +15,7 @@ pkill -9 python
 
 set -ex
 
-export PYTHONBUFFERED=16
+export PYTHONUNBUFFERED=1
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
 
 NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
