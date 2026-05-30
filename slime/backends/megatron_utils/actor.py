@@ -564,6 +564,38 @@ class MegatronTrainRayActor(TrainRayActor):
 
         log_perf_data(rollout_id, self.args, extra_metrics=self.weight_updater.pop_metrics())
 
+    def compute_val_loss(self, rollout_id: int) -> None:
+        """Compute validation loss with full DP coordination.
+
+        Called periodically by train_async.py (controlled by --val-interval).
+        Each DP rank independently tokenizes its shard of val data and runs
+        forward-only; results are gathered and logged on the source rank.
+        """
+        if self.args.debug_rollout_only:
+            return
+
+        if not getattr(self.args, "val_data", None):
+            return
+
+        from .val_loss import ValDataLoader, compute_val_loss
+
+        # Lazy-initialize val data loader (each rank gets its own shard)
+        if not hasattr(self, "_val_data_loader"):
+            self._val_data_loader = ValDataLoader(
+                self.args,
+                dp_rank=mpu.get_data_parallel_rank(with_context_parallel=False),
+                dp_size=mpu.get_data_parallel_world_size(with_context_parallel=False),
+            )
+
+        if self.args.offload_train:
+            self.wake_up()
+
+        with torch.no_grad():
+            compute_val_loss(self.args, self.model, self._val_data_loader, rollout_id)
+
+        if self.args.offload_train:
+            self.sleep()
+
     @timer
     def save_model(self, rollout_id: int, force_sync: bool = False) -> None:
         if self.args.debug_rollout_only:
