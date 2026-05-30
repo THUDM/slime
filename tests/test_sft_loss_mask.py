@@ -67,19 +67,24 @@ REAL_CHAT_TEMPLATE_SPECS = (
 
 def _candidate_model_refs(spec: ChatTemplateSpec) -> list[str]:
     refs = [spec.repo_id]
-    roots = [
-        os.environ.get("SLIME_TEST_MODEL_ROOT"),
-        "/root/models",
-        "/mnt/nvme0n1/slime_ci/models",
-    ]
+    roots = [os.environ.get("SLIME_TEST_MODEL_ROOT")]
+    if not os.environ.get("CI"):
+        roots.extend(["/root/models", "/mnt/nvme0n1/slime_ci/models"])
     for root in roots:
         if not root:
             continue
         for local_name in spec.local_names:
             path = Path(root) / local_name
-            if path.exists():
+            if _path_exists(path):
                 refs.append(str(path))
     return refs
+
+
+def _path_exists(path: Path) -> bool:
+    try:
+        return path.exists()
+    except OSError:
+        return False
 
 
 def _has_chat_template(obj) -> bool:
@@ -100,7 +105,7 @@ def _load_real_chat_template(spec: ChatTemplateSpec):
     errors = []
     loaded_without_template = False
     for model_ref in _candidate_model_refs(spec):
-        is_local = Path(model_ref).exists()
+        is_local = _path_exists(Path(model_ref))
         tokenizer = None
         processor = None
 
