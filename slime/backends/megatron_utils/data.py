@@ -358,11 +358,13 @@ def log_rollout_data(
 
         reduced_log_dict = gather_log_data("rollout", args, rollout_id, log_dict)
         if args.ci_test and reduced_log_dict is not None:
-            # R3 replays rollout routing for the actor forward, while the
-            # reference forward intentionally falls through to normal routing.
-            # Their log-probs are not expected to match bit-for-bit in CI.
+            # This is an initial actor/ref zero-KL check. R3 replays rollout
+            # routing for the actor forward, while the reference forward
+            # intentionally falls through to normal routing, so their
+            # log-probs are not expected to match bit-for-bit in CI.
             if (
                 rollout_id == 0
+                and not getattr(args, "ci_disable_kl_checker", False)
                 and not getattr(args, "use_rollout_routing_replay", False)
                 and "rollout/log_probs" in reduced_log_dict
                 and "rollout/ref_log_probs" in reduced_log_dict
