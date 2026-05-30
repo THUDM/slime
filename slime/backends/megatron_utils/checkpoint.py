@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import shutil
 from pathlib import Path
 
 # TODO: may need to copy those 2 functions and do refactoring.
@@ -91,7 +92,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["save_checkpoint"]
+__all__ = ["save_checkpoint", "cleanup_old_checkpoints"]
 
 
 def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_context, skip_load_to_model_and_opt):
@@ -155,3 +156,29 @@ def _load_checkpoint_hf(ddp_model, optimizer, args, load_path: str):
 def _is_dir_nonempty(path):
     with os.scandir(path) as it:
         return any(it)
+
+
+def cleanup_old_checkpoints(save_dir: str, max_count: int) -> None:
+    """Delete oldest checkpoint directories when count exceeds max_count."""
+    if max_count is None or save_dir is None:
+        return
+
+    save_path = Path(save_dir)
+    if not save_path.is_dir():
+        return
+
+    # Find all iter_* directories
+    iter_dirs = []
+    for d in save_path.iterdir():
+        if d.is_dir() and re.fullmatch(r"iter_\d{7}", d.name):
+            iter_num = int(d.name.split("_")[1])
+            iter_dirs.append((iter_num, d))
+
+    # Sort by iteration number (oldest first)
+    iter_dirs.sort(key=lambda x: x[0])
+
+    # Delete oldest if count exceeds limit
+    while len(iter_dirs) > max_count:
+        iter_num, dir_path = iter_dirs.pop(0)
+        shutil.rmtree(dir_path)
+        logger.info(f"Deleted old checkpoint: {dir_path.name}")
