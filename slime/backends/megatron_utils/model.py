@@ -805,7 +805,14 @@ def train(
                 if step_id == 0 and "train/ppo_kl" in log_dict and "train/pg_clipfrac" in log_dict:
                     # TODO: figure out why KL is not exactly zero when using PPO loss with KL clipping, and whether this is expected behavior or a bug.
                     assert log_dict["train/ppo_kl"] < 1e-8, f"{log_dict=}"
-                if accumulated_step_id == 0 and "train/kl_loss" in log_dict:
+                # R3 replays rollout routing for the actor path, while ref
+                # log-probs are computed with normal routing. The initial
+                # actor/ref KL is therefore not expected to be exactly zero.
+                if (
+                    accumulated_step_id == 0
+                    and not getattr(args, "use_rollout_routing_replay", False)
+                    and "train/kl_loss" in log_dict
+                ):
                     assert log_dict["train/kl_loss"] < 1e-8, f"{log_dict=}"
 
             logger.info(f"{role_tag}step {accumulated_step_id}: {log_dict}")

@@ -24,7 +24,7 @@ if [ -z "${MASTER_ADDR}" ]; then
 fi
 
 # will prevent ray from buffering stdout/stderr
-export PYTHONBUFFERED=16
+export PYTHONUNBUFFERED=1
 
 # unset proxy to avoid distributed startup issues
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
