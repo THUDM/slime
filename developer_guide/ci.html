@@ -434,17 +434,22 @@
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-works">How It Works</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-labels">CI Labels</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#key-labels-explained">Key Labels Explained</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#run-ci-changed-run-only-new-or-modified-tests"><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> — Run Only New or Modified Tests</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#run-ci-image-full-suite-on-test-image"><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code> — Full Suite on Test Image</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#run-ci-megatron-core-megatron-tests"><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code> — Core Megatron Tests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-works">How It Works</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-jobs">CPU Jobs</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#gpu-e2e-jobs">GPU E2E Jobs</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#changed-test-job">Changed-Test Job</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#writing-a-new-test">Writing a New Test</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-jobs-and-triggers">CI Jobs and Triggers</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-unit-tests">CPU Unit Tests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#gpu-e2e-tests">GPU E2E Tests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#writing-a-new-test">Writing a New Test</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-tests">CPU Tests</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">GPU E2E Tests</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#workflow-generation">Workflow Generation</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#customization-contract-tests">Customization Contract Tests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#choosing-checks-for-a-pr">Choosing Checks for a PR</a></li>
 </ul>
             </nav>
         </div>
@@ -458,107 +463,178 @@
                   
   <section class="tex2jax_ignore mathjax_ignore" id="ci-continuous-integration">
 <h1>CI (Continuous Integration)<a class="headerlink" href="#ci-continuous-integration" title="Link to this heading">#</a></h1>
-<p>slime uses GitHub Actions for CI. Tests are triggered by <strong>PR labels</strong> — adding a specific label to a PR will run the corresponding test suite.</p>
+<p>slime CI has two layers:</p>
+<ol class="arabic simple">
+<li><p><strong>Always-on CPU correctness tests</strong> that run on every PR, every push to <code class="docutils literal notranslate"><span class="pre">main</span></code>, and manual <code class="docutils literal notranslate"><span class="pre">workflow_dispatch</span></code>.</p></li>
+<li><p><strong>Label-gated GPU end-to-end tests</strong> that validate real Megatron + SGLang training and rollout paths on self-hosted GPU runners.</p></li>
+</ol>
+<p>This split is intentional. Most invariants should be checked quickly without waiting for the GPU fleet, while full training/rollout behavior is still covered by GPU e2e jobs.</p>
 <section id="how-it-works">
 <h2>How It Works<a class="headerlink" href="#how-it-works" title="Link to this heading">#</a></h2>
-<p>The workflow is defined in <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml</span></code> (auto-generated from <code class="docutils literal notranslate"><span class="pre">pr-test.yml.j2</span></code>). Each CI job:</p>
-<ol class="arabic simple">
-<li><p>Runs on a self-hosted GPU runner via <code class="docutils literal notranslate"><span class="pre">docker</span> <span class="pre">run</span></code>; most tests use <code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code>, while image validation uses <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code>.</p></li>
-<li><p>Installs slime with <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span> <span class="pre">--no-deps</span></code>.</p></li>
-<li><p>Acquires the required GPUs via <code class="docutils literal notranslate"><span class="pre">tests/ci/gpu_lock_exec.py</span> <span class="pre">--count</span> <span class="pre">&lt;num_gpus&gt;</span></code>.</p></li>
-<li><p>Executes the test file: <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">&lt;test_path&gt;.py</span></code> or <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/&lt;test_file&gt;.py</span></code>, depending on whether the test lives under <code class="docutils literal notranslate"><span class="pre">tests/</span></code> or a subdirectory such as <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/</span></code>.</p></li>
-</ol>
-<p>Each test file follows a standard pattern: a <code class="docutils literal notranslate"><span class="pre">prepare()</span></code> function downloads models/datasets, and an <code class="docutils literal notranslate"><span class="pre">execute()</span></code> function builds CLI arguments and calls <code class="docutils literal notranslate"><span class="pre">U.execute_train(...)</span></code>.</p>
+<p>The workflow is defined in <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml</span></code>, which is auto-generated from <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code>.</p>
+<section id="cpu-jobs">
+<h3>CPU Jobs<a class="headerlink" href="#cpu-jobs" title="Link to this heading">#</a></h3>
+<p>CPU jobs run on GitHub-hosted <code class="docutils literal notranslate"><span class="pre">ubuntu-latest</span></code> runners:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">cpu-unittest</span></code> installs CPU PyTorch and lightweight dependencies, then runs registered unit and contract tests with <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/&lt;test_file&gt;.py</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">agent-adapter-test</span></code> does the same for agent adapter tests, with extra dependencies such as <code class="docutils literal notranslate"><span class="pre">openai</span></code>, <code class="docutils literal notranslate"><span class="pre">openai-agents</span></code>, and <code class="docutils literal notranslate"><span class="pre">anthropic</span></code>.</p></li>
+</ul>
+<p>CPU jobs do not use Docker, do not acquire GPUs, and do not call <code class="docutils literal notranslate"><span class="pre">tests/ci/gpu_lock_exec.py</span></code>.</p>
 </section>
-<section id="ci-labels">
-<h2>CI Labels<a class="headerlink" href="#ci-labels" title="Link to this heading">#</a></h2>
-<p>Add a label to your PR to trigger the corresponding test suite:</p>
+<section id="gpu-e2e-jobs">
+<h3>GPU E2E Jobs<a class="headerlink" href="#gpu-e2e-jobs" title="Link to this heading">#</a></h3>
+<p>GPU jobs run on self-hosted GPU runners. Each job:</p>
+<ol class="arabic simple">
+<li><p>Starts a Docker container, usually <code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code>; image validation uses <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code>.</p></li>
+<li><p>Installs slime with <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span> <span class="pre">--no-deps</span></code>.</p></li>
+<li><p>Acquires the requested GPUs with <code class="docutils literal notranslate"><span class="pre">tests/ci/gpu_lock_exec.py</span> <span class="pre">--count</span> <span class="pre">&lt;num_gpus&gt;</span></code>.</p></li>
+<li><p>Executes the registered test file with <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/&lt;test_file&gt;.py</span></code>.</p></li>
+</ol>
+<p>GPU tests usually follow the e2e pattern: <code class="docutils literal notranslate"><span class="pre">prepare()</span></code> downloads models/datasets, and <code class="docutils literal notranslate"><span class="pre">execute()</span></code> builds CLI arguments and calls <code class="docutils literal notranslate"><span class="pre">U.execute_train(...)</span></code>.</p>
+</section>
+<section id="changed-test-job">
+<h3>Changed-Test Job<a class="headerlink" href="#changed-test-job" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> dynamically detects added or modified files under <code class="docutils literal notranslate"><span class="pre">tests/test_*.py</span></code> and <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_*.py</span></code> relative to <code class="docutils literal notranslate"><span class="pre">origin/main</span></code>.</p>
+<p>For each changed test file, it extracts a top-level <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">&lt;N&gt;</span></code> constant and builds a matrix. If <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span></code> is missing, CI defaults to <code class="docutils literal notranslate"><span class="pre">8</span></code>, so CPU-only tests should declare:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">NUM_GPUS</span> <span class="o">=</span> <span class="mi">0</span>
+</pre></div>
+</div>
+<p>The changed-test job itself runs through the self-hosted Docker path. When <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">0</span></code>, it runs the test without acquiring GPUs.</p>
+</section>
+</section>
+<section id="ci-jobs-and-triggers">
+<h2>CI Jobs and Triggers<a class="headerlink" href="#ci-jobs-and-triggers" title="Link to this heading">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Label</p></th>
+<tr class="row-odd"><th class="head"><p>Trigger</p></th>
 <th class="head"><p>Job</p></th>
+<th class="head"><p>Type</p></th>
 <th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
+<tr class="row-even"><td><p>Automatic</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cpu-unittest</span></code></p></td>
+<td><p>CPU</p></td>
+<td><p>Always-on unit and contract tests for argument validation, schedules, rewards, samples, rollout validation, checkpoint utilities, and plugin contracts.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Automatic</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">agent-adapter-test</span></code></p></td>
+<td><p>CPU</p></td>
+<td><p>Always-on agent adapter tests with optional provider SDK dependencies.</p></td>
+</tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-short</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-short</span></code></p></td>
-<td><p>Lightweight smoke tests with Qwen2.5-0.5B (4 GPUs). Fast feedback loop.</p></td>
+<td><p>GPU</p></td>
+<td><p>Lightweight smoke tests with small Qwen models. Fast GPU feedback loop.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-sglang-config</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-sglang-config</span></code></p></td>
+<td><p>GPU</p></td>
+<td><p>SGLang config tests for advanced rollout engine deployment and mixed/offload scenarios.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-megatron</span></code></p></td>
-<td><p>Core Megatron training tests covering dense, MoE, PPO, MTP, OPD, etc.</p></td>
+<td><p>GPU</p></td>
+<td><p>Core Megatron training tests covering dense, MoE, PPO, MTP, OPD, async rollout, PD/Mooncake, and debug replay paths.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-precision</span></code></p></td>
-<td><p>Numerical precision validation (parallel check).</p></td>
+<td><p>GPU</p></td>
+<td><p>Numerical precision validation and parallel consistency checks.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-ckpt</span></code></p></td>
-<td><p>Checkpoint save/load correctness (sync and async-save).</p></td>
+<td><p>GPU</p></td>
+<td><p>Checkpoint save/load correctness, including CPU/GPU optimizer states and async save.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-image</span></code></p></td>
-<td><p>Full test suite run on <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code> image (for image validation).</p></td>
+<td><p>GPU</p></td>
+<td><p>Broad image validation suite on <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-changed</span></code></p></td>
-<td><p><strong>Dynamically</strong> detects new/modified test files in the PR and runs only those.</p></td>
+<td><p>Mixed</p></td>
+<td><p>Runs only changed tests, using each file’s <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span></code> value.</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>All labels also run when triggered via <code class="docutils literal notranslate"><span class="pre">workflow_dispatch</span></code> (manual run from the Actions tab).</p>
+<p><code class="docutils literal notranslate"><span class="pre">workflow_dispatch</span></code> can be used from the Actions page for manual validation. It runs the registered jobs according to the workflow conditions.</p>
 </section>
-<section id="key-labels-explained">
-<h2>Key Labels Explained<a class="headerlink" href="#key-labels-explained" title="Link to this heading">#</a></h2>
-<section id="run-ci-changed-run-only-new-or-modified-tests">
-<h3><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> — Run Only New or Modified Tests<a class="headerlink" href="#run-ci-changed-run-only-new-or-modified-tests" title="Link to this heading">#</a></h3>
-<p>This is the most useful label for development. When you add a new test file or modify an existing one, just add <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> to your PR and CI will:</p>
-<ol class="arabic simple">
-<li><p><strong>Detect</strong> which <code class="docutils literal notranslate"><span class="pre">tests/test_*.py</span></code> or <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_*.py</span></code> files are added or modified relative to <code class="docutils literal notranslate"><span class="pre">origin/main</span></code> (via <code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">diff</span> <span class="pre">--diff-filter=AM</span></code>).</p></li>
-<li><p><strong>Extract</strong> the <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span></code> value from each detected test file automatically.</p></li>
-<li><p><strong>Build</strong> a dynamic GitHub Actions matrix and run each test in parallel.</p></li>
-</ol>
-<p>This means you don’t need to manually register your new test in the workflow — just make sure your test file has a top-level <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">&lt;N&gt;</span></code> constant and <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> will pick it up.</p>
-<p><strong>Example</strong>: If your PR adds <code class="docutils literal notranslate"><span class="pre">tests/test_qwen3_8B_opd_sglang.py</span></code> with <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">8</span></code>, adding the <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> label will automatically run that test on 8 GPUs.</p>
-</section>
-<section id="run-ci-image-full-suite-on-test-image">
-<h3><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code> — Full Suite on Test Image<a class="headerlink" href="#run-ci-image-full-suite-on-test-image" title="Link to this heading">#</a></h3>
-<p>This runs <strong>all</strong> registered tests on the <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code> Docker image. Use this label to:</p>
+<section id="cpu-unit-tests">
+<h2>CPU Unit Tests<a class="headerlink" href="#cpu-unit-tests" title="Link to this heading">#</a></h2>
+<p>The CPU suite is the first line of defense for correctness. It is designed to catch silent RL infrastructure bugs before a change reaches expensive GPU runs.</p>
+<p>The registered CPU suite currently covers:</p>
 <ul class="simple">
-<li><p>Validate a newly built Docker image before release.</p></li>
-<li><p>Run the entire test suite for a comprehensive pre-merge check.</p></li>
+<li><p>Megatron argument and HF config validation;</p></li>
+<li><p>DP/CP scheduling utilities and CP loss invariance;</p></li>
+<li><p>metric reporting and distributed metric aggregation;</p></li>
+<li><p>reward-model grading utilities for math, GPQA, F1, DeepScaler, and DAPO-style math;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Sample</span></code> behavior, rollout validation, and agent trajectory merging;</p></li>
+<li><p>HF checkpoint saver behavior;</p></li>
+<li><p>customization hook contracts for rollout functions, generate functions, runtime hooks, and path loading.</p></li>
 </ul>
-<p>Since this includes every test, it consumes significant GPU time — use it sparingly and prefer more targeted labels for routine development.</p>
+<p>Agent adapter tests are kept in a separate CPU job because they need extra SDK dependencies.</p>
+<p>Useful local commands:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tests/test_agent_trajectory.py
+python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>tests/test_megatron_argument_validation.py<span class="w"> </span>tests/plugin_contracts/test_plugin_generate_contracts.py
+</pre></div>
+</div>
 </section>
-<section id="run-ci-megatron-core-megatron-tests">
-<h3><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code> — Core Megatron Tests<a class="headerlink" href="#run-ci-megatron-core-megatron-tests" title="Link to this heading">#</a></h3>
-<p>This is the primary label for validating Megatron-backend changes. It covers:</p>
+<section id="gpu-e2e-tests">
+<h2>GPU E2E Tests<a class="headerlink" href="#gpu-e2e-tests" title="Link to this heading">#</a></h2>
+<p>GPU e2e tests validate the integrated training/rollout behavior that CPU tests cannot cover:</p>
 <ul class="simple">
-<li><p>Dense models: GLM4-9B, Qwen3-4B (PPO)</p></li>
-<li><p>MoE models: Qwen3-30B-A3B (with DeepEP + FP8), Qwen3.6-35B-A3B PD + Mooncake, Moonlight-16B-A3B</p></li>
-<li><p>Specialized: MiMo-7B MTP, Qwen2.5-0.5B debug rollout-then-train, OPD with sglang teacher</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-short</span></code>: small-model smoke coverage for quick GPU feedback.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-sglang-config</span></code>: advanced SGLang deployment paths, including config-based engine layouts.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code>: main Megatron backend coverage for dense/MoE recipes, async rollout, OPD, PPO-style paths, PD/Mooncake, and debug rollout-then-train replay.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code>: numerical consistency across parallel settings.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code>: checkpoint save/load combinations and async save.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code>: broad validation of the release/test image.</p></li>
 </ul>
-<p>All tests use 8 GPUs. If you are modifying Megatron training logic, loss computation, or checkpoint conversion, this is the label to use.</p>
-</section>
+<p>Use targeted labels for routine PRs. Use <code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code> sparingly because it consumes significantly more GPU time.</p>
 </section>
 <section id="writing-a-new-test">
 <h2>Writing a New Test<a class="headerlink" href="#writing-a-new-test" title="Link to this heading">#</a></h2>
+<section id="cpu-tests">
+<h3>CPU Tests<a class="headerlink" href="#cpu-tests" title="Link to this heading">#</a></h3>
+<p>For CPU-only tests:</p>
 <ol class="arabic simple">
-<li><p>Create <code class="docutils literal notranslate"><span class="pre">tests/test_&lt;your_test_name&gt;.py</span></code> following the standard pattern:</p></li>
+<li><p>Add the test under <code class="docutils literal notranslate"><span class="pre">tests/test_*.py</span></code>, <code class="docutils literal notranslate"><span class="pre">tests/utils/test_*.py</span></code>, or <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_*.py</span></code>, following nearby patterns.</p></li>
+<li><p>Add a top-level <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">0</span></code> if the file may be run by <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code>.</p></li>
+<li><p>Make the file executable directly:</p></li>
 </ol>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="k">raise</span> <span class="ne">SystemExit</span><span class="p">(</span><span class="n">pytest</span><span class="o">.</span><span class="n">main</span><span class="p">([</span><span class="vm">__file__</span><span class="p">]))</span>
+</pre></div>
+</div>
+<ol class="arabic simple" start="4">
+<li><p>If the test should run permanently, register it in the <code class="docutils literal notranslate"><span class="pre">cpu-unittest</span></code> or <code class="docutils literal notranslate"><span class="pre">agent-adapter-test</span></code> job in <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code>, then regenerate the workflow.</p></li>
+</ol>
+</section>
+<section id="id1">
+<h3>GPU E2E Tests<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
+<p>For GPU e2e tests:</p>
+<ol class="arabic simple">
+<li><p>Create <code class="docutils literal notranslate"><span class="pre">tests/test_&lt;your_test_name&gt;.py</span></code> following the existing <code class="docutils literal notranslate"><span class="pre">prepare()</span></code> / <code class="docutils literal notranslate"><span class="pre">execute()</span></code> pattern.</p></li>
+<li><p>Declare the required GPU count with <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">&lt;N&gt;</span></code>.</p></li>
+<li><p>Download required models/datasets in <code class="docutils literal notranslate"><span class="pre">prepare()</span></code>.</p></li>
+<li><p>Build arguments and call <code class="docutils literal notranslate"><span class="pre">U.execute_train(...)</span></code> in <code class="docutils literal notranslate"><span class="pre">execute()</span></code>.</p></li>
+<li><p>Register the test in the appropriate GPU job in <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code>, then regenerate the workflow.</p></li>
+</ol>
+<p>Example skeleton:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">slime.utils.external_utils.command_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">U</span>
 
 <span class="n">MODEL_NAME</span> <span class="o">=</span> <span class="s2">&quot;Qwen2.5-0.5B-Instruct&quot;</span>
 <span class="n">MODEL_TYPE</span> <span class="o">=</span> <span class="s2">&quot;qwen2.5-0.5B&quot;</span>
-<span class="n">NUM_GPUS</span> <span class="o">=</span> <span class="mi">4</span>  <span class="c1"># This constant is used by run-ci-changed</span>
+<span class="n">NUM_GPUS</span> <span class="o">=</span> <span class="mi">4</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">prepare</span><span class="p">():</span>
     <span class="n">U</span><span class="o">.</span><span class="n">exec_command</span><span class="p">(</span><span class="s2">&quot;mkdir -p /root/models /root/datasets&quot;</span><span class="p">)</span>
     <span class="n">U</span><span class="o">.</span><span class="n">exec_command</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;hf download Qwen/</span><span class="si">{</span><span class="n">MODEL_NAME</span><span class="si">}</span><span class="s2"> --local-dir /root/models/</span><span class="si">{</span><span class="n">MODEL_NAME</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-    <span class="c1"># Download datasets as needed ...</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">execute</span><span class="p">():</span>
     <span class="c1"># Build argument strings and call U.execute_train(...)</span>
@@ -571,35 +647,32 @@
     <span class="n">execute</span><span class="p">()</span>
 </pre></div>
 </div>
-<ol class="arabic simple" start="2">
-<li><p><strong>For quick validation</strong>: Just push your test file and add <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> to the PR. It will be auto-detected.</p></li>
-<li><p><strong>To register in a permanent label group</strong>: Edit <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code>, add an entry to the desired job’s <code class="docutils literal notranslate"><span class="pre">tests</span></code> list, then regenerate:</p></li>
-</ol>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>.github/workflows<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>python<span class="w"> </span>generate_github_workflows.py
-</pre></div>
-</div>
-<p>Remember to commit both the <code class="docutils literal notranslate"><span class="pre">.j2</span></code> and the generated <code class="docutils literal notranslate"><span class="pre">.yml</span></code> file.</p>
+</section>
 </section>
 <section id="workflow-generation">
 <h2>Workflow Generation<a class="headerlink" href="#workflow-generation" title="Link to this heading">#</a></h2>
-<p>The workflow file <code class="docutils literal notranslate"><span class="pre">pr-test.yml</span></code> is auto-generated from the Jinja2 template <code class="docutils literal notranslate"><span class="pre">pr-test.yml.j2</span></code>. <strong>Do not edit <code class="docutils literal notranslate"><span class="pre">pr-test.yml</span></code> directly.</strong> To make changes:</p>
+<p>The workflow file <code class="docutils literal notranslate"><span class="pre">pr-test.yml</span></code> is auto-generated from the Jinja2 template <code class="docutils literal notranslate"><span class="pre">pr-test.yml.j2</span></code>. Do not edit <code class="docutils literal notranslate"><span class="pre">pr-test.yml</span></code> directly.</p>
+<p>To change the permanent CI matrix:</p>
 <ol class="arabic simple">
 <li><p>Edit <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code>.</p></li>
-<li><p>Run <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">.github/workflows/generate_github_workflows.py</span></code>.</p></li>
-<li><p>Commit both files.</p></li>
+<li><p>Run:</p></li>
 </ol>
-</section>
-<section id="customization-contract-tests">
-<h2>Customization Contract Tests<a class="headerlink" href="#customization-contract-tests" title="Link to this heading">#</a></h2>
-<p>For CPU-only contract tests that validate hooks loaded from function paths, run:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>tests/plugin_contracts/test_plugin_rollout_contracts.py<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>tests/plugin_contracts/test_plugin_generate_contracts.py<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>tests/plugin_contracts/test_plugin_path_loading_contracts.py<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>tests/plugin_contracts/test_plugin_runtime_hook_contracts.py
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>.github/workflows/generate_github_workflows.py
 </pre></div>
 </div>
-<p>These files also support direct execution as <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/plugin_contracts/&lt;file&gt;.py</span></code>. They declare <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">0</span></code>, so <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> can pick them up without treating them as GPU-heavy end-to-end tests.</p>
+<ol class="arabic simple" start="3">
+<li><p>Commit both <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code> and the generated <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml</span></code>.</p></li>
+</ol>
+</section>
+<section id="choosing-checks-for-a-pr">
+<h2>Choosing Checks for a PR<a class="headerlink" href="#choosing-checks-for-a-pr" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p>Pure argument parsing, reward, schedule, sample, trajectory, or hook-contract changes: rely on CPU tests first.</p></li>
+<li><p>SGLang topology or rollout engine deployment changes: use <code class="docutils literal notranslate"><span class="pre">run-ci-sglang-config</span></code>.</p></li>
+<li><p>Megatron training, loss, checkpoint conversion, or model recipe changes: use <code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code>; add <code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code> or <code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code> when relevant.</p></li>
+<li><p>Docker image or dependency changes: use <code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code>.</p></li>
+<li><p>New or modified tests: use <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> for quick targeted validation.</p></li>
+</ul>
 </section>
 </section>
 
@@ -650,17 +723,22 @@
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-works">How It Works</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-labels">CI Labels</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#key-labels-explained">Key Labels Explained</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#run-ci-changed-run-only-new-or-modified-tests"><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> — Run Only New or Modified Tests</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#run-ci-image-full-suite-on-test-image"><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code> — Full Suite on Test Image</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#run-ci-megatron-core-megatron-tests"><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code> — Core Megatron Tests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-works">How It Works</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-jobs">CPU Jobs</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#gpu-e2e-jobs">GPU E2E Jobs</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#changed-test-job">Changed-Test Job</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#writing-a-new-test">Writing a New Test</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-jobs-and-triggers">CI Jobs and Triggers</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-unit-tests">CPU Unit Tests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#gpu-e2e-tests">GPU E2E Tests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#writing-a-new-test">Writing a New Test</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-tests">CPU Tests</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">GPU E2E Tests</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#workflow-generation">Workflow Generation</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#customization-contract-tests">Customization Contract Tests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#choosing-checks-for-a-pr">Choosing Checks for a PR</a></li>
 </ul>
   </nav></div>
 

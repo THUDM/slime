@@ -430,17 +430,22 @@
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">工作原理</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-labels">CI Labels</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#label">重点 Label 说明</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#run-ci-changed"><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> — 仅运行新增或修改的测试</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#run-ci-image"><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code> — 在测试镜像上运行全部测试</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#run-ci-megatron-megatron"><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code> — 核心 Megatron 测试</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">工作原理</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-jobs">CPU Jobs</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#gpu-e2e-jobs">GPU E2E Jobs</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#changed-test-job">Changed-Test Job</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">编写新测试</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-jobs">CI Jobs 与触发方式</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-unit-tests">CPU Unit Tests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#gpu-e2e-tests">GPU E2E Tests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">编写新测试</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-tests">CPU Tests</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">GPU E2E Tests</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#workflow">Workflow 生成</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#customization">Customization 契约测试</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pr">PR 应该选择哪些检查</a></li>
 </ul>
             </nav>
         </div>
@@ -454,107 +459,178 @@
                   
   <section class="tex2jax_ignore mathjax_ignore" id="ci">
 <h1>CI（持续集成）<a class="headerlink" href="#ci" title="链接到此标题。">#</a></h1>
-<p>slime 使用 GitHub Actions 进行 CI。测试通过 <strong>PR label</strong> 触发——给 PR 添加特定 label 即可运行对应的测试套件。</p>
+<p>slime CI 分成两层：</p>
+<ol class="arabic simple">
+<li><p><strong>默认运行的 CPU 正确性测试</strong>：每个 PR、每次 push 到 <code class="docutils literal notranslate"><span class="pre">main</span></code>、以及手动 <code class="docutils literal notranslate"><span class="pre">workflow_dispatch</span></code> 都会运行。</p></li>
+<li><p><strong>通过 label 触发的 GPU end-to-end 测试</strong>：在自托管 GPU runner 上验证真实的 Megatron + SGLang training/rollout 路径。</p></li>
+</ol>
+<p>这个拆分是有意为之。大部分 correctness invariant 应该在不等待 GPU 集群的情况下快速检查；真正依赖完整训练和 rollout 的行为，则由 GPU e2e job 覆盖。</p>
 <section id="id1">
 <h2>工作原理<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
-<p>工作流定义在 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml</span></code>（由 <code class="docutils literal notranslate"><span class="pre">pr-test.yml.j2</span></code> 自动生成）。每个 CI 任务会：</p>
-<ol class="arabic simple">
-<li><p>在自托管 GPU runner 上通过 <code class="docutils literal notranslate"><span class="pre">docker</span> <span class="pre">run</span></code> 运行；大多数测试使用 <code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code>，镜像验证使用 <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code>。</p></li>
-<li><p>通过 <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span> <span class="pre">--no-deps</span></code> 安装 slime。</p></li>
-<li><p>通过 <code class="docutils literal notranslate"><span class="pre">tests/ci/gpu_lock_exec.py</span> <span class="pre">--count</span> <span class="pre">&lt;num_gpus&gt;</span></code> 获取所需数量的 GPU。</p></li>
-<li><p>执行测试文件：<code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">&lt;test_path&gt;.py</span></code> 或 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/&lt;test_file&gt;.py</span></code>。如果测试位于 <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/</span></code> 这样的子目录，CI 也会自动处理。</p></li>
-</ol>
-<p>每个测试文件遵循统一的模式：<code class="docutils literal notranslate"><span class="pre">prepare()</span></code> 函数下载模型和数据集，<code class="docutils literal notranslate"><span class="pre">execute()</span></code> 函数构建命令行参数并调用 <code class="docutils literal notranslate"><span class="pre">U.execute_train(...)</span></code>。</p>
+<p>workflow 定义在 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml</span></code>，它由 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code> 自动生成。</p>
+<section id="cpu-jobs">
+<h3>CPU Jobs<a class="headerlink" href="#cpu-jobs" title="链接到此标题。">#</a></h3>
+<p>CPU job 运行在 GitHub-hosted <code class="docutils literal notranslate"><span class="pre">ubuntu-latest</span></code> runner 上：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">cpu-unittest</span></code> 安装 CPU PyTorch 和轻量依赖，然后通过 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/&lt;test_file&gt;.py</span></code> 运行注册的 unit/contract tests。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">agent-adapter-test</span></code> 使用同样的方式运行 agent adapter tests，并额外安装 <code class="docutils literal notranslate"><span class="pre">openai</span></code>、<code class="docutils literal notranslate"><span class="pre">openai-agents</span></code>、<code class="docutils literal notranslate"><span class="pre">anthropic</span></code> 等 SDK 依赖。</p></li>
+</ul>
+<p>CPU job 不使用 Docker，不申请 GPU，也不会调用 <code class="docutils literal notranslate"><span class="pre">tests/ci/gpu_lock_exec.py</span></code>。</p>
 </section>
-<section id="ci-labels">
-<h2>CI Labels<a class="headerlink" href="#ci-labels" title="链接到此标题。">#</a></h2>
-<p>给 PR 添加 label 即可触发对应的测试套件：</p>
+<section id="gpu-e2e-jobs">
+<h3>GPU E2E Jobs<a class="headerlink" href="#gpu-e2e-jobs" title="链接到此标题。">#</a></h3>
+<p>GPU job 运行在自托管 GPU runner 上。每个 job 会：</p>
+<ol class="arabic simple">
+<li><p>启动 Docker container，通常使用 <code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code>；镜像验证使用 <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code>。</p></li>
+<li><p>通过 <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span> <span class="pre">--no-deps</span></code> 安装 slime。</p></li>
+<li><p>通过 <code class="docutils literal notranslate"><span class="pre">tests/ci/gpu_lock_exec.py</span> <span class="pre">--count</span> <span class="pre">&lt;num_gpus&gt;</span></code> 申请所需 GPU。</p></li>
+<li><p>执行注册的测试文件：<code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/&lt;test_file&gt;.py</span></code>。</p></li>
+</ol>
+<p>GPU 测试通常遵循 e2e 模式：<code class="docutils literal notranslate"><span class="pre">prepare()</span></code> 下载模型和数据集，<code class="docutils literal notranslate"><span class="pre">execute()</span></code> 构建 CLI 参数并调用 <code class="docutils literal notranslate"><span class="pre">U.execute_train(...)</span></code>。</p>
+</section>
+<section id="changed-test-job">
+<h3>Changed-Test Job<a class="headerlink" href="#changed-test-job" title="链接到此标题。">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> 会动态检测相对于 <code class="docutils literal notranslate"><span class="pre">origin/main</span></code> 新增或修改的 <code class="docutils literal notranslate"><span class="pre">tests/test_*.py</span></code> 和 <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_*.py</span></code> 文件。</p>
+<p>对每个 changed test file，它会读取文件顶层的 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">&lt;N&gt;</span></code> 常量并构建 matrix。如果缺少 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span></code>，CI 会默认使用 <code class="docutils literal notranslate"><span class="pre">8</span></code>，因此 CPU-only test 应该声明：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">NUM_GPUS</span> <span class="o">=</span> <span class="mi">0</span>
+</pre></div>
+</div>
+<p>changed-test job 本身走 self-hosted Docker 路径。当 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">0</span></code> 时，它会直接运行测试，不申请 GPU。</p>
+</section>
+</section>
+<section id="ci-jobs">
+<h2>CI Jobs 与触发方式<a class="headerlink" href="#ci-jobs" title="链接到此标题。">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Label</p></th>
+<tr class="row-odd"><th class="head"><p>Trigger</p></th>
 <th class="head"><p>Job</p></th>
+<th class="head"><p>类型</p></th>
 <th class="head"><p>说明</p></th>
 </tr>
 </thead>
 <tbody>
+<tr class="row-even"><td><p>自动运行</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cpu-unittest</span></code></p></td>
+<td><p>CPU</p></td>
+<td><p>默认运行的 unit/contract tests，覆盖 argument validation、schedule、reward、sample、rollout validation、checkpoint utilities 和 plugin contracts。</p></td>
+</tr>
+<tr class="row-odd"><td><p>自动运行</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">agent-adapter-test</span></code></p></td>
+<td><p>CPU</p></td>
+<td><p>默认运行的 agent adapter tests，包含额外 provider SDK 依赖。</p></td>
+</tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-short</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-short</span></code></p></td>
-<td><p>Qwen2.5-0.5B 轻量级冒烟测试（4 GPU），用于快速反馈。</p></td>
+<td><p>GPU</p></td>
+<td><p>小模型轻量级 smoke tests，用于快速 GPU 反馈。</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-sglang-config</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-sglang-config</span></code></p></td>
+<td><p>GPU</p></td>
+<td><p>SGLang config 测试，覆盖高级 rollout engine deployment 和 mixed/offload 场景。</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-megatron</span></code></p></td>
-<td><p>核心 Megatron 训练测试，覆盖 Dense、MoE、PPO、MTP、OPD 等。</p></td>
+<td><p>GPU</p></td>
+<td><p>核心 Megatron 训练测试，覆盖 dense、MoE、PPO、MTP、OPD、async rollout、PD/Mooncake 和 debug replay 路径。</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-precision</span></code></p></td>
-<td><p>数值精度校验（并行一致性检查）。</p></td>
+<td><p>GPU</p></td>
+<td><p>数值精度和并行一致性检查。</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-ckpt</span></code></p></td>
-<td><p>Checkpoint 保存/加载正确性（同步和异步保存）。</p></td>
+<td><p>GPU</p></td>
+<td><p>Checkpoint save/load 正确性，包括 CPU/GPU optimizer state 和 async save。</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-image</span></code></p></td>
-<td><p>在 <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code> 镜像上运行<strong>全部</strong>测试（用于镜像验证）。</p></td>
+<td><p>GPU</p></td>
+<td><p>在 <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code> 上运行更完整的镜像验证套件。</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-changed</span></code></p></td>
-<td><p><strong>动态</strong>检测 PR 中新增或修改的测试文件，仅运行这些测试。</p></td>
+<td><p>Mixed</p></td>
+<td><p>只运行 changed tests，并使用每个文件中的 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span></code>。</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>所有 label 也可通过 <code class="docutils literal notranslate"><span class="pre">workflow_dispatch</span></code>（在 Actions 页面手动触发）来运行。</p>
+<p>也可以在 Actions 页面通过 <code class="docutils literal notranslate"><span class="pre">workflow_dispatch</span></code> 手动验证；它会按照 workflow 条件运行注册的 jobs。</p>
 </section>
-<section id="label">
-<h2>重点 Label 说明<a class="headerlink" href="#label" title="链接到此标题。">#</a></h2>
-<section id="run-ci-changed">
-<h3><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> — 仅运行新增或修改的测试<a class="headerlink" href="#run-ci-changed" title="链接到此标题。">#</a></h3>
-<p>这是开发中最常用的 label。当你新增或修改了测试文件时，只需给 PR 添加 <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code>，CI 会自动：</p>
-<ol class="arabic simple">
-<li><p><strong>检测</strong>相对于 <code class="docutils literal notranslate"><span class="pre">origin/main</span></code> 新增或修改的 <code class="docutils literal notranslate"><span class="pre">tests/test_*.py</span></code> 或 <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_*.py</span></code> 文件（通过 <code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">diff</span> <span class="pre">--diff-filter=AM</span></code>）。</p></li>
-<li><p><strong>提取</strong>每个测试文件中的 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span></code> 值。</p></li>
-<li><p><strong>构建</strong>动态 GitHub Actions matrix，并行运行每个测试。</p></li>
-</ol>
-<p>这意味着你不需要手动在 workflow 中注册新测试——只需确保测试文件顶部有 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">&lt;N&gt;</span></code> 常量，<code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> 就会自动识别并运行。</p>
-<p><strong>示例</strong>：如果你的 PR 新增了 <code class="docutils literal notranslate"><span class="pre">tests/test_qwen3_8B_opd_sglang.py</span></code>（其中 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">8</span></code>），添加 <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> label 后会自动在 8 张 GPU 上运行该测试。</p>
-</section>
-<section id="run-ci-image">
-<h3><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code> — 在测试镜像上运行全部测试<a class="headerlink" href="#run-ci-image" title="链接到此标题。">#</a></h3>
-<p>这会在 <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code> Docker 镜像上运行<strong>所有</strong>已注册的测试。适用于：</p>
+<section id="cpu-unit-tests">
+<h2>CPU Unit Tests<a class="headerlink" href="#cpu-unit-tests" title="链接到此标题。">#</a></h2>
+<p>CPU suite 是 correctness 的第一道防线，用来在进入昂贵 GPU run 之前捕获 silent RL infrastructure bugs。</p>
+<p>当前注册的 CPU suite 覆盖：</p>
 <ul class="simple">
-<li><p>验证新构建的 Docker 镜像是否可用。</p></li>
-<li><p>在合并前做全面的测试检查。</p></li>
+<li><p>Megatron argument 和 HF config validation；</p></li>
+<li><p>DP/CP scheduling utilities 和 CP loss invariance；</p></li>
+<li><p>metric reporting 和 distributed metric aggregation；</p></li>
+<li><p>math、GPQA、F1、DeepScaler、DAPO-style math 等 reward-model grading utilities；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Sample</span></code> 行为、rollout validation 和 agent trajectory merging；</p></li>
+<li><p>HF checkpoint saver 行为；</p></li>
+<li><p>rollout function、generate function、runtime hook 和 path loading 的 customization hook contracts。</p></li>
 </ul>
-<p>由于包含所有测试，GPU 占用时间较长——日常开发请优先使用更有针对性的 label。</p>
+<p>Agent adapter tests 单独放在一个 CPU job 中，因为它们需要额外 SDK 依赖。</p>
+<p>常用本地命令：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tests/test_agent_trajectory.py
+python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>tests/test_megatron_argument_validation.py<span class="w"> </span>tests/plugin_contracts/test_plugin_generate_contracts.py
+</pre></div>
+</div>
 </section>
-<section id="run-ci-megatron-megatron">
-<h3><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code> — 核心 Megatron 测试<a class="headerlink" href="#run-ci-megatron-megatron" title="链接到此标题。">#</a></h3>
-<p>这是验证 Megatron 后端改动的主要 label，覆盖：</p>
+<section id="gpu-e2e-tests">
+<h2>GPU E2E Tests<a class="headerlink" href="#gpu-e2e-tests" title="链接到此标题。">#</a></h2>
+<p>GPU e2e tests 验证 CPU tests 无法覆盖的集成训练/rollout 行为：</p>
 <ul class="simple">
-<li><p>Dense 模型：GLM4-9B、Qwen3-4B（PPO）</p></li>
-<li><p>MoE 模型：Qwen3-30B-A3B（DeepEP + FP8）、Qwen3.6-35B-A3B PD + Mooncake、Moonlight-16B-A3B</p></li>
-<li><p>特殊场景：MiMo-7B MTP、Qwen2.5-0.5B debug rollout-then-train、OPD（sglang teacher 模式）</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-short</span></code>：小模型 smoke coverage，用于快速 GPU 反馈。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-sglang-config</span></code>：高级 SGLang deployment path，包括 config-based engine layouts。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code>：主要 Megatron backend coverage，包括 dense/MoE recipe、async rollout、OPD、PPO-style path、PD/Mooncake 和 debug rollout-then-train replay。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code>：不同并行设置下的数值一致性。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code>：checkpoint save/load 组合和 async save。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code>：release/test image 的较完整验证。</p></li>
 </ul>
-<p>所有测试使用 8 张 GPU。如果你正在修改 Megatron 训练逻辑、loss 计算或 checkpoint 转换，应该使用这个 label。</p>
-</section>
+<p>日常 PR 优先使用 targeted labels。<code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code> 消耗 GPU 时间较多，应谨慎使用。</p>
 </section>
 <section id="id2">
 <h2>编写新测试<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
+<section id="cpu-tests">
+<h3>CPU Tests<a class="headerlink" href="#cpu-tests" title="链接到此标题。">#</a></h3>
+<p>对于 CPU-only tests：</p>
 <ol class="arabic simple">
-<li><p>创建 <code class="docutils literal notranslate"><span class="pre">tests/test_&lt;your_test_name&gt;.py</span></code>，遵循标准模式：</p></li>
+<li><p>按照附近文件的模式，将测试放在 <code class="docutils literal notranslate"><span class="pre">tests/test_*.py</span></code>、<code class="docutils literal notranslate"><span class="pre">tests/utils/test_*.py</span></code> 或 <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_*.py</span></code> 下。</p></li>
+<li><p>如果这个文件可能被 <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> 运行，添加顶层 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">0</span></code>。</p></li>
+<li><p>让文件可以直接执行：</p></li>
 </ol>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="k">raise</span> <span class="ne">SystemExit</span><span class="p">(</span><span class="n">pytest</span><span class="o">.</span><span class="n">main</span><span class="p">([</span><span class="vm">__file__</span><span class="p">]))</span>
+</pre></div>
+</div>
+<ol class="arabic simple" start="4">
+<li><p>如果测试需要永久进入 CI matrix，在 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code> 的 <code class="docutils literal notranslate"><span class="pre">cpu-unittest</span></code> 或 <code class="docutils literal notranslate"><span class="pre">agent-adapter-test</span></code> job 中注册，然后重新生成 workflow。</p></li>
+</ol>
+</section>
+<section id="id3">
+<h3>GPU E2E Tests<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h3>
+<p>对于 GPU e2e tests：</p>
+<ol class="arabic simple">
+<li><p>创建 <code class="docutils literal notranslate"><span class="pre">tests/test_&lt;your_test_name&gt;.py</span></code>，遵循已有的 <code class="docutils literal notranslate"><span class="pre">prepare()</span></code> / <code class="docutils literal notranslate"><span class="pre">execute()</span></code> 模式。</p></li>
+<li><p>用 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">&lt;N&gt;</span></code> 声明所需 GPU 数量。</p></li>
+<li><p>在 <code class="docutils literal notranslate"><span class="pre">prepare()</span></code> 中下载所需模型和数据集。</p></li>
+<li><p>在 <code class="docutils literal notranslate"><span class="pre">execute()</span></code> 中构建参数并调用 <code class="docutils literal notranslate"><span class="pre">U.execute_train(...)</span></code>。</p></li>
+<li><p>在 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code> 的合适 GPU job 中注册测试，然后重新生成 workflow。</p></li>
+</ol>
+<p>示例骨架：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">slime.utils.external_utils.command_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">U</span>
 
 <span class="n">MODEL_NAME</span> <span class="o">=</span> <span class="s2">&quot;Qwen2.5-0.5B-Instruct&quot;</span>
 <span class="n">MODEL_TYPE</span> <span class="o">=</span> <span class="s2">&quot;qwen2.5-0.5B&quot;</span>
-<span class="n">NUM_GPUS</span> <span class="o">=</span> <span class="mi">4</span>  <span class="c1"># 此常量会被 run-ci-changed 自动读取</span>
+<span class="n">NUM_GPUS</span> <span class="o">=</span> <span class="mi">4</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">prepare</span><span class="p">():</span>
     <span class="n">U</span><span class="o">.</span><span class="n">exec_command</span><span class="p">(</span><span class="s2">&quot;mkdir -p /root/models /root/datasets&quot;</span><span class="p">)</span>
     <span class="n">U</span><span class="o">.</span><span class="n">exec_command</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;hf download Qwen/</span><span class="si">{</span><span class="n">MODEL_NAME</span><span class="si">}</span><span class="s2"> --local-dir /root/models/</span><span class="si">{</span><span class="n">MODEL_NAME</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-    <span class="c1"># 按需下载数据集 ...</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">execute</span><span class="p">():</span>
     <span class="c1"># 构建参数字符串并调用 U.execute_train(...)</span>
@@ -567,35 +643,32 @@
     <span class="n">execute</span><span class="p">()</span>
 </pre></div>
 </div>
-<ol class="arabic simple" start="2">
-<li><p><strong>快速验证</strong>：直接推送测试文件，给 PR 添加 <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> label，测试会被自动检测并运行。</p></li>
-<li><p><strong>注册到固定 label 组</strong>：编辑 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code>，在对应 job 的 <code class="docutils literal notranslate"><span class="pre">tests</span></code> 列表中添加条目，然后重新生成：</p></li>
-</ol>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>.github/workflows<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>python<span class="w"> </span>generate_github_workflows.py
-</pre></div>
-</div>
-<p>记得同时提交 <code class="docutils literal notranslate"><span class="pre">.j2</span></code> 和生成的 <code class="docutils literal notranslate"><span class="pre">.yml</span></code> 文件。</p>
+</section>
 </section>
 <section id="workflow">
 <h2>Workflow 生成<a class="headerlink" href="#workflow" title="链接到此标题。">#</a></h2>
-<p>工作流文件 <code class="docutils literal notranslate"><span class="pre">pr-test.yml</span></code> 是从 Jinja2 模板 <code class="docutils literal notranslate"><span class="pre">pr-test.yml.j2</span></code> 自动生成的。<strong>不要直接编辑 <code class="docutils literal notranslate"><span class="pre">pr-test.yml</span></code></strong>。修改步骤：</p>
+<p>workflow 文件 <code class="docutils literal notranslate"><span class="pre">pr-test.yml</span></code> 由 Jinja2 模板 <code class="docutils literal notranslate"><span class="pre">pr-test.yml.j2</span></code> 自动生成。不要直接编辑 <code class="docutils literal notranslate"><span class="pre">pr-test.yml</span></code>。</p>
+<p>如果要修改固定 CI matrix：</p>
 <ol class="arabic simple">
 <li><p>编辑 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code>。</p></li>
-<li><p>运行 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">.github/workflows/generate_github_workflows.py</span></code>。</p></li>
-<li><p>同时提交两个文件。</p></li>
+<li><p>运行：</p></li>
 </ol>
-</section>
-<section id="customization">
-<h2>Customization 契约测试<a class="headerlink" href="#customization" title="链接到此标题。">#</a></h2>
-<p>如果你要运行通过函数路径加载的 customization hook 契约测试，可以使用：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>tests/plugin_contracts/test_plugin_rollout_contracts.py<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>tests/plugin_contracts/test_plugin_generate_contracts.py<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>tests/plugin_contracts/test_plugin_path_loading_contracts.py<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>tests/plugin_contracts/test_plugin_runtime_hook_contracts.py
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>.github/workflows/generate_github_workflows.py
 </pre></div>
 </div>
-<p>这些测试文件也支持直接执行 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/plugin_contracts/&lt;file&gt;.py</span></code>。它们声明了 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">0</span></code>，因此可以被 <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> 自动识别，同时不会被当作 GPU 重型端到端测试。</p>
+<ol class="arabic simple" start="3">
+<li><p>同时提交 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code> 和生成的 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml</span></code>。</p></li>
+</ol>
+</section>
+<section id="pr">
+<h2>PR 应该选择哪些检查<a class="headerlink" href="#pr" title="链接到此标题。">#</a></h2>
+<ul class="simple">
+<li><p>纯 argument parsing、reward、schedule、sample、trajectory 或 hook-contract 改动：优先依赖 CPU tests。</p></li>
+<li><p>SGLang topology 或 rollout engine deployment 改动：使用 <code class="docutils literal notranslate"><span class="pre">run-ci-sglang-config</span></code>。</p></li>
+<li><p>Megatron training、loss、checkpoint conversion 或 model recipe 改动：使用 <code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code>；必要时加 <code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code> 或 <code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code>。</p></li>
+<li><p>Docker image 或 dependency 改动：使用 <code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code>。</p></li>
+<li><p>新增或修改测试：使用 <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> 做 targeted validation。</p></li>
+</ul>
 </section>
 </section>
 
@@ -646,17 +719,22 @@
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">工作原理</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-labels">CI Labels</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#label">重点 Label 说明</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#run-ci-changed"><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> — 仅运行新增或修改的测试</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#run-ci-image"><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code> — 在测试镜像上运行全部测试</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#run-ci-megatron-megatron"><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code> — 核心 Megatron 测试</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">工作原理</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-jobs">CPU Jobs</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#gpu-e2e-jobs">GPU E2E Jobs</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#changed-test-job">Changed-Test Job</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">编写新测试</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-jobs">CI Jobs 与触发方式</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-unit-tests">CPU Unit Tests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#gpu-e2e-tests">GPU E2E Tests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">编写新测试</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-tests">CPU Tests</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">GPU E2E Tests</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#workflow">Workflow 生成</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#customization">Customization 契约测试</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pr">PR 应该选择哪些检查</a></li>
 </ul>
   </nav></div>
 
