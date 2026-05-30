@@ -300,6 +300,7 @@ def log_rollout_data(
                 "group_mask_sums",
                 "rollout_routed_experts",
                 "max_seq_lens",
+                "global_raw_reward",
                 "global_batch_sizes",
                 "num_microbatches",
                 "micro_batch_indices",
@@ -495,12 +496,10 @@ def log_passrate(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -
     """
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
         log_dict = {}
-        for key, val in rollout_data.items():
-            if key != "raw_reward":
-                continue
-
+        raw_rewards = rollout_data.get("global_raw_reward", rollout_data.get("raw_reward"))
+        if raw_rewards is not None:
             log_dict |= compute_pass_rate(
-                flat_rewards=val,
+                flat_rewards=raw_rewards,
                 group_size=args.n_samples_per_prompt,
                 num_groups=args.rollout_batch_size,
             )
