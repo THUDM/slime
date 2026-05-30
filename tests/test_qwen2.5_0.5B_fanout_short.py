@@ -3,18 +3,18 @@
 What this test pins
 -------------------
 The "compact" pattern (where one rollout execution emits a *variable*
-number of training samples sharing a single ``rollout_id``) has CPU unit
-coverage at the piece-level (``test_dp_schedule.py`` for the rollout-
-aware step splitter, ``test_sample.py`` for ``Sample.rollout_id`` round-
-trip, ``test_cp_utils.py`` for the per-rollout-mean reducer). But until
+number of training samples sharing a single ``group_id``) has CPU unit
+coverage at the piece-level (``test_dp_schedule.py`` for the group-
+aware step splitter, ``test_sample.py`` for ``Sample.rollout_id`` alias
+compatibility, ``test_cp_utils.py`` for the per-rollout-mean reducer). But until
 this test, **no e2e training run had ever exercised the full chain**:
 
-  custom_generate returns list[Sample] sharing rollout_id
-    → _validate_rollout_id_annotated at depth ≥ 2 passes
-    → _split_train_data_by_dp groups by rollout_id and trims to N steps
+  custom_generate returns list[Sample] sharing group_id
+    → _validate_group_id_annotated at depth >= 2 passes
+    → _split_train_data_by_dp groups by group_id and trims to N steps
        using ``rollout_batch_size * n_samples_per_prompt / global_batch_size``
        (NOT total sample count, which would inflate steps once N>1)
-    → loss aggregation uses ``rollout_mask_sums`` so every sibling sample
+    → loss aggregation uses ``group_mask_sums`` so every sibling sample
        contributes one token-weighted mean per rollout
     → train_one_step's ``step_global_batch_size`` denominator equals
        num_rollouts (not num_samples), keeping grad magnitude stable
