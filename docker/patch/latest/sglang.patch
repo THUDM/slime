@@ -2798,6 +2798,30 @@ index 1dd4bb0..4be3a8c 100644
          if (
              buffers.hidden_states is not None
              and forward_batch.spec_info.hidden_states is not None
+diff --git a/python/sglang/srt/speculative/eagle_worker_v2.py b/python/sglang/srt/speculative/eagle_worker_v2.py
+index e845fde..ead4d72 100644
+--- a/python/sglang/srt/speculative/eagle_worker_v2.py
++++ b/python/sglang/srt/speculative/eagle_worker_v2.py
+@@ -1232,6 +1232,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
+         success, message = self._draft_worker.draft_runner.update_weights_from_disk(
+             recv_req.model_path,
+             recv_req.load_format,
++            files=recv_req.files,
+             recapture_cuda_graph=recv_req.recapture_cuda_graph,
+         )
+         if not success:
+diff --git a/python/sglang/srt/speculative/multi_layer_eagle_worker_v2.py b/python/sglang/srt/speculative/multi_layer_eagle_worker_v2.py
+index 4650619..3722bd2 100644
+--- a/python/sglang/srt/speculative/multi_layer_eagle_worker_v2.py
++++ b/python/sglang/srt/speculative/multi_layer_eagle_worker_v2.py
+@@ -819,6 +819,7 @@ class MultiLayerEagleWorkerV2(BaseSpecWorker):
+             ].update_weights_from_disk(
+                 recv_req.model_path,
+                 recv_req.load_format,
++                files=recv_req.files,
+                 recapture_cuda_graph=recv_req.recapture_cuda_graph,
+             )
+             if not success:
 diff --git a/python/sglang/srt/utils/common.py b/python/sglang/srt/utils/common.py
 index 48e1086..2fd60b3 100644
 --- a/python/sglang/srt/utils/common.py
