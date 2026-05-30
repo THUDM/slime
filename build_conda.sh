@@ -114,22 +114,6 @@ pip install cmake ninja
 # the newest version megatron supports is v2.7.4.post1
 MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1 --no-build-isolation
 
-# flash attn 3 (hopper) — matches Dockerfile
-cd $BASE_DIR
-if [ ! -d "$BASE_DIR/flash-attention" ]; then
-  git clone https://github.com/Dao-AILab/flash-attention.git
-fi
-cd $BASE_DIR/flash-attention
-git checkout fbf24f67cf7f6442c5cfb2c1057f4bfc57e72d89
-git submodule update --init
-cd hopper/
-MAX_JOBS=96 python setup.py install
-python_path=$(python -c "import site; print(site.getsitepackages()[0])")
-mkdir -p $python_path/flash_attn_3
-cp flash_attn_interface.py $python_path/flash_attn_3/flash_attn_interface.py
-cd $BASE_DIR
-rm -rf flash-attention
-
 pip install git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c --no-deps
 pip install flash-linear-attention==0.4.1
 # FlashQLA: optional GDN backend for Qwen3.5/Qwen3-Next (--qwen-gdn-backend flashqla; requires SM90+)
@@ -164,7 +148,13 @@ cd $BASE_DIR
 if [ ! -d "$BASE_DIR/Megatron-LM" ]; then
   git clone https://github.com/NVIDIA/Megatron-LM.git --recursive
 fi
-cd $BASE_DIR/Megatron-LM && git checkout ${MEGATRON_COMMIT} && pip install -e .
+# pre-install Megatron's build deps explicitly since we use --no-build-isolation
+pip install "setuptools<80.0.0" pybind11 "packaging>=24.2"
+# --no-build-isolation: setup.py builds a C++ extension (megatron.core.datasets.helpers_cpp)
+# that subprocess-shells `python3 -m pybind11`; without isolation pip uses the
+# current env's python which already has pybind11 installed. Otherwise the ext
+# is marked optional and silently skipped, which breaks GPT dataset loading.
+cd $BASE_DIR/Megatron-LM && git checkout ${MEGATRON_COMMIT} && pip install -e . --no-build-isolation
 
 # install slime and apply patches
 
