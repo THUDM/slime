@@ -9,6 +9,13 @@ mkdir -p /root/.cargo/
 touch /root/.cargo/env
 source ~/.bashrc
 
+# The micromamba installer writes `nodefaults` into ~/.condarc as a channel
+# entry, which newer micromamba versions try to fetch as a real anaconda.org
+# repo (it isn't — it's a meta-tag) and time out on. Strip it.
+if [ -f ~/.condarc ]; then
+  sed -i '/^\s*-\s*nodefaults\s*$/d' ~/.condarc
+fi
+
 micromamba create -n slime python=3.12 pip -c conda-forge -y
 micromamba activate slime
 export CUDA_HOME="$CONDA_PREFIX"
@@ -29,9 +36,11 @@ micromamba install -n slime \
   -c conda-forge \
   -y
 micromamba install -n slime -c conda-forge cudnn -y
+# sglang's editable install builds a Rust extension (sglang-grpc via
+# setuptools-rust), so the conda env needs a working rustc + cargo.
+micromamba install -n slime -c conda-forge rust -y
 
 pip install cuda-python==12.9
-pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cu129
 
 # install sglang
 if [ ! -d "$BASE_DIR/sglang" ]; then
@@ -40,8 +49,13 @@ if [ ! -d "$BASE_DIR/sglang" ]; then
 fi
 cd $BASE_DIR/sglang
 git checkout ${SGLANG_COMMIT}
-# Install the python packages
-pip install -e "python[all]"
+# Install the python packages. Pass cu129 as extra index so sglang's torch==2.11.0
+# resolution can find the +cu129 local wheel; pip may still prefer the pypi cu13
+# wheel during resolve, so re-pin torch to +cu129 immediately after.
+pip install -e "python[all]" --extra-index-url https://download.pytorch.org/whl/cu129
+pip install --force-reinstall --no-deps \
+  torch==2.11.0 torchvision torchaudio==2.11.0 \
+  --index-url https://download.pytorch.org/whl/cu129
 
 
 pip install cmake ninja
@@ -92,6 +106,10 @@ fi
 # https://github.com/pytorch/pytorch/issues/168167
 pip install nvidia-cudnn-cu12==9.16.0.29
 pip install "numpy<2"
+# kernels 0.15.x trips a ValueError("Either a revision or a version must be
+# specified") on `transformers.integrations.hub_kernels` import; pin to <0.15
+# so `import sglang` works at runtime.
+pip install "kernels<0.15.0"
 
 # apply patch
 cd $BASE_DIR/sglang

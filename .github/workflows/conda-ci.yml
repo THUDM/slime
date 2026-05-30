@@ -9,11 +9,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Read the sglang base image tag from docker/Dockerfile so we only have to bump
+  # the Dockerfile when sglang versions change. We use lmsysorg/sglang (upstream
+  # sglang's CUDA image) rather than slimerl/sglang so the conda build starts
+  # from a clean sglang-only base instead of one with slime already installed.
+  resolve-image:
+    if: contains(github.event.pull_request.title, '[release]')
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.read.outputs.image }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: read
+        shell: bash
+        run: |
+          tag=$(grep -oP '^ARG SGLANG_IMAGE_TAG=\K\S+' docker/Dockerfile)
+          if [ -z "$tag" ]; then
+            echo "Failed to parse SGLANG_IMAGE_TAG from docker/Dockerfile" >&2
+            exit 1
+          fi
+          echo "image=slimerl/sglang:${tag}" >> "$GITHUB_OUTPUT"
+
   build-conda:
+    needs: resolve-image
     if: contains(github.event.pull_request.title, '[release]')
     runs-on: self-hosted
     container:
-      image: lmsysorg/sglang:v0.5.0rc0-cu126
+      image: ${{ needs.resolve-image.outputs.image }}
       options: --privileged --cap-add SYS_NICE --security-opt seccomp=unconfined --gpus all --ipc=host --shm-size=16g --ulimit memlock=-1 --ulimit stack=67108864 --memory=0 --memory-swap=0 -v /mnt/nvme0n1/models:/root/models -v /mnt/nvme0n1/datasets:/root/datasets
 
     defaults:
