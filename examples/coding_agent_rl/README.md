@@ -5,8 +5,13 @@ This directory provides an example of running end-to-end **SWE (Software-Enginee
 Two example files and one shared adapter implement the loop:
 
 - `generate.py` — per-sample `generate()` registered via `--custom-generate-function-path`. Boots the sandbox, runs claude-code, captures the diff, scores it, and emits one or more `Sample`s back to slime.
-- `slime.agent.adapters.anthropic` — the shared Anthropic Messages adapter. claude-code talks to it as if it were Anthropic; the adapter tokenizes the current message history each turn, records prompt/output token snapshots, preserves model-generated tokens (`loss_mask=1`) only while later prompts stitch onto them, masks template/observation tokens (`0`), and emits **three kinds of segments** per trajectory: `subagent` (completed `Task/Agent` dispatch), `wipe` (chain frozen by auto-compact), `final` (tail of the main chain).
+- `slime.agent.adapters.AnthropicAdapter` — the shared Anthropic Messages adapter. claude-code talks to it as if it were Anthropic; the adapter tokenizes the current message history each turn, records prompt/output token snapshots, preserves model-generated tokens (`loss_mask=1`) only while later prompts stitch onto them, masks template/observation tokens (`0`), and emits **three kinds of segments** per trajectory: `subagent` (completed `Task/Agent` dispatch), `wipe` (chain frozen by auto-compact), `final` (tail of the main chain).
 - `sandbox.py` — coding-agent/SWE helpers built on `slime.agent.sandbox`: install bootstraps, spawn claude-code, capture patches, and run the fresh-sandbox evaluator. The shared sandbox contract lives in `slime.agent.sandbox.Sandbox`.
+
+`generate.py` owns one `AnthropicAdapter` instance. For each sample it calls
+`adapter.open_session(...)` before starting claude-code, serves `adapter.app` as
+the Anthropic-compatible endpoint, and drains trainable `TokenSegment`s with
+`await adapter.finish_session(...)` when the trajectory ends.
 
 ## Environment Setup
 
@@ -112,8 +117,9 @@ All set in the launcher; tune per cluster.
 
 `--rollout-max-response-len` is the per-turn generation cap passed to each
 SGLang `/generate` call as `max_new_tokens`. `--rollout-max-context-len` is the
-multi-turn prompt+response budget: each turn clamps `max_new_tokens` to the
-remaining context, and oversized emitted segments are dropped before training.
+multi-turn prompt+response budget enforced only during generation: each turn
+clamps `max_new_tokens` to the remaining context. Trajectory merge/export keeps
+the emitted segments and does not drop them for length.
 The Anthropic adapter reuses `--sglang-tool-call-parser` and
 `--sglang-reasoning-parser` for output parsing, so those flags must match the
 served model.

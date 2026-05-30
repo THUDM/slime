@@ -14,7 +14,14 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
-from slime.agent.trajectory import TurnRecord
+from slime.agent.trajectory import TokenSegment, TurnRecord
+
+
+ADAPTER_KEY = web.AppKey("adapter", object)
+TOKENIZER_KEY = web.AppKey("tokenizer", object)
+SGLANG_URL_KEY = web.AppKey("sglang_url", object)
+TOOL_PARSER_KEY = web.AppKey("tool_parser", object)
+REASONING_PARSER_KEY = web.AppKey("reasoning_parser", object)
 
 
 @dataclasses.dataclass
@@ -27,6 +34,44 @@ class AdapterChain:
     seen_msgs: int = 0
     msg_hashes: list[str] = dataclasses.field(default_factory=list)
     turns: list[TurnRecord] = dataclasses.field(default_factory=list)
+
+
+class BaseAdapter:
+    """Base HTTP adapter with per-instance session lifecycle state."""
+
+    session_cls: type
+
+    def __init__(self, *, tokenizer, sglang_url, tool_parser=None, reasoning_parser=None) -> None:
+        self.store: dict[str, Any] = {}
+        self.inflight: dict[str, set[asyncio.Task]] = {}
+        self.closed: set[str] = set()
+        self.app = web.Application(client_max_size=64 * 1024 * 1024)
+        self.app[ADAPTER_KEY] = self
+        self.app[TOKENIZER_KEY] = tokenizer
+        self.app[SGLANG_URL_KEY] = sglang_url.rstrip("/") if isinstance(sglang_url, str) else sglang_url
+        self.app[TOOL_PARSER_KEY] = tool_parser
+        self.app[REASONING_PARSER_KEY] = reasoning_parser
+
+    def open_session(
+        self,
+        sid: str,
+        *,
+        sampling_defaults: dict | None = None,
+        max_context_tokens: int = 0,
+    ) -> None:
+        register_session(
+            self.store,
+            sid,
+            self.session_cls,
+            sampling_defaults=sampling_defaults,
+            max_context_tokens=max_context_tokens,
+        )
+
+    async def shutdown_session(self, sid: str, *, wait_timeout: float = 5.0) -> None:
+        await shutdown_session_tasks(sid, self.closed, self.inflight, wait_timeout=wait_timeout)
+
+    async def finish_session(self, sid: str, *, wait_timeout: float = 5.0) -> list[TokenSegment]:
+        raise NotImplementedError
 
 
 def strip_cache_control(obj: Any) -> Any:
@@ -155,7 +200,7 @@ async def call_sglang_generate(
             return TurnRecord(prompt_ids=list(prompt_ids), output_ids=[], finish_reason="length")
         sp["max_new_tokens"] = min(int(sp.get("max_new_tokens", remaining_context)), remaining_context)
 
-    sglang_url = app["sglang_url"]
+    sglang_url = app[SGLANG_URL_KEY]
     rid = uuid.uuid4().hex
     headers = {"X-SMG-Routing-Key": session_id} if session_id and session_id != "default" else None
     timeout = aiohttp.ClientTimeout(total=None, sock_read=900)

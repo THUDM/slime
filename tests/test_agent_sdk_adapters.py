@@ -38,8 +38,6 @@ class SDKTokenizer:
 @pytest.mark.integration
 def test_openai_agents_sdk_responses_runs_tool_loop_against_adapter(monkeypatch):
     async def run_case():
-        openai._closed.clear()
-        openai._inflight.clear()
         calls = []
 
         async def fake_generate(prompt_ids, session, body, app, **kwargs):
@@ -58,8 +56,8 @@ def test_openai_agents_sdk_responses_runs_tool_loop_against_adapter(monkeypatch)
                 "final after tool",
             ]
         )
-        app, store = openai.start(tokenizer=tokenizer, sglang_url="http://unused")
-        client = TestClient(TestServer(app))
+        adapter = openai.OpenAIAdapter(tokenizer=tokenizer, sglang_url="http://unused")
+        client = TestClient(TestServer(adapter.app))
         await client.start_server()
         base_url = str(client.make_url("/v1/"))
         http_client = httpx.AsyncClient(trust_env=False)
@@ -89,7 +87,7 @@ def test_openai_agents_sdk_responses_runs_tool_loop_against_adapter(monkeypatch)
             await client.close()
             await oai.close()
 
-        segments = openai.pop_session_split(store, "sdk-openai")
+        segments = await adapter.finish_session("sdk-openai")
         assert result.final_output == "final after tool"
         assert len(calls) == 2
         assert calls[0]["body"]["max_output_tokens"] == 4
@@ -118,8 +116,6 @@ def test_openai_agents_sdk_responses_runs_tool_loop_against_adapter(monkeypatch)
 @pytest.mark.integration
 def test_openai_agents_sdk_chat_completions_runs_against_adapter(monkeypatch):
     async def run_case():
-        openai._closed.clear()
-        openai._inflight.clear()
         calls = []
 
         async def fake_generate(prompt_ids, session, body, app, **kwargs):
@@ -130,8 +126,8 @@ def test_openai_agents_sdk_chat_completions_runs_against_adapter(monkeypatch):
 
         monkeypatch.setattr(openai, "_generate", fake_generate)
         tokenizer = SDKTokenizer(["chat final"])
-        app, store = openai.start(tokenizer=tokenizer, sglang_url="http://unused")
-        client = TestClient(TestServer(app))
+        adapter = openai.OpenAIAdapter(tokenizer=tokenizer, sglang_url="http://unused")
+        client = TestClient(TestServer(adapter.app))
         await client.start_server()
         base_url = str(client.make_url("/v1/"))
         http_client = httpx.AsyncClient(trust_env=False)
@@ -156,7 +152,7 @@ def test_openai_agents_sdk_chat_completions_runs_against_adapter(monkeypatch):
             await client.close()
             await oai.close()
 
-        segments = openai.pop_session_split(store, "sdk-openai-chat")
+        segments = await adapter.finish_session("sdk-openai-chat")
         assert result.final_output == "chat final"
         assert calls[0]["body"]["max_tokens"] == 5
         assert calls[0]["body"]["messages"] == [
@@ -173,8 +169,6 @@ def test_openai_agents_sdk_chat_completions_runs_against_adapter(monkeypatch):
 @pytest.mark.integration
 def test_openai_sdk_chat_completion_streaming_runs_against_adapter(monkeypatch):
     async def run_case():
-        openai._closed.clear()
-        openai._inflight.clear()
         calls = []
 
         async def fake_generate(prompt_ids, session, body, app, **kwargs):
@@ -187,8 +181,8 @@ def test_openai_sdk_chat_completion_streaming_runs_against_adapter(monkeypatch):
         tokenizer = SDKTokenizer(
             ["streamed via sdk <tool_call><function=lookup><parameter=query>slime</parameter></function></tool_call>"]
         )
-        app, store = openai.start(tokenizer=tokenizer, sglang_url="http://unused")
-        client = TestClient(TestServer(app))
+        adapter = openai.OpenAIAdapter(tokenizer=tokenizer, sglang_url="http://unused")
+        client = TestClient(TestServer(adapter.app))
         await client.start_server()
         base_url = str(client.make_url("/v1/"))
         http_client = httpx.AsyncClient(trust_env=False)
@@ -236,7 +230,7 @@ def test_openai_sdk_chat_completion_streaming_runs_against_adapter(monkeypatch):
             await client.close()
             await oai.close()
 
-        segments = openai.pop_session_split(store, "sdk-openai-chat-stream")
+        segments = await adapter.finish_session("sdk-openai-chat-stream")
         assert "".join(text_parts) == "streamed via sdk"
         assert tool_names == ["lookup"]
         assert tool_arguments == ['{"query": "slime"}']
@@ -252,8 +246,6 @@ def test_openai_sdk_chat_completion_streaming_runs_against_adapter(monkeypatch):
 @pytest.mark.integration
 def test_openai_sdk_responses_streaming_runs_against_adapter(monkeypatch):
     async def run_case():
-        openai._closed.clear()
-        openai._inflight.clear()
         calls = []
 
         async def fake_generate(prompt_ids, session, body, app, **kwargs):
@@ -264,8 +256,8 @@ def test_openai_sdk_responses_streaming_runs_against_adapter(monkeypatch):
 
         monkeypatch.setattr(openai, "_generate", fake_generate)
         tokenizer = SDKTokenizer(["response stream via sdk"])
-        app, store = openai.start(tokenizer=tokenizer, sglang_url="http://unused")
-        client = TestClient(TestServer(app))
+        adapter = openai.OpenAIAdapter(tokenizer=tokenizer, sglang_url="http://unused")
+        client = TestClient(TestServer(adapter.app))
         await client.start_server()
         base_url = str(client.make_url("/v1/"))
         http_client = httpx.AsyncClient(trust_env=False)
@@ -296,7 +288,7 @@ def test_openai_sdk_responses_streaming_runs_against_adapter(monkeypatch):
             await client.close()
             await oai.close()
 
-        segments = openai.pop_session_split(store, "sdk-openai-responses-stream")
+        segments = await adapter.finish_session("sdk-openai-responses-stream")
         assert event_types == ["response.created", "response.output_text.delta", "response.completed"]
         assert "".join(deltas) == "response stream via sdk"
         assert completed_response.status == "completed"
@@ -311,8 +303,6 @@ def test_openai_sdk_responses_streaming_runs_against_adapter(monkeypatch):
 @pytest.mark.integration
 def test_anthropic_sdk_non_streaming_messages_runs_against_adapter(monkeypatch):
     async def run_case():
-        anthropic._closed.clear()
-        anthropic._inflight.clear()
         calls = []
 
         async def fake_generate(prompt_ids, session, body, app, **kwargs):
@@ -323,8 +313,8 @@ def test_anthropic_sdk_non_streaming_messages_runs_against_adapter(monkeypatch):
 
         monkeypatch.setattr(anthropic, "_generate", fake_generate)
         tokenizer = SDKTokenizer(["anthropic json"])
-        app, store = anthropic.start(tokenizer=tokenizer, sglang_url="http://unused")
-        client = TestClient(TestServer(app))
+        adapter = anthropic.AnthropicAdapter(tokenizer=tokenizer, sglang_url="http://unused")
+        client = TestClient(TestServer(adapter.app))
         await client.start_server()
         base_url = str(client.make_url("/"))
         http_client = httpx.AsyncClient(trust_env=False)
@@ -346,7 +336,7 @@ def test_anthropic_sdk_non_streaming_messages_runs_against_adapter(monkeypatch):
             await client.close()
             await anth.close()
 
-        segments = anthropic.pop_session_split(store, "sdk-anthropic-json")
+        segments = await adapter.finish_session("sdk-anthropic-json")
         assert message.type == "message"
         assert message.content[0].type == "text"
         assert message.content[0].text == "anthropic json"
@@ -362,8 +352,6 @@ def test_anthropic_sdk_non_streaming_messages_runs_against_adapter(monkeypatch):
 @pytest.mark.integration
 def test_anthropic_sdk_streaming_messages_runs_against_adapter(monkeypatch):
     async def run_case():
-        anthropic._closed.clear()
-        anthropic._inflight.clear()
         calls = []
 
         async def fake_generate(prompt_ids, session, body, app, **kwargs):
@@ -374,8 +362,8 @@ def test_anthropic_sdk_streaming_messages_runs_against_adapter(monkeypatch):
 
         monkeypatch.setattr(anthropic, "_generate", fake_generate)
         tokenizer = SDKTokenizer(["anthropic final"])
-        app, store = anthropic.start(tokenizer=tokenizer, sglang_url="http://unused")
-        client = TestClient(TestServer(app))
+        adapter = anthropic.AnthropicAdapter(tokenizer=tokenizer, sglang_url="http://unused")
+        client = TestClient(TestServer(adapter.app))
         await client.start_server()
         base_url = str(client.make_url("/"))
         http_client = httpx.AsyncClient(trust_env=False)
@@ -404,7 +392,7 @@ def test_anthropic_sdk_streaming_messages_runs_against_adapter(monkeypatch):
             await client.close()
             await anth.close()
 
-        segments = anthropic.pop_session_split(store, "sdk-anthropic")
+        segments = await adapter.finish_session("sdk-anthropic")
         assert "".join(text_parts) == "anthropic final"
         assert event_types == [
             "message_start",

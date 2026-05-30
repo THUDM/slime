@@ -30,10 +30,27 @@ agent workflow 本身可以使用字符串、chat messages、tool calls、环境
 
 slime 提供已有 agent runtime 可用的协议 adapter：
 
-- `slime.agent.adapters.anthropic`：Anthropic Messages API，用于 Claude Code 风格 agent。
-- `slime.agent.adapters.openai`：OpenAI Chat Completions 和 Responses API，用于 OpenAI SDK / OpenAI Agents SDK 风格 client。
+- `slime.agent.adapters.AnthropicAdapter`：Anthropic Messages API，用于 Claude Code 风格 agent。
+- `slime.agent.adapters.OpenAIAdapter`：OpenAI Chat Completions 和 Responses API，用于 OpenAI SDK / OpenAI Agents SDK 风格 client。
 
 adapter 是一个便利层，不是单独的 agent framework。它的 contract 是 message history in，sampled tokens out：adapter 会渲染 chat template，用 `input_ids` 和 `return_logprob=True` 调 SGLang，并把返回的 token ids/logprobs 导出为可训练的 trajectory segments；不会从 response text 重新分词恢复训练目标。
+
+在自定义 generate 函数里实例化对应协议的 adapter，用 aiohttp 跑它的 `app`，然后通过 adapter 实例管理每次 rollout：
+
+```python
+from slime.agent.adapters import AnthropicAdapter
+
+adapter = AnthropicAdapter(
+    tokenizer=tokenizer,
+    sglang_url=sglang_url,
+    tool_parser=tool_parser,
+    reasoning_parser=reasoning_parser,
+)
+
+adapter.open_session(session_id, sampling_defaults=sampling_params)
+# Agent client 向 adapter.app 发送请求。
+segments = await adapter.finish_session(session_id)
+```
 
 多轮 agent 应使用稳定的 `session_id`。adapter 会把它作为 `X-SMG-Routing-Key` 传给 SGLang，让同一个 session 尽量落到同一个 worker，复用 prefix cache。
 
