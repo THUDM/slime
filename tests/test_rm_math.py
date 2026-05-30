@@ -31,6 +31,9 @@ from slime.rollout.rm_hub.math_utils import (
 )
 
 
+NUM_GPUS = 0
+
+
 # ---------------------------------------------------------------------------
 # last_boxed_only_string — hand-rolled brace counter
 # ---------------------------------------------------------------------------

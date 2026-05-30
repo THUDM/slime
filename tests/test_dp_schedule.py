@@ -11,6 +11,9 @@ import pytest
 from slime.utils.dp_schedule import build_dp_schedule
 
 
+NUM_GPUS = 0
+
+
 def make_args(
     *,
     micro_batch_size=1,

@@ -28,6 +28,9 @@ from slime.rollout.rm_hub.math_dapo_utils import (
 )
 
 
+NUM_GPUS = 0
+
+
 # ---------------------------------------------------------------------------
 # last_boxed_only_string — brace counter (separate impl from math_utils;
 # this one expects ``\boxed{`` specifically, no \fbox fallback)
