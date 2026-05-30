@@ -100,17 +100,12 @@ def execute():
             num_gpus_per_node=NUM_GPUS,
             megatron_model_type=MODEL_TYPE,
         )
-        # 8 GPU CPU 1
+        parallel_sizes = [1, 2, 4]
         for num_gpus in [8, 4, 2]:
-            remaining_gpus = num_gpus
-            for tp_size in [1, 2, 4, 8]:
-                remaining_gpus /= tp_size
+            for tp_size in parallel_sizes:
                 for pp_size in [1, 2, 4]:
-                    if remaining_gpus < pp_size:
-                        continue
-                    remaining_gpus /= pp_size
-                    for cp_size in [1, 2, 4, 8]:
-                        if remaining_gpus < cp_size:
+                    for cp_size in parallel_sizes:
+                        if tp_size * pp_size * cp_size > num_gpus:
                             continue
                         args = train_args + (
                             f"--load-debug-rollout-data data-{i}.pt "
