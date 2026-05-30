@@ -66,9 +66,11 @@ pip install --force-reinstall --no-deps \
 # reinstalls above swap torch/sglang-kernel/sgl-deep-gemm to their +cu129
 # variants but DO NOT remove those stale cu13 nvidia runtime libs, and they can
 # get dlopen'd ahead of our cu12 libs at import time (e.g. deep_gemm's
-# libcudart.so.13 lookup). Uninstall them explicitly so the env is purely cu12.
+# libcudart.so.13 lookup). Uninstall them so the env is purely cu12. Then
+# force-reinstall the cu12 nvidia wheels — pip uninstall stomps shared
+# `site-packages/nvidia/*` subdirs that cu12/cu13 wheels co-own, so this puts
+# the missing .so files back.
 pip uninstall -y \
-  cuda-toolkit \
   nvidia-cublas \
   nvidia-cuda-cupti \
   nvidia-cuda-nvrtc \
@@ -86,6 +88,24 @@ pip uninstall -y \
   nvidia-nvtx \
   nvidia-cutlass-dsl-libs-cu13 \
   || true
+pip install --force-reinstall --no-deps \
+  nvidia-cublas-cu12 \
+  nvidia-cuda-cupti-cu12 \
+  nvidia-cuda-nvrtc-cu12 \
+  nvidia-cuda-runtime-cu12 \
+  nvidia-cudnn-cu12==9.16.0.29 \
+  nvidia-cufft-cu12 \
+  nvidia-cufile-cu12 \
+  nvidia-curand-cu12 \
+  nvidia-cusolver-cu12 \
+  nvidia-cusparse-cu12 \
+  nvidia-cusparselt-cu12 \
+  nvidia-nccl-cu12 \
+  nvidia-nvjitlink-cu12 \
+  nvidia-nvshmem-cu12 \
+  nvidia-nvtx-cu12 \
+  --index-url https://download.pytorch.org/whl/cu129 \
+  --extra-index-url https://pypi.org/simple
 
 
 pip install cmake ninja
