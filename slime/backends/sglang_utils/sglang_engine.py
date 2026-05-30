@@ -190,6 +190,25 @@ class SGLangEngine(RayActor):
         actual_server_args = _get_actual_server_args()
         _sanity_check_server_args(actual_server_args, expect_server_args)
 
+        # Register external engine with the router, same as _init_normal.
+        if self.node_rank == 0 and self.router_ip and self.router_port:
+            if parse(sglang_router.__version__) <= parse("0.2.1"):
+                response = requests.post(
+                    f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}",
+                )
+            else:
+                payload = {
+                    "url": f"http://{self.server_host}:{self.server_port}",
+                    "worker_type": self.worker_type,
+                }
+                if self.worker_type == "prefill":
+                    payload["bootstrap_port"] = expect_server_args["disaggregation_bootstrap_port"]
+                response = requests.post(
+                    f"http://{self.router_ip}:{self.router_port}/workers",
+                    json=payload,
+                )
+            response.raise_for_status()
+
     def _init_normal(self, server_args_dict):
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
         self.process = launch_server_process(ServerArgs(**server_args_dict))
@@ -648,4 +667,7 @@ _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS = [
     "enable_draft_weights_cpu_backup",
     "enable_metrics",
     "mem_fraction_static",
+    "host",
+    "base_gpu_id",
+    "gpu_id_step",
 ]

@@ -1827,6 +1827,52 @@ def slime_validate_args(args):
             if args.use_critic:
                 args.rollout_num_gpus += args.critic_num_gpus_per_node * args.critic_num_nodes
 
+    # rollout_external: the inference engines are pre-launched outside slime.
+    # Local SGLangEngine Ray actors are only thin HTTP wrappers that do not
+    # own GPU memory, so they must share the actor's placement group rather
+    # than reserving extra GPU bundles. We also force offload_rollout=False
+    # because release/resume_memory_occupation would HTTP-call the external
+    # server and disturb its memory state.
+    if args.rollout_external:
+        assert not args.colocate, (
+            "--colocate is incompatible with --rollout-external: colocate forces "
+            "rollout_num_gpus to equal actor GPUs and enables offload_rollout, "
+            "both of which conflict with externally-hosted engines."
+        )
+        assert not args.debug_rollout_only, "--debug-rollout-only is incompatible with --rollout-external."
+        assert (
+            args.rollout_external_engine_addrs
+        ), "--rollout-external requires --rollout-external-engine-addrs to be set."
+        # Rollout shares the actor's placement group, which has
+        # actor_num_nodes * actor_num_gpus_per_node GPU bundles. Each external
+        # engine still occupies one bundle slot for scheduling, so the engine
+        # count cannot exceed the actor PG size.
+        num_external_engines = len(args.rollout_external_engine_addrs)
+        actor_pg_slots = args.actor_num_nodes * args.actor_num_gpus_per_node
+        assert num_external_engines <= actor_pg_slots, (
+            f"--rollout-external currently requires num_external_engines "
+            f"({num_external_engines}) <= actor_num_nodes * actor_num_gpus_per_node "
+            f"({actor_pg_slots}), because external rollout actors share the actor "
+            f"placement group bundle-for-bundle. Either reduce "
+            f"--rollout-external-engine-addrs or increase actor GPUs."
+        )
+        # When --rollout-num-gpus is omitted, derive it from the number of
+        # external engine addresses so the user doesn't have to specify a
+        # GPU count for off-host engines.
+        if args.rollout_num_gpus is None:
+            args.rollout_num_gpus = len(args.rollout_external_engine_addrs) * args.rollout_num_gpus_per_engine
+            logger.info(
+                f"rollout_external: derived rollout_num_gpus={args.rollout_num_gpus} "
+                f"from {len(args.rollout_external_engine_addrs)} external address(es) × "
+                f"rollout_num_gpus_per_engine={args.rollout_num_gpus_per_engine}."
+            )
+        if args.offload_rollout:
+            logger.info(
+                "rollout_external is set: forcing offload_rollout=False to avoid "
+                "issuing release/resume_memory_occupation to the external server."
+            )
+        args.offload_rollout = False
+
     if args.offload_train is None:
         args.offload_train = False
     if args.offload_rollout is None:
