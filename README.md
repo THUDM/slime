@@ -10,12 +10,56 @@
 1.  **High-Performance Training**: Supports efficient training in various modes by connecting Megatron with SGLang;
 2.  **Flexible Data Generation**: Enables arbitrary training data generation workflows through custom data generation interfaces and server-based engines.
 
-In the agentic era, slime treats multi-turn tool use, sandbox interaction, environment feedback, and verifier/test-based rewards as data generation workflows. These workflows plug into the same training / rollout / Data Buffer loop through custom generation, custom reward, and server-based rollout engines, rather than requiring a separate agent framework.
+slime's design goal is to make these two capabilities reinforce each other without turning the system into a heavy stack of disconnected trainers, rollout services, and agent frameworks. Megatron training, SGLang rollout, custom data generation, reward computation, verifier feedback, and environment interaction all flow through the same training / rollout / Data Buffer path.
 
-slime is the RL-framework behind [GLM-5.1](https://z.ai/blog/glm-5.1), [GLM-5](https://z.ai/blog/glm-5), [GLM-4.7](https://z.ai/blog/glm-4.7), [GLM-4.6](https://z.ai/blog/glm-4.6), [GLM-4.5](https://z.ai/blog/glm-4.5) and apart from models from Z.ai, we also supports the following models:
-- Qwen series (Qwen3.6, Qwen3.5, Qwen3Next, Qwen3MoE, Qwen3, Qwen2.5);
-- DeepSeek V3 series (DeepSeek V3, V3.1, DeepSeek R1);
+This makes slime one of the most battle-tested open RL post-training frameworks: small enough to understand and extend, but validated through complete training loops behind SOTA-level model releases.
+
+## Why This Design Matters
+
+- **Battle-tested by frontier model training**: slime is the RL framework behind [GLM-5.1](https://z.ai/blog/glm-5.1), [GLM-5](https://z.ai/blog/glm-5), [GLM-4.7](https://z.ai/blog/glm-4.7), [GLM-4.6](https://z.ai/blog/glm-4.6), and [GLM-4.5](https://z.ai/blog/glm-4.5). This validates the full post-training loop, not only isolated examples.
+- **Correctness-first infrastructure**: RL bugs are often silent. slime keeps the dataflow explicit, supports separate rollout-only and train-only debugging paths, and documents reproducibility, fault tolerance, tracing, profiling, and CI as first-class engineering concerns.
+- **Native by design**: slime passes Megatron arguments through directly and exposes installed SGLang arguments with a `--sglang-` prefix. New upstream training and serving optimizations can be used without adding another abstraction layer inside slime.
+- **Maximum data-generation freedom**: math, code, search, tools, sandboxes, verifiers, environments, multi-agent systems, and long-horizon agentic workflows plug in as data generation or reward workflows. They do not fork the training kernel.
+- **Lightweight and opinionated**: slime focuses deeply on the Megatron + SGLang path used for large-scale RL. By choosing one rollout backend, slime can use SGLang-specific capabilities directly instead of flattening multiple inference engines into a lowest-common-denominator abstraction.
+
+## Production Validation
+
+slime has been exercised by the complete workflow needed for release-grade model post-training: large-scale training, high-throughput rollout, weight synchronization, reward/verifier data, checkpointing, debugging, and long-running stability.
+
+Beyond the GLM family, slime also supports:
+
+- Qwen series: Qwen3.6, Qwen3.5, Qwen3Next, Qwen3MoE, Qwen3, Qwen2.5;
+- DeepSeek V3 series: DeepSeek V3, V3.1, DeepSeek R1;
 - Llama 3.
+
+## Native Engine Pass-Through and SGLang Deployment
+
+slime is not just a framework that can call an inference backend. It keeps the Megatron and SGLang control surfaces close to the upstream engines while adding the RL dataflow around them:
+
+- native SGLang argument pass-through: every argument supported by the installed SGLang can be used by adding the `--sglang-` prefix, such as passing `--mem-fraction-static` as `--sglang-mem-fraction-static`;
+- native Megatron argument pass-through: slime reads Megatron arguments directly, so Megatron-side parallelism, optimizer, checkpointing, and model options remain available without wrapper code;
+- [SGLang Config](docs/en/advanced/sglang-config.md) as an optional YAML extension for topology-specific control, such as separate prefill/decode/EPD-style settings, heterogeneous server groups, multi-model serving, and per-group SGLang overrides;
+- [PD Disaggregation](docs/en/advanced/pd-disaggregation.md) for multi-turn and agentic workloads with different prefill/decode resource needs;
+- router policies such as session affinity for multi-turn agents;
+- [Delta Weight Sync](docs/en/advanced/delta-weight-sync.md) for training/inference disaggregation and large-model update efficiency;
+- external rollout engines for deployments where serving is managed outside the training job.
+
+This pass-through design makes slime native from the start. Most upstream engine improvements remain accessible as the engines evolve, while slime focuses on the RL loop, dataflow, synchronization, and correctness checks.
+
+Choosing SGLang as the single rollout backend is also intentional. Multi-backend frameworks often have to abstract over the common subset of several inference engines, which can hide the strongest features of each backend. slime instead optimizes deeply for SGLang so RL workloads can use SGLang-specific serving, routing, caching, disaggregation, and weight-sync behavior directly.
+
+## Correctness, Stability, and CI
+
+slime is developed as RL infrastructure, where "the script runs" is not enough. The project maintains CPU unit tests, contract tests for customization hooks, and GPU end-to-end tests covering dense and MoE models, Megatron training paths, SGLang deployment configurations, checkpointing, numerical precision, async rollout, OPD, PPO-style workflows, and debug rollout-then-train replay.
+
+Useful engineering docs:
+
+- [CI](docs/en/developer_guide/ci.md)
+- [Debugging](docs/en/developer_guide/debug.md)
+- [Reproducibility](docs/en/advanced/reproducibility.md)
+- [Fault Tolerance](docs/en/advanced/fault-tolerance.md)
+- [Trace Viewer](docs/en/developer_guide/trace.md)
+- [Profiling](docs/en/developer_guide/profiling.md)
 
 ## Blogs
 
@@ -25,9 +69,13 @@ slime is the RL-framework behind [GLM-5.1](https://z.ai/blog/glm-5.1), [GLM-5](h
 
 ## Table of Contents
 
+- [Why This Design Matters](#why-this-design-matters)
+- [Production Validation](#production-validation)
+- [Native Engine Pass-Through and SGLang Deployment](#native-engine-pass-through-and-sglang-deployment)
+- [Correctness, Stability, and CI](#correctness-stability-and-ci)
 - [Architecture Overview](#architecture-overview)
 - [Quick Start](#quick-start)
-- [Projects Built with slime](#projects-built-with-slime)
+- [Ecosystem Built on slime](#ecosystem-built-on-slime)
 - [Arguments Walkthrough](#arguments-walkthrough)
 - [Developer Guide](#developer-guide)
 - [FAQ & Acknowledgements](#faq--acknowledgements)
@@ -59,9 +107,9 @@ For agentic RL workloads, the following examples plug into the standard rollout 
 
 See the [Customization Guide](docs/en/get_started/customization.md) for which interface to use for a given agentic workflow.
 
-## Projects Built upon slime
+## Ecosystem Built on slime
 
-slime has powered several novel research projects and production systems. Here are some notable examples:
+These are not just demos. They are independent systems that use slime as a reusable RL substrate for production-scale post-training, agentic RL, domain RL, and rollout-system research.
 
 ### 🌈 Relax: Asynchronous RL Engine for Omni-Modal Agentic Training
 
@@ -73,7 +121,7 @@ slime has powered several novel research projects and production systems. Here a
 
 ### ⚛️ P1: Mastering Physics Olympiads with Reinforcement Learning
 
-[**P1**](https://prime-rl.github.io/P1/) is a family of open-source physics reasoning models trained entirely through reinforcement learning. P1 leverages slime as the RL post training framework, and introduces a multi-stage RL training algorithm that progressively enhances reasoning ability through adaptive learnability adjustment and stabilization mechanisms. Enpowered by this training paradigm, P1 delivers breakthrough performance in open-source physics reasoning.
+[**P1**](https://prime-rl.github.io/P1/) is a family of open-source physics reasoning models trained entirely through reinforcement learning. P1 leverages slime as the RL post-training framework, and introduces a multi-stage RL training algorithm that progressively enhances reasoning ability through adaptive learnability adjustment and stabilization mechanisms. Empowered by this training paradigm, P1 delivers breakthrough performance in open-source physics reasoning.
 
 ### 📈RLVE: Scaling LM RL with Adaptive Verifiable Environments
 
@@ -81,7 +129,7 @@ slime has powered several novel research projects and production systems. Here a
 
 ### ⚡ TritonForge: Agentic RL Training Framework for Kernel Generation
 
-[**TritonForge**](https://github.com/RLsys-Foundation/TritonForge) leverages slime's SFT & RL capabilities to train LLMs that automatically generate optimized GPU kernels. By using a two-stage training approach—supervised fine-tuning followed by reinforcement learning with multi-turn compilation feedback—TritonForge achieves remarkable results in converting PyTorch operations into high-performance Triton kernels.
+[**TritonForge**](https://github.com/RLsys-Foundation/TritonForge) leverages slime's SFT and RL capabilities to train LLMs that automatically generate optimized GPU kernels. By using a two-stage training approach—supervised fine-tuning followed by reinforcement learning with multi-turn compilation feedback—TritonForge achieves remarkable results in converting PyTorch operations into high-performance Triton kernels.
 
 ### 🚀 APRIL: Accelerating RL Training with Active Partial Rollouts
 
@@ -91,14 +139,14 @@ slime has powered several novel research projects and production systems. Here a
 
 [**qqr**](https://github.com/Alibaba-NLP/qqr) (a.k.a. hilichurl) is a lightweight extension for slime designed to evolve open-ended agents. It implements the **ArenaRL** algorithm to tackle discriminative collapse through tournament-based relative ranking (**e.g., Seeded Single-Elimination, Round-Robin**) and seamlessly integrates the **Model Context Protocol (MCP)**. qqr leverages slime's high-throughput training capabilities to enable scalable, distributed evolution of agents in standardized, decoupled tool environments.
 
-These projects showcase slime's versatility—from training code-generation models to optimizing RL training systems—making it a powerful foundation for both research and production deployments.
+Together, these projects show the main idea behind slime: one high-performance RL kernel can support frontier model post-training, online agent optimization, verifiable environments, omni-modal rollouts, kernel-generation agents, and rollout-system research without changing the core training loop.
 
 ## Arguments Walkthrough
 
 Arguments in slime are divided into three categories:
 
-1.  **Megatron arguments**: slime reads all arguments in Megatron. You can configure Megatron by passing arguments like `--tensor-model-parallel-size 2`.
-2.  **SGLang arguments**: All arguments for the installed SGLang are supported. These arguments must be prefixed with `--sglang-`. For example, `--mem-fraction-static` should be passed as `--sglang-mem-fraction-static`.
+1.  **Megatron arguments**: slime reads Megatron arguments directly. You can configure Megatron by passing arguments like `--tensor-model-parallel-size 2`.
+2.  **SGLang arguments**: All arguments for the installed SGLang are supported through pass-through. These arguments must be prefixed with `--sglang-`. For example, `--mem-fraction-static` should be passed as `--sglang-mem-fraction-static`.
 3.  **slime-specific arguments**: Please refer to: [slime/utils/arguments.py](slime/utils/arguments.py)
 
 For complete usage instructions, please refer to the [Usage Documentation](docs/en/get_started/usage.md).

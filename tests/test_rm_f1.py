@@ -23,6 +23,9 @@ import pytest
 from slime.rollout.rm_hub.f1 import f1_score, normalize_answer
 
 
+NUM_GPUS = 0
+
+
 @pytest.mark.unit
 @pytest.mark.parametrize(
     "raw,expected",

@@ -12,6 +12,9 @@ from slime.backends.megatron_utils.hf_checkpoint_saver import (
 )
 
 
+NUM_GPUS = 0
+
+
 def test_copy_hf_assets_keeps_quantized_config_and_skips_weights(tmp_path: Path):
     src = tmp_path / "src"
     dst = tmp_path / "dst"

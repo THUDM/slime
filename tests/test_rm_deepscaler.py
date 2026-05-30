@@ -15,6 +15,9 @@ import pytest
 from slime.rollout.rm_hub.deepscaler import get_deepscaler_rule_based_reward
 
 
+NUM_GPUS = 0
+
+
 @pytest.mark.unit
 def test_response_split_on_think_marker_grades_tail():
     """The default chat format puts the answer after ``</think>``. Only
