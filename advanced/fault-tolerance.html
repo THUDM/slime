@@ -175,7 +175,7 @@
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">On-Policy Distillation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">Speculative Decoding</a></li>
-<li class="toctree-l1"><a class="reference internal" href="low-precision.html">Low Precision Training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="low-precision.html">Low Precision Training and Rollout</a></li>
 <li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Fault Tolerance</a></li>
 <li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD Disaggregation</a></li>
@@ -434,7 +434,12 @@
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-fault-tolerance">Rollout Fault Tolerance</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-scope">Current Scope</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-health-checks">Rollout Health Checks</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-and-replay-path">Debug and Replay Path</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recommended-production-pattern">Recommended Production Pattern</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-to-watch">What to Watch</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#related-docs">Related Docs</a></li>
 </ul>
             </nav>
         </div>
@@ -448,15 +453,79 @@
                   
   <section class="tex2jax_ignore mathjax_ignore" id="fault-tolerance">
 <h1>Fault Tolerance<a class="headerlink" href="#fault-tolerance" title="Link to this heading">#</a></h1>
-<p>To ensure long-term, stable RL training, slime enables a certain level of fault tolerance by default. This section introduces the design philosophy behind fault tolerance in slime.</p>
-<p>To enable the fault tolerance function in slime, please set <code class="docutils literal notranslate"><span class="pre">--use-fault-tolerance</span></code>.</p>
-<section id="rollout-fault-tolerance">
-<h2>Rollout Fault Tolerance<a class="headerlink" href="#rollout-fault-tolerance" title="Link to this heading">#</a></h2>
-<p>During the rollout process, slime periodically sends heartbeat requests (<code class="docutils literal notranslate"><span class="pre">/health_generate</span></code>) to all SGLang servers. If a heartbeat times out, that SGLang server will be stopped. After the current rollout round is complete, the server will be restarted and its parameters will be correctly updated.</p>
+<p>Long-running RL jobs fail in different ways from short supervised runs. Rollout engines can hang, long-tail samples can keep a round open, and serving state must be refreshed after weight updates. slime’s fault-tolerance support focuses on making the rollout side observable, restartable, and debuggable without changing the training / rollout / Data Buffer loop.</p>
+<p>Enable fault tolerance with:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--use-fault-tolerance
+</pre></div>
+</div>
+<section id="current-scope">
+<h2>Current Scope<a class="headerlink" href="#current-scope" title="Link to this heading">#</a></h2>
+<p>slime currently provides rollout-engine fault tolerance:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-first-wait</span></code>: Since some large MoE models require compilation on their first run, slime will wait for <code class="docutils literal notranslate"><span class="pre">rollout_health_check_first_wait</span></code> seconds before the first rollout to start sending heartbeats. Defaults to 300s.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-interval</span></code>: The interval between heartbeat checks. Defaults to 10s.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-timeout</span></code>: The timeout limit for a heartbeat request. Defaults to 5s.</p></li>
+<li><p>health checks for SGLang rollout servers;</p></li>
+<li><p>timeout-based rollout server restart;</p></li>
+<li><p>correct parameter update after restart;</p></li>
+<li><p>debug rollout dumps for replaying training-side issues without rerunning rollout;</p></li>
+<li><p>trace/profiling hooks for inspecting long-tail rollout behavior.</p></li>
+</ul>
+<p>Cluster-level preemption, trainer-rank failure, and full-job resume should still be handled through your cluster scheduler, Ray restart policy, and slime checkpointing. In practice, production jobs combine rollout fault tolerance with frequent checkpoints and debug dumps.</p>
+</section>
+<section id="rollout-health-checks">
+<h2>Rollout Health Checks<a class="headerlink" href="#rollout-health-checks" title="Link to this heading">#</a></h2>
+<p>During rollout, slime periodically sends heartbeat requests (<code class="docutils literal notranslate"><span class="pre">/health_generate</span></code>) to all SGLang servers. If a heartbeat times out, the unhealthy SGLang server is stopped. After the current rollout round completes, slime restarts the server and updates it with the correct parameters before it serves future rollout requests.</p>
+<p>The main arguments are:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-first-wait</span></code>: wait before starting heartbeat checks for the first rollout. Large MoE models may compile kernels on first run. Default: <code class="docutils literal notranslate"><span class="pre">300</span></code> seconds.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-interval</span></code>: interval between heartbeat checks. Default: <code class="docutils literal notranslate"><span class="pre">10</span></code> seconds.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-timeout</span></code>: timeout for one heartbeat request. Default: <code class="docutils literal notranslate"><span class="pre">5</span></code> seconds.</p></li>
+</ul>
+<p>Example:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--use-fault-tolerance<span class="w"> </span><span class="se">\</span>
+--rollout-health-check-first-wait<span class="w"> </span><span class="m">600</span><span class="w"> </span><span class="se">\</span>
+--rollout-health-check-interval<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+--rollout-health-check-timeout<span class="w"> </span><span class="m">5</span>
+</pre></div>
+</div>
+</section>
+<section id="debug-and-replay-path">
+<h2>Debug and Replay Path<a class="headerlink" href="#debug-and-replay-path" title="Link to this heading">#</a></h2>
+<p>Fault tolerance is more useful when failures are reproducible. slime provides separate rollout-only and train-only debugging paths:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--debug-rollout-only</span></code>: run rollout and save generated data without training;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--save-debug-rollout-data</span> <span class="pre">/path/to/rollout_{rollout_id}.pt</span></code>: save rollout samples for later inspection or replay;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--load-debug-rollout-data</span> <span class="pre">/path/to/rollout_{rollout_id}.pt</span></code>: replay saved rollout data and skip SGLang initialization;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--debug-train-only</span></code>: run training-side logic without rollout.</p></li>
+</ul>
+<p>This lets you isolate whether a failure belongs to serving/rollout, data conversion, reward/verifier logic, or Megatron training.</p>
+</section>
+<section id="recommended-production-pattern">
+<h2>Recommended Production Pattern<a class="headerlink" href="#recommended-production-pattern" title="Link to this heading">#</a></h2>
+<p>For long-running jobs:</p>
+<ol class="arabic simple">
+<li><p>Enable <code class="docutils literal notranslate"><span class="pre">--use-fault-tolerance</span></code>.</p></li>
+<li><p>Save checkpoints regularly with <code class="docutils literal notranslate"><span class="pre">--save-interval</span></code>.</p></li>
+<li><p>Save rollout debug dumps for new agentic or verifier-heavy workloads.</p></li>
+<li><p>Use <a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc">Trace Viewer</span></a> to inspect long-tail samples and reward/model-call spans.</p></li>
+<li><p>Use <a class="reference internal" href="../developer_guide/profiling.html"><span class="std std-doc">Profiling</span></a> to separate rollout bottlenecks from training bottlenecks.</p></li>
+<li><p>Keep SGLang deployment explicit with <a class="reference internal" href="sglang-config.html"><span class="std std-doc">SGLang Config</span></a> for complex multi-model or PD topologies.</p></li>
+</ol>
+</section>
+<section id="what-to-watch">
+<h2>What to Watch<a class="headerlink" href="#what-to-watch" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p>If startup health checks fail on large MoE models, increase <code class="docutils literal notranslate"><span class="pre">--rollout-health-check-first-wait</span></code>.</p></li>
+<li><p>If transient load spikes cause false positives, increase <code class="docutils literal notranslate"><span class="pre">--rollout-health-check-timeout</span></code>.</p></li>
+<li><p>If a server repeatedly restarts after weight sync, inspect the SGLang logs and the latest rollout debug dump.</p></li>
+<li><p>If the trainer fails rather than rollout, resume from checkpoint and use debug replay to isolate whether the saved rollout batch is valid.</p></li>
+</ul>
+</section>
+<section id="related-docs">
+<h2>Related Docs<a class="headerlink" href="#related-docs" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="../developer_guide/debug.html"><span class="std std-doc">Debugging</span></a></p></li>
+<li><p><a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc">Trace Viewer</span></a></p></li>
+<li><p><a class="reference internal" href="../developer_guide/profiling.html"><span class="std std-doc">Profiling</span></a></p></li>
+<li><p><a class="reference internal" href="../developer_guide/ci.html"><span class="std std-doc">CI</span></a></p></li>
 </ul>
 </section>
 </section>
@@ -508,7 +577,12 @@
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-fault-tolerance">Rollout Fault Tolerance</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-scope">Current Scope</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-health-checks">Rollout Health Checks</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-and-replay-path">Debug and Replay Path</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recommended-production-pattern">Recommended Production Pattern</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-to-watch">What to Watch</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#related-docs">Related Docs</a></li>
 </ul>
   </nav></div>
 

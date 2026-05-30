@@ -175,7 +175,7 @@
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">投机采样</a></li>
-<li class="toctree-l1"><a class="reference internal" href="low-precision.html">低精度训练</a></li>
+<li class="toctree-l1"><a class="reference internal" href="low-precision.html">低精度训练与 Rollout</a></li>
 <li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">容灾</a></li>
 <li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD 分离</a></li>
@@ -430,7 +430,12 @@
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout">rollout 容灾</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">当前覆盖范围</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-health-checks">Rollout Health Checks</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-replay">Debug 与 Replay 路径</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">推荐生产模式</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">需要关注的信号</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">相关文档</a></li>
 </ul>
             </nav>
         </div>
@@ -444,15 +449,79 @@
                   
   <section class="tex2jax_ignore mathjax_ignore" id="id1">
 <h1>容灾<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h1>
-<p>为了保证长期稳定的 RL 训练，slime 会默认开始一定程度的容灾机制。这里主要介绍一下 slime 中容灾的一些设计思路。</p>
-<p>可以通过 <code class="docutils literal notranslate"><span class="pre">--use-fault-tolerance</span></code> 开启容灾机制。</p>
-<section id="rollout">
-<h2>rollout 容灾<a class="headerlink" href="#rollout" title="链接到此标题。">#</a></h2>
-<p>slime 会在 rollout 过程中，定期向所有 SGLang server 发送心跳请求（<code class="docutils literal notranslate"><span class="pre">/health_generate</span></code>），如果心跳超时，则会停止这个 SGLang server。并在这轮 rollout 完成之后进行重启和正确的参数更新。</p>
+<p>长时间 RL 任务的失败模式和短 SFT 任务很不一样：rollout engine 可能 hang，long-tail sample 可能拖住整个 round，serving state 也必须在权重更新后保持一致。slime 的容灾能力主要聚焦在 rollout 侧：让 rollout engine 可观测、可重启、可调试，同时不改变 training / rollout / Data Buffer 主路径。</p>
+<p>开启容灾：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--use-fault-tolerance
+</pre></div>
+</div>
+<section id="id2">
+<h2>当前覆盖范围<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
+<p>slime 当前提供 rollout-engine fault tolerance：</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-first-wait</span></code>：由于一些大的 MoE 模型在第一次运行时需要处理一些编译，我们会在第一次 rollout 前等待 <code class="docutils literal notranslate"><span class="pre">rollout_health_check_first_wait</span></code> 秒再开始发送心跳，默认为 300s；</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-interval</span></code>：心跳检查间隔，默认为 10s；</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-timeout</span></code>：心跳超时限额，默认为 5s。</p></li>
+<li><p>对 SGLang rollout server 做 health check；</p></li>
+<li><p>heartbeat timeout 后重启 rollout server；</p></li>
+<li><p>重启后正确更新参数；</p></li>
+<li><p>保存 debug rollout dump，用于不重新跑 rollout 的情况下 replay 训练侧问题；</p></li>
+<li><p>trace/profiling hook，用于检查 long-tail rollout 行为。</p></li>
+</ul>
+<p>集群级抢占、trainer rank failure 和 full-job resume 仍应由集群调度器、Ray restart policy 和 slime checkpointing 共同处理。实际生产任务中，建议把 rollout fault tolerance、定期 checkpoint 和 debug dump 组合使用。</p>
+</section>
+<section id="rollout-health-checks">
+<h2>Rollout Health Checks<a class="headerlink" href="#rollout-health-checks" title="链接到此标题。">#</a></h2>
+<p>rollout 过程中，slime 会定期向所有 SGLang server 发送 heartbeat 请求（<code class="docutils literal notranslate"><span class="pre">/health_generate</span></code>）。如果 heartbeat timeout，异常 SGLang server 会被停止。当前 rollout round 完成后，slime 会重启 server，并在其继续服务后续 rollout 请求前更新到正确参数。</p>
+<p>主要参数：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-first-wait</span></code>：第一次 rollout 前等待多久再开始 heartbeat。大 MoE 模型首次运行可能需要 kernel compilation。默认 <code class="docutils literal notranslate"><span class="pre">300</span></code> 秒。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-interval</span></code>：heartbeat 间隔。默认 <code class="docutils literal notranslate"><span class="pre">10</span></code> 秒。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-timeout</span></code>：单次 heartbeat timeout。默认 <code class="docutils literal notranslate"><span class="pre">5</span></code> 秒。</p></li>
+</ul>
+<p>示例：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--use-fault-tolerance<span class="w"> </span><span class="se">\</span>
+--rollout-health-check-first-wait<span class="w"> </span><span class="m">600</span><span class="w"> </span><span class="se">\</span>
+--rollout-health-check-interval<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+--rollout-health-check-timeout<span class="w"> </span><span class="m">5</span>
+</pre></div>
+</div>
+</section>
+<section id="debug-replay">
+<h2>Debug 与 Replay 路径<a class="headerlink" href="#debug-replay" title="链接到此标题。">#</a></h2>
+<p>容灾只有在问题可复现时才真正有用。slime 提供 rollout-only 和 train-only 分离调试路径：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--debug-rollout-only</span></code>：只跑 rollout 并保存生成数据，不训练；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--save-debug-rollout-data</span> <span class="pre">/path/to/rollout_{rollout_id}.pt</span></code>：保存 rollout samples，后续可以检查或 replay；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--load-debug-rollout-data</span> <span class="pre">/path/to/rollout_{rollout_id}.pt</span></code>：加载已保存 rollout data，并跳过 SGLang 初始化；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--debug-train-only</span></code>：只跑训练侧逻辑，不跑 rollout。</p></li>
+</ul>
+<p>这可以帮助定位问题属于 serving/rollout、data conversion、reward/verifier 逻辑，还是 Megatron training。</p>
+</section>
+<section id="id3">
+<h2>推荐生产模式<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
+<p>对于长时间任务：</p>
+<ol class="arabic simple">
+<li><p>开启 <code class="docutils literal notranslate"><span class="pre">--use-fault-tolerance</span></code>。</p></li>
+<li><p>通过 <code class="docutils literal notranslate"><span class="pre">--save-interval</span></code> 定期保存 checkpoint。</p></li>
+<li><p>对新的 agentic 或 verifier-heavy workload 保存 rollout debug dump。</p></li>
+<li><p>使用 <a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc">Trace Viewer</span></a> 检查 long-tail samples 和 reward/model-call spans。</p></li>
+<li><p>使用 <a class="reference internal" href="../developer_guide/profiling.html"><span class="std std-doc">Profiling</span></a> 区分 rollout bottleneck 和 training bottleneck。</p></li>
+<li><p>对复杂 multi-model 或 PD topology，使用 <a class="reference internal" href="sglang-config.html"><span class="std std-doc">SGLang Config</span></a> 显式管理 SGLang 部署。</p></li>
+</ol>
+</section>
+<section id="id4">
+<h2>需要关注的信号<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
+<ul class="simple">
+<li><p>如果大 MoE 模型启动阶段 health check 失败，增大 <code class="docutils literal notranslate"><span class="pre">--rollout-health-check-first-wait</span></code>。</p></li>
+<li><p>如果短暂负载高峰导致误判，增大 <code class="docutils literal notranslate"><span class="pre">--rollout-health-check-timeout</span></code>。</p></li>
+<li><p>如果某个 server 在 weight sync 后反复重启，检查 SGLang log 和最近的 rollout debug dump。</p></li>
+<li><p>如果失败发生在 trainer 而非 rollout，从 checkpoint 恢复，并用 debug replay 确认保存的 rollout batch 是否有效。</p></li>
+</ul>
+</section>
+<section id="id5">
+<h2>相关文档<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="../developer_guide/debug.html"><span class="std std-doc">Debugging</span></a></p></li>
+<li><p><a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc">Trace Viewer</span></a></p></li>
+<li><p><a class="reference internal" href="../developer_guide/profiling.html"><span class="std std-doc">Profiling</span></a></p></li>
+<li><p><a class="reference internal" href="../developer_guide/ci.html"><span class="std std-doc">CI</span></a></p></li>
 </ul>
 </section>
 </section>
@@ -504,7 +573,12 @@
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout">rollout 容灾</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">当前覆盖范围</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-health-checks">Rollout Health Checks</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-replay">Debug 与 Replay 路径</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">推荐生产模式</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">需要关注的信号</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">相关文档</a></li>
 </ul>
   </nav></div>
 

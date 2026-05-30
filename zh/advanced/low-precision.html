@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>低精度训练 &#8212; slime</title>
+    <title>低精度训练与 Rollout &#8212; slime</title>
   
   
   
@@ -175,7 +175,7 @@
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">投机采样</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">低精度训练</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">低精度训练与 Rollout</a></li>
 <li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fault-tolerance.html">容灾</a></li>
 <li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD 分离</a></li>
@@ -420,7 +420,7 @@
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>低精度训练</h1>
+    <h1>低精度训练与 Rollout</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -430,11 +430,13 @@
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fp8-bf16">FP8 推理与 BF16 训练</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fp8-fp8">FP8 推理与 FP8 训练</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">快速开始</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">原理简述</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#todo">待办事项 (TODO)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#feature-maturity">Feature Maturity</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#bf16-fp8-rollout">BF16 训练 + FP8 Rollout</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-fp8-kv-cache">Rollout 使用 FP8 KV Cache</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fp8-fp8-rollout">FP8 训练 + FP8 Rollout</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">快速开始</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">实现说明</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">已知限制</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#int4-qat">INT4 QAT 训练</a><ul class="visible nav section-nav flex-column">
@@ -452,125 +454,160 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section class="tex2jax_ignore mathjax_ignore" id="id1">
-<h1>低精度训练<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h1>
-<ul class="simple">
-<li><p>FP8 推理与 BF16 训练</p></li>
-<li><p>FP8 推理与 FP8 训练</p></li>
-<li><p>INT4 QAT 训练</p></li>
-</ul>
-<section id="fp8-bf16">
-<h2>FP8 推理与 BF16 训练<a class="headerlink" href="#fp8-bf16" title="链接到此标题。">#</a></h2>
-<p>你可以通过在 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 中设置块缩放（blockwise）量化的 HuggingFace 权重来运行 FP8 推演。转换命令如下：</p>
+  <section class="tex2jax_ignore mathjax_ignore" id="rollout">
+<h1>低精度训练与 Rollout<a class="headerlink" href="#rollout" title="链接到此标题。">#</a></h1>
+<p>slime 中的低精度能力主要用于让 rollout 更快、更省显存，同时保持训练侧数值稳定。对于大规模 MoE RL，推荐的生产路径是：</p>
+<blockquote>
+<div><p><strong>Megatron BF16 训练 + SGLang FP8 rollout/inference</strong></p>
+</div></blockquote>
+<p>Megatron 侧保持 BF16/torch_dist 的可训练 checkpoint；SGLang 侧使用 FP8 Hugging Face checkpoint 做 rollout。权重更新时，slime 会根据 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 中的量化配置，把更新后的 BF16 权重量化后再发送给 SGLang。</p>
+<section id="feature-maturity">
+<h2>Feature Maturity<a class="headerlink" href="#feature-maturity" title="链接到此标题。">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>功能</p></th>
+<th class="head"><p>状态</p></th>
+<th class="head"><p>推荐用法</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>BF16 training + FP8 rollout/inference</p></td>
+<td><p>Stable</p></td>
+<td><p>大规模 MoE RL 的默认推荐路径。训练保持稳定，rollout 降低显存和带宽开销。</p></td>
+</tr>
+<tr class="row-odd"><td><p>SGLang rollout FP8 KV cache</p></td>
+<td><p>Stable，取决于当前 SGLang 版本和 GPU stack 支持</p></td>
+<td><p>通过 <code class="docutils literal notranslate"><span class="pre">--sglang-kv-cache-dtype</span> <span class="pre">fp8_e4m3</span></code> 提升 long-context 或 agentic rollout 的 KV cache 容量。</p></td>
+</tr>
+<tr class="row-even"><td><p>INT4 rollout / INT4 QAT</p></td>
+<td><p>Beta</p></td>
+<td><p>当 rollout 显存或吞吐压力很高，并且目标模型路径已经验证时使用。</p></td>
+</tr>
+<tr class="row-odd"><td><p>FP8 training + FP8 rollout</p></td>
+<td><p>Experimental</p></td>
+<td><p>适合研究训推不一致和吞吐优化，但仍有 optimizer/checkpoint 相关限制。</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="bf16-fp8-rollout">
+<h2>BF16 训练 + FP8 Rollout<a class="headerlink" href="#bf16-fp8-rollout" title="链接到此标题。">#</a></h2>
+<p>这是 slime 当前最主要的生产路径。</p>
+<p>你可以通过将 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 指向 blockwise quantized Hugging Face checkpoint 来开启 FP8 rollout。可以用如下命令从 BF16 checkpoint 转换：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/convert_hf_to_fp8.py<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--model-dir<span class="w"> </span><span class="nv">$BF16_MODEL</span><span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--save-dir<span class="w"> </span><span class="nv">$FP8_model</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--save-dir<span class="w"> </span><span class="nv">$FP8_MODEL</span><span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--strategy<span class="w"> </span>block<span class="w"> </span>--block-size<span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--max-workers<span class="w"> </span><span class="m">4</span>
 </pre></div>
 </div>
-<p>请确保转换后的权重目录中的 <code class="docutils literal notranslate"><span class="pre">config.json</span></code> 包含正确的 <code class="docutils literal notranslate"><span class="pre">quantization_config</span></code>，以便 slime 在权重更新期间自动使用 FP8 量化。</p>
+<p>请确保转换后的 checkpoint 中 <code class="docutils literal notranslate"><span class="pre">config.json</span></code> 包含正确的 <code class="docutils literal notranslate"><span class="pre">quantization_config</span></code>。slime 会在权重更新时使用这个配置，因此训练侧可以保持 BF16，而 rollout 侧收到 FP8 权重。</p>
+<p>示例：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Megatron 训练 checkpoint 仍然是 BF16 / torch_dist。</span>
+--ref-load<span class="w"> </span>/path/to/model_torch_dist
+
+<span class="c1"># SGLang rollout checkpoint 使用 FP8 Hugging Face。</span>
+--hf-checkpoint<span class="w"> </span>/path/to/model-fp8-hf
+</pre></div>
+</div>
 </section>
-<section id="fp8-fp8">
-<h2>FP8 推理与 FP8 训练<a class="headerlink" href="#fp8-fp8" title="链接到此标题。">#</a></h2>
-<p>我们观察到，在训练和推理阶段同时使用 FP8，可以获得更高效的推理吞吐量，并降低训推不一致，从而使训练更稳定。更多细节请参考 <a class="reference external" href="https://lmsys.org/blog/2025-11-25-fp8-rl/">此博客</a>。</p>
-<section id="id2">
-<h3>快速开始<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h3>
+<section id="rollout-fp8-kv-cache">
+<h2>Rollout 使用 FP8 KV Cache<a class="headerlink" href="#rollout-fp8-kv-cache" title="链接到此标题。">#</a></h2>
+<p>对于 long-context、multi-turn 或 agentic workload，KV cache 容量经常是瓶颈。由于 slime 通过 <code class="docutils literal notranslate"><span class="pre">--sglang-</span></code> 前缀透传 SGLang 参数，可以直接开启 FP8 KV cache：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-kv-cache-dtype<span class="w"> </span>fp8_e4m3
+</pre></div>
+</div>
+<p>这是 rollout 侧配置，不会改变 Megatron 的训练精度。它可以提升 SGLang 的有效 KV cache 容量，从而支持更长 context 或更高并发；实际精度和性能表现取决于当前 SGLang 版本与 GPU stack。</p>
+</section>
+<section id="fp8-fp8-rollout">
+<h2>FP8 训练 + FP8 Rollout<a class="headerlink" href="#fp8-fp8-rollout" title="链接到此标题。">#</a></h2>
+<p>slime 也支持 experimental 的 FP8 training 路径。我们观察到，在一些设置下同时使用 FP8 training 和 FP8 inference，可以提升推理吞吐并降低训推不一致。更多细节请参考 <a class="reference external" href="https://lmsys.org/blog/2025-11-25-fp8-rl/">这篇博客</a>。</p>
+<section id="id1">
+<h3>快速开始<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h3>
 <ol class="arabic simple">
-<li><p>使用上述 <code class="docutils literal notranslate"><span class="pre">tools/convert_hf_to_fp8.py</span></code> 将 HuggingFace 模型权重转换为 FP8 格式。</p></li>
-<li><p>对于训练任务，需要添加以下参数：</p></li>
+<li><p>使用 <code class="docutils literal notranslate"><span class="pre">tools/convert_hf_to_fp8.py</span></code> 将 Hugging Face 模型权重转换为 FP8 格式。</p></li>
+<li><p>添加 FP8 训练参数：</p></li>
 </ol>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--fp8-format<span class="w"> </span>e4m3
 --fp8-recipe<span class="w"> </span>blockwise
-<span class="c1"># --fp8-param-gather # [可选] 目前与 CPU Adam 优化器不兼容</span>
+<span class="c1"># --fp8-param-gather # 可选；目前与 CPU Adam 不兼容</span>
 </pre></div>
 </div>
-<p>同时，确保启用了环境变量 <code class="docutils literal notranslate"><span class="pre">NVTE_FP8_BLOCK_SCALING_FP32_SCALES</span></code>，目前我们会默认将这个参数设置为 <code class="docutils literal notranslate"><span class="pre">1</span></code>。</p>
-<p>注意：目前只有 TransformerEngine 中的 <code class="docutils literal notranslate"><span class="pre">Linear</span></code> 和 <code class="docutils literal notranslate"><span class="pre">GroupLinear</span></code> 层使用 FP8 格式。<code class="docutils literal notranslate"><span class="pre">embedding</span></code> 和 <code class="docutils literal notranslate"><span class="pre">lm_head</span></code> 仍保持原始精度。如果未开启 <code class="docutils literal notranslate"><span class="pre">--fp8-param-gather</span></code>，TransformerEngine 中的权重将以 BF16 格式存储，仅在 <code class="docutils literal notranslate"><span class="pre">GEMM</span></code> 或 <code class="docutils literal notranslate"><span class="pre">GroupGEMM</span></code> 运算期间临时转换为 FP8。</p>
 <ol class="arabic simple" start="3">
-<li><p>启动训练：</p></li>
+<li><p>确保设置 <code class="docutils literal notranslate"><span class="pre">NVTE_FP8_BLOCK_SCALING_FP32_SCALES=1</span></code>。slime 默认会为 Ray actors 设置为 <code class="docutils literal notranslate"><span class="pre">1</span></code>。</p></li>
+<li><p>启动 FP8 training example：</p></li>
 </ol>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Qwen3-4B Int4 training</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Qwen3-4B FP8 training</span>
 bash<span class="w"> </span>scripts/low_precision/run-qwen3-4b-fp8.sh
 
-<span class="c1"># Qwen3-30B-A3B (2 nodes)</span>
+<span class="c1"># Qwen3-30B-A3B FP8 training (2 nodes)</span>
 bash<span class="w"> </span>scripts/low_precision/run-qwen3-30b-a3b-fp8.sh
 </pre></div>
 </div>
-<ol class="arabic simple" start="4">
-<li><p>使用保存的 ckpt：TransformerEngine 不会专门保存 FP8 量化后的权重；保存的 <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> ckpt 仍为原始精度（通常是 BF16）。如果你想在 FP8 下进行评估，需要先将 <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> 转换为 HuggingFace 格式，然后再转换为 FP8 HuggingFace 格式。</p></li>
+</section>
+<section id="id2">
+<h3>实现说明<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h3>
+<ol class="arabic simple">
+<li><p>如果启用 FP8 recipe，TransformerEngine layers 会在 FP8 context 中构建。</p></li>
+<li><p>训练时，权重和 activation 会在线量化为 NVFP8 格式，并在 forward/backward GEMM 中使用 cuBLAS FP8 GEMM。</p></li>
+<li><p>RL 权重更新时，Megatron 会先把 FP8 权重反量化为 BF16，然后 slime 再把 BF16 权重量化为 FP8 并发送给 SGLang。</p></li>
+<li><p>从 training engine 保存 checkpoint 时，会反量化回 BF16 并保存为 <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code>。</p></li>
 </ol>
+<p>目前只有 TransformerEngine 中的 <code class="docutils literal notranslate"><span class="pre">Linear</span></code> 和 <code class="docutils literal notranslate"><span class="pre">GroupLinear</span></code> 层使用 FP8。<code class="docutils literal notranslate"><span class="pre">embedding</span></code> 和 <code class="docutils literal notranslate"><span class="pre">lm_head</span></code> 保持原始精度。如果未开启 <code class="docutils literal notranslate"><span class="pre">--fp8-param-gather</span></code>，TransformerEngine 中的权重以 BF16 存储，仅在 <code class="docutils literal notranslate"><span class="pre">GEMM</span></code> 或 <code class="docutils literal notranslate"><span class="pre">GroupGEMM</span></code> 时转换为 FP8。</p>
 </section>
 <section id="id3">
-<h3>原理简述<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h3>
-<p>以下是 slime 中 FP8 训练目前的实现方式：</p>
-<ol class="arabic simple">
-<li><p><strong>初始化</strong>：如果启用了 FP8 方案，相关层将在 FP8 上下文中构建。</p></li>
-<li><p><strong>训练过程</strong>：在训练期间，权重和激活值会在线量化为 <code class="docutils literal notranslate"><span class="pre">nvfp8</span></code> 格式，并在前向和反向传播中调用 <code class="docutils literal notranslate"><span class="pre">cuBLAS</span> <span class="pre">FP8</span> <span class="pre">GEMM</span></code> 进行计算。</p></li>
-<li><p><strong>权重更新</strong>：在强化学习（RL）权重更新期间，Megatron 首先将 FP8 权重反量化为 BF16 格式，然后 slime 再将这些 BF16 权重重新量化为 FP8 并发送给 sglang。（这种“反量化+再量化”的操作虽然不够优雅，但为了框架兼容性，目前尚未修改接口。）</p></li>
-<li><p><strong>保存 ckpt</strong>：与权重更新类似，从训练引擎保存 ckpt 时，也会反量化回 BF16 并以 <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> 格式保存。</p></li>
-</ol>
-</section>
-<section id="todo">
-<h3>待办事项 (TODO)<a class="headerlink" href="#todo" title="链接到此标题。">#</a></h3>
-<p>目前 FP8 功能尚不完全成熟，仍存在以下已知问题：</p>
-<ul class="simple">
-<li><p>FP8 权重存储（<code class="docutils literal notranslate"><span class="pre">--fp8-param-gather</span></code>）虽然能节省显存，但目前必须配合 TransformerEngine 的 <code class="docutils literal notranslate"><span class="pre">FusedAdam</span></code> 使用，这与 Megatron-LM 中的 CPU Adam 技术冲突。</p></li>
-</ul>
+<h3>已知限制<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">--fp8-param-gather</span></code> 可以节省显存，但目前需要 TransformerEngine <code class="docutils literal notranslate"><span class="pre">FusedAdam</span></code>，这与大规模 Megatron-LM RL 中常用的 CPU Adam offload 路径冲突。</p>
 </section>
 </section>
 <section id="int4-qat">
 <h2>INT4 QAT 训练<a class="headerlink" href="#int4-qat" title="链接到此标题。">#</a></h2>
-<p>本指南提供了 INT4 STE（直通估计器，Straight-Through Estimator）训练和 INT4 推理的示例。使用 INT4 推理可显著提升吞吐量，从而加速整个训练流水线（特别是在 rollout 生成阶段）。</p>
+<p>INT4 STE（Straight-Through Estimator）训练和 INT4 inference 可以进一步降低 rollout 显存并提升吞吐。在目标模型和 reward setup 验证前，请把这条路径视作 beta。</p>
 <section id="id4">
 <h3>快速开始<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h3>
 <ol class="arabic simple">
-<li><p><strong>将 HuggingFace 权重转换为 INT4</strong>
-首先，从 HuggingFace 下载 PTQ（训练后量化）校准数据集：
-<a class="reference external" href="https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1">wikitext-2-raw-v1</a>
-接着，使用 <code class="docutils literal notranslate"><span class="pre">tools/convert_hf_to_int4.py</span></code> 脚本进行转换。确保 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 指向的目录中 <code class="docutils literal notranslate"><span class="pre">config.json</span></code> 包含正确的 <code class="docutils literal notranslate"><span class="pre">quantization_config</span></code>。</p></li>
+<li><p>将 Hugging Face 权重转换为 INT4：</p></li>
 </ol>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/convert_hf_to_int4.py<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--input-dir<span class="w"> </span>/path/to/your/original/models<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--output-dir<span class="w"> </span>/path/to/your/save/models<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--data-dir<span class="w"> </span>/path/to/your/wikitext
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/convert_hf_to_int4_direct.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--model-dir<span class="w"> </span>/path/to/your/original/models<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--save-dir<span class="w"> </span>/path/to/your/save/models
 </pre></div>
 </div>
-<p><strong>提示</strong>：如果你只想运行 INT4 推演（Rollout），只需将 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 设置为转换后的 INT4 路径即可。
-2. <strong>启动 INT4 QAT 训练</strong>
-你需要配置特定的环境变量来设定量化参数。
-<strong>环境变量说明：</strong></p>
-<ul class="simple">
-<li><p><strong><code class="docutils literal notranslate"><span class="pre">OPEN_TRAINING_INT4_FAKE_QAT_FLAG</span></code></strong>: 启用 INT4 训练的伪量化（Fake Quantization）操作。</p></li>
-<li><p><strong><code class="docutils literal notranslate"><span class="pre">OPEN_TRAINING_INT4_GROUP_SIZE</span></code></strong>: 指定模型量化的块大小（Group Size）。</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">moonlight-16B-A3B</span></code>、<code class="docutils literal notranslate"><span class="pre">qwen3-30B-A3B</span></code> 和 <code class="docutils literal notranslate"><span class="pre">qwen3-235B-A22B-int4</span></code> 设置为 <strong>128</strong>。</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">kimi-k2-Thinking-int4</span></code> 设置为 <strong>32</strong>。</p></li>
-</ul>
-<p><strong>配置示例：</strong></p>
+<p>如果只需要 INT4 rollout，把 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 指向转换后的 INT4 checkpoint 即可。</p>
+<ol class="arabic simple" start="2">
+<li><p>开启 INT4 fake QAT：</p></li>
+</ol>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="err">RUNTIME_ENV_JSON=</span><span class="s2">&quot;{</span>
 <span class="s2">  \&quot;env_vars\&quot;: {</span>
-<span class="s2">    ...</span>
 <span class="s2">    \&quot;OPEN_TRAINING_INT4_FAKE_QAT_FLAG\&quot;: \&quot;1\&quot;,</span>
 <span class="s2">    \&quot;OPEN_TRAINING_INT4_GROUP_SIZE\&quot;: \&quot;128\&quot;</span>
 <span class="s2">  }</span>
 <span class="s2">}&quot;</span>
 </pre></div>
 </div>
-<p><strong>启动命令：</strong></p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Moonlight-16B-A3B Int4 training</span>
+<p><code class="docutils literal notranslate"><span class="pre">OPEN_TRAINING_INT4_GROUP_SIZE</span></code> 通常设置为：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">128</span></code>：<code class="docutils literal notranslate"><span class="pre">moonlight-16B-A3B</span></code>、<code class="docutils literal notranslate"><span class="pre">qwen3-30B-A3B</span></code>、<code class="docutils literal notranslate"><span class="pre">qwen3-235B-A22B-int4</span></code>；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">32</span></code>：<code class="docutils literal notranslate"><span class="pre">kimi-k2-Thinking-int4</span></code>。</p></li>
+</ul>
+<ol class="arabic simple" start="3">
+<li><p>启动 example：</p></li>
+</ol>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Moonlight-16B-A3B INT4 training</span>
 bash<span class="w"> </span>scripts/low_precision/run-moonlight-16B-A3B-int4.sh
 
-<span class="c1"># Qwen3‑30B‑A3B Int4 training</span>
-bash<span class="w"> </span>scripts/low_precision/run-qwen3‑30B‑A3B-int4.sh
+<span class="c1"># Qwen3-30B-A3B INT4 training</span>
+bash<span class="w"> </span>scripts/low_precision/run-qwen3-30B-A3B-int4.sh
 
-<span class="c1"># Qwen3-235B-A22B Int4 training (8 nodes)</span>
+<span class="c1"># Qwen3-235B-A22B INT4 training (8 nodes)</span>
 bash<span class="w"> </span>scripts/low_precision/run-qwen3-235B-A22B-int4.sh
 
-<span class="c1"># Kimi-k2-Thinking Int4 training (32 nodes)</span>
+<span class="c1"># Kimi-k2-Thinking INT4 training (32 nodes)</span>
 bash<span class="w"> </span>scripts/low_precision/run-kimi-k2-Thinking-int4.sh
 </pre></div>
 </div>
-<p><em>对于多节点环境，请根据您的集群配置启动 Ray 服务。</em></p>
+<p>多机环境请根据集群配置启动 Ray 服务。</p>
 </section>
 </section>
 </section>
@@ -622,11 +659,13 @@ bash<span class="w"> </span>scripts/low_precision/run-kimi-k2-Thinking-int4.sh
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fp8-bf16">FP8 推理与 BF16 训练</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fp8-fp8">FP8 推理与 FP8 训练</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">快速开始</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">原理简述</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#todo">待办事项 (TODO)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#feature-maturity">Feature Maturity</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#bf16-fp8-rollout">BF16 训练 + FP8 Rollout</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-fp8-kv-cache">Rollout 使用 FP8 KV Cache</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fp8-fp8-rollout">FP8 训练 + FP8 Rollout</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">快速开始</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">实现说明</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">已知限制</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#int4-qat">INT4 QAT 训练</a><ul class="visible nav section-nav flex-column">

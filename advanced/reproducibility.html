@@ -54,7 +54,7 @@
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Fault Tolerance" href="fault-tolerance.html" />
-    <link rel="prev" title="Low Precision Training" href="low-precision.html" />
+    <link rel="prev" title="Low Precision Training and Rollout" href="low-precision.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
@@ -175,7 +175,7 @@
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">On-Policy Distillation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">Speculative Decoding</a></li>
-<li class="toctree-l1"><a class="reference internal" href="low-precision.html">Low Precision Training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="low-precision.html">Low Precision Training and Rollout</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Reproducibility</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fault-tolerance.html">Fault Tolerance</a></li>
 <li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD Disaggregation</a></li>
@@ -438,8 +438,8 @@
                   
   <section class="tex2jax_ignore mathjax_ignore" id="reproducibility">
 <h1>Reproducibility<a class="headerlink" href="#reproducibility" title="Link to this heading">#</a></h1>
-<p>Reproducibility is a bedrock of scientific progress. 通过结合 SGLang 提供的 <a class="reference external" href="https://lmsys.org/blog/2025-09-22-sglang-deterministic/">确定性推理</a> 和 Megatron-LM 的确定性模式，slime 可以提供完全确定性（bitwise）的实验复现能力。</p>
-<p>为了开启确定性训练，你需要通过 <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">uninstall</span> <span class="pre">flash_attn_3</span> <span class="pre">-y</span></code> 卸载 flash attention 3，并设置：</p>
+<p>Reproducibility is a bedrock of scientific progress. By combining <a class="reference external" href="https://lmsys.org/blog/2025-09-22-sglang-deterministic/">deterministic inference</a> from SGLang with Megatron-LM deterministic mode, slime can provide bitwise experiment reproduction.</p>
+<p>To enable deterministic training, uninstall FlashAttention 3 with <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">uninstall</span> <span class="pre">flash_attn_3</span> <span class="pre">-y</span></code>, then set:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="w">  </span><span class="c1"># sglang config</span>
 <span class="w">  </span>--sglang-enable-deterministic-inference
 <span class="w">  </span>--sglang-attention-backend<span class="w"> </span>flashinfer
@@ -448,7 +448,7 @@
 <span class="w">  </span>--deterministic-mode
 </pre></div>
 </div>
-<p>以及设置如下环境变量：</p>
+<p>Also set the following environment variables:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="w">     </span><span class="s2">&quot;env_vars&quot;</span>:<span class="w"> </span><span class="o">{</span>
 <span class="w">        </span>...,
 <span class="w">        </span><span class="s2">&quot;NCCL_ALGO&quot;</span>:<span class="w"> </span><span class="s2">&quot;Ring&quot;</span>,
@@ -457,8 +457,8 @@
 <span class="w">     </span><span class="o">}</span>
 </pre></div>
 </div>
-<p>我们提供了一个完全确定性的，用 Qwen2.5 0.5B 训练 GSM8K 的脚本。</p>
-<p>可以用如下脚本初始化训练数据和 ckpt：</p>
+<p>We provide a fully deterministic GSM8K training script for Qwen2.5-0.5B.</p>
+<p>Use the following commands to initialize the training data and checkpoint:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># download</span>
 hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/gsm8k<span class="w"> </span>--local-dir<span class="w"> </span>/root/gsm8k
 hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-0.5B-Instruct<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen2.5-0.5B-Instruct
@@ -473,11 +473,11 @@ hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-0.5B-Inst
 <span class="w">   </span>--save<span class="w"> </span>/root/Qwen2.5-0.5B-Instruct_torch_dist/
 </pre></div>
 </div>
-<p>可以使用如下脚本进行训练：</p>
+<p>Run training with:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>script/run-qwen2.5-0.5B-reproducibility.sh
 </pre></div>
 </div>
-<p>这个 PR 中记录了 wandb 的截图 <a class="reference external" href="https://github.com/THUDM/slime/pull/370">pull#370</a>.</p>
+<p>The wandb screenshots are recorded in <a class="reference external" href="https://github.com/THUDM/slime/pull/370">pull#370</a>.</p>
 </section>
 
 
@@ -497,7 +497,7 @@ hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-0.5B-Inst
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Low Precision Training</p>
+        <p class="prev-next-title">Low Precision Training and Rollout</p>
       </div>
     </a>
     <a class="right-next"

@@ -175,7 +175,7 @@
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">投机采样</a></li>
-<li class="toctree-l1"><a class="reference internal" href="low-precision.html">低精度训练</a></li>
+<li class="toctree-l1"><a class="reference internal" href="low-precision.html">低精度训练与 Rollout</a></li>
 <li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fault-tolerance.html">容灾</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">PD 分离</a></li>
@@ -407,7 +407,9 @@
 <button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
     <i class="fa-solid fa-magnifying-glass fa-lg"></i>
 </button>
-
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
 </div></div>
       
     </div>
@@ -423,6 +425,22 @@
     <div id="print-main-content">
         <div id="jb-print-toc">
             
+            <div>
+                <h2> 目录 </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">什么时候使用</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">配置路径</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prefill-num-servers">简单路径：<code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-config">高级路径：<code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rl">为什么这对 RL 重要</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">运维注意事项</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">相关文档</a></li>
+</ul>
+            </nav>
         </div>
     </div>
 </div>
@@ -434,9 +452,89 @@
                   
   <section class="tex2jax_ignore mathjax_ignore" id="pd">
 <h1>PD 分离<a class="headerlink" href="#pd" title="链接到此标题。">#</a></h1>
-<p>slime 支持 Prefill 和 Decode 的分离部署 (PD Disaggregation)。</p>
-<p>可以通过设置 <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code> 参数来指定用于 Prefill 的服务器数量。</p>
-<p>我们推荐在多轮或 agentic RL 训练中开启 PD 分离：这类 rollout 通常会产生较长 context 与 decode-heavy 的负载，更适合把 prefill 与 decode 拆开部署。</p>
+<p>PD Disaggregation 将 SGLang rollout 中的 Prefill worker 和 Decode worker 拆开部署。它特别适合 multi-turn、long-context 和 agentic RL：这些 workload 中，prompt processing 和 token generation 的计算/显存特征往往完全不同。</p>
+<section id="id1">
+<h2>什么时候使用<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
+<p>建议在以下场景使用 PD 分离：</p>
+<ul class="simple">
+<li><p>rollout context 很长，或会随着多轮交互持续增长；</p></li>
+<li><p>decode 阶段占据主要 rollout 时间；</p></li>
+<li><p>multi-turn session 需要更好的 prefix-cache locality；</p></li>
+<li><p>prefill 和 decode 需要不同 TP、显存或 runtime 设置；</p></li>
+<li><p>希望 rollout topology 更接近生产 serving，而不是单一 uniform inference group。</p></li>
+</ul>
+<p>对于短单轮任务，默认 regular SGLang engine layout 通常更简单。</p>
+</section>
+<section id="id2">
+<h2>配置路径<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
+<p>slime 支持两种 PD 配置方式。</p>
+<section id="prefill-num-servers">
+<h3>简单路径：<code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code><a class="headerlink" href="#prefill-num-servers" title="链接到此标题。">#</a></h3>
+<p>如果只有单个 actor model，并且只需要简单 PD layout，可以设置：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--prefill-num-servers<span class="w"> </span><span class="m">1</span>
+</pre></div>
+</div>
+<p>这是轻量路径，适合只想拆开 prefill/decode、但不需要分别调每个 group 的场景。</p>
+</section>
+<section id="sglang-config">
+<h3>高级路径：<code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code><a class="headerlink" href="#sglang-config" title="链接到此标题。">#</a></h3>
+<p>生产级 rollout topology 推荐使用 <a class="reference internal" href="sglang-config.html"><span class="std std-doc">SGLang Config</span></a>。它可以独立配置 prefill 和 decode group，也能表达 EPD-style layout、heterogeneous server group、multi-model serving 和 per-group SGLang override。</p>
+<p>示例：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prefill</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<span class="w">        </span><span class="nt">overrides</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">chunked_prefill_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8192</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">decode</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">12</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">overrides</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">mem_fraction_static</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.88</span>
+</pre></div>
+</div>
+<p>启动：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--sglang-config<span class="w"> </span>sglang_pd.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-num-gpus<span class="w"> </span><span class="m">16</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>...
+</pre></div>
+</div>
+</section>
+</section>
+<section id="rl">
+<h2>为什么这对 RL 重要<a class="headerlink" href="#rl" title="链接到此标题。">#</a></h2>
+<p>RL rollout 往往不是一批短 completion。Agentic 和 verifier-based workload 常见特征包括：</p>
+<ul class="simple">
+<li><p>来自 tool/environment history 的长 prompt；</p></li>
+<li><p>每个 sample 多轮交互；</p></li>
+<li><p>decode latency long tail；</p></li>
+<li><p>session-local prefix cache 机会；</p></li>
+<li><p>actor、reference、reward、judge model 资源需求不同。</p></li>
+</ul>
+<p>PD 让 slime 在不改变 training loop 的情况下，使用更贴合真实 serving workload 的 rollout topology。</p>
+</section>
+<section id="id3">
+<h2>运维注意事项<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
+<ul class="simple">
+<li><p>新的复杂部署优先使用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code>，而不是 <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code>。</p></li>
+<li><p>multi-turn agent 建议开启 router session affinity，使同一 sample 的多轮请求可以复用 prefix cache。见 <a class="reference internal" href="sglang-config.html#session-affinity-routing-for-multi-turn-agents"><span class="std std-ref">Session-Affinity Routing</span></a>。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code> 应等于 SGLang config 中描述的 GPU 总数。</p></li>
+<li><p>不要在同一个 model entry 中混用 <code class="docutils literal notranslate"><span class="pre">regular</span></code> worker 和 <code class="docutils literal notranslate"><span class="pre">prefill</span></code>/<code class="docutils literal notranslate"><span class="pre">decode</span></code> worker。</p></li>
+<li><p>当 prompt processing 和 token generation 的瓶颈不同时，分别调 prefill 和 decode 的 TP。</p></li>
+</ul>
+</section>
+<section id="id4">
+<h2>相关文档<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="sglang-config.html"><span class="std std-doc">SGLang Config</span></a></p></li>
+<li><p><a class="reference internal" href="../get_started/agent.html"><span class="std std-doc">Agentic RL Training Roadmap</span></a></p></li>
+<li><p><a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc">Trace Viewer</span></a></p></li>
+</ul>
+</section>
 </section>
 
 
@@ -474,6 +572,31 @@
             </div>
             
             
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> 目录
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">什么时候使用</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">配置路径</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prefill-num-servers">简单路径：<code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-config">高级路径：<code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rl">为什么这对 RL 重要</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">运维注意事项</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">相关文档</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
               
             
           </div>

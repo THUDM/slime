@@ -175,7 +175,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../advanced/on-policy-distillation.html">On-Policy Distillation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">Speculative Decoding</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/low-precision.html">Low Precision Training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/low-precision.html">Low Precision Training and Rollout</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/reproducibility.html">Reproducibility</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/fault-tolerance.html">Fault Tolerance</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD Disaggregation</a></li>
@@ -524,7 +524,7 @@ docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </
 </section>
 <section id="install-slime">
 <h3>Install slime<a class="headerlink" href="#install-slime" title="Link to this heading">#</a></h3>
-<p>slime is already installed in the docker image. To update to the latest verison, please execute the following command:</p>
+<p>slime is already installed in the docker image. To update to the latest version, please execute the following command:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Path can be adjusted according to actual situation</span>
 <span class="nb">cd</span><span class="w"> </span>/root/slime
 git<span class="w"> </span>pull
@@ -879,6 +879,10 @@ The <code class="docutils literal notranslate"><span class="pre">sample.metadata
 </pre></div>
 </div>
 <p>This will trigger fp8 inference. Currently, we will directly cast bf16 weights to fp8, and we will gradually add quantization schemes with less impact on accuracy in the future.</p>
+<p>For long-context rollout, you can also enable FP8 KV cache in SGLang to increase effective KV cache capacity:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-kv-cache-dtype<span class="w"> </span>fp8_e4m3
+</pre></div>
+</div>
 <p>⚠️ The training megatron checkpoint still needs to be the one converted from bf16 huggingface at the beginning.</p>
 </section>
 </section>
@@ -1065,7 +1069,7 @@ export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=$(ip -o -4 addr show | awk &#39;$4 ~ /^
 <li><p><a class="reference internal" href="../examples/glm4.7-30B-A3B.html"><span class="std std-doc">Example: 8xH100 Training GLM-4.7-Flash</span></a></p></li>
 <li><p><a class="reference internal" href="../examples/glm4.7-355B-A32B.html"><span class="std std-doc">Example: 64xH100 Training GLM-4.7</span></a></p></li>
 <li><p><a class="reference internal" href="../examples/deepseek-r1.html"><span class="std std-doc">Example: 128xH100 Training DeepSeek-R1</span></a></p></li>
-<li><p>The scripts such as <code class="docutils literal notranslate"><span class="pre">scripts/run_qwen3_30b_a3b.py</span></code>, <code class="docutils literal notranslate"><span class="pre">scripts/run_glm45_355b_a32b.py</span></code> also support multi-node training, though there are little documentations about it currently.</p></li>
+<li><p>Scripts such as <code class="docutils literal notranslate"><span class="pre">scripts/run_qwen3_30b_a3b.py</span></code> and <code class="docutils literal notranslate"><span class="pre">scripts/run_glm45_355b_a32b.py</span></code> also support multi-node training. Their documentation is still being expanded.</p></li>
 </ul>
 </section>
 </section>
