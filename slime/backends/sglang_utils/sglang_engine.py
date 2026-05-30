@@ -353,6 +353,15 @@ class SGLangEngine(RayActor):
         response.raise_for_status()
         return response.json()["weight_version"]
 
+    def set_weight_version(self, new_version: str):
+        """Bump the engine's recorded weight version without changing weights.
+
+        Used by the delta-update path when a sync produced no bytes (e.g. an
+        all-zero diff): we still need the engine's version to track the
+        updater's, otherwise the CI version-equality check will trip.
+        """
+        return self._make_request("update_weight_version", {"new_version": str(new_version)})
+
     def release_memory_occupation(self):
         self.flush_cache()
         return self._make_request("release_memory_occupation")

@@ -519,6 +519,7 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
         # on rank 0; ``_finalize_sync`` awaits them at end of sync.
         self._pending_files: list[str] = []
         self._pending_publishes: list = []
+        self._published_any: bool = False
         self._rpc_executor: ThreadPoolExecutor | None = None
         if self.transport == "disk":
             self.delta_dir = args.update_weight_delta_dir
@@ -576,6 +577,11 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
         if not self._snapshot_seeded:
             self._seed_snapshot()
             self._snapshot_seeded = True
+            # Pin the engine's recorded version to ours (0) on the seed call so the
+            # CI version-equality check holds before any real sync has happened.
+            if dist.get_rank() == 0 and self.transport == "disk" and self.rollout_engines:
+                weight_version = str(self.weight_version)
+                ray.get([engine.set_weight_version.remote(weight_version) for engine in self.rollout_engines])
             return
 
         self.weight_version += 1
@@ -592,6 +598,7 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
         self.density_nnz = self.density_numel = self.wire_bytes = self._flush_idx = 0
         self._pending_files.clear()
         self._pending_publishes.clear()
+        self._published_any = False
         if self.writer is not None:
             self.writer.reset_counters()
         pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_pp_src_rank else None
@@ -771,6 +778,7 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
             version_dir = self._version_dir
             engines = list(self.rollout_engines)
             weight_version = str(self.weight_version)
+            self._published_any = True
 
             def _fire_when_committed() -> list:
                 if commit_future is not None:
@@ -808,6 +816,12 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
             object_refs = [ref for fut in self._pending_publishes for ref in fut.result()]
             ray.get(object_refs)
             self._pending_publishes.clear()
+            if not self._published_any:
+                # No delta files needed publishing this sync (e.g. all-zero diff).
+                # Engines never saw the new version via update_weights_from_disk, so
+                # bump it explicitly to keep their recorded version in sync with ours.
+                weight_version = str(self.weight_version)
+                ray.get([engine.set_weight_version.remote(weight_version) for engine in self.rollout_engines])
             if not self.args.update_weight_delta_keep_files:
                 shutil.rmtree(self._version_dir, ignore_errors=True)
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])

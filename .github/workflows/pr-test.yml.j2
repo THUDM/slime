@@ -6,6 +6,7 @@
         {'test_file': 'test_qwen3.5_0.8B_gsm8k_short.py', 'num_gpus': 4},
         {'test_file': 'test_qwen2.5_0.5B_ppo_critic_only_short.py', 'num_gpus': 4},
         {'test_file': 'test_qwen2.5_0.5B_fanout_short.py', 'num_gpus': 4},
+        {'test_file': 'test_delta_weight_update.py', 'num_gpus': 4},
       ],
     },
     'e2e-test-sglang-config': {
@@ -25,7 +26,6 @@
         {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1', 'enable_eval': '0'},
         {'test_file': 'test_qwen3.6_35B_A3B_pd_mooncake.py', 'num_gpus': 8, 'use_deepep': '1'},
         {'test_file': 'test_qwen3_30B_A3B_r3.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1', 'enable_eval': '0'},
-        {'test_file': 'test_qwen3_30B_A3B_r3.py', 'num_gpus': 8, 'enable_eval': '0'},
         {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8, 'enable_eval': '0'},
         {'test_file': 'test_qwen3_4B_ppo_disaggregate.py', 'num_gpus': 8, 'enable_eval': '0'},
         {'test_file': 'test_qwen3_4B_ppo_train_critic_only.py', 'num_gpus': 8, 'enable_eval': '0'},
