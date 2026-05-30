@@ -56,7 +56,6 @@ SFT_ARGS=(
    --global-batch-size 128
 
    --loss-type sft_loss
-   --loss-mask-type qwen3_5
    --calculate-per-token-loss
    --disable-compute-advantages-and-returns
    --debug-train-only

@@ -1,232 +1,336 @@
-from transformers import AutoTokenizer
+import re
+from dataclasses import dataclass
+
+from transformers import PreTrainedTokenizerBase, ProcessorMixin
 
 
 def get_response_lengths(loss_masks: list[list[int]]) -> list[int]:
-    # return the lengths starting from the first occurrence of 1 to the end of each loss mask
+    # Return the length from the first supervised token to the end of each mask.
     return [len(mask[mask.index(1) :]) if 1 in mask else 0 for mask in loss_masks]
 
 
+@dataclass(frozen=True)
+class LossMaskResult:
+    token_ids: list[int]
+    loss_mask: list[int]
+    response_start: int
+
+    @property
+    def response_length(self) -> int:
+        return len(self.token_ids) - self.response_start
+
+    @property
+    def response_loss_mask(self) -> list[int]:
+        return self.loss_mask[self.response_start :]
+
+
+@dataclass(frozen=True)
+class RoleMarkerPattern:
+    assistant_starts: tuple[str, ...]
+    boundaries: tuple[str, ...]
+
+
 class MultiTurnLossMaskGenerator:
-    def __init__(self, tokenizer: AutoTokenizer, tokenizer_type: str = "qwen"):
+    """Build SFT loss masks from chat-template assistant masks.
+
+    The tokenizer chat template is the source of truth for assistant-generated
+    spans. Non-assistant context such as tool responses, observations, and
+    compacted history stays in the response tail with loss_mask=0.
+    """
+
+    def __init__(
+        self,
+        tokenizer: PreTrainedTokenizerBase,
+        chat_template_kwargs: dict | None = None,
+        chat_template_processor: ProcessorMixin | None = None,
+    ):
         self.tokenizer = tokenizer
-        self.tokenizer_type = tokenizer_type
-        self.system_message_length = 0
-        self.gen_token_length = 0
-        if self.tokenizer_type in ("qwen", "qwen3"):
-            self.system_message_length, self.gen_token_length = self.get_system_message_length()
+        self.chat_template_processor = chat_template_processor or tokenizer
+        self.chat_template_kwargs = chat_template_kwargs or {}
+
+    ROLE_MARKER_PATTERNS = (
+        RoleMarkerPattern(
+            assistant_starts=("<|assistant|>",),
+            boundaries=("<|system|>", "<|user|>", "<|assistant|>", "<|observation|>", "<|tool|>"),
+        ),
+        RoleMarkerPattern(
+            assistant_starts=("<|im_start|>assistant\n",),
+            boundaries=(
+                "<|im_start|>system\n",
+                "<|im_start|>user\n",
+                "<|im_start|>assistant\n",
+                "<|im_start|>tool\n",
+                "<|im_start|>observation\n",
+            ),
+        ),
+        RoleMarkerPattern(
+            assistant_starts=("<｜Assistant｜>", "<｜tool▁outputs▁end｜>"),
+            boundaries=(
+                "<｜System｜>",
+                "<｜User｜>",
+                "<｜Assistant｜>",
+                "<｜tool▁outputs▁begin｜>",
+                "<｜tool▁output▁begin｜>",
+            ),
+        ),
+    )
 
     def get_response_lengths(self, loss_masks: list[list[int]]) -> list[int]:
         return get_response_lengths(loss_masks)
 
-    def find_all_sublist_indices(self, main_list, sublist):
-        sublist_len = len(sublist)
-        indices = []
-        for i in range(len(main_list) - sublist_len + 1):
-            if main_list[i : i + sublist_len] == sublist:
-                indices.append(i)
-        return indices
+    @staticmethod
+    def _to_list(value):
+        if hasattr(value, "tolist"):
+            return value.tolist()
+        return list(value)
 
-    def get_system_message_length(self) -> tuple[int, int]:
-        test_string = "FOR TESTING ONLY"
-        test_messages = [
-            {"role": "user", "content": test_string},
-            {"role": "user", "content": test_string},
-        ]
-        raw_token_ids = self.tokenizer(test_string, add_special_tokens=False)["input_ids"]
-        chat_template_token = self.tokenizer.apply_chat_template(
-            test_messages, add_special_tokens=False, tokenize=False
+    @staticmethod
+    def _first_assistant_mask_index(assistant_mask: list[int]) -> int:
+        for index, value in enumerate(assistant_mask):
+            if value:
+                return index
+        raise ValueError(
+            "Chat template produced no assistant mask tokens. "
+            "Please wrap assistant-generated text/tool calls in `{% generation %}` blocks."
         )
-        chat_template_token_ids = self.tokenizer(chat_template_token, add_special_tokens=False)["input_ids"]
-        idx_1, idx_2 = self.find_all_sublist_indices(chat_template_token_ids, raw_token_ids)
-        end_interval = len(chat_template_token_ids) - len(raw_token_ids) - idx_2
-        gen_token_length = len(
-            self.tokenizer.apply_chat_template(
-                test_messages,
-                add_special_tokens=False,
-                tokenize=True,
-                add_generation_prompt=True,
-                return_dict=False,
+
+    def _chat_template_supports_generation_blocks(self, tools: list[dict] = None) -> bool:
+        chat_template = self.chat_template_kwargs.get("chat_template")
+        if chat_template is None:
+            get_chat_template = getattr(self.chat_template_processor, "get_chat_template", None)
+            if get_chat_template is not None:
+                try:
+                    chat_template = get_chat_template(chat_template=None, tools=tools)
+                except ValueError:
+                    chat_template = None
+            else:
+                chat_template = getattr(self.chat_template_processor, "chat_template", None)
+                if chat_template is None:
+                    chat_template = getattr(self.tokenizer, "chat_template", None)
+        if not isinstance(chat_template, str):
+            return True
+        return re.search(r"\{\%-?\s*generation\s*-?\%\}", chat_template) is not None
+
+    def _apply_chat_template(self, messages: list[dict], *, tools: list[dict] = None, **kwargs):
+        return self.chat_template_processor.apply_chat_template(
+            messages,
+            tools=tools,
+            add_generation_prompt=False,
+            **self.chat_template_kwargs,
+            **kwargs,
+        )
+
+    def get_loss_mask_result(self, messages: list[dict], tools: list[dict] = None) -> LossMaskResult:
+        if not self._chat_template_supports_generation_blocks(tools):
+            return self._get_loss_mask_result_from_role_markers(messages, tools)
+
+        tokenized = self._apply_chat_template(
+            messages,
+            tokenize=True,
+            return_dict=True,
+            return_assistant_tokens_mask=True,
+            tools=tools,
+        )
+        token_ids = self._to_list(tokenized["input_ids"])
+        assistant_mask = tokenized.get("assistant_masks")
+        if assistant_mask is None:
+            raise ValueError(
+                "`apply_chat_template(..., return_assistant_tokens_mask=True)` did not return `assistant_masks`. "
+                "Please use a Transformers version/tokenizer template that supports assistant masks."
             )
-        ) - len(chat_template_token_ids)
+        assistant_mask = self._to_list(assistant_mask)
 
-        system_message_length = idx_1 - ((idx_2 - idx_1) - end_interval - len(raw_token_ids))
-        return system_message_length, gen_token_length
+        if len(token_ids) != len(assistant_mask):
+            raise ValueError(
+                "Chat template returned mismatched input_ids/assistant_masks lengths: "
+                f"{len(token_ids)} != {len(assistant_mask)}"
+            )
+        if not any(assistant_mask):
+            return self._get_loss_mask_result_from_role_markers(messages, tools, expected_token_ids=token_ids)
 
-    def gen_multi_turn_loss_mask_qwen(
-        self, messages: list[dict], tools: list[dict] = None
-    ) -> tuple[list[int], list[int]]:
-        all_loss_masks = []
-        all_token_ids = []
+        response_start = self._first_assistant_mask_index(assistant_mask)
+        loss_mask = [int(bool(value)) for value in assistant_mask]
 
-        for i, message in enumerate(messages):
-            if i == 0:
-                message_ids = self.tokenizer.apply_chat_template(
-                    [message], tokenize=True, tools=tools, return_dict=False
-                )
-            else:
-                message_ids = self.tokenizer.apply_chat_template([message], tokenize=True, return_dict=False)
+        if any(message.get("step_loss_mask", 1) != 1 for message in messages):
+            loss_mask = self._apply_step_loss_masks(messages, loss_mask)
 
-            if message["role"] != "system" and i > 0:
-                message_ids = message_ids[self.system_message_length :]
+        return LossMaskResult(token_ids=token_ids, loss_mask=loss_mask, response_start=response_start)
 
-            if message["role"] == "assistant":
-                loss_mask = [0] * self.gen_token_length + [1] * (len(message_ids) - self.gen_token_length)
-            else:
-                loss_mask = [0] * len(message_ids)
+    def _get_loss_mask_result_from_role_markers(
+        self, messages: list[dict], tools: list[dict] = None, expected_token_ids: list[int] | None = None
+    ) -> LossMaskResult:
+        rendered = self._apply_chat_template(
+            messages,
+            tokenize=False,
+            tools=tools,
+        )
+        if not isinstance(rendered, str):
+            raise ValueError("Chat template role-marker fallback expects a single rendered string.")
 
-            if message.get("step_loss_mask", 1) != 1:
-                loss_mask = [0] * len(message_ids)
+        try:
+            tokenized = self.tokenizer(rendered, add_special_tokens=False, return_offsets_mapping=True)
+        except NotImplementedError as exc:
+            raise ValueError(
+                "Chat template returned no assistant mask tokens, and role-marker fallback requires "
+                "`return_offsets_mapping` support."
+            ) from exc
 
-            all_loss_masks.extend(loss_mask)
-            all_token_ids.extend(message_ids)
+        token_ids = self._to_list(tokenized["input_ids"])
+        if expected_token_ids is not None and token_ids != expected_token_ids:
+            raise ValueError(
+                "Role-marker fallback tokenization does not match `apply_chat_template(..., tokenize=True)` output."
+            )
 
-        return all_token_ids, all_loss_masks
-
-    def gen_multi_turn_loss_mask_qwen3(
-        self, messages: list[dict], tools: list[dict] = None
-    ) -> tuple[list[int], list[int]]:
-        all_loss_masks = []
-        all_token_ids = []
-
-        prefix_message = {"role": "user", "content": "FOR CALCULATING LOSS MASK ONLY"}
-        prefix_token_ids = self.tokenizer.apply_chat_template([prefix_message], tokenize=True, return_dict=False)
-
-        for i, message in enumerate(messages):
-            if i == 0:
-                tailed_message_ids = self.tokenizer.apply_chat_template(
-                    [message, prefix_message],
-                    tokenize=True,
-                    tools=tools,
-                    return_dict=False,
-                )
-                message_ids = tailed_message_ids[: -len(prefix_token_ids)]
-            else:
-                prefixed_message_ids = self.tokenizer.apply_chat_template(
-                    [prefix_message, message],
-                    tokenize=True,
-                    return_dict=False,
-                )
-                message_ids = prefixed_message_ids[len(prefix_token_ids) :]
-
-            if message["role"] != "system" and i > 0:
-                message_ids = message_ids[self.system_message_length :]
-
-            if message["role"] == "assistant":
-                loss_mask = [0] * self.gen_token_length + [1] * (len(message_ids) - self.gen_token_length)
-            else:
-                loss_mask = [0] * len(message_ids)
-
-            if message.get("step_loss_mask", 1) != 1:
-                loss_mask = [0] * len(message_ids)
-
-            all_loss_masks.extend(loss_mask)
-            all_token_ids.extend(message_ids)
-
-        return all_token_ids, all_loss_masks
-
-    def gen_multi_turn_loss_mask_qwen3_5(
-        self, messages: list[dict], tools: list[dict] = None
-    ) -> tuple[list[int], list[int]]:
-        rendered_text = self.tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, return_dict=False)
-        tokenized = self.tokenizer(rendered_text, add_special_tokens=False, return_offsets_mapping=True)
-        token_ids = tokenized["input_ids"]
         offset_mapping = tokenized.get("offset_mapping")
-
         if offset_mapping is None:
             raise ValueError(
-                "Qwen3.5 loss mask generation requires a fast tokenizer " "with `return_offsets_mapping` support."
+                "Chat template returned no assistant mask tokens, and role-marker fallback requires offset mappings."
             )
 
-        expected_token_ids = self.tokenizer.apply_chat_template(
-            messages, tokenize=True, tools=tools, return_dict=False
-        )
-        if token_ids != expected_token_ids:
+        char_spans = self._assistant_char_spans_from_template_diffs(rendered, messages, tools)
+        if char_spans is None:
+            char_spans = self._assistant_char_spans_from_role_markers(rendered, messages)
+        loss_mask = [0] * len(token_ids)
+        for token_index, (token_start, token_end) in enumerate(offset_mapping):
+            if token_end <= token_start:
+                continue
+            if any(token_start < span_end and token_end > span_start for span_start, span_end in char_spans):
+                loss_mask[token_index] = 1
+
+        if not any(loss_mask):
             raise ValueError(
-                "Qwen3.5 rendered text tokenization does not match "
-                "`apply_chat_template(..., tokenize=True)` output."
+                "Chat template produced no assistant mask tokens and role-marker fallback could not map "
+                "assistant spans to tokens."
             )
 
-        assistant_header = "<|im_start|>assistant\n"
-        think_prefix = "<think>\n"
-        end_marker = "<|im_end|>"
+        response_start = self._first_assistant_mask_index(loss_mask)
+        if any(message.get("step_loss_mask", 1) != 1 for message in messages):
+            loss_mask = self._apply_step_loss_masks(messages, loss_mask)
 
-        char_mask = [0] * len(rendered_text)
+        return LossMaskResult(token_ids=token_ids, loss_mask=loss_mask, response_start=response_start)
+
+    @staticmethod
+    def _common_prefix_len(left: str, right: str) -> int:
+        limit = min(len(left), len(right))
+        index = 0
+        while index < limit and left[index] == right[index]:
+            index += 1
+        return index
+
+    @staticmethod
+    def _common_suffix_len(left: str, right: str, prefix_len: int) -> int:
+        limit = min(len(left), len(right)) - prefix_len
+        index = 0
+        while index < limit and left[len(left) - index - 1] == right[len(right) - index - 1]:
+            index += 1
+        return index
+
+    def _assistant_char_spans_from_template_diffs(
+        self, rendered: str, messages: list[dict], tools: list[dict] = None
+    ) -> list[tuple[int, int]] | None:
+        spans = []
+        for message_index, message in enumerate(messages):
+            if message.get("role") != "assistant":
+                continue
+
+            sentinel = f"SLIME_ASSISTANT_SPAN_{message_index}"
+            replacement = {
+                key: value
+                for key, value in message.items()
+                if key not in ("content", "reasoning_content", "tool_calls")
+            }
+            replacement["content"] = sentinel
+            probe_messages = list(messages)
+            probe_messages[message_index] = replacement
+
+            try:
+                probe_rendered = self._apply_chat_template(probe_messages, tokenize=False, tools=tools)
+            except Exception:
+                return None
+            if not isinstance(probe_rendered, str) or sentinel not in probe_rendered:
+                return None
+
+            span_start = self._common_prefix_len(rendered, probe_rendered)
+            suffix_len = self._common_suffix_len(rendered, probe_rendered, span_start)
+            span_end = len(rendered) - suffix_len
+            if span_start >= span_end:
+                return None
+            spans.append((span_start, span_end))
+
+        return spans or None
+
+    @staticmethod
+    def _first_marker_after(rendered: str, markers: tuple[str, ...], start: int) -> tuple[int, str] | None:
+        matches = [(pos, marker) for marker in markers if (pos := rendered.find(marker, start)) >= 0]
+        return min(matches, key=lambda item: item[0]) if matches else None
+
+    @classmethod
+    def _assistant_char_spans_from_role_markers(cls, rendered: str, messages: list[dict]) -> list[tuple[int, int]]:
+        spans = []
         cursor = 0
 
         for message in messages:
-            if message["role"] != "assistant":
+            if message.get("role") != "assistant":
                 continue
 
-            header_pos = rendered_text.find(assistant_header, cursor)
-            if header_pos < 0:
-                raise ValueError("Failed to locate assistant message in rendered Qwen3.5 chat template output.")
+            start_match = cls._first_marker_after(
+                rendered,
+                tuple(marker for pattern in cls.ROLE_MARKER_PATTERNS for marker in pattern.assistant_starts),
+                cursor,
+            )
+            if start_match is None:
+                raise ValueError(
+                    "Chat template produced no assistant mask tokens and role-marker fallback could not locate "
+                    "a supported assistant role marker."
+                )
 
-            content_start = header_pos + len(assistant_header)
-            end_pos = rendered_text.find(end_marker, content_start)
-            if end_pos < 0:
-                raise ValueError("Failed to locate <|im_end|> for assistant message in rendered text.")
-
-            span_end = end_pos + len(end_marker)
-            if span_end < len(rendered_text) and rendered_text[span_end] == "\n":
-                span_end += 1
+            header_pos, assistant_header = start_match
+            span_start = header_pos + len(assistant_header)
+            boundary_markers = tuple(marker for pattern in cls.ROLE_MARKER_PATTERNS for marker in pattern.boundaries)
+            boundary_match = cls._first_marker_after(rendered, boundary_markers, span_start)
+            span_end = boundary_match[0] if boundary_match is not None else len(rendered)
+            spans.append((span_start, span_end))
             cursor = span_end
 
-            if message.get("step_loss_mask", 1) != 1:
+        if not spans:
+            raise ValueError("Cannot build a loss mask because the message list contains no assistant messages.")
+        return spans
+
+    @staticmethod
+    def _get_mask_spans(mask: list[int]) -> list[tuple[int, int]]:
+        spans = []
+        start = None
+        for index, value in enumerate(mask):
+            if value and start is None:
+                start = index
+            elif not value and start is not None:
+                spans.append((start, index))
+                start = None
+        if start is not None:
+            spans.append((start, len(mask)))
+        return spans
+
+    def _apply_step_loss_masks(self, messages: list[dict], loss_mask: list[int]) -> list[int]:
+        """Apply per-assistant step masks when the template emits one span per assistant turn."""
+        spans = self._get_mask_spans(loss_mask)
+
+        assistant_messages = [message for message in messages if message.get("role") == "assistant"]
+        if len(spans) != len(assistant_messages):
+            raise ValueError(
+                "`step_loss_mask` requires one contiguous assistant mask span per assistant message. "
+                f"Got {len(spans)} span(s) for {len(assistant_messages)} assistant message(s)."
+            )
+
+        masked = list(loss_mask)
+        for (start, end), message in zip(spans, assistant_messages, strict=True):
+            if message.get("step_loss_mask", 1) == 1:
                 continue
-
-            if rendered_text[content_start : content_start + len(think_prefix)] == think_prefix:
-                mask_start = content_start + len(think_prefix)
-            else:
-                mask_start = content_start
-
-            for pos in range(mask_start, span_end):
-                char_mask[pos] = 1
-
-        char_mask_prefix_sum = [0]
-        for value in char_mask:
-            char_mask_prefix_sum.append(char_mask_prefix_sum[-1] + value)
-
-        loss_mask = []
-        for start, end in offset_mapping:
-            if end <= start:
-                loss_mask.append(0)
-            else:
-                loss_mask.append(1 if char_mask_prefix_sum[end] - char_mask_prefix_sum[start] > 0 else 0)
-
-        return token_ids, loss_mask
-
-    def gen_multi_turn_loss_mask_distill_qwen(
-        self, messages: list[dict], tools: list[dict] = None
-    ) -> tuple[list[int], list[int]]:
-        prompt = self.tokenizer.apply_chat_template(
-            messages[:1], tokenize=False, add_generation_prompt=True, tools=tools
-        )
-        response = messages[-1]["content"]
-        prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
-        response_tokens = self.tokenizer(response, add_special_tokens=False)["input_ids"]
-
-        response_length = len(response_tokens)
-        token_ids = prompt_tokens + response_tokens
-        loss_mask = [0] * len(prompt_tokens) + [1] * response_length
-
-        if messages[-1].get("step_loss_mask", 1) != 1:
-            loss_mask = [0] * len(token_ids)
-        return token_ids, loss_mask
+            masked[start:end] = [0] * (end - start)
+        return masked
 
     def get_loss_mask(self, messages: list[dict], tools: list[dict] = None) -> tuple[list[int], list[int]]:
-        if self.tokenizer_type == "qwen":
-            if "<｜Assistant｜>" in self.tokenizer.get_added_vocab():
-                return self.gen_multi_turn_loss_mask_distill_qwen(messages, tools)
-
-            return self.gen_multi_turn_loss_mask_qwen(messages, tools)
-        elif self.tokenizer_type == "qwen3":
-            return self.gen_multi_turn_loss_mask_qwen3(messages, tools)
-        elif self.tokenizer_type == "qwen3_5":
-            return self.gen_multi_turn_loss_mask_qwen3_5(messages, tools)
-        elif self.tokenizer_type == "distill_qwen":
-            return self.gen_multi_turn_loss_mask_distill_qwen(messages, tools)
-        else:
-            raise ValueError(f"Unsupported tokenizer type: {self.tokenizer_type}")
+        result = self.get_loss_mask_result(messages, tools)
+        return result.token_ids, result.loss_mask
 
     def get_loss_mask_with_multimodal_alignment(
         self, messages: list[dict], input_ids: list[int], tools: list[dict] = None
@@ -240,20 +344,17 @@ class MultiTurnLossMaskGenerator:
                         text_parts.append(item.get("text", ""))
                     elif isinstance(item, str):
                         text_parts.append(item)
-                text.append({"role": msg["role"], "content": " ".join(text_parts)})
+                text.append({**msg, "content": " ".join(text_parts)})
             else:
                 text.append(msg)
 
         _, loss_mask_text = self.get_loss_mask(text, tools=tools)
-
         diff = len(input_ids) - len(loss_mask_text)
         assert diff >= 0, (
             f"input_ids (length={len(input_ids)}) is shorter than text loss_mask (length={len(loss_mask_text)}) "
             f"Please check if processor and tokenizer tokenization are consistent."
         )
-        loss_mask = [0] * diff + loss_mask_text
-
-        return input_ids, loss_mask
+        return input_ids, [0] * diff + loss_mask_text
 
     def get_text_from_loss_mask(self, token_ids: list[int], loss_masks: list[int]) -> list[str]:
         selected_texts = []
