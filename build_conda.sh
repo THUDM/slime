@@ -19,7 +19,6 @@ export BASE_DIR=${BASE_DIR:-"/root"}
 cd $BASE_DIR
 
 # install cuda 12.9 as it's the default cuda version for torch
-<<<<<<< Updated upstream
 micromamba install -n slime \
   cuda=12.9.1 \
   cuda-nvtx=12.9.79 \
@@ -29,17 +28,17 @@ micromamba install -n slime \
   -c nvidia \
   -c conda-forge \
   -y
-=======
-micromamba install -n slime cuda cuda-nvtx cuda-nvtx-dev nccl -c nvidia/label/cuda-12.9.1 -c nvidia -y
->>>>>>> Stashed changes
 micromamba install -n slime -c conda-forge cudnn -y
 
 pip install cuda-python==12.9
 pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cu129
 
 # install sglang
-git clone https://github.com/sgl-project/sglang.git
-cd sglang
+if [ ! -d "$BASE_DIR/sglang" ]; then
+  cd $BASE_DIR
+  git clone https://github.com/sgl-project/sglang.git
+fi
+cd $BASE_DIR/sglang
 git checkout ${SGLANG_COMMIT}
 # Install the python packages
 pip install -e "python[all]"
@@ -70,9 +69,10 @@ pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-5f8d
 
 # megatron
 cd $BASE_DIR
-git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
-  cd Megatron-LM/ && git checkout ${MEGATRON_COMMIT} && \
-  pip install -e .
+if [ ! -d "$BASE_DIR/Megatron-LM" ]; then
+  git clone https://github.com/NVIDIA/Megatron-LM.git --recursive
+fi
+cd $BASE_DIR/Megatron-LM && git checkout ${MEGATRON_COMMIT} && pip install -e .
 
 # install slime and apply patches
 
@@ -95,6 +95,10 @@ pip install "numpy<2"
 
 # apply patch
 cd $BASE_DIR/sglang
-git apply $SLIME_DIR/docker/patch/v0.5.12.post1/sglang.patch
+git apply --check $SLIME_DIR/docker/patch/v0.5.12.post1/sglang.patch 2>/dev/null && \
+  git apply $SLIME_DIR/docker/patch/v0.5.12.post1/sglang.patch || \
+  echo "sglang patch already applied or not applicable, skipping"
 cd $BASE_DIR/Megatron-LM
-git apply $SLIME_DIR/docker/patch/v0.5.12.post1/megatron.patch
+git apply --check $SLIME_DIR/docker/patch/v0.5.12.post1/megatron.patch 2>/dev/null && \
+  git apply $SLIME_DIR/docker/patch/v0.5.12.post1/megatron.patch || \
+  echo "megatron patch already applied or not applicable, skipping"
