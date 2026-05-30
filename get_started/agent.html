@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="May 29, 2026"/>
+    <meta name="docbuild:last-update" content="May 30, 2026"/>
   </head>
   
   
@@ -492,7 +492,7 @@
 <h2>Recommended Integration Pattern<a class="headerlink" href="#recommended-integration-pattern" title="Link to this heading">#</a></h2>
 <p>Most agentic RL tasks should start with <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>. This function converts one agent execution into slime-trainable <code class="docutils literal notranslate"><span class="pre">Sample</span></code> objects: fill <code class="docutils literal notranslate"><span class="pre">tokens</span></code>, <code class="docutils literal notranslate"><span class="pre">response_length</span></code>, <code class="docutils literal notranslate"><span class="pre">loss_mask</span></code>, and <code class="docutils literal notranslate"><span class="pre">status</span></code>, then either fill <code class="docutils literal notranslate"><span class="pre">reward</span></code> directly or let <code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code> compute it.</p>
 <p>The agent workflow itself may speak in strings, chat messages, tool calls, environment observations, or framework-specific events. The training target, however, should stay token based. Preserve the model-sampled token ids and use <code class="docutils literal notranslate"><span class="pre">loss_mask</span></code> to separate trainable model output from prompt, template, tool-observation, or environment text.</p>
-<p>If one prompt rollout corresponds to one training sample, return a single <code class="docutils literal notranslate"><span class="pre">Sample</span></code>. If one rollout splits into multiple trainable segments, such as subagent trajectories, main-agent continuations, or pre/post-compaction segments, return <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code> and set the same <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code> on all sibling samples. slime then keeps those samples together for train-step splitting and loss aggregation instead of counting them as independent rollouts.</p>
+<p>If one prompt rollout corresponds to one training sample, return a single <code class="docutils literal notranslate"><span class="pre">Sample</span></code>. If one rollout splits into multiple trainable segments, such as subagent trajectories, main-agent continuations, or pre/post-compaction segments, return <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code> and set the same <code class="docutils literal notranslate"><span class="pre">group_id</span></code> on all sibling samples. slime then keeps those samples together for train-step splitting and loss aggregation instead of counting them as independent groups. <code class="docutils literal notranslate"><span class="pre">Sample.rollout_id</span></code> remains as a deprecated write-only alias for older code that only assigns it.</p>
 <p>Reach for <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> only when you need to replace the whole rollout orchestration. Common reasons include custom data-source scheduling, cross-rollout background queues, fully asynchronous generation, or workflows that cannot fit the default <code class="docutils literal notranslate"><span class="pre">sglang_rollout</span></code> prompt-by-sample structure.</p>
 </section>
 <section id="agent-runtime-adapters">
@@ -534,7 +534,7 @@
 <section id="reference-example">
 <h2>Reference Example<a class="headerlink" href="#reference-example" title="Link to this heading">#</a></h2>
 <p>The full coding-agent example is <a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/coding_agent_rl</span></code></span></a>. It shows an end-to-end agent RL setup that is close to a real software-engineering workflow: each sample boots an isolated sandbox, the agent uses tools to edit code, the rollout captures a <code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">diff</span></code>, and a clean sandbox runs the tests to produce the reward.</p>
-<p>This example also demonstrates agent fan-out training. Its middleware splits one trajectory into <code class="docutils literal notranslate"><span class="pre">subagent</span></code>, <code class="docutils literal notranslate"><span class="pre">wipe</span></code> (the chain frozen before compaction), and <code class="docutils literal notranslate"><span class="pre">final</span></code> segments. <code class="docutils literal notranslate"><span class="pre">generate()</span></code> returns <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code>, and all segments share the same <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code>.</p>
+<p>This example also demonstrates agent fan-out training. Its middleware splits one trajectory into <code class="docutils literal notranslate"><span class="pre">subagent</span></code>, <code class="docutils literal notranslate"><span class="pre">wipe</span></code> (the chain frozen before compaction), and <code class="docutils literal notranslate"><span class="pre">final</span></code> segments. <code class="docutils literal notranslate"><span class="pre">generate()</span></code> returns <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code>, and all segments share the same <code class="docutils literal notranslate"><span class="pre">group_id</span></code>.</p>
 <p>For smaller starting points, see <a class="reference internal" href="../_examples_synced/search-r1/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/search-r1</span></code></span></a> for multi-turn tool use, <a class="reference internal" href="../_examples_synced/retool/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/retool</span></code></span></a> for tool-augmented generation, and <a class="reference internal" href="../_examples_synced/multi_agent/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/multi_agent</span></code></span></a> for the multi-agent pattern.</p>
 </section>
 </section>
@@ -624,7 +624,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on May 29, 2026.
+  Last updated on May 30, 2026.
   <br/>
 </p>
   </div>

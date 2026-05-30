@@ -22,7 +22,7 @@ Most agentic RL tasks should start with `--custom-generate-function-path`. This 
 
 The agent workflow itself may speak in strings, chat messages, tool calls, environment observations, or framework-specific events. The training target, however, should stay token based. Preserve the model-sampled token ids and use `loss_mask` to separate trainable model output from prompt, template, tool-observation, or environment text.
 
-If one prompt rollout corresponds to one training sample, return a single `Sample`. If one rollout splits into multiple trainable segments, such as subagent trajectories, main-agent continuations, or pre/post-compaction segments, return `list[Sample]` and set the same `rollout_id` on all sibling samples. slime then keeps those samples together for train-step splitting and loss aggregation instead of counting them as independent rollouts.
+If one prompt rollout corresponds to one training sample, return a single `Sample`. If one rollout splits into multiple trainable segments, such as subagent trajectories, main-agent continuations, or pre/post-compaction segments, return `list[Sample]` and set the same `group_id` on all sibling samples. slime then keeps those samples together for train-step splitting and loss aggregation instead of counting them as independent groups. `Sample.rollout_id` remains as a deprecated write-only alias for older code that only assigns it.
 
 Reach for `--rollout-function-path` only when you need to replace the whole rollout orchestration. Common reasons include custom data-source scheduling, cross-rollout background queues, fully asynchronous generation, or workflows that cannot fit the default `sglang_rollout` prompt-by-sample structure.
 
@@ -68,6 +68,6 @@ Agentic rollouts tend to depend more heavily on serving configuration than ordin
 
 The full coding-agent example is [`examples/coding_agent_rl`](../_examples_synced/coding_agent_rl/README.md). It shows an end-to-end agent RL setup that is close to a real software-engineering workflow: each sample boots an isolated sandbox, the agent uses tools to edit code, the rollout captures a `git diff`, and a clean sandbox runs the tests to produce the reward.
 
-This example also demonstrates agent fan-out training. Its middleware splits one trajectory into `subagent`, `wipe` (the chain frozen before compaction), and `final` segments. `generate()` returns `list[Sample]`, and all segments share the same `rollout_id`.
+This example also demonstrates agent fan-out training. Its middleware splits one trajectory into `subagent`, `wipe` (the chain frozen before compaction), and `final` segments. `generate()` returns `list[Sample]`, and all segments share the same `group_id`.
 
 For smaller starting points, see [`examples/search-r1`](../_examples_synced/search-r1/README.md) for multi-turn tool use, [`examples/retool`](../_examples_synced/retool/README.md) for tool-augmented generation, and [`examples/multi_agent`](../_examples_synced/multi_agent/README.md) for the multi-agent pattern.

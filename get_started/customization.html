@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="May 29, 2026"/>
+    <meta name="docbuild:last-update" content="May 30, 2026"/>
   </head>
   
   
@@ -628,7 +628,7 @@
 <section id="returning-multiple-training-samples-for-one-prompt">
 <h4>Returning multiple training samples for one prompt<a class="headerlink" href="#returning-multiple-training-samples-for-one-prompt" title="Link to this heading">#</a></h4>
 <p>In agentic settings such as subagents, multi-agent execution, or context compaction, one prompt rollout can naturally split into multiple trainable segments. For example, a subagent trajectory and the main-agent continuation may both need to be trained, or the context before and after compaction may be represented as separate segments.</p>
-<p>You do not need to replace the whole rollout function for this. A <code class="docutils literal notranslate"><span class="pre">custom_generate</span></code> function may return <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code>. The key contract is that sibling samples produced by the same rollout must share the same <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code>, so slime keeps them together for train-step splitting and loss aggregation instead of counting them as independent rollouts.</p>
+<p>You do not need to replace the whole rollout function for this. A <code class="docutils literal notranslate"><span class="pre">custom_generate</span></code> function may return <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code>. The key contract is that sibling samples produced by the same rollout must share the same <code class="docutils literal notranslate"><span class="pre">group_id</span></code>, so slime keeps them together for train-step splitting and loss aggregation instead of counting them as independent groups. <code class="docutils literal notranslate"><span class="pre">Sample.rollout_id</span></code> remains as a deprecated write-only alias for older code that only assigns it.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">copy</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.types</span><span class="w"> </span><span class="kn">import</span> <span class="n">Sample</span>
@@ -636,7 +636,7 @@
 
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">custom_generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]:</span>
     <span class="n">segments</span> <span class="o">=</span> <span class="k">await</span> <span class="n">run_agent_and_split_segments</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">)</span>
-    <span class="n">rollout_id</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">rollout_id</span> <span class="k">if</span> <span class="n">sample</span><span class="o">.</span><span class="n">rollout_id</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">sample</span><span class="o">.</span><span class="n">index</span>
+    <span class="n">group_id</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">group_id</span> <span class="k">if</span> <span class="n">sample</span><span class="o">.</span><span class="n">group_id</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">sample</span><span class="o">.</span><span class="n">index</span>
 
     <span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">segment</span> <span class="ow">in</span> <span class="n">segments</span><span class="p">:</span>
@@ -647,7 +647,7 @@
         <span class="n">s</span><span class="o">.</span><span class="n">loss_mask</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">loss_mask</span>
         <span class="n">s</span><span class="o">.</span><span class="n">reward</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">reward</span>
         <span class="n">s</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">COMPLETED</span>
-        <span class="n">s</span><span class="o">.</span><span class="n">rollout_id</span> <span class="o">=</span> <span class="n">rollout_id</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">group_id</span> <span class="o">=</span> <span class="n">group_id</span>
         <span class="n">samples</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">s</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">samples</span>
 </pre></div>
@@ -1120,7 +1120,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on May 29, 2026.
+  Last updated on May 30, 2026.
   <br/>
 </p>
   </div>

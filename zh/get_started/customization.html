@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 05 月 29 日"/>
+    <meta name="docbuild:last-update" content="2026 年 05 月 30 日"/>
   </head>
   
   
@@ -624,7 +624,7 @@
 <section id="prompt">
 <h4>一个 prompt 产生多个训练样本<a class="headerlink" href="#prompt" title="链接到此标题。">#</a></h4>
 <p>在 subagent、multi-agent、context compact 等 agentic 场景中，一次 prompt rollout 可能会自然拆成多个可训练片段。例如：主 agent 调用 subagent 后，subagent 的轨迹和主 agent 的后续轨迹都需要参与训练；或者发生 compact 后，compact 前后的上下文被切成多个 segment。</p>
-<p>这种情况下不需要重写整个 rollout 函数，<code class="docutils literal notranslate"><span class="pre">custom_generate</span></code> 可以直接返回 <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code>。关键是：这些由同一次 rollout 拆出来的 sibling samples 必须设置相同的 <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code>，这样 slime 会在训练切分和 loss 聚合时把它们视作同一次 rollout，而不是重复计数为多次独立 rollout。</p>
+<p>这种情况下不需要重写整个 rollout 函数，<code class="docutils literal notranslate"><span class="pre">custom_generate</span></code> 可以直接返回 <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code>。关键是：这些由同一次 rollout 拆出来的 sibling samples 必须设置相同的 <code class="docutils literal notranslate"><span class="pre">group_id</span></code>，这样 slime 会在训练切分和 loss 聚合时把它们视作同一个训练分组，而不是重复计数为多个独立分组。<code class="docutils literal notranslate"><span class="pre">Sample.rollout_id</span></code> 仍然作为 deprecated write-only alias 保留给只赋值它的旧代码。</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">copy</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.types</span><span class="w"> </span><span class="kn">import</span> <span class="n">Sample</span>
@@ -632,7 +632,7 @@
 
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">custom_generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]:</span>
     <span class="n">segments</span> <span class="o">=</span> <span class="k">await</span> <span class="n">run_agent_and_split_segments</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">)</span>
-    <span class="n">rollout_id</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">rollout_id</span> <span class="k">if</span> <span class="n">sample</span><span class="o">.</span><span class="n">rollout_id</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">sample</span><span class="o">.</span><span class="n">index</span>
+    <span class="n">group_id</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">group_id</span> <span class="k">if</span> <span class="n">sample</span><span class="o">.</span><span class="n">group_id</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">sample</span><span class="o">.</span><span class="n">index</span>
 
     <span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">segment</span> <span class="ow">in</span> <span class="n">segments</span><span class="p">:</span>
@@ -643,7 +643,7 @@
         <span class="n">s</span><span class="o">.</span><span class="n">loss_mask</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">loss_mask</span>
         <span class="n">s</span><span class="o">.</span><span class="n">reward</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">reward</span>
         <span class="n">s</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">COMPLETED</span>
-        <span class="n">s</span><span class="o">.</span><span class="n">rollout_id</span> <span class="o">=</span> <span class="n">rollout_id</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">group_id</span> <span class="o">=</span> <span class="n">group_id</span>
         <span class="n">samples</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">s</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">samples</span>
 </pre></div>
@@ -1118,7 +1118,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 05 月 29 日.
+  最后更新于 2026 年 05 月 30 日.
   <br/>
 </p>
   </div>
