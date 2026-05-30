@@ -999,7 +999,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--custom-tis-function-path",
                 type=str,
                 default=None,
-                help="Path to the custom TIS/RS function (e.g., examples/train_infer_mismatch_helper/mis.py:compute_mis_weights_with_cp).",
+                help="Dotted path to the custom TIS/RS function (e.g., examples.train_infer_mismatch_helper.mis.compute_mis_weights_with_cp).",
             )
             parser.add_argument(
                 "--custom-pg-loss-reducer-function-path",
@@ -1751,8 +1751,11 @@ def slime_validate_args(args):
             "require advantage normalization. Please add `--normalize-advantages` to your command."
         )
 
-    if args.use_rollout_logprobs:
-        assert not args.use_tis, "use_rollout_logprobs and use_tis cannot be set at the same time."
+    if args.use_rollout_logprobs and args.use_tis:
+        assert args.custom_tis_function_path is not None, (
+            "use_rollout_logprobs with use_tis requires a custom_tis_function_path. "
+            "The builtin TIS implementations assume train-vs-rollout correction semantics."
+        )
 
     if args.get_mismatch_metrics:
         assert (

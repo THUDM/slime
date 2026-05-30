@@ -380,6 +380,76 @@ def compute_mis_weights_with_cp(
     return pg_loss, modified_masks, result_metrics
 
 
+def compute_rollout_proxy_pg_loss_with_cp(
+    args,
+    *,
+    pg_loss: torch.Tensor,
+    current_log_probs: list[torch.Tensor],
+    rollout_log_probs: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+    advantages: torch.Tensor | None = None,
+    **kwargs: Any,
+) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
+    """
+    Recompute PPO/GRPO pg_loss from rollout-proxy ratios, then apply MIS/TIS/RS once.
+
+    This hook is intended for `use_rollout_logprobs=True` together with
+    `custom_tis_function_path`. Unlike the default decoupled TIS path, it uses
+    current-policy logprobs as the behavior-ratio reference for MIS/TIS
+    statistics and reconstructs pg_loss directly from the bounded rollout-proxy
+    ratios instead of multiplying another correction term onto an existing
+    bypass-PPO loss.
+    """
+    from slime.backends.megatron_utils.cp_utils import all_gather_with_cp, slice_log_prob_with_cp
+
+    assert args.use_rollout_logprobs, "compute_rollout_proxy_pg_loss_with_cp expects use_rollout_logprobs=True"
+    assert args.use_tis, "compute_rollout_proxy_pg_loss_with_cp expects use_tis=True"
+    assert advantages is not None, "advantages must be provided for rollout-proxy pg loss recomputation"
+
+    full_rollout_log_probs = [
+        all_gather_with_cp(log_prob, total_length, response_length)
+        for log_prob, total_length, response_length in zip(
+            rollout_log_probs, total_lengths, response_lengths, strict=False
+        )
+    ]
+    full_current_log_probs = [
+        all_gather_with_cp(log_prob, total_length, response_length)
+        for log_prob, total_length, response_length in zip(
+            current_log_probs, total_lengths, response_lengths, strict=False
+        )
+    ]
+
+    direct_weights, modified_masks, is_metrics = compute_mis_weights(
+        args=args,
+        train_log_probs=full_current_log_probs,
+        rollout_log_probs=full_rollout_log_probs,
+        loss_masks=loss_masks,
+    )
+
+    def slice_cp_and_concat(
+        values: list[torch.Tensor], total_lengths: list[int], response_lengths: list[int]
+    ) -> torch.Tensor:
+        values = [
+            slice_log_prob_with_cp(values[i], total_lengths[i], response_lengths[i]) for i in range(len(values))
+        ]
+        return torch.cat(values, dim=0)
+
+    ratio = slice_cp_and_concat(direct_weights, total_lengths, response_lengths)
+    pg_losses1 = -ratio * advantages
+    pg_losses2 = -ratio.clamp(1 - args.eps_clip, 1 + args.eps_clip_high) * advantages
+    pg_loss = torch.maximum(pg_losses1, pg_losses2)
+
+    result_metrics = {}
+    for key, values in is_metrics.items():
+        key_name = f"mis_{key}"
+        values = slice_cp_and_concat(values, total_lengths, response_lengths)
+        result_metrics[key_name] = values
+
+    return pg_loss, modified_masks, result_metrics
+
+
 def add_ppl_metrics(
     train_log_prob: torch.Tensor,
     rollout_log_prob: torch.Tensor,
