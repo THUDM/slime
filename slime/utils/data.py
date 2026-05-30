@@ -292,5 +292,10 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
     # save the seqlen of the whole rollout batch
     Timer().seq_lens = total_lengths
     rollout_data["total_lengths"] = [total_lengths[i] for i in partition]
+    if "raw_reward" in rollout_data:
+        raw_reward = rollout_data["raw_reward"]
+        if getattr(args, "log_passrate", False):
+            rollout_data["global_raw_reward"] = raw_reward
+        rollout_data["raw_reward"] = [raw_reward[i] for i in partition]
 
     return rollout_data
