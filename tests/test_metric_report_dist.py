@@ -43,6 +43,9 @@ from _cp_dist_helpers import (
 )
 
 
+NUM_GPUS = 0
+
+
 def _train_step_distributed_worker(
     rank: int,
     world_size: int,

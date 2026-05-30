@@ -930,15 +930,15 @@ def policy_loss_function(
 
         # [decouple IS and rejection] Rebuild sum_of_sample_mean with
         # modified_response_masks for numerator correction (rejected tokens
-        # zeroed in pg_loss). Denominators stay the precomputed per-rollout
-        # totals from ``rollout_mask_sums`` (based on original loss_masks) —
+        # zeroed in pg_loss). Denominators stay the precomputed per-group
+        # totals from ``group_mask_sums`` (based on original loss_masks) —
         # same normalizer as the outer reducer, so pg_loss and the rest of the
         # reported metrics live in the same per-rollout-mean space.
         sum_of_sample_mean = get_sum_of_sample_mean(
             total_lengths,
             response_lengths,
             modified_response_masks,
-            batch["rollout_mask_sums"],
+            batch["group_mask_sums"],
             args.calculate_per_token_loss,
             args.qkv_format,
             max_seq_lens,
@@ -1174,7 +1174,7 @@ def loss_function(
         batch["total_lengths"],
         batch["response_lengths"],
         batch["loss_masks"],
-        batch["rollout_mask_sums"],
+        batch["group_mask_sums"],
         args.calculate_per_token_loss,
         args.qkv_format,
         batch.get("max_seq_lens", None),

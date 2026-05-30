@@ -18,11 +18,15 @@ from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 from megatron.core.optimizer.optimizer import MegatronOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.pipeline_parallel import get_forward_backward_func
-from megatron.core.utils import get_model_config, unwrap_model
+from megatron.core.utils import get_model_config
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 from tqdm import tqdm
 
+try:
+    from megatron.core.pipeline_parallel.utils import unwrap_model
+except ImportError:
+    from megatron.core.utils import unwrap_model
 from slime.utils import logging_utils
 from slime.utils.memory_utils import clear_memory
 
@@ -497,7 +501,7 @@ def train_one_step(
                 "rollout_log_probs",
                 "max_seq_lens",
                 "teacher_log_probs",
-                "rollout_mask_sums",
+                "group_mask_sums",
             ],
             args.data_pad_size_multiplier,
             args.qkv_format,
@@ -794,11 +798,21 @@ def train(
             log_dict["train/step"] = accumulated_step_id
             logging_utils.log(args, log_dict, step_key="train/step")
 
+            if args.ci_test and "train/train_rollout_logprob_abs_diff" in log_dict:
+                assert log_dict["train/train_rollout_logprob_abs_diff"] <= 0.1, f"{log_dict=}"
+
             if args.ci_test and not args.ci_disable_kl_checker:
                 if step_id == 0 and "train/ppo_kl" in log_dict and "train/pg_clipfrac" in log_dict:
                     # TODO: figure out why KL is not exactly zero when using PPO loss with KL clipping, and whether this is expected behavior or a bug.
                     assert log_dict["train/ppo_kl"] < 1e-8, f"{log_dict=}"
-                if accumulated_step_id == 0 and "train/kl_loss" in log_dict:
+                # R3 replays rollout routing for the actor path, while ref
+                # log-probs are computed with normal routing. The initial
+                # actor/ref KL is therefore not expected to be exactly zero.
+                if (
+                    accumulated_step_id == 0
+                    and not getattr(args, "use_rollout_routing_replay", False)
+                    and "train/kl_loss" in log_dict
+                ):
                     assert log_dict["train/kl_loss"] < 1e-8, f"{log_dict=}"
 
             logger.info(f"{role_tag}step {accumulated_step_id}: {log_dict}")
@@ -867,6 +881,19 @@ def save_hf_model(args, rollout_id: int, model: Sequence[DDP]) -> None:
         model (Sequence[DDP]): Sequence of DDP-wrapped model chunks.
         rollout_id (int): Rollout ID for path formatting.
     """
+    if args.megatron_to_hf_mode != "bridge":
+        try:
+            from slime.backends.megatron_utils.hf_checkpoint_saver import save_hf_model_direct
+
+            save_hf_model_direct(args, rollout_id, model)
+        except Exception as e:
+            if (
+                mpu.get_data_parallel_rank(with_context_parallel=True) == 0
+                and mpu.get_tensor_model_parallel_rank() == 0
+            ):
+                logger.error(f"Failed to save HuggingFace format: {e}")
+        return
+
     should_log = (
         mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
     )

@@ -26,7 +26,19 @@ Use this skill when:
 
 ### Step 2: Keep CI Compatibility
 
-When creating CI-discoverable tests, ensure top-level constants and conventions match repository patterns (including `NUM_GPUS = <N>` where expected).
+- CI executes registered test files with `python tests/<file>.py`, not only pytest discovery. New CPU pytest files should include:
+
+```python
+import pytest
+
+NUM_GPUS = 0
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))
+```
+
+- `run-ci-changed` extracts a top-level `NUM_GPUS = <N>` constant from added/modified `tests/test_*.py` and `tests/plugin_contracts/test_*.py`; if missing, it defaults to 8 GPUs. Set `NUM_GPUS = 0` for CPU-only tests.
+- For GPU/e2e tests, follow the nearby file pattern (`prepare()`, `execute()`, `NUM_GPUS`, and any model/dataset constants).
 
 ### Step 3: Run Local Validation
 
@@ -45,7 +57,7 @@ For CI workflow changes:
 python .github/workflows/generate_github_workflows.py
 ```
 
-3. Commit both template and generated workflow files
+3. Include both the template and generated workflow file in the change set (`.j2` and `.yml`). If the user asked for a commit, commit both.
 
 ### Step 5: Provide Verifiable PR Notes
 
@@ -59,6 +71,8 @@ Include:
 ## Common Mistakes
 
 - Editing generated workflow file only
+- Forgetting `NUM_GPUS = 0` on a CPU-only changed test, causing `run-ci-changed` to default to 8 GPUs
+- Adding a CPU pytest file that passes under `pytest tests/foo.py` but fails under CI's `python tests/foo.py`
 - Adding tests without following existing constants/conventions
 - Making tests too large or non-deterministic
 - Skipping local validation and relying only on remote CI
