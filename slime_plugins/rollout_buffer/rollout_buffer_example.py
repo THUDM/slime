@@ -271,11 +271,11 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
         for record in group_record:
             oai_messages = record["messages"]
 
-            mask_generator = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type=args.loss_mask_type)
-            token_ids, loss_mask = mask_generator.get_loss_mask(oai_messages)
-            response_length = mask_generator.get_response_lengths([loss_mask])[0]
-
-            loss_mask = loss_mask[-response_length:]
+            mask_generator = MultiTurnLossMaskGenerator(tokenizer)
+            mask_result = mask_generator.get_loss_mask_result(oai_messages)
+            token_ids = mask_result.token_ids
+            response_length = mask_result.response_length
+            loss_mask = mask_result.response_loss_mask
 
             group_results.append(
                 Sample(

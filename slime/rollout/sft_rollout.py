@@ -37,7 +37,11 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
         PROCESSOR = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
     if MASK_GENERATOR is None:
-        MASK_GENERATOR = MultiTurnLossMaskGenerator(TOKENIZER, tokenizer_type=args.loss_mask_type)
+        MASK_GENERATOR = MultiTurnLossMaskGenerator(
+            TOKENIZER,
+            chat_template_kwargs=args.apply_chat_template_kwargs,
+            chat_template_processor=PROCESSOR,
+        )
 
     samples = data_buffer.get_samples(args.rollout_batch_size)
 
@@ -46,22 +50,25 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
         messages = sample.prompt
         tools = sample.metadata.get("tools", None)
 
-        token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages, tools=tools)
-        if len(token_ids) != len(loss_mask):
+        mask_result = MASK_GENERATOR.get_loss_mask_result(messages, tools=tools)
+        if len(mask_result.token_ids) != len(mask_result.loss_mask):
             raise ValueError(
-                f"SFT rollout produced mismatched token_ids/loss_mask lengths: {len(token_ids)=}, {len(loss_mask)=}"
+                "SFT rollout produced mismatched token_ids/loss_mask lengths: "
+                f"len(token_ids)={len(mask_result.token_ids)}, len(loss_mask)={len(mask_result.loss_mask)}"
             )
 
-        response_length = MASK_GENERATOR.get_response_lengths([loss_mask])[0]
+        response_length = mask_result.response_length
 
-        sample.tokens = token_ids
+        sample.tokens = mask_result.token_ids
         sample.response_length = response_length
         sample.reward = 0
-        sample.loss_mask = loss_mask[-response_length:]
+        sample.loss_mask = mask_result.response_loss_mask
 
         if i == 0 and not SAMPLE_PRINTED:
             logger.info(
-                f"sft_rollout::generate_rollout example data: {sample=} (raw){messages=} (raw){token_ids=} (raw){loss_mask=} {response_length=}"
+                "sft_rollout::generate_rollout example data: "
+                f"{sample=} (raw){messages=} (raw){mask_result.token_ids=} "
+                f"(raw){mask_result.loss_mask=} {response_length=}"
             )
             SAMPLE_PRINTED = True
 
