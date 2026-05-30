@@ -158,13 +158,19 @@ cd $BASE_DIR/Megatron-LM && git checkout ${MEGATRON_COMMIT} && pip install -e . 
 
 # install slime and apply patches
 
-# if slime does not exist locally, clone it (matches Dockerfile: pip install -e . --no-deps)
+# if slime does not exist locally, clone it
 if [ ! -d "$BASE_DIR/slime" ]; then
   cd $BASE_DIR
   git clone https://github.com/THUDM/slime.git
 fi
 export SLIME_DIR=$BASE_DIR/slime
 cd $SLIME_DIR
+# Install slime's pure-python runtime deps first (wandb, ray, accelerate,
+# transformers, etc.) from its requirements.txt, then install slime itself
+# with --no-deps so pip doesn't re-resolve and stomp our pinned native libs
+# (torch+cu129, sglang-kernel+cu129, ...). The Dockerfile does the same thing
+# in two RUN layers (line ~71 + line ~124).
+pip install -r requirements.txt
 pip install -e . --no-deps
 
 # int4_qat kernel (matches Dockerfile)
