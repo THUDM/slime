@@ -18,6 +18,7 @@ ray[default]
 ring_flash_attn
 safetensors
 sglang-router>=0.2.3
+swanlab
 tensorboard
 transformers
 wandb

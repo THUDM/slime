@@ -9,6 +9,7 @@ except ImportError as e:
 
 from slime.rollout.sglang_rollout import GenerateState
 from slime.utils.http_utils import post
+from slime.utils import logging_utils
 from slime.utils.types import Sample
 
 # Import reward models
@@ -272,26 +273,28 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             "return_logprob": True,  # Request log probabilities for training
         }
 
-        # Log payload to wandb for debugging
+        # Log payload for debugging
         try:
-            import wandb
-
-            if wandb.run is not None:
+            if getattr(args, "use_wandb", False) or getattr(args, "use_swanlab", False) or getattr(
+                args, "use_tensorboard", False
+            ):
                 # Count available tools (from tool_specs)
                 available_tools = len(tool_specs)
                 # Count tools used in the current response
                 tools_used = response.count("<interpreter>")
 
-                wandb.log(
+                logging_utils.log(
+                    args,
                     {
                         "debug/payload_length": len(prompt + response),
                         "debug/available_tools": available_tools,
                         "debug/tools_used": tools_used,
                         "debug/turn": turn,
-                    }
+                    },
+                    step_key="debug/turn",
                 )
-        except ImportError:
-            pass  # wandb not available
+        except Exception:
+            pass
 
         output = await post(url, payload)
 
