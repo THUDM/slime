@@ -10,9 +10,9 @@ dots in the e2e test's filename).
 Two helpers:
 
   - ``compact_generate``: fans one input sample out to N siblings
-    sharing the same ``rollout_id``. That's the contract the rest of the
-    framework (per-rollout step splitter, per-rollout-mean reducer,
-    ``_validate_rollout_id_annotated`` validator) is built around.
+    sharing the same ``group_id``. That's the contract the rest of the
+    framework (group-aware step splitter, per-group reducer,
+    ``_validate_group_id_annotated`` validator) is built around.
 
   - ``grpo_normalize_by_group_index``: replaces the default
     ``_post_process_rewards`` reshape-by-shape logic with a proper
@@ -63,12 +63,12 @@ async def compact_generate(args, sample, sampling_params):
     siblings = []
     for _ in range(n):
         s = copy.deepcopy(base_sample)
-        # Critical invariant: all siblings share ``rollout_id`` so the
-        # per-rollout reducer aggregates them as ONE rollout (not N) and
-        # the rollout-aware step splitter keeps them in the same step.
+        # Critical invariant: all siblings share ``group_id`` so the
+        # per-group reducer aggregates them as ONE group (not N) and
+        # the group-aware step splitter keeps them in the same step.
         # ``group_index`` is inherited via ``deepcopy`` and is what the
         # post-process reward hook below groups on for GRPO normalize.
-        s.rollout_id = sample.index
+        s.group_id = sample.index
         siblings.append(s)
     return siblings
 

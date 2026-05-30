@@ -48,8 +48,8 @@ def assert_invariants(
     """Check the invariants documented at the top of dp_schedule.py.
 
     ``expected_global_sample_indices`` is the set of global sample indices
-    that should end up covered (after trim). Trailing rollouts that don't
-    fit are excluded.
+    that should end up covered (after trim). Trailing groups that don't fit
+    are excluded.
     """
     seen_global: set[int] = set()
     for r in range(dp_size):
@@ -84,12 +84,12 @@ def assert_invariants(
 def test_static_stride_single_step():
     """Static + strided DP split, single step (1 rollout = 1 sample)."""
     total_lengths = [10] * 16
-    rollout_indices = list(range(16))
+    group_indices = list(range(16))
     args = make_args(micro_batch_size=2)
     tp = make_tp(dp_size=4)
 
     partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, global_batch_size=16, rollout_indices=rollout_indices
+        args, tp, total_lengths, global_batch_size=16, group_indices=group_indices
     )
 
     assert nmb == [2]
@@ -108,12 +108,12 @@ def test_static_stride_single_step():
 def test_static_balance_multi_step():
     """Static + balance_data + 2 training steps."""
     total_lengths = [1, 2, 3, 4, 5, 6, 7, 8, 8, 7, 6, 5, 4, 3, 2, 1]
-    rollout_indices = list(range(16))
+    group_indices = list(range(16))
     args = make_args(micro_batch_size=2, balance_data=True)
     tp = make_tp(dp_size=2)
 
     partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, global_batch_size=8, rollout_indices=rollout_indices
+        args, tp, total_lengths, global_batch_size=8, group_indices=group_indices
     )
 
     assert nmb == [2, 2]
@@ -132,12 +132,12 @@ def test_static_balance_multi_step():
 def test_dynamic_uniform():
     """Dynamic mbs on uniform-length samples."""
     total_lengths = [5] * 8
-    rollout_indices = list(range(8))
+    group_indices = list(range(8))
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=10)
     tp = make_tp(dp_size=2)
 
     partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, global_batch_size=8, rollout_indices=rollout_indices
+        args, tp, total_lengths, global_batch_size=8, group_indices=group_indices
     )
 
     assert gbs_per_step == [8]
@@ -156,12 +156,12 @@ def test_dynamic_uniform():
 def test_dynamic_oversized_sample_lands_alone():
     """A sample larger than max_per_bin must end up alone in its mbs."""
     total_lengths = [15, 3, 3, 3, 3, 3, 3, 3]
-    rollout_indices = list(range(8))
+    group_indices = list(range(8))
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=10)
     tp = make_tp(dp_size=2)
 
     partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, global_batch_size=8, rollout_indices=rollout_indices
+        args, tp, total_lengths, global_batch_size=8, group_indices=group_indices
     )
 
     assert_invariants(
@@ -190,12 +190,12 @@ def test_dynamic_oversized_sample_lands_alone():
 def test_dynamic_with_vpp_rounds_to_mb_group():
     """num_microbatches per rank should be a multiple of mb_group when vpp_size > 1."""
     total_lengths = [4] * 32
-    rollout_indices = list(range(32))
+    group_indices = list(range(32))
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=8)
     tp = make_tp(dp_size=2, vpp_size=2, microbatch_group_size_per_vp_stage=2)
 
     partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, global_batch_size=16, rollout_indices=rollout_indices
+        args, tp, total_lengths, global_batch_size=16, group_indices=group_indices
     )
 
     for n in nmb:
@@ -212,19 +212,19 @@ def test_dynamic_with_vpp_rounds_to_mb_group():
 
 
 @pytest.mark.unit
-def test_rollout_grouping_keeps_samples_together():
-    """compact / subagent simulation: rollout 0 emits 3 samples, rollout 1 emits 2,
-    rollout 2 emits 4. Splitter keeps every rollout's samples in a single step."""
-    rollout_indices = [0, 0, 0, 1, 1, 2, 2, 2, 2]
+def test_grouping_keeps_samples_together():
+    """compact / subagent simulation: group 0 emits 3 samples, group 1 emits 2,
+    group 2 emits 4. Splitter keeps every group's samples in a single step."""
+    group_indices = [0, 0, 0, 1, 1, 2, 2, 2, 2]
     total_lengths = [3] * 9
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=12)
     tp = make_tp(dp_size=1)
 
     partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, global_batch_size=1, rollout_indices=rollout_indices
+        args, tp, total_lengths, global_batch_size=1, group_indices=group_indices
     )
 
-    # 3 rollouts / 1 per step → 3 steps, gbs constant.
+    # 3 groups / 1 per step -> 3 steps, gbs constant.
     assert gbs_per_step == [1, 1, 1]
     # For each step, collect the samples (global indices) that landed in that step's mbs
     # on rank 0, then verify they exactly equal the rollout's sample positions.
@@ -250,16 +250,16 @@ def test_rollout_grouping_keeps_samples_together():
 
 
 @pytest.mark.unit
-def test_trims_trailing_rollouts_that_dont_fill_a_step():
-    """5 rollouts, gbs=2 → 2 steps × 2 rollouts; trailing rollout 4 (sample positions 6, 7)
+def test_trims_trailing_groups_that_dont_fill_a_step():
+    """5 groups, gbs=2 -> 2 steps x 2 groups; trailing group 4 (sample positions 6, 7)
     is dropped."""
-    rollout_indices = [0, 0, 1, 2, 2, 3, 4, 4]
+    group_indices = [0, 0, 1, 2, 2, 3, 4, 4]
     total_lengths = [3] * 8
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=12)
     tp = make_tp(dp_size=1)
 
     partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
-        args, tp, total_lengths, global_batch_size=2, rollout_indices=rollout_indices
+        args, tp, total_lengths, global_batch_size=2, group_indices=group_indices
     )
 
     assert gbs_per_step == [2, 2]
@@ -276,12 +276,12 @@ def test_trims_trailing_rollouts_that_dont_fill_a_step():
 
 
 @pytest.mark.unit
-def test_rejects_when_fewer_rollouts_than_gbs():
-    """gbs=4 with only 3 distinct rollouts → cannot form one step."""
+def test_rejects_when_fewer_groups_than_gbs():
+    """gbs=4 with only 3 distinct groups -> cannot form one step."""
     args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=12)
     tp = make_tp(dp_size=1)
-    with pytest.raises(AssertionError, match="num_rollouts"):
-        build_dp_schedule(args, tp, [3] * 6, global_batch_size=4, rollout_indices=[0, 0, 1, 1, 2, 2])
+    with pytest.raises(AssertionError, match="num_groups"):
+        build_dp_schedule(args, tp, [3] * 6, global_batch_size=4, group_indices=[0, 0, 1, 1, 2, 2])
 
 
 if __name__ == "__main__":

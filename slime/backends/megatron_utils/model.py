@@ -501,7 +501,7 @@ def train_one_step(
                 "rollout_log_probs",
                 "max_seq_lens",
                 "teacher_log_probs",
-                "rollout_mask_sums",
+                "group_mask_sums",
             ],
             args.data_pad_size_multiplier,
             args.qkv_format,

@@ -1,3 +1,4 @@
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -11,14 +12,13 @@ class Sample:
 
     group_index: int | None = None
     index: int | None = None
-    # Id of the rollout this sample came from. Defaults to ``None`` and the
-    # downstream pipeline falls back to ``index`` (so the default rollout
-    # path, where one execution = one training sample, sees rollout_id ==
-    # index). Compact / subagent paths that split one rollout execution into
-    # multiple training samples should set the same ``rollout_id`` on every
-    # sibling, so loss aggregation averages within the rollout instead of
-    # over-counting it.
-    rollout_id: int | None = None
+    # Id of the training aggregation group this sample belongs to. Defaults
+    # to ``None`` and the downstream pipeline falls back to ``index`` (or the
+    # sample position if index is absent). Compact / subagent paths that split
+    # one rollout execution into multiple training samples should set the same
+    # ``group_id`` on every sibling, so loss aggregation averages within the
+    # group instead of over-counting it.
+    group_id: int | None = None
     # prompt
     prompt: str | list[dict[str, str]] = ""
     tokens: list[int] = field(default_factory=list)
@@ -127,6 +127,29 @@ class Sample:
 
     prefix_cache_info: PrefixCacheInfo = field(default_factory=PrefixCacheInfo)
 
+    def __getattribute__(self, name):
+        if name == "rollout_id":
+            raise AttributeError("Sample.rollout_id is deprecated and write-only; use Sample.group_id instead.")
+        return object.__getattribute__(self, name)
+
+    def __setattr__(self, name, value):
+        if name == "group_id":
+            object.__setattr__(self, "group_id", value)
+            return
+        if name == "rollout_id":
+            # Deprecated assignment-only compatibility path. ``rollout_id`` is
+            # intentionally not a dataclass field and cannot be read.
+            if value is None:
+                return
+            warnings.warn(
+                "Sample.rollout_id is deprecated and write-only; set Sample.group_id instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            object.__setattr__(self, "group_id", value)
+            return
+        object.__setattr__(self, name, value)
+
     def to_dict(self):
         value = self.__dict__.copy()
         value["status"] = self.status.value
@@ -147,6 +170,10 @@ class Sample:
 
         for key, value in data.items():
             if key not in field_names:
+                if key == "rollout_id":
+                    if sample.group_id is None:
+                        setattr(sample, key, value)
+                    continue
                 setattr(sample, key, value)
 
         return sample
