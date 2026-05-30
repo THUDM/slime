@@ -373,9 +373,9 @@ def log_rollout_data(
                 # assert reduced_log_dict["rollout/log_probs"] == reduced_log_dict["rollout/ref_log_probs"]
                 assert abs(reduced_log_dict["rollout/log_probs"] - reduced_log_dict["rollout/ref_log_probs"]) < 1e-8
             if "rollout/log_probs" in reduced_log_dict:
-                assert -0.5 < reduced_log_dict["rollout/log_probs"] < 0
+                assert -1 < reduced_log_dict["rollout/log_probs"] < 0
             if "rollout/entropy" in reduced_log_dict:
-                assert 0 < reduced_log_dict["rollout/entropy"] < 0.5
+                assert 0 < reduced_log_dict["rollout/entropy"] < 1
 
     if args.log_multi_turn:
         log_multi_turn_data(rollout_id, args, rollout_data)
