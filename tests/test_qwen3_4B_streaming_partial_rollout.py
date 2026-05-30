@@ -16,8 +16,6 @@ import os
 
 import slime.utils.external_utils.command_utils as U
 
-TIGHT_HOST_MEMORY = U.get_bool_env_var("SLIME_TEST_TIGHT_HOST_MEMORY", "1")
-
 MODEL_NAME = "Qwen3-4B"
 MODEL_TYPE = "qwen3-4B"
 NUM_GPUS = 8
@@ -69,7 +67,7 @@ def execute():
         "--recompute-method uniform "
         "--recompute-num-layers 1 "
         "--use-dynamic-batch-size "
-        f"--max-tokens-per-gpu {2048 if TIGHT_HOST_MEMORY else 8192} "
+        "--max-tokens-per-gpu 8192 "
     )
 
     grpo_args = (

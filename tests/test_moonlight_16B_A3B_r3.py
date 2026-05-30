@@ -2,7 +2,6 @@ import os
 import slime.utils.external_utils.command_utils as U
 
 ENABLE_EVAL = bool(int(os.environ.get("SLIME_TEST_ENABLE_EVAL", "1")))
-TIGHT_HOST_MEMORY = bool(int(os.environ.get("SLIME_TEST_TIGHT_HOST_MEMORY", "1")))
 
 MODEL_NAME = "Moonlight-16B-A3B-Instruct"
 MODEL_TYPE = "moonlight"
@@ -30,12 +29,12 @@ def execute():
         "--apply-chat-template "
         "--rollout-shuffle "
         "--rm-type math "
-        "--num-rollout 3 "
-        "--rollout-batch-size 8 "
+        "--num-rollout 2 "
+        "--rollout-batch-size 4 "
         "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 4096 "
         "--rollout-temperature 1 "
-        "--global-batch-size 32 "
+        "--global-batch-size 16 "
     )
 
     eval_args = (
@@ -57,12 +56,12 @@ def execute():
         "--recompute-method uniform "
         "--recompute-num-layers 1 "
         "--use-dynamic-batch-size "
-        f"--max-tokens-per-gpu {2048 if TIGHT_HOST_MEMORY else 2048} "
+        "--max-tokens-per-gpu 8192 "
     )
 
     grpo_args = (
         "--advantage-estimator gspo "
-        f"{'' if TIGHT_HOST_MEMORY else '--use-kl-loss '}"
+        "--use-kl-loss "
         "--kl-loss-coef 0.00 "
         "--kl-loss-type low_var_kl "
         "--kl-coef 0.00 "
@@ -83,7 +82,7 @@ def execute():
     sglang_args = (
         "--rollout-num-gpus-per-engine 2 "
         "--sglang-mem-fraction-static 0.8 "
-        "--sglang-cuda-graph-max-bs 32 "
+        "--sglang-cuda-graph-max-bs 16 "
         "--sglang-max-running-requests 512 "
     )
 

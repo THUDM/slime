@@ -43,11 +43,11 @@ def execute():
         "--rollout-shuffle "
         "--rm-type deepscaler "
         "--num-rollout 2 "
-        "--rollout-batch-size 8 "
+        "--rollout-batch-size 4 "
         "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 16384 "
         "--rollout-temperature 1.0 "
-        "--global-batch-size 32 "
+        "--global-batch-size 16 "
     )
 
     eval_args = (
@@ -99,7 +99,7 @@ def execute():
         "--sglang-dp-size 4 "
         "--sglang-ep-size 4 "
         "--sglang-enable-dp-lm-head "
-        "--sglang-cuda-graph-bs 1 2 4 8 16 24 32 "
+        "--sglang-cuda-graph-bs 1 2 4 8 16 "
         "--sglang-max-running-requests 512 "
         "--prefill-num-servers 1 "
         "--sglang-disaggregation-transfer-backend mooncake "

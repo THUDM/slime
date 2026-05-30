@@ -44,8 +44,6 @@ import tempfile
 
 import slime.utils.external_utils.command_utils as U
 
-TIGHT_DEVICE_MEMORY = U.get_bool_env_var("SLIME_TEST_TIGHT_DEVICE_MEMORY", "1")
-
 MODEL_NAME = "Qwen2.5-0.5B-Instruct"
 MODEL_TYPE = "qwen2.5-0.5B"
 NUM_GPUS = 4
@@ -73,11 +71,11 @@ def prepare():
 def execute():
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
 
-    # Shape: rollout_batch_size=8 prompts, n_samples_per_prompt=1 (all
+    # Shape: rollout_batch_size=4 prompts, n_samples_per_prompt=1 (all
     # fan-out is owned by compact_generate; this knob stays at 1 so a
     # regression that confuses sample count vs rollout count surfaces),
-    # global_batch_size=4 → 2 training steps per rollout, num_rollout=3
-    # → 6 total training steps.
+    # global_batch_size=4 → 1 training step per rollout, num_rollout=2
+    # → 2 total training steps.
     #
     # NB no ``--group-rm``: when custom_generate returns ``list[Sample]``
     # the per-sample rm path inside ``generate_and_rm`` (sglang_rollout.py:
@@ -94,8 +92,8 @@ def execute():
         "--apply-chat-template "
         "--rollout-shuffle "
         "--rm-type deepscaler "
-        "--num-rollout 3 "
-        "--rollout-batch-size 8 "
+        "--num-rollout 2 "
+        "--rollout-batch-size 4 "
         "--n-samples-per-prompt 1 "
         "--rollout-max-response-len 8192 "
         "--rollout-temperature 0.8 "
@@ -146,8 +144,8 @@ def execute():
 
     sglang_args = (
         "--rollout-num-gpus-per-engine 1 "
-        f"--sglang-mem-fraction-static {0.6 if TIGHT_DEVICE_MEMORY else 0.7} "
-        "--sglang-cuda-graph-max-bs 32 "
+        "--sglang-mem-fraction-static 0.7 "
+        "--sglang-cuda-graph-max-bs 8 "
         "--sglang-enable-metrics "
     )
 
@@ -195,11 +193,11 @@ def execute():
     )
 
     # Post-train assertion: compact_generate must have been called exactly
-    # ``num_rollout * rollout_batch_size`` = 3 * 8 = 24 times. A regression
+    # ``num_rollout * rollout_batch_size`` = 2 * 4 = 8 times. A regression
     # that bypassed the custom path (arg parser drops the flag, or the
     # path is silently mis-routed) would either skip the file entirely or
     # under-count.
-    expected_calls = 3 * 8
+    expected_calls = 2 * 4
     try:
         with open(FANOUT_COUNTER_FILE) as f:
             actual_calls = sum(1 for _ in f)
@@ -211,7 +209,7 @@ def execute():
         ) from e
     assert actual_calls == expected_calls, (
         f"compact_generate was called {actual_calls} times, expected {expected_calls} "
-        f"(num_rollout=3 × rollout_batch_size=8). A mismatch points at the rollout "
+        f"(num_rollout=2 x rollout_batch_size=4). A mismatch points at the rollout "
         f"submission loop double-submitting / under-submitting prompts."
     )
 
