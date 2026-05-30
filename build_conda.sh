@@ -19,8 +19,15 @@ fi
 micromamba create -n slime python=3.12 pip -c conda-forge -y
 micromamba activate slime
 export CUDA_HOME="$CONDA_PREFIX"
+
+# Keep these in sync with docker/Dockerfile:
+#   - SGLANG_IMAGE_TAG (ARG)            -> SGLANG_VERSION below
+#   - MEGATRON_COMMIT (ARG)             -> MEGATRON_COMMIT below
+#   - PATCH_VERSION (ARG, default "latest") -> PATCH_VERSION below
+export SGLANG_VERSION="v0.5.12.post1"
 export SGLANG_COMMIT="5a15cde858ea09b77116212a39356f2fc51b8584"
 export MEGATRON_COMMIT="1dcf0dafa884ad52ffb243625717a3471643e087"
+export PATCH_VERSION="latest"
 
 export BASE_DIR=${BASE_DIR:-"/root"}
 cd $BASE_DIR
@@ -42,18 +49,20 @@ micromamba install -n slime -c conda-forge rust -y
 
 pip install cuda-python==12.9
 
-# install sglang
+# install sglang. The Dockerfile starts FROM slimerl/sglang:v0.5.12.post1-cu129
+# which already has sglang installed with cu129-built native kernels; we have
+# to install it ourselves here. Two follow-up steps clean up the cu13 spill:
+#   1. force-reinstall torch / sglang-kernel / sgl-deep-gemm to their +cu129
+#      wheels (pypi defaults are cu13);
+#   2. uninstall the cu13 nvidia-* runtime libs sglang dragged in, then
+#      reinstall the cu12 equivalents to repair the `site-packages/nvidia/*`
+#      shared dirs (pip uninstall stomps libs co-owned across cu12/cu13).
 if [ ! -d "$BASE_DIR/sglang" ]; then
   cd $BASE_DIR
   git clone https://github.com/sgl-project/sglang.git
 fi
 cd $BASE_DIR/sglang
 git checkout ${SGLANG_COMMIT}
-# Install sglang's Python package. Sglang pins `torch==2.11.0` and ships native
-# kernels (sglang-kernel, sgl-deep-gemm) built against cu13 on pypi; pip's
-# resolver insists on those during this editable install no matter what we
-# pre-stage. Let it complete with cu13, then force-reinstall torch and the
-# native kernels from the cu129 indexes so the env ends up consistently cu129.
 pip install -e "python[all]" --extra-index-url https://download.pytorch.org/whl/cu129
 pip install --force-reinstall --no-deps \
   torch==2.11.0 torchvision torchaudio==2.11.0 \
@@ -61,15 +70,6 @@ pip install --force-reinstall --no-deps \
 pip install --force-reinstall --no-deps \
   sglang-kernel==0.4.2.post2 sgl-deep-gemm==0.1.0 \
   --index-url https://docs.sglang.ai/whl/cu129/
-# sglang's editable install pulled in pypi's cu13 torch+kernels, which dragged
-# along a full set of nvidia-*-cu13 / cuda-toolkit==13 wheels. The force-
-# reinstalls above swap torch/sglang-kernel/sgl-deep-gemm to their +cu129
-# variants but DO NOT remove those stale cu13 nvidia runtime libs, and they can
-# get dlopen'd ahead of our cu12 libs at import time (e.g. deep_gemm's
-# libcudart.so.13 lookup). Uninstall them so the env is purely cu12. Then
-# force-reinstall the cu12 nvidia wheels — pip uninstall stomps shared
-# `site-packages/nvidia/*` subdirs that cu12/cu13 wheels co-own, so this puts
-# the missing .so files back.
 pip uninstall -y \
   nvidia-cublas \
   nvidia-cuda-cupti \
@@ -110,15 +110,35 @@ pip install --force-reinstall --no-deps \
 
 pip install cmake ninja
 
-# flash attn
+# flash attn 2 (matches Dockerfile)
 # the newest version megatron supports is v2.7.4.post1
 MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1 --no-build-isolation
 
+# flash attn 3 (hopper) — matches Dockerfile
+cd $BASE_DIR
+if [ ! -d "$BASE_DIR/flash-attention" ]; then
+  git clone https://github.com/Dao-AILab/flash-attention.git
+fi
+cd $BASE_DIR/flash-attention
+git checkout fbf24f67cf7f6442c5cfb2c1057f4bfc57e72d89
+git submodule update --init
+cd hopper/
+MAX_JOBS=96 python setup.py install
+python_path=$(python -c "import site; print(site.getsitepackages()[0])")
+mkdir -p $python_path/flash_attn_3
+cp flash_attn_interface.py $python_path/flash_attn_3/flash_attn_interface.py
+cd $BASE_DIR
+rm -rf flash-attention
+
 pip install git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c --no-deps
-pip install --no-build-isolation "transformer_engine[pytorch]==2.10.0"
 pip install flash-linear-attention==0.4.1
 # FlashQLA: optional GDN backend for Qwen3.5/Qwen3-Next (--qwen-gdn-backend flashqla; requires SM90+)
 pip install git+https://github.com/QwenLM/FlashQLA.git --no-build-isolation
+# tilelang (matches Dockerfile)
+pip install tilelang -f https://tile-ai.github.io/whl/nightly/cu128/
+
+pip install --no-build-isolation "transformer_engine[pytorch]==2.10.0"
+
 NVCC_APPEND_FLAGS="--threads 4" \
   pip -v install --disable-pip-version-check --no-cache-dir \
   --no-build-isolation \
@@ -126,10 +146,18 @@ NVCC_APPEND_FLAGS="--threads 4" \
 
 TMS_CUDA_MAJOR="${TMS_CUDA_MAJOR:-$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')}"
 export TMS_CUDA_MAJOR
-pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@a193d9dd1b877d33c64a41cfb3db9f867df2d926 --no-cache-dir --force-reinstall
+# --no-build-isolation: TMS's setup.py needs to find nvcc + headers + the
+# installed torch to build its cu${TMS_CUDA_MAJOR} native hook; pip's default
+# PEP 517 build venv hides them, so the wheel comes out python-only (~46KB)
+# and sglang trips `Only hook_mode=preload supports pauseable CUDA Graph`
+# because the preload .so was never compiled in.
+pip install -v git+https://github.com/fzyzcjy/torch_memory_saver.git@a193d9dd1b877d33c64a41cfb3db9f867df2d926 \
+  --no-cache-dir --force-reinstall --no-build-isolation
+# matches Dockerfile (different fork/branch from older build_conda.sh)
 pip install git+https://github.com/radixark/Megatron-Bridge.git@bridge --no-deps --no-build-isolation
 pip install nvidia-modelopt[torch]>=0.37.0 --no-build-isolation
 pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-5f8d397/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
+python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
 
 # megatron
 cd $BASE_DIR
@@ -140,18 +168,18 @@ cd $BASE_DIR/Megatron-LM && git checkout ${MEGATRON_COMMIT} && pip install -e .
 
 # install slime and apply patches
 
-# if slime does not exist locally, clone it
+# if slime does not exist locally, clone it (matches Dockerfile: pip install -e . --no-deps)
 if [ ! -d "$BASE_DIR/slime" ]; then
   cd $BASE_DIR
-  git clone  https://github.com/THUDM/slime.git
-  cd slime/
-  export SLIME_DIR=$BASE_DIR/slime
-  pip install -e .
-else
-  export SLIME_DIR=$BASE_DIR/slime
-  cd $SLIME_DIR
-  pip install -e .
+  git clone https://github.com/THUDM/slime.git
 fi
+export SLIME_DIR=$BASE_DIR/slime
+cd $SLIME_DIR
+pip install -e . --no-deps
+
+# int4_qat kernel (matches Dockerfile)
+cd $SLIME_DIR/slime/backends/megatron_utils/kernels/int4_qat
+pip install . --no-build-isolation
 
 # https://github.com/pytorch/pytorch/issues/168167
 pip install nvidia-cudnn-cu12==9.16.0.29
@@ -161,12 +189,26 @@ pip install "numpy<2"
 # so `import sglang` works at runtime.
 pip install "kernels<0.15.0"
 
-# apply patch
+# apply patch (matches Dockerfile: --3way + fail on conflicts)
 cd $BASE_DIR/sglang
-git apply --check $SLIME_DIR/docker/patch/v0.5.12.post1/sglang.patch 2>/dev/null && \
-  git apply $SLIME_DIR/docker/patch/v0.5.12.post1/sglang.patch || \
+if git apply --check $SLIME_DIR/docker/patch/${PATCH_VERSION}/sglang.patch 2>/dev/null; then
+  git update-index --refresh || true
+  git apply $SLIME_DIR/docker/patch/${PATCH_VERSION}/sglang.patch --3way
+  if grep -R -n '^<<<<<<< ' .; then
+    echo "sglang patch failed to apply cleanly. Please resolve conflicts." >&2
+    exit 1
+  fi
+else
   echo "sglang patch already applied or not applicable, skipping"
+fi
 cd $BASE_DIR/Megatron-LM
-git apply --check $SLIME_DIR/docker/patch/v0.5.12.post1/megatron.patch 2>/dev/null && \
-  git apply $SLIME_DIR/docker/patch/v0.5.12.post1/megatron.patch || \
+if git apply --check $SLIME_DIR/docker/patch/${PATCH_VERSION}/megatron.patch 2>/dev/null; then
+  git update-index --refresh || true
+  git apply $SLIME_DIR/docker/patch/${PATCH_VERSION}/megatron.patch --3way
+  if grep -R -n '^<<<<<<< ' .; then
+    echo "megatron patch failed to apply cleanly. Please resolve conflicts." >&2
+    exit 1
+  fi
+else
   echo "megatron patch already applied or not applicable, skipping"
+fi
