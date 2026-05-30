@@ -49,7 +49,7 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
         )
         _patch_bridge_expert_cache_to_cpu()
 
-    def get_hf_weight_chunks(self, megatron_local_weights):
+    def get_hf_weight_chunks(self, megatron_local_weights, progress_desc: str = "Update weights"):
         # TODO support quantization (e.g. modify megatron-bridge to provide megatron param name)
         renamed_megatron_local_weights = {strip_param_name_prefix(k): v for k, v in megatron_local_weights.items()}
         with megatron_bridge_utils.patch_megatron_model(self.model):

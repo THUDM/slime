@@ -20,9 +20,39 @@ This page is a roadmap: use it to decide which docs and examples to read when pl
 
 Most agentic RL tasks should start with `--custom-generate-function-path`. This function converts one agent execution into slime-trainable `Sample` objects: fill `tokens`, `response_length`, `loss_mask`, and `status`, then either fill `reward` directly or let `--custom-rm-path` compute it.
 
-If one prompt rollout corresponds to one training sample, return a single `Sample`. If one rollout splits into multiple trainable segments, such as subagent trajectories, main-agent continuations, or pre/post-compaction segments, return `list[Sample]` and set the same `rollout_id` on all sibling samples. slime then keeps those samples together for train-step splitting and loss aggregation instead of counting them as independent rollouts.
+The agent workflow itself may speak in strings, chat messages, tool calls, environment observations, or framework-specific events. The training target, however, should stay token based. Preserve the model-sampled token ids and use `loss_mask` to separate trainable model output from prompt, template, tool-observation, or environment text.
+
+If one prompt rollout corresponds to one training sample, return a single `Sample`. If one rollout splits into multiple trainable segments, such as subagent trajectories, main-agent continuations, or pre/post-compaction segments, return `list[Sample]` and set the same `group_id` on all sibling samples. slime then keeps those samples together for train-step splitting and loss aggregation instead of counting them as independent groups. `Sample.rollout_id` remains as a deprecated write-only alias for older code that only assigns it.
 
 Reach for `--rollout-function-path` only when you need to replace the whole rollout orchestration. Common reasons include custom data-source scheduling, cross-rollout background queues, fully asynchronous generation, or workflows that cannot fit the default `sglang_rollout` prompt-by-sample structure.
+
+## Agent Runtime Adapters
+
+slime includes protocol adapters for existing agent runtimes:
+
+- `slime.agent.adapters.AnthropicAdapter`: Anthropic Messages API, used by Claude Code style agents.
+- `slime.agent.adapters.OpenAIAdapter`: OpenAI Chat Completions and Responses APIs, used by OpenAI SDK / OpenAI Agents SDK style clients.
+
+Adapters are a convenience layer, not a separate agent framework. Their contract is message history in, sampled tokens out: they render the chat template, call SGLang with `input_ids` and `return_logprob=True`, and export the returned token ids/logprobs as trainable trajectory segments. They avoid re-tokenizing response text to recover the training target.
+
+Instantiate the protocol-specific adapter in your custom generate function, run its `app` with aiohttp, then manage each rollout through the adapter instance:
+
+```python
+from slime.agent.adapters import AnthropicAdapter
+
+adapter = AnthropicAdapter(
+    tokenizer=tokenizer,
+    sglang_url=sglang_url,
+    tool_parser=tool_parser,
+    reasoning_parser=reasoning_parser,
+)
+
+adapter.open_session(session_id, sampling_defaults=sampling_params)
+# Agent client sends requests to adapter.app.
+segments = await adapter.finish_session(session_id)
+```
+
+For multi-turn agents, use a stable `session_id`. The adapters pass it as `X-SMG-Routing-Key` so SGLang can route one session to the same worker and reuse prefix cache.
 
 ## Agent Serving And Performance
 
@@ -38,6 +68,6 @@ Agentic rollouts tend to depend more heavily on serving configuration than ordin
 
 The full coding-agent example is [`examples/coding_agent_rl`](../_examples_synced/coding_agent_rl/README.md). It shows an end-to-end agent RL setup that is close to a real software-engineering workflow: each sample boots an isolated sandbox, the agent uses tools to edit code, the rollout captures a `git diff`, and a clean sandbox runs the tests to produce the reward.
 
-This example also demonstrates agent fan-out training. Its middleware splits one trajectory into `subagent`, `wipe` (the chain frozen before compaction), and `final` segments. `generate()` returns `list[Sample]`, and all segments share the same `rollout_id`.
+This example also demonstrates agent fan-out training. Its middleware splits one trajectory into `subagent`, `wipe` (the chain frozen before compaction), and `final` segments. `generate()` returns `list[Sample]`, and all segments share the same `group_id`.
 
 For smaller starting points, see [`examples/search-r1`](../_examples_synced/search-r1/README.md) for multi-turn tool use, [`examples/retool`](../_examples_synced/retool/README.md) for tool-augmented generation, and [`examples/multi_agent`](../_examples_synced/multi_agent/README.md) for the multi-agent pattern.

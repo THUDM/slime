@@ -113,6 +113,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="The qkv layout for Megatron backend.",
             )
             parser.add_argument(
+                "--qwen-gdn-backend",
+                type=str,
+                choices=["fla", "flashqla"],
+                default="fla",
+                help="GDN implementation backend for Qwen linear-attention layers.",
+            )
+            parser.add_argument(
                 "--train-env-vars",
                 type=json.loads,
                 default="{}",
@@ -793,6 +800,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Path to save the model in HuggingFace format when using Megatron backend. "
                     "The model will be saved to `save_hf.format(rollout_id)`. "
+                    "In raw Megatron-to-HF mode, weights are saved with the same quantization config "
+                    "as `--hf-checkpoint`. "
                 ),
             )
             reset_arg(parser, "--seed", type=int, default=1234)

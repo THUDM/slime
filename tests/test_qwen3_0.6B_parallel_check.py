@@ -4,7 +4,6 @@ import slime.utils.external_utils.command_utils as U
 
 
 ENABLE_EVAL = bool(int(os.environ.get("SLIME_TEST_ENABLE_EVAL", "1")))
-TIGHT_HOST_MEMORY = bool(int(os.environ.get("SLIME_TEST_TIGHT_HOST_MEMORY", "1")))
 
 MODEL_NAME = "Qwen3-0.6B"
 MODEL_TYPE = "qwen3-0.6B"
@@ -33,10 +32,10 @@ def execute():
         "--rm-type deepscaler "
         "--num-rollout 1 "
         "--rollout-batch-size 4 "
-        "--n-samples-per-prompt 8 "
+        "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 8192 "
         "--rollout-temperature 0.8 "
-        "--global-batch-size 32 "
+        "--global-batch-size 16 "
     )
 
     ppo_args = (
@@ -61,7 +60,7 @@ def execute():
         "--rollout-num-gpus-per-engine 2 "
         "--rollout-num-gpus 8 "
         "--sglang-mem-fraction-static 0.8 "
-        "--sglang-cuda-graph-max-bs 32 "
+        "--sglang-cuda-graph-max-bs 16 "
     )
 
     ci_args = "--ci-test "

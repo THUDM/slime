@@ -151,19 +151,14 @@ def merge_turns(turns: list[TurnRecord], *, metadata: dict[str, Any] | None = No
     )
 
 
-def merge_turn_segments(
-    segments: list[TurnSegment],
-    *,
-    max_context_tokens: int = 0,
-) -> list[TokenSegment]:
-    """Merge frozen turn segments and drop empty or oversized outputs."""
+def merge_turn_segments(segments: list[TurnSegment]) -> list[TokenSegment]:
+    """Merge frozen turn segments and keep every non-empty output."""
     out: list[TokenSegment] = []
     for turn_segment in segments:
         token_segment = merge_turns(turn_segment.turns, metadata=turn_segment.metadata)
         if token_segment is None:
             continue
-        total_tokens = len(token_segment.prompt_ids) + len(token_segment.response_ids)
-        if token_segment.response_ids and (max_context_tokens <= 0 or total_tokens <= max_context_tokens):
+        if token_segment.response_ids:
             out.append(token_segment)
     return out
 
@@ -186,23 +181,22 @@ def fan_out_sample_segments(
     tokenizer,
     *,
     metadata: dict[str, Any] | None = None,
-    rollout_id: int | None = None,
 ) -> list[Sample]:
     """Emit one Sample per segment, splitting reward uniformly across them.
 
-    Sibling samples share ``rollout_id`` so reducers that average by rollout do
+    Sibling samples share ``group_id`` so reducers that average by group do
     not over-count trajectories split by compaction or sub-agent dispatch.
     """
     k = len(segments)
     per_segment_reward = float(reward) / max(1, k)
-    shared_rollout_id = getattr(sample, "index", None) if rollout_id is None else rollout_id
+    shared_group_id = sample.group_id if sample.group_id is not None else sample.index
     base_metadata = {**(sample.metadata or {}), **(metadata or {})}
 
     out: list[Sample] = []
     for i, segment in enumerate(segments):
         sub = sample if i == 0 else copy.copy(sample)
         write_segment_to_sample(sub, segment, per_segment_reward, tokenizer)
-        sub.rollout_id = shared_rollout_id
+        sub.group_id = shared_group_id
         sub.metadata = {
             **base_metadata,
             **(segment.metadata or {}),

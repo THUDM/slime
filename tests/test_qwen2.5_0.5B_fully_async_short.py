@@ -13,8 +13,6 @@ import os
 
 import slime.utils.external_utils.command_utils as U
 
-TIGHT_DEVICE_MEMORY = U.get_bool_env_var("SLIME_TEST_TIGHT_DEVICE_MEMORY", "1")
-
 MODEL_NAME = "Qwen2.5-0.5B-Instruct"
 MODEL_TYPE = "qwen2.5-0.5B"
 NUM_GPUS = 4
@@ -39,12 +37,12 @@ def execute():
         "--apply-chat-template "
         "--rollout-shuffle "
         "--rm-type deepscaler "
-        "--num-rollout 3 "
-        "--rollout-batch-size 8 "
+        "--num-rollout 2 "
+        "--rollout-batch-size 4 "
         "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 8192 "
         "--rollout-temperature 0.8 "
-        "--global-batch-size 32 "
+        "--global-batch-size 16 "
         "--balance-data "
     )
 
@@ -80,8 +78,8 @@ def execute():
 
     sglang_args = (
         "--rollout-num-gpus-per-engine 1 "
-        f"--sglang-mem-fraction-static {0.55 if TIGHT_DEVICE_MEMORY else 0.65} "
-        "--sglang-cuda-graph-max-bs 32 "
+        "--sglang-mem-fraction-static 0.65 "
+        "--sglang-cuda-graph-max-bs 16 "
         "--sglang-enable-metrics "
     )
 

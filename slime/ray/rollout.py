@@ -594,13 +594,13 @@ class RolloutManager:
             data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
             metrics = data.metrics
             data = data.samples
-            # Enforce the rollout_id contract before flattening: any list[Sample]
-            # encountered in the nested output must have rollout_id set on every
-            # element. Default rollouts inherit it from the data source; compact /
-            # subagent paths that split one rollout into N training samples must
-            # set the same rollout_id on every sibling so the loss reducer counts
-            # the rollout once instead of N times.
-            _validate_rollout_id_annotated(data)
+            # Enforce the group_id contract before flattening: any list[Sample]
+            # encountered in the nested output must have group_id set on every
+            # element. Default rollouts land at depth 1 and skip this validation;
+            # compact / subagent paths that split one rollout into N samples must
+            # set the same group_id on every sibling so the loss reducer counts
+            # the group once instead of N times. Legacy rollout_id is accepted.
+            _validate_group_id_annotated(data)
             # flatten the data if it is a list of lists
             while isinstance(data[0], list):
                 data = list(itertools.chain.from_iterable(data))
@@ -665,15 +665,12 @@ class RolloutManager:
         assert len(raw_rewards) == len(samples)
         assert len(rewards) == len(samples)
 
-        # Rollout id (one per rollout execution). Default rollouts emit one
-        # sample per rollout, so we fall back to ``sample.index`` (unique).
+        # Group id (one per training aggregation unit). Default rollouts emit
+        # one sample per group, so we fall back to the unique sample index.
         # Compact / subagent paths that emit multiple training samples per
-        # rollout set ``rollout_id`` explicitly so all siblings share a
-        # value; the loss reducer then aggregates them as one rollout.
-        if samples[0].rollout_id is None:
-            rollout_ids = list(range(len(samples)))
-        else:
-            rollout_ids = [sample.rollout_id for sample in samples]
+        # group set ``Sample.group_id`` explicitly so all siblings share a
+        # value; assigning legacy ``Sample.rollout_id`` still forwards here.
+        group_ids = [sample.group_id if sample.group_id is not None else sample.index for sample in samples]
 
         train_data = {
             "tokens": [sample.tokens for sample in samples],
@@ -684,7 +681,7 @@ class RolloutManager:
             "raw_reward": raw_rewards,
             "truncated": [1 if sample.status == Sample.Status.TRUNCATED else 0 for sample in samples],
             "sample_indices": [sample.index for sample in samples],
-            "rollout_ids": rollout_ids,
+            "group_ids": group_ids,
         }
 
         # loss mask
@@ -703,22 +700,23 @@ class RolloutManager:
             loss_masks.append(sample.loss_mask)
         train_data["loss_masks"] = loss_masks
 
-        # Per-rollout aggregate, precomputed at the step level (where we can
-        # see every sample of every rollout) and broadcast per-sample so the
-        # per-mb loss reducer uses the correct whole-rollout denominator even
-        # when a rollout's samples land in different micro-batches (first-fit
-        # packing can split a rollout across mbs):
+        # Per-group aggregate, precomputed at the step level (where we can
+        # see every sample of every group) and broadcast per-sample so the
+        # per-mb loss reducer uses the correct whole-group denominator even
+        # when a group's samples land in different micro-batches (first-fit
+        # packing can split a group across mbs):
         #
-        #   ``rollout_mask_sums[i]`` — sum of loss-mask totals over every
-        #   sample in sample i's rollout. Used as the reducer's denominator
+        #   ``group_mask_sums[i]`` — sum of loss-mask totals over every
+        #   sample in sample i's group. Used as the reducer's denominator
         #   so summing partial contributions across mbs yields one
-        #   token-weighted mean per rollout.
-        rollout_id_list = train_data["rollout_ids"]
+        #   token-weighted mean per group.
+        group_id_list = train_data["group_ids"]
         mask_sums_per_sample = [sum(m) for m in loss_masks]
-        rollout_total_mask: dict[int, int] = {}
-        for rid, ms in zip(rollout_id_list, mask_sums_per_sample, strict=True):
-            rollout_total_mask[rid] = rollout_total_mask.get(rid, 0) + ms
-        train_data["rollout_mask_sums"] = [rollout_total_mask[rid] for rid in rollout_id_list]
+        group_total_mask: dict[int, int] = {}
+        for group_id, ms in zip(group_id_list, mask_sums_per_sample, strict=True):
+            group_total_mask[group_id] = group_total_mask.get(group_id, 0) + ms
+        group_mask_sums = [group_total_mask[group_id] for group_id in group_id_list]
+        train_data["group_mask_sums"] = group_mask_sums
 
         # Overwrite raw_reward when available. Mixed-source batches may only
         # populate this field for a subset of samples (e.g. SWE but not code).
@@ -758,12 +756,11 @@ class RolloutManager:
         into a Ray Box. The schedule itself is computed by
         :func:`build_dp_schedule` so it stays unit-testable without Ray/sglang.
 
-        Step split is by rollout id (``samples[i].rollout_id``, falling back
-        to ``samples[i].index``); each step holds exactly
-        ``args.global_batch_size`` rollouts so the training-step count per
-        rollout is fixed at ``rollout_batch_size * n_samples_per_prompt //
-        global_batch_size`` regardless of how many training samples each
-        rollout produced.
+        Step split is by group id (``samples[i].group_id``, falling back to
+        ``samples[i].index``); each step holds exactly ``args.global_batch_size``
+        groups so the training step count is fixed at
+        ``rollout_batch_size * n_samples_per_prompt // global_batch_size``
+        regardless of how many training samples each group produced.
         """
         dp_size = self.train_parallel_config["dp_size"]
         total_lengths = [len(t) for t in data["tokens"]]
@@ -774,7 +771,7 @@ class RolloutManager:
             self.train_parallel_config,
             total_lengths,
             global_batch_size=self.args.global_batch_size,
-            rollout_indices=data["rollout_ids"],
+            group_indices=data["group_ids"],
         )
 
         # Package per-rank rollout_data
@@ -791,8 +788,8 @@ class RolloutManager:
                 "loss_masks",
                 "round_number",
                 "sample_indices",
-                "rollout_ids",
-                "rollout_mask_sums",
+                "group_ids",
+                "group_mask_sums",
                 "rollout_log_probs",
                 "rollout_routed_experts",
                 "prompt",
@@ -813,8 +810,8 @@ class RolloutManager:
         return rollout_data_refs
 
 
-def _validate_rollout_id_annotated(node, depth=0):
-    """Walk the rollout function's nested output and validate ``rollout_id`` only
+def _validate_group_id_annotated(node, depth=0):
+    """Walk the rollout function's nested output and validate ``group_id`` only
     when a compact / subagent pattern is detected.
 
     "Compact" = the rollout function wraps multiple training samples from one
@@ -822,27 +819,30 @@ def _validate_rollout_id_annotated(node, depth=0):
     default rollout shape is ``list[list[Sample]]`` (depth-2: prompt × rollout)
     so its leaf ``list[Sample]`` lands at depth 1 and we skip validation,
     preserving backward compatibility. A compact rollout adds a third level:
-    ``list[list[list[Sample]]]`` (prompt × rollout × samples-from-one-rollout),
+    ``list[list[list[Sample]]]`` (prompt × rollout × samples-from-one-group),
     so the leaf ``list[Sample]`` lands at depth ≥ 2. At that point we require
-    every sibling to carry a non-None ``rollout_id`` and to share the same
-    value, so the loss reducer counts the rollout once instead of N times.
+    every sibling to carry a non-None ``group_id`` (or legacy ``rollout_id``)
+    and to share the same value, so the loss reducer counts the group once
+    instead of N times.
     """
     if isinstance(node, Sample):
         return
     assert isinstance(node, list), f"unexpected rollout output node type: {type(node).__name__}"
     if node and isinstance(node[0], Sample):
         if depth >= 2 and len(node) > 1:
-            rids = [s.rollout_id for s in node]
-            missing = [i for i, r in enumerate(rids) if r is None]
+            group_ids = [s.group_id for s in node]
+            missing = [i for i, group_id in enumerate(group_ids) if group_id is None]
             assert not missing, (
-                f"Compact rollout returned {len(node)} samples but rollout_id is unset on "
-                f"positions {missing}. Set Sample.rollout_id on every sibling so the loss "
-                "reducer can aggregate them as one rollout instead of N."
+                f"Compact rollout returned {len(node)} samples but group_id is unset on "
+                f"positions {missing}. Set Sample.group_id on every sibling so the loss "
+                "reducer can aggregate them as one group instead of N."
             )
-            assert len(set(rids)) == 1, f"Sibling samples from one compact rollout must share rollout_id; got {rids}."
+            assert (
+                len(set(group_ids)) == 1
+            ), f"Sibling samples from one compact rollout must share group_id; got {group_ids}."
         return
     for item in node:
-        _validate_rollout_id_annotated(item, depth + 1)
+        _validate_group_id_annotated(item, depth + 1)
 
 
 def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):

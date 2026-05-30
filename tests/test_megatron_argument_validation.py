@@ -6,6 +6,9 @@ from pathlib import Path
 import pytest
 
 
+NUM_GPUS = 0
+
+
 def load_arguments_module(monkeypatch):
     megatron_mod = types.ModuleType("megatron")
     training_mod = types.ModuleType("megatron.training")
