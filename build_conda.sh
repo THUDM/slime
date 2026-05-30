@@ -49,13 +49,43 @@ if [ ! -d "$BASE_DIR/sglang" ]; then
 fi
 cd $BASE_DIR/sglang
 git checkout ${SGLANG_COMMIT}
-# Install the python packages. Pass cu129 as extra index so sglang's torch==2.11.0
-# resolution can find the +cu129 local wheel; pip may still prefer the pypi cu13
-# wheel during resolve, so re-pin torch to +cu129 immediately after.
+# Install sglang's Python package. Sglang pins `torch==2.11.0` and ships native
+# kernels (sglang-kernel, sgl-deep-gemm) built against cu13 on pypi; pip's
+# resolver insists on those during this editable install no matter what we
+# pre-stage. Let it complete with cu13, then force-reinstall torch and the
+# native kernels from the cu129 indexes so the env ends up consistently cu129.
 pip install -e "python[all]" --extra-index-url https://download.pytorch.org/whl/cu129
 pip install --force-reinstall --no-deps \
   torch==2.11.0 torchvision torchaudio==2.11.0 \
   --index-url https://download.pytorch.org/whl/cu129
+pip install --force-reinstall --no-deps \
+  sglang-kernel==0.4.2.post2 sgl-deep-gemm==0.1.0 \
+  --index-url https://docs.sglang.ai/whl/cu129/
+# sglang's editable install pulled in pypi's cu13 torch+kernels, which dragged
+# along a full set of nvidia-*-cu13 / cuda-toolkit==13 wheels. The force-
+# reinstalls above swap torch/sglang-kernel/sgl-deep-gemm to their +cu129
+# variants but DO NOT remove those stale cu13 nvidia runtime libs, and they can
+# get dlopen'd ahead of our cu12 libs at import time (e.g. deep_gemm's
+# libcudart.so.13 lookup). Uninstall them explicitly so the env is purely cu12.
+pip uninstall -y \
+  cuda-toolkit \
+  nvidia-cublas \
+  nvidia-cuda-cupti \
+  nvidia-cuda-nvrtc \
+  nvidia-cuda-runtime \
+  nvidia-cudnn-cu13 \
+  nvidia-cufft \
+  nvidia-cufile \
+  nvidia-curand \
+  nvidia-cusolver \
+  nvidia-cusparse \
+  nvidia-cusparselt-cu13 \
+  nvidia-nccl-cu13 \
+  nvidia-nvjitlink \
+  nvidia-nvshmem-cu13 \
+  nvidia-nvtx \
+  nvidia-cutlass-dsl-libs-cu13 \
+  || true
 
 
 pip install cmake ninja
