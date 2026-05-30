@@ -1213,7 +1213,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "Save the train data to this path for debugging. "
-                    "The file will be saved to `save_debug_train_data.format(rollout_id)`."
+                    "The file will be saved to `save_debug_train_data.format(rollout_id, rank)`. "
+                    "Missing placeholders are appended automatically to avoid overwrites."
                 ),
             )
             parser.add_argument(
