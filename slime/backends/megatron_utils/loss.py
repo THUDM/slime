@@ -24,8 +24,8 @@ from slime.utils.ppo_utils import (
 from slime.utils.types import RolloutBatch
 
 from .cp_utils import (
-    all_gather_with_cp,
     get_logits_and_tokens_offset_with_cp,
+    get_local_response_mask_with_cp,
     get_sum_of_sample_mean,
     slice_log_prob_with_cp,
 )
@@ -399,9 +399,6 @@ def get_log_probs_and_entropy(
     Computes on the **full** logits ``[T, V]`` tensor at once (instead of
     per-sample slicing) so backward traverses ``[T, V]`` only once, then
     extracts per-sample response portions.
-
-    When ``entropy_coef == 0``, entropy is computed under ``torch.no_grad()``
-    to avoid retaining the computation graph and to skip cloning.
     """
     assert non_loss_data
     qkv_format = args.qkv_format
@@ -834,13 +831,14 @@ def policy_loss_function(
     total_lengths = batch["total_lengths"]
     max_seq_lens = batch.get("max_seq_lens", None)
 
+    with_entropy = args.entropy_coef != 0
     _, log_probs_and_entropy = get_log_probs_and_entropy(
         logits,
         args=args,
         unconcat_tokens=batch["unconcat_tokens"],
         total_lengths=total_lengths,
         response_lengths=response_lengths,
-        with_entropy=True,
+        with_entropy=with_entropy,
         max_seq_lens=max_seq_lens,
     )
 
@@ -851,22 +849,22 @@ def policy_loss_function(
     if not train_log_probs_for_tis:
         train_log_probs_for_tis = [log_prob.detach() for log_prob in log_probs]
 
-    # Pre-gather log probs if needed by OPSM or GSPO to avoid duplicate gathering
-    need_full_log_probs = args.use_opsm or args.advantage_estimator == "gspo"
-
-    full_log_probs = None
-    full_old_log_probs = None
-    if need_full_log_probs:
-        full_log_probs = [
-            all_gather_with_cp(log_prob, total_length, response_length)
-            for log_prob, total_length, response_length in zip(
-                log_probs, total_lengths, response_lengths, strict=False
+    need_sequence_kl = args.use_opsm or args.advantage_estimator == "gspo"
+    cp_group = None
+    local_loss_masks = None
+    if need_sequence_kl:
+        cp_size = mpu.get_context_parallel_world_size()
+        cp_group = mpu.get_context_parallel_group() if cp_size > 1 else None
+        local_loss_masks = [
+            get_local_response_mask_with_cp(
+                loss_mask,
+                total_length,
+                response_length,
+                args.qkv_format,
+                max_seq_lens[i] if max_seq_lens is not None else None,
             )
-        ]
-        full_old_log_probs = [
-            all_gather_with_cp(old_log_prob, total_length, response_length)
-            for old_log_prob, total_length, response_length in zip(
-                old_log_probs, total_lengths, response_lengths, strict=False
+            for i, (loss_mask, total_length, response_length) in enumerate(
+                zip(batch["loss_masks"], total_lengths, response_lengths, strict=False)
             )
         ]
 
@@ -874,19 +872,22 @@ def policy_loss_function(
     if args.use_opsm:
         opsm_mask, opsm_clipfrac = compute_opsm_mask(
             args=args,
-            full_log_probs=full_log_probs,
-            full_old_log_probs=full_old_log_probs,
+            local_log_probs=log_probs,
+            local_old_log_probs=old_log_probs,
             advantages=batch["advantages"],
+            local_loss_masks=local_loss_masks,
             loss_masks=batch["loss_masks"],
+            cp_group=cp_group,
         )
 
     # Compute KL divergence (GSPO uses sequence-level KL, others use per-token KL)
     if args.advantage_estimator == "gspo":
         ppo_kl = compute_gspo_kl(
-            full_log_probs=full_log_probs,
-            full_old_log_probs=full_old_log_probs,
             local_log_probs=log_probs,
+            local_old_log_probs=old_log_probs,
+            local_loss_masks=local_loss_masks,
             loss_masks=batch["loss_masks"],
+            cp_group=cp_group,
         )
         old_log_probs = torch.cat(old_log_probs, dim=0)
         log_probs = torch.cat(log_probs, dim=0)
@@ -963,9 +964,12 @@ def policy_loss_function(
     ppo_kl = sum_of_sample_mean(ppo_kl)
 
     # entropy loss
-    entropy = log_probs_and_entropy["entropy"]
-    entropy = torch.cat(entropy, dim=0)
-    entropy_loss = sum_of_sample_mean(entropy)
+    if with_entropy:
+        entropy = log_probs_and_entropy["entropy"]
+        entropy = torch.cat(entropy, dim=0)
+        entropy_loss = sum_of_sample_mean(entropy)
+    else:
+        entropy_loss = logits.new_zeros(())
 
     loss = pg_loss - args.entropy_coef * entropy_loss
 
