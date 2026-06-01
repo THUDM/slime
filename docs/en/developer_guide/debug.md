@@ -151,6 +151,6 @@ Ray provides a [distributed debugger](https://docs.ray.io/en/latest/ray-observab
 
 4. Connect via VS Code:
 
-   Install the [Ray Distributed Debugger](https://marketplace.visualstudio.com/items?itemName=ray-project.ray-distributed-debugger) extension in VS Code. Once the job hits `breakpoint()`, open the Ray Dashboard panel in VS Code and click the active breakpoint to attach the debugger. You can then step through code, inspect variables, and set additional breakpoints directly in the editor.
+   Install the [Ray Distributed Debugger](https://marketplace.visualstudio.com/items?itemName=ray-project.ray-distributed-debugger) extension in VS Code. Run your launch script to submit the job. Once the job hits `breakpoint()`, open the Ray Dashboard panel in VS Code and click the active breakpoint to attach the debugger. You can then step through code, inspect variables, and set additional breakpoints directly in the editor.
 
 > **Note**: Remove `ray.init()` and `breakpoint()` after debugging. An explicit `ray.init()` without arguments may cause issues in multi-node training where Ray injects specific namespace and runtime environment configurations via `ray job submit`.
