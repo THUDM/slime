@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="May 30, 2026"/>
+    <meta name="docbuild:last-update" content="Jun 01, 2026"/>
   </head>
   
   
@@ -438,6 +438,7 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#separate-debugging-for-training-and-inference">Separate Debugging for Training and Inference</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#int4-compressed-tensors-quantization-checkpoint-issues">INT4 / Compressed-Tensors Quantization Checkpoint Issues</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-sglang-illegal-memory-access-ima">Debug sglang illegal memory access (IMA)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#step-by-step-debugging-with-ray-distributed-debugger">Step-by-Step Debugging with Ray Distributed Debugger</a></li>
 </ul>
             </nav>
         </div>
@@ -579,6 +580,49 @@
 </li>
 </ol>
 </section>
+<section id="step-by-step-debugging-with-ray-distributed-debugger">
+<h2>Step-by-Step Debugging with Ray Distributed Debugger<a class="headerlink" href="#step-by-step-debugging-with-ray-distributed-debugger" title="Link to this heading">#</a></h2>
+<p>Ray provides a <a class="reference external" href="https://docs.ray.io/en/latest/ray-observability/ray-distributed-debugger.html">distributed debugger</a> based on debugpy that lets you set breakpoints in the driver process and step through code interactively.</p>
+<ol class="arabic">
+<li><p>Install debugpy:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span><span class="nv">debugpy</span><span class="o">==</span><span class="m">1</span>.8.0
+</pre></div>
+</div>
+</li>
+<li><p>Enable <code class="docutils literal notranslate"><span class="pre">RAY_DEBUG_POSTMORTEM</span></code> in your launch script:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">RAY_DEBUG_POSTMORTEM</span><span class="o">=</span><span class="m">1</span>
+
+<span class="nv">RUNTIME_ENV_JSON</span><span class="o">=</span><span class="s2">&quot;{</span>
+<span class="s2">  \&quot;env_vars\&quot;: {</span>
+<span class="s2">    ...</span>
+<span class="s2">    \&quot;RAY_DEBUG_POSTMORTEM\&quot;: \&quot;</span><span class="si">${</span><span class="nv">RAY_DEBUG_POSTMORTEM</span><span class="k">:-</span><span class="nv">0</span><span class="si">}</span><span class="s2">\&quot;</span>
+<span class="s2">  }</span>
+<span class="s2">}&quot;</span>
+
+ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>--address<span class="o">=</span><span class="s2">&quot;http://127.0.0.1:8265&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--runtime-env-json<span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">RUNTIME_ENV_JSON</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--<span class="w"> </span>python3<span class="w"> </span>train.py<span class="w"> </span><span class="o">[</span>args...<span class="o">]</span>
+</pre></div>
+</div>
+</li>
+<li><p>Add <code class="docutils literal notranslate"><span class="pre">ray.init()</span></code> before <code class="docutils literal notranslate"><span class="pre">breakpoint()</span></code> in <code class="docutils literal notranslate"><span class="pre">train.py</span></code>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">ray</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+    <span class="nb">breakpoint</span><span class="p">()</span>
+    <span class="n">args</span> <span class="o">=</span> <span class="n">parse_args</span><span class="p">()</span>
+    <span class="n">train</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">ray.init()</span></code> is required because the distributed debugger depends on <code class="docutils literal notranslate"><span class="pre">core_worker</span></code>, which is only available after Ray initialization. Without it, <code class="docutils literal notranslate"><span class="pre">breakpoint()</span></code> raises <code class="docutils literal notranslate"><span class="pre">AttributeError:</span> <span class="pre">'Worker'</span> <span class="pre">object</span> <span class="pre">has</span> <span class="pre">no</span> <span class="pre">attribute</span> <span class="pre">'core_worker'</span></code>.</p>
+</li>
+<li><p>Connect via VS Code:</p>
+<p>Install the <a class="reference external" href="https://marketplace.visualstudio.com/items?itemName=ray-project.ray-distributed-debugger">Ray Distributed Debugger</a> extension in VS Code. Run your launch script to submit the job. Once the job hits <code class="docutils literal notranslate"><span class="pre">breakpoint()</span></code>, open the Ray Dashboard panel in VS Code and click the active breakpoint to attach the debugger. You can then step through code, inspect variables, and set additional breakpoints directly in the editor.</p>
+</li>
+</ol>
+<blockquote>
+<div><p><strong>Note</strong>: Remove <code class="docutils literal notranslate"><span class="pre">ray.init()</span></code> and <code class="docutils literal notranslate"><span class="pre">breakpoint()</span></code> after debugging. An explicit <code class="docutils literal notranslate"><span class="pre">ray.init()</span></code> without arguments may cause issues in multi-node training where Ray injects specific namespace and runtime environment configurations via <code class="docutils literal notranslate"><span class="pre">ray</span> <span class="pre">job</span> <span class="pre">submit</span></code>.</p>
+</div></blockquote>
+</section>
 </section>
 
 
@@ -632,6 +676,7 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#separate-debugging-for-training-and-inference">Separate Debugging for Training and Inference</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#int4-compressed-tensors-quantization-checkpoint-issues">INT4 / Compressed-Tensors Quantization Checkpoint Issues</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-sglang-illegal-memory-access-ima">Debug sglang illegal memory access (IMA)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#step-by-step-debugging-with-ray-distributed-debugger">Step-by-Step Debugging with Ray Distributed Debugger</a></li>
 </ul>
   </nav></div>
 
@@ -665,7 +710,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on May 30, 2026.
+  Last updated on Jun 01, 2026.
   <br/>
 </p>
   </div>
