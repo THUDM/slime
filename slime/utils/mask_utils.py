@@ -204,11 +204,13 @@ class MultiTurnLossMaskGenerator:
         )
 
         stop_words = ("<|endoftext|>", "<|user|>", "<|observation|>")
-        final_stop = "<|user|>"
+        last_message = messages[-1] if messages else None
+        has_tool_calls = bool(last_message and last_message.get("tool_calls"))
+        final_stop = "<|observation|>" if has_tool_calls else "<|user|>"
         append_final_stop = (
-            bool(messages)
-            and messages[-1]["role"] == "assistant"
-            and messages[-1].get("step_loss_mask", 1) == 1
+            last_message is not None
+            and last_message["role"] == "assistant"
+            and last_message.get("step_loss_mask", 1) == 1
             and not rendered_text.endswith(stop_words)
         )
         if append_final_stop:

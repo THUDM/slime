@@ -184,6 +184,32 @@ def test_glm5_loss_mask_matches_multi_turn_rendering():
     ]
 
 
+def test_glm5_loss_mask_appends_observation_after_final_tool_call():
+    tokenizer = FakeGLM5Tokenizer()
+    messages = [
+        {"role": "user", "content": "USER"},
+        {
+            "role": "assistant",
+            "content": "CALL",
+            "tool_calls": [{"function": {"name": "terminal", "arguments": {"command": "ls"}}}],
+        },
+    ]
+
+    expected_text, expected_mask = tokenizer.render_with_expected_mask(messages)
+    expected_text += "<|observation|>"
+    expected_mask += [1] * len("<|observation|>")
+    expected_token_ids = tokenizer(expected_text, add_special_tokens=False)["input_ids"]
+
+    generator = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type="glm5")
+    token_ids, loss_mask = generator.get_loss_mask(messages)
+
+    assert token_ids == expected_token_ids
+    assert loss_mask == expected_mask
+    assert generator.get_text_from_loss_mask(token_ids, loss_mask) == [
+        "CALL<tool_call>terminal<arg_key>command</arg_key><arg_value>ls</arg_value></tool_call><|observation|>",
+    ]
+
+
 def test_glm5_loss_mask_handles_tool_calls_and_step_loss_mask():
     tokenizer = FakeGLM5Tokenizer()
     messages = [
