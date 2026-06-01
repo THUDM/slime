@@ -112,7 +112,7 @@ slime 支持将训练部分和推理部分分开进行调试，从而实现：
 
 Ray 提供了基于 debugpy 的[分布式调试器](https://docs.ray.io/en/latest/ray-observability/ray-distributed-debugger.html)，可以在 driver 进程中设置断点并单步执行代码。
 
-1. 安装 debugpy（更高版本可能与 Ray 存在兼容性问题）：
+1. 安装 debugpy：
 
    ```bash
    pip install debugpy==1.8.0
