@@ -2,9 +2,10 @@
 
 The adapter exposes ``/v1/chat/completions`` and ``/v1/responses``. Both
 endpoints render incoming messages with the served model's chat template, call
-SGLang ``/generate`` with ``input_ids``, and record the exact sampled token
-ids/logprobs as ``TurnRecord`` objects. New code should use ``OpenAIAdapter``
-and call ``finish_session()`` at trajectory end to drain trainable
+SGLang ``/generate`` with ``input_ids``, and fold the turn into a per-session
+turn-node :class:`~slime.agent.trajectory_manager.TrajectoryTree`. The tree
+routes everything by text prefix, so there is no manual new/append/wipe
+bookkeeping. Call ``finish_session()`` at trajectory end to drain trainable
 ``TokenSegment`` objects.
 """
 
@@ -20,25 +21,31 @@ from typing import Any
 
 from aiohttp import web
 
-from slime.agent.adapters.common import ADAPTER_KEY, REASONING_PARSER_KEY, TOKENIZER_KEY, TOOL_PARSER_KEY
-from slime.agent.adapters.common import AdapterChain as Chain
-from slime.agent.adapters.common import BaseAdapter, call_sglang_generate
+from slime.agent.adapters.common import (
+    ADAPTER_KEY,
+    REASONING_PARSER_KEY,
+    TOKENIZER_KEY,
+    TOOL_PARSER_KEY,
+    BaseAdapter,
+    GenResult,
+    SessionTrajectory,
+    assemble_turns,
+    call_sglang_generate,
+)
 from slime.agent.adapters.common import json_arguments as _json_arguments
-from slime.agent.adapters.common import ok_response, render_token_ids, request_session_id
-from slime.agent.adapters.common import stable_hash as _hash
+from slime.agent.adapters.common import ok_response, render_prompt, request_session_id
 from slime.agent.parsing import ParsedModelOutput, parse_model_output
-from slime.agent.trajectory import TokenSegment, TurnRecord, TurnSegment, make_turn_segment, merge_turn_segments
+from slime.agent.trajectory_manager import TokenSegment, export_token_segments, record_turn
 
 logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass
 class Session:
-    main: Chain = dataclasses.field(default_factory=Chain)
+    traj: SessionTrajectory = dataclasses.field(default_factory=SessionTrajectory)
     sampling_defaults: dict = dataclasses.field(default_factory=dict)
     max_context_tokens: int = 0
     lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
-    segments: list[TurnSegment] = dataclasses.field(default_factory=list)
 
 
 class OpenAIAdapter(BaseAdapter):
@@ -63,9 +70,7 @@ class OpenAIAdapter(BaseAdapter):
         s = self.store.pop(sid, None)
         if s is None:
             return []
-        if s.main.turns:
-            s.segments.append(make_turn_segment(s.main.turns, kind="final"))
-        return merge_turn_segments(s.segments)
+        return export_token_segments(s.traj.tree)
 
 
 def _flatten_content(content: Any) -> str:
@@ -239,48 +244,7 @@ def _responses_input_to_messages(input_value: Any, instructions: Any = None) -> 
     return messages
 
 
-def _select_kind(s: Session, messages: list[dict]) -> str:
-    target = s.main
-    msg_hashes = [_hash(m) for m in messages]
-    if target.seen_msgs == 0:
-        kind = "new"
-    else:
-        is_append = len(msg_hashes) >= target.seen_msgs and msg_hashes[: target.seen_msgs] == target.msg_hashes
-        if is_append:
-            kind = "append"
-        else:
-            if target.turns:
-                s.segments.append(make_turn_segment(target.turns, kind="wipe"))
-            kind = "wipe"
-    return kind
-
-
-def _replace_chat_messages(target: Chain, messages: list[dict], tools_schema: list[dict] | None) -> None:
-    target.chat_messages = _translate_chat_messages(messages)
-    target.turns.clear()
-    target.seen_msgs = len(messages)
-    target.msg_hashes = [_hash(m) for m in messages]
-    if tools_schema is not None:
-        target.tools_schema = tools_schema
-
-
-def _extend_chat_messages(target: Chain, messages: list[dict], tools_schema: list[dict] | None) -> None:
-    translated = _translate_chat_messages(messages[target.seen_msgs :])
-    target.chat_messages.extend(translated)
-    target.seen_msgs = len(messages)
-    target.msg_hashes = [_hash(m) for m in messages]
-    if tools_schema is not None:
-        target.tools_schema = tools_schema
-
-
-def _build_prompt(target: Chain, messages: list[dict], tools_schema: list[dict] | None, kind: str, tok) -> list[int]:
-    (_extend_chat_messages if kind == "append" else _replace_chat_messages)(target, messages, tools_schema)
-    return render_token_ids(target, tok)
-
-
-async def _generate(
-    prompt_ids: list[int], s: Session, body: dict, app, *, session_id: str | None = None
-) -> TurnRecord:
+async def _generate(prompt_ids: list[int], s: Session, body: dict, app, *, session_id: str | None = None):
     return await call_sglang_generate(
         prompt_ids,
         s,
@@ -294,12 +258,10 @@ async def _generate(
     )
 
 
-def _parse_turn(target: Chain, turn: TurnRecord, app) -> ParsedModelOutput:
-    tok = app[TOKENIZER_KEY]
-    raw_output = tok.decode(turn.output_ids, skip_special_tokens=False) if turn.output_ids else ""
+def _parse_output(output_text: str, tools_schema: list[dict] | None, app) -> ParsedModelOutput:
     return parse_model_output(
-        raw_output,
-        tools_schema=target.tools_schema,
+        output_text or "",
+        tools_schema=tools_schema,
         tool_parser_name=app[TOOL_PARSER_KEY],
         reasoning_parser_name=app[REASONING_PARSER_KEY],
     )
@@ -365,25 +327,32 @@ def _request_session_id(request: web.Request, body: dict) -> str:
 
 async def _run_turn(
     request: web.Request, body: dict, messages: list[dict]
-) -> tuple[TurnRecord, ParsedModelOutput, int, int]:
+) -> tuple[GenResult, ParsedModelOutput, int, int]:
     sid = _request_session_id(request, body)
     adapter = request.app[ADAPTER_KEY]
     if sid in adapter.closed:
         raise web.HTTPServiceUnavailable(text="session closed")
     app = request.app
+    tok = app[TOKENIZER_KEY]
     s = adapter.store.setdefault(sid, Session())
     task = asyncio.current_task()
     adapter.inflight.setdefault(sid, set()).add(task)
     try:
         async with s.lock:
-            target = s.main
+            translated = _translate_chat_messages(messages)
             tools_schema = _normalize_tools(body.get("tools"))
-            kind = _select_kind(s, messages)
-            prompt_ids = _build_prompt(target, messages, tools_schema, kind, app[TOKENIZER_KEY])
-            turn = await _generate(prompt_ids, s, body, app, session_id=sid)
-            parsed = _parse_turn(target, turn, app)
-            target.turns.append(turn)
-            return turn, parsed, len(prompt_ids), len(turn.output_ids)
+            full_prompt_ids = render_prompt(s.traj, translated, tok, tools_schema)
+            gen = await _generate(full_prompt_ids, s, body, app, session_id=sid)
+            turns, pending_key = assemble_turns(s.traj, translated, tok, tools_schema, gen, full_prompt_ids)
+            node = record_turn(s.traj.tree, turns)
+            if node is not None:
+                s.traj.resp_truth[pending_key] = (
+                    list(gen.output_ids),
+                    list(gen.output_log_probs),
+                    gen.output_text,
+                )
+            parsed = _parse_output(gen.output_text, tools_schema, app)
+            return gen, parsed, len(full_prompt_ids), len(gen.output_ids)
     finally:
         adapter.inflight.get(sid, set()).discard(task)
 
@@ -393,10 +362,10 @@ async def _handle_chat_completions(request: web.Request) -> web.StreamResponse:
     messages = body.get("messages") or []
     if not isinstance(messages, list):
         raise web.HTTPBadRequest(text="messages must be a list")
-    turn, parsed, in_tok, out_tok = await _run_turn(request, body, messages)
+    gen, parsed, in_tok, out_tok = await _run_turn(request, body, messages)
     if body.get("stream"):
-        return await _stream_chat_completion(request, body, parsed, turn.finish_reason, in_tok, out_tok)
-    return web.json_response(_chat_completion_response(body, parsed, turn.finish_reason, in_tok, out_tok))
+        return await _stream_chat_completion(request, body, parsed, gen.finish_reason, in_tok, out_tok)
+    return web.json_response(_chat_completion_response(body, parsed, gen.finish_reason, in_tok, out_tok))
 
 
 def _chat_completion_response(
@@ -469,10 +438,10 @@ async def _stream_chat_completion(
 async def _handle_responses(request: web.Request) -> web.StreamResponse:
     body = await request.json()
     messages = _responses_input_to_messages(body.get("input", ""), body.get("instructions"))
-    turn, parsed, in_tok, out_tok = await _run_turn(request, body, messages)
+    gen, parsed, in_tok, out_tok = await _run_turn(request, body, messages)
     if body.get("stream"):
-        return await _stream_response(request, body, parsed, turn.finish_reason, in_tok, out_tok)
-    return web.json_response(_response_response(body, parsed, turn.finish_reason, in_tok, out_tok))
+        return await _stream_response(request, body, parsed, gen.finish_reason, in_tok, out_tok)
+    return web.json_response(_response_response(body, parsed, gen.finish_reason, in_tok, out_tok))
 
 
 def _response_output(parsed: ParsedModelOutput) -> list[dict[str, Any]]:

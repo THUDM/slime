@@ -145,16 +145,18 @@ The Anthropic adapter therefore follows a **string in, token out** contract:
 
 Multi-turn agents still force the adapter to tokenize later message
 histories, because tool observations and claude-code's own compacted messages
-arrive as strings. `slime.agent.trajectory.merge_turns` stitches those later
-prompts against the saved token stream:
+arrive as strings. `slime.agent.trajectory_manager` models each session as a
+turn-node text-prefix tree and folds every request into it:
 
-- New prompt suffixes that are tool/user/environment context are appended with
-  `loss_mask=0`.
-- Fresh model outputs from SGLang are appended with `loss_mask=1`.
-- If a later prompt no longer token-matches an earlier sampled output, the
-  unmatched suffix is dropped. If the drift cuts through the middle of a
-  previous model output, the retained prefix of that whole output turn is also
-  assigned `loss_mask=0`.
+- Each request is split into strictly-alternating `(prompt, response)` turns;
+  the current turn's prompt segment is taken by a segment render diff and its
+  response comes from SGLang, while historical responses are served from a
+  per-session truth cache so they keep their exact sampled token ids.
+- New prompt suffixes that are tool/user/environment context export with
+  `loss_mask=0`; fresh model outputs export with `loss_mask=1`.
+- Text divergence (compaction / history rewrite / sub-agent) branches the tree;
+  tail-turn token drift (TITO) is repaired in place and masked. `export`
+  deduplicates shared fork prefixes so they are trained at most once.
 
 That last case is the important correctness guard. A re-tokenization mismatch
 can make a string-level conversation look continuous while token-level
