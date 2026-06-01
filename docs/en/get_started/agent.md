@@ -10,9 +10,9 @@ This page is a roadmap: use it to decide which docs and examples to read when pl
 | :--- | :--- |
 | Run a custom agent loop, tool calls, RAG, browser/terminal/sandbox interaction for each sample | [`--custom-generate-function-path`](customization.md#2-custom-generate-function---custom-generate-function-path), [writing a custom generation function](quick_start.md#writing-custom-generation-function) |
 | Implement verifier rewards, test-based rewards, environment success checks, or an external reward service | [`--custom-rm-path`](customization.md#3-reward-model---custom-rm-path), [writing a custom reward function](quick_start.md#writing-custom-reward-function) |
-| Return multiple training samples from one prompt, such as subagent, multi-agent, or context-compaction segments | [fan-out return from custom generate](customization.md#returning-multiple-training-samples-for-one-prompt), [`examples/multi_agent`](../_examples_synced/multi_agent/README.md) |
-| Avoid blocking training on long-tail agent rollouts | [`examples/fully_async`](../_examples_synced/fully_async/README.md) |
-| Study a full end-to-end agent example with sandboxing, real code edits, and test-based grading | [`examples/coding_agent_rl`](../_examples_synced/coding_agent_rl/README.md) |
+| Return multiple training samples from one prompt, such as subagent, multi-agent, or context-compaction segments | [fan-out return from custom generate](customization.md#returning-multiple-training-samples-for-one-prompt), [`examples/multi_agent`](../../../examples/multi_agent/README.md) |
+| Avoid blocking training on long-tail agent rollouts | [`examples/fully_async`](../../../examples/fully_async/README.md) |
+| Study a full end-to-end agent example with sandboxing, real code edits, and test-based grading | [`examples/coding_agent_rl`](../../../examples/coding_agent_rl/README.md) |
 | Improve SGLang serving throughput for multi-turn agents | [PD Disaggregation](../advanced/pd-disaggregation.md), [SGLang Config](../advanced/sglang-config.md) |
 | Enable SGLang optimization flags, router policies, or multi-model serving | [How to Use SGLang](usage.md#how-to-use-sglang), [SGLang Config](../advanced/sglang-config.md), [Speculative Decoding](../advanced/speculative-decoding.md), [Low Precision Training](../advanced/low-precision.md) |
 
@@ -66,8 +66,8 @@ Agentic rollouts tend to depend more heavily on serving configuration than ordin
 
 ## Reference Example
 
-The full coding-agent example is [`examples/coding_agent_rl`](../_examples_synced/coding_agent_rl/README.md). It shows an end-to-end agent RL setup that is close to a real software-engineering workflow: each sample boots an isolated sandbox, the agent uses tools to edit code, the rollout captures a `git diff`, and a clean sandbox runs the tests to produce the reward.
+The full coding-agent example is [`examples/coding_agent_rl`](../../../examples/coding_agent_rl/README.md). It shows an end-to-end agent RL setup that is close to a real software-engineering workflow: each sample boots an isolated sandbox, the agent uses tools to edit code, the rollout captures a `git diff`, and a clean sandbox runs the tests to produce the reward.
 
 This example also demonstrates agent fan-out training. Its middleware splits one trajectory into `subagent`, `wipe` (the chain frozen before compaction), and `final` segments. `generate()` returns `list[Sample]`, and all segments share the same `group_id`.
 
-For smaller starting points, see [`examples/search-r1`](../_examples_synced/search-r1/README.md) for multi-turn tool use, [`examples/retool`](../_examples_synced/retool/README.md) for tool-augmented generation, and [`examples/multi_agent`](../_examples_synced/multi_agent/README.md) for the multi-agent pattern.
+For smaller starting points, see [`examples/search-r1`](../../../examples/search-r1/README.md) for multi-turn tool use, [`examples/retool`](../../../examples/retool/README.md) for tool-augmented generation, and [`examples/multi_agent`](../../../examples/multi_agent/README.md) for the multi-agent pattern.
