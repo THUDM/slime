@@ -227,8 +227,7 @@ class MultiTurnLossMaskGenerator:
 
         if token_ids[: len(template_token_ids)] != template_token_ids:
             raise ValueError(
-                "GLM5 rendered text tokenization does not match "
-                "`apply_chat_template(..., tokenize=True)` output."
+                "GLM5 rendered text tokenization does not match " "`apply_chat_template(..., tokenize=True)` output."
             )
 
         assistant_header = "<|assistant|>"

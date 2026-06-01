@@ -153,7 +153,11 @@ class FakeGLM5Tokenizer:
 
     @staticmethod
     def _role_mask(marker, piece, messages, index):
-        if index > 0 and messages[index - 1]["role"] == "assistant" and messages[index - 1].get("step_loss_mask", 1) == 1:
+        if (
+            index > 0
+            and messages[index - 1]["role"] == "assistant"
+            and messages[index - 1].get("step_loss_mask", 1) == 1
+        ):
             return [1] * len(marker) + [0] * (len(piece) - len(marker))
         return [0] * len(piece)
 
