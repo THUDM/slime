@@ -10,10 +10,10 @@ Wire-up:
     2. ``sandbox.git_diff`` captures the model-produced patch.
     3. ``sandbox.evaluate`` scores that patch in a second clean sandbox.
     4. ``_merge_samples`` combines reward + adapter ``TokenSegment``s,
-       delegating segment-to-``Sample`` fan-out to ``slime.agent.trajectory``.
+       delegating segment-to-``Sample`` fan-out to ``slime.agent.trajectory_manager``.
 
 All sandbox-side details live in ``sandbox.py``; the LLM plumbing
-(Anthropic <-> SGLang /generate, token capture, 3-kind segment split) uses
+(Anthropic <-> SGLang /generate, token capture, turn-node trajectory tree) uses
 ``slime.agent.adapters.AnthropicAdapter``.
 
 Dataset row ``metadata`` schema::
@@ -53,7 +53,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from slime.agent.adapters import AnthropicAdapter
-from slime.agent.trajectory import TokenSegment, fan_out_sample_segments
+from slime.agent.trajectory_manager import TokenSegment, fan_out_sample_segments
 from slime.utils.misc import SingletonMeta
 from slime.utils.processing_utils import load_tokenizer
 from slime.utils.types import Sample

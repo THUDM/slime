@@ -2,13 +2,13 @@
 
 The adapter exposes ``/v1/messages`` and ``/v1/messages/count_tokens``. It
 renders each Anthropic message history with the served model's chat template,
-calls SGLang ``/generate`` with ``input_ids``, and records the exact sampled
-token ids/logprobs as ``TurnRecord`` objects. New code should use
-``AnthropicAdapter`` and call ``finish_session()`` at trajectory end to drain
-trainable ``TokenSegment`` objects.
+calls SGLang ``/generate`` with ``input_ids``, and folds the turn into a
+per-session turn-node :class:`~slime.agent.trajectory_manager.TrajectoryTree`.
 
-It also handles Claude Code sub-agent and compaction patterns by splitting one
-session into ``subagent``, ``wipe``, and ``final`` segments.
+The tree routes everything by text prefix, so Claude Code sub-agent and
+compaction patterns split into independent leaves automatically -- no manual
+``active_sub`` / ``wipe`` bookkeeping. Call ``finish_session()`` at trajectory
+end to drain trainable ``TokenSegment`` objects.
 """
 
 from __future__ import annotations
@@ -22,35 +22,31 @@ from typing import Any
 
 from aiohttp import web
 
-from slime.agent.adapters.common import ADAPTER_KEY, REASONING_PARSER_KEY, TOKENIZER_KEY, TOOL_PARSER_KEY
-from slime.agent.adapters.common import AdapterChain as Chain
 from slime.agent.adapters.common import (
+    ADAPTER_KEY,
+    REASONING_PARSER_KEY,
+    TOKENIZER_KEY,
+    TOOL_PARSER_KEY,
     BaseAdapter,
+    SessionTrajectory,
+    assemble_turns,
     call_sglang_generate,
     ok_response,
-    render_token_ids,
+    render_prompt,
     request_session_id,
 )
-from slime.agent.adapters.common import stable_hash as _hash
 from slime.agent.parsing import parse_model_output
-from slime.agent.trajectory import TokenSegment, TurnRecord, TurnSegment, make_turn_segment, merge_turn_segments
+from slime.agent.trajectory_manager import TokenSegment, export_token_segments, record_turn
 
 logger = logging.getLogger(__name__)
 
 
-# Tool names claude-code uses to dispatch a sub-agent.
-_SUBAGENT_TOOLS = {"Task", "Agent"}
-
-
 @dataclasses.dataclass
 class Session:
-    main: Chain = dataclasses.field(default_factory=Chain)
-    active_sub: Chain | None = None  # at most one sub-agent at a time
-    pending_dispatch_id: str = ""  # tool_use_id we're waiting to close
+    traj: SessionTrajectory = dataclasses.field(default_factory=SessionTrajectory)
     sampling_defaults: dict = dataclasses.field(default_factory=dict)
     max_context_tokens: int = 0
     lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
-    segments: list[TurnSegment] = dataclasses.field(default_factory=list)  # frozen output
 
 
 class AnthropicAdapter(BaseAdapter):
@@ -75,84 +71,12 @@ class AnthropicAdapter(BaseAdapter):
         s = self.store.pop(sid, None)
         if s is None:
             return []
-        if s.active_sub is not None and s.active_sub.turns:
-            s.segments.append(make_turn_segment(s.active_sub.turns, kind="subagent"))
-        if s.main.turns:
-            s.segments.append(make_turn_segment(s.main.turns, kind="final"))
-
-        return merge_turn_segments(s.segments)
+        return export_token_segments(s.traj.tree)
 
 
 # =============================================================================
-# 2. Per-turn stages
+# Translation (Anthropic wire <-> chat-template messages) -- unchanged
 # =============================================================================
-
-
-def _select_chain(s: Session, body: dict) -> tuple[Chain, bool, str]:
-    """Decide which chain this turn operates on.
-
-    1. fingerprint body.messages and body.system into hashes
-    2. if main now contains the tool_result for a pending sub dispatch,
-       snapshot the sub chain into s.segments and clear s.active_sub
-    3. pick main vs s.active_sub based on whether request continues main's prefix
-    4. classify as 'new' | 'append' | 'wipe' against the chosen target;
-       a wipe also snapshots the target's current state into s.segments
-
-    Returns (target_chain, is_sub, kind).
-    """
-    all_msgs = body.get("messages") or []
-    msg_hashes = [_hash(m) for m in all_msgs]
-    req_system_hash = _hash(body.get("system")) if "system" in body else s.main.system_hash
-
-    # Close active sub-agent if its dispatch tool_result has landed on main.
-    if s.pending_dispatch_id and s.active_sub is not None:
-        tu_id = s.pending_dispatch_id
-        for m in all_msgs:
-            if not isinstance(m, dict) or m.get("role") != "user":
-                continue
-            content = m.get("content")
-            if not isinstance(content, list):
-                continue
-            done = any(
-                isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") == tu_id
-                for b in content
-            )
-            if done:
-                if s.active_sub.turns:
-                    s.segments.append(make_turn_segment(s.active_sub.turns, kind="subagent"))
-                s.active_sub = None
-                s.pending_dispatch_id = ""
-                break
-
-    # Route: main iff request continues main's prefix. Sub system_hash can be
-    # "" (armed before sub dialled in), so never route by sub equality alone.
-    if s.active_sub is None:
-        target, is_sub = s.main, False
-    else:
-        main_continues = (
-            req_system_hash == s.main.system_hash
-            and len(msg_hashes) >= s.main.seen_msgs
-            and msg_hashes[: s.main.seen_msgs] == s.main.msg_hashes[: s.main.seen_msgs]
-        )
-        target, is_sub = (s.main, False) if main_continues else (s.active_sub, True)
-
-    # Classify; snapshot a "wipe" segment first if we're discarding work.
-    if target.seen_msgs == 0:
-        kind = "new"
-    else:
-        is_append = (
-            req_system_hash == target.system_hash
-            and len(msg_hashes) >= target.seen_msgs
-            and msg_hashes[: target.seen_msgs] == target.msg_hashes[: target.seen_msgs]
-        )
-        if is_append:
-            kind = "append"
-        else:
-            if target.turns:
-                s.segments.append(make_turn_segment(target.turns, kind="wipe"))
-            kind = "wipe"
-
-    return target, is_sub, kind
 
 
 def _flatten(c: Any) -> str:
@@ -241,47 +165,13 @@ def _anthropic_tools_to_chat_tools(anth_tools: list[dict] | None) -> list[dict] 
     return ts or None
 
 
-def _replace_chat_messages(target: Chain, body: dict) -> None:
-    """new/wipe: full reset of chat state and turn log."""
-    all_msgs = body.get("messages") or []
-    target.chat_messages = _translate_anthropic(all_msgs, body.get("system"))
-    if "system" in body:
-        target.system_hash = _hash(body.get("system"))
-    target.turns.clear()
-    target.seen_msgs = len(all_msgs)
-    target.msg_hashes = [_hash(m) for m in all_msgs]
-    if target.tools_schema is None:
-        target.tools_schema = _anthropic_tools_to_chat_tools(body.get("tools"))
+# =============================================================================
+# Reply building (raw output text -> Anthropic content blocks) -- unchanged shape
+# =============================================================================
 
 
-def _extend_chat_messages(target: Chain, body: dict) -> None:
-    """append: translate only the new tail."""
-    all_msgs = body.get("messages") or []
-    translated = _translate_anthropic(all_msgs[target.seen_msgs :], None)
-    target.chat_messages.extend(translated)
-
-    target.seen_msgs = len(all_msgs)
-    target.msg_hashes = [_hash(m) for m in all_msgs]
-    if target.tools_schema is None:
-        target.tools_schema = _anthropic_tools_to_chat_tools(body.get("tools"))
-
-
-def _build_prompt(target: Chain, body: dict, kind: str, tok) -> list[int]:
-    """Replace/extend chat_messages and render input ids for sglang."""
-    (_extend_chat_messages if kind == "append" else _replace_chat_messages)(target, body)
-    return render_token_ids(target, tok)
-
-
-async def _generate(
-    prompt_ids: list[int], s: Session, body: dict, app, *, session_id: str | None = None
-) -> TurnRecord:
-    """Call sglang and return a TurnRecord.
-
-    1. build sampling_params (session defaults overlaid with body overrides)
-    2. POST sglang /generate; on cancel/error fire /abort_request
-    3. keep the exact prompt/output token ids; trajectory merge later compares
-       later prompt tokens with earlier outputs to build the loss mask
-    """
+async def _generate(prompt_ids: list[int], s: Session, body: dict, app, *, session_id: str | None = None):
+    """Call sglang and return a GenResult (output ids/logprobs/text)."""
     return await call_sglang_generate(
         prompt_ids,
         s,
@@ -295,22 +185,19 @@ async def _generate(
     )
 
 
-def _build_reply(target: Chain, output_ids: list[int], finish: str, app) -> tuple[list[dict], str, str]:
-    """Turn the model's raw output ids into the reply we send back to claude-code.
+def _build_reply(output_text: str, finish: str, tools_schema: list[dict] | None, app) -> tuple[list[dict], str, str]:
+    """Turn the model's raw output text into the reply we send back to claude-code.
 
     1. parse decoded text -> (thinking, visible, tool_uses) via sglang parsers
-    2. pack into Anthropic content blocks; tag dispatch_id when a tool_use
-       names Task/Agent (sub-agent trigger)
+    2. pack into Anthropic content blocks
     3. derive stop_reason: 'tool_use' | 'max_tokens' | 'end_turn'
 
-    Returns (blocks, stop_reason, dispatch_id).
+    Returns (blocks, stop_reason, dispatch_id). dispatch_id is retained for wire
+    compatibility but no longer drives routing (the tree splits sub-agents).
     """
-    tok = app[TOKENIZER_KEY]
-
-    raw_output = tok.decode(output_ids, skip_special_tokens=False) if output_ids else ""
     parsed = parse_model_output(
-        raw_output,
-        tools_schema=target.tools_schema,
+        output_text or "",
+        tools_schema=tools_schema,
         tool_parser_name=app[TOOL_PARSER_KEY],
         reasoning_parser_name=app[REASONING_PARSER_KEY],
     )
@@ -329,8 +216,6 @@ def _anthropic_blocks(thinking: str, visible: str, tool_uses: list[dict]) -> tup
     for tu in tool_uses:
         tu_id = f"toolu_{secrets.token_hex(8)}"
         blocks.append({"type": "tool_use", "id": tu_id, "name": tu["name"], "input": tu["input"]})
-        if tu["name"] in _SUBAGENT_TOOLS:
-            dispatch_id = tu_id
     if not blocks:
         blocks.append({"type": "text", "text": ""})
     return blocks, dispatch_id
@@ -344,17 +229,8 @@ def _stop_reason(tool_uses: list[dict], finish: str) -> str:
     return "end_turn"
 
 
-def _start_sub_chain(s: Session, dispatch_id: str) -> None:
-    """Start a fresh sub chain on this session and remember the tool_use_id
-    we'll watch for on main to know when this sub is done. The matching
-    'sub done' step lives inside _select_chain."""
-    s.pending_dispatch_id = dispatch_id
-    if s.active_sub is None:
-        s.active_sub = Chain()
-
-
 # =============================================================================
-# 3. Request handling -- one full turn + SSE wrap
+# Request handling -- one full turn + SSE wrap
 # =============================================================================
 
 
@@ -369,19 +245,26 @@ async def _handle_request(request: web.Request) -> web.StreamResponse:
     if sid in adapter.closed:  # session drained; refuse stragglers
         return web.Response(status=503, text="session closed")
     app = request.app
+    tok = app[TOKENIZER_KEY]
     s = adapter.store.setdefault(sid, Session())
     task = asyncio.current_task()
     adapter.inflight.setdefault(sid, set()).add(task)
     try:
         async with s.lock:  # same sid -> serialized
-            target, is_sub, kind = _select_chain(s, body)
-            ideal_ids = _build_prompt(target, body, kind, app[TOKENIZER_KEY])
-            turn = await _generate(ideal_ids, s, body, app, session_id=sid)
-            blocks, stop, did = _build_reply(target, turn.output_ids, turn.finish_reason, app)
-            target.turns.append(turn)
-            if did and not is_sub:  # sub doesn't nest
-                _start_sub_chain(s, did)
-            in_tok, out_tok = len(ideal_ids), len(turn.output_ids)
+            translated = _translate_anthropic(body.get("messages") or [], body.get("system"))
+            tools_schema = _anthropic_tools_to_chat_tools(body.get("tools"))
+            full_prompt_ids = render_prompt(s.traj, translated, tok, tools_schema)
+            gen = await _generate(full_prompt_ids, s, body, app, session_id=sid)
+            turns, pending_key = assemble_turns(s.traj, translated, tok, tools_schema, gen, full_prompt_ids)
+            node = record_turn(s.traj.tree, turns)
+            if node is not None:
+                s.traj.resp_truth[pending_key] = (
+                    list(gen.output_ids),
+                    list(gen.output_log_probs),
+                    gen.output_text,
+                )
+            blocks, stop, _did = _build_reply(gen.output_text, gen.finish_reason, tools_schema, app)
+            in_tok, out_tok = len(full_prompt_ids), len(gen.output_ids)
         if body.get("stream") is True or "text/event-stream" in request.headers.get("Accept", ""):
             return await _stream_response(request, blocks, stop, in_tok, out_tok)
         return web.json_response(_message_response(body, blocks, stop, in_tok, out_tok))
