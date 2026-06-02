@@ -31,8 +31,7 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
-from slime.agent.trajectory_manager import PromptSeg, RespSeg, TokenSegment, TrajectoryTree
-
+from slime.agent.trajectory_manager import PromptSeg, RespSeg, TokenSegment, TrajectoryTree, export_token_segments
 
 ADAPTER_KEY = web.AppKey("adapter", object)
 TOKENIZER_KEY = web.AppKey("tokenizer", object)
@@ -77,10 +76,25 @@ class SessionTrajectory:
     render_memo: dict[tuple[str, bool], list[int]] = dataclasses.field(default_factory=dict)
 
 
+@dataclasses.dataclass
+class Session:
+    """Per-session adapter state shared by the OpenAI and Anthropic adapters.
+
+    Holds the trajectory (turn-node tree + truth cache), the per-session sampling
+    defaults / context budget injected at ``open_session``, and a lock that
+    serializes concurrent requests carrying the same session id.
+    """
+
+    traj: SessionTrajectory = dataclasses.field(default_factory=SessionTrajectory)
+    sampling_defaults: dict = dataclasses.field(default_factory=dict)
+    max_context_tokens: int = 0
+    lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
+
+
 class BaseAdapter:
     """Base HTTP adapter with per-instance session lifecycle state."""
 
-    session_cls: type
+    session_cls: type = Session
 
     def __init__(self, *, tokenizer, sglang_url, tool_parser=None, reasoning_parser=None) -> None:
         self.store: dict[str, Any] = {}
@@ -112,7 +126,14 @@ class BaseAdapter:
         await shutdown_session_tasks(sid, self.closed, self.inflight, wait_timeout=wait_timeout)
 
     async def finish_session(self, sid: str, *, wait_timeout: float = 5.0) -> list[TokenSegment]:
-        raise NotImplementedError
+        """Drain a session: wait out in-flight requests, then export trainable
+        ``TokenSegment``s from its trajectory tree. Idempotent -- a second call
+        for an already-popped sid returns ``[]``."""
+        await self.shutdown_session(sid, wait_timeout=wait_timeout)
+        s = self.store.pop(sid, None)
+        if s is None:
+            return []
+        return export_token_segments(s.traj.tree)
 
 
 def strip_cache_control(obj: Any) -> Any:
