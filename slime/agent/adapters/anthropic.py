@@ -14,7 +14,6 @@ end to drain trainable ``TokenSegment`` objects.
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import json
 import logging
 import secrets
@@ -28,7 +27,7 @@ from slime.agent.adapters.common import (
     TOKENIZER_KEY,
     TOOL_PARSER_KEY,
     BaseAdapter,
-    SessionTrajectory,
+    Session,
     assemble_turns,
     call_sglang_generate,
     ok_response,
@@ -36,23 +35,13 @@ from slime.agent.adapters.common import (
     request_session_id,
 )
 from slime.agent.parsing import parse_model_output
-from slime.agent.trajectory_manager import TokenSegment, export_token_segments, record_turn
+from slime.agent.trajectory_manager import record_turn
 
 logger = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass
-class Session:
-    traj: SessionTrajectory = dataclasses.field(default_factory=SessionTrajectory)
-    sampling_defaults: dict = dataclasses.field(default_factory=dict)
-    max_context_tokens: int = 0
-    lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
-
-
 class AnthropicAdapter(BaseAdapter):
     """Anthropic Messages-compatible HTTP adapter with session lifecycle helpers."""
-
-    session_cls = Session
 
     def __init__(self, *, tokenizer, sglang_url, tool_parser=None, reasoning_parser=None) -> None:
         super().__init__(
@@ -65,13 +54,6 @@ class AnthropicAdapter(BaseAdapter):
         self.app.router.add_post("/v1/messages/count_tokens", _count_tokens)
         self.app.router.add_get("/healthz", _ok)
         self.app.router.add_get("/v1/models", _ok)
-
-    async def finish_session(self, sid: str, *, wait_timeout: float = 5.0) -> list[TokenSegment]:
-        await self.shutdown_session(sid, wait_timeout=wait_timeout)
-        s = self.store.pop(sid, None)
-        if s is None:
-            return []
-        return export_token_segments(s.traj.tree)
 
 
 # =============================================================================
@@ -185,15 +167,14 @@ async def _generate(prompt_ids: list[int], s: Session, body: dict, app, *, sessi
     )
 
 
-def _build_reply(output_text: str, finish: str, tools_schema: list[dict] | None, app) -> tuple[list[dict], str, str]:
+def _build_reply(output_text: str, finish: str, tools_schema: list[dict] | None, app) -> tuple[list[dict], str]:
     """Turn the model's raw output text into the reply we send back to claude-code.
 
     1. parse decoded text -> (thinking, visible, tool_uses) via sglang parsers
     2. pack into Anthropic content blocks
     3. derive stop_reason: 'tool_use' | 'max_tokens' | 'end_turn'
 
-    Returns (blocks, stop_reason, dispatch_id). dispatch_id is retained for wire
-    compatibility but no longer drives routing (the tree splits sub-agents).
+    Returns (blocks, stop_reason).
     """
     parsed = parse_model_output(
         output_text or "",
@@ -201,24 +182,23 @@ def _build_reply(output_text: str, finish: str, tools_schema: list[dict] | None,
         tool_parser_name=app[TOOL_PARSER_KEY],
         reasoning_parser_name=app[REASONING_PARSER_KEY],
     )
-    blocks, dispatch_id = _anthropic_blocks(parsed.reasoning, parsed.text, parsed.tool_uses)
-    return blocks, _stop_reason(parsed.tool_uses, finish), dispatch_id
+    blocks = _anthropic_blocks(parsed.reasoning, parsed.text, parsed.tool_uses)
+    return blocks, _stop_reason(parsed.tool_uses, finish)
 
 
-def _anthropic_blocks(thinking: str, visible: str, tool_uses: list[dict]) -> tuple[list[dict], str]:
+def _anthropic_blocks(thinking: str, visible: str, tool_uses: list[dict]) -> list[dict]:
     """Pack parsed model output into Anthropic content blocks."""
     blocks: list[dict] = []
     if thinking:
         blocks.append({"type": "thinking", "thinking": thinking})
     if visible:
         blocks.append({"type": "text", "text": visible})
-    dispatch_id = ""
     for tu in tool_uses:
         tu_id = f"toolu_{secrets.token_hex(8)}"
         blocks.append({"type": "tool_use", "id": tu_id, "name": tu["name"], "input": tu["input"]})
     if not blocks:
         blocks.append({"type": "text", "text": ""})
-    return blocks, dispatch_id
+    return blocks
 
 
 def _stop_reason(tool_uses: list[dict], finish: str) -> str:
@@ -263,7 +243,7 @@ async def _handle_request(request: web.Request) -> web.StreamResponse:
                     list(gen.output_log_probs),
                     gen.output_text,
                 )
-            blocks, stop, _did = _build_reply(gen.output_text, gen.finish_reason, tools_schema, app)
+            blocks, stop = _build_reply(gen.output_text, gen.finish_reason, tools_schema, app)
             in_tok, out_tok = len(full_prompt_ids), len(gen.output_ids)
         if body.get("stream") is True or "text/event-stream" in request.headers.get("Accept", ""):
             return await _stream_response(request, blocks, stop, in_tok, out_tok)

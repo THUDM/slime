@@ -12,7 +12,6 @@ bookkeeping. Call ``finish_session()`` at trajectory end to drain trainable
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import json
 import logging
 import secrets
@@ -28,30 +27,20 @@ from slime.agent.adapters.common import (
     TOOL_PARSER_KEY,
     BaseAdapter,
     GenResult,
-    SessionTrajectory,
+    Session,
     assemble_turns,
     call_sglang_generate,
 )
 from slime.agent.adapters.common import json_arguments as _json_arguments
 from slime.agent.adapters.common import ok_response, render_prompt, request_session_id
 from slime.agent.parsing import ParsedModelOutput, parse_model_output
-from slime.agent.trajectory_manager import TokenSegment, export_token_segments, record_turn
+from slime.agent.trajectory_manager import record_turn
 
 logger = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass
-class Session:
-    traj: SessionTrajectory = dataclasses.field(default_factory=SessionTrajectory)
-    sampling_defaults: dict = dataclasses.field(default_factory=dict)
-    max_context_tokens: int = 0
-    lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
-
-
 class OpenAIAdapter(BaseAdapter):
     """OpenAI-compatible HTTP adapter with session lifecycle helpers."""
-
-    session_cls = Session
 
     def __init__(self, *, tokenizer, sglang_url, tool_parser=None, reasoning_parser=None) -> None:
         super().__init__(
@@ -64,13 +53,6 @@ class OpenAIAdapter(BaseAdapter):
         self.app.router.add_post("/v1/responses", _handle_responses)
         self.app.router.add_get("/healthz", _ok)
         self.app.router.add_get("/v1/models", _ok)
-
-    async def finish_session(self, sid: str, *, wait_timeout: float = 5.0) -> list[TokenSegment]:
-        await self.shutdown_session(sid, wait_timeout=wait_timeout)
-        s = self.store.pop(sid, None)
-        if s is None:
-            return []
-        return export_token_segments(s.traj.tree)
 
 
 def _flatten_content(content: Any) -> str:

@@ -182,19 +182,6 @@ def _log_replace(case, reason, node, before_text, after_text, before_tokens, aft
 # ---- match_prefix ----
 
 
-def _starting_chains(root: Node) -> list[Node]:
-    """ROOT's direct children = the head of each starting chain."""
-    return list(root.children)
-
-
-def _leaf_of_chain(head: Node) -> Node:
-    """Walk children[0..] to the leaf (single-chain helper)."""
-    cur = head
-    while cur.children:
-        cur = cur.children[0]
-    return cur
-
-
 def match_prefix(tree: TrajectoryTree, turns) -> MatchResult:
     incoming_text = "".join(p.text + r.text for (p, r) in turns)
 
