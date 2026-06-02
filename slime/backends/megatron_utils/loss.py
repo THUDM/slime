@@ -140,8 +140,8 @@ def get_responses(
 
         # Apply temperature per-chunk instead of on the full [T, V] logits to avoid
         # a single ~16GiB allocation that OOMs under fragmentation.
-        if args.rollout_temperature != 1.0:
-            logits_chunk = logits_chunk / args.rollout_temperature
+        if apply_temperature and args.rollout_temperature != 1.0:
+            logits_chunk = logits_chunk.div(args.rollout_temperature)
 
         yield logits_chunk, tokens_chunk
 
