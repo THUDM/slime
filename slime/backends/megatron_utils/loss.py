@@ -75,9 +75,6 @@ def get_responses(
         assert max_seq_lens is not None
         logits = logits.view(-1, logits.size(-1))
 
-    if apply_temperature and args.rollout_temperature != 1.0:
-        logits = logits.div(args.rollout_temperature)
-
     cp_size = mpu.get_context_parallel_world_size()
     end = 0
     seq_start = 0
@@ -140,6 +137,11 @@ def get_responses(
             tokens_chunk = torch.cat([tokens_0, tokens_1], dim=0)
 
         seq_start += total_length
+
+        # Apply temperature per-chunk instead of on the full [T, V] logits to avoid
+        # a single ~16GiB allocation that OOMs under fragmentation.
+        if args.rollout_temperature != 1.0:
+            logits_chunk = logits_chunk / args.rollout_temperature
 
         yield logits_chunk, tokens_chunk
 
