@@ -38,14 +38,24 @@ async def generate_response(args, prompt, key):
 
         # Extract new response tokens
         if "output_token_logprobs" in output["meta_info"]:
-            new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
+            output_token_logprobs = output["meta_info"]["output_token_logprobs"]
+            new_response_tokens = [item[1] for item in output_token_logprobs]
+            new_response_log_probs = [item[0] for item in output_token_logprobs]
         else:
             # abort
             new_response_tokens = []
+            new_response_log_probs = []
 
         # Update sample with tokens directly - avoiding re-tokenization
         sample.tokens = sample.tokens + new_response_tokens
         sample.response_length += len(new_response_tokens)
+        if sample.rollout_log_probs is None:
+            sample.rollout_log_probs = []
+        sample.rollout_log_probs += new_response_log_probs
+        assert len(sample.rollout_log_probs) == sample.response_length, (
+            f"rollout logprob length mismatch: {len(sample.rollout_log_probs)} logprobs "
+            f"vs {sample.response_length} response tokens"
+        )
         sample.response = output["text"]
 
         match output["meta_info"]["finish_reason"]["type"]:
