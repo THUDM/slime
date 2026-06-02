@@ -75,6 +75,8 @@ PERF_ARGS=(
    # --micro-batch-size 1
    --use-dynamic-batch-size
    --max-tokens-per-gpu 9216
+   # Bound the fused cross-entropy [tokens, vocab] transient that can OOM on long retool traces.
+   --log-probs-chunk-size 1024
 )
 
 GRPO_ARGS=(
