@@ -200,30 +200,43 @@ class _VocabParallelLogProbsAndEntropy(torch.autograd.Function):
             local_entropy -= torch.xlogy(softmax_chunk, softmax_chunk).sum(dim=-1)
         dist.all_reduce(local_entropy, op=dist.ReduceOp.SUM, group=process_group)
 
+        # `softmax` is reused in place as the gradient buffer in backward (no double-backward).
         ctx.save_for_backward(softmax, target_mask, masked_target_1d, local_entropy)
         return log_prob, local_entropy.squeeze(dim=-1)
 
     @staticmethod
     def backward(ctx, grad_log_prob: torch.Tensor, grad_entropy: torch.Tensor):
+        # Local grad wrt logit z_j (no cross-rank reduce needed):
+        #   g_j = softmax_j * [ -grad_log_prob - grad_entropy * (entropy + log_softmax_j) ]
+        #         + grad_log_prob * 1{j == target}
+        # The saved softmax buffer is reused in place as the gradient, so the only extra
+        # full-vocab allocation is `log_softmax`, and only when entropy gradient flows.
         softmax, target_mask, masked_target_1d, entropy = ctx.saved_tensors
         partition_vocab_size = softmax.size(-1)
-        if grad_entropy is None:
-            grad_entropy = torch.zeros_like(entropy.squeeze(dim=-1))
-        if grad_log_prob is None:
-            grad_log_prob = torch.zeros_like(entropy)
 
-        log_softmax = torch.where(softmax > 0, softmax.log(), torch.zeros_like(softmax))
-        entropy_grad = softmax * (
-            grad_entropy.unsqueeze(dim=-1).unsqueeze(dim=-1) * (-entropy.unsqueeze(dim=-1) - log_softmax)
-        )
+        if grad_entropy is not None:
+            # log_softmax = log(softmax); softmax underflow (==0) -> log(0)=-inf, mapped to 0
+            # so the softmax==0 positions contribute nothing (0 * finite).
+            log_softmax = softmax.log()
+            log_softmax.nan_to_num_(neginf=0.0)
+            log_softmax.add_(entropy.unsqueeze(dim=-1))  # entropy + log_softmax
+            log_softmax.mul_(grad_entropy.unsqueeze(dim=-1).unsqueeze(dim=-1))
+            if grad_log_prob is not None:
+                log_softmax.add_(grad_log_prob.unsqueeze(dim=-1))
+            softmax.mul_(log_softmax).neg_()  # softmax * [-grad_log_prob - grad_entropy*(H+log p)]
+            del log_softmax
+        elif grad_log_prob is not None:
+            softmax.mul_(grad_log_prob.unsqueeze(dim=-1).neg())  # -softmax * grad_log_prob
+        else:
+            return None, None, None
 
-        grad_input = softmax * -grad_log_prob.unsqueeze(dim=-1)
-        grad_input_2d = grad_input.view(-1, partition_vocab_size)
-        arange_1d = torch.arange(start=0, end=grad_input_2d.size(0), device=grad_input_2d.device)
-        softmax_update = 1.0 - target_mask.view(-1).float()
-        grad_input_2d[arange_1d, masked_target_1d] += grad_log_prob.view(-1) * softmax_update
+        if grad_log_prob is not None:
+            grad_2d = softmax.view(-1, partition_vocab_size)
+            arange_1d = torch.arange(start=0, end=grad_2d.size(0), device=grad_2d.device)
+            softmax_update = 1.0 - target_mask.view(-1).to(softmax.dtype)
+            grad_2d[arange_1d, masked_target_1d] += grad_log_prob.reshape(-1) * softmax_update
 
-        return grad_input.to(torch.bfloat16) + entropy_grad, None, None
+        return softmax.to(torch.bfloat16), None, None
 
 
 def compute_log_probs_and_entropy(logits: torch.Tensor, tokens: torch.Tensor, process_group):
@@ -682,7 +695,7 @@ def chunked_gae(
 
 def _clone_if_grad_tracked(logits: torch.Tensor) -> torch.Tensor:
     # Megatron-LM's fused CE mutates its float32 input in place (subtract-max,
-    # exp(out=...), div_; see INVESTIGATION.md). That is safe to hand over directly
+    # exp(out=...), div_). That is safe to hand over directly
     # only when autograd will not observe the mutation. When grad is tracked, an
     # in-place write on a (view of a) grad-requiring tensor corrupts the graph and
     # raises (issue #1951). Clone exactly when grad is tracked; otherwise pass the
