@@ -24,7 +24,12 @@ NUM_GPUS = 0
 DEFAULT_ROLLOUT_FUNCTION_PATH = "slime.rollout.sglang_rollout.generate_rollout"
 REFERENCE_ROLLOUT_FUNCTION_PATH = "plugin_contracts.test_plugin_rollout_contracts.valid_rollout_function"
 
-from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput, call_rollout_fn
+from slime.rollout.base_types import (
+    RolloutFnEvalOutput,
+    RolloutFnTrainOutput,
+    apply_rollout_sample_filter,
+    call_rollout_fn,
+)
 from slime.rollout.sglang_rollout import generate_rollout as default_generate_rollout
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
@@ -79,6 +84,11 @@ def valid_rollout_function(args, rollout_id, data_source, evaluation=False):
             sample.reward = float(group_index + sample_index)
             sample.status = Sample.Status.COMPLETED
     return RolloutFnTrainOutput(samples=groups, metrics={"source": "contract"})
+
+
+def drop_last_sample_filter(args, groups: list[list[Sample]]) -> None:
+    for group in groups:
+        group[-1].remove_sample = True
 
 
 def invalid_rollout_function(args, rollout_id, data_source, evaluation=False):
@@ -178,6 +188,24 @@ def test_default_rollout_compat_wrapper_stability():
 
 def test_local_rollout_plugin_aligns_with_default_input_output_format():
     assert_rollout_function_matches_default_contract(valid_rollout_function)
+
+
+def test_rollout_sample_filter_applies_to_custom_rollout_output():
+    args = type(
+        "Args",
+        (),
+        {
+            "rollout_sample_filter_path": "plugin_contracts.test_plugin_rollout_contracts.drop_last_sample_filter",
+        },
+    )()
+    train_output = call_rollout_fn(valid_rollout_function, args, 2, ContractDataSource(), evaluation=False)
+
+    apply_rollout_sample_filter(args, train_output.samples)
+
+    assert [[sample.remove_sample for sample in group] for group in train_output.samples] == [
+        [False, True],
+        [False, True],
+    ]
 
 
 def test_misaligned_rollout_plugin_is_rejected():
