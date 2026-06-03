@@ -687,17 +687,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
 
             parser.add_argument(
-                "--exact-flops-balance",
-                action="store_true",
-                default=False,
-                help=(
-                    "When used with --balance-by-flops, compute exact per-sample FLOPs via "
-                    "calculate_fwd_flops instead of the lightweight coeff*L + L² approximation. "
-                    "Useful for ablation studies comparing approximate vs exact FLOPs balancing."
-                ),
-            )
-
-            parser.add_argument(
                 "--use-dynamic-batch-size",
                 action="store_true",
                 default=False,
@@ -1793,9 +1782,6 @@ def slime_validate_args(args):
         assert args.max_tokens_per_gpu is not None, "max_tokens_per_gpu must be set when use_dynamic_batch_size is set"
         if args.log_probs_max_tokens_per_gpu is None:
             args.log_probs_max_tokens_per_gpu = args.max_tokens_per_gpu
-
-    if getattr(args, "exact_flops_balance", False):
-        assert getattr(args, "balance_by_flops", False), "--exact-flops-balance requires --balance-by-flops"
 
     if getattr(args, "balance_by_flops", False):
         assert args.use_dynamic_batch_size, "--balance-by-flops requires --use-dynamic-batch-size"
