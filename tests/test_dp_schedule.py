@@ -287,5 +287,53 @@ def test_rejects_when_fewer_groups_than_gbs():
         build_dp_schedule(args, tp, [3] * 6, global_batch_size=4, group_indices=[0, 0, 1, 1, 2, 2])
 
 
+@pytest.mark.unit
+def test_balance_by_flops_basic():
+    """FLOPs-balanced partitioning produces valid mbs."""
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=9000)
+    args.balance_by_flops = True
+    args.workload_coeff = 26624  # Qwen3-8B SwiGLU: 2*4096 + 3*12288//2
+    tp = make_tp(dp_size=2)
+    total_lengths = [2000, 8000, 3000, 1500, 5000, 4000, 7000, 500]
+    p, mbi, nmb, gbs = build_dp_schedule(
+        args, tp, total_lengths, global_batch_size=8, group_indices=list(range(8))
+    )
+    assert_invariants(
+        p, mbi, nmb,
+        dp_size=2,
+        expected_global_sample_indices=range(8),
+        total_lengths=total_lengths,
+    )
+
+
+@pytest.mark.unit
+def test_balance_by_flops_workload_aware():
+    """FLOPs-balanced partitioning groups by computational cost, not just token count."""
+    from slime.utils.seqlen_balancing import calculate_workload
+
+    # 4 samples: two long, two short. Total tokens similar per pair but FLOPs very different.
+    total_lengths = [8000, 2000, 2000, 8000]
+    tp = make_tp(dp_size=2)
+
+    args_fb = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=12000)
+    args_fb.balance_by_flops = True
+    args_fb.workload_coeff = 26624
+    p, mbi, nmb, _ = build_dp_schedule(
+        args_fb, tp, total_lengths, global_batch_size=4, group_indices=list(range(4))
+    )
+    assert_invariants(
+        p, mbi, nmb,
+        dp_size=2,
+        expected_global_sample_indices=range(4),
+        total_lengths=total_lengths,
+    )
+
+    # Verify each rank gets one long + one short sample for FLOPs balance
+    workloads = calculate_workload(total_lengths, coeff=26624)
+    rank_workloads = [sum(workloads[i] for i in p[r]) for r in range(2)]
+    ratio = max(rank_workloads) / min(rank_workloads) if min(rank_workloads) > 0 else float("inf")
+    assert ratio < 1.5, f"DP rank workload ratio {ratio:.2f} too unbalanced"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

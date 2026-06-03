@@ -673,6 +673,20 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
 
             parser.add_argument(
+                "--balance-by-flops",
+                action="store_true",
+                default=False,
+                help=(
+                    "Use FLOPs-based workload estimation (coeff*L + L²) for micro-batch "
+                    "partitioning via Karmarkar-Karp instead of first-fit token packing. "
+                    "The linear coefficient is auto-computed from model config (hidden_size, "
+                    "ffn_hidden_size, swiglu, MoE experts). Captures the quadratic cost of "
+                    "attention, producing more balanced micro-batches when sequence lengths "
+                    "vary widely. Requires --use-dynamic-batch-size."
+                ),
+            )
+
+            parser.add_argument(
                 "--use-dynamic-batch-size",
                 action="store_true",
                 default=False,
@@ -1768,6 +1782,26 @@ def slime_validate_args(args):
         assert args.max_tokens_per_gpu is not None, "max_tokens_per_gpu must be set when use_dynamic_batch_size is set"
         if args.log_probs_max_tokens_per_gpu is None:
             args.log_probs_max_tokens_per_gpu = args.max_tokens_per_gpu
+
+    if getattr(args, "balance_by_flops", False):
+        assert args.use_dynamic_batch_size, "--balance-by-flops requires --use-dynamic-batch-size"
+
+        h = getattr(args, "hidden_size", None)
+        ffn = getattr(args, "ffn_hidden_size", None)
+        if h is None or ffn is None:
+            args.workload_coeff = 24576
+        else:
+            num_experts = getattr(args, "num_experts", None)
+            if num_experts is not None and num_experts > 1:
+                topk = getattr(args, "moe_router_topk", 1)
+                moe_ffn = getattr(args, "moe_ffn_hidden_size", ffn)
+                shared = getattr(args, "moe_shared_expert_intermediate_size", None) or 0
+                d_ff = moe_ffn * topk + shared
+            else:
+                d_ff = ffn
+            ffn_mul = 3 if getattr(args, "swiglu", False) else 2
+            args.workload_coeff = 2 * h + ffn_mul * d_ff // 2
+        logger.info(f"balance-by-flops: workload_coeff={args.workload_coeff}")
 
     if args.eps_clip_high is None:
         args.eps_clip_high = args.eps_clip
