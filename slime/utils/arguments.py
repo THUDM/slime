@@ -1818,6 +1818,19 @@ def slime_validate_args(args):
             args.offload_train = True
         if args.offload_rollout is None:
             args.offload_rollout = True
+        # In colocate mode the rollout engines share the actor's physical nodes, so the
+        # GPUs-per-physical-node equals actor_num_gpus_per_node. --num-gpus-per-node defaults
+        # to 8 (an 8-GPU/node assumption); on hardware with a different per-node count (e.g.
+        # 4x GB200/node) that default is wrong for MULTI-NODE colocate: the rollout-engine
+        # addr/port allocation computes node_index via num_gpus_per_node and maps every engine
+        # to node 0, so worker-node engines are handed the head node's IP and fail to bind
+        # (OSError: [Errno 99] Cannot assign requested address). Derive the real per-node count.
+        if args.num_gpus_per_node != args.actor_num_gpus_per_node:
+            logger.info(
+                f"colocate: overriding num_gpus_per_node {args.num_gpus_per_node} -> "
+                f"actor_num_gpus_per_node {args.actor_num_gpus_per_node} (per-physical-node GPU count)."
+            )
+            args.num_gpus_per_node = args.actor_num_gpus_per_node
         if args.rollout_num_gpus != args.actor_num_gpus_per_node * args.actor_num_nodes:
             logger.info(
                 f"rollout_num_gpus {args.rollout_num_gpus} != actor_num_gpus_per_node {args.actor_num_gpus_per_node} "
