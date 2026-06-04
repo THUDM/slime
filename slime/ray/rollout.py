@@ -215,25 +215,17 @@ class ServerGroup:
                 sglang_overrides=self.sglang_overrides,
                 num_gpus_per_engine=self.num_gpus_per_engine,
             )
-            rollout_engines.append((global_rank, rollout_engine))
+            rollout_engines.append((global_rank, rollout_engine, spec))
             self.all_engines[i] = rollout_engine
 
         self.num_new_engines = len(rollout_engines)
-        if self.num_new_engines == 0:
-            return [], port_cursors
-
-        addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(
-            self.external_worker_specs,
-            rollout_engines,
-            rank_offset=self.rank_offset,
-        )
         init_handles = [
             engine.init.remote(
-                **addr_and_ports[rank],
+                **_external_engine_init_kwargs(spec),
                 router_ip=self.router_ip,
                 router_port=self.router_port,
             )
-            for rank, engine in rollout_engines
+            for _rank, engine, spec in rollout_engines
         ]
         return init_handles, port_cursors
 
@@ -897,25 +889,16 @@ def _validate_rollout_id_annotated(node, depth=0):
         _validate_rollout_id_annotated(item, depth + 1)
 
 
-def _allocate_rollout_engine_addr_and_ports_external(
-    external_worker_specs: list[ExternalEngineInfo],
-    rollout_engines,
-    *,
-    rank_offset: int = 0,
-):
-    addr_and_ports = {}
-    for rank, _ in rollout_engines:
-        spec = external_worker_specs[rank - rank_offset]
-        addr = f"{spec.host}:{spec.port}"
-        addr_and_ports[rank] = dict(
-            dist_init_addr=addr,
-            nccl_port=None,
-            host=spec.host,
-            port=spec.port,
-        )
-        if spec.worker_type == "prefill":
-            addr_and_ports[rank]["disaggregation_bootstrap_port"] = spec.disaggregation_bootstrap_port
-    return addr_and_ports
+def _external_engine_init_kwargs(spec: ExternalEngineInfo) -> dict:
+    init_kwargs = {
+        "dist_init_addr": f"{spec.host}:{spec.port}",
+        "nccl_port": None,
+        "host": spec.host,
+        "port": spec.port,
+    }
+    if spec.worker_type == "prefill":
+        init_kwargs["disaggregation_bootstrap_port"] = spec.disaggregation_bootstrap_port
+    return init_kwargs
 
 
 def _allocate_rollout_engine_addr_and_ports_normal(
