@@ -43,6 +43,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.seqlen_balancing import (
     calculate_workload,
     expand_bins_by_splitting,
@@ -53,14 +54,21 @@ from slime.utils.seqlen_balancing import (
 logger = logging.getLogger(__name__)
 
 
+def _calculate_workloads(step_lengths, args, exact_flops_balance):
+    if exact_flops_balance:
+        return [calculate_fwd_flops([l], args) for l in step_lengths]
+    return calculate_workload(step_lengths, coeff=getattr(args, "workload_coeff", 24576))
+
+
 def _pack_step_into_mbs(
     step_lengths: list[int],
     *,
+    args: Any,
     use_dynamic_batch_size: bool,
     max_per_bin: int | None,
     micro_batch_size: int | None,
     balance_by_flops: bool = False,
-    workload_coeff: int = 24576,
+    exact_flops_balance: bool = False,
 ) -> list[list[int]]:
     """Group a step's samples into mbs. Returns ``mbs[k]`` = local indices into ``step_lengths``."""
     if use_dynamic_batch_size:
@@ -70,7 +78,7 @@ def _pack_step_into_mbs(
             num_mbs = max(1, (total_tokens + max_per_bin - 1) // max_per_bin)
             if num_mbs >= len(step_lengths):
                 return [[i] for i in range(len(step_lengths))]
-            workloads = calculate_workload(step_lengths, coeff=workload_coeff)
+            workloads = _calculate_workloads(step_lengths, args, exact_flops_balance)
             return get_seqlen_balanced_partitions(workloads, num_mbs, equal_size=False)
         return first_fit_pack(step_lengths, max_per_bin)
     assert micro_batch_size is not None
@@ -155,14 +163,15 @@ def build_dp_schedule(
         # 1. Pack samples in this step into mbs with one global pass.
         # ``step_mbs`` indices are LOCAL into ``sample_indices``.
         balance_by_flops = getattr(args, "balance_by_flops", False)
-        workload_coeff = getattr(args, "workload_coeff", 24576)
+        exact_flops_balance = getattr(args, "exact_flops_balance", False)
         step_mbs = _pack_step_into_mbs(
             step_lengths,
+            args=args,
             use_dynamic_batch_size=args.use_dynamic_batch_size,
             max_per_bin=max_per_bin,
             micro_batch_size=getattr(args, "micro_batch_size", None),
             balance_by_flops=balance_by_flops,
-            workload_coeff=workload_coeff,
+            exact_flops_balance=exact_flops_balance,
         )
 
         # 2. Align mbs count to a multiple of ``align_to``.
@@ -193,7 +202,7 @@ def build_dp_schedule(
         # or balance_by_flops is on, otherwise a strided round-robin.
         if args.balance_data or balance_by_flops:
             if balance_by_flops:
-                step_workloads = calculate_workload(step_lengths, coeff=workload_coeff)
+                step_workloads = _calculate_workloads(step_lengths, args, exact_flops_balance)
                 mbs_weights = [sum(step_workloads[i] for i in bin_) for bin_ in step_mbs]
             else:
                 mbs_weights = [sum(step_lengths[i] for i in bin_) for bin_ in step_mbs]
