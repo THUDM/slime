@@ -1,11 +1,11 @@
 """E2E test for --rollout-external-engine-addrs with a pure-PD external fleet.
 
-Spawns four SGLang servers out-of-band on a single 8-GPU box (all tp=1):
-- 2 prefill (``--disaggregation-mode prefill``, mooncake transfer backend)
-- 2 decode  (``--disaggregation-mode decode``,  mooncake transfer backend)
+Spawns two SGLang servers out-of-band on a single GPU box (all tp=1):
+- 1 prefill (``--disaggregation-mode prefill``, mooncake transfer backend)
+- 1 decode  (``--disaggregation-mode decode``,  mooncake transfer backend)
 
-and points slime at all four via ``--rollout-external-engine-addrs ...``.
-The remaining 4 GPUs train. slime queries ``/server_info`` on each engine to
+and points slime at both via ``--rollout-external-engine-addrs ...``.
+The first 4 GPUs train. slime queries ``/server_info`` on each engine to
 infer per-engine TP / GPU counts and registers them to its PD-enabled router.
 
 Weight sync uses ``--update-weight-mode delta --update-weight-transport disk``
@@ -16,6 +16,7 @@ NCCL group between trainer and external engines).
 """
 
 import os
+import socket
 import subprocess
 import tempfile
 import time
@@ -24,17 +25,97 @@ from pathlib import Path
 
 import slime.utils.external_utils.command_utils as U
 
-MODEL_NAME = "Qwen3.5-0.8B"
-MODEL_TYPE = "qwen3.5-0.8B"
-NUM_GPUS = 8
+MODEL_NAME = "Qwen3-4B"
+MODEL_TYPE = "qwen3-4B"
+NUM_GPUS = 6
 NUM_TRAIN_GPUS = 4
-NUM_PREFILL_ENGINES = 2
-NUM_DECODE_ENGINES = 2
+NUM_PREFILL_ENGINES = 1
+NUM_DECODE_ENGINES = 1
 
 EXTERNAL_HOST = "127.0.0.1"
-PREFILL_PORTS = [13150, 13151]
-DECODE_PORTS = [13152, 13153]
-BOOTSTRAP_PORTS = [13160, 13161]
+PREFILL_PORTS = [13150]
+DECODE_PORTS = [13151]
+BOOTSTRAP_PORTS = [13160]
+
+
+def _get_bond_ipv4():
+    net_root = Path("/sys/class/net")
+    if not net_root.exists():
+        return None
+
+    bond_ifaces = [
+        path.name for path in net_root.iterdir() if path.name.startswith("bond") and path.name[4:].isdigit()
+    ]
+    bond_ifaces.sort(key=lambda name: int(name[4:]))
+    for iface in bond_ifaces:
+        try:
+            output = subprocess.check_output(["ip", "-o", "-4", "addr", "show", "dev", iface], text=True)
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        fields = output.split()
+        for idx, field in enumerate(fields):
+            if field == "inet" and idx + 1 < len(fields):
+                return fields[idx + 1].split("/", 1)[0]
+    return None
+
+
+def _get_external_host():
+    env_value = os.environ.get("SLIME_TEST_EXTERNAL_PD_HOST")
+    if env_value and env_value not in ("127.0.0.1", "localhost"):
+        return env_value
+
+    bond_host = _get_bond_ipv4()
+    if bond_host is not None:
+        return bond_host
+
+    master_addr = os.environ.get("MASTER_ADDR")
+    if master_addr and master_addr not in ("127.0.0.1", "localhost"):
+        return master_addr
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            host = sock.getsockname()[0]
+            if host and not host.startswith("127."):
+                return host
+    except OSError:
+        pass
+
+    return EXTERNAL_HOST
+
+
+def _get_disaggregation_ib_device():
+    env_value = os.environ.get("SLIME_TEST_DISAGGREGATION_IB_DEVICE")
+    if env_value is not None:
+        return env_value.strip() or None
+
+    ib_root = Path("/sys/class/infiniband")
+    if not ib_root.exists():
+        return None
+
+    active_devices = []
+    for device in ib_root.iterdir():
+        for state_file in device.glob("ports/*/state"):
+            try:
+                if "ACTIVE" in state_file.read_text():
+                    active_devices.append(device.name)
+                    break
+            except OSError:
+                continue
+
+    bond_devices = []
+    numeric_mlx5_devices = []
+    for device in active_devices:
+        prefix, _, suffix = device.partition("_")
+        if prefix == "mlx5" and suffix.startswith("bond_") and suffix[5:].isdigit():
+            bond_devices.append(device)
+        elif prefix == "mlx5" and suffix.isdigit():
+            numeric_mlx5_devices.append(device)
+    bond_devices.sort(key=lambda name: int(name.rsplit("_", 1)[1]))
+    numeric_mlx5_devices.sort(key=lambda name: int(name.rsplit("_", 1)[1]))
+
+    devices = bond_devices or numeric_mlx5_devices or sorted(active_devices)
+    return ",".join(devices) if devices else None
 
 
 def prepare():
@@ -50,7 +131,7 @@ def prepare():
 
 
 def _get_gpu_split():
-    """Partition the 8 visible GPUs: 4 train + 2 prefill + 2 decode."""
+    """Partition visible GPUs: 4 train + 1 prefill + 1 decode."""
     all_gpus = os.environ.get("CUDA_VISIBLE_DEVICES", ",".join(str(i) for i in range(NUM_GPUS))).split(",")
     assert len(all_gpus) >= NUM_GPUS, f"Expected at least {NUM_GPUS} GPUs, got {len(all_gpus)}"
     train_gpus = all_gpus[:NUM_TRAIN_GPUS]
@@ -69,6 +150,8 @@ def _launch_sglang_server(
     log_path: str,
     disaggregation_mode: str,
     disaggregation_bootstrap_port: int | None = None,
+    disaggregation_ib_device: str | None = None,
+    external_host: str = EXTERNAL_HOST,
 ) -> subprocess.Popen:
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = ",".join(gpus)
@@ -93,8 +176,13 @@ def _launch_sglang_server(
         "--disaggregation-transfer-backend",
         "mooncake",
     ]
+    if disaggregation_ib_device is not None:
+        cmd += ["--disaggregation-ib-device", disaggregation_ib_device]
     if disaggregation_bootstrap_port is not None:
         cmd += ["--disaggregation-bootstrap-port", str(disaggregation_bootstrap_port)]
+        cmd += ["--load-balance-method", "follow_bootstrap_room"]
+    else:
+        cmd += ["--prefill-round-robin-balance"]
 
     log_file = open(log_path, "w")
     process = subprocess.Popen(cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT)
@@ -111,7 +199,7 @@ def _launch_sglang_server(
         if process.poll() is not None:
             raise RuntimeError(f"{disaggregation_mode} server exited with code {process.returncode}; check {log_path}")
         try:
-            req = urllib.request.urlopen(f"http://{EXTERNAL_HOST}:{port}/server_info", timeout=2)
+            req = urllib.request.urlopen(f"http://{external_host}:{port}/server_info", timeout=2)
             if req.status == 200:
                 print(f"External sglang {disaggregation_mode} server is ready on GPUs {gpus}")
                 return process
@@ -125,6 +213,10 @@ def _launch_sglang_server(
 
 def execute():
     train_gpus, prefill_gpus, decode_gpus = _get_gpu_split()
+    external_host = _get_external_host()
+    disaggregation_ib_device = _get_disaggregation_ib_device()
+    print(f"Using external host for SGLang workers: {external_host}")
+    print(f"Using SGLang disaggregation IB device: {disaggregation_ib_device}")
     processes: list[subprocess.Popen] = []
 
     # Restrict CUDA_VISIBLE_DEVICES to training GPUs before Ray starts so
@@ -142,6 +234,8 @@ def execute():
                     tp=1,
                     disaggregation_mode="prefill",
                     disaggregation_bootstrap_port=bootstrap_port,
+                    disaggregation_ib_device=disaggregation_ib_device,
+                    external_host=external_host,
                     log_path=f"/tmp/sglang_external_prefill_{idx}.log",
                 )
             )
@@ -152,6 +246,8 @@ def execute():
                     port=port,
                     tp=1,
                     disaggregation_mode="decode",
+                    disaggregation_ib_device=disaggregation_ib_device,
+                    external_host=external_host,
                     log_path=f"/tmp/sglang_external_decode_{idx}.log",
                 )
             )
@@ -168,16 +264,16 @@ def execute():
             "--apply-chat-template "
             "--rollout-shuffle "
             "--rm-type math "
-            "--num-rollout 2 "
+            "--num-rollout 3 "
             "--rollout-batch-size 4 "
             "--n-samples-per-prompt 4 "
-            "--rollout-max-response-len 512 "
+            "--rollout-max-response-len 1024 "
             "--rollout-temperature 0.8 "
             "--global-batch-size 16 "
         )
 
         perf_args = (
-            "--tensor-model-parallel-size 1 "
+            "--tensor-model-parallel-size 2 "
             "--sequence-parallel "
             "--pipeline-model-parallel-size 1 "
             "--context-parallel-size 1 "
@@ -185,6 +281,9 @@ def execute():
             "--expert-tensor-parallel-size 1 "
             "--use-dynamic-batch-size "
             "--max-tokens-per-gpu 9216 "
+            "--recompute-granularity full "
+            "--recompute-method uniform "
+            "--recompute-num-layers 1 "
         )
 
         grpo_args = (
@@ -210,9 +309,9 @@ def execute():
         )
 
         # No --rollout-num-gpus / --rollout-num-gpus-per-engine: those are
-        # inferred from /server_info on each external engine (2 prefill +
-        # 2 decode, all tp=1).
-        all_addrs = [f"{EXTERNAL_HOST}:{port}" for port in (*PREFILL_PORTS, *DECODE_PORTS)]
+        # inferred from /server_info on each external engine (1 prefill +
+        # 1 decode, all tp=1).
+        all_addrs = [f"{external_host}:{port}" for port in (*PREFILL_PORTS, *DECODE_PORTS)]
         external_args = "--rollout-external-engine-addrs " + " ".join(all_addrs) + " "
 
         # External engines have no NCCL group with the trainer, so weight
@@ -235,7 +334,6 @@ def execute():
             "--accumulate-allreduce-grads-in-fp32 "
             "--attention-softmax-in-fp32 "
             "--attention-backend flash "
-            "--loss-mask-type qwen3_5 "
             "--actor-num-nodes 1 "
             f"--actor-num-gpus-per-node {NUM_TRAIN_GPUS} "
         )
@@ -258,6 +356,10 @@ def execute():
             num_gpus_per_node=NUM_TRAIN_GPUS,
             megatron_model_type=MODEL_TYPE,
             before_ray_job_submit=launch_external_engines,
+            extra_env_vars={
+                "no_proxy": f"127.0.0.1,localhost,{external_host}",
+                "NO_PROXY": f"127.0.0.1,localhost,{external_host}",
+            },
         )
 
         delta_files = list(Path(delta_dir).glob("weight_v*/*.safetensors"))

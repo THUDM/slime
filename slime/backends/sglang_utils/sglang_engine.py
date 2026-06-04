@@ -189,27 +189,37 @@ class SGLangEngine(RayActor):
         )
         actual_server_args = _get_actual_server_args()
         _sanity_check_server_args(actual_server_args, expect_server_args)
+        self._register_to_router(expect_server_args)
 
     def _init_normal(self, server_args_dict):
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
         self.process = launch_server_process(ServerArgs(**server_args_dict))
+        self._register_to_router(server_args_dict)
 
+    def _register_to_router(self, server_args_dict):
         if self.worker_type == "encoder":
             return
 
         if self.node_rank == 0 and self.router_ip and self.router_port:
+            worker_url = f"http://{self.server_host}:{self.server_port}"
             if parse(sglang_router.__version__) <= parse("0.2.1"):
                 assert self.worker_type == "regular", "pd disaggregation is not supported in old router."
                 response = requests.post(
-                    f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}",
+                    f"http://{self.router_ip}:{self.router_port}/add_worker?url={worker_url}",
                 )
             else:
                 payload = {
-                    "url": f"http://{self.server_host}:{self.server_port}",
+                    "url": worker_url,
                     "worker_type": self.worker_type,
                 }
                 if self.worker_type == "prefill":
-                    payload["bootstrap_port"] = server_args_dict["disaggregation_bootstrap_port"]
+                    bootstrap_port = server_args_dict.get("disaggregation_bootstrap_port")
+                    if bootstrap_port is None:
+                        raise RuntimeError(
+                            f"Prefill worker {worker_url} does not have disaggregation_bootstrap_port; "
+                            "cannot register it to the PD router."
+                        )
+                    payload["bootstrap_port"] = bootstrap_port
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/workers",
                     json=payload,

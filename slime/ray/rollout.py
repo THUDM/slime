@@ -10,10 +10,7 @@ from typing import Any
 
 import numpy as np
 import ray
-import requests
-import sglang_router
 import torch
-from packaging.version import parse
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
@@ -1079,67 +1076,11 @@ def _external_model_from_args(args) -> ExternalModelInfo:
     return model_info
 
 
-def _get_registered_router_worker_urls(router_ip: str, router_port: int) -> set[str]:
-    router_addr = f"http://{router_ip}:{router_port}"
-    for endpoint in ("/workers", "/list_workers"):
-        try:
-            response = requests.get(f"{router_addr}{endpoint}", timeout=30)
-            response.raise_for_status()
-            payload = response.json()
-        except Exception:
-            continue
-        if "workers" in payload:
-            return {worker["url"] if isinstance(worker, dict) else worker for worker in payload["workers"]}
-        if "urls" in payload:
-            return set(payload["urls"])
-    return set()
-
-
-def _register_external_workers_to_router(args, model_info: ExternalModelInfo) -> None:
-    engine_infos = model_info.engine_infos
-    if not engine_infos:
-        return
-
-    router_addr = f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
-    registered_urls = _get_registered_router_worker_urls(args.sglang_router_ip, args.sglang_router_port)
-
-    if parse(sglang_router.__version__) <= parse("0.2.1"):
-        assert (
-            not model_info.has_pd_disaggregation
-        ), "PD disaggregation for external engines requires sglang_router > 0.2.1."
-        for info in engine_infos:
-            if info.url in registered_urls:
-                continue
-            response = requests.post(f"{router_addr}/add_worker?url={info.url}")
-            response.raise_for_status()
-        return
-
-    for info in engine_infos:
-        if info.worker_type == "encoder":
-            continue
-        if info.url in registered_urls:
-            continue
-        payload = {
-            "url": info.url,
-            "worker_type": info.worker_type,
-        }
-        if info.worker_type == "prefill":
-            if info.disaggregation_bootstrap_port is None:
-                raise RuntimeError(
-                    f"External prefill worker {info.url} did not report disaggregation_bootstrap_port "
-                    "from /server_info; cannot register it to the PD router."
-                )
-            payload["bootstrap_port"] = info.disaggregation_bootstrap_port
-        response = requests.post(f"{router_addr}/workers", json=payload)
-        response.raise_for_status()
-
-
 def _start_external_rollout_servers(args, pg) -> dict[str, RolloutServer]:
     model_cfg = _external_model_from_args(args)
     router_ip, router_port = _start_router(args, has_pd_disaggregation=model_cfg.has_pd_disaggregation)
     args.sglang_router_ip = router_ip
     args.sglang_router_port = router_port
-    _register_external_workers_to_router(args, model_cfg)
 
     server_groups = []
     engine_offset = 0
