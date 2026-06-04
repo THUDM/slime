@@ -275,6 +275,11 @@ python train.py \
   ...
 ```
 
+slime 会请求每个外部引擎的 `/server_info`，自动推断
+`rollout_num_gpus`、单个 engine 的 GPU 数、SGLang 并行参数，以及
+prefill/decode worker 类型。如果没有提供 `--sglang-router-ip/--sglang-router-port`，
+slime 会自己启动 router，并把这些外部引擎注册进去。
+
 > **注意：** `--sglang-config` 和 `--rollout-external` 互斥。当你希望 slime 管理完整的引擎生命周期时，使用 `--sglang-config`；当引擎已预部署时，使用 `--rollout-external`。
 
 ---

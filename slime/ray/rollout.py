@@ -10,10 +10,18 @@ from typing import Any
 
 import numpy as np
 import ray
+import requests
+import sglang_router
 import torch
+from packaging.version import parse
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
+from slime.backends.sglang_utils.external import (
+    ExternalEngineInfo,
+    discover_external_engines,
+    external_engine_info_from_dict,
+)
 from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
@@ -58,14 +66,19 @@ class ServerGroup:
     model_path: str | None = None  # checkpoint path for update_weights_from_disk
     router_ip: str | None = None
     router_port: int | None = None
+    external_worker_specs: list[ExternalEngineInfo] = dataclasses.field(default_factory=list)
 
     @property
     def nodes_per_engine(self):
+        if self.args.rollout_external:
+            return 1
         return max(1, self.num_gpus_per_engine // self.args.num_gpus_per_node)
 
     @property
     def engines(self):
         """Node-0 engines only (for multi-node serving)."""
+        if self.args.rollout_external:
+            return [engine for engine in self.all_engines if engine is not None]
         return self.all_engines[:: self.nodes_per_engine]
 
     def start_engines(self, port_cursors: dict[int, int] | None = None) -> tuple[list, dict[int, int]]:
@@ -84,6 +97,9 @@ class ServerGroup:
         if self.args.debug_train_only or self.worker_type == "placeholder":
             self.num_new_engines = 0
             return [], port_cursors
+
+        if self.args.rollout_external:
+            return self._start_external_proxy_engines(port_cursors)
 
         num_gpu_per_engine = min(self.num_gpus_per_engine, self.args.num_gpus_per_node)
 
@@ -158,26 +174,62 @@ class ServerGroup:
         if self.num_new_engines == 0:
             return [], port_cursors
 
-        if self.args.rollout_external:
-            addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(
-                args=self.args, rollout_engines=rollout_engines
-            )
-        else:
-            # Compute base_port from the maximum cursor across all nodes that
-            # this group's engines may land on (conservative: just use global max).
-            base_port = max(port_cursors.values()) if port_cursors else 15000
-            addr_and_ports, port_cursors = _allocate_rollout_engine_addr_and_ports_normal(
-                args=self.args,
-                rollout_engines=rollout_engines,
-                worker_type=self.worker_type,
-                num_gpus_per_engine=self.num_gpus_per_engine,
-                rank_offset=self.rank_offset,
-                base_port=base_port,
-            )
+        # Compute base_port from the maximum cursor across all nodes that
+        # this group's engines may land on (conservative: just use global max).
+        base_port = max(port_cursors.values()) if port_cursors else 15000
+        addr_and_ports, port_cursors = _allocate_rollout_engine_addr_and_ports_normal(
+            args=self.args,
+            rollout_engines=rollout_engines,
+            worker_type=self.worker_type,
+            num_gpus_per_engine=self.num_gpus_per_engine,
+            rank_offset=self.rank_offset,
+            base_port=base_port,
+        )
 
         init_handles = [
             engine.init.remote(
                 **(addr_and_ports[rank]),
+                router_ip=self.router_ip,
+                router_port=self.router_port,
+            )
+            for rank, engine in rollout_engines
+        ]
+        return init_handles, port_cursors
+
+    def _start_external_proxy_engines(self, port_cursors: dict[int, int]) -> tuple[list, dict[int, int]]:
+        """Create CPU-only proxy actors for pre-launched external workers."""
+        assert self.external_worker_specs, "external_worker_specs must be populated for rollout_external."
+
+        RolloutRayActor = ray.remote(SGLangEngine)
+        rollout_engines = []
+        for i, spec in enumerate(self.external_worker_specs):
+            if self.all_engines[i] is not None:
+                continue
+
+            global_rank = self.rank_offset + i
+            rollout_engine = RolloutRayActor.options(num_cpus=0.2, num_gpus=0).remote(
+                self.args,
+                rank=global_rank,
+                worker_type=spec.worker_type,
+                base_gpu_id=0,
+                sglang_overrides=self.sglang_overrides,
+                num_gpus_per_engine=self.num_gpus_per_engine,
+            )
+            rollout_engines.append((global_rank, rollout_engine))
+            self.all_engines[i] = rollout_engine
+
+        self.num_new_engines = len(rollout_engines)
+        if self.num_new_engines == 0:
+            return [], port_cursors
+
+        addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(
+            self.external_worker_specs,
+            rollout_engines,
+            rank_offset=self.rank_offset,
+        )
+        init_handles = [
+            engine.init.remote(
+                **addr_and_ports[rank],
                 router_ip=self.router_ip,
                 router_port=self.router_port,
             )
@@ -845,17 +897,24 @@ def _validate_rollout_id_annotated(node, depth=0):
         _validate_rollout_id_annotated(item, depth + 1)
 
 
-def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):
+def _allocate_rollout_engine_addr_and_ports_external(
+    external_worker_specs: list[ExternalEngineInfo],
+    rollout_engines,
+    *,
+    rank_offset: int = 0,
+):
     addr_and_ports = {}
     for rank, _ in rollout_engines:
-        addr = args.rollout_external_engine_addrs[rank]
-        [host, port] = addr.split(":")
+        spec = external_worker_specs[rank - rank_offset]
+        addr = f"{spec.host}:{spec.port}"
         addr_and_ports[rank] = dict(
             dist_init_addr=addr,
             nccl_port=None,
-            host=host,
-            port=int(port),
+            host=spec.host,
+            port=spec.port,
         )
+        if spec.worker_type == "prefill":
+            addr_and_ports[rank]["disaggregation_bootstrap_port"] = spec.disaggregation_bootstrap_port
     return addr_and_ports
 
 
@@ -1018,6 +1077,137 @@ def _compute_megatron_num_gpus(args) -> int:
     return num
 
 
+def _external_engine_infos_from_args(args) -> list[ExternalEngineInfo]:
+    raw_infos = getattr(args, "rollout_external_engine_infos", None)
+    if raw_infos is None:
+        addrs = getattr(args, "rollout_external_engine_addrs", None)
+        if not addrs:
+            raise RuntimeError("--rollout-external requires --rollout-external-engine-addrs.")
+        infos = discover_external_engines(addrs)
+        args.rollout_external_engine_infos = [info.to_dict() for info in infos]
+        args.rollout_num_engines = len(infos)
+        args.rollout_num_gpus = sum(info.num_gpus for info in infos)
+        if infos:
+            args.rollout_num_gpus_per_engine = infos[0].num_gpus
+        return infos
+    return [external_engine_info_from_dict(info) if isinstance(info, dict) else info for info in raw_infos]
+
+
+def _get_registered_router_worker_urls(router_ip: str, router_port: int) -> set[str]:
+    router_addr = f"http://{router_ip}:{router_port}"
+    for endpoint in ("/workers", "/list_workers"):
+        try:
+            response = requests.get(f"{router_addr}{endpoint}", timeout=30)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception:
+            continue
+        if "workers" in payload:
+            return {worker["url"] if isinstance(worker, dict) else worker for worker in payload["workers"]}
+        if "urls" in payload:
+            return set(payload["urls"])
+    return set()
+
+
+def _register_external_workers_to_router(args, engine_infos: list[ExternalEngineInfo]) -> None:
+    if not engine_infos:
+        return
+
+    router_addr = f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
+    registered_urls = _get_registered_router_worker_urls(args.sglang_router_ip, args.sglang_router_port)
+    has_pd = any(info.is_pd_worker for info in engine_infos)
+
+    if parse(sglang_router.__version__) <= parse("0.2.1"):
+        assert not has_pd, "PD disaggregation for external engines requires sglang_router > 0.2.1."
+        for info in engine_infos:
+            if info.url in registered_urls:
+                continue
+            response = requests.post(f"{router_addr}/add_worker?url={info.url}")
+            response.raise_for_status()
+        return
+
+    for info in engine_infos:
+        if info.worker_type == "encoder":
+            continue
+        if info.url in registered_urls:
+            continue
+        payload = {
+            "url": info.url,
+            "worker_type": info.worker_type,
+        }
+        if info.worker_type == "prefill":
+            if info.disaggregation_bootstrap_port is None:
+                raise RuntimeError(
+                    f"External prefill worker {info.url} did not report disaggregation_bootstrap_port "
+                    "from /server_info; cannot register it to the PD router."
+                )
+            payload["bootstrap_port"] = info.disaggregation_bootstrap_port
+        response = requests.post(f"{router_addr}/workers", json=payload)
+        response.raise_for_status()
+
+
+def _start_external_rollout_servers(args, pg) -> dict[str, RolloutServer]:
+    engine_infos = _external_engine_infos_from_args(args)
+    has_pd = any(info.is_pd_worker for info in engine_infos)
+    router_ip, router_port = _start_router(args, has_pd_disaggregation=has_pd)
+    args.sglang_router_ip = router_ip
+    args.sglang_router_port = router_port
+    _register_external_workers_to_router(args, engine_infos)
+
+    specs_by_topology: dict[tuple, list[ExternalEngineInfo]] = {}
+    for info in engine_infos:
+        key = (info.worker_type, info.num_gpus, info.tp_size, info.pp_size, info.dp_size, info.ep_size)
+        specs_by_topology.setdefault(key, []).append(info)
+
+    server_groups = []
+    engine_offset = 0
+    gpu_offset = 0
+    init_handles = []
+    for (worker_type, num_gpus, tp_size, pp_size, dp_size, ep_size), group_specs in specs_by_topology.items():
+        overrides = {
+            "tp_size": tp_size,
+            "pp_size": pp_size,
+            "dp_size": dp_size,
+            "ep_size": ep_size,
+        }
+        group = ServerGroup(
+            args=args,
+            pg=pg,
+            all_engines=[None] * len(group_specs),
+            num_gpus_per_engine=num_gpus,
+            num_new_engines=0,
+            worker_type=worker_type,
+            rank_offset=engine_offset,
+            gpu_offset=gpu_offset,
+            sglang_overrides=overrides,
+            needs_offload=False,
+            model_path=args.hf_checkpoint,
+            router_ip=router_ip,
+            router_port=router_port,
+            external_worker_specs=group_specs,
+        )
+        handles, _ = group.start_engines({})
+        init_handles.extend(handles)
+        server_groups.append(group)
+
+        engine_offset += len(group_specs)
+        gpu_offset += len(group_specs) * num_gpus
+
+    if init_handles:
+        ray.get(init_handles)
+
+    args.sglang_model_routers = {"default": (router_ip, router_port)}
+    return {
+        "default": RolloutServer(
+            server_groups=server_groups,
+            router_ip=router_ip,
+            router_port=router_port,
+            model_name="default",
+            update_weights=True,
+        )
+    }
+
+
 def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
     """Start rollout servers: one per model, each with its own router.
 
@@ -1031,6 +1221,9 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
     Note: ``init_http_client`` should be called separately before this,
     as the HTTP client is shared across all servers.
     """
+    if args.rollout_external:
+        return _start_external_rollout_servers(args, pg)
+
     config = _resolve_sglang_config(args)
 
     servers: dict[str, RolloutServer] = {}

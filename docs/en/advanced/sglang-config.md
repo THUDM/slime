@@ -275,6 +275,12 @@ python train.py \
   ...
 ```
 
+slime queries each external engine's `/server_info` endpoint to infer
+`rollout_num_gpus`, per-engine GPU counts, SGLang parallel sizes, and
+prefill/decode worker types. If no `--sglang-router-ip/--sglang-router-port`
+is provided, slime launches its own router and registers the external engines
+to it.
+
 > **Note:** `--sglang-config` and `--rollout-external` are mutually exclusive. Use `--sglang-config` when you want slime to manage the full engine lifecycle; use `--rollout-external` when engines are pre-deployed.
 
 ---

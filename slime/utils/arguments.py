@@ -10,6 +10,7 @@ from sglang_router.launch_router import RouterArgs
 
 from slime.backends.sglang_utils.arguments import sglang_parse_args
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
+from slime.backends.sglang_utils.external import apply_external_engine_info_to_args
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
 from slime.utils.logging_utils import configure_logger
 
@@ -1785,6 +1786,9 @@ def slime_validate_args(args):
             "will not instantiate sglang servers and will only run the training process."
         )
         args.debug_train_only = True
+
+    if not args.debug_train_only:
+        apply_external_engine_info_to_args(args, logger=logger)
 
     args.use_critic = args.advantage_estimator == "ppo"
     # Critic always uses the same GPU count as actor.

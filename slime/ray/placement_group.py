@@ -90,6 +90,9 @@ def create_placement_groups(args):
     elif args.colocate:
         num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
         rollout_offset = 0
+    elif args.rollout_external:
+        num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
+        rollout_offset = num_gpus
     else:
         num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node + args.rollout_num_gpus
         rollout_offset = args.actor_num_nodes * args.actor_num_gpus_per_node
