@@ -157,11 +157,6 @@ def validate_args(args):
     if getattr(args, "sglang_router_ip", None):
         args.sglang_router_ip = _wrap_ipv6(args.sglang_router_ip)
 
-    if getattr(args, "rollout_external", False) and args.sglang_router_ip is not None:
-        assert (
-            args.sglang_router_port is not None
-        ), "--sglang-router-port must be set with --sglang-router-ip when using --rollout-external-engine-addrs."
-
     # Mutual-exclusion checks for PD disaggregation / sglang-config.
     assert not (
         getattr(args, "prefill_num_servers", None) is not None and getattr(args, "rollout_external", False)

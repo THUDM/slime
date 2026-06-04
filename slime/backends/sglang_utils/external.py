@@ -172,16 +172,11 @@ class ExternalRolloutServer:
 def external_engine_infos_from_args(args) -> list[ExternalEngineInfo]:
     raw_infos = getattr(args, "rollout_external_engine_infos", None)
     if raw_infos is None:
-        addrs = getattr(args, "rollout_external_engine_addrs", None)
-        if not addrs:
-            raise RuntimeError("External rollout requires --rollout-external-engine-addrs.")
-        infos = discover_external_engines(addrs)
-        args.rollout_external_engine_infos = [info.to_dict() for info in infos]
-    else:
-        infos = [external_engine_info_from_dict(info) if isinstance(info, dict) else info for info in raw_infos]
-    args.rollout_num_engines = len(infos)
-    args.rollout_num_gpus = sum(info.num_gpus for info in infos)
-    return infos
+        raise RuntimeError(
+            "External rollout engine info is missing. "
+            "apply_external_engine_info_to_args must run before starting external rollout servers."
+        )
+    return [external_engine_info_from_dict(info) if isinstance(info, dict) else info for info in raw_infos]
 
 
 def start_external_rollout_servers(args, *, start_router) -> dict[str, ExternalRolloutServer]:
