@@ -1786,23 +1786,6 @@ def slime_validate_args(args):
     if getattr(args, "balance_by_flops", False):
         assert args.use_dynamic_batch_size, "--balance-by-flops requires --use-dynamic-batch-size"
 
-        h = getattr(args, "hidden_size", None)
-        ffn = getattr(args, "ffn_hidden_size", None)
-        if h is None or ffn is None:
-            args.workload_coeff = 24576
-        else:
-            num_experts = getattr(args, "num_experts", None)
-            if num_experts is not None and num_experts > 1:
-                topk = getattr(args, "moe_router_topk", 1)
-                moe_ffn = getattr(args, "moe_ffn_hidden_size", ffn)
-                shared = getattr(args, "moe_shared_expert_intermediate_size", None) or 0
-                d_ff = moe_ffn * topk + shared
-            else:
-                d_ff = ffn
-            ffn_mul = 3 if getattr(args, "swiglu", False) else 2
-            args.workload_coeff = 2 * h + ffn_mul * d_ff // 2
-        logger.info(f"balance-by-flops: workload_coeff={args.workload_coeff}")
-
     if args.eps_clip_high is None:
         args.eps_clip_high = args.eps_clip
 
