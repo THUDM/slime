@@ -46,6 +46,9 @@ def _args(**overrides):
         "partial_rollout": False,
         "mask_offpolicy_in_partial_rollout": False,
         "sglang_speculative_algorithm": None,
+        "rollout_weight_version_policy": "none",
+        "rollout_weight_version_retry_attempts": 60,
+        "rollout_weight_version_retry_sleep": 1.0,
     }
     values.update(overrides)
     return Namespace(**values)
@@ -92,7 +95,7 @@ def test_get_model_url_uses_model_router_without_http_endpoint():
 def test_generate_posts_to_http_endpoint(monkeypatch):
     captured = {}
 
-    async def fake_post(url, payload, headers=None):
+    async def fake_post(url, payload, headers=None, **_kwargs):
         captured["url"] = url
         captured["payload"] = payload
         captured["headers"] = headers
@@ -118,6 +121,112 @@ def test_generate_posts_to_http_endpoint(monkeypatch):
     assert sample.response == " answer"
     assert sample.tokens == [101, 2, 42]
     assert sample.status == Sample.Status.COMPLETED
+
+
+def test_generate_adds_exact_rollout_weight_version(monkeypatch):
+    captured = {}
+
+    async def fake_post(url, payload, headers=None, max_retries=60, retry_sleep=1.0):
+        captured["url"] = url
+        captured["payload"] = payload
+        captured["max_retries"] = max_retries
+        captured["retry_sleep"] = retry_sleep
+        return {
+            "text": " answer",
+            "meta_info": {
+                "output_token_logprobs": [[-0.25, 42]],
+                "finish_reason": {"type": "stop"},
+                "prompt_tokens": 2,
+                "cached_tokens": 1,
+            },
+        }
+
+    monkeypatch.setattr(sglang_rollout, "GenerateState", _GenerateState)
+    monkeypatch.setattr(sglang_rollout, "post", fake_post)
+
+    args = _args(
+        rollout_http_endpoint_url="https://rollout.example",
+        rollout_weight_version_policy="exact-rollout-id",
+        rollout_weight_version_retry_attempts=123,
+        rollout_weight_version_retry_sleep=0.25,
+    )
+    with sglang_rollout.rollout_weight_version_context(args, rollout_id=9):
+        sample = asyncio.run(generate(args, Sample(index=0, prompt="hi"), {"max_new_tokens": 8}))
+
+    assert captured["url"] == "https://rollout.example/generate"
+    assert captured["payload"]["weight_version"] == {"exact_version": 9}
+    assert captured["max_retries"] == 123
+    assert captured["retry_sleep"] == 0.25
+    assert sample.status == Sample.Status.COMPLETED
+
+
+def test_generate_retries_until_exact_weight_version_is_available(monkeypatch):
+    aiohttp_web = pytest.importorskip("aiohttp.web")
+    httpx = pytest.importorskip("httpx")
+
+    async def run():
+        from slime.utils import http_utils
+
+        attempts = []
+
+        async def handle_generate(request):
+            payload = await request.json()
+            attempts.append(payload)
+            assert payload["weight_version"] == {"exact_version": 11}
+            if len(attempts) == 1:
+                raise aiohttp_web.HTTPNotFound(text="weight version not loaded")
+            if len(attempts) == 2:
+                raise aiohttp_web.HTTPConflict(text="weight version still loading")
+            return aiohttp_web.json_response(
+                {
+                    "text": " answer",
+                    "meta_info": {
+                        "output_token_logprobs": [[-0.25, 42]],
+                        "finish_reason": {"type": "stop"},
+                        "prompt_tokens": 2,
+                        "cached_tokens": 0,
+                    },
+                }
+            )
+
+        app = aiohttp_web.Application()
+        app.router.add_post("/generate", handle_generate)
+        runner = aiohttp_web.AppRunner(app)
+        await runner.setup()
+        site = aiohttp_web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+
+        old_client = http_utils._http_client
+        old_distributed = http_utils._distributed_post_enabled
+        old_post_actors = http_utils._post_actors
+        client = httpx.AsyncClient(timeout=httpx.Timeout(None), trust_env=False)
+        http_utils._http_client = client
+        http_utils._distributed_post_enabled = False
+        http_utils._post_actors = []
+        try:
+            monkeypatch.setattr(sglang_rollout, "GenerateState", _GenerateState)
+
+            args = _args(
+                rollout_http_endpoint_url=f"http://127.0.0.1:{port}",
+                rollout_weight_version_policy="exact-rollout-id",
+                rollout_weight_version_retry_attempts=5,
+                rollout_weight_version_retry_sleep=0.01,
+            )
+            with sglang_rollout.rollout_weight_version_context(args, rollout_id=11):
+                sample = await generate(args, Sample(index=0, prompt="hi"), {"max_new_tokens": 8})
+        finally:
+            await client.aclose()
+            http_utils._http_client = old_client
+            http_utils._distributed_post_enabled = old_distributed
+            http_utils._post_actors = old_post_actors
+            await runner.cleanup()
+
+        assert len(attempts) == 3
+        assert sample.status == Sample.Status.COMPLETED
+        assert sample.tokens == [101, 2, 42]
+
+    asyncio.run(run())
 
 
 def test_cancel_only_abort_does_not_query_router_workers(monkeypatch):

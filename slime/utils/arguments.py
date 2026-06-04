@@ -557,6 +557,28 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "'router-workers' uses the SGLang router worker list."
                 ),
             )
+            parser.add_argument(
+                "--rollout-weight-version-policy",
+                type=str,
+                choices=["none", "exact-rollout-id"],
+                default="none",
+                help=(
+                    "Optional weight-version policy included in rollout generation payloads. "
+                    "'exact-rollout-id' sends {'weight_version': {'exact_version': rollout_id}}."
+                ),
+            )
+            parser.add_argument(
+                "--rollout-weight-version-retry-attempts",
+                type=int,
+                default=60,
+                help="Maximum HTTP POST attempts for version-pinned rollout generation requests.",
+            )
+            parser.add_argument(
+                "--rollout-weight-version-retry-sleep",
+                type=float,
+                default=1.0,
+                help="Sleep interval between HTTP POST retries for version-pinned rollout generation requests.",
+            )
             return parser
 
         def add_fault_tolerance_arguments(parser):
