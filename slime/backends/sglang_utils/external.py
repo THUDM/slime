@@ -26,6 +26,55 @@ class ExternalEngineInfo:
         return dataclasses.asdict(self)
 
 
+@dataclasses.dataclass(frozen=True)
+class ExternalServerGroupInfo:
+    worker_type: str
+    num_gpus_per_engine: int
+    engine_infos: tuple[ExternalEngineInfo, ...]
+
+    @property
+    def num_gpus(self) -> int:
+        return sum(info.num_gpus for info in self.engine_infos)
+
+    def to_dict(self) -> dict:
+        return {
+            "worker_type": self.worker_type,
+            "num_gpus": self.num_gpus,
+            "num_gpus_per_engine": self.num_gpus_per_engine,
+            "engine_infos": [info.to_dict() for info in self.engine_infos],
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class ExternalModelInfo:
+    name: str
+    server_groups: tuple[ExternalServerGroupInfo, ...]
+    update_weights: bool = True
+
+    @property
+    def has_pd_disaggregation(self) -> bool:
+        return any(g.worker_type in ("prefill", "decode") for g in self.server_groups)
+
+    @property
+    def engine_infos(self) -> list[ExternalEngineInfo]:
+        return [info for group in self.server_groups for info in group.engine_infos]
+
+    @property
+    def total_num_gpus(self) -> int:
+        return sum(group.num_gpus for group in self.server_groups)
+
+    @property
+    def num_engines(self) -> int:
+        return sum(len(group.engine_infos) for group in self.server_groups)
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "server_groups": [group.to_dict() for group in self.server_groups],
+            "update_weights": self.update_weights,
+        }
+
+
 def normalize_external_engine_addr(addr: str) -> str:
     """Normalize ``host:port`` or ``http://host:port`` to an HTTP base URL."""
     if "://" not in addr:
@@ -42,6 +91,23 @@ def normalize_external_engine_addr(addr: str) -> str:
 
 def external_engine_info_from_dict(data: dict) -> ExternalEngineInfo:
     return ExternalEngineInfo(**data)
+
+
+def build_external_model_info(infos: list[ExternalEngineInfo], name: str = "default") -> ExternalModelInfo:
+    specs_by_topology: dict[tuple[str, int], list[ExternalEngineInfo]] = {}
+    for info in infos:
+        key = (info.worker_type, info.num_gpus)
+        specs_by_topology.setdefault(key, []).append(info)
+
+    server_groups = tuple(
+        ExternalServerGroupInfo(
+            worker_type=worker_type,
+            num_gpus_per_engine=num_gpus_per_engine,
+            engine_infos=tuple(group_infos),
+        )
+        for (worker_type, num_gpus_per_engine), group_infos in specs_by_topology.items()
+    )
+    return ExternalModelInfo(name=name, server_groups=server_groups)
 
 
 def _positive_int(value, default: int) -> int:
@@ -116,8 +182,10 @@ def apply_external_engine_info_to_args(args, logger=None) -> None:
         raise ValueError("--rollout-external-engine-addrs did not contain any engines.")
 
     args.rollout_external_engine_infos = [info.to_dict() for info in infos]
-    args.rollout_num_engines = len(infos)
-    args.rollout_num_gpus = sum(info.num_gpus for info in infos)
+    model_info = build_external_model_info(infos)
+    args.rollout_external_model_info = model_info.to_dict()
+    args.rollout_num_engines = model_info.num_engines
+    args.rollout_num_gpus = model_info.total_num_gpus
 
     if logger is not None:
         summary = [

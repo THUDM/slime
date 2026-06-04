@@ -19,6 +19,8 @@ from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_
 
 from slime.backends.sglang_utils.external import (
     ExternalEngineInfo,
+    ExternalModelInfo,
+    build_external_model_info,
     discover_external_engines,
     external_engine_info_from_dict,
 )
@@ -1060,7 +1062,7 @@ def _compute_megatron_num_gpus(args) -> int:
     return num
 
 
-def _external_engine_infos_from_args(args) -> list[ExternalEngineInfo]:
+def _external_model_from_args(args) -> ExternalModelInfo:
     raw_infos = getattr(args, "rollout_external_engine_infos", None)
     if raw_infos is None:
         addrs = getattr(args, "rollout_external_engine_addrs", None)
@@ -1068,10 +1070,13 @@ def _external_engine_infos_from_args(args) -> list[ExternalEngineInfo]:
             raise RuntimeError("External rollout requires --rollout-external-engine-addrs.")
         infos = discover_external_engines(addrs)
         args.rollout_external_engine_infos = [info.to_dict() for info in infos]
-        args.rollout_num_engines = len(infos)
-        args.rollout_num_gpus = sum(info.num_gpus for info in infos)
-        return infos
-    return [external_engine_info_from_dict(info) if isinstance(info, dict) else info for info in raw_infos]
+    else:
+        infos = [external_engine_info_from_dict(info) if isinstance(info, dict) else info for info in raw_infos]
+    model_info = build_external_model_info(infos)
+    args.rollout_external_model_info = model_info.to_dict()
+    args.rollout_num_engines = model_info.num_engines
+    args.rollout_num_gpus = model_info.total_num_gpus
+    return model_info
 
 
 def _get_registered_router_worker_urls(router_ip: str, router_port: int) -> set[str]:
@@ -1090,16 +1095,18 @@ def _get_registered_router_worker_urls(router_ip: str, router_port: int) -> set[
     return set()
 
 
-def _register_external_workers_to_router(args, engine_infos: list[ExternalEngineInfo]) -> None:
+def _register_external_workers_to_router(args, model_info: ExternalModelInfo) -> None:
+    engine_infos = model_info.engine_infos
     if not engine_infos:
         return
 
     router_addr = f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
     registered_urls = _get_registered_router_worker_urls(args.sglang_router_ip, args.sglang_router_port)
-    has_pd = any(info.is_pd_worker for info in engine_infos)
 
     if parse(sglang_router.__version__) <= parse("0.2.1"):
-        assert not has_pd, "PD disaggregation for external engines requires sglang_router > 0.2.1."
+        assert (
+            not model_info.has_pd_disaggregation
+        ), "PD disaggregation for external engines requires sglang_router > 0.2.1."
         for info in engine_infos:
             if info.url in registered_urls:
                 continue
@@ -1128,30 +1135,26 @@ def _register_external_workers_to_router(args, engine_infos: list[ExternalEngine
 
 
 def _start_external_rollout_servers(args, pg) -> dict[str, RolloutServer]:
-    engine_infos = _external_engine_infos_from_args(args)
-    has_pd = any(info.is_pd_worker for info in engine_infos)
-    router_ip, router_port = _start_router(args, has_pd_disaggregation=has_pd)
+    model_cfg = _external_model_from_args(args)
+    router_ip, router_port = _start_router(args, has_pd_disaggregation=model_cfg.has_pd_disaggregation)
     args.sglang_router_ip = router_ip
     args.sglang_router_port = router_port
-    _register_external_workers_to_router(args, engine_infos)
-
-    specs_by_topology: dict[tuple, list[ExternalEngineInfo]] = {}
-    for info in engine_infos:
-        key = (info.worker_type, info.num_gpus)
-        specs_by_topology.setdefault(key, []).append(info)
+    _register_external_workers_to_router(args, model_cfg)
 
     server_groups = []
     engine_offset = 0
     gpu_offset = 0
     init_handles = []
-    for (worker_type, num_gpus), group_specs in specs_by_topology.items():
+    for group_cfg in model_cfg.server_groups:
+        group_specs = list(group_cfg.engine_infos)
+        num_gpus = group_cfg.num_gpus_per_engine
         group = ServerGroup(
             args=args,
             pg=pg,
             all_engines=[None] * len(group_specs),
             num_gpus_per_engine=num_gpus,
             num_new_engines=0,
-            worker_type=worker_type,
+            worker_type=group_cfg.worker_type,
             rank_offset=engine_offset,
             gpu_offset=gpu_offset,
             sglang_overrides={},

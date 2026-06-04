@@ -8,9 +8,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from slime.backends.sglang_utils.external import apply_external_engine_info_to_args, discover_external_engines
+from slime.backends.sglang_utils.external import (
+    ExternalEngineInfo,
+    apply_external_engine_info_to_args,
+    build_external_model_info,
+    discover_external_engines,
+)
 from slime.utils.http_utils import get_rollout_num_engines
-
 
 NUM_GPUS = 0
 
@@ -59,6 +63,40 @@ def test_discover_external_engines_reads_server_info(monkeypatch):
     assert info.server_info["ep_size"] == 4
 
 
+def test_build_external_model_info_groups_engines_by_topology():
+    infos = [
+        ExternalEngineInfo(
+            url="http://prefill-0:10090",
+            host="prefill-0",
+            port=10090,
+            worker_type="prefill",
+            num_gpus=2,
+        ),
+        ExternalEngineInfo(
+            url="http://prefill-1:10091",
+            host="prefill-1",
+            port=10091,
+            worker_type="prefill",
+            num_gpus=2,
+        ),
+        ExternalEngineInfo(url="http://decode-0:10092", host="decode-0", port=10092, worker_type="decode", num_gpus=4),
+    ]
+
+    model_info = build_external_model_info(infos)
+
+    assert model_info.name == "default"
+    assert model_info.has_pd_disaggregation is True
+    assert model_info.num_engines == 3
+    assert model_info.total_num_gpus == 8
+    assert [
+        (group.worker_type, group.num_gpus, group.num_gpus_per_engine, len(group.engine_infos))
+        for group in model_info.server_groups
+    ] == [
+        ("prefill", 4, 2, 2),
+        ("decode", 4, 4, 1),
+    ]
+
+
 def test_apply_external_engine_info_handles_pd(monkeypatch):
     payloads = {
         "http://prefill:10090/server_info": {
@@ -90,11 +128,13 @@ def test_apply_external_engine_info_handles_pd(monkeypatch):
         sglang_data_parallel_size=1,
         sglang_expert_parallel_size=1,
         sglang_enable_dp_attention=False,
+        router_pd_disaggregation=False,
     )
 
     apply_external_engine_info_to_args(args)
 
     assert args.rollout_external is True
+    assert args.router_pd_disaggregation is False
     assert args.rollout_num_gpus == 6
     assert args.rollout_num_engines == 2
     assert get_rollout_num_engines(args) == 2
@@ -102,6 +142,31 @@ def test_apply_external_engine_info_handles_pd(monkeypatch):
     assert [info["num_gpus"] for info in args.rollout_external_engine_infos] == [2, 4]
     assert [info["server_info"]["dp_size"] for info in args.rollout_external_engine_infos] == [1, 2]
     assert args.rollout_external_engine_infos[0]["disaggregation_bootstrap_port"] == 12090
+
+
+def test_apply_external_engine_info_preserves_router_pd_flag(monkeypatch):
+    def fake_get(url, timeout):
+        assert url == "http://regular:10090/server_info"
+        return _Response(
+            {
+                "tp_size": 2,
+                "pp_size": 1,
+                "disaggregation_mode": "null",
+            }
+        )
+
+    monkeypatch.setattr("slime.backends.sglang_utils.external.requests.get", fake_get)
+    args = Namespace(
+        rollout_external_engine_addrs=["regular:10090"],
+        router_pd_disaggregation=True,
+    )
+
+    apply_external_engine_info_to_args(args)
+
+    assert args.rollout_external is True
+    assert args.router_pd_disaggregation is True
+    assert args.rollout_num_gpus == 2
+    assert args.rollout_num_engines == 1
 
 
 def test_apply_external_engine_info_no_addrs_disables_external():
