@@ -8,12 +8,20 @@ Spawns four SGLang servers out-of-band on a single 8-GPU box (all tp=1):
 and points slime at all four via ``--rollout-external-engine-addrs ...``.
 The remaining 4 GPUs train. slime queries ``/server_info`` on each engine to
 infer per-engine TP / GPU counts and registers them to its (PD-enabled) router.
+
+Weight sync uses ``--update-weight-mode delta --update-weight-transport disk``
+so the post-train sync writes sparse safetensors to a shared dir and the
+external engines load them via ``update_weights_from_disk(load_format=delta)``
+— that's the only sync path that actually works for pre-launched workers (no
+NCCL group between trainer and external engines).
 """
 
 import os
 import subprocess
+import tempfile
 import time
 import urllib.request
+from pathlib import Path
 
 import slime.utils.external_utils.command_utils as U
 
@@ -160,6 +168,8 @@ def execute():
                 )
             )
 
+    delta_dir_cm = tempfile.TemporaryDirectory(prefix="slime_external_pd_delta_")
+    delta_dir = delta_dir_cm.name
     try:
         ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /dev/shm/{MODEL_NAME}_torch_dist "
 
@@ -194,7 +204,10 @@ def execute():
             "--use-kl-loss "
             "--kl-loss-coef 0.00 "
             "--kl-loss-type low_var_kl "
-            "--entropy-coef 0.00 "
+            # Nonzero entropy coef guarantees a nonzero gradient even when all
+            # rewards in a group tie (advantages=0), so the delta sync writes
+            # real sparse files instead of an empty no-op.
+            "--entropy-coef 0.01 "
             "--eps-clip 0.2 "
             "--eps-clip-high 0.28 "
         )
@@ -215,6 +228,18 @@ def execute():
             "--rollout-external-engine-addrs "
             f"{EXTERNAL_HOST}:{PREFILL_PORT} "
             f"{EXTERNAL_HOST}:{DECODE_PORT} " + " ".join(f"{EXTERNAL_HOST}:{port}" for port in REGULAR_PORTS) + " "
+        )
+
+        # External engines have no NCCL group with the trainer, so weight
+        # updates have to go through the disk-backed delta path: the trainer
+        # writes sparse safetensors per sync, the engines pull via
+        # update_weights_from_disk(load_format="delta", files=...).
+        delta_args = (
+            "--update-weight-mode delta "
+            "--update-weight-transport disk "
+            "--update-weight-encoding deltas "
+            f"--update-weight-delta-dir {delta_dir} "
+            "--update-weight-delta-keep-files "
         )
 
         ci_args = "--ci-test "
@@ -238,6 +263,7 @@ def execute():
             f"{U.get_default_wandb_args(__file__)} "
             f"{perf_args} "
             f"{external_args} "
+            f"{delta_args} "
             f"{ci_args} "
             f"{misc_args} "
         )
@@ -248,12 +274,16 @@ def execute():
             megatron_model_type=MODEL_TYPE,
             before_ray_job_submit=launch_external_engines,
         )
+
+        delta_files = list(Path(delta_dir).glob("weight_v*/*.safetensors"))
+        assert delta_files, f"No disk delta safetensors were written under {delta_dir}"
     finally:
         for p in processes:
             if p.poll() is None:
                 p.kill()
                 p.wait()
         U.exec_command("pkill -9 sglang; true")
+        delta_dir_cm.cleanup()
 
 
 if __name__ == "__main__":
