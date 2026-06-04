@@ -72,7 +72,6 @@ def test_apply_external_engine_info_handles_pd(monkeypatch):
 
     monkeypatch.setattr("slime.backends.sglang_utils.external.requests.get", fake_get)
     args = Namespace(
-        rollout_external=True,
         rollout_external_engine_addrs=["prefill:10090", "decode:10091"],
         rollout_num_gpus=None,
         rollout_num_gpus_per_engine=1,
@@ -84,6 +83,7 @@ def test_apply_external_engine_info_handles_pd(monkeypatch):
 
     apply_external_engine_info_to_args(args)
 
+    assert args.rollout_external is True
     assert args.rollout_num_gpus == 6
     assert args.rollout_num_engines == 2
     assert get_rollout_num_engines(args) == 2
@@ -91,3 +91,11 @@ def test_apply_external_engine_info_handles_pd(monkeypatch):
     assert args.sglang_enable_dp_attention is True
     assert [info["worker_type"] for info in args.rollout_external_engine_infos] == ["prefill", "decode"]
     assert args.rollout_external_engine_infos[0]["disaggregation_bootstrap_port"] == 12090
+
+
+def test_apply_external_engine_info_no_addrs_disables_external():
+    args = Namespace(rollout_external_engine_addrs=None)
+
+    apply_external_engine_info_to_args(args)
+
+    assert args.rollout_external is False

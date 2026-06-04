@@ -1082,7 +1082,7 @@ def _external_engine_infos_from_args(args) -> list[ExternalEngineInfo]:
     if raw_infos is None:
         addrs = getattr(args, "rollout_external_engine_addrs", None)
         if not addrs:
-            raise RuntimeError("--rollout-external requires --rollout-external-engine-addrs.")
+            raise RuntimeError("External rollout requires --rollout-external-engine-addrs.")
         infos = discover_external_engines(addrs)
         args.rollout_external_engine_infos = [info.to_dict() for info in infos]
         args.rollout_num_engines = len(infos)

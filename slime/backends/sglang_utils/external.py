@@ -115,13 +115,12 @@ def discover_external_engines(addrs: list[str], timeout: float = 30.0) -> list[E
 
 def apply_external_engine_info_to_args(args, logger=None) -> None:
     """Detect external engines and store the derived topology on ``args``."""
-    if not getattr(args, "rollout_external", False):
-        return
-
     addrs = getattr(args, "rollout_external_engine_addrs", None)
     if not addrs:
-        raise ValueError("--rollout-external requires --rollout-external-engine-addrs.")
+        args.rollout_external = False
+        return
 
+    args.rollout_external = True
     infos = discover_external_engines(addrs)
     if not infos:
         raise ValueError("--rollout-external-engine-addrs did not contain any engines.")

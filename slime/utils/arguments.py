@@ -510,8 +510,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-external",
                 action="store_true",
-                default=False,
-                help="Use external SGLang instances instead of launching them inside the framework.",
+                default=None,
+                help=argparse.SUPPRESS,
             )
             parser.add_argument(
                 "--rollout-external-engine-addrs",
@@ -1786,6 +1786,13 @@ def slime_validate_args(args):
             "will not instantiate sglang servers and will only run the training process."
         )
         args.debug_train_only = True
+
+    if getattr(args, "rollout_external", None) is not None:
+        logger.warning(
+            "--rollout-external is deprecated and ignored. "
+            "Set --rollout-external-engine-addrs to use pre-launched external SGLang engines."
+        )
+    args.rollout_external = args.rollout_external_engine_addrs is not None
 
     if not args.debug_train_only:
         apply_external_engine_info_to_args(args, logger=logger)
