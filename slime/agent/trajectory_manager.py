@@ -32,7 +32,7 @@ Design (Plan C, 2026-06-03):
   Sample alongside the main leaf. Snapshot tokens = cumulative pre-drop;
   snapshot loss_mask is COMPLEMENTARY — 1 only at positions that the
   main leaf is about to drop, 0 elsewhere. Snapshot reward = main-leaf
-  share; snapshot rollout_id = main-leaf rollout_id. Snapshot ∪ main on
+  share; snapshot group_id = main-leaf group_id. Snapshot ∪ main on
   loss_mask=1 tokens never overlap and their union equals the virtual
   no-drift trajectory. The snapshotted drift is NOT counted in the main
   sample's ``tito_dropped_*`` (it wasn't truly lost).
@@ -435,9 +435,7 @@ class TrajectoryManager:
                 samples.append(
                     Sample(
                         index=base_sample.index,
-                        rollout_id=(
-                            base_sample.rollout_id if base_sample.rollout_id is not None else base_sample.index
-                        ),
+                        group_id=(base_sample.group_id if base_sample.group_id is not None else base_sample.index),
                         prompt=base_sample.prompt,
                         label=base_sample.label,
                         tokens=snap_tokens,
@@ -463,7 +461,7 @@ class TrajectoryManager:
             samples.append(
                 Sample(
                     index=base_sample.index,
-                    rollout_id=(base_sample.rollout_id if base_sample.rollout_id is not None else base_sample.index),
+                    group_id=(base_sample.group_id if base_sample.group_id is not None else base_sample.index),
                     prompt=base_sample.prompt,
                     label=base_sample.label,
                     tokens=tokens,
