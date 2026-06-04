@@ -1004,7 +1004,7 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
 
 def _compute_rollout_offset(args) -> int:
     """Offset (in PG bundle slots) where rollout GPUs start."""
-    if args.debug_train_only or args.debug_rollout_only or args.colocate:
+    if args.debug_train_only or args.debug_rollout_only or args.colocate or args.rollout_external:
         return 0
     offset = args.actor_num_nodes * args.actor_num_gpus_per_node
     return offset
