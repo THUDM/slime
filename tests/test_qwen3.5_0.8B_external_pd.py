@@ -1,11 +1,11 @@
 """E2E test for --rollout-external-engine-addrs with a mixed external fleet.
 
-Spawns three SGLang servers out-of-band on a single 8-GPU box:
-- 1 prefill (tp=2, 2 GPUs, ``--disaggregation-mode prefill``)
-- 1 decode  (tp=1, 1 GPU,  ``--disaggregation-mode decode``)
-- 1 regular (tp=1, 1 GPU,  no disaggregation)
+Spawns four SGLang servers out-of-band on a single 8-GPU box (all tp=1):
+- 1 prefill  (``--disaggregation-mode prefill``)
+- 1 decode   (``--disaggregation-mode decode``)
+- 2 regular  (no disaggregation)
 
-and points slime at all three via ``--rollout-external-engine-addrs ...``.
+and points slime at all four via ``--rollout-external-engine-addrs ...``.
 The remaining 4 GPUs train. slime queries ``/server_info`` on each engine to
 infer per-engine TP / GPU counts and registers them to its (PD-enabled) router.
 """
@@ -21,12 +21,12 @@ MODEL_NAME = "Qwen3.5-0.8B"
 MODEL_TYPE = "qwen3.5-0.8B"
 NUM_GPUS = 8
 NUM_TRAIN_GPUS = 4
-PREFILL_TP = 2
+NUM_REGULAR_ENGINES = 2
 
 EXTERNAL_HOST = "127.0.0.1"
 PREFILL_PORT = 13150
 DECODE_PORT = 13151
-REGULAR_PORT = 13153
+REGULAR_PORTS = [13153, 13154]
 BOOTSTRAP_PORT = 13152
 
 
@@ -43,17 +43,17 @@ def prepare():
 
 
 def _get_gpu_split():
-    """Partition the 8 visible GPUs: 4 train + 2 prefill + 1 decode + 1 regular."""
+    """Partition the 8 visible GPUs: 4 train + 1 prefill + 1 decode + 2 regular."""
     all_gpus = os.environ.get("CUDA_VISIBLE_DEVICES", ",".join(str(i) for i in range(NUM_GPUS))).split(",")
     assert len(all_gpus) >= NUM_GPUS, f"Expected at least {NUM_GPUS} GPUs, got {len(all_gpus)}"
     train_gpus = all_gpus[:NUM_TRAIN_GPUS]
     cursor = NUM_TRAIN_GPUS
-    prefill_gpus = all_gpus[cursor : cursor + PREFILL_TP]
-    cursor += PREFILL_TP
+    prefill_gpu = all_gpus[cursor]
+    cursor += 1
     decode_gpu = all_gpus[cursor]
     cursor += 1
-    regular_gpu = all_gpus[cursor]
-    return train_gpus, prefill_gpus, decode_gpu, regular_gpu
+    regular_gpus = all_gpus[cursor : cursor + NUM_REGULAR_ENGINES]
+    return train_gpus, prefill_gpu, decode_gpu, regular_gpus
 
 
 def _launch_sglang_server(
@@ -123,7 +123,7 @@ def _launch_sglang_server(
 
 
 def execute():
-    train_gpus, prefill_gpus, decode_gpu, regular_gpu = _get_gpu_split()
+    train_gpus, prefill_gpu, decode_gpu, regular_gpus = _get_gpu_split()
     processes: list[subprocess.Popen] = []
 
     # Restrict CUDA_VISIBLE_DEVICES to training GPUs before Ray starts so
@@ -133,9 +133,9 @@ def execute():
     def launch_external_engines():
         processes.append(
             _launch_sglang_server(
-                gpus=prefill_gpus,
+                gpus=[prefill_gpu],
                 port=PREFILL_PORT,
-                tp=PREFILL_TP,
+                tp=1,
                 disaggregation_mode="prefill",
                 disaggregation_bootstrap_port=BOOTSTRAP_PORT,
                 log_path="/tmp/sglang_external_prefill.log",
@@ -150,14 +150,15 @@ def execute():
                 log_path="/tmp/sglang_external_decode.log",
             )
         )
-        processes.append(
-            _launch_sglang_server(
-                gpus=[regular_gpu],
-                port=REGULAR_PORT,
-                tp=1,
-                log_path="/tmp/sglang_external_regular.log",
+        for idx, (gpu, port) in enumerate(zip(regular_gpus, REGULAR_PORTS, strict=True)):
+            processes.append(
+                _launch_sglang_server(
+                    gpus=[gpu],
+                    port=port,
+                    tp=1,
+                    log_path=f"/tmp/sglang_external_regular_{idx}.log",
+                )
             )
-        )
 
     try:
         ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /dev/shm/{MODEL_NAME}_torch_dist "
@@ -208,13 +209,12 @@ def execute():
         )
 
         # No --rollout-num-gpus / --rollout-num-gpus-per-engine: those are
-        # inferred from /server_info on each external engine (heterogeneous
-        # topology — 2-GPU prefill, 1-GPU decode, 1-GPU regular).
+        # inferred from /server_info on each external engine (1 prefill +
+        # 1 decode + 2 regular, all tp=1).
         external_args = (
             "--rollout-external-engine-addrs "
             f"{EXTERNAL_HOST}:{PREFILL_PORT} "
-            f"{EXTERNAL_HOST}:{DECODE_PORT} "
-            f"{EXTERNAL_HOST}:{REGULAR_PORT} "
+            f"{EXTERNAL_HOST}:{DECODE_PORT} " + " ".join(f"{EXTERNAL_HOST}:{port}" for port in REGULAR_PORTS) + " "
         )
 
         ci_args = "--ci-test "
