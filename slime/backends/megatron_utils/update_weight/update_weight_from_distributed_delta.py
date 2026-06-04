@@ -481,7 +481,7 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
     """
     Selective delta sync. ``--update-weight-transport`` picks the per-flush carrier:
     "nccl" broadcasts each bucket; "disk" writes each bucket as a safetensors file under
-    ``--update-weight-delta-dir`` and pushes once at end-of-sync.
+    ``--update-weight-disk-dir`` and pushes once at end-of-sync.
     """
 
     def __init__(
@@ -522,7 +522,7 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
         self._published_any: bool = False
         self._rpc_executor: ThreadPoolExecutor | None = None
         if self.transport == "disk":
-            self.delta_dir = args.update_weight_delta_dir
+            self.delta_dir = args.update_weight_disk_dir
             os.makedirs(self.delta_dir, exist_ok=True)
             self.writer = AsyncSafetensorsWriter(
                 compress_with_zstd=(self.encoding == DeltaEncoding.DELTAS_ZSTD),

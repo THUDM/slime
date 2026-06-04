@@ -21,20 +21,57 @@ _HF_WEIGHT_FILE_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth", ".ckpt", ".ms
 
 def save_hf_model_direct(args, rollout_id: int, model) -> None:
     """Save a Megatron model as an HF safetensors checkpoint without Megatron Bridge."""
+    path = Path(args.save_hf.format(rollout_id=rollout_id))
+    save_hf_model_direct_to_path(args, path, model)
+
+
+def save_hf_model_to_path(
+    args,
+    output_dir: str | Path,
+    model,
+    *,
+    model_name: str | None = None,
+    quantization_config: dict[str, Any] | None = None,
+) -> None:
+    """Save a Megatron model as an HF checkpoint at a concrete directory."""
+    if args.megatron_to_hf_mode == "bridge":
+        save_hf_model_bridge_to_path(args, output_dir, model)
+    else:
+        save_hf_model_direct_to_path(
+            args,
+            output_dir,
+            model,
+            model_name=model_name,
+            quantization_config=quantization_config,
+        )
+
+
+def save_hf_model_direct_to_path(
+    args,
+    output_dir: str | Path,
+    model,
+    *,
+    model_name: str | None = None,
+    quantization_config: dict[str, Any] | None = None,
+) -> None:
+    """Save a Megatron model as an HF safetensors checkpoint without Megatron Bridge."""
+    path = Path(output_dir)
+    hf_checkpoint = Path(args.hf_checkpoint).resolve()
+    save_path = path.resolve()
+    if hf_checkpoint == save_path:
+        raise ValueError("HF save output path must not point to the same directory as --hf-checkpoint")
+    if not hf_checkpoint.is_dir():
+        raise ValueError(
+            f"--hf-checkpoint must be a local directory when saving raw HuggingFace weights: {args.hf_checkpoint}"
+        )
+
     import torch.distributed as dist
     from transformers import AutoConfig
 
     from .update_weight.common import named_params_and_buffers
     from .update_weight.hf_weight_iterator_direct import HfWeightIteratorDirect
 
-    path = Path(args.save_hf.format(rollout_id=rollout_id))
     is_save_rank = _is_global_rank_zero()
-    hf_checkpoint = Path(args.hf_checkpoint).resolve()
-    save_path = path.resolve()
-    if hf_checkpoint == save_path:
-        raise ValueError("--save-hf must not point to the same directory as --hf-checkpoint")
-    if not hf_checkpoint.is_dir():
-        raise ValueError(f"--hf-checkpoint must be a local directory when using raw --save-hf: {args.hf_checkpoint}")
 
     setup_error = None
     if is_save_rank:
@@ -50,18 +87,21 @@ def save_hf_model_direct(args, rollout_id: int, model) -> None:
 
     metadata_error = None
     payload: list[Any] = [None]
-    if is_save_rank:
-        try:
-            hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
-            payload = [
-                (
-                    type(hf_config).__name__.lower() if args.model_name is None else args.model_name,
-                    getattr(hf_config, "quantization_config", None),
-                )
-            ]
-        except Exception as e:
-            metadata_error = repr(e)
-    _raise_if_rank_zero_failed("load HuggingFace conversion metadata", metadata_error)
+    if model_name is not None:
+        payload = [(model_name, quantization_config)]
+    else:
+        if is_save_rank:
+            try:
+                hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+                payload = [
+                    (
+                        type(hf_config).__name__.lower() if args.model_name is None else args.model_name,
+                        getattr(hf_config, "quantization_config", None),
+                    )
+                ]
+            except Exception as e:
+                metadata_error = repr(e)
+        _raise_if_rank_zero_failed("load HuggingFace conversion metadata", metadata_error)
 
     if dist.is_available() and dist.is_initialized():
         dist.broadcast_object_list(payload, src=0)
@@ -101,6 +141,37 @@ def save_hf_model_direct(args, rollout_id: int, model) -> None:
     _finalize_distributed_shards(path, writer.state())
 
     if is_save_rank:
+        logger.info("Successfully saved HuggingFace model to %s", path)
+
+
+def save_hf_model_bridge_to_path(args, output_dir: str | Path, model) -> None:
+    """Save a Megatron model as an HF checkpoint through Megatron Bridge."""
+    import torch.distributed as dist
+    from megatron.bridge import AutoBridge
+    from megatron.core import mpu
+
+    from slime.utils.megatron_bridge_utils import patch_auto_bridge_hf_config, patch_megatron_model
+
+    path = Path(output_dir)
+    should_log = (
+        mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
+    )
+    if should_log:
+        logger.info("Saving model in HuggingFace format to %s with Megatron Bridge", path)
+
+    path.mkdir(parents=True, exist_ok=True)
+    bridge = patch_auto_bridge_hf_config(AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True))
+
+    with patch_megatron_model(model):
+        bridge.save_hf_pretrained(
+            model,
+            path=path,
+        )
+
+    if dist.is_available() and dist.is_initialized():
+        dist.barrier()
+
+    if should_log:
         logger.info("Successfully saved HuggingFace model to %s", path)
 
 

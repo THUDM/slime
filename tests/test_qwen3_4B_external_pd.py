@@ -323,7 +323,7 @@ def execute():
             "--update-weight-mode delta "
             "--update-weight-transport disk "
             "--update-weight-encoding deltas "
-            f"--update-weight-delta-dir {delta_dir} "
+            f"--update-weight-disk-dir {delta_dir} "
             "--update-weight-delta-keep-files "
         )
 
