@@ -37,6 +37,7 @@ def run_contract_test_file() -> None:
             "custom-reward-post-process-path",
             "custom-convert-samples-to-train-data-path",
             "rollout-data-postprocess-path",
+            "custom-rollout-request-hook-path",
         ],
     )
 
@@ -71,6 +72,11 @@ def reference_convert_samples_to_train_data(args, samples):
 
 def reference_rollout_data_postprocess(args, rollout_id, rollout_data) -> None:
     args.rollout_data_postprocess_called = True
+
+
+def reference_rollout_request_hook(args, sample, request) -> None:
+    args.rollout_request_hook_called = True
+    request["payload"]["hooked"] = sample.index
 
 
 def make_sample(index: int, reward: float = 1.0) -> Sample:
@@ -128,6 +134,14 @@ def invoke_rollout_data_postprocess(fn):
     assert args.rollout_data_postprocess_called is True
 
 
+def invoke_rollout_request_hook(fn):
+    args = type("Args", (), {})()
+    request = {"payload": {}}
+    assert fn(args, Sample(index=7), request) is None
+    assert args.rollout_request_hook_called is True
+    assert request["payload"]["hooked"] == 7
+
+
 HOOK_CASES = [
     HookCase(
         "custom_rollout_log",
@@ -173,6 +187,15 @@ HOOK_CASES = [
         "self.rollout_data_postprocess(self.args, rollout_id, rollout_data)",
         ("args", "rollout_id", "rollout_data"),
         invoke_rollout_data_postprocess,
+    ),
+    HookCase(
+        "rollout_request_hook",
+        "CUSTOM_ROLLOUT_REQUEST_HOOK_PATH",
+        "plugin_contracts.test_plugin_runtime_hook_contracts.reference_rollout_request_hook",
+        "slime/rollout/sglang_rollout.py",
+        "hook(args, sample, request)",
+        ("args", "sample", "request"),
+        invoke_rollout_request_hook,
     ),
 ]
 

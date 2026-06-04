@@ -567,6 +567,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "'router-workers' uses the SGLang router worker list."
                 ),
             )
+            parser.add_argument(
+                "--custom-rollout-request-hook-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a hook called before each default SGLang rollout /generate request. "
+                    "Signature: ``def hook(args, sample, request) -> None | dict``. "
+                    "The request dict contains url, payload, headers, max_retries, retry_sleep, "
+                    "rollout_id, and evaluation. Mutate it in place or return a dict of updates."
+                ),
+            )
             return parser
 
         def add_fault_tolerance_arguments(parser):

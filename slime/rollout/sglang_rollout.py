@@ -34,11 +34,12 @@ from slime.utils.types import Sample
 
 from .rm_hub import async_rm, batched_async_rm
 
-__all__ = ["generate_rollout", "get_model_url"]
+__all__ = ["generate_rollout", "get_model_url", "rollout_request_context"]
 
 logger = logging.getLogger(__name__)
 
 _PROCESSOR_PROMPT_KEYS = {"input_ids", "attention_mask"}
+_MISSING = object()
 
 
 def _prepare_prompt_ids(sample: Sample, tokenizer, processor: Any) -> list[int]:
@@ -85,6 +86,67 @@ def get_model_url(args: Namespace, model_name: str, endpoint: str = "/generate")
         ip, port = routers[model_name]
         return f"http://{ip}:{port}{endpoint}"
     return f"http://{args.sglang_router_ip}:{args.sglang_router_port}{endpoint}"
+
+
+@contextmanager
+def rollout_request_context(args: Namespace, rollout_id: int, *, evaluation: bool = False):
+    old_rollout_id = getattr(args, "_rollout_request_rollout_id", _MISSING)
+    old_evaluation = getattr(args, "_rollout_request_evaluation", _MISSING)
+    args._rollout_request_rollout_id = int(rollout_id)
+    args._rollout_request_evaluation = bool(evaluation)
+
+    try:
+        yield
+    finally:
+        _restore_context_attr(args, "_rollout_request_rollout_id", old_rollout_id)
+        _restore_context_attr(args, "_rollout_request_evaluation", old_evaluation)
+
+
+def _restore_context_attr(args: Namespace, name: str, old_value: Any) -> None:
+    if old_value is _MISSING:
+        if hasattr(args, name):
+            delattr(args, name)
+    else:
+        setattr(args, name, old_value)
+
+
+async def _post_generate(
+    args: Namespace,
+    url: str,
+    payload: dict[str, Any],
+    *,
+    headers: dict | None,
+    sample: Sample,
+):
+    request = {
+        "url": url,
+        "payload": payload,
+        "headers": headers,
+        "max_retries": 60,
+        "retry_sleep": 1.0,
+        "rollout_id": getattr(args, "_rollout_request_rollout_id", None),
+        "evaluation": getattr(args, "_rollout_request_evaluation", False),
+    }
+
+    if (hook_path := getattr(args, "custom_rollout_request_hook_path", None)) is not None:
+        hook = load_function(hook_path)
+        result = hook(args, sample, request)
+        if inspect.isawaitable(result):
+            result = await result
+        if result is not None:
+            if not isinstance(result, dict):
+                raise TypeError(
+                    f"{hook_path} must return None or a dict of request updates, got {type(result).__name__}"
+                )
+            request.update(result)
+
+    return await post(
+        request["url"],
+        request["payload"],
+        max_retries=request["max_retries"],
+        headers=request["headers"],
+        retry_sleep=request["retry_sleep"],
+    )
 
 
 class GenerateState(metaclass=SingletonMeta):
@@ -203,7 +265,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
             headers = {"X-SMG-Routing-Key": sample.session_id}
 
     with trace_span(sample, "sglang_generate", attrs={"max_new_tokens": sampling_params["max_new_tokens"]}) as span:
-        output = await post(url, payload, headers=headers)
+        output = await _post_generate(args, url, payload, headers=headers, sample=sample)
         span.update(build_sglang_meta_trace_attrs(output["meta_info"]))
 
     if "output_token_logprobs" in output["meta_info"]:
@@ -646,11 +708,12 @@ def generate_rollout(
         RolloutFnTrainOutput | RolloutFnEvalOutput: the output of the rollout
     """
     assert args.rollout_global_dataset
-    if evaluation:
-        output, _ = run(eval_rollout(args, rollout_id))
-        return output
+    with rollout_request_context(args, rollout_id, evaluation=evaluation):
+        if evaluation:
+            output, _ = run(eval_rollout(args, rollout_id))
+            return output
 
-    output, aborted_samples = run(generate_rollout_async(args, rollout_id, data_source.get_samples))
-    if aborted_samples:
-        data_source.add_samples(aborted_samples)
-    return output
+        output, aborted_samples = run(generate_rollout_async(args, rollout_id, data_source.get_samples))
+        if aborted_samples:
+            data_source.add_samples(aborted_samples)
+        return output
