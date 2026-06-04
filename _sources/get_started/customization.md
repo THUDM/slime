@@ -88,7 +88,7 @@ async def custom_generate(args, sample: Sample, sampling_params: dict) -> Sample
 
 In agentic settings such as subagents, multi-agent execution, or context compaction, one prompt rollout can naturally split into multiple trainable segments. For example, a subagent trajectory and the main-agent continuation may both need to be trained, or the context before and after compaction may be represented as separate segments.
 
-You do not need to replace the whole rollout function for this. A `custom_generate` function may return `list[Sample]`. The key contract is that sibling samples produced by the same rollout must share the same `group_id`, so slime keeps them together for train-step splitting and loss aggregation instead of counting them as independent groups. `Sample.rollout_id` remains as a deprecated write-only alias for older code that only assigns it.
+You do not need to replace the whole rollout function for this. A `custom_generate` function may return `list[Sample]`. The key contract is that sibling samples produced by the same rollout must share the same `rollout_id`, so slime keeps them together for train-step splitting and loss aggregation instead of counting them as independent rollouts.
 
 ```python
 import copy
@@ -98,7 +98,7 @@ from slime.utils.types import Sample
 
 async def custom_generate(args, sample: Sample, sampling_params: dict) -> list[Sample]:
     segments = await run_agent_and_split_segments(args, sample, sampling_params)
-    group_id = sample.group_id if sample.group_id is not None else sample.index
+    rollout_id = sample.rollout_id if sample.rollout_id is not None else sample.index
 
     samples: list[Sample] = []
     for segment in segments:
@@ -109,7 +109,7 @@ async def custom_generate(args, sample: Sample, sampling_params: dict) -> list[S
         s.loss_mask = segment.loss_mask
         s.reward = segment.reward
         s.status = Sample.Status.COMPLETED
-        s.group_id = group_id
+        s.rollout_id = rollout_id
         samples.append(s)
     return samples
 ```

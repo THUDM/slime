@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Jun 01, 2026"/>
+    <meta name="docbuild:last-update" content="Jun 04, 2026"/>
   </head>
   
   
@@ -660,7 +660,7 @@ restarts.</p>
 <h2>Fan-out Semantics<a class="headerlink" href="#fan-out-semantics" title="Link to this heading">#</a></h2>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">generate()</span></code> returns <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code> — one Sample per trajectory <strong>segment</strong> (<code class="docutils literal notranslate"><span class="pre">subagent</span></code> / <code class="docutils literal notranslate"><span class="pre">wipe</span></code> / <code class="docutils literal notranslate"><span class="pre">final</span></code>).</p></li>
-<li><p>Per-trajectory reward is split as <code class="docutils literal notranslate"><span class="pre">reward</span> <span class="pre">/</span> <span class="pre">K</span></code> across segments; <code class="docutils literal notranslate"><span class="pre">group_id</span></code> is shared so the per-rollout-mean loss reducer still counts the trajectory once.</p></li>
+<li><p>Per-trajectory reward is split as <code class="docutils literal notranslate"><span class="pre">reward</span> <span class="pre">/</span> <span class="pre">K</span></code> across segments; <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code> is shared so the per-rollout-mean loss reducer still counts the trajectory once.</p></li>
 <li><p>Sub-agent dispatch increases <code class="docutils literal notranslate"><span class="pre">K</span></code> (each completed <code class="docutils literal notranslate"><span class="pre">Agent</span></code> turn block becomes its own segment), so the effective batch after flatten can be much larger than <code class="docutils literal notranslate"><span class="pre">rollout_batch_size</span> <span class="pre">*</span> <span class="pre">n_samples_per_prompt</span></code>.</p></li>
 </ul>
 </section>
@@ -766,7 +766,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jun 01, 2026.
+  Last updated on Jun 04, 2026.
   <br/>
 </p>
   </div>
