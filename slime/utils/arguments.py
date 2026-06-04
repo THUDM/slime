@@ -11,6 +11,7 @@ import yaml
 from slime.backends.sglang_utils.arguments import sglang_parse_args
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 from slime.backends.sglang_utils.external import apply_external_engine_info_to_args
+from slime.backends.sglang_utils.http_endpoint import normalize_rollout_http_endpoint_url
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
 from slime.utils.logging_utils import configure_logger
 
@@ -544,6 +545,27 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 nargs="+",
                 help="Address and ports of the external engines.",
+            )
+            parser.add_argument(
+                "--rollout-http-endpoint-url",
+                type=str,
+                default=None,
+                help=(
+                    "Opaque HTTP endpoint base URL for rollout generation. "
+                    "When set, slime sends /generate requests to this endpoint "
+                    "without launching or registering SGLang workers."
+                ),
+            )
+            parser.add_argument(
+                "--rollout-http-endpoint-abort-strategy",
+                type=str,
+                choices=["cancel-only", "router-workers"],
+                default=None,
+                help=(
+                    "Abort behavior for the default SGLang rollout. "
+                    "'cancel-only' cancels local pending tasks and does not call router /workers; "
+                    "'router-workers' uses the SGLang router worker list."
+                ),
             )
             return parser
 
@@ -1875,6 +1897,18 @@ def slime_validate_args(args):
             "will not instantiate sglang servers and will only run the training process."
         )
         args.debug_train_only = True
+
+    if args.rollout_http_endpoint_url is not None:
+        args.rollout_http_endpoint_url = normalize_rollout_http_endpoint_url(args.rollout_http_endpoint_url)
+        if args.rollout_http_endpoint_abort_strategy is None:
+            args.rollout_http_endpoint_abort_strategy = "cancel-only"
+        if getattr(args, "rollout_num_engines", None) is None:
+            args.rollout_num_engines = 1
+    elif args.rollout_http_endpoint_abort_strategy is None:
+        args.rollout_http_endpoint_abort_strategy = "router-workers"
+
+    if args.rollout_http_endpoint_url is not None and args.rollout_external_engine_addrs is not None:
+        raise ValueError("--rollout-http-endpoint-url and --rollout-external-engine-addrs are mutually exclusive.")
 
     args.rollout_external = args.rollout_external_engine_addrs is not None
 

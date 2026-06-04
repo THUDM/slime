@@ -14,6 +14,7 @@ import sglang_router
 from packaging.version import parse
 from tqdm import tqdm
 
+from slime.backends.sglang_utils.http_endpoint import rollout_http_endpoint_url, uses_rollout_http_endpoint
 from slime.backends.sglang_utils.server_control import abort_servers_until_idle
 from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter
@@ -63,7 +64,7 @@ def _prepare_prompt_ids(sample: Sample, tokenizer, processor: Any) -> list[int]:
 
 
 def get_model_url(args: Namespace, model_name: str, endpoint: str = "/generate") -> str:
-    """Return the router URL for a named model.
+    """Return the rollout URL for a named model.
 
     Use this in custom rollout functions to route requests to a specific
     model when multiple models are deployed via ``--sglang-config``::
@@ -71,9 +72,14 @@ def get_model_url(args: Namespace, model_name: str, endpoint: str = "/generate")
         url = get_model_url(args, "ref", "/generate")
         resp = await post(url, json=payload)
 
-    Falls back to the default router if *model_name* is not found or
-    ``sglang_model_routers`` is not set.
+    If ``--rollout-http-endpoint-url`` is set, returns that opaque endpoint
+    with *endpoint* appended and does not assume SGLang router APIs exist.
+    Otherwise, falls back to the default router if *model_name* is not found
+    or ``sglang_model_routers`` is not set.
     """
+    if uses_rollout_http_endpoint(args):
+        return rollout_http_endpoint_url(args, endpoint)
+
     routers = getattr(args, "sglang_model_routers", None)
     if routers and model_name in routers:
         ip, port = routers[model_name]
@@ -154,7 +160,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         assert isinstance(sample.prompt, str)
 
     state = GenerateState(args)
-    url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
+    url = get_model_url(args, "default", "/generate")
 
     assert (
         sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
@@ -349,11 +355,12 @@ async def generate_and_rm_group(
 
 
 async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
-    aborted_samples = []
-
     state = GenerateState(args)
     assert not state.aborted
     state.aborted = True
+
+    if getattr(args, "rollout_http_endpoint_abort_strategy", None) == "cancel-only":
+        return await _cancel_pending_tasks(state)
 
     if parse(sglang_router.__version__) <= parse("0.2.1"):
         response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers")
@@ -363,6 +370,30 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
         urls = [worker["url"] for worker in response["workers"]]
 
     await abort_servers_until_idle(urls)
+
+    return await _drain_aborted_pending_tasks(args, rollout_id, state)
+
+
+async def _cancel_pending_tasks(state: GenerateState) -> list[list[Sample]]:
+    if not state.pendings:
+        return []
+    pending = list(state.pendings)
+    for task in pending:
+        task.cancel()
+    results = await asyncio.gather(*pending, return_exceptions=True)
+    for result in results:
+        if isinstance(result, Exception):
+            logger.warning("Pending rollout task ended during cancel-only abort: %s", result)
+    state.pendings.clear()
+    return []
+
+
+async def _drain_aborted_pending_tasks(
+    args: Namespace,
+    rollout_id: int,
+    state: GenerateState,
+) -> list[list[Sample]]:
+    aborted_samples = []
 
     # make sure all the pending tasks are finished
     count = 0
