@@ -1,30 +1,58 @@
-"""Turn-node trajectory manager for agent rollouts.
+"""Per-role chunk-merging trajectory tree manager (C-plan: token-faithful).
 
-A session's trajectory is modeled as a **text-prefix tree**: each ``Node`` is one
-turn (incremental prompt segment + response segment). Text-prefix matching is the
-primary signal; token-id comparison is secondary and only handles TITO
-(text-in-token-out) drift after the text prefix already matches. ``export`` walks
-the tree once and yields full-length ``(tokens, masks, logprobs)`` triples, one
-sample per leaf.
+Design (Plan C, 2026-06-03):
 
-The core algorithm (``PromptSeg``/``RespSeg``/``Node``/``TrajectoryTree``/
-``MatchResult`` and ``match_prefix``/``attach_turn``/``record_turn``/``export``)
-is the standalone turn-node design; see
-``0601-Trajectory-manager/02-turn-node/02-turn-node-design.md``.
+* The tree is a router only. DFS merge keys on ``(role, node_match_key)``
+  alone — no prompt_ids prefix check. Same conversation prefix in
+  ``messages`` space always lands on the same path, regardless of any
+  chat_template re-tokenization drift across turns.
 
-The slime glue below the core (``TokenSegment``/``export_token_segments``/
-``fan_out_sample_segments``/``write_segment_to_sample``) is the only intentional
-deviation from the design's zero-dependency constraint: it imports ``Sample`` and
-adapts the full-length export into slime's prompt/response training segments.
+* Each assistant leaf stores the THIS-TURN sglang snapshot:
+  ``turn_prompt_ids`` / ``turn_response_ids`` / ``turn_response_logprobs``
+  / ``turn_finish_reason`` / ``turn_index``. Non-assistant nodes carry no
+  token attribution at all.
+
+* ``get_trajectory`` linearizes each leaf turn-by-turn using LCP-aligned
+  drop-and-replace: the cumulative tokens emitted so far are clamped to
+  the longest common prefix with the next turn's prompt; any prior tokens
+  past that LCP (the TITO drift suffix, including the previous turn's
+  response if it lands in the drift region) are DROPPED along with their
+  logprobs, then ``prompt[LCP:]`` is appended as loss_mask=0 (chat
+  template's authoritative re-rendering wins), then the current turn's
+  ``response`` is appended as loss_mask=1 with real logprobs.
+
+* Trade-off: previous-turn response tokens that fall inside the drift
+  region lose their training signal. In exchange, the final tokens
+  sequence matches what the live model actually conditioned on for every
+  later turn — logprobs stay coherent, no duplicated-content forks, no
+  reliance on chat_template being position-invariant.
+
+* Snapshot rescue (opt-in via ``tito_snapshot_min_loss_tokens``): when a
+  drift would drop >= N loss_mask=1 tokens, emit an extra "snapshot"
+  Sample alongside the main leaf. Snapshot tokens = cumulative pre-drop;
+  snapshot loss_mask is COMPLEMENTARY — 1 only at positions that the
+  main leaf is about to drop, 0 elsewhere. Snapshot reward = main-leaf
+  share; snapshot rollout_id = main-leaf rollout_id. Snapshot ∪ main on
+  loss_mask=1 tokens never overlap and their union equals the virtual
+  no-drift trajectory. The snapshotted drift is NOT counted in the main
+  sample's ``tito_dropped_*`` (it wasn't truly lost).
+
+* On drift, ``Sample.metadata`` records:
+    ``tito_dropped_tokens``       — total tokens dropped (NOT including
+                                    drifts that produced a snapshot)
+    ``tito_dropped_turns``        — number of turns that triggered a drop
+    ``tito_snapshots_emitted``    — set on main leaf when >=1 snapshot
+                                    sibling was emitted for the same leaf
+    ``tito_snapshot``             — True on a snapshot Sample
+    ``tito_snapshot_at_turn``     — turn index whose drift triggered it
+    ``tito_snapshot_loss_tokens`` — count of loss_mask=1 tokens in snapshot
 """
 
 from __future__ import annotations
 
-import copy
-import dataclasses
+import json
 import logging
-import time
-import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -33,101 +61,127 @@ from slime.utils.types import Sample
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# Core turn-node tree (standalone design; zero training-side dependency)
-# =============================================================================
+# ===========================================================================
+# Node
+# ===========================================================================
 
 
-@dataclass
-class PromptSeg:
-    text: str
-    tokens: list[int]
-
-
-@dataclass
-class RespSeg:
-    text: str
-    tokens: list[int]
-    logprobs: list[float]
-
-
-@dataclass
 class Node:
-    id: str
-    prompt_delta_text: str
-    prompt_delta_tokens: list[int]
-    resp_text: str
-    resp_tokens: list[int]
-    resp_logprobs: list[float]
-    parent: Node | None
-    children: list[Node] = field(default_factory=list)
-    loss_mask: bool = False
-    created_at: float = 0.0
-    updated_at: float = 0.0
-    replaced_count: int = 0
-    warning: str | None = None
-    kind_is_root: bool = False
+    """One node in the trajectory tree.
 
-    @staticmethod
-    def new_root() -> Node:
-        now = time.time()
-        return Node(
-            id=uuid.uuid4().hex[:12],
-            prompt_delta_text="",
-            prompt_delta_tokens=[],
-            resp_text="",
-            resp_tokens=[],
-            resp_logprobs=[],
-            parent=None,
-            children=[],
-            created_at=now,
-            updated_at=now,
-            kind_is_root=True,
-        )
+    Routing fields (every node):
+        role, messages, parent, children, metadata
 
-    @staticmethod
-    def new_turn(prompt: PromptSeg, resp: RespSeg, parent: Node) -> Node:
-        now = time.time()
-        node = Node(
-            id=uuid.uuid4().hex[:12],
-            prompt_delta_text=prompt.text,
-            prompt_delta_tokens=list(prompt.tokens),
-            resp_text=resp.text,
-            resp_tokens=list(resp.tokens),
-            resp_logprobs=list(resp.logprobs),
-            parent=parent,
-            children=[],
-            created_at=now,
-            updated_at=now,
-        )
-        parent.children.append(node)
-        return node
+    Per-turn snapshot fields (assistant leaves only — None on non-assistant
+    and on internal assistant nodes that aren't a turn's own leaf):
+        turn_prompt_ids:        list[int]    sglang prompt as fed to /generate
+        turn_response_ids:      list[int]    sglang output ids
+        turn_response_logprobs: list[float]
+        turn_finish_reason:     str | None
+        turn_index:             int          1-based, monotonic per session
+    """
+
+    __slots__ = (
+        # routing
+        "role",
+        "messages",
+        "metadata",
+        "parent",
+        "children",
+        # per-turn snapshot (assistant leaves)
+        "turn_prompt_ids",
+        "turn_response_ids",
+        "turn_response_logprobs",
+        "turn_finish_reason",
+        "turn_index",
+    )
+
+    def __init__(
+        self,
+        *,
+        role: str | None = None,
+        messages: list[dict[str, Any]] | None = None,
+        metadata: dict[str, Any] | None = None,
+        parent: Node | None = None,
+    ) -> None:
+        self.role = role
+        self.messages = list(messages or [])
+        self.metadata = dict(metadata or {})
+        self.parent: Node | None = parent
+        self.children: list[Node] = []
+        # per-turn snapshot
+        self.turn_prompt_ids: list[int] | None = None
+        self.turn_response_ids: list[int] | None = None
+        self.turn_response_logprobs: list[float] | None = None
+        self.turn_finish_reason: str | None = None
+        self.turn_index: int | None = None
 
     @property
-    def node_text(self) -> str:
-        return self.prompt_delta_text + self.resp_text
+    def is_root(self) -> bool:
+        return self.parent is None
+
+    def add_child(self, child: Node) -> Node:
+        child.parent = self
+        self.children.append(child)
+        return child
+
+    def path_from_root(self) -> list[Node]:
+        """Ordered list of nodes from the first non-root ancestor down to self."""
+        chain: list[Node] = []
+        cur: Node | None = self
+        while cur is not None and not cur.is_root:
+            chain.append(cur)
+            cur = cur.parent
+        chain.reverse()
+        return chain
+
+    def leaves(self) -> Iterator[Node]:
+        if not self.children:
+            yield self
+            return
+        for c in self.children:
+            yield from c.leaves()
+
+
+# ===========================================================================
+# node_match_key + role-grouping helpers
+# ===========================================================================
+
+
+def node_match_key(messages: list[dict[str, Any]]) -> str:
+    """Identity key for a node's message list.
+
+    json.dumps(sort_keys=True) sorts dict-internal keys recursively; list
+    element order is preserved (which is what we want: message order and
+    tool_calls order are both semantically significant).
+    """
+    return json.dumps(messages, sort_keys=True, ensure_ascii=False)
 
 
 @dataclass
-class TrajectoryTree:
-    root: Node = field(default_factory=Node.new_root)
+class _PromptGroup:
+    role: str
+    messages: list[dict[str, Any]] = field(default_factory=list)
 
 
-@dataclass
-class MatchResult:
-    case: str
-    anchor: Node | None = None
-    text_matched_len: int = 0
-    drift_nodes: list[Node] = field(default_factory=list)
-    lca: Node | None = None
-    fork_node: Node | None = None
-    residual_count: int = 0
+def _group_messages_by_role(
+    messages: list[dict[str, Any]],
+) -> list[_PromptGroup]:
+    groups: list[_PromptGroup] = []
+    for m in messages:
+        role = m.get("role")
+        if not isinstance(role, str):
+            logger.warning("skipping message without string role: %r", m)
+            continue
+        if groups and groups[-1].role == role:
+            groups[-1].messages.append(m)
+        else:
+            groups.append(_PromptGroup(role=role, messages=[m]))
+    return groups
 
 
-# ---- helpers ----
-
-
-def _text_lcp(a: str, b: str) -> int:
+def _lcp_len(a: list[int], b: list[int]) -> int:
+    """Length of the longest common prefix between two int lists."""
     n = min(len(a), len(b))
     i = 0
     while i < n and a[i] == b[i]:
@@ -135,405 +189,314 @@ def _text_lcp(a: str, b: str) -> int:
     return i
 
 
-def _chain_nodes(node: Node) -> list[Node]:
-    """root->node path, non-root nodes, ordered root to leaf."""
-    out = []
-    cur = node
-    while cur is not None and not cur.kind_is_root:
-        out.append(cur)
-        cur = cur.parent
-    out.reverse()
-    return out
+# ===========================================================================
+# TrajectoryManager
+# ===========================================================================
 
 
-def _chain_text(nodes: list[Node]) -> str:
-    return "".join(n.node_text for n in nodes)
+class TrajectoryManager:
+    """Per-sid trajectory tree manager.
 
+    See module docstring for the C-plan invariants. Each ``append_turn``
+    mounts >=0 prompt nodes (under the deepest matching ancestor) + exactly
+    1 assistant leaf carrying that turn's sglang snapshot.
+    """
 
-def _collect_leaves(root: Node) -> list[Node]:
-    """Pre-order collect of all leaves (excluding root; empty if root childless)."""
-    leaves = []
+    def __init__(
+        self,
+        *,
+        tokenizer=None,
+        chat_template_kwargs: dict[str, Any] | None = None,
+        end_of_turn_token_id: int | None = None,
+        tito_snapshot_min_loss_tokens: int | None = None,
+    ) -> None:
+        # tokenizer / chat_template_kwargs are no longer load-bearing under
+        # plan C, but the constructor signature is kept for callsite
+        # compatibility. _tokenizer is retained for forward-compat (callers
+        # constructing TrajectoryManager(tokenizer=tok) shouldn't break).
+        self._tokenizer = tokenizer
+        self._ct_kwargs: dict[str, Any] = dict(chat_template_kwargs or {})
+        self._end_of_turn_token_id = end_of_turn_token_id
+        # Drift-snapshot threshold (loss_mask=1 token count inside drift suffix).
+        # None or <= 0 disables; behavior then matches the pre-feature output.
+        self._snap_threshold: int | None = (
+            tito_snapshot_min_loss_tokens
+            if (tito_snapshot_min_loss_tokens is not None and tito_snapshot_min_loss_tokens > 0)
+            else None
+        )
+        self._trees: dict[str, Node] = {}
+        self._turn_count: dict[str, int] = {}
 
-    def walk(n: Node):
-        if not n.children:
-            if not n.kind_is_root:
-                leaves.append(n)
+    # -------------------- public ------------------------------------------
+
+    def has_session(self, sid: str) -> bool:
+        return sid in self._trees
+
+    def turn_count(self, sid: str) -> int:
+        return self._turn_count.get(sid, 0)
+
+    def append_turn(
+        self,
+        sid: str,
+        *,
+        prompt_messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        prompt_ids: list[int],
+        response_ids: list[int],
+        response_logprobs: list[float] | None,
+        response_message: dict[str, Any] | None,
+        finish_reason: str | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        if not prompt_messages:
+            logger.warning("append_turn(sid=%s): empty prompt_messages; skipping", sid)
             return
-        for c in n.children:
-            walk(c)
-
-    walk(root)
-    return leaves
-
-
-def _log_replace(case, reason, node, before_text, after_text, before_tokens, after_tokens):
-    logger.warning(
-        "trajectory replace | case=%s reason=%s node=%s\n" "  text : %r -> %r\n" "  token: %s -> %s",
-        case,
-        reason,
-        node.id,
-        before_text,
-        after_text,
-        before_tokens,
-        after_tokens,
-    )
-
-
-# ---- match_prefix ----
-
-
-def match_prefix(tree: TrajectoryTree, turns) -> MatchResult:
-    incoming_text = "".join(p.text + r.text for (p, r) in turns)
-
-    # For each root->leaf chain take the longest text prefix; pick the longest,
-    # ties broken by the latest created_at leaf.
-    best_leaf = None
-    best_len = -1
-    for leaf in _collect_leaves(tree.root):
-        nodes = _chain_nodes(leaf)
-        ctext = _chain_text(nodes)
-        lcp = _text_lcp(ctext, incoming_text)
-        if lcp > best_len or (lcp == best_len and best_leaf is not None and leaf.created_at > best_leaf.created_at):
-            best_leaf = leaf
-            best_len = lcp
-
-    # Case 1: no text overlap at all
-    if best_leaf is None or best_len == 0:
-        return MatchResult(case="case1", anchor=tree.root, text_matched_len=0)
-
-    nodes = _chain_nodes(best_leaf)
-    ctext = _chain_text(nodes)
-
-    # §7.1: incoming text <= chain text and fully covered (no new tail, incl. equal)
-    if best_len == len(incoming_text) and len(incoming_text) <= len(ctext):
-        return MatchResult(case="substring", anchor=best_leaf, text_matched_len=best_len)
-
-    # Text reached leaf and incoming has a new tail -> TITO decision (Case 2/3/4)
-    if best_len == len(ctext) and len(incoming_text) > len(ctext):
-        drift = []
-        for i, node in enumerate(nodes):
-            p, r = turns[i]
-            if list(p.tokens) != node.prompt_delta_tokens or list(r.tokens) != node.resp_tokens:
-                drift.append(node)
-        if not drift:
-            return MatchResult(case="case2", anchor=best_leaf, text_matched_len=best_len)
-        only_tail = len(drift) == 1 and drift[0] is nodes[-1]
-        return MatchResult(
-            case="case3" if only_tail else "case4",
-            anchor=best_leaf,
-            text_matched_len=best_len,
-            drift_nodes=drift,
-        )
-
-    # Text stops inside the chain (0 < best_len < len(ctext)) -> Case 5/6
-    cum = 0
-    fork_node = None
-    fork_idx = 0
-    for idx, node in enumerate(nodes):
-        seg_len = len(node.node_text)
-        if cum + seg_len > best_len:
-            fork_node = node
-            fork_idx = idx
-            break
-        cum += seg_len
-    if fork_node is None:
-        fork_node = nodes[-1]
-        fork_idx = len(nodes) - 1
-    residual_count = len(nodes) - fork_idx  # X..leaf
-    lca = fork_node.parent
-    return MatchResult(
-        case="case5" if residual_count <= 1 else "case6",
-        anchor=best_leaf,
-        text_matched_len=best_len,
-        lca=lca,
-        fork_node=fork_node,
-        residual_count=residual_count,
-    )
-
-
-# ---- attach_turn ----
-
-
-def attach_turn(tree: TrajectoryTree, match: MatchResult, turns) -> Node | None:
-    last_p, last_r = turns[-1]
-
-    if match.case == "substring":
-        logger.warning(
-            "trajectory drop | reason=substring-prefix redelivery; "
-            "incoming is a true prefix of an existing chain, dropped"
-        )
-        return None
-
-    if match.case == "case1":
-        return Node.new_turn(last_p, last_r, parent=tree.root)
-
-    if match.case == "case2":
-        return Node.new_turn(last_p, last_r, parent=match.anchor)
-
-    if match.case in ("case3", "case4"):
-        nodes = _chain_nodes(match.anchor)
-        # Replace each drifted node's segment in place (same-index turn segment).
-        idx_by_node = {id(n): i for i, n in enumerate(nodes)}
-        for node in match.drift_nodes:
-            i = idx_by_node[id(node)]
-            p, r = turns[i]
-            before_text, before_tokens = node.node_text, list(node.resp_tokens)
-            node.prompt_delta_text = p.text
-            node.prompt_delta_tokens = list(p.tokens)
-            node.resp_text = r.text
-            node.resp_tokens = list(r.tokens)
-            node.resp_logprobs = [0.0] * len(r.tokens)  # §2.4 placeholder
-            node.replaced_count += 1
-            node.updated_at = time.time()
-            reason = (
-                "tokenizer TITO drift at tail turn"
-                if match.case == "case3"
-                else "multi-turn token drift (template changed?)"
+        if response_logprobs is not None and len(response_logprobs) != len(response_ids):
+            raise ValueError(
+                f"response_logprobs length {len(response_logprobs)} != " f"response_ids length {len(response_ids)}"
             )
-            _log_replace(match.case, reason, node, before_text, node.node_text, before_tokens, node.resp_tokens)
-        # mask interval
-        if match.case == "case3":
-            match.drift_nodes[0].loss_mask = True
-        else:
-            first = match.drift_nodes[0]
-            first.warning = "multi-turn token drift"
-            start = idx_by_node[id(first)]
-            for node in nodes[start:]:
-                node.loss_mask = True
-        # append the new turn at the tail
-        return Node.new_turn(last_p, last_r, parent=nodes[-1])
 
-    if match.case == "case5":
-        nodes = _chain_nodes(match.anchor)
-        x = match.fork_node
-        xi = nodes.index(x)
-        p, r = turns[xi]
-        before_text, before_tokens = x.node_text, list(x.resp_tokens)
-        x.prompt_delta_text = p.text
-        x.prompt_delta_tokens = list(p.tokens)
-        x.resp_text = r.text
-        x.resp_tokens = list(r.tokens)
-        x.resp_logprobs = [0.0] * len(r.tokens)
-        x.loss_mask = True
-        x.replaced_count += 1
-        x.updated_at = time.time()
-        _log_replace(
-            "case5", "upstream response format rewrite", x, before_text, x.node_text, before_tokens, x.resp_tokens
+        root = self._trees.get(sid)
+        if root is None:
+            root = Node()
+            self._trees[sid] = root
+
+        groups = _group_messages_by_role(prompt_messages)
+
+        # Step 1: DFS by (role, node_match_key) ONLY. No prompt_ids check.
+        cur = root
+        i = 0
+        while i < len(groups):
+            g_key = node_match_key(groups[i].messages)
+            match: Node | None = None
+            for child in cur.children:
+                if child.role == groups[i].role and node_match_key(child.messages) == g_key:
+                    match = child
+                    break
+            if match is None:
+                break
+            cur = match
+            i += 1
+
+        # Step 2: mount remaining prompt groups as plain routing nodes.
+        # Token attribution happens at get_trajectory time, not here.
+        for g in groups[i:]:
+            md: dict[str, Any] = {}
+            if g.role == "system" and tools is not None and not self._first_system_already_set(cur):
+                md["tools"] = list(tools)
+            cur = cur.add_child(Node(role=g.role, messages=list(g.messages), metadata=md))
+
+        # Step 3: assistant leaf with this turn's sglang snapshot.
+        asst_messages = [response_message] if response_message is not None else []
+        asst = Node(
+            role="assistant",
+            messages=asst_messages,
+            metadata=dict(metadata or {}),
         )
-        # if turns has newer turns after x, append them in order
-        parent = x
-        for j in range(xi + 1, len(turns)):
-            pj, rj = turns[j]
-            parent = Node.new_turn(pj, rj, parent=parent)
-        return parent
+        asst.turn_prompt_ids = list(prompt_ids)
+        asst.turn_response_ids = list(response_ids)
+        asst.turn_response_logprobs = list(response_logprobs) if response_logprobs is not None else None
+        asst.turn_finish_reason = finish_reason
+        asst.turn_index = self._turn_count.get(sid, 0) + 1
+        cur.add_child(asst)
 
-    if match.case == "case6":
-        nodes = _chain_nodes(match.anchor)
-        x = match.fork_node
-        xi = nodes.index(x)
-        lca = match.lca  # = x.parent
-        parent = lca
-        last = None
-        for j in range(xi, len(turns)):
-            pj, rj = turns[j]
-            last = Node.new_turn(pj, rj, parent=parent)
-            parent = last
-        return last
+        self._turn_count[sid] = asst.turn_index
 
-    raise ValueError(f"unknown match case: {match.case}")
+    def get_trajectory(
+        self,
+        sid: str,
+        *,
+        base_sample=None,
+        reward: float = 0.0,
+        extra_metadata: dict[str, Any] | None = None,
+        drop: bool = True,
+    ) -> list:
+        """Linearize each leaf into a slime ``Sample`` using LCP drop-and-replace.
 
+        For each leaf, walk root→leaf collecting assistant nodes in order.
+        Start with tokens=[]. For each assistant turn k (1-based):
 
-# ---- record_turn ----
+          1. ``p = asst.turn_prompt_ids``, ``r = asst.turn_response_ids``.
+          2. If k == 1: emit all of ``p`` as loss_mask=0 (plus 0.0 logprobs),
+             then ``r`` as loss_mask=1 with real logprobs.
+          3. If k >= 2: compute ``L = LCP(tokens, p)``. Truncate tokens /
+             loss_mask / logprobs to length L (DROP everything past L —
+             that includes the previous turn's response tokens that fall
+             in the drift region; logging tells you how much was dropped).
+             Then append ``p[L:]`` (loss_mask=0) and ``r`` (loss_mask=1).
 
+        When drift fires on at least one turn, the returned Sample's
+        ``metadata`` gains ``tito_dropped_tokens`` (total tokens dropped
+        across the leaf) and ``tito_dropped_turns`` (how many turns
+        triggered a drop). Both keys are absent when no drift occurs.
 
-def record_turn(tree: TrajectoryTree, turns) -> Node | None:
-    match = match_prefix(tree, turns)
-    return attach_turn(tree, match, turns)
+        When ``tito_snapshot_min_loss_tokens`` was passed to the constructor
+        and a drift would drop >= that many loss_mask=1 tokens, an extra
+        snapshot Sample is emitted before the main-leaf Sample carrying just
+        the to-be-lost tokens (complementary mask). See module docstring.
 
+        See module docstring for the rationale.
+        """
+        if base_sample is None:
+            base_sample = Sample(index=0, prompt="")
 
-# ---- export ----
+        root = self._trees.get(sid)
+        if root is None:
+            return []
+        leaves = [leaf for leaf in root.leaves() if not leaf.is_root]
+        samples: list[Sample] = []
+        for leaf in leaves:
+            chain = leaf.path_from_root()
+            # Only assistant leaves carrying this turn's sglang snapshot
+            # participate in TITO accumulation. Routing assistant nodes mounted
+            # from prior-turn replay (turn_prompt_ids is None) carry no token
+            # signal and would otherwise be misread as a full-trajectory drift.
+            asst_chain = [n for n in chain if n.role == "assistant" and n.turn_prompt_ids is not None]
 
+            tokens: list[int] = []
+            loss_mask: list[int] = []
+            logprobs: list[float] = []
+            total_dropped = 0
+            dropped_turns = 0
+            snapshots: list[tuple[list[int], list[int], list[float], int, int]] = []
 
-def _subtree_has_trainable(node: Node) -> bool:
-    """Whether any node in the subtree (rooted at ``node``) carries a trainable
-    response segment (``loss_mask`` False and non-empty ``resp_tokens``). Used by
-    owner selection so a fork's owner branch is not later dropped by the slice
-    layer for being all-mask."""
-    stack = [node]
-    while stack:
-        cur = stack.pop()
-        if not cur.kind_is_root and not cur.loss_mask and cur.resp_tokens:
-            return True
-        stack.extend(cur.children)
-    return False
+            for k, asst in enumerate(asst_chain, start=1):
+                p = list(asst.turn_prompt_ids or [])
+                r = list(asst.turn_response_ids or [])
+                lp = list(asst.turn_response_logprobs) if asst.turn_response_logprobs is not None else None
 
+                if k == 1:
+                    emit_prompt = p
+                else:
+                    L = _lcp_len(tokens, p)
+                    drift = len(tokens) - L
+                    if drift > 0:
+                        drift_loss_tokens = sum(loss_mask[L:])
+                        snap_emitted = False
+                        if self._snap_threshold is not None and drift_loss_tokens >= self._snap_threshold:
+                            snap_tokens = list(tokens)
+                            snap_mask = [0] * L + list(loss_mask[L:])
+                            snap_lp = [0.0] * L + [
+                                (logprobs[i] if loss_mask[i] == 1 else 0.0) for i in range(L, len(tokens))
+                            ]
+                            snapshots.append((snap_tokens, snap_mask, snap_lp, asst.turn_index, k - 1))
+                            snap_emitted = True
+                        logger.warning(
+                            "get_trajectory(sid=%s leaf turn=%s): TITO drift detected, "
+                            "dropping %d prior tokens (incl. previous-turn response) to "
+                            "realign with this turn's prompt%s",
+                            sid,
+                            asst.turn_index,
+                            drift,
+                            f"; snapshotted {drift_loss_tokens} loss tokens" if snap_emitted else "",
+                        )
+                        if not snap_emitted:
+                            total_dropped += drift
+                            dropped_turns += 1
+                        tokens = tokens[:L]
+                        loss_mask = loss_mask[:L]
+                        logprobs = logprobs[:L]
+                    emit_prompt = p[L:]
 
-def _decide_fork_owners(root: Node) -> dict:
-    owners = {}
+                tokens.extend(emit_prompt)
+                loss_mask.extend([0] * len(emit_prompt))
+                logprobs.extend([0.0] * len(emit_prompt))
 
-    def walk(n: Node):
-        if len(n.children) >= 2:
-            # Decision E: prefer the earliest child whose subtree still has a
-            # trainable leaf, so the shared prefix it owns survives slicing.
-            # Fall back to the earliest child when every branch is all-mask
-            # (then the shared prefix has nowhere trainable to go anyway).
-            trainable = [c for c in n.children if _subtree_has_trainable(c)]
-            pool = trainable or list(n.children)
-            owner = min(pool, key=lambda c: c.created_at)
-            owners[id(n)] = owner
-        for c in n.children:
-            walk(c)
+                tokens.extend(r)
+                loss_mask.extend([1] * len(r))
+                if lp is not None:
+                    logprobs.extend(lp)
+                else:
+                    logprobs.extend([0.0] * len(r))
 
-    walk(root)
-    return owners
+            last_asst = asst_chain[-1] if asst_chain else None
+            first_sys = next((n for n in chain if n.role == "system"), None)
+            tools_meta = first_sys.metadata.get("tools") if first_sys else None
+            base_md: dict[str, Any] = {
+                **(base_sample.metadata or {}),
+                **(extra_metadata or {}),
+                "tools": tools_meta,
+            }
+            per_leaf_reward = (reward / len(leaves)) if leaves else 0.0
 
+            # Emit snapshot sample(s) first, then the main-leaf sample.
+            for snap_tokens, snap_mask, snap_lp, drift_turn, cur_chain_idx in snapshots:
+                snap_finish = None
+                prev_idx = cur_chain_idx - 1  # asst_chain index of the previous (prefix's last) turn
+                if 0 <= prev_idx < len(asst_chain):
+                    snap_finish = asst_chain[prev_idx].turn_finish_reason
+                snap_md = {
+                    **base_md,
+                    "finish_reason": snap_finish,
+                    "tito_snapshot": True,
+                    "tito_snapshot_at_turn": drift_turn,
+                    "tito_snapshot_loss_tokens": sum(snap_mask),
+                }
+                samples.append(
+                    Sample(
+                        index=base_sample.index,
+                        rollout_id=(
+                            base_sample.rollout_id if base_sample.rollout_id is not None else base_sample.index
+                        ),
+                        prompt=base_sample.prompt,
+                        label=base_sample.label,
+                        tokens=snap_tokens,
+                        response_length=sum(1 for m in snap_mask if m == 1),
+                        loss_mask=snap_mask,
+                        rollout_log_probs=snap_lp,
+                        reward=per_leaf_reward,
+                        status=Sample.Status.COMPLETED,
+                        metadata=snap_md,
+                    )
+                )
 
-def _masked_by_fork(node: Node, leaf: Node, fork_owner: dict) -> bool:
-    """Whether ``node`` is force-masked because some fork ancestor ``F`` on the
-    leaf's path chose a non-owner branch toward ``leaf``: i.e. ``node`` is at or
-    before ``F`` (incl. ``F`` itself) and at ``F`` the leaf's branch != owner."""
-    # leaf's root->leaf path (incl. root)
-    path = []
-    cur = leaf
-    while cur is not None:
-        path.append(cur)
-        cur = cur.parent
-    path.reverse()  # root ... leaf
-    pos = {id(n): i for i, n in enumerate(path)}
-    node_pos = pos.get(id(node))
-    if node_pos is None:
-        return False
-    # for every fork point F on path (present in fork_owner)
-    for i, F in enumerate(path):
-        if id(F) not in fork_owner:
-            continue
-        # leaf's chosen child at F = path[i+1]
-        if i + 1 >= len(path):
-            continue
-        chosen_child = path[i + 1]
-        owner = fork_owner[id(F)]
-        if chosen_child is not owner:
-            # non-owner branch: mask nodes at or before F (root..F)
-            if node_pos <= i:
+            response_length = sum(1 for m in loss_mask if m == 1)
+            main_md: dict[str, Any] = {
+                **base_md,
+                "finish_reason": last_asst.turn_finish_reason if last_asst else None,
+            }
+            if total_dropped > 0:
+                main_md["tito_dropped_tokens"] = total_dropped
+                main_md["tito_dropped_turns"] = dropped_turns
+            if snapshots:
+                main_md["tito_snapshots_emitted"] = len(snapshots)
+            samples.append(
+                Sample(
+                    index=base_sample.index,
+                    rollout_id=(base_sample.rollout_id if base_sample.rollout_id is not None else base_sample.index),
+                    prompt=base_sample.prompt,
+                    label=base_sample.label,
+                    tokens=tokens,
+                    response_length=response_length,
+                    loss_mask=loss_mask,
+                    rollout_log_probs=logprobs,
+                    reward=per_leaf_reward,
+                    status=Sample.Status.COMPLETED,
+                    metadata=main_md,
+                )
+            )
+        if drop:
+            self._trees.pop(sid, None)
+            self._turn_count.pop(sid, None)
+        return samples
+
+    # -------------------- internals ----------------------------------------
+
+    @staticmethod
+    def _first_system_already_set(start: Node) -> bool:
+        """Walk start->root looking for a system node already carrying tools."""
+        cur: Node | None = start
+        while cur is not None and not cur.is_root:
+            if cur.role == "system" and cur.metadata.get("tools") is not None:
                 return True
-    return False
+            cur = cur.parent
+        return False
 
 
-def export(tree: TrajectoryTree):
-    samples, masks, logprobs = [], [], []
-    fork_owner = _decide_fork_owners(tree.root)
-    for leaf in _collect_leaves(tree.root):
-        nodes = _chain_nodes(leaf)
-        toks, mask, lp = [], [], []
-        for node in nodes:
-            toks += node.prompt_delta_tokens
-            mask += [0] * len(node.prompt_delta_tokens)
-            lp += [0.0] * len(node.prompt_delta_tokens)
-            toks += node.resp_tokens
-            if _masked_by_fork(node, leaf, fork_owner):
-                bit = 0
-            elif node.loss_mask:
-                bit = 0
-            else:
-                bit = 1
-            mask += [bit] * len(node.resp_tokens)
-            lp += list(node.resp_logprobs)
-        samples.append(toks)
-        masks.append(mask)
-        logprobs.append(lp)
-    return samples, masks, logprobs
-
-
-# =============================================================================
-# slime glue: full-length export -> prompt/response TokenSegment + Sample fan-out
-# =============================================================================
-
-
-@dataclasses.dataclass(frozen=True)
-class TokenSegment:
-    """One training segment assembled from an agent trajectory.
-
-    slime training invariants: ``tokens = prompt_ids + response_ids``,
-    ``response_length = len(response_ids)`` and
-    ``len(loss_mask) == len(rollout_log_probs) == response_length``.
-    """
-
-    prompt_ids: list[int]
-    response_ids: list[int]
-    loss_mask: list[int]
-    rollout_log_probs: list[float] = dataclasses.field(default_factory=list)
-    metadata: dict[str, Any] = dataclasses.field(default_factory=dict)
-
-
-def export_token_segments(tree: TrajectoryTree, *, metadata: dict[str, Any] | None = None) -> list[TokenSegment]:
-    """Turn the tree's full-length export into slime ``TokenSegment``s.
-
-    Each leaf chain is split at the first trainable token (design §6,
-    ``mask.index(1)``): tokens before the cut are the prompt, tokens from the cut
-    on are the response. Leaves whose whole chain is masked (no trainable token,
-    e.g. fork non-owner or Case4/5 fully-masked) are dropped -- they have no
-    trainable response and would break slime's ``response_length`` contract.
-    """
-    out: list[TokenSegment] = []
-    tokens_list, masks_list, logprobs_list = export(tree)
-    for tokens, mask, logprobs in zip(tokens_list, masks_list, logprobs_list, strict=True):
-        if 1 not in mask:
-            continue  # all-mask chain: nothing trainable, drop
-        cut = mask.index(1)
-        response_ids = tokens[cut:]
-        if not response_ids:
-            continue
-        segment = TokenSegment(
-            prompt_ids=list(tokens[:cut]),
-            response_ids=list(response_ids),
-            loss_mask=list(mask[cut:]),
-            rollout_log_probs=list(logprobs[cut:]),
-            metadata={**(metadata or {}), "segment_kind": "leaf"},
-        )
-        assert len(segment.loss_mask) == len(segment.rollout_log_probs) == len(segment.response_ids)
-        out.append(segment)
-    return out
-
-
-def write_segment_to_sample(sample: Sample, segment: TokenSegment, reward: float, tokenizer) -> None:
-    """Populate token, mask, response, reward, and status fields from a segment."""
-    sample.tokens = list(segment.prompt_ids) + list(segment.response_ids)
-    sample.response_length = len(segment.response_ids)
-    sample.loss_mask = list(segment.loss_mask)
-    sample.rollout_log_probs = list(segment.rollout_log_probs)
-    sample.response = tokenizer.decode(segment.response_ids, skip_special_tokens=False)
-    sample.reward = float(reward)
-    sample.status = Sample.Status.COMPLETED
-
-
-def fan_out_sample_segments(
-    sample: Sample,
-    segments: list[TokenSegment],
-    reward: float,
-    tokenizer,
-    *,
-    metadata: dict[str, Any] | None = None,
-) -> list[Sample]:
-    """Emit one Sample per segment, splitting reward uniformly across them.
-
-    Sibling samples share ``group_id`` so reducers that average by group do
-    not over-count trajectories split by compaction or sub-agent dispatch.
-    """
-    k = len(segments)
-    per_segment_reward = float(reward) / max(1, k)
-    shared_group_id = sample.group_id if sample.group_id is not None else sample.index
-    base_metadata = {**(sample.metadata or {}), **(metadata or {})}
-
-    out: list[Sample] = []
-    for i, segment in enumerate(segments):
-        sub = sample if i == 0 else copy.copy(sample)
-        write_segment_to_sample(sub, segment, per_segment_reward, tokenizer)
-        sub.group_id = shared_group_id
-        sub.metadata = {
-            **base_metadata,
-            **(segment.metadata or {}),
-            "segment_idx": i,
-            "num_segments": k,
-        }
-        out.append(sub)
-    return out
+__all__ = [
+    "Node",
+    "TrajectoryManager",
+    "node_match_key",
+    "_group_messages_by_role",
+    "_lcp_len",
+]
