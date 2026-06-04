@@ -15,10 +15,6 @@ class ExternalEngineInfo:
     port: int
     worker_type: str
     num_gpus: int
-    tp_size: int
-    pp_size: int
-    dp_size: int
-    ep_size: int
     disaggregation_bootstrap_port: int | None = None
     server_info: dict = dataclasses.field(default_factory=dict)
 
@@ -86,8 +82,6 @@ def discover_external_engines(addrs: list[str], timeout: float = 30.0) -> list[E
 
         pp_size = _positive_int(server_info.get("pp_size") or server_info.get("pipeline_parallel_size"), 1)
         tp_size = _positive_int(server_info.get("tp_size") or server_info.get("tensor_parallel_size"), 1)
-        dp_size = _positive_int(server_info.get("dp_size") or server_info.get("data_parallel_size"), 1)
-        ep_size = _positive_int(server_info.get("ep_size") or server_info.get("expert_parallel_size"), 1)
         num_gpus = _positive_int(
             server_info.get("num_gpus") or server_info.get("num_gpus_per_engine"),
             tp_size * pp_size,
@@ -102,10 +96,6 @@ def discover_external_engines(addrs: list[str], timeout: float = 30.0) -> list[E
                 port=parsed.port,
                 worker_type=_infer_worker_type(server_info),
                 num_gpus=num_gpus,
-                tp_size=tp_size,
-                pp_size=pp_size,
-                dp_size=dp_size,
-                ep_size=ep_size,
                 disaggregation_bootstrap_port=bootstrap_port,
                 server_info=server_info,
             )
@@ -135,10 +125,7 @@ def apply_external_engine_info_to_args(args, logger=None) -> None:
                 "url": info.url,
                 "worker_type": info.worker_type,
                 "num_gpus": info.num_gpus,
-                "tp_size": info.tp_size,
-                "pp_size": info.pp_size,
-                "dp_size": info.dp_size,
-                "ep_size": info.ep_size,
+                "disaggregation_bootstrap_port": info.disaggregation_bootstrap_port,
             }
             for info in infos
         ]

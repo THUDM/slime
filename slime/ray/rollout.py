@@ -1137,20 +1137,14 @@ def _start_external_rollout_servers(args, pg) -> dict[str, RolloutServer]:
 
     specs_by_topology: dict[tuple, list[ExternalEngineInfo]] = {}
     for info in engine_infos:
-        key = (info.worker_type, info.num_gpus, info.tp_size, info.pp_size, info.dp_size, info.ep_size)
+        key = (info.worker_type, info.num_gpus)
         specs_by_topology.setdefault(key, []).append(info)
 
     server_groups = []
     engine_offset = 0
     gpu_offset = 0
     init_handles = []
-    for (worker_type, num_gpus, tp_size, pp_size, dp_size, ep_size), group_specs in specs_by_topology.items():
-        overrides = {
-            "tp_size": tp_size,
-            "pp_size": pp_size,
-            "dp_size": dp_size,
-            "ep_size": ep_size,
-        }
+    for (worker_type, num_gpus), group_specs in specs_by_topology.items():
         group = ServerGroup(
             args=args,
             pg=pg,
@@ -1160,7 +1154,7 @@ def _start_external_rollout_servers(args, pg) -> dict[str, RolloutServer]:
             worker_type=worker_type,
             rank_offset=engine_offset,
             gpu_offset=gpu_offset,
-            sglang_overrides=overrides,
+            sglang_overrides={},
             needs_offload=False,
             model_path=args.hf_checkpoint,
             router_ip=router_ip,

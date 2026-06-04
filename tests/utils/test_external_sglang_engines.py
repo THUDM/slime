@@ -42,10 +42,10 @@ def test_discover_external_engines_reads_server_info(monkeypatch):
     assert info.port == 10090
     assert info.worker_type == "regular"
     assert info.num_gpus == 8
-    assert info.tp_size == 4
-    assert info.pp_size == 2
-    assert info.dp_size == 1
-    assert info.ep_size == 4
+    assert info.server_info["tp_size"] == 4
+    assert info.server_info["pp_size"] == 2
+    assert info.server_info["dp_size"] == 1
+    assert info.server_info["ep_size"] == 4
 
 
 def test_apply_external_engine_info_handles_pd(monkeypatch):
@@ -89,7 +89,7 @@ def test_apply_external_engine_info_handles_pd(monkeypatch):
     assert get_rollout_num_engines(args) == 2
     assert [info["worker_type"] for info in args.rollout_external_engine_infos] == ["prefill", "decode"]
     assert [info["num_gpus"] for info in args.rollout_external_engine_infos] == [2, 4]
-    assert [info["dp_size"] for info in args.rollout_external_engine_infos] == [1, 2]
+    assert [info["server_info"]["dp_size"] for info in args.rollout_external_engine_infos] == [1, 2]
     assert args.rollout_external_engine_infos[0]["disaggregation_bootstrap_port"] == 12090
 
 
