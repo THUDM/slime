@@ -609,8 +609,9 @@ class MegatronTrainRayActor(TrainRayActor):
         )
 
         reconnect_rollout_engines = self.args.offload_train and self.args.use_critic and not self.args.colocate
+        force_connect_rollout_target = getattr(self.args, "update_weight_delta_publish_only", False)
 
-        if not rollout_engines and not reconnect_rollout_engines:
+        if not rollout_engines and not reconnect_rollout_engines and not force_connect_rollout_target:
             if dist.get_rank() == 0:
                 logger.info("No updatable SGLang engines are running; skip weight update.")
             return
@@ -620,7 +621,7 @@ class MegatronTrainRayActor(TrainRayActor):
         elif self.args.offload_train:
             reload_process_groups()
 
-        if num_new_engines > 0 or reconnect_rollout_engines:
+        if num_new_engines > 0 or reconnect_rollout_engines or force_connect_rollout_target:
             self.weight_updater.connect_rollout_engines(
                 rollout_engines,
                 rollout_engine_lock,
