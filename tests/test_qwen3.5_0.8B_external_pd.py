@@ -1,13 +1,12 @@
-"""E2E test for --rollout-external-engine-addrs with a mixed external fleet.
+"""E2E test for --rollout-external-engine-addrs with a pure-PD external fleet.
 
 Spawns four SGLang servers out-of-band on a single 8-GPU box (all tp=1):
-- 1 prefill  (``--disaggregation-mode prefill``)
-- 1 decode   (``--disaggregation-mode decode``)
-- 2 regular  (no disaggregation)
+- 2 prefill (``--disaggregation-mode prefill``, mooncake transfer backend)
+- 2 decode  (``--disaggregation-mode decode``,  mooncake transfer backend)
 
 and points slime at all four via ``--rollout-external-engine-addrs ...``.
 The remaining 4 GPUs train. slime queries ``/server_info`` on each engine to
-infer per-engine TP / GPU counts and registers them to its (PD-enabled) router.
+infer per-engine TP / GPU counts and registers them to its PD-enabled router.
 
 Weight sync uses ``--update-weight-mode delta --update-weight-transport disk``
 so the post-train sync writes sparse safetensors to a shared dir and the
@@ -29,13 +28,13 @@ MODEL_NAME = "Qwen3.5-0.8B"
 MODEL_TYPE = "qwen3.5-0.8B"
 NUM_GPUS = 8
 NUM_TRAIN_GPUS = 4
-NUM_REGULAR_ENGINES = 2
+NUM_PREFILL_ENGINES = 2
+NUM_DECODE_ENGINES = 2
 
 EXTERNAL_HOST = "127.0.0.1"
-PREFILL_PORT = 13150
-DECODE_PORT = 13151
-REGULAR_PORTS = [13153, 13154]
-BOOTSTRAP_PORT = 13152
+PREFILL_PORTS = [13150, 13151]
+DECODE_PORTS = [13152, 13153]
+BOOTSTRAP_PORTS = [13160, 13161]
 
 
 def prepare():
@@ -51,17 +50,15 @@ def prepare():
 
 
 def _get_gpu_split():
-    """Partition the 8 visible GPUs: 4 train + 1 prefill + 1 decode + 2 regular."""
+    """Partition the 8 visible GPUs: 4 train + 2 prefill + 2 decode."""
     all_gpus = os.environ.get("CUDA_VISIBLE_DEVICES", ",".join(str(i) for i in range(NUM_GPUS))).split(",")
     assert len(all_gpus) >= NUM_GPUS, f"Expected at least {NUM_GPUS} GPUs, got {len(all_gpus)}"
     train_gpus = all_gpus[:NUM_TRAIN_GPUS]
     cursor = NUM_TRAIN_GPUS
-    prefill_gpu = all_gpus[cursor]
-    cursor += 1
-    decode_gpu = all_gpus[cursor]
-    cursor += 1
-    regular_gpus = all_gpus[cursor : cursor + NUM_REGULAR_ENGINES]
-    return train_gpus, prefill_gpu, decode_gpu, regular_gpus
+    prefill_gpus = all_gpus[cursor : cursor + NUM_PREFILL_ENGINES]
+    cursor += NUM_PREFILL_ENGINES
+    decode_gpus = all_gpus[cursor : cursor + NUM_DECODE_ENGINES]
+    return train_gpus, prefill_gpus, decode_gpus
 
 
 def _launch_sglang_server(
@@ -70,7 +67,7 @@ def _launch_sglang_server(
     port: int,
     tp: int,
     log_path: str,
-    disaggregation_mode: str | None = None,
+    disaggregation_mode: str,
     disaggregation_bootstrap_port: int | None = None,
 ) -> subprocess.Popen:
     env = os.environ.copy()
@@ -91,22 +88,18 @@ def _launch_sglang_server(
         "--mem-fraction-static",
         "0.6",
         "--trust-remote-code",
+        "--disaggregation-mode",
+        disaggregation_mode,
+        "--disaggregation-transfer-backend",
+        "mooncake",
     ]
-    if disaggregation_mode is not None:
-        cmd += [
-            "--disaggregation-mode",
-            disaggregation_mode,
-            "--disaggregation-transfer-backend",
-            "mooncake",
-        ]
     if disaggregation_bootstrap_port is not None:
         cmd += ["--disaggregation-bootstrap-port", str(disaggregation_bootstrap_port)]
 
     log_file = open(log_path, "w")
     process = subprocess.Popen(cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT)
-    label = disaggregation_mode or "regular"
     print(
-        f"Starting external sglang {label} server on GPUs {gpus} "
+        f"Starting external sglang {disaggregation_mode} server on GPUs {gpus} "
         f"port={port} tp={tp} (pid={process.pid}), log: {log_path}"
     )
 
@@ -116,22 +109,22 @@ def _launch_sglang_server(
     deadline = time.time() + 600
     while time.time() < deadline:
         if process.poll() is not None:
-            raise RuntimeError(f"{label} server exited with code {process.returncode}; check {log_path}")
+            raise RuntimeError(f"{disaggregation_mode} server exited with code {process.returncode}; check {log_path}")
         try:
             req = urllib.request.urlopen(f"http://{EXTERNAL_HOST}:{port}/server_info", timeout=2)
             if req.status == 200:
-                print(f"External sglang {label} server is ready on GPUs {gpus}")
+                print(f"External sglang {disaggregation_mode} server is ready on GPUs {gpus}")
                 return process
         except Exception:
             pass
         time.sleep(5)
 
     process.kill()
-    raise RuntimeError(f"{label} server failed to start within timeout; check {log_path}")
+    raise RuntimeError(f"{disaggregation_mode} server failed to start within timeout; check {log_path}")
 
 
 def execute():
-    train_gpus, prefill_gpu, decode_gpu, regular_gpus = _get_gpu_split()
+    train_gpus, prefill_gpus, decode_gpus = _get_gpu_split()
     processes: list[subprocess.Popen] = []
 
     # Restrict CUDA_VISIBLE_DEVICES to training GPUs before Ray starts so
@@ -139,32 +132,27 @@ def execute():
     os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(train_gpus)
 
     def launch_external_engines():
-        processes.append(
-            _launch_sglang_server(
-                gpus=[prefill_gpu],
-                port=PREFILL_PORT,
-                tp=1,
-                disaggregation_mode="prefill",
-                disaggregation_bootstrap_port=BOOTSTRAP_PORT,
-                log_path="/tmp/sglang_external_prefill.log",
-            )
-        )
-        processes.append(
-            _launch_sglang_server(
-                gpus=[decode_gpu],
-                port=DECODE_PORT,
-                tp=1,
-                disaggregation_mode="decode",
-                log_path="/tmp/sglang_external_decode.log",
-            )
-        )
-        for idx, (gpu, port) in enumerate(zip(regular_gpus, REGULAR_PORTS, strict=True)):
+        for idx, (gpu, port, bootstrap_port) in enumerate(
+            zip(prefill_gpus, PREFILL_PORTS, BOOTSTRAP_PORTS, strict=True)
+        ):
             processes.append(
                 _launch_sglang_server(
                     gpus=[gpu],
                     port=port,
                     tp=1,
-                    log_path=f"/tmp/sglang_external_regular_{idx}.log",
+                    disaggregation_mode="prefill",
+                    disaggregation_bootstrap_port=bootstrap_port,
+                    log_path=f"/tmp/sglang_external_prefill_{idx}.log",
+                )
+            )
+        for idx, (gpu, port) in enumerate(zip(decode_gpus, DECODE_PORTS, strict=True)):
+            processes.append(
+                _launch_sglang_server(
+                    gpus=[gpu],
+                    port=port,
+                    tp=1,
+                    disaggregation_mode="decode",
+                    log_path=f"/tmp/sglang_external_decode_{idx}.log",
                 )
             )
 
@@ -222,13 +210,10 @@ def execute():
         )
 
         # No --rollout-num-gpus / --rollout-num-gpus-per-engine: those are
-        # inferred from /server_info on each external engine (1 prefill +
-        # 1 decode + 2 regular, all tp=1).
-        external_args = (
-            "--rollout-external-engine-addrs "
-            f"{EXTERNAL_HOST}:{PREFILL_PORT} "
-            f"{EXTERNAL_HOST}:{DECODE_PORT} " + " ".join(f"{EXTERNAL_HOST}:{port}" for port in REGULAR_PORTS) + " "
-        )
+        # inferred from /server_info on each external engine (2 prefill +
+        # 2 decode, all tp=1).
+        all_addrs = [f"{EXTERNAL_HOST}:{port}" for port in (*PREFILL_PORTS, *DECODE_PORTS)]
+        external_args = "--rollout-external-engine-addrs " + " ".join(all_addrs) + " "
 
         # External engines have no NCCL group with the trainer, so weight
         # updates have to go through the disk-backed delta path: the trainer

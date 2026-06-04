@@ -1,7 +1,18 @@
+import sys
 from argparse import Namespace
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from slime.backends.sglang_utils.external import apply_external_engine_info_to_args, discover_external_engines
 from slime.utils.http_utils import get_rollout_num_engines
+
+
+NUM_GPUS = 0
 
 
 class _Response:
@@ -99,3 +110,7 @@ def test_apply_external_engine_info_no_addrs_disables_external():
     apply_external_engine_info_to_args(args)
 
     assert args.rollout_external is False
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

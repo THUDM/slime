@@ -41,6 +41,9 @@ def sort_key(x):
 
 def _create_placement_group(num_gpus):
     """Create a placement group with the specified number of GPUs."""
+    if num_gpus == 0:
+        return None, [], []
+
     bundles = [{"GPU": 1, "CPU": 1} for _ in range(num_gpus)]
     pg = placement_group(bundles, strategy="PACK")
     num_bundles = len(bundles)
@@ -77,25 +80,30 @@ def _create_placement_group(num_gpus):
     return pg, pg_reordered_bundle_indices, pg_reordered_gpu_ids
 
 
+def _get_placement_group_layout(args) -> tuple[int, int]:
+    actor_num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
+
+    if args.debug_train_only:
+        return actor_num_gpus, 0
+
+    if args.rollout_external:
+        if args.debug_rollout_only:
+            return 0, 0
+        return actor_num_gpus, actor_num_gpus
+
+    if args.debug_rollout_only:
+        return args.rollout_num_gpus, 0
+
+    if args.colocate:
+        return actor_num_gpus, 0
+
+    return actor_num_gpus + args.rollout_num_gpus, actor_num_gpus
+
+
 def create_placement_groups(args):
     """Create placement groups for actor, critic, and rollout engines."""
 
-    num_gpus = 0
-    if args.debug_train_only:
-        num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
-        rollout_offset = 0
-    elif args.debug_rollout_only:
-        num_gpus = args.rollout_num_gpus
-        rollout_offset = 0
-    elif args.colocate:
-        num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
-        rollout_offset = 0
-    elif args.rollout_external:
-        num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
-        rollout_offset = num_gpus
-    else:
-        num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node + args.rollout_num_gpus
-        rollout_offset = args.actor_num_nodes * args.actor_num_gpus_per_node
+    num_gpus, rollout_offset = _get_placement_group_layout(args)
 
     logger.info(f"Creating placement group with {num_gpus} GPUs...")
     pg, actor_pg_reordered_bundle_indices, actor_pg_reordered_gpu_ids = _create_placement_group(num_gpus)
