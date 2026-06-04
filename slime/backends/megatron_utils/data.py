@@ -279,16 +279,16 @@ def log_rollout_data(
         loss_masks = rollout_data["loss_masks"]
         total_lengths = rollout_data["total_lengths"]
         max_seq_lens = rollout_data.get("max_seq_lens", None)
-        # Same per-group denominators the training loss uses, so reported
-        # log_probs / returns / advantages / etc. live in the same per-group
+        # Same per-rollout denominators the training loss uses, so reported
+        # log_probs / returns / advantages / etc. live in the same per-rollout
         # mean space (rather than per-sample) as the gradient signal.
-        group_mask_sums = rollout_data.get("group_mask_sums", None)
+        rollout_mask_sums = rollout_data.get("rollout_mask_sums", None)
         # For per-rollout-mean metrics: ``rollout_log_metric_contribution``
         # produces the ``(sum, count)`` tuple so gather_log_data's
-        # ``sum / count`` lands on ``sum_DP_full / num_groups`` — the
+        # ``Σsum / Σcount`` lands on ``sum_DP_full / num_rollouts`` — the
         # same number train_one_step reports for the same samples.
         dp_world = mpu.get_data_parallel_world_size(with_context_parallel=False)
-        num_groups_in_rollout = sum(rollout_data["global_batch_sizes"])
+        num_rollouts_in_rollout = sum(rollout_data["global_batch_sizes"])
 
         for key, val in rollout_data.items():
             if key in [
@@ -296,8 +296,8 @@ def log_rollout_data(
                 "multimodal_train_inputs",
                 "loss_masks",
                 "sample_indices",
-                "group_ids",
-                "group_mask_sums",
+                "rollout_ids",
+                "rollout_mask_sums",
                 "rollout_routed_experts",
                 "max_seq_lens",
                 "global_batch_sizes",
@@ -328,7 +328,7 @@ def log_rollout_data(
                             total_lengths,
                             response_lengths,
                             loss_masks,
-                            group_mask_sums,
+                            rollout_mask_sums,
                             qkv_format=args.qkv_format,
                             max_seq_lens=max_seq_lens,
                         )
@@ -337,7 +337,7 @@ def log_rollout_data(
                         sum_value, count = rollout_log_metric_contribution(
                             sum_of_sample_mean(tensor).item(),
                             cp_size=cp_size,
-                            num_rollouts_in_rollout=num_groups_in_rollout,
+                            num_rollouts_in_rollout=num_rollouts_in_rollout,
                             dp_size=dp_world,
                         )
                         log_dict[key] = (sum_value, count)
@@ -433,8 +433,8 @@ def log_rollout_data(
                 rollout_data[f"correct_length/{p}"] = [val] * num_correct_responses
             if len(correct_entropy) > 0:
                 # NOTE: per-sample-mean over the correct subset, not per-rollout.
-                # A group's siblings may not all be correct, and slicing
-                # ``group_mask_sums`` here would leave a denom that still
+                # A rollout's siblings may not all be correct, and slicing
+                # ``rollout_mask_sums`` here would leave a denom that still
                 # includes incorrect siblings — meaningless for a "correct-only"
                 # entropy report. Per-sample-mean over the filtered subset is
                 # the cleanest semantic.

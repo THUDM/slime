@@ -184,7 +184,8 @@ def _merge_samples(
         "elapsed_sec": elapsed_sec,
     }
 
-    # All K samples share group_id so the loss reducer counts this trajectory once.
+    # All K samples share rollout_id so the loss reducer counts this
+    # trajectory once.
     fanned = fan_out_sample_segments(
         sample,
         segments,

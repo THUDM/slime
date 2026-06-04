@@ -203,17 +203,17 @@ async def run_agent_system(args, sample):
     args.sample = sample
     args.results_dict = {"solver": [], "rewriter": [], "selector": []}
     # Every sample emitted below is a training sample split out of this one
-    # rollout execution (the input ``sample``). Stamp the shared group id on
-    # every collected sample at each return point so the per-group loss
+    # rollout execution (the input ``sample``). Stamp the shared rollout id on
+    # every collected sample at each return point so the per-rollout loss
     # reducer aggregates the solver / rewriter / selector siblings as one
-    # group instead of N, and the by-group step splitter keeps them in
+    # rollout instead of N, and the by-rollout step splitter keeps them in
     # the same step. Captured here because ``sample`` gets shadowed by zip-
     # loop variables further down.
-    input_group_id = sample.index
+    input_rollout_id = sample.index
 
     def _emit(samples_list):
         for s in samples_list:
-            s.group_id = input_group_id
+            s.rollout_id = input_rollout_id
         return samples_list
 
     problem_statement = sample.prompt

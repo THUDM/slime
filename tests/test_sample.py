@@ -5,8 +5,8 @@ Pins two contracts that the rollout / training boundary depends on:
   1. ``to_dict`` / ``from_dict`` round-trip — Sample crosses Ray actor
      boundaries as a dict (especially in async / fully-async / partial-
      rollout paths). A silent field drop or enum corruption here means a
-     sample loses its status / spec_info / prefix_cache_info / group_id
-     on the way to the trainer with no crash signal.
+     sample loses its status / spec_info / prefix_cache_info on the way
+     to the trainer with no crash signal.
 
   2. ``update_from_meta_info`` finish_reason → Status enum mapping
      (length→TRUNCATED, abort→ABORTED, stop→COMPLETED). The match
@@ -39,7 +39,7 @@ def _make_sample(**overrides) -> Sample:
     base = dict(
         group_index=0,
         index=42,
-        group_id=7,
+        rollout_id=7,
         prompt="hello",
         tokens=[1, 2, 3],
         multimodal_inputs={"images": ["fake_url"]},
@@ -120,7 +120,7 @@ def test_round_trip_preserves_every_field():
     for field in (
         "group_index",
         "index",
-        "group_id",
+        "rollout_id",
         "prompt",
         "tokens",
         "multimodal_inputs",
@@ -141,59 +141,6 @@ def test_round_trip_preserves_every_field():
         "non_generation_time",
     ):
         assert getattr(restored, field) == getattr(original, field), f"field {field} drifted"
-
-
-@pytest.mark.unit
-def test_group_id_accepts_legacy_rollout_id_assignment_only():
-    """Older custom rollout code may assign ``rollout_id``; constructor use
-    is no longer supported."""
-    with pytest.raises(TypeError, match="rollout_id"):
-        Sample(index=42, rollout_id=9)
-
-    sample = Sample(index=42)
-    with pytest.warns(DeprecationWarning, match="Sample.rollout_id is deprecated"):
-        sample.rollout_id = 10
-    assert sample.group_id == 10
-    assert sample.to_dict()["group_id"] == 10
-    with pytest.raises(AttributeError, match="write-only"):
-        _ = sample.rollout_id
-
-
-@pytest.mark.unit
-def test_from_dict_accepts_legacy_rollout_id_without_group_id():
-    """Older debug dumps may only carry ``rollout_id``."""
-    d = _make_sample().to_dict()
-    d["rollout_id"] = 13
-    del d["group_id"]
-
-    with pytest.warns(DeprecationWarning, match="Sample.rollout_id is deprecated"):
-        restored = Sample.from_dict(d)
-
-    assert restored.group_id == 13
-    with pytest.raises(AttributeError, match="write-only"):
-        _ = restored.rollout_id
-
-
-@pytest.mark.unit
-def test_from_dict_prefers_group_id_over_legacy_rollout_id():
-    """If both names exist, the canonical group_id wins."""
-    d = _make_sample(group_id=11).to_dict()
-    d["rollout_id"] = 13
-
-    restored = Sample.from_dict(d)
-
-    assert restored.group_id == 11
-
-
-@pytest.mark.unit
-def test_group_id_does_not_serialize_legacy_rollout_id_alias():
-    """New debug dumps should only carry the canonical ``group_id``."""
-    sample = Sample(index=42, group_id=11)
-
-    with pytest.raises(AttributeError, match="write-only"):
-        _ = sample.rollout_id
-    assert sample.to_dict()["group_id"] == 11
-    assert "rollout_id" not in sample.to_dict()
 
 
 @pytest.mark.unit
