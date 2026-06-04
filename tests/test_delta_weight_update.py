@@ -108,7 +108,6 @@ def execute():
             "--accumulate-allreduce-grads-in-fp32 "
             "--attention-softmax-in-fp32 "
             "--attention-backend flash "
-            "--loss-mask-type qwen3_5 "
             "--actor-num-nodes 1 "
             "--actor-num-gpus-per-node 1 "
         )
