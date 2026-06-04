@@ -27,7 +27,7 @@ import slime.utils.external_utils.command_utils as U
 
 MODEL_NAME = "Qwen3-4B"
 MODEL_TYPE = "qwen3-4B"
-TORCH_DIST_CKPT = f"/root/{MODEL_NAME}_torch_dist"
+TORCH_DIST_CKPT = f"/root/models/{MODEL_NAME}_torch_dist"
 NUM_GPUS = 6
 NUM_TRAIN_GPUS = 4
 NUM_PREFILL_ENGINES = 1
@@ -127,6 +127,7 @@ def prepare():
         model_name=MODEL_NAME,
         megatron_model_type=MODEL_TYPE,
         num_gpus_per_node=NUM_TRAIN_GPUS,
+        dir_dst="/root/models",
     )
 
 
