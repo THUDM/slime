@@ -1087,8 +1087,6 @@ def _external_engine_infos_from_args(args) -> list[ExternalEngineInfo]:
         args.rollout_external_engine_infos = [info.to_dict() for info in infos]
         args.rollout_num_engines = len(infos)
         args.rollout_num_gpus = sum(info.num_gpus for info in infos)
-        if infos:
-            args.rollout_num_gpus_per_engine = infos[0].num_gpus
         return infos
     return [external_engine_info_from_dict(info) if isinstance(info, dict) else info for info in raw_infos]
 

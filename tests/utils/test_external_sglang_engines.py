@@ -87,9 +87,9 @@ def test_apply_external_engine_info_handles_pd(monkeypatch):
     assert args.rollout_num_gpus == 6
     assert args.rollout_num_engines == 2
     assert get_rollout_num_engines(args) == 2
-    assert args.rollout_num_gpus_per_engine == 2
-    assert args.sglang_enable_dp_attention is True
     assert [info["worker_type"] for info in args.rollout_external_engine_infos] == ["prefill", "decode"]
+    assert [info["num_gpus"] for info in args.rollout_external_engine_infos] == [2, 4]
+    assert [info["dp_size"] for info in args.rollout_external_engine_infos] == [1, 2]
     assert args.rollout_external_engine_infos[0]["disaggregation_bootstrap_port"] == 12090
 
 

@@ -129,16 +129,6 @@ def apply_external_engine_info_to_args(args, logger=None) -> None:
     args.rollout_num_engines = len(infos)
     args.rollout_num_gpus = sum(info.num_gpus for info in infos)
 
-    # Keep legacy homogeneous fields meaningful for code paths that still read
-    # them.  Per-group rollout startup uses the exact per-engine values below.
-    first = infos[0]
-    args.rollout_num_gpus_per_engine = first.num_gpus
-    args.sglang_pipeline_parallel_size = first.pp_size
-    args.sglang_data_parallel_size = first.dp_size
-    args.sglang_expert_parallel_size = first.ep_size
-    if any(info.dp_size > 1 for info in infos):
-        args.sglang_enable_dp_attention = True
-
     if logger is not None:
         summary = [
             {
