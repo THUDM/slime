@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 from urllib.parse import urlparse
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -26,55 +29,6 @@ class ExternalEngineInfo:
         return dataclasses.asdict(self)
 
 
-@dataclasses.dataclass(frozen=True)
-class ExternalServerGroupInfo:
-    worker_type: str
-    num_gpus_per_engine: int
-    engine_infos: tuple[ExternalEngineInfo, ...]
-
-    @property
-    def num_gpus(self) -> int:
-        return sum(info.num_gpus for info in self.engine_infos)
-
-    def to_dict(self) -> dict:
-        return {
-            "worker_type": self.worker_type,
-            "num_gpus": self.num_gpus,
-            "num_gpus_per_engine": self.num_gpus_per_engine,
-            "engine_infos": [info.to_dict() for info in self.engine_infos],
-        }
-
-
-@dataclasses.dataclass(frozen=True)
-class ExternalModelInfo:
-    name: str
-    server_groups: tuple[ExternalServerGroupInfo, ...]
-    update_weights: bool = True
-
-    @property
-    def has_pd_disaggregation(self) -> bool:
-        return any(g.worker_type in ("prefill", "decode") for g in self.server_groups)
-
-    @property
-    def engine_infos(self) -> list[ExternalEngineInfo]:
-        return [info for group in self.server_groups for info in group.engine_infos]
-
-    @property
-    def total_num_gpus(self) -> int:
-        return sum(group.num_gpus for group in self.server_groups)
-
-    @property
-    def num_engines(self) -> int:
-        return sum(len(group.engine_infos) for group in self.server_groups)
-
-    def to_dict(self) -> dict:
-        return {
-            "name": self.name,
-            "server_groups": [group.to_dict() for group in self.server_groups],
-            "update_weights": self.update_weights,
-        }
-
-
 def normalize_external_engine_addr(addr: str) -> str:
     """Normalize ``host:port`` or ``http://host:port`` to an HTTP base URL."""
     if "://" not in addr:
@@ -93,21 +47,16 @@ def external_engine_info_from_dict(data: dict) -> ExternalEngineInfo:
     return ExternalEngineInfo(**data)
 
 
-def build_external_model_info(infos: list[ExternalEngineInfo], name: str = "default") -> ExternalModelInfo:
-    specs_by_topology: dict[tuple[str, int], list[ExternalEngineInfo]] = {}
-    for info in infos:
-        key = (info.worker_type, info.num_gpus)
-        specs_by_topology.setdefault(key, []).append(info)
-
-    server_groups = tuple(
-        ExternalServerGroupInfo(
-            worker_type=worker_type,
-            num_gpus_per_engine=num_gpus_per_engine,
-            engine_infos=tuple(group_infos),
-        )
-        for (worker_type, num_gpus_per_engine), group_infos in specs_by_topology.items()
-    )
-    return ExternalModelInfo(name=name, server_groups=server_groups)
+def external_engine_init_kwargs(info: ExternalEngineInfo) -> dict:
+    init_kwargs = {
+        "dist_init_addr": f"{info.host}:{info.port}",
+        "nccl_port": None,
+        "host": info.host,
+        "port": info.port,
+    }
+    if info.worker_type == "prefill":
+        init_kwargs["disaggregation_bootstrap_port"] = info.disaggregation_bootstrap_port
+    return init_kwargs
 
 
 def get_server_info(url: str, timeout: float = 30.0) -> dict:
@@ -170,10 +119,8 @@ def apply_external_engine_info_to_args(args, logger=None) -> None:
         raise ValueError("--rollout-external-engine-addrs did not contain any engines.")
 
     args.rollout_external_engine_infos = [info.to_dict() for info in infos]
-    model_info = build_external_model_info(infos)
-    args.rollout_external_model_info = model_info.to_dict()
-    args.rollout_num_engines = model_info.num_engines
-    args.rollout_num_gpus = model_info.total_num_gpus
+    args.rollout_num_engines = len(infos)
+    args.rollout_num_gpus = sum(info.num_gpus for info in infos)
 
     if logger is not None:
         summary = [
@@ -186,3 +133,106 @@ def apply_external_engine_info_to_args(args, logger=None) -> None:
             for info in infos
         ]
         logger.info(f"Detected external SGLang engines: {summary}")
+
+
+@dataclasses.dataclass
+class ExternalRolloutServer:
+    """Rollout server backed by pre-launched external SGLang engines."""
+
+    engines: list
+    engine_gpu_counts: list[int]
+    engine_gpu_offsets: list[int]
+    router_ip: str | None = None
+    router_port: int | None = None
+    model_name: str = "default"
+    update_weights: bool = True
+    num_new_engines: int = 0
+    server_groups: list = dataclasses.field(default_factory=list)
+
+    @property
+    def all_engines(self):
+        return self.engines
+
+    def recover(self):
+        logger.warning("Fault tolerance is not supported for external rollout engines; skip recover.")
+
+    def offload(self):
+        return []
+
+    def onload(self, tags: list[str] | None = None):
+        return []
+
+    def onload_weights(self):
+        return []
+
+    def onload_kv(self):
+        return []
+
+
+def external_engine_infos_from_args(args) -> list[ExternalEngineInfo]:
+    raw_infos = getattr(args, "rollout_external_engine_infos", None)
+    if raw_infos is None:
+        addrs = getattr(args, "rollout_external_engine_addrs", None)
+        if not addrs:
+            raise RuntimeError("External rollout requires --rollout-external-engine-addrs.")
+        infos = discover_external_engines(addrs)
+        args.rollout_external_engine_infos = [info.to_dict() for info in infos]
+    else:
+        infos = [external_engine_info_from_dict(info) if isinstance(info, dict) else info for info in raw_infos]
+    args.rollout_num_engines = len(infos)
+    args.rollout_num_gpus = sum(info.num_gpus for info in infos)
+    return infos
+
+
+def start_external_rollout_servers(args, *, start_router) -> dict[str, ExternalRolloutServer]:
+    import ray
+
+    from slime.backends.sglang_utils.sglang_engine import SGLangEngine
+
+    infos = external_engine_infos_from_args(args)
+    router_ip, router_port = start_router(args, has_pd_disaggregation=any(info.is_pd_worker for info in infos))
+    args.sglang_router_ip = router_ip
+    args.sglang_router_port = router_port
+
+    engines = []
+    engine_gpu_counts = []
+    engine_gpu_offsets = []
+    init_handles = []
+    RolloutRayActor = ray.remote(SGLangEngine)
+    gpu_offset = 0
+    for rank, info in enumerate(infos):
+        rollout_engine = RolloutRayActor.options(num_cpus=0.2, num_gpus=0).remote(
+            args=args,
+            rank=rank,
+            worker_type=info.worker_type,
+            base_gpu_id=0,
+            num_gpus_per_engine=info.num_gpus,
+        )
+        engines.append(rollout_engine)
+        engine_gpu_counts.append(info.num_gpus)
+        engine_gpu_offsets.append(gpu_offset)
+        gpu_offset += info.num_gpus
+        init_handles.append(
+            rollout_engine.init.remote(
+                **external_engine_init_kwargs(info),
+                router_ip=router_ip,
+                router_port=router_port,
+            )
+        )
+
+    if init_handles:
+        ray.get(init_handles)
+
+    args.sglang_model_routers = {"default": (router_ip, router_port)}
+    return {
+        "default": ExternalRolloutServer(
+            engines=engines,
+            engine_gpu_counts=engine_gpu_counts,
+            engine_gpu_offsets=engine_gpu_offsets,
+            router_ip=router_ip,
+            router_port=router_port,
+            model_name="default",
+            update_weights=True,
+            num_new_engines=len(engines),
+        )
+    }

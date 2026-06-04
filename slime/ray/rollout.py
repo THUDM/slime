@@ -14,13 +14,7 @@ import torch
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
-from slime.backends.sglang_utils.external import (
-    ExternalEngineInfo,
-    ExternalModelInfo,
-    build_external_model_info,
-    discover_external_engines,
-    external_engine_info_from_dict,
-)
+from slime.backends.sglang_utils.external import start_external_rollout_servers
 from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
@@ -65,19 +59,14 @@ class ServerGroup:
     model_path: str | None = None  # checkpoint path for update_weights_from_disk
     router_ip: str | None = None
     router_port: int | None = None
-    external_worker_specs: list[ExternalEngineInfo] = dataclasses.field(default_factory=list)
 
     @property
     def nodes_per_engine(self):
-        if self.args.rollout_external:
-            return 1
         return max(1, self.num_gpus_per_engine // self.args.num_gpus_per_node)
 
     @property
     def engines(self):
         """Node-0 engines only (for multi-node serving)."""
-        if self.args.rollout_external:
-            return [engine for engine in self.all_engines if engine is not None]
         return self.all_engines[:: self.nodes_per_engine]
 
     def start_engines(self, port_cursors: dict[int, int] | None = None) -> tuple[list, dict[int, int]]:
@@ -96,9 +85,6 @@ class ServerGroup:
         if self.args.debug_train_only or self.worker_type == "placeholder":
             self.num_new_engines = 0
             return [], port_cursors
-
-        if self.args.rollout_external:
-            return self._start_external_proxy_engines(port_cursors)
 
         num_gpu_per_engine = min(self.num_gpus_per_engine, self.args.num_gpus_per_node)
 
@@ -192,39 +178,6 @@ class ServerGroup:
                 router_port=self.router_port,
             )
             for rank, engine in rollout_engines
-        ]
-        return init_handles, port_cursors
-
-    def _start_external_proxy_engines(self, port_cursors: dict[int, int]) -> tuple[list, dict[int, int]]:
-        """Create CPU-only proxy actors for pre-launched external workers."""
-        assert self.external_worker_specs, "external_worker_specs must be populated for rollout_external."
-
-        RolloutRayActor = ray.remote(SGLangEngine)
-        rollout_engines = []
-        for i, spec in enumerate(self.external_worker_specs):
-            if self.all_engines[i] is not None:
-                continue
-
-            global_rank = self.rank_offset + i
-            rollout_engine = RolloutRayActor.options(num_cpus=0.2, num_gpus=0).remote(
-                self.args,
-                rank=global_rank,
-                worker_type=spec.worker_type,
-                base_gpu_id=0,
-                sglang_overrides=self.sglang_overrides,
-                num_gpus_per_engine=self.num_gpus_per_engine,
-            )
-            rollout_engines.append((global_rank, rollout_engine, spec))
-            self.all_engines[i] = rollout_engine
-
-        self.num_new_engines = len(rollout_engines)
-        init_handles = [
-            engine.init.remote(
-                **_external_engine_init_kwargs(spec),
-                router_ip=self.router_ip,
-                router_port=self.router_port,
-            )
-            for _rank, engine, spec in rollout_engines
         ]
         return init_handles, port_cursors
 
@@ -427,7 +380,7 @@ class RolloutManager:
         logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
         if self.args.debug_train_only:
-            self.servers: dict[str, RolloutServer] = {}
+            self.servers: dict[str, Any] = {}
         else:
             init_http_client(args)
             self.servers = start_rollout_servers(args, pg)
@@ -470,7 +423,12 @@ class RolloutManager:
         # Only inject fault once
         self._ci_fault_injection_pending = False
 
-        if self.server and self.server.server_groups[0].all_engines and self.server.server_groups[0].all_engines[0]:
+        if (
+            self.server
+            and self.server.server_groups
+            and self.server.server_groups[0].all_engines
+            and self.server.server_groups[0].all_engines[0]
+        ):
             logger.info("CI Fault Injection: Simulating crash on engine 0 during generate")
             try:
                 # This will cause the ray actor to exit
@@ -489,13 +447,13 @@ class RolloutManager:
         logging_utils.finish_tracking(self.args)
 
     @property
-    def server(self) -> RolloutServer | None:
+    def server(self) -> Any | None:
         """Default server (first model).  For backward compatibility."""
         if not self.servers:
             return None
         return next(iter(self.servers.values()))
 
-    def _get_updatable_server(self) -> RolloutServer | None:
+    def _get_updatable_server(self) -> Any | None:
         """Return the server with ``update_weights=True``.
 
         When multiple updatable servers exist, returns the first one
@@ -888,18 +846,6 @@ def _validate_rollout_id_annotated(node, depth=0):
         _validate_rollout_id_annotated(item, depth + 1)
 
 
-def _external_engine_init_kwargs(spec: ExternalEngineInfo) -> dict:
-    init_kwargs = {
-        "dist_init_addr": f"{spec.host}:{spec.port}",
-        "nccl_port": None,
-        "host": spec.host,
-        "port": spec.port,
-    }
-    if spec.worker_type == "prefill":
-        init_kwargs["disaggregation_bootstrap_port"] = spec.disaggregation_bootstrap_port
-    return init_kwargs
-
-
 def _allocate_rollout_engine_addr_and_ports_normal(
     *,
     args,
@@ -1059,75 +1005,7 @@ def _compute_megatron_num_gpus(args) -> int:
     return num
 
 
-def _external_model_from_args(args) -> ExternalModelInfo:
-    raw_infos = getattr(args, "rollout_external_engine_infos", None)
-    if raw_infos is None:
-        addrs = getattr(args, "rollout_external_engine_addrs", None)
-        if not addrs:
-            raise RuntimeError("External rollout requires --rollout-external-engine-addrs.")
-        infos = discover_external_engines(addrs)
-        args.rollout_external_engine_infos = [info.to_dict() for info in infos]
-    else:
-        infos = [external_engine_info_from_dict(info) if isinstance(info, dict) else info for info in raw_infos]
-    model_info = build_external_model_info(infos)
-    args.rollout_external_model_info = model_info.to_dict()
-    args.rollout_num_engines = model_info.num_engines
-    args.rollout_num_gpus = model_info.total_num_gpus
-    return model_info
-
-
-def _start_external_rollout_servers(args, pg) -> dict[str, RolloutServer]:
-    model_cfg = _external_model_from_args(args)
-    router_ip, router_port = _start_router(args, has_pd_disaggregation=model_cfg.has_pd_disaggregation)
-    args.sglang_router_ip = router_ip
-    args.sglang_router_port = router_port
-
-    server_groups = []
-    engine_offset = 0
-    gpu_offset = 0
-    init_handles = []
-    for group_cfg in model_cfg.server_groups:
-        group_specs = list(group_cfg.engine_infos)
-        num_gpus = group_cfg.num_gpus_per_engine
-        group = ServerGroup(
-            args=args,
-            pg=pg,
-            all_engines=[None] * len(group_specs),
-            num_gpus_per_engine=num_gpus,
-            num_new_engines=0,
-            worker_type=group_cfg.worker_type,
-            rank_offset=engine_offset,
-            gpu_offset=gpu_offset,
-            sglang_overrides={},
-            needs_offload=False,
-            model_path=args.hf_checkpoint,
-            router_ip=router_ip,
-            router_port=router_port,
-            external_worker_specs=group_specs,
-        )
-        handles, _ = group.start_engines({})
-        init_handles.extend(handles)
-        server_groups.append(group)
-
-        engine_offset += len(group_specs)
-        gpu_offset += len(group_specs) * num_gpus
-
-    if init_handles:
-        ray.get(init_handles)
-
-    args.sglang_model_routers = {"default": (router_ip, router_port)}
-    return {
-        "default": RolloutServer(
-            server_groups=server_groups,
-            router_ip=router_ip,
-            router_port=router_port,
-            model_name="default",
-            update_weights=True,
-        )
-    }
-
-
-def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
+def start_rollout_servers(args, pg) -> dict[str, Any]:
     """Start rollout servers: one per model, each with its own router.
 
     Each model defined in the sglang config gets its own router and set
@@ -1141,7 +1019,7 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
     as the HTTP client is shared across all servers.
     """
     if args.rollout_external:
-        return _start_external_rollout_servers(args, pg)
+        return start_external_rollout_servers(args, start_router=_start_router)
 
     config = _resolve_sglang_config(args)
 
