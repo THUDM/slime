@@ -797,7 +797,7 @@
 </section>
 <section id="sglang">
 <h3>7. 独立 SGLang 启动器<a class="headerlink" href="#sglang" title="链接到此标题。">#</a></h3>
-<p>虽然 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 是为 slime 的训练流水线设计的，但它也可以作为纯推理场景的强大启动器，通过 <code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code> 模式或配置 slime 仅关注推理服务。</p>
+<p>虽然 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 是为 slime 的训练流水线设计的，但它也可以作为纯推理场景的强大启动器，通过外部 engine 地址或配置 slime 仅关注推理服务。</p>
 <p><strong>使用预启动的外部引擎：</strong></p>
 <p>对于复杂的生产部署，你可能希望独立预启动 SGLang 引擎，然后将其连接到 slime：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 步骤 1：外部启动 SGLang 引擎</span>
@@ -806,13 +806,16 @@ python<span class="w"> </span>-m<span class="w"> </span>sglang.launch_server<spa
 
 <span class="c1"># 步骤 2：将 slime 连接到外部引擎</span>
 python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--rollout-external<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--rollout-external-engine-addrs<span class="w"> </span>host1:10090<span class="w"> </span>host2:10091<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>...
 </pre></div>
 </div>
+<p>slime 会请求每个外部引擎的 <code class="docutils literal notranslate"><span class="pre">/server_info</span></code>，自动推断
+<code class="docutils literal notranslate"><span class="pre">rollout_num_gpus</span></code>、单个 engine 的 GPU 数、SGLang 并行参数，以及
+prefill/decode worker 类型。如果没有提供 <code class="docutils literal notranslate"><span class="pre">--sglang-router-ip/--sglang-router-port</span></code>，
+slime 会自己启动 router，并把这些外部引擎注册进去。</p>
 <blockquote>
-<div><p><strong>注意：</strong> <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code> 互斥。当你希望 slime 管理完整的引擎生命周期时，使用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code>；当引擎已预部署时，使用 <code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code>。</p>
+<div><p><strong>注意：</strong> <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code> 互斥。当你希望 slime 管理完整的引擎生命周期时，使用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code>；当引擎已预部署时，使用 <code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code>。</p>
 </div></blockquote>
 </section>
 </section>
@@ -875,7 +878,7 @@ python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code></p></td>
 <td><p>PD 分离通过 YAML 中的 <code class="docutils literal notranslate"><span class="pre">server_groups</span></code> 配置</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code></p></td>
 <td><p>外部引擎有自己的拓扑；config 在内部管理生命周期</p></td>
 </tr>
 </tbody>
@@ -986,7 +989,7 @@ python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\
 </section>
 <section id="q-sglang-config">
 <h3>Q: 可以不训练，只用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 做推理吗？<a class="headerlink" href="#q-sglang-config" title="链接到此标题。">#</a></h3>
-<p>虽然 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 是为 slime 的训练循环设计的，但你可以通过配置仅 rollout 的运行来实现纯推理场景。对于完全独立的 SGLang 推理服务，建议直接使用 SGLang 原生的 <code class="docutils literal notranslate"><span class="pre">launch_server</span></code>，或使用 <code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code> 模式连接预部署的引擎。</p>
+<p>虽然 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 是为 slime 的训练循环设计的，但你可以通过配置仅 rollout 的运行来实现纯推理场景。对于完全独立的 SGLang 推理服务，建议直接使用 SGLang 原生的 <code class="docutils literal notranslate"><span class="pre">launch_server</span></code>，或使用 <code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code> 连接预部署的引擎。</p>
 </section>
 <section id="q-sglang-config-prefill-num-servers">
 <h3>Q: <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code> 是什么关系？<a class="headerlink" href="#q-sglang-config-prefill-num-servers" title="链接到此标题。">#</a></h3>

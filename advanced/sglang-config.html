@@ -801,7 +801,7 @@
 </section>
 <section id="standalone-sglang-launcher">
 <h3>7. Standalone SGLang Launcher<a class="headerlink" href="#standalone-sglang-launcher" title="Link to this heading">#</a></h3>
-<p>While <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> is designed for slime’s training pipeline, it also works as a powerful launcher for pure inference scenarios using the <code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code> pattern or by configuring slime to focus solely on serving.</p>
+<p>While <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> is designed for slime’s training pipeline, it also works as a powerful launcher for pure inference scenarios using external engine addresses or by configuring slime to focus solely on serving.</p>
 <p><strong>Using external engines with a pre-launched topology:</strong></p>
 <p>For complex production deployments, you may want to pre-launch SGLang engines independently and connect them to slime:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Step 1: Launch SGLang engines externally</span>
@@ -810,13 +810,17 @@ python<span class="w"> </span>-m<span class="w"> </span>sglang.launch_server<spa
 
 <span class="c1"># Step 2: Connect slime to external engines</span>
 python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--rollout-external<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--rollout-external-engine-addrs<span class="w"> </span>host1:10090<span class="w"> </span>host2:10091<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>...
 </pre></div>
 </div>
+<p>slime queries each external engine’s <code class="docutils literal notranslate"><span class="pre">/server_info</span></code> endpoint to infer
+<code class="docutils literal notranslate"><span class="pre">rollout_num_gpus</span></code>, per-engine GPU counts, SGLang parallel sizes, and
+prefill/decode worker types. If no <code class="docutils literal notranslate"><span class="pre">--sglang-router-ip/--sglang-router-port</span></code>
+is provided, slime launches its own router and registers the external engines
+to it.</p>
 <blockquote>
-<div><p><strong>Note:</strong> <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> and <code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code> are mutually exclusive. Use <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> when you want slime to manage the full engine lifecycle; use <code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code> when engines are pre-deployed.</p>
+<div><p><strong>Note:</strong> <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> and <code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code> are mutually exclusive. Use <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> when you want slime to manage the full engine lifecycle; use <code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code> when engines are pre-deployed.</p>
 </div></blockquote>
 </section>
 </section>
@@ -879,7 +883,7 @@ python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code></p></td>
 <td><p>PD disaggregation is configured via <code class="docutils literal notranslate"><span class="pre">server_groups</span></code> in the YAML</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code></p></td>
 <td><p>External engines have their own topology; config manages the lifecycle internally</p></td>
 </tr>
 </tbody>
@@ -990,7 +994,7 @@ python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\
 </section>
 <section id="q-can-i-use-sglang-config-without-training-inference-only">
 <h3>Q: Can I use <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> without training (inference only)?<a class="headerlink" href="#q-can-i-use-sglang-config-without-training-inference-only" title="Link to this heading">#</a></h3>
-<p>While <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> is designed for slime’s training loop, you can effectively use it for inference-only scenarios by configuring a rollout-only run. For fully standalone SGLang serving, consider using SGLang’s native <code class="docutils literal notranslate"><span class="pre">launch_server</span></code> directly or the <code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code> mode for connecting to pre-deployed engines.</p>
+<p>While <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> is designed for slime’s training loop, you can effectively use it for inference-only scenarios by configuring a rollout-only run. For fully standalone SGLang serving, consider using SGLang’s native <code class="docutils literal notranslate"><span class="pre">launch_server</span></code> directly or <code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code> for connecting to pre-deployed engines.</p>
 </section>
 <section id="q-what-is-the-relationship-between-sglang-config-and-prefill-num-servers">
 <h3>Q: What is the relationship between <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> and <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code>?<a class="headerlink" href="#q-what-is-the-relationship-between-sglang-config-and-prefill-num-servers" title="Link to this heading">#</a></h3>

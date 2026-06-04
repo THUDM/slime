@@ -257,7 +257,7 @@ sglang:
 
 ### 7. 独立 SGLang 启动器
 
-虽然 `--sglang-config` 是为 slime 的训练流水线设计的，但它也可以作为纯推理场景的强大启动器，通过 `--rollout-external` 模式或配置 slime 仅关注推理服务。
+虽然 `--sglang-config` 是为 slime 的训练流水线设计的，但它也可以作为纯推理场景的强大启动器，通过外部 engine 地址或配置 slime 仅关注推理服务。
 
 **使用预启动的外部引擎：**
 
@@ -270,12 +270,16 @@ python -m sglang.launch_server --model-path /path/to/model --port 10091 ...
 
 # 步骤 2：将 slime 连接到外部引擎
 python train.py \
-  --rollout-external \
   --rollout-external-engine-addrs host1:10090 host2:10091 \
   ...
 ```
 
-> **注意：** `--sglang-config` 和 `--rollout-external` 互斥。当你希望 slime 管理完整的引擎生命周期时，使用 `--sglang-config`；当引擎已预部署时，使用 `--rollout-external`。
+slime 会请求每个外部引擎的 `/server_info`，自动推断
+`rollout_num_gpus`、单个 engine 的 GPU 数、SGLang 并行参数，以及
+prefill/decode worker 类型。如果没有提供 `--sglang-router-ip/--sglang-router-port`，
+slime 会自己启动 router，并把这些外部引擎注册进去。
+
+> **注意：** `--sglang-config` 和 `--rollout-external-engine-addrs` 互斥。当你希望 slime 管理完整的引擎生命周期时，使用 `--sglang-config`；当引擎已预部署时，使用 `--rollout-external-engine-addrs`。
 
 ---
 
@@ -332,7 +336,7 @@ slime 自动为每个 sample 分配一个唯一的 `session_id`（存储在 `sam
 | 选项 | 冲突原因 |
 |------|----------|
 | `--prefill-num-servers` | PD 分离通过 YAML 中的 `server_groups` 配置 |
-| `--rollout-external` | 外部引擎有自己的拓扑；config 在内部管理生命周期 |
+| `--rollout-external-engine-addrs` | 外部引擎有自己的拓扑；config 在内部管理生命周期 |
 
 ---
 
@@ -446,7 +450,7 @@ async def generate_with_models(args, sample, sampling_params):
 
 ### Q: 可以不训练，只用 `--sglang-config` 做推理吗？
 
-虽然 `--sglang-config` 是为 slime 的训练循环设计的，但你可以通过配置仅 rollout 的运行来实现纯推理场景。对于完全独立的 SGLang 推理服务，建议直接使用 SGLang 原生的 `launch_server`，或使用 `--rollout-external` 模式连接预部署的引擎。
+虽然 `--sglang-config` 是为 slime 的训练循环设计的，但你可以通过配置仅 rollout 的运行来实现纯推理场景。对于完全独立的 SGLang 推理服务，建议直接使用 SGLang 原生的 `launch_server`，或使用 `--rollout-external-engine-addrs` 连接预部署的引擎。
 
 ### Q: `--sglang-config` 和 `--prefill-num-servers` 是什么关系？
 

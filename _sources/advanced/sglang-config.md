@@ -257,7 +257,7 @@ Overrides take **highest priority**, overriding both the base `--sglang-*` CLI a
 
 ### 7. Standalone SGLang Launcher
 
-While `--sglang-config` is designed for slime's training pipeline, it also works as a powerful launcher for pure inference scenarios using the `--rollout-external` pattern or by configuring slime to focus solely on serving.
+While `--sglang-config` is designed for slime's training pipeline, it also works as a powerful launcher for pure inference scenarios using external engine addresses or by configuring slime to focus solely on serving.
 
 **Using external engines with a pre-launched topology:**
 
@@ -270,12 +270,17 @@ python -m sglang.launch_server --model-path /path/to/model --port 10091 ...
 
 # Step 2: Connect slime to external engines
 python train.py \
-  --rollout-external \
   --rollout-external-engine-addrs host1:10090 host2:10091 \
   ...
 ```
 
-> **Note:** `--sglang-config` and `--rollout-external` are mutually exclusive. Use `--sglang-config` when you want slime to manage the full engine lifecycle; use `--rollout-external` when engines are pre-deployed.
+slime queries each external engine's `/server_info` endpoint to infer
+`rollout_num_gpus`, per-engine GPU counts, SGLang parallel sizes, and
+prefill/decode worker types. If no `--sglang-router-ip/--sglang-router-port`
+is provided, slime launches its own router and registers the external engines
+to it.
+
+> **Note:** `--sglang-config` and `--rollout-external-engine-addrs` are mutually exclusive. Use `--sglang-config` when you want slime to manage the full engine lifecycle; use `--rollout-external-engine-addrs` when engines are pre-deployed.
 
 ---
 
@@ -332,7 +337,7 @@ When the config is loaded, slime applies the following resolution cascade:
 | Flag | Conflict Reason |
 |------|----------------|
 | `--prefill-num-servers` | PD disaggregation is configured via `server_groups` in the YAML |
-| `--rollout-external` | External engines have their own topology; config manages the lifecycle internally |
+| `--rollout-external-engine-addrs` | External engines have their own topology; config manages the lifecycle internally |
 
 ---
 
@@ -446,7 +451,7 @@ Use `get_model_url(args, "model_name", "/endpoint")` from `slime.rollout.sglang_
 
 ### Q: Can I use `--sglang-config` without training (inference only)?
 
-While `--sglang-config` is designed for slime's training loop, you can effectively use it for inference-only scenarios by configuring a rollout-only run. For fully standalone SGLang serving, consider using SGLang's native `launch_server` directly or the `--rollout-external` mode for connecting to pre-deployed engines.
+While `--sglang-config` is designed for slime's training loop, you can effectively use it for inference-only scenarios by configuring a rollout-only run. For fully standalone SGLang serving, consider using SGLang's native `launch_server` directly or `--rollout-external-engine-addrs` for connecting to pre-deployed engines.
 
 ### Q: What is the relationship between `--sglang-config` and `--prefill-num-servers`?
 
