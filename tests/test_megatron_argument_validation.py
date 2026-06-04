@@ -270,6 +270,7 @@ def make_slime_validate_args(**overrides):
         rollout_external_engine_addrs=None,
         rollout_http_endpoint_url=None,
         rollout_http_endpoint_abort_strategy=None,
+        update_weight_delta_publish_only=False,
         debug_train_only=False,
         actor_num_gpus_per_node=8,
         actor_num_nodes=1,
@@ -363,6 +364,7 @@ def test_update_weight_delta_rejects_colocate(monkeypatch):
         update_weight_transport="nccl",
         update_weight_disk_dir=None,
         update_weight_delta_dir=None,
+        update_weight_delta_publish_only=False,
         colocate=True,
     )
 
@@ -378,6 +380,7 @@ def test_update_weight_delta_rejects_unknown_transport(monkeypatch):
         update_weight_transport="tensor",
         update_weight_disk_dir=None,
         update_weight_delta_dir=None,
+        update_weight_delta_publish_only=False,
         colocate=False,
     )
 
