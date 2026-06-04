@@ -44,14 +44,11 @@ class RayTrainGroup:
         self._allocate_gpus_for_actor(pg, num_gpus_per_actor)
 
     def _allocate_gpus_for_actor(self, pg, num_gpus_per_actor):
-        world_size = 1 if self.args.debug_rollout_only else self._num_nodes * self._num_gpus_per_node
+        world_size = self._num_nodes * self._num_gpus_per_node
 
         # Use placement group to lock resources for models of same type
-        if self.args.debug_rollout_only:
-            pg, reordered_bundle_indices = None, []
-        else:
-            assert pg is not None
-            pg, reordered_bundle_indices, _reordered_gpu_ids = pg
+        assert pg is not None
+        pg, reordered_bundle_indices, _reordered_gpu_ids = pg
 
         env_vars = {
             # because sglang will always set NCCL_CUMEM_ENABLE to 0
@@ -92,23 +89,20 @@ class RayTrainGroup:
 
         actor_impl = MegatronTrainRayActor
 
-        default_num_gpus = 0 if self.args.debug_rollout_only else 1
-        TrainRayActor = ray.remote(num_gpus=default_num_gpus, runtime_env={"env_vars": env_vars})(actor_impl)
+        TrainRayActor = ray.remote(num_gpus=1, runtime_env={"env_vars": env_vars})(actor_impl)
 
         # Create worker actors
         self._actor_handlers = []
         master_addr, master_port = None, None
         for rank in range(world_size):
-            actor_options = {
-                "num_cpus": num_gpus_per_actor,
-                "num_gpus": 0 if self.args.debug_rollout_only else num_gpus_per_actor,
-            }
-            if not self.args.debug_rollout_only:
-                actor_options["scheduling_strategy"] = PlacementGroupSchedulingStrategy(
+            actor = TrainRayActor.options(
+                num_cpus=num_gpus_per_actor,
+                num_gpus=num_gpus_per_actor,
+                scheduling_strategy=PlacementGroupSchedulingStrategy(
                     placement_group=pg,
                     placement_group_bundle_index=reordered_bundle_indices[rank],
-                )
-            actor = TrainRayActor.options(**actor_options).remote(world_size, rank, master_addr, master_port)
+                ),
+            ).remote(world_size, rank, master_addr, master_port)
             if rank == 0:
                 master_addr, master_port = ray.get(actor.get_master_addr_and_port.remote())
             self._actor_handlers.append(actor)

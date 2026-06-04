@@ -13,6 +13,7 @@ from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils import kill_process_tree
 from urllib3.exceptions import NewConnectionError
 
+from slime.backends.sglang_utils.external import get_server_info
 from slime.ray.ray_actor import RayActor
 from slime.utils.http_utils import get_host_info
 
@@ -169,11 +170,6 @@ class SGLangEngine(RayActor):
     def _init_external(self, expect_server_args, external_engine_need_check_fields):
         logger.info(f"Use external SGLang engine (rank={self.rank}, expect_server_args={expect_server_args})")
 
-        def _get_actual_server_args():
-            response = requests.get(f"http://{self.server_host}:{self.server_port}/get_server_info")
-            response.raise_for_status()
-            return response.json()
-
         def _sanity_check_server_args(actual_server_args, expect_server_args):
             for name in external_engine_need_check_fields:
                 expect_value = expect_server_args.get(name)
@@ -182,12 +178,7 @@ class SGLangEngine(RayActor):
                     actual_value == expect_value
                 ), f"{name=} {expect_value=} {actual_value=} {expect_server_args=} {actual_server_args=}"
 
-        _wait_server_healthy(
-            base_url=f"http://{self.server_host}:{self.server_port}",
-            api_key=None,
-            is_process_alive=lambda: True,
-        )
-        actual_server_args = _get_actual_server_args()
+        actual_server_args = get_server_info(f"http://{self.server_host}:{self.server_port}")
         _sanity_check_server_args(actual_server_args, expect_server_args)
         self._register_to_router(expect_server_args)
 

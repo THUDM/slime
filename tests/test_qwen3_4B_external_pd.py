@@ -27,6 +27,7 @@ import slime.utils.external_utils.command_utils as U
 
 MODEL_NAME = "Qwen3-4B"
 MODEL_TYPE = "qwen3-4B"
+TORCH_DIST_CKPT = f"/root/{MODEL_NAME}_torch_dist"
 NUM_GPUS = 6
 NUM_TRAIN_GPUS = 4
 NUM_PREFILL_ENGINES = 1
@@ -126,7 +127,6 @@ def prepare():
         model_name=MODEL_NAME,
         megatron_model_type=MODEL_TYPE,
         num_gpus_per_node=NUM_TRAIN_GPUS,
-        dir_dst="/dev/shm",
     )
 
 
@@ -255,7 +255,7 @@ def execute():
     delta_dir_cm = tempfile.TemporaryDirectory(prefix="slime_external_pd_delta_")
     delta_dir = delta_dir_cm.name
     try:
-        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /dev/shm/{MODEL_NAME}_torch_dist "
+        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load {TORCH_DIST_CKPT} "
 
         rollout_args = (
             "--prompt-data /root/datasets/gsm8k/train.parquet "

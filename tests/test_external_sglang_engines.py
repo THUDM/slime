@@ -121,6 +121,7 @@ def test_apply_external_engine_info_handles_pd(monkeypatch):
 
     monkeypatch.setattr("slime.backends.sglang_utils.external.requests.get", fake_get)
     args = Namespace(
+        rollout_external=True,
         rollout_external_engine_addrs=["prefill:10090", "decode:10091"],
         rollout_num_gpus=None,
         rollout_num_gpus_per_engine=1,
@@ -157,6 +158,7 @@ def test_apply_external_engine_info_preserves_router_pd_flag(monkeypatch):
 
     monkeypatch.setattr("slime.backends.sglang_utils.external.requests.get", fake_get)
     args = Namespace(
+        rollout_external=True,
         rollout_external_engine_addrs=["regular:10090"],
         router_pd_disaggregation=True,
     )
@@ -169,12 +171,11 @@ def test_apply_external_engine_info_preserves_router_pd_flag(monkeypatch):
     assert args.rollout_num_engines == 1
 
 
-def test_apply_external_engine_info_no_addrs_disables_external():
+def test_apply_external_engine_info_requires_addrs():
     args = Namespace(rollout_external_engine_addrs=None)
 
-    apply_external_engine_info_to_args(args)
-
-    assert args.rollout_external is False
+    with pytest.raises(ValueError, match="rollout-external-engine-addrs"):
+        apply_external_engine_info_to_args(args)
 
 
 if __name__ == "__main__":

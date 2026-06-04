@@ -508,12 +508,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--rollout-external",
-                action="store_true",
-                default=None,
-                help=argparse.SUPPRESS,
-            )
-            parser.add_argument(
                 "--rollout-external-engine-addrs",
                 type=str,
                 default=None,
@@ -1787,14 +1781,9 @@ def slime_validate_args(args):
         )
         args.debug_train_only = True
 
-    if getattr(args, "rollout_external", None) is not None:
-        logger.warning(
-            "--rollout-external is deprecated and ignored. "
-            "Set --rollout-external-engine-addrs to use pre-launched external SGLang engines."
-        )
     args.rollout_external = args.rollout_external_engine_addrs is not None
 
-    if not args.debug_train_only:
+    if args.rollout_external and not args.debug_train_only:
         apply_external_engine_info_to_args(args, logger=logger)
 
     args.use_critic = args.advantage_estimator == "ppo"

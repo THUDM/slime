@@ -18,14 +18,11 @@ logger = logging.getLogger(__name__)
 
 
 def get_local_gpu_id():
-    gpu_ids = ray.get_gpu_ids()
-    if not gpu_ids:
-        return 0
     cvd = os.environ.get("CUDA_VISIBLE_DEVICES", None)
     if cvd is None:
-        return gpu_ids[0]
+        return ray.get_gpu_ids()[0]
     else:
-        return cvd.split(",").index(str(gpu_ids[0]))
+        return cvd.split(",").index(str(ray.get_gpu_ids()[0]))
 
 
 class TrainRayActor(RayActor):

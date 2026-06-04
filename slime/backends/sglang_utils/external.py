@@ -110,14 +110,7 @@ def build_external_model_info(infos: list[ExternalEngineInfo], name: str = "defa
     return ExternalModelInfo(name=name, server_groups=server_groups)
 
 
-def _positive_int(value, default: int) -> int:
-    if value is None:
-        return default
-    value = int(value)
-    return value if value > 0 else default
-
-
-def _get_server_info(url: str, timeout: float = 30.0) -> dict:
+def get_server_info(url: str, timeout: float = 30.0) -> dict:
     errors = []
     for endpoint in ("/server_info", "/get_server_info"):
         try:
@@ -144,14 +137,11 @@ def discover_external_engines(addrs: list[str], timeout: float = 30.0) -> list[E
         url = normalize_external_engine_addr(addr)
         parsed = urlparse(url)
         assert parsed.hostname is not None and parsed.port is not None
-        server_info = _get_server_info(url, timeout=timeout)
+        server_info = get_server_info(url, timeout=timeout)
 
-        pp_size = _positive_int(server_info.get("pp_size") or server_info.get("pipeline_parallel_size"), 1)
-        tp_size = _positive_int(server_info.get("tp_size") or server_info.get("tensor_parallel_size"), 1)
-        num_gpus = _positive_int(
-            server_info.get("num_gpus") or server_info.get("num_gpus_per_engine"),
-            tp_size * pp_size,
-        )
+        pp_size = int(server_info.get("pp_size") or server_info.get("pipeline_parallel_size") or 1)
+        tp_size = int(server_info.get("tp_size") or server_info.get("tensor_parallel_size") or 1)
+        num_gpus = int(server_info.get("num_gpus") or server_info.get("num_gpus_per_engine") or tp_size * pp_size)
         bootstrap_port = server_info.get("disaggregation_bootstrap_port")
         bootstrap_port = int(bootstrap_port) if bootstrap_port is not None else None
 
@@ -171,12 +161,10 @@ def discover_external_engines(addrs: list[str], timeout: float = 30.0) -> list[E
 
 def apply_external_engine_info_to_args(args, logger=None) -> None:
     """Detect external engines and store the derived topology on ``args``."""
-    addrs = getattr(args, "rollout_external_engine_addrs", None)
+    addrs = args.rollout_external_engine_addrs
     if not addrs:
-        args.rollout_external = False
-        return
+        raise ValueError("apply_external_engine_info_to_args requires --rollout-external-engine-addrs.")
 
-    args.rollout_external = True
     infos = discover_external_engines(addrs)
     if not infos:
         raise ValueError("--rollout-external-engine-addrs did not contain any engines.")
