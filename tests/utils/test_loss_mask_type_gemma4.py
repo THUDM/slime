@@ -175,3 +175,24 @@ def test_response_lengths_helper():
     # "Hello.<turn|>\n" — first 1 to end of mask.
     assert length == sum(mask)
     assert length > 0
+
+
+def test_gemma4_is_an_accepted_argparse_choice():
+    """Regression guard: the get_loss_mask dispatch accepts 'gemma4', but the
+    --loss-mask-type argparse choices=[...] list must list it too, or slime
+    rejects the flag before training starts ('invalid choice: gemma4').
+    These two lists drifted once; keep them in sync."""
+    import inspect
+
+    from slime.utils import arguments
+
+    src = inspect.getsource(arguments)
+    # Find the choices list for --loss-mask-type and assert gemma4 is in it.
+    marker = '"--loss-mask-type"'
+    assert marker in src, "could not locate --loss-mask-type in arguments.py"
+    tail = src.split(marker, 1)[1]
+    choices_line = next((ln for ln in tail.splitlines() if "choices=" in ln), None)
+    assert choices_line is not None, "no choices=[...] found for --loss-mask-type"
+    assert "gemma4" in choices_line, (
+        f"'gemma4' missing from --loss-mask-type choices: {choices_line.strip()}"
+    )
