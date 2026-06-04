@@ -190,6 +190,17 @@ class SGLangEngine(RayActor):
         actual_server_args = _get_actual_server_args()
         _sanity_check_server_args(actual_server_args, expect_server_args)
 
+        # Pin the external engine's weight version to the trainer's initial value
+        # (0) so the --ci-test version-equality check in actor.update_weights does
+        # not trip on the seed call. SGLang's default `server_args.weight_version`
+        # is "default"; without this we would need the user to remember
+        # `--weight-version 0` when pre-launching every external server.
+        if self.worker_type != "encoder" and self.node_rank == 0:
+            requests.post(
+                f"http://{self.server_host}:{self.server_port}/update_weight_version",
+                json={"new_version": "0"},
+            ).raise_for_status()
+
     def _init_normal(self, server_args_dict):
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
         self.process = launch_server_process(ServerArgs(**server_args_dict))
