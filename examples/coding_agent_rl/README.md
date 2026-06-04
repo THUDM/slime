@@ -167,7 +167,7 @@ restarts.
 ## Fan-out Semantics
 
 - `generate()` returns `list[Sample]` — one Sample per trajectory **segment** (`subagent` / `wipe` / `final`).
-- Per-trajectory reward is split as `reward / K` across segments; `group_id` is shared so the per-rollout-mean loss reducer still counts the trajectory once.
+- Per-trajectory reward is split as `reward / K` across segments; `rollout_id` is shared so the per-rollout-mean loss reducer still counts the trajectory once.
 - Sub-agent dispatch increases `K` (each completed `Agent` turn block becomes its own segment), so the effective batch after flatten can be much larger than `rollout_batch_size * n_samples_per_prompt`.
 
 ## Porting to a New Sandbox Backend

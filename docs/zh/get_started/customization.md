@@ -88,7 +88,7 @@ async def custom_generate(args, sample: Sample, sampling_params: dict) -> Sample
 
 在 subagent、multi-agent、context compact 等 agentic 场景中，一次 prompt rollout 可能会自然拆成多个可训练片段。例如：主 agent 调用 subagent 后，subagent 的轨迹和主 agent 的后续轨迹都需要参与训练；或者发生 compact 后，compact 前后的上下文被切成多个 segment。
 
-这种情况下不需要重写整个 rollout 函数，`custom_generate` 可以直接返回 `list[Sample]`。关键是：这些由同一次 rollout 拆出来的 sibling samples 必须设置相同的 `group_id`，这样 slime 会在训练切分和 loss 聚合时把它们视作同一个训练分组，而不是重复计数为多个独立分组。`Sample.rollout_id` 仍然作为 deprecated write-only alias 保留给只赋值它的旧代码。
+这种情况下不需要重写整个 rollout 函数，`custom_generate` 可以直接返回 `list[Sample]`。关键是：这些由同一次 rollout 拆出来的 sibling samples 必须设置相同的 `rollout_id`，这样 slime 会在训练切分和 loss 聚合时把它们视作同一次 rollout，而不是重复计数为多次独立 rollout。
 
 ```python
 import copy
@@ -98,7 +98,7 @@ from slime.utils.types import Sample
 
 async def custom_generate(args, sample: Sample, sampling_params: dict) -> list[Sample]:
     segments = await run_agent_and_split_segments(args, sample, sampling_params)
-    group_id = sample.group_id if sample.group_id is not None else sample.index
+    rollout_id = sample.rollout_id if sample.rollout_id is not None else sample.index
 
     samples: list[Sample] = []
     for segment in segments:
@@ -109,7 +109,7 @@ async def custom_generate(args, sample: Sample, sampling_params: dict) -> list[S
         s.loss_mask = segment.loss_mask
         s.reward = segment.reward
         s.status = Sample.Status.COMPLETED
-        s.group_id = group_id
+        s.rollout_id = rollout_id
         samples.append(s)
     return samples
 ```
