@@ -43,10 +43,6 @@ def normalize_external_engine_addr(addr: str) -> str:
     return addr
 
 
-def external_engine_info_from_dict(data: dict) -> ExternalEngineInfo:
-    return ExternalEngineInfo(**data)
-
-
 def external_engine_init_kwargs(info: ExternalEngineInfo) -> dict:
     init_kwargs = {
         "dist_init_addr": f"{info.host}:{info.port}",
@@ -176,7 +172,7 @@ def external_engine_infos_from_args(args) -> list[ExternalEngineInfo]:
             "External rollout engine info is missing. "
             "apply_external_engine_info_to_args must run before starting external rollout servers."
         )
-    return [external_engine_info_from_dict(info) if isinstance(info, dict) else info for info in raw_infos]
+    return [ExternalEngineInfo(**info) if isinstance(info, dict) else info for info in raw_infos]
 
 
 def start_external_rollout_servers(args, *, start_router) -> dict[str, ExternalRolloutServer]:
