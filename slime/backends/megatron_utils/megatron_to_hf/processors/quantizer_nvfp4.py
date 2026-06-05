@@ -1,5 +1,5 @@
 import re
-from typing import List, Tuple
+from typing import Tuple
 
 import torch
 
@@ -7,11 +7,17 @@ FP4_E2M1_MAX = 6.0
 FP8_E4M3_MAX = 448.0
 NVFP4_GROUP_SIZE = 16
 
+
 GATED_PAIR_SUFFIXES = {
     ".gate_proj.weight": "gate",
     ".up_proj.weight": "up",
     ".w1.weight": "gate",
     ".w3.weight": "up",
+}
+
+W2_SUFFIXES = {
+    ".down_proj.weight": "w2",
+    ".w2.weight": "w2",
 }
 
 QKV_TRIPLET_SUFFIXES = {
@@ -21,16 +27,33 @@ QKV_TRIPLET_SUFFIXES = {
 }
 
 
+def _get_ignore_list(quantization_config) -> list[str]:
+    ignore = quantization_config.get("ignore", [])
+    if ignore is None:
+        return []
+    if not isinstance(ignore, list):
+        raise TypeError(f"quantization_config['ignore'] must be a list, got {type(ignore)}")
+    return [x for x in ignore if isinstance(x, str) and x]
+
+
+def _is_ignored_module_or_param(name: str, ignore_list: list[str]) -> bool:
+    for ignored in ignore_list:
+        if name == ignored or name.startswith(ignored + "."):
+            return True
+    return False
+
+
 def quantize_params_nvfp4(args, megatron_name, converted_named_params, quantization_config):
     assert quantization_config is not None
     assert quantization_config.get("quant_algo") == "NVFP4" or quantization_config.get("quant_method") == "nvfp4"
+
     group_size = _resolve_group_size(quantization_config)
+    ignore_list = _get_ignore_list(quantization_config)
 
     decoder_layers_pattern = r"decoder\.layers\.(\d+)\.(.+)"
     match = re.search(decoder_layers_pattern, megatron_name)
 
     if not match:
-        # check mtp layers
         mtp_layer_pattern = r"mtp\.layers\.(\d+)\.(.+)"
         match = re.search(mtp_layer_pattern, megatron_name)
         if not match:
@@ -40,49 +63,45 @@ def quantize_params_nvfp4(args, megatron_name, converted_named_params, quantizat
     else:
         _, rest = match.groups()
 
-    # q,k,v proj / o proj
+    # self attention: qkv / o_proj
     qkv_pattern = r"self_attention\.(.+)"
     match = re.match(qkv_pattern, rest)
     if match:
-        rest = match.groups()[0]
-        if rest in ["linear_qkv.weight"]:
-            return _quantize_qkv_params(converted_named_params, group_size)
-        if rest in ["linear_proj.weight"]:
-            return _quantize_dense_single_params(converted_named_params, group_size)
+        attn_rest = match.groups()[0]
+        if attn_rest in ["linear_qkv.weight"]:
+            return _quantize_qkv_params(converted_named_params, group_size, ignore_list)
+        if attn_rest in ["linear_proj.weight"]:
+            return _quantize_dense_single_params(converted_named_params, group_size, ignore_list)
 
-    # mlp proj
+    # IMPORTANT:
+    # MoE experts must be checked before the generic MLP branch.
+    # Otherwise "mlp.experts.linear_fc1.weight6" would be truncated to
+    # "experts.linear_fc1.weight6" and miss the expert branch.
+    expert_pattern = r"mlp\.experts\.(.+)\.weight(\d+)"
+    match = re.match(expert_pattern, rest)
+    if match:
+        expert_rest, _expert_id = match.groups()
+        if expert_rest in ["linear_fc1", "linear_fc2"]:
+            return _quantize_moe_params(converted_named_params, group_size, ignore_list)
+
+    # shared expert should also be checked before generic MLP.
+    shared_expert_pattern = r"mlp\.shared_experts\.(.+)"
+    match = re.match(shared_expert_pattern, rest)
+    if match:
+        shared_rest = match.groups()[0]
+        if shared_rest in ["linear_fc1.weight", "linear_fc2.weight"]:
+            return _quantize_moe_params(converted_named_params, group_size, ignore_list)
+
+    # ordinary dense MLP
     mlp_pattern = r"mlp\.(.+)"
     match = re.match(mlp_pattern, rest)
     if match:
-        rest = match.groups()[0]
-        if rest in ["linear_fc1.weight"]:
-            return _quantize_mlp_params(converted_named_params, group_size)
-        if rest in ["linear_fc2.weight"]:
-            return _quantize_dense_single_params(converted_named_params, group_size)
+        mlp_rest = match.groups()[0]
+        if mlp_rest in ["linear_fc1.weight"]:
+            return _quantize_mlp_params(converted_named_params, group_size, ignore_list)
+        if mlp_rest in ["linear_fc2.weight"]:
+            return _quantize_dense_single_params(converted_named_params, group_size, ignore_list)
 
-    # experts
-    expert_pattern = r"mlp.experts\.(.+)\.weight(\d+)"
-    match = re.match(expert_pattern, rest)
-    if match:
-        rest, _ = match.groups()
-        if rest in [
-            "linear_fc1",
-            "linear_fc2",
-        ]:
-            return _quantize_moe_params(converted_named_params, group_size)
-
-    # shared expert
-    shared_expert_pattern = r"mlp.shared_experts\.(.+)"
-    match = re.match(shared_expert_pattern, rest)
-    if match:
-        rest = match.groups()[0]
-        if rest in [
-            "linear_fc1.weight",
-            "linear_fc2.weight",
-        ]:
-            return _quantize_moe_params(converted_named_params, group_size)
-
-    # for other parameters, we just return the original converted_named_params
     return converted_named_params
 
 
@@ -93,14 +112,99 @@ def _resolve_group_size(quantization_config):
     return group_size
 
 
-def _quantize_moe_params(converted_named_params, group_size):
+def _quantize_moe_params(converted_named_params, group_size, ignore_list):
+    """
+    Quantize MoE expert weights for SGLang's HF-style MoE weight-loader path.
+
+    SGLang receives gate_proj/up_proj/down_proj keys and routes them into
+    packed internal w13/w2 storage. Therefore this function keeps the original
+    HF names, but converts tensor payloads from BF16/FP16/FP32 to NVFP4 packed
+    uint8 and appends corresponding scale tensors.
+    """
+    quantize_named_params = []
     shared_global_amax = {}
     gated_candidates = {}
+
+    # Collect gate/up pairs so they share the same global scale.
+    for converted_name, param in converted_named_params:
+        if not _should_quantize_param(converted_name, param, group_size, ignore_list):
+            continue
+
+        base, role = _split_gated_pair_name(converted_name)
+        if base is not None and role in ("gate", "up"):
+            gated_candidates.setdefault(base, {})[role] = param
+
+    for base, roles in gated_candidates.items():
+        if "gate" in roles and "up" in roles:
+            gate_amax = roles["gate"].abs().max().to(torch.float32)
+            up_amax = roles["up"].abs().max().to(torch.float32)
+            shared_global_amax[base] = torch.max(gate_amax, up_amax)
+
+    for converted_name, param in converted_named_params:
+        if not _should_quantize_param(converted_name, param, group_size, ignore_list):
+            quantize_named_params.append((converted_name, param))
+            continue
+
+        base, role = _split_gated_pair_name(converted_name)
+        w2_base = _split_w2_name(converted_name)
+
+        if base is not None and role in ("gate", "up"):
+            global_amax = shared_global_amax.get(base)
+
+            qweight, block_scale, weight_scale_2 = quantize_nvfp4(
+                param,
+                global_amax=global_amax,
+                group_size=group_size,
+            )
+
+            quantize_named_params.append((converted_name, qweight))
+            quantize_named_params.append((converted_name.replace(".weight", ".weight_scale"), block_scale))
+            quantize_named_params.append((converted_name.replace(".weight", ".weight_scale_2"), weight_scale_2))
+            quantize_named_params.append(
+                (converted_name.replace(".weight", ".input_scale"), torch.ones_like(weight_scale_2, dtype=torch.float32))
+            )
+            continue
+
+        if w2_base is not None:
+            qweight, block_scale, weight_scale_2 = quantize_nvfp4(
+                param,
+                global_amax=None,
+                group_size=group_size,
+            )
+
+            quantize_named_params.append((converted_name, qweight))
+            quantize_named_params.append((converted_name.replace(".weight", ".weight_scale"), block_scale))
+            quantize_named_params.append((converted_name.replace(".weight", ".weight_scale_2"), weight_scale_2))
+            quantize_named_params.append(
+                (converted_name.replace(".weight", ".input_scale"), torch.ones_like(weight_scale_2, dtype=torch.float32))
+            )
+            continue
+
+        qweight, block_scale, weight_scale_2 = quantize_nvfp4(
+            param,
+            global_amax=None,
+            group_size=group_size,
+        )
+
+        quantize_named_params.append((converted_name, qweight))
+        quantize_named_params.append((converted_name.replace(".weight", ".weight_scale"), block_scale))
+        quantize_named_params.append((converted_name.replace(".weight", ".weight_scale_2"), weight_scale_2))
+        quantize_named_params.append(
+            (converted_name.replace(".weight", ".input_scale"), torch.ones_like(weight_scale_2, dtype=torch.float32))
+        )
+
+    return quantize_named_params
+
+
+def _quantize_mlp_params(converted_named_params, group_size, ignore_list):
+    shared_global_amax = {}
+    gated_candidates = {}
+
     for converted_name, param in converted_named_params:
         base, role = _split_gated_pair_name(converted_name)
         if base is None or role is None:
             continue
-        if _should_quantize_param(converted_name, param, group_size):
+        if _should_quantize_param(converted_name, param, group_size, ignore_list):
             gated_candidates.setdefault(base, {})[role] = param
 
     for base, roles in gated_candidates.items():
@@ -111,12 +215,19 @@ def _quantize_moe_params(converted_named_params, group_size):
 
     quantize_named_params = []
     for converted_name, param in converted_named_params:
-        if not _should_quantize_param(converted_name, param, group_size):
+        if not _should_quantize_param(converted_name, param, group_size, ignore_list):
             quantize_named_params.append((converted_name, param))
             continue
+
         base, _role = _split_gated_pair_name(converted_name)
         global_amax = shared_global_amax.get(base) if base else None
-        qweight, block_scale, weight_scale_2 = quantize_nvfp4(param, global_amax=global_amax, group_size=group_size)
+
+        qweight, block_scale, weight_scale_2 = quantize_nvfp4(
+            param,
+            global_amax=global_amax,
+            group_size=group_size,
+        )
+
         quantize_named_params.append((converted_name, qweight))
         quantize_named_params.append((converted_name.replace(".weight", ".weight_scale"), block_scale))
         quantize_named_params.append((converted_name.replace(".weight", ".weight_scale_2"), weight_scale_2))
@@ -127,15 +238,11 @@ def _quantize_moe_params(converted_named_params, group_size):
     return quantize_named_params
 
 
-def _quantize_mlp_params(converted_named_params, group_size):
-    # dense fused linear_fc1 -> gate_proj/up_proj
-    return _quantize_moe_params(converted_named_params, group_size)
-
-
-def _quantize_dense_single_params(converted_named_params, group_size):
+def _quantize_dense_single_params(converted_named_params, group_size, ignore_list):
     quantize_named_params = []
+
     for converted_name, param in converted_named_params:
-        if not _should_quantize_param(converted_name, param, group_size):
+        if not _should_quantize_param(converted_name, param, group_size, ignore_list):
             quantize_named_params.append((converted_name, param))
             continue
 
@@ -144,6 +251,7 @@ def _quantize_dense_single_params(converted_named_params, group_size):
             global_amax=None,
             group_size=group_size,
         )
+
         quantize_named_params.append((converted_name, qweight))
         quantize_named_params.append((converted_name.replace(".weight", ".weight_scale"), block_scale))
         quantize_named_params.append((converted_name.replace(".weight", ".weight_scale_2"), weight_scale_2))
@@ -154,7 +262,7 @@ def _quantize_dense_single_params(converted_named_params, group_size):
     return quantize_named_params
 
 
-def _quantize_qkv_params(converted_named_params, group_size):
+def _quantize_qkv_params(converted_named_params, group_size, ignore_list):
     shared_global_amax = {}
     qkv_candidates = {}
 
@@ -162,7 +270,7 @@ def _quantize_qkv_params(converted_named_params, group_size):
         base, role = _split_qkv_triplet_name(converted_name)
         if base is None or role is None:
             continue
-        if _should_quantize_param(converted_name, param, group_size):
+        if _should_quantize_param(converted_name, param, group_size, ignore_list):
             qkv_candidates.setdefault(base, {})[role] = param
 
     for base, roles in qkv_candidates.items():
@@ -174,7 +282,7 @@ def _quantize_qkv_params(converted_named_params, group_size):
 
     quantize_named_params = []
     for converted_name, param in converted_named_params:
-        if not _should_quantize_param(converted_name, param, group_size):
+        if not _should_quantize_param(converted_name, param, group_size, ignore_list):
             quantize_named_params.append((converted_name, param))
             continue
 
@@ -186,6 +294,7 @@ def _quantize_qkv_params(converted_named_params, group_size):
             global_amax=global_amax,
             group_size=group_size,
         )
+
         quantize_named_params.append((converted_name, qweight))
         quantize_named_params.append((converted_name.replace(".weight", ".weight_scale"), block_scale))
         quantize_named_params.append((converted_name.replace(".weight", ".weight_scale_2"), weight_scale_2))
@@ -203,7 +312,9 @@ def _split_qkv_triplet_name(name: str):
     return None, None
 
 
-def _should_quantize_param(name, weight, group_size):
+def _should_quantize_param(name, weight, group_size, ignore_list=None):
+    if ignore_list and _is_ignored_module_or_param(name, ignore_list):
+        return False
     if not name.endswith(".weight"):
         return False
     if weight.dtype not in (torch.float16, torch.bfloat16, torch.float32):
@@ -222,9 +333,17 @@ def _split_gated_pair_name(name: str):
     return None, None
 
 
+def _split_w2_name(name: str):
+    for suffix in W2_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return None
+
+
 def cast_to_fp4x2(x: torch.Tensor) -> torch.Tensor:
     """Quantize a tensor to FP4 E2M1 and pack two values per byte."""
     result = torch.zeros_like(x, dtype=torch.uint8)
+
     result[(x >= 0.0) & (x <= 0.25)] = 0
     result[(x > 0.25) & (x < 0.75)] = 1
     result[(x >= 0.75) & (x <= 1.25)] = 2
@@ -248,7 +367,7 @@ def cast_to_fp4x2(x: torch.Tensor) -> torch.Tensor:
 
 def _quantize_nvfp4(
     x: torch.Tensor,
-    global_amax: torch.Tensor,
+    global_amax: torch.Tensor | None,
     pow_2_scales: bool = False,
     with_2d_quantization: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -259,35 +378,31 @@ def _quantize_nvfp4(
     x_f = x.to(torch.float32)
 
     if global_amax is None:
-        global_amax = torch.amax(torch.abs(x_f))  # scalar tensor (fp32, on device)
+        global_amax = torch.amax(torch.abs(x_f))
     else:
         global_amax = global_amax.to(device=x.device, dtype=torch.float32)
 
     assert x.ndim == 2
     m, n = x.shape
-    # Compute vec_max based on the original x (before reshape)
-    # For 1D quantization: amax over each row chunk of 16
-    # For 2D quantization: amax over each 16x16 block, but output shape is still (128, 8, 1), filled with block amax
+
     if with_2d_quantization:
-        # x shape: (128, 128)
         x_blocks = (
             x.unfold(0, tile_len_y, tile_len_y)
             .unfold(1, tile_len_x, tile_len_x)
             .to(torch.float32)
-        )  # (8, 8, 16, 16)
-        block_amax = torch.amax(torch.abs(x_blocks), dim=(-1, -2))  # (8, 8)
-        # Now, expand to (128, 8, 1) by repeating each block_amax for 16 rows
-        vec_max = block_amax.repeat_interleave(tile_len_y, dim=0).unsqueeze(-1)  # (128, 8, 1)
+        )
+        block_amax = torch.amax(torch.abs(x_blocks), dim=(-1, -2))
+        vec_max = block_amax.repeat_interleave(tile_len_y, dim=0).unsqueeze(-1)
     else:
-        # x shape: (128, 128)
-        x_reshaped = x.view(m, n // tile_len_x, tile_len_x)  # (128, 8, 16)
-        vec_max = torch.amax(torch.abs(x_reshaped), dim=-1, keepdim=True).to(
-            torch.float32
-        )  # (128, 8, 1)
+        x_reshaped = x.view(m, n // tile_len_x, tile_len_x)
+        vec_max = torch.amax(torch.abs(x_reshaped), dim=-1, keepdim=True).to(torch.float32)
+
     x = x.view(m, n // tile_len_x, tile_len_x)
-    FLOAT4_E2M1_MAX = torch.tensor(6.0, device=x.device, dtype=torch.float32)
-    FLOAT8_E4M3_MAX = torch.tensor(448.0, device=x.device, dtype=torch.float32)
-    decode_scale = torch.div(vec_max, FLOAT4_E2M1_MAX)
+
+    float4_e2m1_max = torch.tensor(FP4_E2M1_MAX, device=x.device, dtype=torch.float32)
+    float8_e4m3_max = torch.tensor(FP8_E4M3_MAX, device=x.device, dtype=torch.float32)
+
+    decode_scale = torch.div(vec_max, float4_e2m1_max)
 
     if pow_2_scales:
         decode_scale = cast_to_e8(decode_scale)
@@ -295,8 +410,9 @@ def _quantize_nvfp4(
             torch.tensor(1.0, device=x.device, dtype=torch.float32),
             decode_scale.to(torch.float32),
         )
+        global_decode_scale = torch.tensor(1.0, device=x.device, dtype=torch.float32)
     else:
-        global_encode_scale = torch.div(FLOAT8_E4M3_MAX * FLOAT4_E2M1_MAX, global_amax)
+        global_encode_scale = torch.div(float8_e4m3_max * float4_e2m1_max, global_amax)
         global_encode_scale = torch.min(
             global_encode_scale,
             torch.tensor(
@@ -305,8 +421,10 @@ def _quantize_nvfp4(
                 dtype=torch.float32,
             ),
         )
+
         if global_encode_scale == torch.tensor(0.0, device=x.device, dtype=torch.float32):
             global_encode_scale = torch.tensor(1.0, device=x.device, dtype=torch.float32)
+
         global_decode_scale = torch.div(1.0, global_encode_scale)
 
         decode_scale = decode_scale * global_encode_scale
@@ -318,7 +436,7 @@ def _quantize_nvfp4(
                 dtype=torch.float32,
             ),
         )
-        decode_scale = torch.clamp(decode_scale, min=-FLOAT8_E4M3_MAX, max=FLOAT8_E4M3_MAX)
+        decode_scale = torch.clamp(decode_scale, min=-float8_e4m3_max, max=float8_e4m3_max)
         decode_scale = decode_scale.to(torch.float8_e4m3fn)
 
         encode_scale = torch.min(
@@ -331,8 +449,7 @@ def _quantize_nvfp4(
         )
 
     scaled_x = x.to(torch.float32) * encode_scale
-
-    clipped_x = torch.clamp(scaled_x, -FLOAT4_E2M1_MAX, FLOAT4_E2M1_MAX).reshape(m, n)
+    clipped_x = torch.clamp(scaled_x, -float4_e2m1_max, float4_e2m1_max).reshape(m, n)
 
     return cast_to_fp4x2(clipped_x), decode_scale.squeeze(-1), global_decode_scale
 
@@ -344,20 +461,25 @@ def quantize_nvfp4(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     if weight.dim() == 2:
         return _quantize_nvfp4(weight, global_amax=global_amax)
+
     if weight.dim() == 3:
         if global_amax is not None:
             raise ValueError("global_amax override is only supported for 2D weights.")
+
         qweights = []
         block_scales = []
         global_scales = []
+
         for idx in range(weight.shape[0]):
-            qweight, block_scale, global_scale = _quantize_nvfp4(weight[idx], global_amax=global_amax)
+            qweight, block_scale, global_scale = _quantize_nvfp4(weight[idx], global_amax=None)
             qweights.append(qweight)
             block_scales.append(block_scale)
             global_scales.append(global_scale)
+
         return (
             torch.stack(qweights, dim=0),
             torch.stack(block_scales, dim=0),
             torch.stack(global_scales, dim=0),
         )
+
     raise ValueError(f"Unsupported weight rank {weight.dim()} for NVFP4 quantization.")
