@@ -78,10 +78,12 @@ class AnthropicAdapter(BaseAdapter):
             reasoning_parser=reasoning_parser,
         )
         # ONE manager shared across all sids; per-sid trees live inside.
-        self.manager = TrajectoryManager(
-            tokenizer=tokenizer,
-            tito_snapshot_min_loss_tokens=tito_snapshot_min_loss_tokens,
-        )
+        # ``None`` here means "caller did not specify" → let TrajectoryManager's
+        # own default take over. Pass an int (incl. 0 to disable) to override.
+        mgr_kwargs: dict[str, int] = {}
+        if tito_snapshot_min_loss_tokens is not None:
+            mgr_kwargs["tito_snapshot_min_loss_tokens"] = tito_snapshot_min_loss_tokens
+        self.manager = TrajectoryManager(**mgr_kwargs)
         # Optional debug hook invoked after each successful append_turn.
         # Signature: (sid, prompt_messages, tools, response_message,
         #             prompt_ids, response_ids, finish_reason) -> None.

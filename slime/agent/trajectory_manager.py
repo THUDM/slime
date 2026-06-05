@@ -205,20 +205,12 @@ class TrajectoryManager:
     def __init__(
         self,
         *,
-        tokenizer=None,
-        chat_template_kwargs: dict[str, Any] | None = None,
-        end_of_turn_token_id: int | None = None,
-        tito_snapshot_min_loss_tokens: int | None = None,
+        tito_snapshot_min_loss_tokens: int | None = 1024,
     ) -> None:
-        # tokenizer / chat_template_kwargs are no longer load-bearing under
-        # plan C, but the constructor signature is kept for callsite
-        # compatibility. _tokenizer is retained for forward-compat (callers
-        # constructing TrajectoryManager(tokenizer=tok) shouldn't break).
-        self._tokenizer = tokenizer
-        self._ct_kwargs: dict[str, Any] = dict(chat_template_kwargs or {})
-        self._end_of_turn_token_id = end_of_turn_token_id
         # Drift-snapshot threshold (loss_mask=1 token count inside drift suffix).
         # None or <= 0 disables; behavior then matches the pre-feature output.
+        # Default 1024 trades a small per-trajectory snapshot overhead for not
+        # silently dropping >1k loss tokens when TITO drift hits.
         self._snap_threshold: int | None = (
             tito_snapshot_min_loss_tokens
             if (tito_snapshot_min_loss_tokens is not None and tito_snapshot_min_loss_tokens > 0)
@@ -419,18 +411,29 @@ class TrajectoryManager:
             }
             per_leaf_reward = (reward / len(leaves)) if leaves else 0.0
 
+            # slime contract (see slime/backends/megatron_utils/data.py:139,
+            # slime/ray/rollout.py:695): ``loss_mask`` and ``rollout_log_probs``
+            # cover only the response region — i.e. tokens AFTER the initial
+            # prompt — and ``response_length == len(loss_mask)``. Strip the
+            # first turn's prompt prefix here so all downstream consumers see
+            # tokens/loss_mask/logprobs in their canonical alignment.
+            first_prompt_len = len(asst_chain[0].turn_prompt_ids or []) if asst_chain else 0
+
             # Emit snapshot sample(s) first, then the main-leaf sample.
             for snap_tokens, snap_mask, snap_lp, drift_turn, cur_chain_idx in snapshots:
                 snap_finish = None
                 prev_idx = cur_chain_idx - 1  # asst_chain index of the previous (prefix's last) turn
                 if 0 <= prev_idx < len(asst_chain):
                     snap_finish = asst_chain[prev_idx].turn_finish_reason
+                snap_strip = min(first_prompt_len, len(snap_mask))
+                snap_mask_resp = snap_mask[snap_strip:]
+                snap_lp_resp = snap_lp[snap_strip:]
                 snap_md = {
                     **base_md,
                     "finish_reason": snap_finish,
                     "tito_snapshot": True,
                     "tito_snapshot_at_turn": drift_turn,
-                    "tito_snapshot_loss_tokens": sum(snap_mask),
+                    "tito_snapshot_loss_tokens": sum(snap_mask_resp),
                 }
                 samples.append(
                     Sample(
@@ -439,16 +442,19 @@ class TrajectoryManager:
                         prompt=base_sample.prompt,
                         label=base_sample.label,
                         tokens=snap_tokens,
-                        response_length=sum(1 for m in snap_mask if m == 1),
-                        loss_mask=snap_mask,
-                        rollout_log_probs=snap_lp,
+                        response_length=len(snap_mask_resp),
+                        loss_mask=snap_mask_resp,
+                        rollout_log_probs=snap_lp_resp,
                         reward=per_leaf_reward,
                         status=Sample.Status.COMPLETED,
                         metadata=snap_md,
                     )
                 )
 
-            response_length = sum(1 for m in loss_mask if m == 1)
+            main_strip = min(first_prompt_len, len(loss_mask))
+            loss_mask_resp = loss_mask[main_strip:]
+            logprobs_resp = logprobs[main_strip:]
+            response_length = len(loss_mask_resp)
             main_md: dict[str, Any] = {
                 **base_md,
                 "finish_reason": last_asst.turn_finish_reason if last_asst else None,
@@ -466,8 +472,8 @@ class TrajectoryManager:
                     label=base_sample.label,
                     tokens=tokens,
                     response_length=response_length,
-                    loss_mask=loss_mask,
-                    rollout_log_probs=logprobs,
+                    loss_mask=loss_mask_resp,
+                    rollout_log_probs=logprobs_resp,
                     reward=per_leaf_reward,
                     status=Sample.Status.COMPLETED,
                     metadata=main_md,
