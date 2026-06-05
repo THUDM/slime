@@ -282,6 +282,8 @@ to it.
 
 > **Note:** `--sglang-config` and `--rollout-external-engine-addrs` are mutually exclusive. Use `--sglang-config` when you want slime to manage the full engine lifecycle; use `--rollout-external-engine-addrs` when engines are pre-deployed.
 
+For external-engine selection, update from disk, and delta disk transport, see [External Rollout Engines Roadmap](external-rollout-engines.md).
+
 ---
 
 ## Router Configuration

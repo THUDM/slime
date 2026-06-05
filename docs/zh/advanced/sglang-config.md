@@ -281,6 +281,8 @@ slime 会自己启动 router，并把这些外部引擎注册进去。
 
 > **注意：** `--sglang-config` 和 `--rollout-external-engine-addrs` 互斥。当你希望 slime 管理完整的引擎生命周期时，使用 `--sglang-config`；当引擎已预部署时，使用 `--rollout-external-engine-addrs`。
 
+关于 external engine 的选择、update from disk 和 delta disk transport，见 [External Rollout Engines 配置路线图](external-rollout-engines.md)。
+
 ---
 
 ## Router 配置

@@ -37,6 +37,7 @@ Start by Use Case
 - Add custom generation, reward, or rollout functions: :doc:`get_started/customization`
 - Build agentic RL workflows: :doc:`get_started/agent`
 - Configure production SGLang rollout topology: :doc:`advanced/sglang-config`
+- Connect external rollout engines: :doc:`advanced/external-rollout-engines`
 - Use PD disaggregation: :doc:`advanced/pd-disaggregation`
 - Use BF16 training with FP8 rollout or FP8 KV cache: :doc:`advanced/low-precision`
 - Use delta weight sync: :doc:`advanced/delta-weight-sync`
@@ -79,6 +80,7 @@ Start by Use Case
    advanced/reproducibility.md
    advanced/fault-tolerance.md
    advanced/pd-disaggregation.md
+   advanced/external-rollout-engines.md
    advanced/delta-weight-sync.md
    advanced/sglang-config.md
    advanced/megatron-config.md

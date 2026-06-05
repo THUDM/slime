@@ -42,7 +42,7 @@ slime is not just a framework that can call an inference backend. It keeps the M
 - [PD Disaggregation](docs/en/advanced/pd-disaggregation.md) for multi-turn and agentic workloads with different prefill/decode resource needs;
 - router policies such as session affinity for multi-turn agents;
 - [Delta Weight Sync](docs/en/advanced/delta-weight-sync.md) for training/inference disaggregation and large-model update efficiency;
-- external rollout engines for deployments where serving is managed outside the training job.
+- [External Rollout Engines](docs/en/advanced/external-rollout-engines.md) for deployments where serving is managed outside the training job, including full-checkpoint update from disk and delta update over a shared filesystem.
 
 This pass-through design makes slime native from the start. Most upstream engine improvements remain accessible as the engines evolve, while slime focuses on the RL loop, dataflow, synchronization, and correctness checks.
 

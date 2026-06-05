@@ -13,7 +13,7 @@ Slime's default sync broadcasts every parameter every step. The cost scales line
 
 The motivating use case is **training/inference disaggregation** — running the trainer and the rollout engines in *different datacenters* over a shared filesystem with bandwidth on the order of 100s of MB/s, where a full broadcast is infeasible but a sparse delta (~3% density, ~5 GB for a 355B model) is. The same delta machinery also runs over NCCL inside a single datacenter, where it serves as the validation baseline that proves the wire encoding and apply logic are correct.
 
-Prior art: selective overwrite is inspired by [arXiv:2509.19128](https://arxiv.org/abs/2509.19128); the cross-DC disaggregation motivation is from [Fireworks AI — Frontier RL Is Cheaper Than You Think](https://fireworks.ai/blog/frontier-rl-is-cheaper-than-you-think).
+Prior art: selective overwrite is inspired by [arXiv:2509.19128](https://arxiv.org/abs/2509.19128); the cross-DC disaggregation motivation is from [Fireworks AI — Frontier RL Is Cheaper Than You Think](https://fireworks.ai/blog/frontier-rl-is-cheaper-than-you-think). Another public production-shaped reference is the [Composer 2 technical report by the Cursor Research Team](https://arxiv.org/html/2603.24477v2), which describes Cursor partnering with Fireworks AI for RL inference and syncing every training-step update through shared S3, delta compression, and cross-region inference-cluster reconstruction.
 
 ## Quick Start
 
