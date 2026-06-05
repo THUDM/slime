@@ -54,7 +54,7 @@
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="SGLang Config: Advanced Engine Deployment" href="sglang-config.html" />
-    <link rel="prev" title="PD Disaggregation" href="pd-disaggregation.html" />
+    <link rel="prev" title="External Rollout Engines Roadmap" href="external-rollout-engines.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
@@ -179,6 +179,7 @@
 <li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fault-tolerance.html">Fault Tolerance</a></li>
 <li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD Disaggregation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="external-rollout-engines.html">External Rollout Engines Roadmap</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Delta Weight Sync</a></li>
 <li class="toctree-l1"><a class="reference internal" href="sglang-config.html">SGLang Config: Advanced Engine Deployment</a></li>
 <li class="toctree-l1"><a class="reference internal" href="megatron-config.html">Megatron Config: Role-Based Training Overrides</a></li>
@@ -465,7 +466,7 @@
 <h2>Why<a class="headerlink" href="#why" title="Link to this heading">#</a></h2>
 <p>Slime’s default sync broadcasts every parameter every step. The cost scales linearly with model size and dominates the sync phase, even though only a few percent of weights change between consecutive RL steps. Delta sync keeps a pinned-CPU snapshot of the last broadcast and ships only the positions whose bytes differ.</p>
 <p>The motivating use case is <strong>training/inference disaggregation</strong> — running the trainer and the rollout engines in <em>different datacenters</em> over a shared filesystem with bandwidth on the order of 100s of MB/s, where a full broadcast is infeasible but a sparse delta (~3% density, ~5 GB for a 355B model) is. The same delta machinery also runs over NCCL inside a single datacenter, where it serves as the validation baseline that proves the wire encoding and apply logic are correct.</p>
-<p>Prior art: selective overwrite is inspired by <a class="reference external" href="https://arxiv.org/abs/2509.19128">arXiv:2509.19128</a>; the cross-DC disaggregation motivation is from <a class="reference external" href="https://fireworks.ai/blog/frontier-rl-is-cheaper-than-you-think">Fireworks AI — Frontier RL Is Cheaper Than You Think</a>.</p>
+<p>Prior art: selective overwrite is inspired by <a class="reference external" href="https://arxiv.org/abs/2509.19128">arXiv:2509.19128</a>; the cross-DC disaggregation motivation is from <a class="reference external" href="https://fireworks.ai/blog/frontier-rl-is-cheaper-than-you-think">Fireworks AI — Frontier RL Is Cheaper Than You Think</a>. Another public production-shaped reference is the <a class="reference external" href="https://arxiv.org/html/2603.24477v2">Composer 2 technical report by the Cursor Research Team</a>, which describes Cursor partnering with Fireworks AI for RL inference and syncing every training-step update through shared S3, delta compression, and cross-region inference-cluster reconstruction.</p>
 </section>
 <section id="quick-start">
 <h2>Quick Start<a class="headerlink" href="#quick-start" title="Link to this heading">#</a></h2>
@@ -600,12 +601,12 @@ decides <strong>how</strong> it reaches SGLang.</p>
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="pd-disaggregation.html"
+       href="external-rollout-engines.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">PD Disaggregation</p>
+        <p class="prev-next-title">External Rollout Engines Roadmap</p>
       </div>
     </a>
     <a class="right-next"

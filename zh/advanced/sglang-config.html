@@ -179,6 +179,7 @@
 <li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fault-tolerance.html">容灾</a></li>
 <li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD 分离</a></li>
+<li class="toctree-l1"><a class="reference internal" href="external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
 <li class="toctree-l1"><a class="reference internal" href="delta-weight-sync.html">Delta 权重同步</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">SGLang Config：高级引擎部署</a></li>
 <li class="toctree-l1"><a class="reference internal" href="megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
@@ -817,6 +818,7 @@ slime 会自己启动 router，并把这些外部引擎注册进去。</p>
 <blockquote>
 <div><p><strong>注意：</strong> <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code> 互斥。当你希望 slime 管理完整的引擎生命周期时，使用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code>；当引擎已预部署时，使用 <code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code>。</p>
 </div></blockquote>
+<p>关于 external engine 的选择、update from disk 和 delta disk transport，见 <a class="reference internal" href="external-rollout-engines.html"><span class="std std-doc">External Rollout Engines 配置路线图</span></a>。</p>
 </section>
 </section>
 <hr class="docutils" />

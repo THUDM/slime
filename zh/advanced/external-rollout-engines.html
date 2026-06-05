@@ -1,0 +1,691 @@
+
+<!DOCTYPE html>
+
+
+<html lang="zh" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>External Rollout Engines 配置路线图 &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=3c74b3bc" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../_static/documentation_options.js?v=30c3115b"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/external-rollout-engines';</script>
+    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="next" title="Delta 权重同步" href="delta-weight-sync.html" />
+    <link rel="prev" title="PD 分离" href="pd-disaggregation.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="zh"/>
+  <meta name="docsearch:version" content="0.0.1" />
+    <meta name="docbuild:last-update" content="2026 年 06 月 05 日"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">跳转至主要内容</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>回到顶部</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="版本警告"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <img src="../_static/logo.jpg" class="logo__image only-dark pst-js-only" alt="slime - Home"/>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">搜索</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">快速使用</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">使用文档</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">自定义指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/agent.html">Agentic RL 训练路线图</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">常见 Q&amp;A</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">投机采样</a></li>
+<li class="toctree-l1"><a class="reference internal" href="low-precision.html">低精度训练与 Rollout</a></li>
+<li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
+<li class="toctree-l1"><a class="reference internal" href="fault-tolerance.html">容灾</a></li>
+<li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD 分离</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">External Rollout Engines 配置路线图</a></li>
+<li class="toctree-l1"><a class="reference internal" href="delta-weight-sync.html">Delta 权重同步</a></li>
+<li class="toctree-l1"><a class="reference internal" href="sglang-config.html">SGLang Config：高级引擎部署</a></li>
+<li class="toctree-l1"><a class="reference internal" href="megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
+<li class="toctree-l1"><a class="reference internal" href="arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI（持续集成）</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace 可视化</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="源码库"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/advanced/external-rollout-engines.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/advanced/external-rollout-engines.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fadvanced/external-rollout-engines.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="创建议题"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="下载此页面">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/advanced/external-rollout-engines.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="下载源文件"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="列印成 PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button pst-navbar-icon"
+  title="全屏模式"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="亮色"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="暗色"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button>
+
+
+<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+</button>
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>External Rollout Engines 配置路线图</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> 目录 </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">从哪里开始</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#external-engine">External Engine 做了什么</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-config">与 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 的关系</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">环境与硬件解耦</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#update-from-disk">Update From Disk</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#update-with-delta">Update With Delta</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">部署检查清单</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">参考工作</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="external-rollout-engines">
+<h1>External Rollout Engines 配置路线图<a class="headerlink" href="#external-rollout-engines" title="链接到此标题。">#</a></h1>
+<p>External rollout engine 指的是：SGLang engine 不由 slime 训练任务启动，而是由外部系统预先部署和管理；slime 只在训练时连接这些 engine，注册 router，并在需要时同步训练后的 actor 权重。</p>
+<p>这篇文档是一个导航页。它帮助你判断什么时候该用 <code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code>，什么时候该继续使用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code>，以及 external 场景下该选择 full checkpoint update from disk 还是 delta update。</p>
+<section id="id1">
+<h2>从哪里开始<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head text-left"><p>目标</p></th>
+<th class="head text-left"><p>推荐入口</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-left"><p>engine 已经由外部系统启动，只想让 slime 连接并做 rollout</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code></p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>engine 仍由 slime 启动，但需要 PD 分离、多模型、异构 server group 或 per-group overrides</p></td>
+<td class="text-left"><p><a class="reference internal" href="sglang-config.html"><span class="std std-doc">SGLang Config</span></a></p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>训练器和 external engine 可以建立 NCCL group</p></td>
+<td class="text-left"><p>默认的 <code class="docutils literal notranslate"><span class="pre">--update-weight-mode</span> <span class="pre">full</span> <span class="pre">--update-weight-transport</span> <span class="pre">nccl</span></code></p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>训练器和 external engine 不能建立 NCCL group，但能共享同一路径的文件系统</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">--update-weight-mode</span> <span class="pre">full</span> <span class="pre">--update-weight-transport</span> <span class="pre">disk</span></code></p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>大模型跨集群或跨数据中心同步，full checkpoint 太重</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">--update-weight-mode</span> <span class="pre">delta</span> <span class="pre">--update-weight-transport</span> <span class="pre">disk</span></code></p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>rollout serving 想使用独立 SGLang 环境，甚至不同型号或不同厂家的 GPU</p></td>
+<td class="text-left"><p>external engine + disk transport</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>想验证 delta wire/apply 逻辑，但仍在同一数据中心内</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">--update-weight-mode</span> <span class="pre">delta</span> <span class="pre">--update-weight-transport</span> <span class="pre">nccl</span></code></p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>需要 reference、reward、tool-side model 等冻结模型</p></td>
+<td class="text-left"><p>优先用 <a class="reference internal" href="sglang-config.html#id8"><span class="std std-ref">SGLang Config</span></a> 的 <code class="docutils literal notranslate"><span class="pre">update_weights:</span> <span class="pre">false</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="external-engine">
+<h2>External Engine 做了什么<a class="headerlink" href="#external-engine" title="链接到此标题。">#</a></h2>
+<p>使用 external engine 时，先独立启动 SGLang server：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>sglang.launch_server<span class="w"> </span>--model-path<span class="w"> </span>/path/to/model<span class="w"> </span>--port<span class="w"> </span><span class="m">10090</span><span class="w"> </span>...
+python<span class="w"> </span>-m<span class="w"> </span>sglang.launch_server<span class="w"> </span>--model-path<span class="w"> </span>/path/to/model<span class="w"> </span>--port<span class="w"> </span><span class="m">10091</span><span class="w"> </span>...
+</pre></div>
+</div>
+<p>训练任务里传入这些地址：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-external-engine-addrs<span class="w"> </span>host1:10090<span class="w"> </span>host2:10091<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>...
+</pre></div>
+</div>
+<p>slime 会请求每个 engine 的 <code class="docutils literal notranslate"><span class="pre">/server_info</span></code> 或 <code class="docutils literal notranslate"><span class="pre">/get_server_info</span></code>，推断 engine 的 GPU 数、TP/PP 信息和 worker 类型（<code class="docutils literal notranslate"><span class="pre">regular</span></code>、<code class="docutils literal notranslate"><span class="pre">prefill</span></code>、<code class="docutils literal notranslate"><span class="pre">decode</span></code>）。如果没有提供 <code class="docutils literal notranslate"><span class="pre">--sglang-router-ip/--sglang-router-port</span></code>，slime 会启动自己的 router，并把这些 external engine 注册进去。</p>
+<p>这条路径适合 serving 生命周期由训练任务外部管理的部署：例如独立的推理集群、跨 Ray 集群部署、手工预热的 SGLang engine，或由其他编排系统管理的 rollout service。</p>
+</section>
+<section id="sglang-config">
+<h2>与 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 的关系<a class="headerlink" href="#sglang-config" title="链接到此标题。">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 互斥，因为它们负责不同的边界：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code>：slime 负责 engine 生命周期。你用 YAML 描述 topology，slime 启动 server group、router，并管理多模型和选择性权重更新。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code>：外部系统负责 engine 生命周期。slime 只发现已启动的 engine，接入 router，并把它们当作默认 rollout model。</p></li>
+</ul>
+<p>如果你的主要需求是多模型 serving、reference/reward 冻结模型、PD 分离或异构组配置，优先使用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code>。如果 engine 已经在训练任务外部部署好，再使用 external engine。</p>
+</section>
+<section id="id2">
+<h2>环境与硬件解耦<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
+<p>External engine 的一个重要含义是：SGLang serving 侧不需要使用 slime 训练任务的 Python 环境、Megatron 环境或 Ray runtime。它可以运行在单独的 SGLang 容器、独立集群或其他编排系统里；slime 只依赖 HTTP endpoint、<code class="docutils literal notranslate"><span class="pre">/server_info</span></code> 信息，以及所选权重同步方式需要的通信路径。</p>
+<p>当使用 disk transport 时，权重通过共享文件系统上的 HF checkpoint 或 safetensors delta 传递，再由 SGLang 通过 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> 热加载。这条路径不要求训练 GPU 和 rollout GPU 是同一型号，甚至不要求是同一厂家；只要 SGLang 本身支持该硬件后端、模型格式和精度配置即可。例如训练可以在一组 GPU 上运行，rollout serving 可以放在另一组不同型号或不同厂家的 GPU 上。</p>
+<p>如果使用 NCCL transport，则仍然需要满足 NCCL 通信和硬件兼容性要求。跨厂家、跨不兼容网络或跨数据中心部署通常应选择 <code class="docutils literal notranslate"><span class="pre">--update-weight-transport</span> <span class="pre">disk</span></code>。</p>
+</section>
+<section id="update-from-disk">
+<h2>Update From Disk<a class="headerlink" href="#update-from-disk" title="链接到此标题。">#</a></h2>
+<p>full checkpoint update from disk 是 external 场景最简单的兜底路径：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>full
+--update-weight-transport<span class="w"> </span>disk
+--update-weight-disk-dir<span class="w"> </span>/shared/fs/full-updates
+</pre></div>
+</div>
+<p>每次权重同步时，训练端会在 <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code> 下写一个完整 HF checkpoint 目录，例如 <code class="docutils literal notranslate"><span class="pre">weight_v000123/</span></code>，然后通过 HTTP 调用每个 SGLang engine 的 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code>，让 engine 在不重启进程的情况下重新加载 checkpoint。</p>
+<p>这个模式的优点是控制面简单：不要求训练器和 engine 建 NCCL group，只要求二者能看到同一个共享文件系统路径。缺点也直接：每次同步都写完整 actor 权重，对大模型和高频同步来说非常重。</p>
+<p>调试时可以加：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-disk-keep-files
+</pre></div>
+</div>
+<p>这样 slime 不会在 engine 确认加载后清理完整 checkpoint 目录，方便检查写出的 HF checkpoint。</p>
+</section>
+<section id="update-with-delta">
+<h2>Update With Delta<a class="headerlink" href="#update-with-delta" title="链接到此标题。">#</a></h2>
+<p>delta update 面向大模型、跨集群或跨数据中心训推解耦。它不写完整 checkpoint，而是在训练端保留上一次同步后的 pinned CPU snapshot，逐字节检测变化，只发送变化位置和值。</p>
+<p>跨集群 / 共享文件系统推荐：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>delta
+--update-weight-transport<span class="w"> </span>disk
+--update-weight-encoding<span class="w"> </span>deltas_zstd
+--update-weight-disk-dir<span class="w"> </span>/shared/fs/delta-updates
+</pre></div>
+</div>
+<p>在 disk transport 下，每次同步会写一组稀疏 safetensors 到 <code class="docutils literal notranslate"><span class="pre">weight_v{N:06d}/</span></code>，然后调用 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk(load_format=&quot;delta&quot;)</span></code>。SGLang 侧只把变化位置覆写到当前权重上，不变位置保持原值。</p>
+<p>在同一数据中心内做实现验证或带宽不紧张时，也可以用 NCCL transport：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>delta
+--update-weight-transport<span class="w"> </span>nccl
+--update-weight-encoding<span class="w"> </span>indices
+</pre></div>
+</div>
+<p>编码如何选择、delta wire layout、接收端 selective overwrite 以及调优参数见 <a class="reference internal" href="delta-weight-sync.html"><span class="std std-doc">Delta 权重同步</span></a>。</p>
+</section>
+<section id="id3">
+<h2>部署检查清单<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
+<ul class="simple">
+<li><p>external engine 的 HTTP 地址必须能从训练任务访问。</p></li>
+<li><p>external engine 可以使用独立 SGLang 环境；不需要安装 slime 或 Megatron 训练环境。</p></li>
+<li><p>disk transport 支持训练和 rollout 使用不同型号或不同厂家的 GPU，前提是 SGLang 支持对应硬件和模型格式。</p></li>
+<li><p>disk transport 要求训练端和 SGLang engine 看到同一个 <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code> 路径；路径只在训练端可见是不够的。</p></li>
+<li><p>external engine 当前不支持 slime 的 fault tolerance 恢复流程；engine 生命周期由外部系统负责。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 与 <code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code> 互斥。</p></li>
+<li><p>delta mode 不支持 <code class="docutils literal notranslate"><span class="pre">--colocate</span></code>，因为 colocated 权重同步通过 CUDA IPC 传句柄，delta 编码不会节省实际传输量。</p></li>
+</ul>
+</section>
+<section id="id4">
+<h2>参考工作<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
+<p><a class="reference external" href="https://arxiv.org/html/2603.24477v2">Cursor Research Team 的 Composer 2 技术报告</a> 公开描述了一个相近的生产形态：训练和 rollout generation 高度异步，Cursor 与 Fireworks AI 合作运行 RL inference；每个训练 step 都把更新后的权重写到共享 S3，并用 delta compression 降低传输量，不同区域的 inference 集群再从共享 delta chain 下载并重建权重。</p>
+<p>slime 的 external engine、update from disk 和 delta disk transport 面向同一类基础设施问题：训练与推理解耦后，权重同步必须能跨进程、跨集群甚至跨数据中心工作，同时不能让训练主循环被完整模型传输拖住。</p>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="pd-disaggregation.html"
+       title="上一页">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">上一页</p>
+        <p class="prev-next-title">PD 分离</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="delta-weight-sync.html"
+       title="下一页">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">下一页</p>
+        <p class="prev-next-title">Delta 权重同步</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> 目录
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">从哪里开始</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#external-engine">External Engine 做了什么</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-config">与 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 的关系</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">环境与硬件解耦</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#update-from-disk">Update From Disk</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#update-with-delta">Update With Delta</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">部署检查清单</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">参考工作</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+作者： slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  最后更新于 2026 年 06 月 05 日.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>
