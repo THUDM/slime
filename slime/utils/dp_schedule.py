@@ -44,17 +44,13 @@ import logging
 from typing import Any
 
 from slime.utils.flops_utils import calculate_fwd_flops
-from slime.utils.seqlen_balancing import (
-    expand_bins_by_splitting,
-    first_fit_pack,
-    get_seqlen_balanced_partitions,
-)
+from slime.utils.seqlen_balancing import expand_bins_by_splitting, first_fit_pack, get_seqlen_balanced_partitions
 
 logger = logging.getLogger(__name__)
 
 
 def _calculate_workloads(step_lengths, args):
-    return [calculate_fwd_flops([l], args) for l in step_lengths]
+    return [calculate_fwd_flops([sl], args) for sl in step_lengths]
 
 
 def _pack_step_into_mbs(

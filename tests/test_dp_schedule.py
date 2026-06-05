@@ -295,11 +295,11 @@ def test_balance_by_flops_basic():
     args.workload_coeff = 26624  # Qwen3-8B SwiGLU: 2*4096 + 3*12288//2
     tp = make_tp(dp_size=2)
     total_lengths = [2000, 8000, 3000, 1500, 5000, 4000, 7000, 500]
-    p, mbi, nmb, gbs = build_dp_schedule(
-        args, tp, total_lengths, global_batch_size=8, group_indices=list(range(8))
-    )
+    p, mbi, nmb, gbs = build_dp_schedule(args, tp, total_lengths, global_batch_size=8, group_indices=list(range(8)))
     assert_invariants(
-        p, mbi, nmb,
+        p,
+        mbi,
+        nmb,
         dp_size=2,
         expected_global_sample_indices=range(8),
         total_lengths=total_lengths,
@@ -318,11 +318,11 @@ def test_balance_by_flops_workload_aware():
     args_fb = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=12000)
     args_fb.balance_by_flops = True
     args_fb.workload_coeff = 26624
-    p, mbi, nmb, _ = build_dp_schedule(
-        args_fb, tp, total_lengths, global_batch_size=4, group_indices=list(range(4))
-    )
+    p, mbi, nmb, _ = build_dp_schedule(args_fb, tp, total_lengths, global_batch_size=4, group_indices=list(range(4)))
     assert_invariants(
-        p, mbi, nmb,
+        p,
+        mbi,
+        nmb,
         dp_size=2,
         expected_global_sample_indices=range(4),
         total_lengths=total_lengths,

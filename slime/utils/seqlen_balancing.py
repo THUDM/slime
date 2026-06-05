@@ -185,8 +185,8 @@ def calculate_workload(seqlen_list, coeff=24576):
     (see ``slime_validate_args`` in arguments.py).  Default 24576 = 6*4096.
     """
     if isinstance(seqlen_list, list):
-        return [coeff * l + l * l for l in seqlen_list]
-    return coeff * seqlen_list + seqlen_list ** 2
+        return [coeff * sl + sl * sl for sl in seqlen_list]
+    return coeff * seqlen_list + seqlen_list**2
 
 
 def first_fit_pack(total_lengths, max_tokens_per_bin):
