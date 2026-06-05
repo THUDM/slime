@@ -113,12 +113,30 @@ class _State(metaclass=SingletonMeta):
                     _snap_env,
                 )
                 _snap_threshold = None
+        # Fork-merge threshold: same env-override convention. Triggers the
+        # rescue path in trajectory_manager when claude-code reformats a prior
+        # assistant message and the existing sibling's response is short
+        # enough to mask out instead of forking the tree.
+        _fork_merge_env = os.environ.get("SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS")
+        _fork_merge_threshold: int | None
+        if _fork_merge_env is None:
+            _fork_merge_threshold = None
+        else:
+            try:
+                _fork_merge_threshold = int(_fork_merge_env)
+            except ValueError:
+                logger.warning(
+                    "SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS=%r is not an int; falling back to TrajectoryManager default",
+                    _fork_merge_env,
+                )
+                _fork_merge_threshold = None
         self.adapter = AnthropicAdapter(
             tokenizer=self.tokenizer,
             sglang_url=sglang_url,
             tool_parser=self.tool_parser,
             reasoning_parser=self.reasoning_parser,
             tito_snapshot_min_loss_tokens=_snap_threshold,
+            fork_merge_max_response_tokens=_fork_merge_threshold,
         )
         # handler_cancellation=True so a client disconnect cancels the handler
         # coroutine, arming the fire-and-forget /abort_request inside the

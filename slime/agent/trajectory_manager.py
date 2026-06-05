@@ -189,6 +189,25 @@ def _lcp_len(a: list[int], b: list[int]) -> int:
     return i
 
 
+def _short_text_preview(messages: list[dict[str, Any]], *, limit: int) -> str:
+    """Compact text preview of an assistant message block for log lines.
+
+    Extracts string ``content`` and any ``{"text": "..."}`` content blocks
+    (anthropic-style); falls back to the empty string if nothing parseable.
+    """
+    parts: list[str] = []
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, str):
+            parts.append(c)
+        elif isinstance(c, list):
+            for blk in c:
+                if isinstance(blk, dict) and isinstance(blk.get("text"), str):
+                    parts.append(blk["text"])
+    s = " ".join(parts).strip()
+    return s[:limit] + ("…" if len(s) > limit else "")
+
+
 # ===========================================================================
 # TrajectoryManager
 # ===========================================================================
@@ -205,15 +224,24 @@ class TrajectoryManager:
     def __init__(
         self,
         *,
-        tito_snapshot_min_loss_tokens: int | None = 1024,
+        tito_snapshot_min_loss_tokens: int | None = None,
+        fork_merge_max_response_tokens: int | None = None,
     ) -> None:
         # Drift-snapshot threshold (loss_mask=1 token count inside drift suffix).
         # None or <= 0 disables; behavior then matches the pre-feature output.
-        # Default 1024 trades a small per-trajectory snapshot overhead for not
-        # silently dropping >1k loss tokens when TITO drift hits.
         self._snap_threshold: int | None = (
             tito_snapshot_min_loss_tokens
             if (tito_snapshot_min_loss_tokens is not None and tito_snapshot_min_loss_tokens > 0)
+            else None
+        )
+        # Fork-merge threshold: when DFS would break at an assistant group and
+        # exactly one non-leaf assistant sibling has turn_response_ids length
+        # STRICTLY LESS than this value, collapse the would-be fork onto that
+        # sibling (its response then enters trajectories with loss_mask=0).
+        # None or <= 0 disables; behavior matches pre-feature output.
+        self._fork_merge_threshold: int | None = (
+            fork_merge_max_response_tokens
+            if (fork_merge_max_response_tokens is not None and fork_merge_max_response_tokens > 0)
             else None
         )
         self._trees: dict[str, Node] = {}
@@ -269,6 +297,62 @@ class TrajectoryManager:
                 break
             cur = match
             i += 1
+
+        # Step 1.5: assistant fork-merge rescue (opt-in via
+        # fork_merge_max_response_tokens). The typical claude-code pattern is:
+        # a later replay reformats an earlier assistant message (e.g. tool_call
+        # arg ordering, whitespace), which breaks the DFS at that assistant
+        # group. Without rescue, every such reformat spawns a new sibling
+        # subtree; with rescue, when the existing sibling's per-turn response
+        # is short enough that masking it out is the cheaper trade-off, we
+        # collapse onto that sibling and mark it for mask=0 at linearization.
+        if i < len(groups) and self._fork_merge_threshold is not None and groups[i].role == "assistant":
+            candidates = [
+                c
+                for c in cur.children
+                if c.role == "assistant"
+                # Real rewrite footprint = the original turn's leaf assistant
+                # node: it was inserted by Step-3 of a prior turn (so
+                # turn_response_ids is populated), and no later turn has
+                # extended it (so it is still a leaf). Once a rewrite collapses
+                # onto it via this rescue, the new turn's user/tool + asst leaf
+                # are appended underneath as children — so the merge target
+                # MUST be a leaf at decision time, otherwise it has already
+                # diverged into mixed subchains and merging would tangle them.
+                and not c.children
+                and c.turn_response_ids is not None
+                and len(c.turn_response_ids) < self._fork_merge_threshold
+            ]
+            if len(candidates) == 1:
+                sib = candidates[0]
+                masked = len(sib.turn_response_ids or [])
+                preview = _short_text_preview(sib.messages, limit=160)
+                logger.warning(
+                    "append_turn(sid=%s turn=%s): fork-merging assistant rewrite "
+                    "into existing sibling (turn_index=%s, masked_response_tokens=%d, "
+                    "sibling_response_preview=%r)",
+                    sid,
+                    self._turn_count.get(sid, 0) + 1,
+                    sib.turn_index,
+                    masked,
+                    preview,
+                )
+                sib.metadata["fork_merged"] = True
+                sib.metadata["fork_merge_masked_tokens"] = masked
+                cur = sib
+                i += 1
+            elif len(candidates) >= 2:
+                # Legacy / pathological state: fork_merge wasn't on during
+                # earlier rewrites, or threshold was widened mid-session.
+                # Don't pick arbitrarily — fork as usual and surface a hint.
+                logger.warning(
+                    "append_turn(sid=%s turn=%s): multiple eligible fork-merge "
+                    "candidates (%d), refusing to merge — likely a legacy state "
+                    "from a prior run without fork_merge enabled; forking instead.",
+                    sid,
+                    self._turn_count.get(sid, 0) + 1,
+                    len(candidates),
+                )
 
         # Step 2: mount remaining prompt groups as plain routing nodes.
         # Token attribution happens at get_trajectory time, not here.
@@ -350,12 +434,15 @@ class TrajectoryManager:
             logprobs: list[float] = []
             total_dropped = 0
             dropped_turns = 0
+            fork_merge_masked_total = 0
+            fork_merge_turns_total = 0
             snapshots: list[tuple[list[int], list[int], list[float], int, int]] = []
 
             for k, asst in enumerate(asst_chain, start=1):
                 p = list(asst.turn_prompt_ids or [])
                 r = list(asst.turn_response_ids or [])
                 lp = list(asst.turn_response_logprobs) if asst.turn_response_logprobs is not None else None
+                is_merged = bool(asst.metadata.get("fork_merged"))
 
                 if k == 1:
                     emit_prompt = p
@@ -395,11 +482,18 @@ class TrajectoryManager:
                 logprobs.extend([0.0] * len(emit_prompt))
 
                 tokens.extend(r)
-                loss_mask.extend([1] * len(r))
+                # fork-merged sibling: its response is "stale" — present in the
+                # tree only as a routing placeholder for the rewrites that
+                # collapsed onto it; mask it out of training.
+                loss_mask.extend([0 if is_merged else 1] * len(r))
                 if lp is not None:
                     logprobs.extend(lp)
                 else:
                     logprobs.extend([0.0] * len(r))
+
+                if is_merged:
+                    fork_merge_masked_total += len(r)
+                    fork_merge_turns_total += 1
 
             last_asst = asst_chain[-1] if asst_chain else None
             first_sys = next((n for n in chain if n.role == "system"), None)
@@ -464,6 +558,9 @@ class TrajectoryManager:
                 main_md["tito_dropped_turns"] = dropped_turns
             if snapshots:
                 main_md["tito_snapshots_emitted"] = len(snapshots)
+            if fork_merge_masked_total > 0:
+                main_md["fork_merge_masked_tokens"] = fork_merge_masked_total
+                main_md["fork_merge_turns"] = fork_merge_turns_total
             samples.append(
                 Sample(
                     index=base_sample.index,
