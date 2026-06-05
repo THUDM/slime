@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-
 NUM_GPUS = 0
 
 
@@ -43,14 +42,17 @@ def load_slime_arguments_module(monkeypatch):
     router_pkg_mod = types.ModuleType("sglang_router")
     router_launch_mod = types.ModuleType("sglang_router.launch_router")
     sglang_arguments_mod = types.ModuleType("slime.backends.sglang_utils.arguments")
+    sglang_external_mod = types.ModuleType("slime.backends.sglang_utils.external")
 
     router_launch_mod.RouterArgs = object
     sglang_arguments_mod.sglang_parse_args = lambda *args, **kwargs: None
     sglang_arguments_mod.validate_args = lambda args: args
+    sglang_external_mod.apply_external_engine_info_to_args = lambda *args, **kwargs: None
 
     monkeypatch.setitem(sys.modules, "sglang_router", router_pkg_mod)
     monkeypatch.setitem(sys.modules, "sglang_router.launch_router", router_launch_mod)
     monkeypatch.setitem(sys.modules, "slime.backends.sglang_utils.arguments", sglang_arguments_mod)
+    monkeypatch.setitem(sys.modules, "slime.backends.sglang_utils.external", sglang_external_mod)
 
     module_path = Path(__file__).resolve().parents[1] / "slime" / "utils" / "arguments.py"
     module_name = "test_slime_argument_validation_module"
@@ -184,7 +186,8 @@ def test_update_weight_disk_dir_normalizes_delta_alias(monkeypatch):
         update_weight_delta_dir="/shared/delta",
     )
 
-    module._resolve_update_weight_disk_dir(args)
+    with pytest.warns(UserWarning, match="will be removed in a future release"):
+        module._resolve_update_weight_disk_dir(args)
 
     assert args.update_weight_disk_dir == "/shared/delta"
     assert args.update_weight_delta_dir == "/shared/delta"
@@ -216,6 +219,36 @@ def test_update_weight_disk_dir_rejects_conflicting_alias(monkeypatch):
 
     with pytest.raises(ValueError, match="deprecated alias"):
         module._resolve_update_weight_disk_dir(args)
+
+
+@pytest.mark.unit
+def test_update_weight_delta_rejects_colocate(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = types.SimpleNamespace(
+        update_weight_mode="delta",
+        update_weight_transport="nccl",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=True,
+    )
+
+    with pytest.raises(ValueError, match="not supported with --colocate"):
+        module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_delta_rejects_unknown_transport(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = types.SimpleNamespace(
+        update_weight_mode="delta",
+        update_weight_transport="tensor",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=False,
+    )
+
+    with pytest.raises(ValueError, match="supports only --update-weight-transport=nccl or disk"):
+        module._validate_update_weight_args(args)
 
 
 if __name__ == "__main__":

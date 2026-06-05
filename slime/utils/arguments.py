@@ -3,6 +3,7 @@ import copy
 import json
 import logging
 import os
+import warnings
 from typing import Any
 
 import yaml
@@ -156,8 +157,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Carrier for weight sync. In full mode, 'nccl' broadcasts chunks and "
                     "'disk' writes a complete HF checkpoint under --update-weight-disk-dir "
-                    "before engines reload it. In delta mode, 'disk' writes sparse safetensors "
-                    "under --update-weight-disk-dir and pushes once at end-of-sync."
+                    "before engines reload it. In delta mode, 'nccl' broadcasts sparse deltas; "
+                    "'disk' writes sparse safetensors under --update-weight-disk-dir and pushes "
+                    "once at end-of-sync."
                 ),
             )
             parser.add_argument(
@@ -196,8 +198,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
                 help=(
-                    "Deprecated alias for --update-weight-disk-dir. Prefer the transport-level "
-                    "directory flag for both full and delta disk sync."
+                    "Deprecated alias for --update-weight-disk-dir and will be removed in a future "
+                    "release. Prefer the transport-level directory flag for both full and delta disk sync."
                 ),
             )
             parser.add_argument(
@@ -1686,6 +1688,14 @@ def _resolve_update_weight_disk_dir(args) -> None:
             "please set only one of them or set both to the same path."
         )
 
+    if delta_dir:
+        warnings.warn(
+            "--update-weight-delta-dir is deprecated and will be removed in a future release; "
+            "use --update-weight-disk-dir instead.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     disk_dir = disk_dir or delta_dir
     if args.update_weight_transport == "disk":
         if not disk_dir:
@@ -1695,6 +1705,23 @@ def _resolve_update_weight_disk_dir(args) -> None:
             )
         args.update_weight_disk_dir = disk_dir
         args.update_weight_delta_dir = disk_dir
+
+
+def _validate_update_weight_args(args) -> None:
+    _resolve_update_weight_disk_dir(args)
+
+    if args.update_weight_mode == "delta":
+        if args.update_weight_transport not in ("nccl", "disk"):
+            raise ValueError(
+                "--update-weight-mode=delta supports only --update-weight-transport=nccl or disk, "
+                f"got {args.update_weight_transport!r}."
+            )
+        if args.colocate:
+            raise ValueError(
+                "--update-weight-mode=delta is not supported with --colocate. Colocate transfers "
+                "weights via CUDA IPC (only a handle crosses processes), so the delta bookkeeping "
+                "(snapshot + diff + sparse encode) is pure overhead."
+            )
 
 
 def slime_validate_args(args):
@@ -1959,12 +1986,4 @@ def slime_validate_args(args):
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")
 
-    _resolve_update_weight_disk_dir(args)
-
-    if args.update_weight_mode == "delta":
-        if args.colocate:
-            raise ValueError(
-                "--update-weight-mode=delta is not supported with --colocate. Colocate transfers "
-                "weights via CUDA IPC (only a handle crosses processes), so the delta bookkeeping "
-                "(snapshot + diff + sparse encode) is pure overhead."
-            )
+    _validate_update_weight_args(args)

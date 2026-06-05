@@ -54,7 +54,6 @@ from slime.utils.timer import Timer, timer
 from ..sglang import DeltaEncoding, DeltaParam, DeltaSpec
 from .update_weight_from_distributed import UpdateWeightFromDistributed
 
-
 logger = logging.getLogger(__name__)
 
 
