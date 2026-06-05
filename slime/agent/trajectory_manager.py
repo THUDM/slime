@@ -339,6 +339,7 @@ class TrajectoryManager:
                 )
                 sib.metadata["fork_merged"] = True
                 sib.metadata["fork_merge_masked_tokens"] = masked
+                sib.messages = list(groups[i].messages)
                 cur = sib
                 i += 1
             elif len(candidates) >= 2:
