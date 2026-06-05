@@ -874,26 +874,6 @@ def save(
         enable_forward_pre_hook(model)
 
 
-def save_hf_model(args, rollout_id: int, model: Sequence[DDP]) -> None:
-    """Save Megatron model in HuggingFace format.
-
-    Args:
-        model (Sequence[DDP]): Sequence of DDP-wrapped model chunks.
-        rollout_id (int): Rollout ID for path formatting.
-    """
-    should_log = (
-        mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
-    )
-    try:
-        from slime.backends.megatron_utils.hf_checkpoint_saver import save_hf_model_to_path
-
-        path = Path(args.save_hf.format(rollout_id=rollout_id))
-        save_hf_model_to_path(args, path, model)
-    except Exception as e:
-        if should_log:
-            logger.error(f"Failed to save HuggingFace format: {e}")
-
-
 def initialize_model_and_optimizer(
     args: Namespace, role: str = "actor"
 ) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:

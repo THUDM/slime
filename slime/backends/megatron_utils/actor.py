@@ -3,6 +3,7 @@ import os
 import random
 from argparse import Namespace
 from contextlib import nullcontext
+from pathlib import Path
 
 import numpy as np
 import ray
@@ -29,6 +30,7 @@ from ...utils.tensor_backper import TensorBackuper
 from .checkpoint import load_checkpoint
 from .cp_utils import slice_log_prob_with_cp, slice_with_cp
 from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data
+from .hf_checkpoint_saver import save_hf_model_to_path
 from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
@@ -595,9 +597,7 @@ class MegatronTrainRayActor(TrainRayActor):
             maybe_finalize_async_save(blocking=True)
 
         if self.args.save_hf is not None and self.role == "actor":
-            from slime.backends.megatron_utils.model import save_hf_model
-
-            save_hf_model(self.args, rollout_id, self.model)
+            save_hf_model_to_path(self.args, Path(self.args.save_hf.format(rollout_id=rollout_id)), self.model)
 
         if self.args.offload_train:
             self.sleep()

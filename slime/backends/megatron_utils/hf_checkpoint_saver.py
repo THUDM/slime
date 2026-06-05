@@ -32,6 +32,7 @@ def save_hf_model_to_path(
     *,
     model_name: str | None = None,
     quantization_config: dict[str, Any] | None = None,
+    progress_desc: str = "Save HF checkpoint",
 ) -> None:
     """Save a Megatron model as an HF checkpoint at a concrete directory."""
     if args.megatron_to_hf_mode == "bridge":
@@ -43,6 +44,7 @@ def save_hf_model_to_path(
             model,
             model_name=model_name,
             quantization_config=quantization_config,
+            progress_desc=progress_desc,
         )
 
 
@@ -53,6 +55,7 @@ def save_hf_model_direct_to_path(
     *,
     model_name: str | None = None,
     quantization_config: dict[str, Any] | None = None,
+    progress_desc: str = "Save HF checkpoint",
 ) -> None:
     """Save a Megatron model as an HF safetensors checkpoint without Megatron Bridge."""
     path = Path(output_dir)
@@ -126,7 +129,7 @@ def save_hf_model_direct_to_path(
     pending_write = None
 
     for chunk_idx, hf_named_tensors in enumerate(
-        hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights, progress_desc="Save HF checkpoint")
+        hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights, progress_desc=progress_desc)
     ):
         if is_writer_rank and chunk_idx % num_save_nodes == save_node_rank:
             pending_write = (chunk_idx, hf_named_tensors)
