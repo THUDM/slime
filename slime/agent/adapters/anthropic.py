@@ -18,7 +18,6 @@ import asyncio
 import dataclasses
 import json
 import logging
-import re
 import secrets
 from collections.abc import Callable
 from typing import Any
@@ -132,54 +131,6 @@ class AnthropicAdapter(BaseAdapter):
 # =============================================================================
 # Translation (Anthropic wire <-> chat-template messages)
 # =============================================================================
-
-
-# Claude Code CLI leaks ``x-anthropic-billing-header: ...cch=<hash>;`` as a text
-# block at the top of the system prompt. The cch hash changes per request, so
-# without stripping it the rendered system tokens differ every turn and the
-# manager tree can't chain consecutive turns together.
-_CLAUDE_CODE_BILLING_HEADER_RE = re.compile(
-    r"^\s*x-anthropic-billing-header:[^\n]*\n?",
-    re.IGNORECASE,
-)
-
-
-def _scrub_claude_code_billing_header_in_body(body_obj: dict) -> bool:
-    """Strip Claude Code's billing-header sidechannel from ``body['system']``.
-
-    Handles both Anthropic shapes (``system: str`` and
-    ``system: list[{type:"text",text:"..."}]``). Mutates ``body_obj`` in
-    place; returns True iff anything changed.
-    """
-    sysm = body_obj.get("system")
-    changed = False
-    if isinstance(sysm, str):
-        cleaned = _CLAUDE_CODE_BILLING_HEADER_RE.sub("", sysm)
-        if cleaned != sysm:
-            body_obj["system"] = cleaned if cleaned.strip() else ""
-            changed = True
-    elif isinstance(sysm, list):
-        new_blocks: list = []
-        for block in sysm:
-            if not isinstance(block, dict) or block.get("type") != "text":
-                new_blocks.append(block)
-                continue
-            txt = block.get("text") or ""
-            cleaned = _CLAUDE_CODE_BILLING_HEADER_RE.sub("", txt)
-            if not cleaned.strip():
-                # Whole block was the sidechannel — drop it.
-                changed = True
-                continue
-            if cleaned != txt:
-                new_block = dict(block)
-                new_block["text"] = cleaned
-                new_blocks.append(new_block)
-                changed = True
-            else:
-                new_blocks.append(block)
-        if changed:
-            body_obj["system"] = new_blocks
-    return changed
 
 
 _MID_SYSTEM_WRAP_PREFIX = "<system-reminder>\n"
@@ -534,11 +485,8 @@ async def _handle_request(request: web.Request) -> web.StreamResponse:
             )
         adapter._sid_turn_count[sid] = prior + 1
 
-    # Strip Claude Code's per-request billing-header sidechannel BEFORE the
-    # adapter renders prompt_ids. Also fold mid-list ``role: system`` messages
-    # into a neighbouring user message so Qwen3 chat templates accept them.
-    # Both are no-ops when the relevant patterns aren't present.
-    _scrub_claude_code_billing_header_in_body(body)
+    # Fold mid-list ``role: system`` messages into a neighbouring user message
+    # so Qwen3 chat templates accept them. No-op when no mid-list system msgs.
     _fold_mid_list_system_into_user(body)
 
     app = request.app
