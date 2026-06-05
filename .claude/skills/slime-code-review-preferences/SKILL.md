@@ -13,6 +13,8 @@ Apply these lightweight review heuristics when changing slime code.
 - Prefer calling the concrete reusable API directly, for example a `*_to_path` helper when the caller already knows the destination path.
 - Keep a wrapper only if it owns a real boundary: compatibility, validation, nontrivial error policy, lifecycle management, metrics/logging semantics, async/retry behavior, or cross-module ownership.
 - Avoid moving a redundant wrapper's body into another file just to preserve the wrapper shape. Inline the simple call at the natural ownership site.
+- When removing a wrapper, search for sibling wrappers and nearby helpers with `rg` and delete confirmed dead functions in the same pass.
+- Treat single-use convenience functions as suspicious when their only job is path formatting plus forwarding. Prefer the caller owning that one line.
 
 ## Make Branches Explain Themselves
 
