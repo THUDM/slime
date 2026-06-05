@@ -59,7 +59,7 @@ from slime.utils.processing_utils import load_tokenizer
 from slime.utils.types import Sample
 
 from . import sandbox
-from .aiohttp_threaded import run_app_in_thread
+from .aiohttp_threaded import FilteredAccessLogger, run_app_in_thread
 
 logger = logging.getLogger(__name__)
 
@@ -97,16 +97,22 @@ class _State(metaclass=SingletonMeta):
                 "Without it the sandbox cannot dial back and the rollout will "
                 "silently abort."
             )
-        # Snapshot threshold: 0 disables; absent or malformed env => default 1000.
+        # Snapshot threshold: env override only. Absent => let TrajectoryManager
+        # take its built-in default. ``0`` disables, malformed values are
+        # ignored with a warning.
         _snap_env = os.environ.get("SLIME_TITO_SNAPSHOT_MIN_LOSS_TOKENS")
-        try:
-            _snap_threshold = int(_snap_env) if _snap_env is not None else 1000
-        except ValueError:
-            logger.warning(
-                "SLIME_TITO_SNAPSHOT_MIN_LOSS_TOKENS=%r is not an int; using 1000",
-                _snap_env,
-            )
-            _snap_threshold = 1000
+        _snap_threshold: int | None
+        if _snap_env is None:
+            _snap_threshold = None
+        else:
+            try:
+                _snap_threshold = int(_snap_env)
+            except ValueError:
+                logger.warning(
+                    "SLIME_TITO_SNAPSHOT_MIN_LOSS_TOKENS=%r is not an int; falling back to TrajectoryManager default",
+                    _snap_env,
+                )
+                _snap_threshold = None
         self.adapter = AnthropicAdapter(
             tokenizer=self.tokenizer,
             sglang_url=sglang_url,
@@ -124,7 +130,10 @@ class _State(metaclass=SingletonMeta):
             host=SHIM_BIND_HOST,
             port=SHIM_PORT,
             thread_name="anthropic-adapter",
-            runner_kwargs={"handler_cancellation": True},
+            runner_kwargs={
+                "handler_cancellation": True,
+                "access_log_class": FilteredAccessLogger,
+            },
         )
         self.adapter_url = f"http://{public_host}:{self.app_handle.port}"
         logger.info(
