@@ -19,12 +19,6 @@ _HF_WEIGHT_FILE_NAMES = {
 _HF_WEIGHT_FILE_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth", ".ckpt", ".msgpack")
 
 
-def save_hf_model_direct(args, rollout_id: int, model) -> None:
-    """Save a Megatron model as an HF safetensors checkpoint without Megatron Bridge."""
-    path = Path(args.save_hf.format(rollout_id=rollout_id))
-    save_hf_model_direct_to_path(args, path, model)
-
-
 def save_hf_model_to_path(
     args,
     output_dir: str | Path,
@@ -46,6 +40,12 @@ def save_hf_model_to_path(
             quantization_config=quantization_config,
             progress_desc=progress_desc,
         )
+
+
+def save_hf_model_direct(args, rollout_id: int, model) -> None:
+    """Save a Megatron model as an HF safetensors checkpoint without Megatron Bridge."""
+    path = Path(args.save_hf.format(rollout_id=rollout_id))
+    save_hf_model_direct_to_path(args, path, model)
 
 
 def save_hf_model_direct_to_path(
