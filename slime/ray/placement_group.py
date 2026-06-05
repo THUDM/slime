@@ -47,7 +47,24 @@ def _create_placement_group(num_gpus):
     pg = placement_group(bundles, strategy="PACK")
     num_bundles = len(bundles)
 
-    ray.get(pg.ready())
+    # Wait for the placement group to be scheduled. Poll rather than a bare
+    # ray.get(pg.ready()) so the wait is observable: when it can't be placed yet
+    # (a node's GPUs haven't registered with the GCS, or an autoscaler is still
+    # bringing nodes up) log the GPU counts periodically instead of hanging with no
+    # output. The wait stays unbounded, so autoscaling clusters — where a pending
+    # placement group is what drives scale-up — are unaffected.
+    ready_ref = pg.ready()
+    elapsed = 0
+    log_interval = 30
+    while not ray.wait([ready_ref], timeout=log_interval)[0]:
+        elapsed += log_interval
+        total = ray.cluster_resources().get("GPU", 0)
+        available = ray.available_resources().get("GPU", 0)
+        logger.info(
+            f"Waiting for placement group of {num_gpus} GPUs (elapsed {elapsed}s): "
+            f"{total:g} GPUs registered with Ray, {available:g} available."
+        )
+
     # use info actor to get the GPU id
     info_actors = []
     for i in range(num_bundles):
