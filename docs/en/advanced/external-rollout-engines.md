@@ -13,6 +13,7 @@ This page is a roadmap. Use it to decide when to use `--rollout-external-engine-
 | Trainer and external engines can form an NCCL group | Default `--update-weight-mode full --update-weight-transport nccl` |
 | Trainer and external engines cannot form an NCCL group, but can see the same filesystem path | `--update-weight-mode full --update-weight-transport disk` |
 | Full checkpoints are too heavy for large-model cross-cluster or cross-DC sync | `--update-weight-mode delta --update-weight-transport disk` |
+| Rollout serving can use an independent SGLang environment, or even different GPU models/vendors | external engines + disk transport |
 | You want to validate delta wire/apply logic inside one datacenter | `--update-weight-mode delta --update-weight-transport nccl` |
 | You need frozen reference, reward, or tool-side models | Prefer `update_weights: false` in [SGLang Config](sglang-config.md#3-multi-model-serving) |
 
@@ -45,6 +46,14 @@ This path fits deployments where serving is owned outside the training job: a se
 - `--rollout-external-engine-addrs`: an external system owns the engine lifecycle. slime discovers already-running engines, attaches them to a router, and treats them as the default rollout model.
 
 If your main requirement is multi-model serving, frozen reference/reward models, PD disaggregation, or heterogeneous group configuration, prefer `--sglang-config`. Use external engines when the engines are already deployed outside the training job.
+
+## Environment And Hardware Decoupling
+
+An important implication of external engines is that the SGLang serving side does not need to use the slime training job's Python environment, Megatron environment, or Ray runtime. It can run in a separate SGLang container, an independent cluster, or another orchestration system. slime only depends on the HTTP endpoint, `/server_info`, and the communication path required by the selected weight-sync transport.
+
+With disk transport, weights move through HF checkpoints or safetensors deltas on a shared filesystem, and SGLang hot-loads them through `update_weights_from_disk`. This path does not require the training GPUs and rollout GPUs to be the same model, or even from the same vendor, as long as SGLang supports that hardware backend, model format, and precision configuration. For example, training can run on one GPU fleet while rollout serving runs on another fleet with different GPU models or vendors.
+
+With NCCL transport, the usual NCCL communication and hardware-compatibility requirements still apply. For cross-vendor, incompatible-network, or cross-datacenter deployments, prefer `--update-weight-transport disk`.
 
 ## Update From Disk
 
@@ -96,6 +105,8 @@ For encoding choices, wire layout, receiver-side selective overwrite, and tuning
 ## Deployment Checklist
 
 - External engine HTTP addresses must be reachable from the training job.
+- External engines can use an independent SGLang environment; they do not need the slime or Megatron training environment.
+- Disk transport supports different GPU models or vendors between training and rollout, as long as SGLang supports the target hardware and model format.
 - Disk transport requires trainer and SGLang engines to see the same `--update-weight-disk-dir` path; a path visible only to the trainer is not enough.
 - External engines are not recovered by slime fault tolerance; their lifecycle belongs to the external deployment system.
 - `--sglang-config` and `--rollout-external-engine-addrs` are mutually exclusive.
