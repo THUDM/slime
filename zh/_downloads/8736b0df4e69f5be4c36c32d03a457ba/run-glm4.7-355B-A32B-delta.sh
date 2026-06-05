@@ -136,7 +136,7 @@ DELTA_ARGS=(
    --update-weight-mode delta
    --update-weight-transport disk
    --update-weight-encoding deltas_zstd
-   --update-weight-delta-dir /shared/fs/delta-updates
+   --update-weight-disk-dir /shared/fs/delta-updates
 )
 
 # ── NCCL (baseline) — intra-datacenter, no shared FS ────────────────────────────

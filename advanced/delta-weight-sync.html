@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Jun 04, 2026"/>
+    <meta name="docbuild:last-update" content="Jun 05, 2026"/>
   </head>
   
   
@@ -436,6 +436,7 @@
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why">Why</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-start">Quick Start</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mode-vs-transport">Mode vs Transport</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-works">How It Works</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#encoding-choice">Encoding Choice</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-not-colocated">Why Not Colocated</a></li>
@@ -455,6 +456,7 @@
 <ul class="simple">
 <li><p><a class="reference internal" href="#why"><span class="std std-ref">Why</span></a></p></li>
 <li><p><a class="reference internal" href="#quick-start"><span class="std std-ref">Quick Start</span></a></p></li>
+<li><p><a class="reference internal" href="#mode-vs-transport"><span class="std std-ref">Mode vs Transport</span></a></p></li>
 <li><p><a class="reference internal" href="#how-it-works"><span class="std std-ref">How It Works</span></a></p></li>
 <li><p><a class="reference internal" href="#encoding-choice"><span class="std std-ref">Encoding Choice</span></a></p></li>
 <li><p><a class="reference internal" href="#why-not-colocated"><span class="std std-ref">Why Not Colocated</span></a></p></li>
@@ -471,7 +473,7 @@
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>delta
 --update-weight-transport<span class="w"> </span>disk
 --update-weight-encoding<span class="w"> </span>deltas_zstd<span class="w">                 </span><span class="c1"># best for ≤ 300 MB/s shared FS</span>
---update-weight-delta-dir<span class="w"> </span>/shared/fs/delta-updates
+--update-weight-disk-dir<span class="w"> </span>/shared/fs/delta-updates
 </pre></div>
 </div>
 <p>NCCL transport (intra-datacenter validation baseline):</p>
@@ -480,16 +482,60 @@
 --update-weight-encoding<span class="w"> </span>indices<span class="w">                     </span><span class="c1"># lowest compute, no compression</span>
 </pre></div>
 </div>
-<p>Receiver-side tuning (applies to both transports):</p>
+<p>Full-checkpoint disk transport (simple external-engine fallback):</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>full
+--update-weight-transport<span class="w"> </span>disk
+--update-weight-disk-dir<span class="w"> </span>/shared/fs/full-updates
+</pre></div>
+</div>
+<p>This writes a complete HF checkpoint under <code class="docutils literal notranslate"><span class="pre">weight_v{N:06d}/</span></code> for every sync,
+then asks each SGLang engine to reload it with <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code>. It is
+useful when the trainer cannot form an NCCL group with pre-launched rollout
+engines, but it is much heavier than delta sync for large models.</p>
+<p>Receiver-side delta tuning (applies to delta NCCL and delta disk):</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-update-weight-delta-chunk-bytes<span class="w"> </span><span class="k">$((</span><span class="m">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="m">1024</span><span class="k">))</span><span class="w">  </span><span class="c1"># byte cap per load_weights call</span>
 --sglang-update-weight-delta-read-workers<span class="w"> </span><span class="m">4</span><span class="w">                           </span><span class="c1"># parallel I/O threads (disk only)</span>
 </pre></div>
 </div>
 <p>See <a class="reference download internal" download="" href="../_downloads/8736b0df4e69f5be4c36c32d03a457ba/run-glm4.7-355B-A32B-delta.sh"><span class="xref download myst">examples/delta_weight_sync/run-glm4.7-355B-A32B-delta.sh</span></a> for a complete launcher.</p>
 </section>
+<section id="mode-vs-transport">
+<h2>Mode vs Transport<a class="headerlink" href="#mode-vs-transport" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">--update-weight-mode</span></code> decides <strong>what</strong> gets sent; <code class="docutils literal notranslate"><span class="pre">--update-weight-transport</span></code>
+decides <strong>how</strong> it reaches SGLang.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>mode</p></th>
+<th class="head"><p>transport</p></th>
+<th class="head"><p>behavior</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">full</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">nccl</span></code></p></td>
+<td><p>default path: broadcast every HF weight chunk over a trainer-engine NCCL group</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">full</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">disk</span></code></p></td>
+<td><p>write a complete HF checkpoint under <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code>, then call <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">delta</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">nccl</span></code></p></td>
+<td><p>broadcast sparse changed positions + values over NCCL</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">delta</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">disk</span></code></p></td>
+<td><p>write sparse safetensors under <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code>, then call <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk(load_format=&quot;delta&quot;)</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">--update-weight-delta-dir</span></code> is kept only as a backward-compatible alias for
+<code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code>; new launchers should use the transport-level name.</p>
+</section>
 <section id="how-it-works">
 <h2>How It Works<a class="headerlink" href="#how-it-works" title="Link to this heading">#</a></h2>
-<p>Both transports share one sender pipeline, one wire layout, and one receiver-side decoder; only the per-flush carrier differs.</p>
+<p>Delta NCCL and delta disk share one sender pipeline, one wire layout, and one receiver-side decoder; only the per-flush carrier differs.</p>
 <p><strong>Sender (per sync, PP-source rank only):</strong></p>
 <ol class="arabic simple">
 <li><p><strong>Diff</strong> the current weights against the pinned-CPU snapshot via bytewise compare (<code class="docutils literal notranslate"><span class="pre">current.view(int_dtype)</span> <span class="pre">!=</span> <span class="pre">snapshot.view(int_dtype)</span></code>) — lossless, dtype-agnostic, no arithmetic.</p></li>
@@ -591,6 +637,7 @@
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why">Why</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-start">Quick Start</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mode-vs-transport">Mode vs Transport</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-works">How It Works</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#encoding-choice">Encoding Choice</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-not-colocated">Why Not Colocated</a></li>
@@ -627,7 +674,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jun 04, 2026.
+  Last updated on Jun 05, 2026.
   <br/>
 </p>
   </div>

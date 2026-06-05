@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 06 月 04 日"/>
+    <meta name="docbuild:last-update" content="2026 年 06 月 05 日"/>
   </head>
   
   
@@ -432,8 +432,9 @@
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">背景</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">快速开始</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">工作原理</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">编码选择</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">同步模式与传输方式</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">工作原理</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">编码选择</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#colocated">为何不支持 colocated</a></li>
 </ul>
             </nav>
@@ -451,6 +452,7 @@
 <ul class="simple">
 <li><p>背景</p></li>
 <li><p>快速开始</p></li>
+<li><p>同步模式与传输方式</p></li>
 <li><p>工作原理</p></li>
 <li><p>编码选择</p></li>
 <li><p>为何不支持 colocated</p></li>
@@ -467,7 +469,7 @@
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>delta
 --update-weight-transport<span class="w"> </span>disk
 --update-weight-encoding<span class="w"> </span>deltas_zstd<span class="w">                 </span><span class="c1"># ≤ 300 MB/s 共享 FS 推荐</span>
---update-weight-delta-dir<span class="w"> </span>/shared/fs/delta-updates
+--update-weight-disk-dir<span class="w"> </span>/shared/fs/delta-updates
 </pre></div>
 </div>
 <p>NCCL 传输（数据中心内部验证基线）：</p>
@@ -476,7 +478,16 @@
 --update-weight-encoding<span class="w"> </span>indices<span class="w">                     </span><span class="c1"># 计算最少，无压缩</span>
 </pre></div>
 </div>
-<p>接收端调优（两种传输都适用）：</p>
+<p>全量 checkpoint 磁盘传输（外部引擎的简单兜底路径）：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>full
+--update-weight-transport<span class="w"> </span>disk
+--update-weight-disk-dir<span class="w"> </span>/shared/fs/full-updates
+</pre></div>
+</div>
+<p>这会在每次同步时写一个完整 HF checkpoint 到 <code class="docutils literal notranslate"><span class="pre">weight_v{N:06d}/</span></code>，然后让每个
+SGLang engine 通过 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> 重新加载。它适用于训练器无法和预启动
+rollout engine 建 NCCL group 的场景，但对大模型来说比 delta 同步重很多。</p>
+<p>接收端 delta 调优（适用于 delta NCCL 和 delta 磁盘）：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-update-weight-delta-chunk-bytes<span class="w"> </span><span class="k">$((</span><span class="m">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="m">1024</span><span class="k">))</span><span class="w">  </span><span class="c1"># 每次 load_weights 字节上限</span>
 --sglang-update-weight-delta-read-workers<span class="w"> </span><span class="m">4</span><span class="w">                           </span><span class="c1"># 并行 I/O 线程数（仅磁盘传输）</span>
 </pre></div>
@@ -484,8 +495,41 @@
 <p>完整启动脚本见 <a class="reference download internal" download="" href="../_downloads/8736b0df4e69f5be4c36c32d03a457ba/run-glm4.7-355B-A32B-delta.sh"><span class="xref download myst">examples/delta_weight_sync/run-glm4.7-355B-A32B-delta.sh</span></a>。</p>
 </section>
 <section id="id3">
-<h2>工作原理<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
-<p>两种传输共用同一条发送管线、同一种 wire 布局以及同一套接收端解码器；只有每个 bucket 的承载层不同。</p>
+<h2>同步模式与传输方式<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">--update-weight-mode</span></code> 决定<strong>发送什么</strong>，<code class="docutils literal notranslate"><span class="pre">--update-weight-transport</span></code> 决定<strong>如何送到 SGLang</strong>。</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>同步模式 (<code class="docutils literal notranslate"><span class="pre">mode</span></code>)</p></th>
+<th class="head"><p>传输方式 (<code class="docutils literal notranslate"><span class="pre">transport</span></code>)</p></th>
+<th class="head"><p>行为</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">full</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">nccl</span></code></p></td>
+<td><p>默认路径：通过训练器和 engine 之间的 NCCL group 广播所有 HF 权重 chunk</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">full</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">disk</span></code></p></td>
+<td><p>在 <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code> 下写完整 HF checkpoint，然后调用 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">delta</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">nccl</span></code></p></td>
+<td><p>通过 NCCL 广播稀疏变化位置和值</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">delta</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">disk</span></code></p></td>
+<td><p>在 <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code> 下写稀疏 safetensors，然后调用 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk(load_format=&quot;delta&quot;)</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">--update-weight-delta-dir</span></code> 只保留为 <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code> 的向后兼容 alias；
+新启动脚本应该使用传输方式级别的目录参数。</p>
+</section>
+<section id="id4">
+<h2>工作原理<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
+<p>Delta NCCL 和 delta 磁盘共用同一条发送管线、同一种 wire 布局以及同一套接收端解码器；只有每个 bucket 的承载层不同。</p>
 <p><strong>发送端（每次同步，仅 PP 源 rank）：</strong></p>
 <ol class="arabic simple">
 <li><p><strong>求差</strong>：通过逐字节比较 <code class="docutils literal notranslate"><span class="pre">current.view(int_dtype)</span> <span class="pre">!=</span> <span class="pre">snapshot.view(int_dtype)</span></code> 检测变化。无算术、无损、与 dtype 无关。</p></li>
@@ -502,8 +546,8 @@
 <p><strong>接收端：</strong> 两种传输最终都进入同一个 <code class="docutils literal notranslate"><span class="pre">_apply_delta_payload(encoding,</span> <span class="pre">params,</span> <span class="pre">positions,</span> <span class="pre">values)</span></code> 帮助函数。它把每个参数的切片解码成全形状张量，未变化位置填 NaN，然后通过 <code class="docutils literal notranslate"><span class="pre">model.load_weights(...)</span></code> 应用；过程中 <code class="docutils literal notranslate"><span class="pre">_delta_apply_context</span></code> 替换 <code class="docutils literal notranslate"><span class="pre">Tensor.copy_</span></code> / <code class="docutils literal notranslate"><span class="pre">Tensor.fill_</span></code>，对参数存储执行 NaN 掩码覆写。辅助写入（scratch buffer、fp8 scale、MoE bias 等通过 <code class="docutils literal notranslate"><span class="pre">post_load_weights</span></code> 写入的派生张量）保留正常语义。</p>
 <p>选择性覆写没有任何算术运算 —— 接收端在变化位置直接写入训练端的精确字节 —— 因此天然无损，也不存在数值漂移问题，无需周期性 base 同步。</p>
 </section>
-<section id="id4">
-<h2>编码选择<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
+<section id="id5">
+<h2>编码选择<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">--update-weight-encoding</span></code> 决定位置如何打包。三种编码共用同一种 wire 布局（<code class="docutils literal notranslate"><span class="pre">__positions__</span></code> uint8 块 + <code class="docutils literal notranslate"><span class="pre">__values__</span></code> 张量 + per-param manifest），解码端根据 metadata 分派。</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
@@ -586,8 +630,9 @@
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">背景</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">快速开始</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">工作原理</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">编码选择</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">同步模式与传输方式</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">工作原理</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">编码选择</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#colocated">为何不支持 colocated</a></li>
 </ul>
   </nav></div>
@@ -622,7 +667,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 06 月 04 日.
+  最后更新于 2026 年 06 月 05 日.
   <br/>
 </p>
   </div>

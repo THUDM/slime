@@ -2,6 +2,7 @@
 
 - [Why](#why)
 - [Quick Start](#quick-start)
+- [Mode vs Transport](#mode-vs-transport)
 - [How It Works](#how-it-works)
 - [Encoding Choice](#encoding-choice)
 - [Why Not Colocated](#why-not-colocated)
@@ -22,7 +23,7 @@ Disk transport (training/inference disaggregation — the main use case):
 --update-weight-mode delta
 --update-weight-transport disk
 --update-weight-encoding deltas_zstd                 # best for ≤ 300 MB/s shared FS
---update-weight-delta-dir /shared/fs/delta-updates
+--update-weight-disk-dir /shared/fs/delta-updates
 ```
 
 NCCL transport (intra-datacenter validation baseline):
@@ -33,7 +34,20 @@ NCCL transport (intra-datacenter validation baseline):
 --update-weight-encoding indices                     # lowest compute, no compression
 ```
 
-Receiver-side tuning (applies to both transports):
+Full-checkpoint disk transport (simple external-engine fallback):
+
+```bash
+--update-weight-mode full
+--update-weight-transport disk
+--update-weight-disk-dir /shared/fs/full-updates
+```
+
+This writes a complete HF checkpoint under `weight_v{N:06d}/` for every sync,
+then asks each SGLang engine to reload it with `update_weights_from_disk`. It is
+useful when the trainer cannot form an NCCL group with pre-launched rollout
+engines, but it is much heavier than delta sync for large models.
+
+Receiver-side delta tuning (applies to delta NCCL and delta disk):
 
 ```bash
 --sglang-update-weight-delta-chunk-bytes $((2 * 1024 * 1024 * 1024))  # byte cap per load_weights call
@@ -42,9 +56,24 @@ Receiver-side tuning (applies to both transports):
 
 See [examples/delta_weight_sync/run-glm4.7-355B-A32B-delta.sh](../../../examples/delta_weight_sync/run-glm4.7-355B-A32B-delta.sh) for a complete launcher.
 
+## Mode vs Transport
+
+`--update-weight-mode` decides **what** gets sent; `--update-weight-transport`
+decides **how** it reaches SGLang.
+
+| mode | transport | behavior |
+|---|---|---|
+| `full` | `nccl` | default path: broadcast every HF weight chunk over a trainer-engine NCCL group |
+| `full` | `disk` | write a complete HF checkpoint under `--update-weight-disk-dir`, then call `update_weights_from_disk` |
+| `delta` | `nccl` | broadcast sparse changed positions + values over NCCL |
+| `delta` | `disk` | write sparse safetensors under `--update-weight-disk-dir`, then call `update_weights_from_disk(load_format="delta")` |
+
+`--update-weight-delta-dir` is kept only as a backward-compatible alias for
+`--update-weight-disk-dir`; new launchers should use the transport-level name.
+
 ## How It Works
 
-Both transports share one sender pipeline, one wire layout, and one receiver-side decoder; only the per-flush carrier differs.
+Delta NCCL and delta disk share one sender pipeline, one wire layout, and one receiver-side decoder; only the per-flush carrier differs.
 
 **Sender (per sync, PP-source rank only):**
 
