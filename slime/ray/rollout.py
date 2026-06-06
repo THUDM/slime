@@ -493,14 +493,58 @@ class RolloutManager:
         self.health_monitoring_resume()
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
-        data, metrics = self._get_rollout_data(rollout_id=rollout_id)
-        self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
-        _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
-        if self.args.debug_rollout_only:
-            # if debug rollout only, we don't convert samples to train data and directly return
+        need_stop_profile = self._maybe_start_rollout_profile(rollout_id)
+        try:
+            data, metrics = self._get_rollout_data(rollout_id=rollout_id)
+            self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
+            _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
+            if self.args.debug_rollout_only:
+                # if debug rollout only, we don't convert samples to train data and directly return
+                return
+            data = self._convert_samples_to_train_data(data)
+            return self._split_train_data_by_dp(data)
+        finally:
+            if need_stop_profile:
+                self._stop_rollout_profile()
+
+    def _maybe_start_rollout_profile(self, rollout_id):
+        if self.args.rollout_profile_start_rollout_id is None:
+            return False
+        if rollout_id != self.args.rollout_profile_start_rollout_id:
+            return False
+        engines = self.rollout_engines
+        if not engines:
+            return False
+        logger.info(
+            f"Start rollout profile at rollout_id={rollout_id} "
+            f"num_steps={self.args.rollout_profile_num_steps} "
+            f"activities={self.args.rollout_profile_activities} "
+            f"output_dir={self.args.rollout_profile_output_dir}"
+        )
+        ray.get(
+            [
+                engine.start_profile.remote(
+                    output_dir=self.args.rollout_profile_output_dir,
+                    start_step=self.args.rollout_profile_start_step,
+                    num_steps=self.args.rollout_profile_num_steps,
+                    activities=self.args.rollout_profile_activities,
+                    profile_by_stage=self.args.rollout_profile_by_stage,
+                    with_stack=self.args.rollout_profile_with_stack or None,
+                    record_shapes=self.args.rollout_profile_record_shapes or None,
+                )
+                for engine in engines
+            ]
+        )
+        # When num_steps is set, sglang auto-stops once it reaches the target;
+        # otherwise we must stop it ourselves at the end of this rollout.
+        return self.args.rollout_profile_num_steps is None
+
+    def _stop_rollout_profile(self):
+        engines = self.rollout_engines
+        if not engines:
             return
-        data = self._convert_samples_to_train_data(data)
-        return self._split_train_data_by_dp(data)
+        logger.info("Stop rollout profile.")
+        ray.get([engine.stop_profile.remote() for engine in engines])
 
     def eval(self, rollout_id):
         if self.args.debug_train_only:
