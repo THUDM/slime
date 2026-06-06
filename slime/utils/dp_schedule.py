@@ -20,15 +20,15 @@ The scheduling philosophy is **pack first, distribute second**:
      by splitting the largest multi-sample bins (dynamic only).
   4. Distribute the ``K`` mbs across ``dp_size`` ranks, ``K / dp_size``
      each, with either a strided round-robin or a Karmarkar-Karp pass on
-     mbs token sums.
+     estimated mbs FLOPs.
 
 Invariants guaranteed by :func:`build_dp_schedule` (asserted by the tests):
   - every DP rank runs the **same** ``num_microbatches`` per training step
     (required for PP sync);
-  - every mbs (dynamic path) holds ``<= max_tokens_per_gpu * cp_size``
-    tokens, with one exception — an individual sample larger than that cap
-    lands alone in its own mbs (and that mbs is the only one allowed to
-    exceed the cap);
+  - every mbs (dynamic path without ``balance_by_flops``) holds
+    ``<= max_tokens_per_gpu * cp_size`` tokens, with one exception — an
+    individual sample larger than that cap lands alone in its own mbs (and
+    that mbs is the only one allowed to exceed the cap);
   - the union of per-rank sample indices equals the set of samples kept
     after trimming trailing rollouts (every kept sample placed exactly
     once);
@@ -70,6 +70,8 @@ def _pack_step_into_mbs(
             if num_mbs >= len(step_lengths):
                 return [[i] for i in range(len(step_lengths))]
             workloads = _calculate_workloads(step_lengths, args)
+            # FLOPs balancing does not enforce the token cap per mbs. A
+            # partition can exceed max_per_bin and may OOM if the cap is tight.
             return get_seqlen_balanced_partitions(workloads, num_mbs, equal_size=False)
         return first_fit_pack(step_lengths, max_per_bin)
     assert micro_batch_size is not None
@@ -153,14 +155,13 @@ def build_dp_schedule(
 
         # 1. Pack samples in this step into mbs with one global pass.
         # ``step_mbs`` indices are LOCAL into ``sample_indices``.
-        balance_by_flops = getattr(args, "balance_by_flops", False)
         step_mbs = _pack_step_into_mbs(
             step_lengths,
             args=args,
             use_dynamic_batch_size=args.use_dynamic_batch_size,
             max_per_bin=max_per_bin,
             micro_batch_size=getattr(args, "micro_batch_size", None),
-            balance_by_flops=balance_by_flops,
+            balance_by_flops=args.balance_by_flops,
         )
 
         # 2. Align mbs count to a multiple of ``align_to``.
@@ -187,14 +188,11 @@ def build_dp_schedule(
         num_mbs_per_rank = K // dp_size
         num_microbatches.append(num_mbs_per_rank)
 
-        # 3. Distribute mbs across ranks: KK on mbs workloads when balance_data
-        # or balance_by_flops is on, otherwise a strided round-robin.
-        if args.balance_data or balance_by_flops:
-            if balance_by_flops:
-                step_workloads = _calculate_workloads(step_lengths, args)
-                mbs_weights = [sum(step_workloads[i] for i in bin_) for bin_ in step_mbs]
-            else:
-                mbs_weights = [sum(step_lengths[i] for i in bin_) for bin_ in step_mbs]
+        # 3. Distribute mbs across ranks: KK on estimated FLOPs when rank
+        # workload balancing is enabled, otherwise a strided round-robin.
+        if args.balance_data:
+            step_workloads = _calculate_workloads(step_lengths, args)
+            mbs_weights = [sum(step_workloads[i] for i in bin_) for bin_ in step_mbs]
             rank_mbs_idx = get_seqlen_balanced_partitions(mbs_weights, dp_size, equal_size=True)
         else:
             rank_mbs_idx = [list(range(r, K, dp_size)) for r in range(dp_size)]

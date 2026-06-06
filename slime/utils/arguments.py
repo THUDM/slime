@@ -682,7 +682,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_true",
                 default=False,
                 help=(
-                    "Balance the number of tokens between data parallel ranks with `karmarkar_karp` for verl. "
+                    "Balance estimated training FLOPs between data parallel ranks with `karmarkar_karp`. "
+                    "Micro-batch packing still follows the configured static/dynamic batching unless "
+                    "`--balance-by-flops` is also set. "
                     "Note that this may allocate the different response of the same prompt into different training steps."
                 ),
             )
@@ -697,7 +699,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "The linear coefficient is auto-computed from model config (hidden_size, "
                     "ffn_hidden_size, swiglu, MoE experts). Captures the quadratic cost of "
                     "attention, producing more balanced micro-batches when sequence lengths "
-                    "vary widely. Requires --use-dynamic-batch-size."
+                    "vary widely. This may create micro-batches whose total tokens exceed "
+                    "--max-tokens-per-gpu and cause OOM. Also enables --balance-data. "
+                    "Requires --use-dynamic-batch-size."
                 ),
             )
 
@@ -1851,6 +1855,7 @@ def slime_validate_args(args):
 
     if getattr(args, "balance_by_flops", False):
         assert args.use_dynamic_batch_size, "--balance-by-flops requires --use-dynamic-batch-size"
+        args.balance_data = True
 
     if args.eps_clip_high is None:
         args.eps_clip_high = args.eps_clip
