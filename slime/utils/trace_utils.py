@@ -123,6 +123,8 @@ def _new_span_id() -> str:
 
 def build_sglang_meta_trace_attrs(meta: dict[str, Any]) -> dict[str, Any]:
     attrs = {key: meta[key] for key in SGLANG_TRACE_META_KEYS if key in meta and meta[key] is not None}
+    if meta.get("id") is not None:
+        attrs["sglang_request_id"] = meta["id"]
     attrs["finish_reason"] = meta["finish_reason"]["type"]
     return attrs
 

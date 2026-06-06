@@ -12,10 +12,18 @@ from sglang_router.launch_router import RouterArgs
 from slime.backends.sglang_utils.arguments import sglang_parse_args
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 from slime.backends.sglang_utils.external import apply_external_engine_info_to_args
+from slime.profiling.observability import prepare_observability_args
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
 from slime.utils.logging_utils import configure_logger
 
 logger = logging.getLogger(__name__)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.lower() in ("1", "true", "yes", "on")
 
 
 def reset_arg(parser, name, **kwargs):
@@ -1206,6 +1214,70 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
             return parser
 
+        # observability
+        def add_observability_arguments(parser):
+            parser.add_argument(
+                "--run-id",
+                type=str,
+                default=os.environ.get("SLIME_RUN_ID"),
+                help="Run identifier used in generated observability metadata.",
+            )
+            parser.add_argument(
+                "--run-dir",
+                type=str,
+                default=os.environ.get("SLIME_RUN_DIR"),
+                help="Directory for per-run observability files. Defaults to /tmp/slime-runs/{run_id}.",
+            )
+            parser.add_argument(
+                "--observability-scratch-dir",
+                type=str,
+                default=os.environ.get("SLIME_OBS_SCRATCH_DIR"),
+                help=(
+                    "High-frequency observability artifact directory template. Defaults to "
+                    "{run_dir}/nodes/node={hostname}. Supports {run_id}, {hostname}, and {pid}."
+                ),
+            )
+            parser.add_argument(
+                "--observability-prometheus-tsdb-dir",
+                type=str,
+                default=os.environ.get("SLIME_PROMETHEUS_TSDB_DIR"),
+                help=(
+                    "Prometheus local TSDB directory template used by helper commands. Defaults to "
+                    "/tmp/slime-observability/{run_id}/prometheus-tsdb."
+                ),
+            )
+            parser.add_argument(
+                "--observability-export-dir",
+                type=str,
+                default=os.environ.get("SLIME_OBS_EXPORT_DIR"),
+                help="Optional durable directory for compacted observability outputs. Defaults to {run_dir}/export.",
+            )
+            parser.add_argument(
+                "--enable-observability",
+                action="store_true",
+                default=_env_flag("SLIME_ENABLE_OBSERVABILITY", False),
+                help=(
+                    "Enable the per-run observability bundle. This writes run metadata, Prometheus config, "
+                    "file service discovery targets, and SGLang request-level profiling files."
+                ),
+            )
+            parser.add_argument(
+                "--disable-observability",
+                action="store_false",
+                dest="enable_observability",
+                default=argparse.SUPPRESS,
+                help="Disable the observability bundle even if SLIME_ENABLE_OBSERVABILITY is set.",
+            )
+            parser.add_argument(
+                "--observability-profile",
+                type=str,
+                default=os.environ.get("SLIME_OBSERVABILITY_PROFILE"),
+                choices=["off", "basic", "debug", "replay"],
+                help=argparse.SUPPRESS,
+            )
+
+            return parser
+
         # debug
         def add_debug_arguments(parser):
             parser.add_argument(
@@ -1481,6 +1553,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_on_policy_distillation_arguments(parser)
         parser = add_wandb_arguments(parser)
         parser = add_tensorboard_arguments(parser)
+        parser = add_observability_arguments(parser)
         parser = add_router_arguments(parser)
         parser = add_debug_arguments(parser)
         parser = add_network_arguments(parser)
@@ -1744,6 +1817,7 @@ def _validate_update_weight_args(args) -> None:
 
 def slime_validate_args(args):
     args.eval_datasets = _resolve_eval_datasets(args)
+    prepare_observability_args(args)
 
     if args.use_slime_router:
         logger.warning(

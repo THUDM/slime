@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import os
 import pickle
 import socketserver
 import sys
@@ -23,8 +24,14 @@ from typing import Any
 
 import torch
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-CACHE_VERSION = 1
+from slime.profiling.request_time_stats import load_request_time_stats, request_time_stats_mtime
+
+
+CACHE_VERSION = 2
 
 
 class _MissingPickleObject:
@@ -116,6 +123,36 @@ def _safe_duration(start: float | None, end: float | None) -> float | None:
     if start is None or end is None:
         return None
     return max(0.0, float(end) - float(start))
+
+
+def _resolve_request_time_stats_path(pt_path: Path, explicit_path: str | None) -> Path | None:
+    if explicit_path:
+        path = Path(explicit_path).expanduser().resolve()
+        if not path.exists():
+            raise SystemExit(f"request time stats path not found: {path}")
+        return path
+
+    env_path = os.environ.get("SLIME_REQUEST_TIME_STATS_PATH")
+    if env_path:
+        path = Path(env_path).expanduser().resolve()
+        if path.exists():
+            return path
+
+    run_dir = os.environ.get("SLIME_RUN_DIR")
+    candidates = []
+    if run_dir:
+        candidates.append(Path(run_dir).expanduser() / "request_time_stats" / "sglang")
+    candidates.extend(
+        [
+            pt_path.parent / "request_time_stats" / "sglang",
+            pt_path.parent.parent / "request_time_stats" / "sglang",
+        ]
+    )
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def _to_sample_dict(sample: Any) -> dict[str, Any]:
@@ -242,7 +279,11 @@ def _compute_span_depths(spans: list[dict[str, Any]]) -> dict[str, int]:
     return cache
 
 
-def _build_items_from_trace(sample: dict[str, Any], sample_idx: int) -> dict[str, Any] | None:
+def _build_items_from_trace(
+    sample: dict[str, Any],
+    sample_idx: int,
+    request_time_stats_by_rid: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
     trace = sample.get("trace")
     if not isinstance(trace, dict):
         return None
@@ -373,6 +414,24 @@ def _build_items_from_trace(sample: dict[str, Any], sample_idx: int) -> dict[str
     for span in all_spans:
         span["depth"] = span_depths.get(span.get("span_id") or "", 0)
         span["lane"] = span["depth"]
+
+    request_time_stats_match_count = 0
+    if request_time_stats_by_rid:
+        for span in all_spans:
+            end_attrs = span.setdefault("end_attrs", {})
+            start_attrs = span.get("start_attrs") or {}
+            request_id = (
+                end_attrs.get("sglang_request_id") or start_attrs.get("sglang_request_id") or end_attrs.get("id")
+            )
+            if request_id is None:
+                continue
+            request_stats_attrs = request_time_stats_by_rid.get(str(request_id))
+            if not request_stats_attrs:
+                continue
+            for key, value in request_stats_attrs.items():
+                end_attrs.setdefault(key, value)
+            end_attrs["sglang_request_time_stats_joined"] = True
+            request_time_stats_match_count += 1
 
     for event in point_events:
         parent_span_id = event.get("parent_span_id")
@@ -559,13 +618,15 @@ def _build_items_from_trace(sample: dict[str, Any], sample_idx: int) -> dict[str
         "open_span_count": sum(1 for item in all_items if item["state"] == "open_span"),
         "point_event_count": sum(1 for item in all_items if item["state"] == "point_event"),
         "orphan_count": sum(1 for item in all_items if item["state"] == "orphan_end"),
+        "request_time_stats_match_count": request_time_stats_match_count,
         "total_response_length": sum(response_lengths),
         "max_response_length": max(response_lengths, default=0),
         "items": all_items,
     }
 
 
-def _build_cache_data(pt_path: Path) -> dict[str, Any]:
+def _build_cache_data(pt_path: Path, request_time_stats_path: Path | None = None) -> dict[str, Any]:
+    request_time_stats_by_rid, request_time_stats_summary = load_request_time_stats(request_time_stats_path)
     before_missing = len(_MISSING_PICKLE_GLOBALS)
     data = torch.load(
         pt_path,
@@ -584,19 +645,23 @@ def _build_cache_data(pt_path: Path) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     global_start = None
     global_end = None
+    request_time_stats_match_count = 0
 
     for sample_idx, raw_sample in enumerate(samples):
         sample = _to_sample_dict(raw_sample)
-        row = _build_items_from_trace(sample, sample_idx)
+        row = _build_items_from_trace(sample, sample_idx, request_time_stats_by_rid=request_time_stats_by_rid)
         if row is None:
             continue
         rows.append(row)
+        request_time_stats_match_count += int(row.get("request_time_stats_match_count", 0) or 0)
         global_start = row["start"] if global_start is None else min(global_start, row["start"])
         global_end = row["end"] if global_end is None else max(global_end, row["end"])
 
+    request_time_stats_summary["matched_span_count"] = request_time_stats_match_count
     return {
         "cache_version": CACHE_VERSION,
         "pt_path": str(pt_path),
+        "request_time_stats": request_time_stats_summary,
         "generated_at": time.time(),
         "sample_count": len(rows),
         "global_start": _round_float(global_start),
@@ -615,14 +680,28 @@ def _timeline_paths(pt_path: Path) -> TimelinePaths:
     )
 
 
-def ensure_cache(paths: TimelinePaths, rebuild: bool = False) -> dict[str, Any]:
-    if not rebuild and paths.cache_path.exists() and paths.cache_path.stat().st_mtime >= paths.pt_path.stat().st_mtime:
+def ensure_cache(
+    paths: TimelinePaths,
+    rebuild: bool = False,
+    request_time_stats_path: Path | None = None,
+) -> dict[str, Any]:
+    stats_mtime = request_time_stats_mtime(request_time_stats_path)
+    cache_is_fresh = paths.cache_path.exists() and paths.cache_path.stat().st_mtime >= paths.pt_path.stat().st_mtime
+    if stats_mtime is not None and cache_is_fresh:
+        cache_is_fresh = paths.cache_path.stat().st_mtime >= stats_mtime
+
+    if not rebuild and cache_is_fresh:
         with paths.cache_path.open("r", encoding="utf-8") as handle:
             cached = json.load(handle)
-        if cached.get("cache_version") == CACHE_VERSION:
+        cached_request_time_stats_path = (cached.get("request_time_stats") or {}).get("path")
+        current_request_time_stats_path = str(request_time_stats_path) if request_time_stats_path is not None else None
+        if (
+            cached.get("cache_version") == CACHE_VERSION
+            and cached_request_time_stats_path == current_request_time_stats_path
+        ):
             return cached
 
-    cache_data = _build_cache_data(paths.pt_path)
+    cache_data = _build_cache_data(paths.pt_path, request_time_stats_path=request_time_stats_path)
     with paths.cache_path.open("w", encoding="utf-8") as handle:
         json.dump(cache_data, handle, ensure_ascii=True, separators=(",", ":"))
     return cache_data
@@ -2338,6 +2417,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("pt_path", help="Path to rollout debug dump .pt file")
     parser.add_argument("--rebuild", action="store_true", help="Rebuild cache even if it already exists")
     parser.add_argument(
+        "--request-time-stats-path",
+        help=(
+            "Optional file or directory containing SGLang ReqTimeStats logs. "
+            "If omitted, the viewer checks SLIME_REQUEST_TIME_STATS_PATH, then "
+            "SLIME_RUN_DIR/request_time_stats/sglang, then paths near the .pt file."
+        ),
+    )
+    parser.add_argument(
         "--serve",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -2354,13 +2441,23 @@ def main() -> None:
         raise SystemExit(f"pt file not found: {pt_path}")
 
     paths = _timeline_paths(pt_path)
-    cache_data = ensure_cache(paths, rebuild=args.rebuild)
+    request_time_stats_path = _resolve_request_time_stats_path(pt_path, args.request_time_stats_path)
+    cache_data = ensure_cache(paths, rebuild=args.rebuild, request_time_stats_path=request_time_stats_path)
     ensure_html(paths)
 
     print(f"pt: {paths.pt_path}")
     print(f"cache: {paths.cache_path}")
     print(f"html: {paths.html_path}")
     print(f"samples: {cache_data['sample_count']}")
+    request_time_stats = cache_data.get("request_time_stats") or {}
+    if request_time_stats.get("path"):
+        print(
+            "request_time_stats: "
+            f"{request_time_stats['path']} "
+            f"records={request_time_stats.get('record_count', 0)} "
+            f"rids={request_time_stats.get('rid_count', 0)} "
+            f"matched_spans={request_time_stats.get('matched_span_count', 0)}"
+        )
 
     if args.serve:
         serve_directory(paths.html_path.parent, args.port)

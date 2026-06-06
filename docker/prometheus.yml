@@ -1,0 +1,14 @@
+# Example all-runs config. Each training run with
+# --enable-observability generates its own
+# {run_dir}/prometheus/prometheus.yml, which is the preferred config for a
+# single run.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: slime_sglang_engine
+    metrics_path: /engine_metrics
+    file_sd_configs:
+      - files:
+          - /tmp/slime-runs/*/prometheus/file_sd/sglang_router.json
