@@ -1,0 +1,9 @@
+# Config for examples.cispo.cispo_loss.cispo_loss_function.
+#
+# This file is loaded through --custom-config-path. slime attaches top-level
+# YAML keys to args, so the custom loss reads args.loss_config["cispo"].
+loss_config:
+  cispo:
+    # These are Tinker-style absolute ratio thresholds, not epsilon values.
+    clip_low_threshold: 0.0
+    clip_high_threshold: 4.0
