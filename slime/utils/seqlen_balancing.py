@@ -177,18 +177,6 @@ def get_seqlen_balanced_partitions(seqlen_list: list[int], k_partitions: int, eq
     return _check_and_sort_partitions(partitions)
 
 
-def calculate_workload(seqlen_list, coeff=24576):
-    """Estimate per-sequence transformer FLOPs proportional to ``coeff * L + L²``.
-
-    ``coeff`` is the linear coefficient that captures FFN + attention projection
-    cost, pre-computed from model config as ``2*h + ffn_mul * d_ff // 2``
-    (see ``slime_validate_args`` in arguments.py).  Default 24576 = 6*4096.
-    """
-    if isinstance(seqlen_list, list):
-        return [coeff * sl + sl * sl for sl in seqlen_list]
-    return coeff * seqlen_list + seqlen_list**2
-
-
 def first_fit_pack(total_lengths, max_tokens_per_bin):
     """First-fit bin packing.
 
