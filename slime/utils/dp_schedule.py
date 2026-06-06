@@ -42,21 +42,35 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.seqlen_balancing import expand_bins_by_splitting, first_fit_pack, get_seqlen_balanced_partitions
 
 logger = logging.getLogger(__name__)
 
 
+def _calculate_workloads(step_lengths, args):
+    return [calculate_fwd_flops([sl], args) for sl in step_lengths]
+
+
 def _pack_step_into_mbs(
     step_lengths: list[int],
     *,
+    args: Any,
     use_dynamic_batch_size: bool,
     max_per_bin: int | None,
     micro_batch_size: int | None,
+    balance_by_flops: bool = False,
 ) -> list[list[int]]:
     """Group a step's samples into mbs. Returns ``mbs[k]`` = local indices into ``step_lengths``."""
     if use_dynamic_batch_size:
         assert max_per_bin is not None
+        if balance_by_flops:
+            total_tokens = sum(step_lengths)
+            num_mbs = max(1, (total_tokens + max_per_bin - 1) // max_per_bin)
+            if num_mbs >= len(step_lengths):
+                return [[i] for i in range(len(step_lengths))]
+            workloads = _calculate_workloads(step_lengths, args)
+            return get_seqlen_balanced_partitions(workloads, num_mbs, equal_size=False)
         return first_fit_pack(step_lengths, max_per_bin)
     assert micro_batch_size is not None
     n = len(step_lengths)
@@ -139,11 +153,14 @@ def build_dp_schedule(
 
         # 1. Pack samples in this step into mbs with one global pass.
         # ``step_mbs`` indices are LOCAL into ``sample_indices``.
+        balance_by_flops = getattr(args, "balance_by_flops", False)
         step_mbs = _pack_step_into_mbs(
             step_lengths,
+            args=args,
             use_dynamic_batch_size=args.use_dynamic_batch_size,
             max_per_bin=max_per_bin,
             micro_batch_size=getattr(args, "micro_batch_size", None),
+            balance_by_flops=balance_by_flops,
         )
 
         # 2. Align mbs count to a multiple of ``align_to``.
@@ -170,12 +187,15 @@ def build_dp_schedule(
         num_mbs_per_rank = K // dp_size
         num_microbatches.append(num_mbs_per_rank)
 
-        # 3. Distribute mbs across ranks: KK on mbs token sums when balance_data is on,
-        # otherwise a strided round-robin. Both produce ``num_mbs_per_rank`` mbs per
-        # rank (equal_size=True is what KK needs for PP to stay synced).
-        if args.balance_data:
-            mbs_token_sums = [sum(step_lengths[i] for i in bin_) for bin_ in step_mbs]
-            rank_mbs_idx = get_seqlen_balanced_partitions(mbs_token_sums, dp_size, equal_size=True)
+        # 3. Distribute mbs across ranks: KK on mbs workloads when balance_data
+        # or balance_by_flops is on, otherwise a strided round-robin.
+        if args.balance_data or balance_by_flops:
+            if balance_by_flops:
+                step_workloads = _calculate_workloads(step_lengths, args)
+                mbs_weights = [sum(step_workloads[i] for i in bin_) for bin_ in step_mbs]
+            else:
+                mbs_weights = [sum(step_lengths[i] for i in bin_) for bin_ in step_mbs]
+            rank_mbs_idx = get_seqlen_balanced_partitions(mbs_weights, dp_size, equal_size=True)
         else:
             rank_mbs_idx = [list(range(r, K, dp_size)) for r in range(dp_size)]
 
