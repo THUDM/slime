@@ -11,6 +11,8 @@ directory is just the launch script + CI test.
 * `run-qwen2.5-0.5B-fully_async.sh` — single-node, 4-GPU, three-rollout demo
   with Qwen2.5-0.5B-Instruct on dapo-math-17k. Fast enough to be the CI
   smoke test for the fully-async path.
+* `run-qwen3.5-9B-fully_async.sh` — single-node, 8-GPU, three-rollout demo
+  with Qwen3.5-9B on dapo-math-17k.
 
 The same script doubles as `tests/test_qwen2.5_0.5B_fully_async_short.py` in
 CI.
