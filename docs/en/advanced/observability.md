@@ -4,13 +4,10 @@ slime's observability path is a per-run local bundle. The goal is to make long-r
 
 There is one default production mode: `--enable-observability`. This mode collects local artifacts that are useful for profiling while keeping overhead controlled.
 
-- W&B keeps algorithm metrics such as loss, reward, KL, entropy, and eval scores.
+- W&B keeps algorithm metrics and also logs a small set of request perf summaries aggregated from `meta_info` / sample traces, such as P/D duration, transfer speed, and retry count.
 - Prometheus scrapes SGLang serving/system metrics from the router's `/metrics` and `/engine_metrics` endpoints, covering router-native metrics and router-aggregated engine metrics.
-- SGLang request metrics are written to local JSONL files, one record per completed request, so request-level profiling state can be reconstructed after the run.
-- SGLang request logs are written as `level=0` metadata-only JSON files under the run directory, not to the user's daily stdout.
-- SGLang `ReqTimeStats(...)` logs are written to local engine log files, and the trace viewer can read them to reconstruct PD prefill/decode timelines.
+- SGLang response `meta_info` request timing fields are stored in sample traces, and the trace viewer uses the `pd_*` fields directly to reconstruct PD prefill/decode timelines.
 - slime writes run metadata, Prometheus config, file-based service discovery files, and fail-open local status/component-state files.
-- High-frequency request-level artifacts default to a node-sharded scratch path instead of the `run_dir` root.
 - slime does not automatically enable token-level traces, payload dumps, remote logging backends, or replay artifacts.
 - slime does not inject step, weight-sync, or request-lifecycle events into the training loop by default; trainer/rollout coupling telemetry should be added through explicit, non-invasive hooks or helpers.
 - The trainer process does not start or own Prometheus, Grafana, Loki, or OpenTelemetry collectors. For non-cloud-native users, the slime image can include a local helper that starts these standard tools on the same machine or inside the same container.
@@ -22,12 +19,10 @@ SGLang Prometheus metrics are high-volume system metrics. Uploading them through
 | Data type | Destination | Default state | Notes |
 | --- | --- | --- | --- |
 | Algorithm metrics | W&B / TensorBoard | unchanged | reward, loss, KL, entropy, eval |
+| SGLang request perf summaries | W&B / TensorBoard | written during rollout perf aggregation | Aggregated from sample trace timing fields; low frequency and low cardinality |
 | SGLang system metrics | Prometheus | scrapeable with `--enable-observability` | scraped from `/metrics` and `/engine_metrics` |
 | Run metadata | local JSON | written with `--enable-observability` | run id, paths, environment, versions, allowlisted args |
 | Component status | local JSON/JSONL | written with `--enable-observability` | `status.json`, `component_state.json`, `errors.jsonl` |
-| Request facts | local JSONL files | written with `--enable-observability` | SGLang `export_metrics_to_file`, one record per completed request |
-| Request logs | local JSON logs | written with `--enable-observability` | metadata-only, file target, no stdout |
-| Request time stats | local engine logs | written with `--enable-observability` | SGLang `ReqTimeStats(...)`, used for profiling and the trace viewer |
 | Traces / replay dumps | TODO | disabled by default | future explicit opt-in only |
 
 This boundary matters: monitoring failures must not stop training.
@@ -39,20 +34,19 @@ The default `--enable-observability` path should be low overhead, but it is not 
 - Bundle files are written at startup and when the router target is registered. They are not on the rollout request hot path.
 - Prometheus scrapes the router `/metrics` and `/engine_metrics` endpoints every 5 seconds. This is HTTP pull-based, does not run in the trainer process, and does not synchronously block rollout.
 - SGLang still maintains counters and histograms for the metrics endpoint. slime currently keeps SGLang metrics enabled so the router `/engine_metrics` endpoint is available. This overhead is typically much smaller than model inference.
-- SGLang's request metrics exporter writes one JSONL record when a request finishes. It does not write once per token. The write is triggered through `asyncio.create_task`, then formats JSON, writes a file record, and flushes.
-- SGLang's request logger writes metadata-only JSON logs on request receive/finish. slime points the target at a local file directory, so the user's daily stdout does not show these logs.
-- SGLang request-time-stats logging writes one `ReqTimeStats(...)` line when a request finishes. slime injects a run-local logging config for local engines so these SGLang subprocess logs go to `request_time_stats/sglang` under the scratch directory instead of relying on Ray driver stdout, which can aggregate repeated lines.
+- SGLang `meta_info` request timings already return to Python with the response. slime stores them in sample traces and logs only aggregate `perf/...` summaries to W&B/TensorBoard after rollout completes, not one point per request.
+- The default path does not write SGLang request metrics JSONL, request logs, or `ReqTimeStats(...)` engine logs, and those records do not appear in daily stdout.
 - If Prometheus is not running, training still runs. Bundle and target writing are fail-open.
 
-Request metrics and request-time-stats logs have different jobs. Request metrics JSONL records request parameters and final `meta_info`, which is useful for request facts and post-crash inspection. `ReqTimeStats(...)` logs come directly from the prefill/decode engines and carry queue, forward, PD transfer, transfer speed, retry, and related durations. They are the primary source for rebuilding PD timelines and trace viewer `[P]` / `[D]` lanes.
+The daily profiling source is the request timing fields in SGLang response `meta_info`. They land in sample traces, the trace viewer renders `[P]` / `[D]` lanes from `pd_*` fields, and W&B/TensorBoard receive one aggregate set per rollout step, such as `perf/prefill/forward_duration/mean`, `perf/decode/transfer_duration/max`, and `perf/request/queue_time/median`.
 
 The default production path is therefore:
 
 ```text
-production profiling default = manifest + status + Prometheus config + file_sd + /metrics scrape target + /engine_metrics scrape target + request metrics JSONL + metadata-only request logs + ReqTimeStats engine logs
+production profiling default = manifest + status + Prometheus config + file_sd + /metrics scrape target + /engine_metrics scrape target + sample trace timing attrs + W&B/TensorBoard perf/* aggregates
 ```
 
-The path contract is split: `run_dir` holds durable low-frequency metadata/config/status; `observability_scratch_dir` holds high-frequency request-level files; `observability_prometheus_tsdb_dir` is for Prometheus local TSDB; and `observability_export_dir` is for compacted durable outputs. Under high QPS, slow disks, shared filesystems, large log volume, or near-full disks, request-level files can still affect tail latency or throughput. TODOs track benchmarking, buffering/rotation, and a narrower SGLang request metrics privacy option.
+This keeps high-frequency SGLang Prometheus metrics in Prometheus and sends only compact request perf summaries to W&B/TensorBoard.
 
 ## User Interface
 
@@ -70,9 +64,7 @@ You can also use environment variables:
 ```bash
 export SLIME_ENABLE_OBSERVABILITY=1
 export SLIME_RUN_DIR=/mnt/runs/ppo_qwen3_001
-export SLIME_OBS_SCRATCH_DIR=/local_nvme/slime-obs/{run_id}/node={hostname}
 export SLIME_PROMETHEUS_TSDB_DIR=/local_nvme/prometheus/{run_id}
-export SLIME_OBS_EXPORT_DIR=/mnt/runs/ppo_qwen3_001/export
 ```
 
 If `--run-id` is not provided, slime generates one. If `--run-dir` is not provided, slime uses:
@@ -99,22 +91,6 @@ For `--run-dir /mnt/runs/ppo_qwen3_001`, slime writes:
     file_sd/
       sglang_router_metrics.json
       sglang_router_engine_metrics.json
-  logging_configs/
-    sglang/
-      {hostname}_{worker_type}_rank{rank}.json
-  export/
-  nodes/
-    node={hostname}/
-      request_metrics/
-        sglang/
-          sglang-request-metrics-YYYYMMDD_HH.log
-      request_time_stats/
-        sglang/
-          worker_type=prefill/rank=0/pid=1234.jsonl
-          worker_type=decode/rank=0/pid=5678.jsonl
-      logs/
-        sglang/
-          ...
 ```
 
 `manifest.json` records the run id, important paths, environment information, component versions, and an allowlisted subset of the slime argument namespace. The full argparse namespace is not written by default; keys containing key, token, secret, password, authorization, or credential are redacted even if they appear in the allowlist.
@@ -189,112 +165,93 @@ The helper would only start standard components as local helper processes, such 
 
 Installing dependencies in the image does not by itself make artifacts durable. If the container filesystem or node-local disk is reclaimed after a failed job, `run_dir` must be mounted on durable storage such as NFS/a parallel filesystem, PVC/hostPath, or be drained promptly by a local log tailer into Loki, ClickHouse, object storage, or another backend.
 
-## Request Metrics Behavior
+## Request Perf Metrics Behavior
 
-With `--enable-observability`, slime injects these SGLang arguments:
-
-```text
-sglang_export_metrics_to_file = true
-sglang_export_metrics_to_file_dir = ${observability_scratch_dir}/request_metrics/sglang
-sglang_log_requests = true
-sglang_log_requests_level = 0
-sglang_log_requests_format = json
-sglang_log_requests_target = [${observability_scratch_dir}/logs/sglang]
-sglang_enable_request_time_stats_logging = true
-```
-
-`export_metrics_to_file` is the request facts artifact. It writes one JSONL record when each request finishes. Fields come from request parameters and the final `meta_info`, which makes it useful for request-level lookup and post-crash inspection.
-
-`enable_request_time_stats_logging` is the main artifact for PD profiling and the trace viewer. SGLang writes lines like this when prefill/decode engine requests finish:
+SGLang response `meta_info` provides request timings that also exist without PD, for example:
 
 ```text
-ReqTimeStats(rid=..., bootstrap_room=..., input_len=..., output_len=..., type=decode): prealloc_queue_duration(...ms) = bootstrap(...ms) + alloc_wait(...ms); transfer_duration=...ms; queue_duration=...ms, forward_duration=...ms
+queue_time
+e2e_latency
+decode_throughput
 ```
 
-For local engines, slime generates a logging config referenced by `SGLANG_LOGGING_CONFIG_PATH` so these lines land under `${observability_scratch_dir}/request_time_stats/sglang`. It does not read Ray driver stdout because stdout can be aggregated, truncated, or displayed as repeated lines.
-
-The default hot-path layout is one append-only shard per engine process, for example:
+Under PD disaggregation, the SGLang patch also puts the request-time-stats fields that matter most for training profiling into response `meta_info`, for example:
 
 ```text
-${observability_scratch_dir}/request_time_stats/sglang/
-  worker_type=prefill/rank=0/pid=1234.jsonl
-  worker_type=decode/rank=0/pid=5678.jsonl
+pd_prefill_bootstrap_queue_duration
+pd_prefill_forward_duration
+pd_prefill_transfer_queue_duration
+pd_decode_prealloc_duration
+pd_decode_transfer_duration
+pd_decode_forward_duration
+pd_bootstrap_duration
+pd_alloc_waiting_duration
+pd_transfer_speed_gb_s
+pd_transfer_total_mb
+pd_prefill_retry_count
 ```
 
-Each process owns its shard, so prefill/decode engines on the same node do not append to one shared file. The larger file count is handled by out-of-band compaction instead of by merging in the request-completion path. Lines still include `worker_type` and `rank`, and those dimensions also appear in the path for easier post-processing.
-
-If containers or node-local disks are reclaimed after a failed job, do not rely only on ephemeral local disk. `run_dir` can point at shared NFS or a parallel filesystem, while high-frequency request-level artifacts should prefer `observability_scratch_dir` and then be copied to durable storage by an agent or compaction/export step. Another option is to write node-local shards and have a log agent tail them into Loki, ClickHouse, or object storage; in that setup the local shard is only a short-lived buffer.
-
-Do not make all nodes append directly to one global file in the training hot path. Cross-node append atomicity, ordering, and throughput depend on the filesystem, and NFS/EFS-style shared paths are especially risky. If you want one file for analysis, compact the shards out of band:
-
-```bash
-python tools/compact_sglang_request_time_stats.py \
-  /local_nvme/slime-obs/ppo_qwen3_001/node=node-a/request_time_stats/sglang \
-  --output /mnt/runs/ppo_qwen3_001/export/sglang_request_time_stats.jsonl
-```
-
-The trace viewer joins records by `sglang_request_id` / `rid`; if an older trace dump already contains `pd_*` attrs, those existing attrs win for compatibility.
-
-`sglang_log_requests_level=0` is enabled for the current SGLang exporter privacy boundary. The request metrics exporter still reuses the request logger skip list; without the metadata-only logger, it may write a wider set of request parameters. slime also records the effective privacy mode in the manifest and writes only an allowlisted config subset there. If SGLang upstream adds an exporter-owned allowlist/privacy option, slime should switch to that and reduce reliance on request logger side effects.
-
-Request logs are auxiliary artifacts, and their target is a local file directory rather than `stdout`. The files can still contain request metadata, so protect the run directory as training data.
-
-If you use external rollout engines, slime can only write the Prometheus target; it cannot change the SGLang flags or logging setup of an already-running external service. Set the same `--export-metrics-to-file`, `--log-requests-level 0`, file target, `--enable-request-time-stats-logging`, and save SGLang `ReqTimeStats(...)` logs to a directory or compacted JSONL file that the trace viewer can read.
-
-## Trace Viewer and Request-Time-Stats Logs
-
-SGLang generates a random `rid` for each request, and both the response `meta_info["id"]` and `ReqTimeStats(rid=...)` logs use that id. After slime receives the response, it records `meta_info["id"]` as the span attribute `sglang_request_id`. `tools/trace_timeline_viewer.py` reads request-time-stats logs while building the cache, joins log records by `rid`, and then uses the existing synthetic `[P]` / `[D]` lane rendering.
-
-Common usage:
-
-```bash
-python tools/trace_timeline_viewer.py \
-  /path/to/debug/rollout_0.pt \
-  --request-time-stats-path /mnt/runs/ppo_qwen3_001/request_time_stats/sglang
-```
-
-If no path is provided, the viewer checks `SLIME_REQUEST_TIME_STATS_PATH`, then `SLIME_RUN_DIR/request_time_stats/sglang`, then `request_time_stats/sglang` near the `.pt` file.
-
-`--request-time-stats-path` can point to a directory or to one compacted JSONL/log file.
-
-The latest SGLang patch no longer sends an extra prefill timing buffer between P/D workers only for the trace viewer. The viewer supports both sources: existing `pd_*` attrs in trace dumps and fields joined by `rid` from request-time-stats logs or compacted JSONL. SGLang `ReqTimeStats(...)` text is the compatibility input; if SGLang writes structured JSONL later, the loader can read it directly.
-
-## Choosing a Log Backend
-
-Loki is a good log storage system, especially for searching raw logs by run, node, worker type, and time range. It should not be the synchronous write target in the SGLang request hot path. The recommended shape is:
+slime stores those fields in the `sglang_generate` span attrs. During rollout metric aggregation, `slime/ray/rollout.py` extracts every `sglang_generate` span from sample traces and maps internal `pd_*` fields to clearer user-facing `perf/prefill/...`, `perf/decode/...`, and `perf/request/...` metrics. Each field logs `mean`, `median`, `max`, `min`, and `count`:
 
 ```text
-SGLang ReqTimeStats
-  -> one append-only shard per engine process (local short-lived buffer or node-sharded scratch)
-  -> Promtail / Grafana Alloy / Vector / Fluent Bit tailing
-  -> Loki
+perf/request/e2e_latency/mean
+perf/request/queue_time/median
+perf/prefill/bootstrap_queue_duration/mean
+perf/prefill/forward_duration/max
+perf/prefill/transfer_speed_gb_s/mean
+perf/decode/prealloc_duration/mean
+perf/decode/transfer_duration/max
+perf/decode/forward_duration/mean
+perf/request/count
+perf/request/profiled_count
 ```
 
-This avoids long-lived piles of small files on a shared filesystem, and Loki or agent failures do not block training or inference. The agent can own queueing, batching, retry, drop policy, and retention; if the shard is on ephemeral local disk, the agent is part of the durability path. High-cardinality fields such as `rid` and `bootstrap_room` must stay in the log body, not labels. Loki labels should stay low-cardinality, for example:
+These metrics go through the existing `logging_utils.log()` path, so both W&B and TensorBoard can see them. They are aggregated once per rollout step, not emitted once per request, so they should not make W&B slow like uploading raw Prometheus metrics would. Without PD, `perf/request/...` and available `perf/decode/throughput/...` still exist; detailed `perf/prefill/...` and `perf/decode/...` durations only appear when SGLang returns the corresponding timing fields.
+
+## Prometheus P/D Queue Metrics
+
+Prometheus owns live serving state. Current SGLang `/engine_metrics` already exposes PD-disaggregation queue gauges that are useful for spotting congestion at a point in time:
 
 ```text
-run_id, component=sglang, log_type=req_time_stats, node, worker_type
+sglang:num_queue_reqs
+sglang:num_running_reqs
+sglang:num_prefill_bootstrap_queue_reqs
+sglang:num_prefill_inflight_queue_reqs
+sglang:num_decode_prealloc_queue_reqs
+sglang:num_decode_transfer_queue_reqs
 ```
 
-If the goal is large-scale statistics over request duration, transfer speed, retry count, or P/D breakdowns, Loki works but is not the strongest backend. Better fits are:
+These metrics carry low-cardinality labels such as `engine_type`, `dp_rank`, `tp_rank`, `pp_rank`, and `model_name`, so Grafana can split prefill-engine and decode-engine queue buildup.
 
-| Backend | Best fit | Notes |
-| --- | --- | --- |
-| Loki | Log search, raw lines by time range, Grafana integration | Do not label by `rid`; good centralized log backend |
-| ClickHouse | Large-scale structured profiling queries | Good for request aggregation, p99, transfer speed, and worker hotspots |
-| Object storage + Parquet | Low-cost long-term archive and offline analysis | For example S3/MinIO plus compaction into Parquet |
-| Kafka/Pulsar + sinks | High-throughput buffering and fan-out | Usually an intermediate layer before Loki/ClickHouse/object storage |
-| Elasticsearch/OpenSearch | Full-text search | Usable, but often higher cost and operational overhead than Loki/ClickHouse |
+Prometheus can also show part of the request-stage latency and KV-transfer picture:
 
-The default design therefore keeps one shard per engine process as the fail-open artifact and uses `observability_scratch_dir` for node-sharded placement. Production clusters can add an agent to ship local shards to Loki, ClickHouse, or object storage and clean local files by retention, or compact them out of band into `observability_export_dir`. A future TODO is to provide a standard Grafana Alloy / Vector config template so users do not need to accumulate fragmented logs on a shared disk.
+```text
+sglang:per_stage_req_latency_seconds_bucket{stage="prefill_bootstrap"}
+sglang:per_stage_req_latency_seconds_bucket{stage="prefill_transfer_kv_cache"}
+sglang:per_stage_req_latency_seconds_bucket{stage="decode_prepare"}
+sglang:per_stage_req_latency_seconds_bucket{stage="decode_bootstrap"}
+sglang:per_stage_req_latency_seconds_bucket{stage="decode_transferred"}
+sglang:kv_transfer_speed_gb_s_bucket
+sglang:kv_transfer_latency_ms_bucket
+sglang:kv_transfer_total_mb_bucket
+sglang:num_prefill_retries_total
+sglang:num_bootstrap_failed_reqs_total
+sglang:num_transfer_failed_reqs_total
+```
 
-If users should not deploy a separate service, Grafana Alloy, Vector, or Fluent Bit can be bundled in the slime image and started by `slime-observability local`. To users this is still "run one slime image"; internally it remains an asynchronous tail, batch, retry, and retention path, not a synchronous Loki push from the SGLang request completion path.
+This complements W&B/TensorBoard `perf/...` metrics: Prometheus shows online queue depth, histograms, and error counters; sample traces and W&B aggregates show min/max/mean/median for completed requests, plus trace-viewer P/D timelines.
+
+## Trace Viewer Duration Input
+
+The trace viewer reads `pd_*` attrs directly from sample traces in debug rollout dumps and renders the synthetic `[P]` / `[D]` lanes from those attrs. The primary path does not need a separate `ReqTimeStats(...)` log file, Loki, or request-time-stats compaction.
+
+Future Grafana-like analysis should be added as native trace viewer panels first: request-duration histograms, p95/p99, `input_len` vs transfer-duration scatter plots, transfer-speed timelines, and similar views. That keeps the user flow to opening the trace viewer instead of deploying a separate log stack.
 
 ## slime-Side Telemetry
 
 SGLang metrics answer many serving-layer questions, but they cannot fully explain whether the trainer is waiting on rollout, weight sync, the data buffer, or Ray/object-store behavior. That telemetry is useful, but the default implementation should not rewrite the training loop.
 
-v1 keeps implementation inside the observability bundle boundary: standard config generation, scrape target registration, SGLang local artifact paths, and status files. If slime-side step, rollout, weight-sync, or request-lifecycle events are added later, they should use explicit lightweight interfaces, for example:
+v1 keeps implementation inside the observability bundle boundary: standard config generation, scrape target registration, and status files. If slime-side step, rollout, weight-sync, or request-lifecycle events are added later, they should use explicit lightweight interfaces, for example:
 
 - Export low-frequency phase summaries from existing `Timer` / trace utilities.
 - Add optional local writers beside existing rollout/training log summary points.
@@ -307,7 +264,7 @@ This preserves the RL-system causal chain without making observability a hard de
 
 The current default collection can show some communication-related request symptoms, but it cannot fully answer hardware-level RDMA questions.
 
-Prometheus scraping `/engine_metrics` can show SGLang serving symptoms such as queue buildup, TTFT, prefill/decode latency, cache behavior, and throughput. Request-time-stats logs add finer request breakdowns; under PD disaggregation they include transfer duration, transfer speed, transfer total MB, and retry fields. RDMA or network problems should be more visible through these symptoms.
+Prometheus scraping `/engine_metrics` can show SGLang serving symptoms such as P/D queue buildup, TTFT, prefill/decode latency, cache behavior, throughput, KV-transfer speed/latency/size histograms, retries, and failure counters. Sample-trace `pd_*` fields add completed-request transfer duration, transfer speed, transfer total MB, and retry summaries at rollout granularity. RDMA or network problems should be more visible through these symptoms.
 
 RDMA bandwidth, retransmits, packet drops, NIC error counters, and link state still require node-level counters. That needs a future low-frequency, out-of-band, fail-open collector:
 
@@ -324,7 +281,7 @@ That lets dashboards put SGLang latency/throughput, request-level transfer stats
 Keep these rules when extending the bundle:
 
 - Do not upload SGLang Prometheus metrics to W&B.
-- The default mode may write request-level profiling files, but it must not write prompt/output payloads, write to stdout, or synchronously send remote logs.
+- The default mode must not write request-level profiling files, prompt/output payloads, stdout request logs, or synchronous remote logs.
 - Do not put `request_id`, `sample_id`, prompt hashes, raw prompts, raw outputs, or user ids into Prometheus labels.
 - Keep Prometheus labels low-cardinality: `run_id`, `role`, `node`, `rank`, `worker_id`, `model_name`, and `phase` are acceptable examples.
 - Put high-cardinality join fields in JSONL, Parquet, or trace attributes instead.
@@ -333,38 +290,29 @@ Keep these rules when extending the bundle:
 
 ## Current Implementation Points
 
-- `slime/profiling/observability.py` owns bundle creation, manifest writing, Prometheus config rendering, file service discovery target writing, and SGLang request profiling defaults.
-- `slime/utils/arguments.py` exposes `--enable-observability`, `--run-id`, `--run-dir`, `--observability-scratch-dir`, `--observability-prometheus-tsdb-dir`, and `--observability-export-dir`.
+- `slime/profiling/observability.py` owns bundle creation, manifest writing, Prometheus config rendering, and file service discovery target writing.
+- `slime/utils/arguments.py` exposes `--enable-observability`, `--run-id`, `--run-dir`, and `--observability-prometheus-tsdb-dir`.
 - `train.py` and `train_async.py` initialize the bundle before tracking and register the router target after rollout servers start.
 - `slime/utils/wandb_utils.py` no longer re-initializes W&B with open metrics endpoints.
 - `slime/utils/logging_utils.py` imports W&B lazily only when `--use-wandb` is enabled.
-- `slime/backends/sglang_utils/sglang_engine.py` still always enables SGLang metrics so the router `/metrics` and `/engine_metrics` endpoints are available; in observability mode it also writes a run-local logging config so `ReqTimeStats(...)` lands in per-process shard files.
-- `slime/profiling/request_time_stats.py` provides the generic request-time-stats JSONL loader, SGLang `ReqTimeStats(...)` compatibility parser, append-only log handler, and shared loading logic used by the trace viewer and compaction tool; the compaction path preserves parse-error records so log format drift is not silently dropped.
-- `slime/utils/trace_utils.py` stores `meta_info["id"]` as `sglang_request_id` for trace viewer joins.
-- `tools/trace_timeline_viewer.py` reads request-time-stats logs, joins by `rid`, and keeps compatibility with old `pd_*` trace attrs.
-- `tools/compact_sglang_request_time_stats.py` compacts request-time-stats shards into one structured JSONL file for offline analysis.
+- `slime/backends/sglang_utils/sglang_engine.py` still always enables SGLang metrics so the router `/metrics` and `/engine_metrics` endpoints are available.
+- `slime/utils/trace_utils.py` stores `meta_info["id"]` as `sglang_request_id` and stores request timing fields from `meta_info` in sample traces.
+- `slime/ray/rollout.py` aggregates request / prefill / decode perf metrics from sample traces and logs min/max/mean/median/count through the existing W&B/TensorBoard path.
+- `tools/trace_timeline_viewer.py` reads `pd_*` fields directly from sample traces and renders synthetic `[P]` / `[D]` lanes.
 
 ## TODO
 
 Short-term:
 
-- Add tests for `prepare_observability_args`, manifest redaction, Prometheus config rendering, file service discovery output, and request profiling argument injection.
+- Add tests for `prepare_observability_args`, manifest redaction, Prometheus config rendering, file service discovery output, and rollout request perf aggregation.
 - Add a small example command to the quick-start or profiling docs.
 - Add a `slime-observability local` helper that reads `run_dir` and the manifest's `prometheus_tsdb_dir`, starts local Prometheus, writes pid/log files, and can clean up helper processes on exit.
-- Benchmark Prometheus scraping, SGLang metrics enablement, request metrics JSONL, and metadata-only request logs at different rollout scales, then document the measured overhead.
-- Add tests for the request-time-stats parser, append-only handler, and compaction tool, covering prefill, decode, older log format, and the current SGLang format.
-- Verify that all local SGLang subprocesses inherit the run-local logging config in multi-node, multi-DP/TP/EP, and PD prefill/decode deployments.
+- Benchmark Prometheus scraping, SGLang metrics enablement, and sample trace request perf aggregation at different rollout scales, then document the measured overhead.
 
 Medium-term:
 
 - Add an RDMA / network node-level sampler that collects counters at low frequency, fails open, and can integrate with node exporter's textfile collector.
 - Generate Grafana provisioning and starter dashboards that point at the run-local Prometheus TSDB.
-- Optionally bundle Grafana Alloy / Vector / Fluent Bit config templates in the image so the helper can tail request-time-stats shards locally and asynchronously ship them to Loki, ClickHouse, or object storage.
-- Add optional JSONL-to-Parquet compaction for request facts and request-time-stats files.
-- Add log rotation, max-size, and retention controls so request-level profiling files cannot fill disks silently; fail-open degradation should update `observability/component_state.json`.
-- If SGLang upstream supports a dedicated request-time-stats file target, switch to it instead of capturing through the general SGLang logging config.
-- If SGLang upstream supports structured request-time-stats JSONL, prefer structured records and keep the `ReqTimeStats(...)` text parser only as a compatibility path.
-- If SGLang upstream supports a narrower request metrics privacy option, decouple exporter skip lists from request logging and reduce auxiliary request log files.
 - Add low-cardinality label allowlists for any future custom SGLang tokenizer metric labels.
 - Add correlation headers for rollout requests, such as `x-slime-run-id`, `x-slime-rollout-id`, `x-slime-weight-version`, and a request id. These should be used for joining logs/traces/request facts, not as Prometheus labels.
 - Expose a small slime-side metrics endpoint or local metrics file for rollout/training coupling metrics such as rollout latency, weight sync latency, data buffer size, and global step; this should be explicit opt-in or attached to existing summary points, not a default training-loop wrapper.

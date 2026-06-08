@@ -1,11 +1,8 @@
 import dataclasses
 import ipaddress
-import json
 import logging
 import multiprocessing
 import os
-import re
-import socket
 import time
 from urllib.parse import quote
 
@@ -17,7 +14,6 @@ from sglang.srt.utils import kill_process_tree
 from urllib3.exceptions import NewConnectionError
 
 from slime.backends.sglang_utils.external import get_server_info
-from slime.profiling.observability import resolve_observability_path
 from slime.ray.ray_actor import RayActor
 from slime.utils.http_utils import get_host_info
 
@@ -80,11 +76,7 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
 
 
 def _launch_http_server(server_args: ServerArgs):
-    import logging.config  # noqa: F401
-
     from sglang.srt.entrypoints.http_server import launch_server
-
-    import slime.profiling.request_time_stats  # noqa: F401
 
     launch_server(server_args)
 
@@ -196,17 +188,7 @@ class SGLangEngine(RayActor):
 
     def _init_normal(self, server_args_dict):
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
-        logging_config_path = _write_sglang_logging_config(self.args, self.rank, self.worker_type)
-        previous_logging_config_path = os.environ.get("SGLANG_LOGGING_CONFIG_PATH")
-        if logging_config_path:
-            os.environ["SGLANG_LOGGING_CONFIG_PATH"] = logging_config_path
-        try:
-            self.process = launch_server_process(ServerArgs(**server_args_dict))
-        finally:
-            if previous_logging_config_path is None:
-                os.environ.pop("SGLANG_LOGGING_CONFIG_PATH", None)
-            else:
-                os.environ["SGLANG_LOGGING_CONFIG_PATH"] = previous_logging_config_path
+        self.process = launch_server_process(ServerArgs(**server_args_dict))
         self._register_to_router(server_args_dict)
 
     def _register_to_router(self, server_args_dict):
@@ -667,82 +649,7 @@ def _compute_server_args(
         for key in unused_keys:
             kwargs.pop(key)
 
-    _apply_observability_server_paths(args, kwargs)
-
     return kwargs, external_engine_need_check_fields
-
-
-def _apply_observability_server_paths(args, kwargs: dict) -> None:
-    if not getattr(args, "observability_enabled", False):
-        return
-
-    if kwargs.get("export_metrics_to_file") and kwargs.get("export_metrics_to_file_dir"):
-        kwargs["export_metrics_to_file_dir"] = resolve_observability_path(args, kwargs["export_metrics_to_file_dir"])
-    if kwargs.get("log_requests") and kwargs.get("log_requests_target"):
-        kwargs["log_requests_target"] = [
-            resolve_observability_path(args, target) for target in kwargs["log_requests_target"]
-        ]
-
-
-def _write_sglang_logging_config(args, rank: int, worker_type: str) -> str | None:
-    if not getattr(args, "observability_enabled", False):
-        return None
-
-    log_dir = resolve_observability_path(args, getattr(args, "observability_sglang_request_time_stats_log_dir", None))
-    config_dir = getattr(args, "observability_sglang_logging_config_dir", None)
-    if not log_dir or not config_dir:
-        return None
-
-    try:
-        os.makedirs(log_dir, exist_ok=True)
-        os.makedirs(config_dir, exist_ok=True)
-        safe_worker_type = re.sub(r"[^A-Za-z0-9_.-]+", "_", worker_type)
-        safe_hostname = re.sub(r"[^A-Za-z0-9_.-]+", "_", socket.gethostname())
-        basename = f"{safe_worker_type}_rank{rank}"
-        log_path = os.path.join(log_dir, f"worker_type={safe_worker_type}", f"rank={rank}", "pid={pid}.jsonl")
-        config_path = os.path.join(config_dir, f"{safe_hostname}_{basename}.json")
-        log_level = str(getattr(args, "sglang_log_level", "info") or "info").upper()
-
-        config = {
-            "version": 1,
-            "disable_existing_loggers": False,
-            "filters": {
-                "request_time_stats": {
-                    "()": "slime.profiling.request_time_stats.ReqTimeStatsLogFilter",
-                }
-            },
-            "formatters": {
-                "sglang": {
-                    "format": f"[%(asctime)s.%(msecs)03d {safe_worker_type} rank{rank}] %(message)s",
-                    "datefmt": "%Y-%m-%d %H:%M:%S",
-                }
-            },
-            "handlers": {
-                "request_time_stats_file": {
-                    "class": "slime.profiling.request_time_stats.AppendOnlyFileHandler",
-                    "filename": log_path,
-                    "encoding": "utf-8",
-                    "formatter": "sglang",
-                    "filters": ["request_time_stats"],
-                }
-            },
-            "root": {
-                "level": log_level,
-                "handlers": ["request_time_stats_file"],
-            },
-            "loggers": {
-                "httpx": {"level": "WARNING"},
-                "httpcore": {"level": "WARNING"},
-            },
-        }
-        tmp_path = f"{config_path}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as handle:
-            json.dump(config, handle, ensure_ascii=True, separators=(",", ":"))
-        os.replace(tmp_path, config_path)
-        return config_path
-    except Exception:
-        logger.exception("Failed to write SGLang logging config for observability; using default SGLang logging.")
-        return None
 
 
 _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS = [

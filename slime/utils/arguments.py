@@ -1229,15 +1229,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Directory for per-run observability files. Defaults to /tmp/slime-runs/{run_id}.",
             )
             parser.add_argument(
-                "--observability-scratch-dir",
-                type=str,
-                default=os.environ.get("SLIME_OBS_SCRATCH_DIR"),
-                help=(
-                    "High-frequency observability artifact directory template. Defaults to "
-                    "{run_dir}/nodes/node={hostname}. Supports {run_id}, {hostname}, and {pid}."
-                ),
-            )
-            parser.add_argument(
                 "--observability-prometheus-tsdb-dir",
                 type=str,
                 default=os.environ.get("SLIME_PROMETHEUS_TSDB_DIR"),
@@ -1247,18 +1238,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--observability-export-dir",
-                type=str,
-                default=os.environ.get("SLIME_OBS_EXPORT_DIR"),
-                help="Optional durable directory for compacted observability outputs. Defaults to {run_dir}/export.",
-            )
-            parser.add_argument(
                 "--enable-observability",
                 action="store_true",
                 default=_env_flag("SLIME_ENABLE_OBSERVABILITY", False),
                 help=(
                     "Enable the per-run observability bundle. This writes run metadata, Prometheus config, "
-                    "file service discovery targets, and SGLang request-level profiling files."
+                    "and file service discovery targets."
                 ),
             )
             parser.add_argument(

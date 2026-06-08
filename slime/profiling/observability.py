@@ -55,20 +55,6 @@ _MANIFEST_CONFIG_ALLOWLIST = {
 _MANIFEST_CONFIG_PREFIX_ALLOWLIST = (
     "observability_",
     "sglang_enable_",
-    "sglang_export_metrics_to_file",
-    "sglang_log_requests",
-)
-_REQUEST_METRICS_FORBIDDEN_FIELDS = (
-    "prompt",
-    "input_ids",
-    "output_ids",
-    "output_text",
-    "sampling_params",
-    "text",
-    "image_data",
-    "audio_data",
-    "video_data",
-    "multi_modal_data",
 )
 
 
@@ -94,17 +80,9 @@ def prepare_observability_args(args) -> None:
     args.run_dir = os.path.abspath(os.path.expanduser(args.run_dir))
 
     _prepare_observability_paths(args)
-    args.observability_request_metrics_privacy_mode = "metadata_only_allowlist"
-
-    _apply_sglang_request_profiling_defaults(args)
 
 
 def _prepare_observability_paths(args) -> None:
-    scratch_dir = getattr(args, "observability_scratch_dir", None) or os.environ.get("SLIME_OBS_SCRATCH_DIR")
-    args.observability_scratch_dir = (
-        _abspath_template(scratch_dir) if scratch_dir else os.path.join(args.run_dir, "nodes", "node={hostname}")
-    )
-
     prometheus_tsdb_dir = getattr(args, "observability_prometheus_tsdb_dir", None) or os.environ.get(
         "SLIME_PROMETHEUS_TSDB_DIR"
     )
@@ -117,11 +95,6 @@ def _prepare_observability_paths(args) -> None:
             args.run_id,
             "prometheus-tsdb",
         )
-    )
-
-    export_dir = getattr(args, "observability_export_dir", None) or os.environ.get("SLIME_OBS_EXPORT_DIR")
-    args.observability_export_dir = (
-        _abspath_template(export_dir) if export_dir else os.path.join(args.run_dir, "export")
     )
 
     status_dir = os.path.join(args.run_dir, "observability")
@@ -144,33 +117,9 @@ def _prepare_observability_paths(args) -> None:
             prometheus_file_sd_dir,
             _PROMETHEUS_ROUTER_ENGINE_METRICS_FILE,
         ),
-        "observability_sglang_request_metrics_dir": os.path.join(
-            args.observability_scratch_dir,
-            "request_metrics",
-            "sglang",
-        ),
-        "observability_sglang_request_log_dir": os.path.join(
-            args.observability_scratch_dir,
-            "logs",
-            "sglang",
-        ),
-        "observability_sglang_request_time_stats_log_dir": os.path.join(
-            args.observability_scratch_dir,
-            "request_time_stats",
-            "sglang",
-        ),
-        "observability_sglang_logging_config_dir": os.path.join(
-            args.run_dir,
-            "logging_configs",
-            "sglang",
-        ),
     }
     for name, path in path_attrs.items():
         setattr(args, name, path)
-
-    # Backward-compatible alias for existing callers and docs generated from
-    # the first implementation.
-    args.observability_sglang_router_target_file = args.observability_sglang_router_engine_metrics_target_file
 
 
 def initialize_observability(args) -> None:
@@ -181,8 +130,6 @@ def initialize_observability(args) -> None:
         os.makedirs(args.run_dir, exist_ok=True)
         os.makedirs(args.observability_status_dir, exist_ok=True)
         os.makedirs(args.observability_prometheus_file_sd_dir, exist_ok=True)
-        os.makedirs(args.observability_export_dir, exist_ok=True)
-        os.makedirs(args.observability_sglang_logging_config_dir, exist_ok=True)
 
         _write_text_atomic(args.observability_prometheus_config, _render_prometheus_config(args))
         _write_json_atomic(args.observability_manifest_path, _build_manifest(args))
@@ -279,31 +226,21 @@ def _build_manifest(args) -> dict:
         "run_dir": args.run_dir,
         "observability_mode": "production_profiling",
         "paths": {
-            "scratch_dir": args.observability_scratch_dir,
-            "export_dir": args.observability_export_dir,
             "manifest": args.observability_manifest_path,
             "prometheus_config": args.observability_prometheus_config,
             "prometheus_tsdb_dir": args.observability_prometheus_tsdb_dir,
             "sglang_router_metrics_file_sd": args.observability_sglang_router_metrics_target_file,
             "sglang_router_engine_metrics_file_sd": args.observability_sglang_router_engine_metrics_target_file,
-            "sglang_request_metrics_dir": args.observability_sglang_request_metrics_dir,
-            "sglang_request_log_dir": args.observability_sglang_request_log_dir,
-            "sglang_request_time_stats_log_dir": args.observability_sglang_request_time_stats_log_dir,
-            "sglang_logging_config_dir": args.observability_sglang_logging_config_dir,
             "status": args.observability_status_path,
             "errors": args.observability_errors_path,
             "component_state": args.observability_component_state_path,
         },
         "privacy": {
             "manifest_config_mode": "allowlist",
-            "request_metrics_privacy_mode": args.observability_request_metrics_privacy_mode,
-            "request_metrics_forbidden_fields": list(_REQUEST_METRICS_FORBIDDEN_FIELDS),
         },
         "storage_contract": {
             "run_dir": "durable low-frequency metadata, configs, status, and summaries",
-            "scratch_dir": "node-local or node-sharded high-frequency request artifacts",
             "prometheus_tsdb_dir": "local Prometheus TSDB path; prefer local POSIX storage",
-            "export_dir": "optional durable compacted or post-run outputs",
         },
         "environment": {
             "hostname": socket.gethostname(),
@@ -314,23 +251,6 @@ def _build_manifest(args) -> dict:
         "versions": _collect_versions(),
         "config": _redact_config(vars(args)),
     }
-
-
-def _apply_sglang_request_profiling_defaults(args) -> None:
-    # SGLang's exporter currently writes one JSONL record per completed
-    # request. Keep the logger metadata-only while slime records the effective
-    # privacy mode and checks generated artifacts out of band.
-    args.sglang_export_metrics_to_file = True
-    if not getattr(args, "sglang_export_metrics_to_file_dir", None):
-        args.sglang_export_metrics_to_file_dir = args.observability_sglang_request_metrics_dir
-
-    args.sglang_log_requests = True
-    args.sglang_log_requests_level = 0
-    args.sglang_log_requests_format = "json"
-    if not getattr(args, "sglang_log_requests_target", None):
-        args.sglang_log_requests_target = [args.observability_sglang_request_log_dir]
-
-    args.sglang_enable_request_time_stats_logging = True
 
 
 def _collect_versions() -> dict:
@@ -467,22 +387,6 @@ def _initial_component_state(args) -> dict:
                 "state": "pending_target",
                 "router_metrics_target_file": args.observability_sglang_router_metrics_target_file,
                 "engine_metrics_target_file": args.observability_sglang_router_engine_metrics_target_file,
-                "updated_at": now,
-            },
-            "request_metrics": {
-                "state": "configured",
-                "path_template": args.observability_sglang_request_metrics_dir,
-                "privacy_mode": args.observability_request_metrics_privacy_mode,
-                "updated_at": now,
-            },
-            "request_logs": {
-                "state": "configured",
-                "path_template": args.observability_sglang_request_log_dir,
-                "updated_at": now,
-            },
-            "request_time_stats": {
-                "state": "configured",
-                "path_template": args.observability_sglang_request_time_stats_log_dir,
                 "updated_at": now,
             },
         },

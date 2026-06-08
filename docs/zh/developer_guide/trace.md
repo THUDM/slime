@@ -31,7 +31,7 @@ python tools/trace_timeline_viewer.py /path/to/debug/rollout_0.pt
 
 默认情况下，它还会启动一个本地静态文件服务，方便直接在浏览器里打开。如果只想生成文件，可以加 `--no-serve`。
 
-如果训练时打开了 `--enable-observability`，viewer 还可以读取 SGLang `ReqTimeStats(...)` 日志，把 prefill/decode 的 PD timing 合并回 `sglang_generate` span：
+默认情况下，viewer 直接读取 `sglang_generate` span attrs 里的 `pd_*` timing，并用这些字段展示 prefill/decode 的虚拟 lane。`--request-time-stats-path` 只是兼容旧 dump 或手动保存的 SGLang `ReqTimeStats(...)` 日志：
 
 ```bash
 python tools/trace_timeline_viewer.py \
@@ -39,14 +39,14 @@ python tools/trace_timeline_viewer.py \
     --request-time-stats-path /path/to/run/request_time_stats/sglang
 ```
 
-不显式传路径时，viewer 会尝试 `SLIME_REQUEST_TIME_STATS_PATH`、`SLIME_RUN_DIR/request_time_stats/sglang`，以及 `.pt` 文件附近的 `request_time_stats/sglang`。这个路径可以是日志目录，也可以是 compact 后的单个 JSONL/log 文件。
+不显式传路径时，viewer 会尝试 `SLIME_REQUEST_TIME_STATS_PATH`、`SLIME_RUN_DIR/request_time_stats/sglang`，以及 `.pt` 文件附近的 `request_time_stats/sglang`。这个路径可以是日志目录，也可以是 compact 后的单个 JSONL/log 文件；当前 observability 默认路径不会额外生成这些日志。
 
 ## 如何理解可视化结果
 
 - 每一行对应一条 sample。
 - 条形块表示 span，点表示瞬时事件。
 - `trace_span(...)` 在开始和结束时记录的属性，都会显示在详情面板里。
-- 当 SGLang trace attrs 或 `ReqTimeStats(...)` 日志里有 PD 分离相关时延时，viewer 会自动补出 `[P]` 和 `[D]` 两条虚拟 lane，用来拆开展示 prefill/decode。
+- 当 SGLang trace attrs 或兼容输入的 `ReqTimeStats(...)` 日志里有 PD 分离相关时延时，viewer 会自动补出 `[P]` 和 `[D]` 两条虚拟 lane，用来拆开展示 prefill/decode。
 - 如果没有开启 PD，这两条虚拟 lane 不会出现，基础 trace 也仍然可以正常渲染。
 
 ## 给自定义代码打点
