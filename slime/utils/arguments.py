@@ -877,10 +877,10 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--loss-type",
                 type=str,
-                choices=["policy_loss", "sft_loss", "custom_loss"],
+                choices=["policy_loss", "sft_loss", "topk_opd_loss", "custom_loss"],
                 default="policy_loss",
                 help=(
-                    "Choose loss type, currently support ppo policy_loss or sft_loss, "
+                    "Choose loss type, currently support ppo policy_loss, top-k OPD loss, or sft_loss, "
                     "if custom_loss is set, we will use the function path from `--custom-loss-function-path`."
                 ),
             )
@@ -1104,6 +1104,28 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "The checkpoint for OPD teacher model. Required when --opd-type=megatron. "
                     "The teacher model should have the same architecture as policy/ref model."
                 ),
+            )
+            parser.add_argument(
+                "--opd-teacher-loads",
+                type=str,
+                nargs="+",
+                default=None,
+                help=(
+                    "Checkpoint paths for one or more Megatron OPD teacher models. "
+                    "When set, this overrides --opd-teacher-load. Teachers must be homogeneous with the student."
+                ),
+            )
+            parser.add_argument(
+                "--topk-level-opd",
+                action="store_true",
+                default=False,
+                help="Enable top-k level OPD for Megatron teachers.",
+            )
+            parser.add_argument(
+                "--opd-top-k",
+                type=int,
+                default=100,
+                help="Top-k vocabulary size used by --topk-level-opd.",
             )
             parser.add_argument(
                 "--opd-teacher-ckpt-step", type=int, default=None, help="The checkpoint step for OPD teacher model."
@@ -1763,36 +1785,52 @@ def slime_validate_args(args):
             )
 
     # Validate on-policy distillation (OPD) arguments
+    if args.opd_top_k <= 0:
+        raise ValueError("--opd-top-k must be positive.")
+
+    if args.opd_teacher_loads is None:
+        args.opd_teacher_loads = [args.opd_teacher_load] if args.opd_teacher_load is not None else None
+
+    if args.topk_level_opd and (not args.use_opd or args.opd_type != "megatron"):
+        raise ValueError("--topk-level-opd requires --use-opd --opd-type=megatron.")
+    if args.topk_level_opd and args.loss_type != "topk_opd_loss":
+        raise ValueError("--topk-level-opd requires --loss-type=topk_opd_loss.")
+    if args.topk_level_opd and args.allgather_cp:
+        raise ValueError("--topk-level-opd currently supports the default zigzag CP layout, not --allgather-cp.")
+    if args.loss_type == "topk_opd_loss" and not args.topk_level_opd:
+        raise ValueError("--loss-type=topk_opd_loss requires --topk-level-opd.")
+    if args.opd_teacher_loads is not None and len(args.opd_teacher_loads) > 1 and not args.topk_level_opd:
+        raise ValueError("--opd-teacher-loads with multiple teachers requires --topk-level-opd.")
+
     if args.use_opd:
         if args.opd_type is None:
             raise ValueError("--opd-type must be specified when --use-opd is enabled. Choose 'sglang' or 'megatron'.")
 
         if args.opd_type == "megatron":
-            if args.opd_teacher_load is None:
+            if not args.opd_teacher_loads:
                 raise ValueError(
-                    "--opd-teacher-load is required when --opd-type=megatron. "
-                    "Please provide the path to the teacher model checkpoint."
+                    "--opd-teacher-load or --opd-teacher-loads is required when --opd-type=megatron. "
+                    "Please provide the path to at least one teacher model checkpoint."
                 )
-            if not os.path.exists(args.opd_teacher_load):
-                raise FileNotFoundError(
-                    f"opd_teacher_load {args.opd_teacher_load} does not exist, please check the path."
-                )
-            if not os.path.exists(os.path.join(args.opd_teacher_load, "latest_checkpointed_iteration.txt")):
-                logger.info(
-                    f"opd_teacher_load {args.opd_teacher_load} does not have latest_checkpointed_iteration.txt, "
-                    "please make sure it is a valid megatron checkpoint directory."
-                )
+            for teacher_load in args.opd_teacher_loads:
+                if not os.path.exists(teacher_load):
+                    raise FileNotFoundError(f"opd teacher load {teacher_load} does not exist, please check the path.")
+                if not os.path.exists(os.path.join(teacher_load, "latest_checkpointed_iteration.txt")):
+                    logger.info(
+                        f"opd teacher load {teacher_load} does not have latest_checkpointed_iteration.txt, "
+                        "please make sure it is a valid megatron checkpoint directory."
+                    )
 
         elif args.opd_type == "sglang":
-            if args.opd_teacher_load is not None:
+            if args.opd_teacher_load is not None or args.opd_teacher_loads is not None:
                 raise ValueError(
-                    "--opd-teacher-load should not be set when --opd-type=sglang. "
+                    "--opd-teacher-load/--opd-teacher-loads should not be set when --opd-type=sglang. "
                     "In sglang mode, teacher log-probs are obtained from external server during rollout."
                 )
     else:
-        # If OPD is not enabled, opd_teacher_load should not be set
-        if args.opd_teacher_load is not None:
-            raise ValueError("--opd-teacher-load is set but --use-opd is not enabled. Please add --use-opd flag.")
+        # If OPD is not enabled, teacher checkpoints should not be set.
+        if args.opd_teacher_load is not None or args.opd_teacher_loads is not None:
+            raise ValueError("OPD teacher checkpoints are set but --use-opd is not enabled. Please add --use-opd flag.")
 
     if args.megatron_to_hf_mode == "bridge":
         if (

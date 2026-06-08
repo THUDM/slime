@@ -120,9 +120,14 @@ class MegatronTrainRayActor(TrainRayActor):
         if with_ref:
             self.load_other_checkpoint("ref", args.ref_load)
 
-        # Load teacher model for Megatron-based on-policy distillation
+        # Load teacher model(s) for Megatron-based on-policy distillation.
         if with_opd_teacher:
-            self.load_other_checkpoint("teacher", args.opd_teacher_load)
+            teacher_loads = getattr(args, "opd_teacher_loads", None) or [args.opd_teacher_load]
+            if len(teacher_loads) == 1:
+                self.load_other_checkpoint("teacher", teacher_loads[0])
+            else:
+                for teacher_idx, teacher_load in enumerate(teacher_loads):
+                    self.load_other_checkpoint(f"teacher_{teacher_idx}", teacher_load)
 
         if self.args.keep_old_actor:
             # Load old_actor checkpoint
@@ -674,7 +679,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if model_tag == "ref" and self.args.ref_ckpt_step is not None:
             old_ckpt_step = self.args.ckpt_step
             self.args.ckpt_step = self.args.ref_ckpt_step
-        elif model_tag == "teacher" and self.args.opd_teacher_ckpt_step is not None:
+        elif model_tag.startswith("teacher") and self.args.opd_teacher_ckpt_step is not None:
             old_ckpt_step = self.args.ckpt_step
             self.args.ckpt_step = self.args.opd_teacher_ckpt_step
 

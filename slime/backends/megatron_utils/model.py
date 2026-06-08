@@ -6,6 +6,7 @@ import os
 from argparse import Namespace
 from collections.abc import Callable, Sequence
 from functools import partial
+from typing import Any
 from pathlib import Path
 
 import torch
@@ -265,6 +266,7 @@ def forward_only(
     data_iterator: Sequence[DataIterator],
     num_microbatches: Sequence[int],
     store_prefix: str = "",
+    extra_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, list[torch.Tensor]]:
     """Run forward passes only and collect non-loss outputs (e.g., logprobs).
 
@@ -322,6 +324,7 @@ def forward_only(
                 "total_lengths",
                 "response_lengths",
                 "max_seq_lens",
+                "student_topk_indices",
             ],
             args.data_pad_size_multiplier,
             args.qkv_format,
@@ -344,6 +347,10 @@ def forward_only(
             forward_kwargs.update(batch["multimodal_train_inputs"])
         output_tensor = model(**forward_kwargs)
 
+        output_kwargs = dict(extra_kwargs or {})
+        if batch.get("student_topk_indices", None) is not None:
+            output_kwargs["target_indices"] = batch["student_topk_indices"]
+
         return output_tensor, partial(
             f,
             args=args,
@@ -352,6 +359,7 @@ def forward_only(
             response_lengths=response_lengths,
             with_entropy=args.use_rollout_entropy,
             max_seq_lens=batch.get("max_seq_lens", None),
+            **output_kwargs,
         )
 
     # Turn on evaluation mode which disables dropout.
@@ -501,6 +509,11 @@ def train_one_step(
                 "rollout_log_probs",
                 "max_seq_lens",
                 "teacher_log_probs",
+                "student_topk_indices",
+                "old_topk_log_probs",
+                "old_tail_log_probs",
+                "teacher_topk_log_probs",
+                "teacher_tail_log_probs",
                 "rollout_mask_sums",
             ],
             args.data_pad_size_multiplier,
