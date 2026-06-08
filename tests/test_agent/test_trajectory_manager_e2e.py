@@ -261,6 +261,24 @@ def _leaves(mgr, sid):
     return [leaf for leaf in mgr._trees[sid].leaves() if not leaf.is_root]
 
 
+# Tree text snapshot captured the instant before get_trajectory drains the sid,
+# so the human-readable dump can show [tree] AND [samples] side by side even
+# though get_trajectory consumes the session.
+_TREE_SNAP: dict[str, str] = {}
+
+
+def get_traj(mgr, sid, *args, **kwargs):
+    """get_trajectory wrapper that snapshots the tree before draining.
+
+    Linearization (get_trajectory) pops the sid, so a later dump would only see
+    ``<drained>``. Capturing the tree text here keeps the routing tree visible
+    next to the Samples it produced.
+    """
+    if mgr.has_session(sid):
+        _TREE_SNAP[sid] = dump_tree_txt(mgr, sid)
+    return mgr.get_trajectory(sid, *args, **kwargs)
+
+
 def _check_invariants(samples):
     for s in samples:
         assert len(s.loss_mask) == len(s.rollout_log_probs) == s.response_length, (
@@ -361,18 +379,35 @@ def test_1_6_tool_fork_shared_assistant():
 
 
 def test_1_7_token_only_drift_no_fork():
-    """Identical messages, tampered prompt_ids -> NO fork (DFS ignores tokens)."""
+    """Identical messages, tampered prompt_ids -> NO tree fork (DFS ignores
+    tokens), but the drift DOES surface in the linearized sample: it lands in
+    leaf 2's prompt region (stripped / loss=0), proving token drift cannot
+    corrupt a trained response yet is still carried in the sample tokens."""
     mgr = TrajectoryManager()
     sid = "1.7"
     s, u = sys_msg("S"), usr_msg("u")
-    p1, _ = append(mgr, sid, [s, u], "a")
-    tampered = drift(p1, 1)
+    pa, ra = append(mgr, sid, [s, u], "a")
+    tampered = drift(pa, 1)  # <DRIFT> spliced into the prompt at index 1
+    rb = render_response("b")
     append(mgr, sid, [s, u], "b", prompt_ids=tampered)
+    # Tree: (sys,user) shared, two assistant turns hang off it -> two leaves; the
+    # path above the assistant is single (NOT forked on tokens).
     user_node = mgr._trees[sid].children[0].children[0]
     assert len(user_node.children) == 2, "two assistant turns share the (sys,user) path"
-    # but the path above the assistant is single (not forked on tokens)
     assert len(mgr._trees[sid].children) == 1
-    _record("1.7 token-only drift -> no tree fork", mgr, sid, [])
+
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    assert len(samples) == 2
+    s_a, s_b = samples
+    # Leaf 1: clean. Leaf 2: tokens carry the <DRIFT> token, but it sits in the
+    # stripped prompt region — loss_mask covers only the response (rb).
+    assert s_a.tokens == pa + ra
+    assert s_b.tokens == tampered + rb
+    assert s_b.loss_mask == [1] * len(rb), "drift confined to prompt; response fully trained"
+    assert (_DRIFT_BAND + 1) in s_b.tokens, "drift token is still carried in the sample"
+    assert (_DRIFT_BAND + 1) not in s_b.tokens[len(tampered) :], "drift not in the response region"
+    _check_invariants(samples)
+    _record("1.7 token-only drift -> no tree fork, drift lands in stripped prompt", mgr, sid, samples)
     print("PASS 1.7")
 
 
@@ -428,7 +463,7 @@ def test_2_1_single_turn_linearize():
     # attach explicit logprobs so we can check propagation
     leaf = _leaves(mgr, sid)[0]
     leaf.turn_response_logprobs = [-0.5] * len(r)
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=7, prompt="hi"), reward=1.0)
+    samples = get_traj(mgr, sid, base_sample=Sample(index=7, prompt="hi"), reward=1.0)
     assert len(samples) == 1
     s0 = samples[0]
     assert s0.tokens == p + r
@@ -447,7 +482,7 @@ def test_2_2_clean_multiturn_linearize():
     s, u, a1, t1 = sys_msg("S"), usr_msg("u"), asst_msg("call"), tool_msg("4")
     p1, r1 = append(mgr, sid, [s, u], "call", finish_reason="tool_calls", logprobs=[-0.5] * 2)
     p2, r2 = append(mgr, sid, [s, u, a1, t1], "done", logprobs=[-0.4] * 2)
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 1
     s0 = samples[0]
     L = _lcp_len(p1 + r1, p2)
@@ -469,7 +504,7 @@ def test_2_3_drift_case_A_forks():
     p2_honest = render_prompt([s, u, a1, t])
     p2 = drift(p2_honest, len(p1) - 1)  # inside p1's prompt region
     p2, r2 = append(mgr, sid, [s, u, a1, t], "done", prompt_ids=p2, logprobs=[-0.4] * 2)
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
     assert len(samples) == 2
     s1, s2 = samples
     assert s1.tokens == p1 + r1
@@ -493,7 +528,7 @@ def test_2_4_drift_case_B1_short_replaces():
     drift_idx = len(p1) + len(r1) - 1  # last token of r1's echo
     p2 = drift_replace(p2_honest, drift_idx)
     p2, r2 = append(mgr, sid, [s, u, a1, t], "done", prompt_ids=p2, logprobs=[-0.4] * 2)
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 1
     s0 = samples[0]
     L = _lcp_len(p1 + r1, p2)
@@ -514,7 +549,7 @@ def test_2_5_drift_case_B1_long_forks():
     p2_honest = render_prompt([s, u, a1, t])
     p2 = drift_replace(p2_honest, len(p1) + len(r1) - 1)
     p2, r2 = append(mgr, sid, [s, u, a1, t], "done", prompt_ids=p2)
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
     assert len(samples) == 2
     assert samples[0].tokens == p1 + r1
     assert samples[1].tokens == p2 + r2
@@ -532,7 +567,7 @@ def test_2_6_drift_case_B1_threshold_zero_forks():
     p2_honest = render_prompt([s, u, a1, t])
     p2 = drift_replace(p2_honest, len(p1) + len(r1) - 1)
     append(mgr, sid, [s, u, a1, t], "done", prompt_ids=p2)
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
     assert len(samples) == 2
     _check_invariants(samples)
     _record("2.6 drift case B1 threshold=0 -> fork", mgr, sid, samples)
@@ -551,7 +586,7 @@ def test_2_7_drift_case_B2_earlier_turn_forks():
     p3_honest = render_prompt([s, u, a1, t1, a2, t2])
     p3 = drift_replace(p3_honest, len(p1) + len(r1) - 1)  # inside r1 (earlier span)
     p3, r3 = append(mgr, sid, [s, u, a1, t1, a2, t2], "a3", prompt_ids=p3, logprobs=[-0.3] * 2)
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
     assert len(samples) == 2
     s1, s2 = samples
     L12 = _lcp_len(p1 + r1, p2)
@@ -571,7 +606,7 @@ def test_2_8_fork_reward_split():
     p2_honest = render_prompt([s, u, a1, t])
     p2 = drift(p2_honest, len(p1) - 1)  # prompt region -> case A fork
     append(mgr, sid, [s, u, a1, t], "done", prompt_ids=p2)
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=3.0)
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=3.0)
     assert len(samples) == 2
     assert all(abs(s.reward - 1.5) < 1e-9 for s in samples)
     _record("2.8 fork reward split (3.0 / 2)", mgr, sid, samples)
@@ -584,7 +619,7 @@ def test_2_9_two_leaves_reward_split():
     s = sys_msg("S")
     for ul in ["A", "B"]:
         append(mgr, sid, [s, usr_msg(ul)], ul.lower())
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
     assert len(samples) == 2
     assert all(s.reward == 1.0 for s in samples)
     _check_invariants(samples)
@@ -602,7 +637,7 @@ def test_2_10_cross_leaf_dedup():
     p1, r1 = append(mgr, sid, [s, u], "call", finish_reason="tool_calls", logprobs=[-0.5] * 2)
     p2, r2 = append(mgr, sid, [s, u, a1, tx], "a2", logprobs=[-0.4] * 2)
     p3, r3 = append(mgr, sid, [s, u, a1, ty], "a3", logprobs=[-0.3] * 2)
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
     assert len(samples) == 2
     s_first, s_second = samples
     L2 = _lcp_len(p1 + r1, p2)
@@ -634,7 +669,7 @@ def test_2_11_routing_only_assistant_filtered():
     chain = leaves[0].path_from_root()
     routing = [n for n in chain if n.role == "assistant" and n.turn_prompt_ids is None]
     assert len(routing) == 1 and routing[0].messages[0]["content"] == "foreign"
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""))
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""))
     assert len(samples) == 1
     _record("2.11 routing-only assistant filtered (no raise)", mgr, sid, samples)
     print("PASS 2.11")
@@ -672,7 +707,7 @@ def test_3_1_rewrite_merge_absorbs_short():
     assert merged.turn_prompt_ids is None and merged.turn_index is None
     assert merged.messages == [a1_rw.message]
     assert merged.metadata["merged_rewrite"]["abandoned_turn_index"] == 1
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 1
     assert samples[0].tokens == p2 + r2
     assert samples[0].loss_mask == [1] * len(r2)
@@ -689,7 +724,7 @@ def test_3_2_rewrite_merge_long_forks():
     append(mgr, sid, [s, u], "ok", finish_reason="tool_calls")
     append(mgr, sid, [s, u, a1_rw, t1], "done")
     assert len(_leaves(mgr, sid)) == 2, "long rewrite forks"
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
     assert len(samples) == 2
     _check_invariants(samples)
     _record("3.2 rewrite-merge long -> fork", mgr, sid, samples)
@@ -704,7 +739,7 @@ def test_3_3_rewrite_merge_threshold_zero_forks():
     append(mgr, sid, [s, u], "ok", finish_reason="tool_calls")
     append(mgr, sid, [s, u, a1_rw, t1], "done")
     assert len(_leaves(mgr, sid)) == 2
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
     _check_invariants(samples)
     _record("3.3 rewrite-merge threshold=0 -> fork", mgr, sid, samples)
     print("PASS 3.3")
@@ -737,7 +772,7 @@ def test_3_5_rewrite_merge_match_key_updated():
     p3, r3 = append(mgr, sid, [s, u, a1_rw, t1, a2, t2], "third", logprobs=[-0.3] * 2)
     leaves = _leaves(mgr, sid)
     assert len(leaves) == 1, "match_key updated -> no spurious fork"
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""))
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""))
     assert len(samples) == 1
     L = _lcp_len(p2 + r2, p3)
     assert samples[0].tokens == p2 + r2 + p3[L:] + r3
@@ -764,7 +799,7 @@ def test_3_6_tree_fork_plus_token_drift():
     append(mgr, sid, [s, u, a1, tx, ax2, txx], "ax3", prompt_ids=p3, logprobs=[-0.2] * 2)
     # Leaf Y: a separate tool result off the shared assistant.
     append(mgr, sid, [s, u, a1, ty], "ay2", logprobs=[-0.1] * 2)
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=3.0)
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=3.0)
     # Leaf X -> 2 samples (drift fork), Leaf Y -> 1 sample. Total 3.
     assert len(samples) == 3, [s.tokens for s in samples]
     assert all(abs(s.reward - 1.0) < 1e-9 for s in samples)
@@ -786,7 +821,7 @@ def test_3_7_deep_multi_leaf_dedup():
     # three different tool results off a2 -> three leaves sharing a1+a2
     for lbl in ["p", "q", "r"]:
         append(mgr, sid, [s, u, a1, t1, a2, tool_msg(lbl)], f"end-{lbl}", logprobs=[-0.3] * 2)
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=3.0)
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=3.0)
     assert len(samples) == 3
     # Count trained tokens for r1 and r2 across all samples: each shared turn
     # trained exactly once (first leaf), others loss=0.
@@ -828,7 +863,7 @@ def test_3_8_long_mixed_session():
     p7_honest = render_prompt(prefix)
     p7 = drift(p7_honest, len(p1) - 1)
     append(mgr, sid, prefix, "a5", prompt_ids=p7, logprobs=lp)
-    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=4.0)
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=4.0)
     # The final case-A fork splits the single leaf chain into >=2 segments.
     assert len(samples) >= 2, len(samples)
     assert abs(sum(s.reward for s in samples) - 4.0) < 1e-9
@@ -878,7 +913,12 @@ def _print_raw_turns(sid: str) -> None:
 def _print_case(title: str, mgr, sid: str, samples: list) -> None:
     print(f"\n=== CASE {title} ===")
     _print_raw_turns(sid)
-    txt = dump_tree_txt(mgr, sid) if mgr.has_session(sid) else "<drained>"
+    if mgr.has_session(sid):
+        txt = dump_tree_txt(mgr, sid)
+    else:
+        # Session already drained by get_trajectory; fall back to the snapshot
+        # captured by get_traj just before draining.
+        txt = _TREE_SNAP.get(sid, "<drained>")
     print("[tree]")
     for line in txt.splitlines():
         print("  " + line)
