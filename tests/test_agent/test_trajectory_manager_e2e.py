@@ -343,6 +343,35 @@ def _check_invariants(samples):
         assert sum(s.loss_mask) > 0, "fully-masked sample emitted"
 
 
+def golden(sample) -> str:
+    """Render one Sample as a human-reviewable golden string.
+
+    Every token is decoded to its readable name (``<sys>``, ``r:done``,
+    ``<DRIFT>`` ...). The leading prompt prefix (no loss_mask entry) is shown as
+    plain names; the response region is shown with each TRAINED token (loss=1)
+    wrapped in ``[...]`` and each context token (loss=0) left bare. This makes the
+    full linearized result — tokens, where the response region starts, and
+    exactly which tokens carry training signal — a single literal a human can
+    eyeball and assert against, instead of hand-derived index arithmetic.
+
+    Example: ``<sys> system:S </sys> <usr> user:u </usr> <gen> [r:ok] [</ast>]``
+    """
+    toks = sample.tokens
+    resp_start = len(toks) - sample.response_length
+    parts: list[str] = []
+    for i, t in enumerate(toks):
+        nm = name_of(t)
+        if i >= resp_start and sample.loss_mask[i - resp_start] == 1:
+            parts.append(f"[{nm}]")
+        else:
+            parts.append(nm)
+    return " ".join(parts)
+
+
+def goldens(samples) -> list[str]:
+    return [golden(s) for s in samples]
+
+
 # ===========================================================================
 # §2 Group 1 — routing tree layer (append_turn shapes the tree)
 # ===========================================================================
@@ -353,12 +382,15 @@ def test_1_1_single_turn_chain():
     sid = "1.1"
     s = sys_msg("S")
     u = usr_msg("compute")
-    append(mgr, sid, [s, u], "ok")
+    p, r = append(mgr, sid, [s, u], "ok")
     chain = _leaves(mgr, sid)[0].path_from_root()
     assert [n.role for n in chain] == ["system", "user", "assistant"]
     assert chain[-1].turn_index == 1
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 1
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:compute </usr> <gen> [r:ok] [</ast>]",
+    ]
     _check_invariants(samples)
     _record("1.1 single turn -> linear chain", mgr, sid, samples)
     print("PASS 1.1")
@@ -369,13 +401,17 @@ def test_1_2_clean_multiturn_with_tool():
     sid = "1.2"
     s, u = sys_msg("S"), usr_msg("compute")
     a1, t1 = asst_msg("call"), tool_msg("4")
-    append(mgr, sid, [s, u], "call", finish_reason="tool_calls")
-    append(mgr, sid, [s, u, a1, t1], "done")
+    p1, r1 = append(mgr, sid, [s, u], "call", finish_reason="tool_calls")
+    p2, r2 = append(mgr, sid, [s, u, a1, t1], "done")
     chain = _leaves(mgr, sid)[0].path_from_root()
     assert [n.role for n in chain] == ["system", "user", "assistant", "tool", "assistant"]
     assert mgr.turn_count(sid) == 2
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 1
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:compute </usr> <gen> [r:call] [</ast>] "
+        "<tul> tool:4 </tul> <gen> [r:done] [</ast>]",
+    ]
     _check_invariants(samples)
     _record("1.2 clean 2-turn with tool -> single chain", mgr, sid, samples)
     print("PASS 1.2")
@@ -390,7 +426,10 @@ def test_1_3_system_fork():
     assert len(root.children) == 2, "different system -> two subtrees at root"
     assert len(_leaves(mgr, sid)) == 2
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
-    assert len(samples) == 2
+    assert goldens(samples) == [
+        "<sys> system:SA </sys> <usr> user:u </usr> <gen> [r:a] [</ast>]",
+        "<sys> system:SB </sys> <usr> user:u </usr> <gen> [r:a] [</ast>]",
+    ]
     _check_invariants(samples)
     _record("1.3 system fork -> two subtrees at root", mgr, sid, samples)
     print("PASS 1.3")
@@ -407,7 +446,10 @@ def test_1_4_user_fork_shared_system():
     assert len(root.children[0].children) == 2, "user level forks"
     assert len(_leaves(mgr, sid)) == 2
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
-    assert len(samples) == 2
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:A </usr> <gen> [r:a] [</ast>]",
+        "<sys> system:S </sys> <usr> user:B </usr> <gen> [r:b] [</ast>]",
+    ]
     _check_invariants(samples)
     _record("1.4 user fork (shared system)", mgr, sid, samples)
     print("PASS 1.4")
@@ -423,7 +465,11 @@ def test_1_5_assistant_message_fork():
     user_node = mgr._trees[sid].children[0].children[0]
     assert len(user_node.children) == 2, "two assistant leaves hang off shared user"
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
-    assert len(samples) == 2
+    # Two independent single-turn leaves sharing only the (sys,user) prefix.
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:a1] [</ast>]",
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:a2] [</ast>]",
+    ]
     _check_invariants(samples)
     _record("1.5 assistant fork under shared user", mgr, sid, samples)
     print("PASS 1.5")
@@ -442,10 +488,14 @@ def test_1_6_tool_fork_shared_assistant():
     assert asst1.role == "assistant" and asst1.turn_prompt_ids is not None
     assert len(asst1.children) == 2, "shared assistant forks at the tool level"
     assert len(_leaves(mgr, sid)) == 2
-    # The shared assistant (turn 1) is trained on the first leaf only; the second
-    # re-emits it as loss=0 context (cross-leaf dedup).
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
-    assert len(samples) == 2
+    # Leaf X owns the shared turn 1 (r:call trained); leaf Y shares it -> r:call
+    # demoted to loss=0 context, only r:ay trains (cross-leaf dedup).
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] [</ast>] "
+        "<tul> tool:x </tul> <gen> [r:ax] [</ast>]",
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> r:call </ast> " "<tul> tool:y </tul> <gen> [r:ay] [</ast>]",
+    ]
     _check_invariants(samples)
     _record("1.6 tool fork (shared assistant snapshot)", mgr, sid, samples)
     print("PASS 1.6")
@@ -459,9 +509,8 @@ def test_1_7_token_only_drift_no_fork():
     mgr = TrajectoryManager()
     sid = "1.7"
     s, u = sys_msg("S"), usr_msg("u")
-    pa, ra = append(mgr, sid, [s, u], "a")
+    pa, _ = append(mgr, sid, [s, u], "a")
     tampered = drift(pa, 1)  # <DRIFT> spliced into the prompt at index 1
-    rb = render_response("b")
     append(mgr, sid, [s, u], "b", prompt_ids=tampered)
     # Tree: (sys,user) shared, two assistant turns hang off it -> two leaves; the
     # path above the assistant is single (NOT forked on tokens).
@@ -471,12 +520,15 @@ def test_1_7_token_only_drift_no_fork():
 
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 2
-    s_a, s_b = samples
-    # Leaf 1: clean. Leaf 2: tokens carry the <DRIFT> token, but it sits in the
-    # stripped prompt region — loss_mask covers only the response (rb).
-    assert s_a.tokens == pa + ra
-    assert s_b.tokens == tampered + rb
-    assert s_b.loss_mask == [1] * len(rb), "drift confined to prompt; response fully trained"
+    # Leaf 1: clean. Leaf 2: the <DRIFT> token sits in the stripped prompt region
+    # (bare, no brackets); the response r:b is fully trained ([...]).
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:a] [</ast>]",
+        "<sys> <DRIFT> system:S </sys> <usr> user:u </usr> <gen> [r:b] [</ast>]",
+    ]
+    # Belt-and-suspenders on the drift placement: token present, but never inside
+    # the response region.
+    s_b = samples[1]
     assert (_DRIFT_BAND + 1) in s_b.tokens, "drift token is still carried in the sample"
     assert (_DRIFT_BAND + 1) not in s_b.tokens[len(tampered) :], "drift not in the response region"
     _check_invariants(samples)
@@ -497,6 +549,10 @@ def test_1_8_multi_tool_per_turn():
     assert chain[4].messages == [tb.message]
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 1
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] [</ast>] "
+        "<tul> tool:A </tul> <tul> tool:B </tul> <gen> [r:done] [</ast>]",
+    ]
     _check_invariants(samples)
     _record("1.8 multi-tool turn -> one node per tool", mgr, sid, samples)
     print("PASS 1.8")
@@ -512,7 +568,8 @@ def test_1_9_cross_sid_isolation():
     assert mgr._trees["sid-a"] is not mgr._trees["sid-b"]
     sa = get_traj(mgr, "sid-a", base_sample=Sample(index=0, prompt=""), reward=1.0)
     sb = get_traj(mgr, "sid-b", base_sample=Sample(index=1, prompt=""), reward=1.0)
-    assert len(sa) == 1 and len(sb) == 1
+    assert goldens(sa) == ["<sys> system:S </sys> <usr> user:A </usr> <gen> [r:a] [</ast>]"]
+    assert goldens(sb) == ["<sys> system:S </sys> <usr> user:B </usr> <gen> [r:b] [</ast>]"]
     _check_invariants(sa)
     _check_invariants(sb)
     _record("1.9 cross-sid isolation (sid-a)", mgr, "sid-a", sa)
@@ -553,10 +610,8 @@ def test_2_1_single_turn_linearize():
     samples = get_traj(mgr, sid, base_sample=Sample(index=7, prompt="hi"), reward=1.0)
     assert len(samples) == 1
     s0 = samples[0]
-    assert s0.tokens == p + r
-    assert s0.loss_mask == [1] * len(r)
+    assert goldens(samples) == ["<sys> system:S </sys> <usr> user:u </usr> <gen> [r:a] [</ast>]"]
     assert s0.rollout_log_probs == [-0.5] * len(r)
-    assert s0.response_length == len(r)
     assert s0.reward == 1.0
     _check_invariants(samples)
     _record("2.1 single-turn linearize", mgr, sid, samples)
@@ -573,9 +628,10 @@ def test_2_2_clean_multiturn_linearize():
     assert len(samples) == 1
     s0 = samples[0]
     L = _lcp_len(p1 + r1, p2)
-    assert L == len(p1) + len(r1)
-    assert s0.tokens == p1 + r1 + p2[L:] + r2
-    assert s0.loss_mask == [1] * len(r1) + [0] * (len(p2) - L) + [1] * len(r2)
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] [</ast>] "
+        "<tul> tool:4 </tul> <gen> [r:done] [</ast>]",
+    ]
     assert s0.rollout_log_probs == [-0.5] * len(r1) + [0.0] * (len(p2) - L) + [-0.4] * len(r2)
     _check_invariants(samples)
     _record("2.2 clean 2-turn linearize", mgr, sid, samples)
@@ -593,11 +649,13 @@ def test_2_3_drift_case_A_forks():
     p2, r2 = append(mgr, sid, [s, u, a1, t], "done", prompt_ids=p2, logprobs=[-0.4] * 2)
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 2
-    s1, s2 = samples
-    assert s1.tokens == p1 + r1
-    assert s1.loss_mask == [1] * len(r1)
-    assert s2.tokens == p2 + r2
-    assert s2.loss_mask == [1] * len(r2)
+    # case-A fork: two coherent single-turn segments; the <DRIFT> token stays in
+    # segment 2's stripped prompt region (bare), no token dropped.
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] [</ast>]",
+        "<sys> system:S </sys> <usr> user:u </usr> <DRIFT> <gen> r:call </ast> "
+        "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
+    ]
     assert all(abs(s.reward - 1.0 / len(samples)) < 1e-9 for s in samples)
     _check_invariants(samples)
     _record("2.3 drift case A (prompt region) -> fork", mgr, sid, samples)
@@ -620,8 +678,13 @@ def test_2_4_drift_case_B1_short_replaces():
     s0 = samples[0]
     L = _lcp_len(p1 + r1, p2)
     assert L == drift_idx
-    assert s0.tokens == p2 + r2
-    assert s0.loss_mask == [1] * (L - len(p1)) + [0] * (len(p2) - L) + [1] * len(r2)
+    # replace: the drifted r:call tail is dropped and re-supplied as loss=0 prompt
+    # context (the <DRIFT> token marks the divergence); only the surviving head of
+    # r:call and the new r:done train.
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] <DRIFT> "
+        "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
+    ]
     assert s0.rollout_log_probs == [-0.5] * (L - len(p1)) + [0.0] * (len(p2) - L) + [-0.4] * len(r2)
     _check_invariants(samples)
     _record("2.4 drift case B1 (small) -> replace", mgr, sid, samples)
@@ -638,8 +701,13 @@ def test_2_5_drift_case_B1_long_forks():
     p2, r2 = append(mgr, sid, [s, u, a1, t], "done", prompt_ids=p2)
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 2
-    assert samples[0].tokens == p1 + r1
-    assert samples[1].tokens == p2 + r2
+    # Both segments single-turn (the drift forked them apart): each trains its own
+    # response. The <DRIFT> sits in segment 2's stripped prompt.
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] [</ast>]",
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> r:call <DRIFT> "
+        "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
+    ]
     assert all(abs(s.reward - 1.0 / len(samples)) < 1e-9 for s in samples)
     _check_invariants(samples)
     _record("2.5 drift case B1 (long) -> fork", mgr, sid, samples)
@@ -653,9 +721,14 @@ def test_2_6_drift_case_B1_threshold_zero_forks():
     p1, r1 = append(mgr, sid, [s, u], "call", finish_reason="tool_calls")
     p2_honest = render_prompt([s, u, a1, t])
     p2 = drift_replace(p2_honest, len(p1) + len(r1) - 1)
-    append(mgr, sid, [s, u, a1, t], "done", prompt_ids=p2)
+    p2, r2 = append(mgr, sid, [s, u, a1, t], "done", prompt_ids=p2)
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 2
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] [</ast>]",
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> r:call <DRIFT> "
+        "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
+    ]
     _check_invariants(samples)
     _record("2.6 drift case B1 threshold=0 -> fork", mgr, sid, samples)
     print("PASS 2.6")
@@ -675,10 +748,14 @@ def test_2_7_drift_case_B2_earlier_turn_forks():
     p3, r3 = append(mgr, sid, [s, u, a1, t1, a2, t2], "a3", prompt_ids=p3, logprobs=[-0.3] * 2)
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 2
-    s1, s2 = samples
-    L12 = _lcp_len(p1 + r1, p2)
-    assert s1.tokens == p1 + r1 + p2[L12:] + r2
-    assert s2.tokens == p3 + r3
+    # Segment 1 = clean turns 1+2; segment 2 = turn 3 alone (forked because the
+    # drift hit an EARLIER turn's response span, which replace can't drop).
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:a1] [</ast>] "
+        "<tul> tool:t1 </tul> <gen> [r:a2] [</ast>]",
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> r:a1 <DRIFT> "
+        "<tul> tool:t1 </tul> <gen> r:a2 </ast> <tul> tool:t2 </tul> <gen> [r:a3] [</ast>]",
+    ]
     assert all(abs(s.reward - 1.0 / len(samples)) < 1e-9 for s in samples)
     _check_invariants(samples)
     _record("2.7 drift case B2 (earlier turn) -> fork", mgr, sid, samples)
@@ -689,14 +766,21 @@ def test_2_8_fork_reward_split():
     mgr = TrajectoryManager()
     sid = "2.8"
     s, u, a1, t = sys_msg("S"), usr_msg("u"), asst_msg("call"), tool_msg("t")
-    p1, _ = append(mgr, sid, [s, u], "call", finish_reason="tool_calls")
+    p1, r1 = append(mgr, sid, [s, u], "call", finish_reason="tool_calls")
     p2_honest = render_prompt([s, u, a1, t])
     p2 = drift(p2_honest, len(p1) - 1)  # prompt region -> case A fork
-    append(mgr, sid, [s, u, a1, t], "done", prompt_ids=p2)
+    p2, r2 = append(mgr, sid, [s, u, a1, t], "done", prompt_ids=p2)
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 2
+    # case-A fork: two single-turn segments, each trains its own response.
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] [</ast>]",
+        "<sys> system:S </sys> <usr> user:u </usr> <DRIFT> <gen> r:call </ast> "
+        "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
+    ]
     # reward 1.0 split evenly across the 2 forked samples -> 0.5 each.
     assert all(abs(s.reward - 0.5) < 1e-9 for s in samples)
+    _check_invariants(samples)
     _record("2.8 fork reward split (1.0 / 2 = 0.5 each)", mgr, sid, samples)
     print("PASS 2.8")
 
@@ -709,6 +793,10 @@ def test_2_9_two_leaves_reward_split():
         append(mgr, sid, [s, usr_msg(ul)], ul.lower())
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 2
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:A </usr> <gen> [r:a] [</ast>]",
+        "<sys> system:S </sys> <usr> user:B </usr> <gen> [r:b] [</ast>]",
+    ]
     # reward 1.0 split evenly across the 2 leaves -> 0.5 each.
     assert all(abs(s.reward - 0.5) < 1e-9 for s in samples)
     _check_invariants(samples)
@@ -728,12 +816,14 @@ def test_2_10_cross_leaf_dedup():
     p3, r3 = append(mgr, sid, [s, u, a1, ty], "a3", logprobs=[-0.3] * 2)
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 2
-    s_first, s_second = samples
-    L2 = _lcp_len(p1 + r1, p2)
-    assert s_first.tokens == p2 + r2
-    assert s_first.loss_mask == [1] * len(r1) + [0] * (len(p2) - L2) + [1] * len(r2)
-    assert s_second.tokens == p3 + r3
-    assert s_second.loss_mask == [0] * (len(p3) - len(p1)) + [1] * len(r3)
+    s_second = samples[1]
+    # First leaf trains the shared r:call + its own r:a2; second leaf shares
+    # r:call (demoted to loss=0) and trains only r:a3.
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] [</ast>] "
+        "<tul> tool:x </tul> <gen> [r:a2] [</ast>]",
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> r:call </ast> " "<tul> tool:y </tul> <gen> [r:a3] [</ast>]",
+    ]
     assert s_second.rollout_log_probs == [0.0] * (len(p3) - len(p1)) + [-0.3] * len(r3)
     _check_invariants(samples)
     _record("2.10 cross-leaf dedup (shared assistant trained once)", mgr, sid, samples)
@@ -760,6 +850,13 @@ def test_2_11_routing_only_assistant_filtered():
     assert len(routing) == 1 and routing[0].messages[0]["content"] == "foreign"
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 1
+    # The foreign assistant (r:foreign) is routing-only -> appears as bare context
+    # (no brackets); the three real turns r:a1/r:a2/r:a3 train.
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:a1] [</ast>] "
+        "<tul> tool:t1 </tul> <gen> [r:a2] [</ast>] <gen> r:foreign </ast> "
+        "<tul> tool:t2 </tul> <gen> [r:a3] [</ast>]",
+    ]
     _record("2.11 routing-only assistant filtered (no raise)", mgr, sid, samples)
     print("PASS 2.11")
 
@@ -771,7 +868,7 @@ def test_2_12_drop_clears_sid():
     append(mgr, sid, [s, u], "a")
     assert mgr.has_session(sid)
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
-    assert len(samples) == 1
+    assert goldens(samples) == ["<sys> system:S </sys> <usr> user:u </usr> <gen> [r:a] [</ast>]"]
     assert not mgr.has_session(sid)
     assert mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt="")) == []
     _check_invariants(samples)
@@ -790,8 +887,8 @@ def test_3_1_rewrite_merge_absorbs_short():
     s, u = sys_msg("S"), usr_msg("u")
     a1_rw = asst_msg("ok ")  # cc-rewritten (different message identity)
     t1 = tool_msg("t")
-    p1, r1 = append(mgr, sid, [s, u], "ok", finish_reason="tool_calls", logprobs=[-0.5] * 2)
-    p2, r2 = append(mgr, sid, [s, u, a1_rw, t1], "done", logprobs=[-0.4] * 2)
+    append(mgr, sid, [s, u], "ok", finish_reason="tool_calls", logprobs=[-0.5] * 2)
+    append(mgr, sid, [s, u, a1_rw, t1], "done", logprobs=[-0.4] * 2)
     leaves = _leaves(mgr, sid)
     assert len(leaves) == 1, "short rewrite absorbed, not forked"
     chain = leaves[0].path_from_root()
@@ -801,8 +898,11 @@ def test_3_1_rewrite_merge_absorbs_short():
     assert merged.metadata["merged_rewrite"]["abandoned_turn_index"] == 1
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 1
-    assert samples[0].tokens == p2 + r2
-    assert samples[0].loss_mask == [1] * len(r2)
+    # The abandoned turn-1 response (r:ok␣) is demoted to routing-only -> appears
+    # bare; only the surviving turn-2 r:done trains.
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> r:ok␣ </ast> " "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
+    ]
     _check_invariants(samples)
     _record("3.1 rewrite-merge absorbs short assistant", mgr, sid, samples)
     print("PASS 3.1")
@@ -818,6 +918,12 @@ def test_3_2_rewrite_merge_long_forks():
     assert len(_leaves(mgr, sid)) == 2, "long rewrite forks"
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 2
+    # Leaf 1: the abandoned turn-1 standalone (r:ok). Leaf 2: turn-2 only (the
+    # rewritten r:ok2␣ assistant mounts routing-only and is filtered out).
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:ok] [</ast>]",
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> r:ok2␣ </ast> " "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
+    ]
     _check_invariants(samples)
     _record("3.2 rewrite-merge long -> fork", mgr, sid, samples)
     print("PASS 3.2")
@@ -832,6 +938,11 @@ def test_3_3_rewrite_merge_threshold_zero_forks():
     append(mgr, sid, [s, u, a1_rw, t1], "done")
     assert len(_leaves(mgr, sid)) == 2
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    assert len(samples) == 2
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:ok] [</ast>]",
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> r:ok3␣ </ast> " "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
+    ]
     _check_invariants(samples)
     _record("3.3 rewrite-merge threshold=0 -> fork", mgr, sid, samples)
     print("PASS 3.3")
@@ -849,6 +960,13 @@ def test_3_4_rewrite_merge_ambiguous_forks():
     assert len(_leaves(mgr, sid)) == 3, "ambiguous candidates fork"
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 3
+    # Leaves "a" and "b" are standalone single turns; leaf "d" carries the
+    # ambiguous-rewrite assistant (r:c) as routing-only (bare) -> trains only r:d.
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:a] [</ast>]",
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:b] [</ast>]",
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> r:c </ast> " "<tul> tool:t </tul> <gen> [r:d] [</ast>]",
+    ]
     _check_invariants(samples)
     _record("3.4 rewrite-merge ambiguous -> fork", mgr, sid, samples)
     print("PASS 3.4")
@@ -863,14 +981,18 @@ def test_3_5_rewrite_merge_match_key_updated():
     a1_rw = asst_msg("ok5 ")
     t1, a2, t2 = tool_msg("t1"), asst_msg("second"), tool_msg("t2")
     append(mgr, sid, [s, u], "ok", finish_reason="tool_calls")
-    p2, r2 = append(mgr, sid, [s, u, a1_rw, t1], "second", finish_reason="tool_calls", logprobs=[-0.4] * 2)
-    p3, r3 = append(mgr, sid, [s, u, a1_rw, t1, a2, t2], "third", logprobs=[-0.3] * 2)
+    append(mgr, sid, [s, u, a1_rw, t1], "second", finish_reason="tool_calls", logprobs=[-0.4] * 2)
+    append(mgr, sid, [s, u, a1_rw, t1, a2, t2], "third", logprobs=[-0.3] * 2)
     leaves = _leaves(mgr, sid)
     assert len(leaves) == 1, "match_key updated -> no spurious fork"
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 1
-    L = _lcp_len(p2 + r2, p3)
-    assert samples[0].tokens == p2 + r2 + p3[L:] + r3
+    # Turn 1 (r:ok) was absorbed as routing-only (rewrite merge), so it appears
+    # bare; turns 2 and 3 (r:second / r:third) train in one clean chain.
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> r:ok5␣ </ast> "
+        "<tul> tool:t1 </tul> <gen> [r:second] [</ast>] <tul> tool:t2 </tul> <gen> [r:third] [</ast>]",
+    ]
     _check_invariants(samples)
     _record("3.5 rewrite-merge match_key updated", mgr, sid, samples)
     print("PASS 3.5")
@@ -887,7 +1009,7 @@ def test_3_6_tree_fork_plus_token_drift():
     ax2 = asst_msg("ax2")
     p1, r1 = append(mgr, sid, [s, u], "call", finish_reason="tool_calls", logprobs=[-0.5] * 2)
     # Leaf X: clean continuation, then a third turn with a case-A prompt drift.
-    p2, r2 = append(mgr, sid, [s, u, a1, tx], "ax2", finish_reason="tool_calls", logprobs=[-0.4] * 2)
+    append(mgr, sid, [s, u, a1, tx], "ax2", finish_reason="tool_calls", logprobs=[-0.4] * 2)
     txx = tool_msg("xx")
     p3_honest = render_prompt([s, u, a1, tx, ax2, txx])
     p3 = drift(p3_honest, len(p1) - 1)  # case A drift -> fork inside leaf X
@@ -895,8 +1017,18 @@ def test_3_6_tree_fork_plus_token_drift():
     # Leaf Y: a separate tool result off the shared assistant.
     append(mgr, sid, [s, u, a1, ty], "ay2", logprobs=[-0.1] * 2)
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
-    # Leaf X -> 2 samples (drift fork), Leaf Y -> 1 sample. Total 3.
     assert len(samples) == 3, [s.tokens for s in samples]
+    assert goldens(samples) == [
+        # Sample 0: leaf X first segment, trains the shared r:call (first claim) + r:ax2.
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] [</ast>] "
+        "<tul> tool:x </tul> <gen> [r:ax2] [</ast>]",
+        # Sample 1: leaf X second segment, a FRESH segment after the case-A fork ->
+        # whole prompt stripped, only r:ax3 trains (the <DRIFT> sits in its prompt).
+        "<sys> system:S </sys> <usr> user:u </usr> <DRIFT> <gen> r:call </ast> "
+        "<tul> tool:x </tul> <gen> r:ax2 </ast> <tul> tool:xx </tul> <gen> [r:ax3] [</ast>]",
+        # Sample 2: leaf Y, shares r:call (claimed by sample 0 -> bare), trains r:ay2.
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> r:call </ast> " "<tul> tool:y </tul> <gen> [r:ay2] [</ast>]",
+    ]
     assert all(abs(s.reward - 1.0 / 3) < 1e-9 for s in samples)
     _check_invariants(samples)
     _record("3.6 tree fork + token drift -> 3 samples", mgr, sid, samples)
@@ -911,19 +1043,24 @@ def test_3_7_deep_multi_leaf_dedup():
     s, u = sys_msg("S"), usr_msg("u")
     a1, t1 = asst_msg("a1"), tool_msg("t1")
     a2 = asst_msg("a2")
-    p1, r1 = append(mgr, sid, [s, u], "a1", finish_reason="tool_calls", logprobs=[-0.5] * 2)
-    p2, r2 = append(mgr, sid, [s, u, a1, t1], "a2", finish_reason="tool_calls", logprobs=[-0.4] * 2)
+    append(mgr, sid, [s, u], "a1", finish_reason="tool_calls", logprobs=[-0.5] * 2)
+    append(mgr, sid, [s, u, a1, t1], "a2", finish_reason="tool_calls", logprobs=[-0.4] * 2)
     # three different tool results off a2 -> three leaves sharing a1+a2
     for lbl in ["p", "q", "r"]:
         append(mgr, sid, [s, u, a1, t1, a2, tool_msg(lbl)], f"end-{lbl}", logprobs=[-0.3] * 2)
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 3
-    # Count trained tokens for r1 and r2 across all samples: each shared turn
-    # trained exactly once (first leaf), others loss=0.
-    # First leaf trains r1+r2+end; others train only their own end.
-    trained_first = sum(samples[0].loss_mask)
-    trained_rest = [sum(x.loss_mask) for x in samples[1:]]
-    assert trained_first > max(trained_rest), (trained_first, trained_rest)
+    # Leaf 0 OWNS the shared r:a1 + r:a2 (both trained) and its own end-p; leaves
+    # 1 and 2 SHARE r:a1 + r:a2 (bare, claimed by leaf 0) and train only their own
+    # end response.
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:a1] [</ast>] "
+        "<tul> tool:t1 </tul> <gen> [r:a2] [</ast>] <tul> tool:p </tul> <gen> [r:end-p] [</ast>]",
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> r:a1 </ast> "
+        "<tul> tool:t1 </tul> <gen> r:a2 </ast> <tul> tool:q </tul> <gen> [r:end-q] [</ast>]",
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> r:a1 </ast> "
+        "<tul> tool:t1 </tul> <gen> r:a2 </ast> <tul> tool:r </tul> <gen> [r:end-r] [</ast>]",
+    ]
     _check_invariants(samples)
     _record("3.7 deep multi-leaf dedup (3 leaves, shared trained once)", mgr, sid, samples)
     print("PASS 3.7")
@@ -959,8 +1096,26 @@ def test_3_8_long_mixed_session():
     p7 = drift(p7_honest, len(p1) - 1)
     append(mgr, sid, prefix, "a5", prompt_ids=p7, logprobs=lp)
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
-    # The final case-A fork splits the single leaf chain into >=2 segments.
-    assert len(samples) >= 2, len(samples)
+    # The final case-A fork splits the single leaf chain into 3 segments.
+    assert goldens(samples) == [
+        # Segment 1: turns 1-4 in one clean chain. The turn-5 B1 replace dropped a
+        # drifted tail (the <DRIFT> is gone here) and realigned, so r:a0..r:a3 all
+        # train.
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:a0] [</ast>] "
+        "<tul> tool:t0 </tul> <gen> [r:a1] [</ast>] <tul> tool:t1 </tul> <gen> [r:a2] [</ast>] "
+        "<tul> tool:t2 <DRIFT> <gen> [r:a3] [</ast>]",
+        # Segment 2: cross-leaf-style dedup within the chain — the prior turns are
+        # re-emitted as bare context and only r:a4 trains.
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> r:a0 </ast> "
+        "<tul> tool:t0 </tul> <gen> r:a1 </ast> <tul> tool:t1 </tul> <gen> r:a2 </ast> "
+        "<tul> tool:t2 </tul> <gen> r:a3 </ast> <tul> tool:t3 </tul> <gen> [r:a4] [</ast>]",
+        # Segment 3: turn 7 after the case-A fork (the <DRIFT> in the early prompt
+        # region); whole prefix bare, only r:a5 trains.
+        "<sys> system:S </sys> <usr> user:u </usr> <DRIFT> <gen> r:a0 </ast> "
+        "<tul> tool:t0 </tul> <gen> r:a1 </ast> <tul> tool:t1 </tul> <gen> r:a2 </ast> "
+        "<tul> tool:t2 </tul> <gen> r:a3 </ast> <tul> tool:t3 </tul> <gen> r:a4 </ast> "
+        "<tul> tool:t4 </tul> <gen> [r:a5] [</ast>]",
+    ]
     assert abs(sum(s.reward for s in samples) - 1.0) < 1e-9
     _check_invariants(samples)
     _record(f"3.8 long mixed session -> {len(samples)} samples", mgr, sid, samples)
@@ -993,7 +1148,10 @@ def test_4_1_tools_metadata_on_first_system_only():
     others = [n for n in _iter_all(mgr._trees[sid]) if n is not sys_node]
     assert all(n.metadata.get("tools") is None for n in others), "tools attached exactly once"
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
-    assert len(samples) == 1
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] [</ast>] "
+        "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
+    ]
     _check_invariants(samples)
     _record("4.1 tools metadata on first system only", mgr, sid, samples)
     print("PASS 4.1")
@@ -1055,6 +1213,7 @@ def test_4_4_default_base_sample():
     samples = mgr.get_trajectory(sid, reward=1.0)  # no base_sample
     assert len(samples) == 1
     assert samples[0].index == 0
+    assert goldens(samples) == ["<sys> system:S </sys> <usr> user:u </usr> <gen> [r:a] [</ast>]"]
     _check_invariants(samples)
     _record("4.4 default base_sample (None)", mgr, sid, samples)
     print("PASS 4.4")
@@ -1074,10 +1233,14 @@ def test_4_5_mixed_logprobs_across_turns():
     assert len(samples) == 1
     s0 = samples[0]
     L = _lcp_len(p1 + r1, p2)
-    # turn-1 region: real logprobs; prompt tail: 0.0; turn-2 region: 0.0 (padded).
+    # both responses still trained (golden shows the loss layout)...
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] [</ast>] "
+        "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
+    ]
+    # ...but turn-2's region carries padded 0.0 logprobs (it had none), while
+    # turn-1's region keeps its real logprobs.
     assert s0.rollout_log_probs == [-0.5] * len(r1) + [0.0] * (len(p2) - L) + [0.0] * len(r2)
-    # both responses still trained.
-    assert s0.loss_mask == [1] * len(r1) + [0] * (len(p2) - L) + [1] * len(r2)
     _check_invariants(samples)
     _record("4.5 mixed logprobs across turns (turn2 padded 0.0)", mgr, sid, samples)
     print("PASS 4.5")
@@ -1116,12 +1279,24 @@ def test_4_6_drift_B1_threshold_boundary():
             tools=None,
             response_message={"role": "assistant", "content": "done"},
         )
-        return get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+        samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+        return samples, p1, r1, p2, r2
 
-    forked = run(threshold=2, drift_tail_len=2)  # d == threshold -> fork
+    # d == threshold -> fork: two single-turn segments, each trains its own resp.
+    forked, p1, r1, p2, r2 = run(threshold=2, drift_tail_len=2)
     assert len(forked) == 2, f"d==threshold must fork, got {len(forked)}"
-    replaced = run(threshold=2, drift_tail_len=1)  # d < threshold -> replace
+    assert forked[0].tokens == p1 + r1
+    assert forked[0].loss_mask == [1] * len(r1)
+    assert forked[1].tokens == p2 + r2
+    assert forked[1].loss_mask == [1] * len(r2)
+    # d < threshold -> replace: one coherent segment realigned to p2.
+    replaced, p1b, r1b, p2b, r2b = run(threshold=2, drift_tail_len=1)
     assert len(replaced) == 1, f"d<threshold must replace, got {len(replaced)}"
+    L = _lcp_len(p1b + r1b, p2b)
+    assert replaced[0].tokens == p2b + r2b
+    # surviving r1 head stays loss=1, the realigned (dropped+resupplied) tail is
+    # loss=0 prompt context, r2 trains.
+    assert replaced[0].loss_mask == [1] * (L - len(p1b)) + [0] * (len(p2b) - L) + [1] * len(r2b)
     _check_invariants(forked)
     _check_invariants(replaced)
     print("PASS 4.6")
