@@ -58,9 +58,11 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
             wait_for_server=True,
         )
 
+    from sglang.srt.entrypoints.http_server import launch_server
+
     multiprocessing.set_start_method("spawn", force=True)
     server_args.host = server_args.host.strip("[]")
-    p = multiprocessing.Process(target=_launch_http_server, args=(server_args,))
+    p = multiprocessing.Process(target=launch_server, args=(server_args,))
     p.start()
 
     if getattr(server_args, "node_rank", 0) != 0:
@@ -73,12 +75,6 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
     )
 
     return p
-
-
-def _launch_http_server(server_args: ServerArgs):
-    from sglang.srt.entrypoints.http_server import launch_server
-
-    launch_server(server_args)
 
 
 def _wait_server_healthy(base_url, api_key, is_process_alive):
@@ -589,8 +585,8 @@ def _compute_server_args(
         "skip_server_warmup": True,
         # always enable draft weights cpu backup so that we run training without mtp weights.
         "enable_draft_weights_cpu_backup": True,
-        # Always enable Prometheus metrics so the router's /engine_metrics endpoint
-        # is available for local Prometheus scraping.
+        # Always enable Prometheus metrics so the router /engine_metrics endpoint
+        # is available for external scraping.
         "enable_metrics": True,
     }
 

@@ -28,11 +28,7 @@ ENV TORCH_CUDA_ARCH_LIST="12.0+PTX"
 # =============================================================================
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libz3-dev \
-        prometheus \
     && rm -rf /var/lib/apt/lists/*
-
-COPY docker/prometheus.yml /etc/prometheus/slime-example-prometheus.yml
-RUN mkdir -p /tmp/slime-runs /var/lib/prometheus
 
 # =============================================================================
 # Header shims for CUDA 13 / NVTX removal
@@ -115,8 +111,8 @@ RUN pip install --no-deps \
 
 # SGLang router: zhuzilin's fork ships x86_64-only. Upstream 0.3.2 has an arm64
 # wheel that satisfies slime's version-parse comparisons (`<=0.2.1`, `<0.3.0`).
-# SGLang Prometheus metrics are scraped by Prometheus instead of W&B, so the
-# custom router version tag is no longer needed for metrics upload.
+# Only loss: the `'slime' in version` check in wandb_utils.py won't match,
+# which is a non-critical logging branch.
 RUN pip install --no-deps sglang-router==0.3.2
 
 # =============================================================================

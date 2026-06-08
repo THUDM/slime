@@ -31,22 +31,12 @@ The script generates:
 
 By default it also starts a local static server so you can open the generated HTML immediately. If you only want the files, use `--no-serve`.
 
-By default, the viewer reads `pd_*` timing fields directly from `sglang_generate` span attrs and uses them to render the prefill/decode virtual lanes. `--request-time-stats-path` is only a compatibility path for older dumps or manually saved SGLang `ReqTimeStats(...)` logs:
-
-```bash
-python tools/trace_timeline_viewer.py \
-    /path/to/debug/rollout_0.pt \
-    --request-time-stats-path /path/to/run/request_time_stats/sglang
-```
-
-If no path is provided, the viewer checks `SLIME_REQUEST_TIME_STATS_PATH`, then `SLIME_RUN_DIR/request_time_stats/sglang`, then `request_time_stats/sglang` near the `.pt` file. The path can be a log directory or one compacted JSONL/log file; the current default observability path does not generate these logs separately.
-
 ## How to read the viewer
 
 - Each row corresponds to one sample.
 - Bars represent spans, while point markers represent instant events.
 - Span attributes recorded at the start or end of `trace_span(...)` are shown in the details panel.
-- When SGLang trace attrs or compatibility `ReqTimeStats(...)` inputs contain PD disaggregation timings, the viewer adds synthetic `[P]` and `[D]` lanes to break out prefill/decode work.
+- When SGLang returns PD disaggregation timings, the viewer adds synthetic `[P]` and `[D]` lanes to break out prefill/decode work.
 - When PD is not enabled, those virtual lanes are omitted automatically and the base trace still renders normally.
 
 ## Instrument custom code
@@ -126,3 +116,4 @@ with trace_span(sample, "sglang_generate") as span:
 - Save a small number of rollouts first; the viewer is easiest to read when each dump contains a manageable number of samples.
 - The viewer is built from the saved `.pt` dump, so traces can be inspected offline on another machine.
 - For GPU/kernel-level SGLang profiling traces, see [Profiling](./profiling.md).
+

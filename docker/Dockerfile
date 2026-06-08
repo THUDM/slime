@@ -15,11 +15,8 @@ WORKDIR /root/
 
 # ======================================== Apt dependencies =============================================
 
-RUN apt update && \
-    apt install -y --no-install-recommends nvtop rsync dnsutils prometheus && \
-    rm -rf /var/lib/apt/lists/*
-COPY docker/prometheus.yml /etc/prometheus/slime-example-prometheus.yml
-RUN mkdir -p /tmp/slime-runs /var/lib/prometheus
+RUN apt update
+RUN apt install -y nvtop rsync dnsutils
 
 # ====================================== Python dependencies ============================================
 

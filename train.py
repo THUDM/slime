@@ -1,6 +1,5 @@
 import ray
 
-from slime.profiling.observability import initialize_observability, register_sglang_router
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.logging_utils import configure_logger, finish_tracking, init_tracking
@@ -9,7 +8,6 @@ from slime.utils.misc import should_run_periodic_action
 
 def train(args):
     configure_logger()
-    initialize_observability(args)
     # allocate the GPUs
     pgs = create_placement_groups(args)
     init_tracking(args)
@@ -17,10 +15,6 @@ def train(args):
     # create the rollout manager, with sglang engines inside.
     # need to initialize rollout manager first to calculate num_rollout
     rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"])
-
-    # Register SGLang Prometheus scrape target now that the router is up.
-    router_addr = ray.get(rollout_manager.get_metrics_router_addr.remote())
-    register_sglang_router(args, router_addr)
 
     # create the actor and critic models
     actor_model, critic_model = create_training_models(args, pgs, rollout_manager)
