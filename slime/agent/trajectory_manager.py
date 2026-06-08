@@ -27,25 +27,42 @@ Design (Plan C, 2026-06-03):
   later turn — logprobs stay coherent, no duplicated-content forks, no
   reliance on chat_template being position-invariant.
 
-* Snapshot rescue (opt-in via ``tito_snapshot_min_loss_tokens``): when a
-  drift would drop >= N loss_mask=1 tokens, emit an extra "snapshot"
-  Sample alongside the main leaf. Snapshot tokens = cumulative pre-drop;
-  snapshot loss_mask is COMPLEMENTARY — 1 only at positions that the
-  main leaf is about to drop, 0 elsewhere. Snapshot reward = main-leaf
-  share; snapshot group_id = main-leaf group_id. Snapshot ∪ main on
-  loss_mask=1 tokens never overlap and their union equals the virtual
-  no-drift trajectory. The snapshotted drift is NOT counted in the main
-  sample's ``tito_dropped_*`` (it wasn't truly lost).
+* Drift fork (gated by ``drift_fork_min_loss_tokens``, default 1024 — ON
+  by default): when a drift would drop >= N loss_mask=1 tokens, the leaf
+  FORKS. This is the primary drift path. We emit an extra synthetic
+  "drift_fork" Sample at drain time alongside the main Sample.
+  Fork tokens = cumulative pre-drop; fork loss_mask is COMPLEMENTARY — 1
+  only at positions that the main leaf is about to drop, 0 elsewhere. Fork
+  reward = main-leaf share; fork group_id = main-leaf group_id. Fork ∪ main
+  on loss_mask=1 tokens never overlap and their union equals the virtual
+  no-drift trajectory. The forked drift is NOT counted in the main sample's
+  ``tito_dropped_*`` (it wasn't truly lost).
+
+  When the drift would drop < N loss_mask=1 tokens (or is a pure-prompt
+  drift losing 0 loss tokens), the secondary DROP path applies instead:
+  drop-and-replace on the main leaf only, accounted in ``tito_dropped_*``.
 
 * On drift, ``Sample.metadata`` records:
-    ``tito_dropped_tokens``       — total tokens dropped (NOT including
-                                    drifts that produced a snapshot)
-    ``tito_dropped_turns``        — number of turns that triggered a drop
-    ``tito_snapshots_emitted``    — set on main leaf when >=1 snapshot
-                                    sibling was emitted for the same leaf
-    ``tito_snapshot``             — True on a snapshot Sample
-    ``tito_snapshot_at_turn``     — turn index whose drift triggered it
-    ``tito_snapshot_loss_tokens`` — count of loss_mask=1 tokens in snapshot
+    ``tito_dropped_tokens``         — total tokens dropped (NOT including
+                                      drifts that produced a fork)
+    ``tito_dropped_turns``          — number of turns that triggered a drop
+    ``tito_drift_forks_emitted``    — set on main leaf when >=1 drift-fork
+                                      sibling was emitted for the same leaf
+    ``tito_drift_fork``             — True on a drift-fork Sample
+    ``tito_drift_fork_at_turn``     — turn index whose drift triggered it
+    ``tito_drift_fork_loss_tokens`` — count of loss_mask=1 tokens in fork
+
+* Fork-merge rescue (gated by ``fork_merge_max_response_tokens``, default
+  1024 — ON by default; set <=0 to disable): a routing-time mechanism,
+  independent of the
+  linearization-time drift_fork/drop above. When DFS breaks at an assistant
+  group (a later replay reformats an earlier assistant message, e.g.
+  tool_call arg ordering or whitespace) and exactly one leaf sibling carries
+  a per-turn response shorter than the threshold, the rewrite is collapsed
+  onto that sibling instead of spawning a new sibling subtree. The merged
+  sibling's stale response then enters trajectories with loss_mask=0,
+  recorded in ``fork_merge_masked_tokens`` / ``fork_merge_turns``. drift_fork
+  handles token alignment; fork-merge prevents a routing fork from forming.
 """
 
 from __future__ import annotations
@@ -56,6 +73,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from slime.agent.adapters.common import TurnRecord
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
@@ -164,6 +182,37 @@ class _PromptGroup:
     messages: list[dict[str, Any]] = field(default_factory=list)
 
 
+@dataclass
+class _DriftFork:
+    """Pre-drop fork collected when TITO drift would lose >= threshold loss tokens."""
+
+    tokens: list[int]
+    # Complementary mask: 0 at positions main leaf keeps, 1 at positions main leaf will drop.
+    loss_mask: list[int]
+    logprobs: list[float]
+    # asst.turn_index whose prompt triggered the drift.
+    drift_turn_index: int | None
+    # finish_reason of the prior assistant turn — describes "what the prefix
+    # looked like" before drift. Captured at fork creation so the build
+    # path doesn't have to look back into the chain.
+    prev_finish_reason: str | None
+
+
+@dataclass
+class _LeafAccum:
+    """Result of walking one leaf's assistant chain."""
+
+    tokens: list[int] = field(default_factory=list)
+    loss_mask: list[int] = field(default_factory=list)
+    logprobs: list[float] = field(default_factory=list)
+    drift_forks: list[_DriftFork] = field(default_factory=list)
+    # accounting (emitted to main sample's metadata when > 0)
+    dropped_tokens: int = 0
+    dropped_turns: int = 0
+    fork_merge_masked_tokens: int = 0
+    fork_merge_turns: int = 0
+
+
 def _group_messages_by_role(
     messages: list[dict[str, Any]],
 ) -> list[_PromptGroup]:
@@ -189,25 +238,6 @@ def _lcp_len(a: list[int], b: list[int]) -> int:
     return i
 
 
-def _short_text_preview(messages: list[dict[str, Any]], *, limit: int) -> str:
-    """Compact text preview of an assistant message block for log lines.
-
-    Extracts string ``content`` and any ``{"text": "..."}`` content blocks
-    (anthropic-style); falls back to the empty string if nothing parseable.
-    """
-    parts: list[str] = []
-    for m in messages:
-        c = m.get("content")
-        if isinstance(c, str):
-            parts.append(c)
-        elif isinstance(c, list):
-            for blk in c:
-                if isinstance(blk, dict) and isinstance(blk.get("text"), str):
-                    parts.append(blk["text"])
-    s = " ".join(parts).strip()
-    return s[:limit] + ("…" if len(s) > limit else "")
-
-
 # ===========================================================================
 # TrajectoryManager
 # ===========================================================================
@@ -224,26 +254,21 @@ class TrajectoryManager:
     def __init__(
         self,
         *,
-        tito_snapshot_min_loss_tokens: int | None = None,
-        fork_merge_max_response_tokens: int | None = None,
+        drift_fork_min_loss_tokens: int = 1024,
+        fork_merge_max_response_tokens: int = 1024,
     ) -> None:
-        # Drift-snapshot threshold (loss_mask=1 token count inside drift suffix).
-        # None or <= 0 disables; behavior then matches the pre-feature output.
-        self._snap_threshold: int | None = (
-            tito_snapshot_min_loss_tokens
-            if (tito_snapshot_min_loss_tokens is not None and tito_snapshot_min_loss_tokens > 0)
-            else None
-        )
+        # Drift-fork threshold (loss_mask=1 token count inside drift suffix).
+        # When a drift would drop >= this many loss tokens, fork instead of
+        # dropping. Always an int (default 1024 — drift-fork ON by default).
+        # Set <=0 to effectively disable (combined with the drift_loss_tokens>0
+        # guard, only true drifts above the threshold ever fork).
+        self._fork_threshold: int = drift_fork_min_loss_tokens
         # Fork-merge threshold: when DFS would break at an assistant group and
         # exactly one non-leaf assistant sibling has turn_response_ids length
         # STRICTLY LESS than this value, collapse the would-be fork onto that
         # sibling (its response then enters trajectories with loss_mask=0).
-        # None or <= 0 disables; behavior matches pre-feature output.
-        self._fork_merge_threshold: int | None = (
-            fork_merge_max_response_tokens
-            if (fork_merge_max_response_tokens is not None and fork_merge_max_response_tokens > 0)
-            else None
-        )
+        # Default 1024 — fork-merge ON by default; set <=0 to disable.
+        self._fork_merge_threshold: int = fork_merge_max_response_tokens
         self._trees: dict[str, Node] = {}
         self._turn_count: dict[str, int] = {}
 
@@ -259,90 +284,85 @@ class TrajectoryManager:
         self,
         sid: str,
         *,
+        turn: TurnRecord,
         prompt_messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
-        prompt_ids: list[int],
-        response_ids: list[int],
-        response_logprobs: list[float] | None,
         response_message: dict[str, Any] | None,
-        finish_reason: str | None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         if not prompt_messages:
             logger.warning("append_turn(sid=%s): empty prompt_messages; skipping", sid)
             return
-        if response_logprobs is not None and len(response_logprobs) != len(response_ids):
+        if turn.output_log_probs and len(turn.output_log_probs) != len(turn.output_ids):
             raise ValueError(
-                f"response_logprobs length {len(response_logprobs)} != " f"response_ids length {len(response_ids)}"
+                f"turn.output_log_probs length {len(turn.output_log_probs)} != "
+                f"turn.output_ids length {len(turn.output_ids)}"
             )
 
-        root = self._trees.get(sid)
-        if root is None:
-            root = Node()
-            self._trees[sid] = root
-
+        root = self._trees.setdefault(sid, Node())
         groups = _group_messages_by_role(prompt_messages)
 
-        # Step 1: DFS by (role, node_match_key) ONLY. No prompt_ids check.
+        cur, i = self._find_mount_point(root, groups)
+        cur, i = self._try_fork_merge_assistant(sid, cur, groups, i)
+        cur = self._mount_prompt_groups(cur, groups[i:], tools)
+        self._attach_assistant_leaf(sid, cur, turn=turn, response_message=response_message, metadata=metadata)
+
+    def _find_mount_point(self, root: Node, groups: list[_PromptGroup]) -> tuple[Node, int]:
+        """DFS down the existing tree by ``(role, node_match_key)``.
+
+        Returns ``(cur, i)``: ``cur`` is the deepest node whose path matches
+        ``groups[:i]`` exactly; ``i`` is the index into ``groups`` of the first
+        group that diverges from anything mounted so far (i.e., where this
+        turn's new content begins).
+        """
         cur = root
         i = 0
         while i < len(groups):
             g_key = node_match_key(groups[i].messages)
-            match: Node | None = None
-            for child in cur.children:
-                if child.role == groups[i].role and node_match_key(child.messages) == g_key:
-                    match = child
-                    break
+            match = next(
+                (c for c in cur.children if c.role == groups[i].role and node_match_key(c.messages) == g_key),
+                None,
+            )
             if match is None:
                 break
             cur = match
             i += 1
+        return cur, i
 
-        # Step 1.5: assistant fork-merge rescue (opt-in via
-        # fork_merge_max_response_tokens). The typical claude-code pattern is:
-        # a later replay reformats an earlier assistant message (e.g. tool_call
-        # arg ordering, whitespace), which breaks the DFS at that assistant
-        # group. Without rescue, every such reformat spawns a new sibling
-        # subtree; with rescue, when the existing sibling's per-turn response
-        # is short enough that masking it out is the cheaper trade-off, we
-        # collapse onto that sibling and mark it for mask=0 at linearization.
-        if i < len(groups) and self._fork_merge_threshold is not None and groups[i].role == "assistant":
-            candidates = [
-                c
-                for c in cur.children
-                if c.role == "assistant"
-                # Real rewrite footprint = the original turn's leaf assistant
-                # node: it was inserted by Step-3 of a prior turn (so
-                # turn_response_ids is populated), and no later turn has
-                # extended it (so it is still a leaf). Once a rewrite collapses
-                # onto it via this rescue, the new turn's user/tool + asst leaf
-                # are appended underneath as children — so the merge target
-                # MUST be a leaf at decision time, otherwise it has already
-                # diverged into mixed subchains and merging would tangle them.
-                and not c.children
-                and c.turn_response_ids is not None
-                and len(c.turn_response_ids) < self._fork_merge_threshold
-            ]
-            if len(candidates) == 1:
-                sib = candidates[0]
-                masked = len(sib.turn_response_ids or [])
-                preview = _short_text_preview(sib.messages, limit=160)
-                logger.warning(
-                    "append_turn(sid=%s turn=%s): fork-merging assistant rewrite "
-                    "into existing sibling (turn_index=%s, masked_response_tokens=%d, "
-                    "sibling_response_preview=%r)",
-                    sid,
-                    self._turn_count.get(sid, 0) + 1,
-                    sib.turn_index,
-                    masked,
-                    preview,
-                )
-                sib.metadata["fork_merged"] = True
-                sib.metadata["fork_merge_masked_tokens"] = masked
-                sib.messages = list(groups[i].messages)
-                cur = sib
-                i += 1
-            elif len(candidates) >= 2:
+    def _try_fork_merge_assistant(self, sid: str, cur: Node, groups: list[_PromptGroup], i: int) -> tuple[Node, int]:
+        """Optionally collapse an assistant-rewrite onto a single short leaf sibling.
+
+        The typical claude-code pattern is: a later replay reformats an earlier
+        assistant message (e.g. tool_call arg ordering, whitespace), which
+        breaks DFS at that assistant group. Without rescue, every such reformat
+        spawns a new sibling subtree; with rescue, when the existing sibling's
+        per-turn response is short enough that masking it out is the cheaper
+        trade-off, we collapse onto that sibling and mark it for mask=0 at
+        linearization.
+        """
+        if self._fork_merge_threshold <= 0:
+            return cur, i  # feature off
+        if i >= len(groups) or groups[i].role != "assistant":
+            return cur, i  # feature on, but this turn isn't an asst rewrite
+
+        candidates = [
+            c
+            for c in cur.children
+            if c.role == "assistant"
+            # Real rewrite footprint = the original turn's leaf assistant
+            # node: it was inserted by step 3 of a prior turn (so
+            # turn_response_ids is populated), and no later turn has
+            # extended it (so it is still a leaf). Once a rewrite collapses
+            # onto it via this rescue, the new turn's user/tool + asst leaf
+            # are appended underneath as children — so the merge target
+            # MUST be a leaf at decision time, otherwise it has already
+            # diverged into mixed subchains and merging would tangle them.
+            and not c.children
+            and c.turn_response_ids is not None
+            and len(c.turn_response_ids) < self._fork_merge_threshold
+        ]
+        if len(candidates) != 1:
+            if len(candidates) >= 2:
                 # Legacy / pathological state: fork_merge wasn't on during
                 # earlier rewrites, or threshold was widened mid-session.
                 # Don't pick arbitrarily — fork as usual and surface a hint.
@@ -354,29 +374,66 @@ class TrajectoryManager:
                     self._turn_count.get(sid, 0) + 1,
                     len(candidates),
                 )
+            return cur, i
 
-        # Step 2: mount remaining prompt groups as plain routing nodes.
-        # Token attribution happens at get_trajectory time, not here.
-        for g in groups[i:]:
+        sib = candidates[0]
+        masked = len(sib.turn_response_ids or [])
+        logger.warning(
+            "append_turn(sid=%s turn=%s): fork-merging assistant rewrite "
+            "into existing sibling (turn_index=%s, masked_response_tokens=%d)",
+            sid,
+            self._turn_count.get(sid, 0) + 1,
+            sib.turn_index,
+            masked,
+        )
+        sib.metadata["fork_merged"] = True
+        sib.metadata["fork_merge_masked_tokens"] = masked
+        sib.messages = list(groups[i].messages)
+        return sib, i + 1
+
+    def _mount_prompt_groups(
+        self,
+        cur: Node,
+        remaining_groups: list[_PromptGroup],
+        tools: list[dict[str, Any]] | None,
+    ) -> Node:
+        """Attach each remaining prompt group as a routing node under ``cur``.
+
+        Token attribution happens at get_trajectory time, not here. The tools
+        metadata is placed only on the FIRST system node on the path —
+        ``_first_system_already_set(cur)`` walks ``cur → root`` looking for a
+        system ancestor that already carries it, and ``cur`` here is the
+        deepest node from descent (+ optional merge), so the walk sees every
+        ancestor that's already mounted.
+        """
+        for g in remaining_groups:
             md: dict[str, Any] = {}
             if g.role == "system" and tools is not None and not self._first_system_already_set(cur):
                 md["tools"] = list(tools)
             cur = cur.add_child(Node(role=g.role, messages=list(g.messages), metadata=md))
+        return cur
 
-        # Step 3: assistant leaf with this turn's sglang snapshot.
-        asst_messages = [response_message] if response_message is not None else []
+    def _attach_assistant_leaf(
+        self,
+        sid: str,
+        cur: Node,
+        *,
+        turn: TurnRecord,
+        response_message: dict[str, Any] | None,
+        metadata: dict[str, Any] | None,
+    ) -> None:
+        """Attach this turn's assistant leaf carrying the sglang snapshot."""
         asst = Node(
             role="assistant",
-            messages=asst_messages,
+            messages=[response_message] if response_message is not None else [],
             metadata=dict(metadata or {}),
         )
-        asst.turn_prompt_ids = list(prompt_ids)
-        asst.turn_response_ids = list(response_ids)
-        asst.turn_response_logprobs = list(response_logprobs) if response_logprobs is not None else None
-        asst.turn_finish_reason = finish_reason
+        asst.turn_prompt_ids = list(turn.prompt_ids)
+        asst.turn_response_ids = list(turn.output_ids)
+        asst.turn_response_logprobs = list(turn.output_log_probs) if turn.output_log_probs else None
+        asst.turn_finish_reason = turn.finish_reason
         asst.turn_index = self._turn_count.get(sid, 0) + 1
         cur.add_child(asst)
-
         self._turn_count[sid] = asst.turn_index
 
     def get_trajectory(
@@ -386,33 +443,14 @@ class TrajectoryManager:
         base_sample=None,
         reward: float = 0.0,
         extra_metadata: dict[str, Any] | None = None,
-        drop: bool = True,
     ) -> list:
-        """Linearize each leaf into a slime ``Sample`` using LCP drop-and-replace.
+        """Drain a sid into slime ``Sample`` objects, then drop the session.
 
-        For each leaf, walk root→leaf collecting assistant nodes in order.
-        Start with tokens=[]. For each assistant turn k (1-based):
-
-          1. ``p = asst.turn_prompt_ids``, ``r = asst.turn_response_ids``.
-          2. If k == 1: emit all of ``p`` as loss_mask=0 (plus 0.0 logprobs),
-             then ``r`` as loss_mask=1 with real logprobs.
-          3. If k >= 2: compute ``L = LCP(tokens, p)``. Truncate tokens /
-             loss_mask / logprobs to length L (DROP everything past L —
-             that includes the previous turn's response tokens that fall
-             in the drift region; logging tells you how much was dropped).
-             Then append ``p[L:]`` (loss_mask=0) and ``r`` (loss_mask=1).
-
-        When drift fires on at least one turn, the returned Sample's
-        ``metadata`` gains ``tito_dropped_tokens`` (total tokens dropped
-        across the leaf) and ``tito_dropped_turns`` (how many turns
-        triggered a drop). Both keys are absent when no drift occurs.
-
-        When ``tito_snapshot_min_loss_tokens`` was passed to the constructor
-        and a drift would drop >= that many loss_mask=1 tokens, an extra
-        snapshot Sample is emitted before the main-leaf Sample carrying just
-        the to-be-lost tokens (complementary mask). See module docstring.
-
-        See module docstring for the rationale.
+        ``get_trajectory`` is the lifecycle boundary where the message routing
+        tree is linearized into token-normalized ``Sample`` objects. Each
+        routing leaf yields one main Sample plus one extra Sample per drift
+        fork. ``reward`` is split evenly across all emitted samples. The sid is
+        consumed: a second call for the same sid returns ``[]``.
         """
         if base_sample is None:
             base_sample = Sample(index=0, prompt="")
@@ -420,169 +458,259 @@ class TrajectoryManager:
         root = self._trees.get(sid)
         if root is None:
             return []
-        leaves = [leaf for leaf in root.leaves() if not leaf.is_root]
+
         samples: list[Sample] = []
-        for leaf in leaves:
-            chain = leaf.path_from_root()
-            # Only assistant leaves carrying this turn's sglang snapshot
-            # participate in TITO accumulation. Routing assistant nodes mounted
-            # from prior-turn replay (turn_prompt_ids is None) carry no token
-            # signal and would otherwise be misread as a full-trajectory drift.
-            asst_chain = [n for n in chain if n.role == "assistant" and n.turn_prompt_ids is not None]
-
-            tokens: list[int] = []
-            loss_mask: list[int] = []
-            logprobs: list[float] = []
-            total_dropped = 0
-            dropped_turns = 0
-            fork_merge_masked_total = 0
-            fork_merge_turns_total = 0
-            snapshots: list[tuple[list[int], list[int], list[float], int, int]] = []
-
-            for k, asst in enumerate(asst_chain, start=1):
-                p = list(asst.turn_prompt_ids or [])
-                r = list(asst.turn_response_ids or [])
-                lp = list(asst.turn_response_logprobs) if asst.turn_response_logprobs is not None else None
-                is_merged = bool(asst.metadata.get("fork_merged"))
-
-                if k == 1:
-                    emit_prompt = p
-                else:
-                    L = _lcp_len(tokens, p)
-                    drift = len(tokens) - L
-                    if drift > 0:
-                        drift_loss_tokens = sum(loss_mask[L:])
-                        snap_emitted = False
-                        if self._snap_threshold is not None and drift_loss_tokens >= self._snap_threshold:
-                            snap_tokens = list(tokens)
-                            snap_mask = [0] * L + list(loss_mask[L:])
-                            snap_lp = [0.0] * L + [
-                                (logprobs[i] if loss_mask[i] == 1 else 0.0) for i in range(L, len(tokens))
-                            ]
-                            snapshots.append((snap_tokens, snap_mask, snap_lp, asst.turn_index, k - 1))
-                            snap_emitted = True
-                        logger.warning(
-                            "get_trajectory(sid=%s leaf turn=%s): TITO drift detected, "
-                            "dropping %d prior tokens (incl. previous-turn response) to "
-                            "realign with this turn's prompt%s",
-                            sid,
-                            asst.turn_index,
-                            drift,
-                            f"; snapshotted {drift_loss_tokens} loss tokens" if snap_emitted else "",
-                        )
-                        if not snap_emitted:
-                            total_dropped += drift
-                            dropped_turns += 1
-                        tokens = tokens[:L]
-                        loss_mask = loss_mask[:L]
-                        logprobs = logprobs[:L]
-                    emit_prompt = p[L:]
-
-                tokens.extend(emit_prompt)
-                loss_mask.extend([0] * len(emit_prompt))
-                logprobs.extend([0.0] * len(emit_prompt))
-
-                tokens.extend(r)
-                # fork-merged sibling: its response is "stale" — present in the
-                # tree only as a routing placeholder for the rewrites that
-                # collapsed onto it; mask it out of training.
-                loss_mask.extend([0 if is_merged else 1] * len(r))
-                if lp is not None:
-                    logprobs.extend(lp)
-                else:
-                    logprobs.extend([0.0] * len(r))
-
-                if is_merged:
-                    fork_merge_masked_total += len(r)
-                    fork_merge_turns_total += 1
-
-            last_asst = asst_chain[-1] if asst_chain else None
-            first_sys = next((n for n in chain if n.role == "system"), None)
-            tools_meta = first_sys.metadata.get("tools") if first_sys else None
-            base_md: dict[str, Any] = {
-                **(base_sample.metadata or {}),
-                **(extra_metadata or {}),
-                "tools": tools_meta,
-            }
-            per_leaf_reward = (reward / len(leaves)) if leaves else 0.0
-
-            # slime contract (see slime/backends/megatron_utils/data.py:139,
-            # slime/ray/rollout.py:695): ``loss_mask`` and ``rollout_log_probs``
-            # cover only the response region — i.e. tokens AFTER the initial
-            # prompt — and ``response_length == len(loss_mask)``. Strip the
-            # first turn's prompt prefix here so all downstream consumers see
-            # tokens/loss_mask/logprobs in their canonical alignment.
-            first_prompt_len = len(asst_chain[0].turn_prompt_ids or []) if asst_chain else 0
-
-            # Emit snapshot sample(s) first, then the main-leaf sample.
-            for snap_tokens, snap_mask, snap_lp, drift_turn, cur_chain_idx in snapshots:
-                snap_finish = None
-                prev_idx = cur_chain_idx - 1  # asst_chain index of the previous (prefix's last) turn
-                if 0 <= prev_idx < len(asst_chain):
-                    snap_finish = asst_chain[prev_idx].turn_finish_reason
-                snap_strip = min(first_prompt_len, len(snap_mask))
-                snap_mask_resp = snap_mask[snap_strip:]
-                snap_lp_resp = snap_lp[snap_strip:]
-                snap_md = {
-                    **base_md,
-                    "finish_reason": snap_finish,
-                    "tito_snapshot": True,
-                    "tito_snapshot_at_turn": drift_turn,
-                    "tito_snapshot_loss_tokens": sum(snap_mask_resp),
-                }
-                samples.append(
-                    Sample(
-                        index=base_sample.index,
-                        group_id=(base_sample.group_id if base_sample.group_id is not None else base_sample.index),
-                        prompt=base_sample.prompt,
-                        label=base_sample.label,
-                        tokens=snap_tokens,
-                        response_length=len(snap_mask_resp),
-                        loss_mask=snap_mask_resp,
-                        rollout_log_probs=snap_lp_resp,
-                        reward=per_leaf_reward,
-                        status=Sample.Status.COMPLETED,
-                        metadata=snap_md,
-                    )
-                )
-
-            main_strip = min(first_prompt_len, len(loss_mask))
-            loss_mask_resp = loss_mask[main_strip:]
-            logprobs_resp = logprobs[main_strip:]
-            response_length = len(loss_mask_resp)
-            main_md: dict[str, Any] = {
-                **base_md,
-                "finish_reason": last_asst.turn_finish_reason if last_asst else None,
-            }
-            if total_dropped > 0:
-                main_md["tito_dropped_tokens"] = total_dropped
-                main_md["tito_dropped_turns"] = dropped_turns
-            if snapshots:
-                main_md["tito_snapshots_emitted"] = len(snapshots)
-            if fork_merge_masked_total > 0:
-                main_md["fork_merge_masked_tokens"] = fork_merge_masked_total
-                main_md["fork_merge_turns"] = fork_merge_turns_total
-            samples.append(
-                Sample(
-                    index=base_sample.index,
-                    group_id=(base_sample.group_id if base_sample.group_id is not None else base_sample.index),
-                    prompt=base_sample.prompt,
-                    label=base_sample.label,
-                    tokens=tokens,
-                    response_length=response_length,
-                    loss_mask=loss_mask_resp,
-                    rollout_log_probs=logprobs_resp,
-                    reward=per_leaf_reward,
-                    status=Sample.Status.COMPLETED,
-                    metadata=main_md,
-                )
+        for routing_leaf in root.leaves():
+            if routing_leaf.is_root:
+                continue
+            samples.extend(
+                self._normalize_routing_leaf(sid, routing_leaf, base_sample=base_sample, extra_metadata=extra_metadata)
             )
-        if drop:
-            self._trees.pop(sid, None)
-            self._turn_count.pop(sid, None)
+
+        # Reward is split evenly across every emitted sample (main + forks);
+        # the token-weighted reducer downstream then gives each loss token the
+        # trajectory's full R. Assigned after the fact so the per-leaf builder
+        # stays reward-agnostic.
+        per_sample_reward = (reward / len(samples)) if samples else 0.0
+        for s in samples:
+            s.reward = per_sample_reward
+
+        self._trees.pop(sid, None)
+        self._turn_count.pop(sid, None)
         return samples
 
     # -------------------- internals ----------------------------------------
+
+    def _normalize_routing_leaf(
+        self,
+        sid: str,
+        leaf: Node,
+        *,
+        base_sample: Sample,
+        extra_metadata: dict[str, Any] | None,
+    ) -> list[Sample]:
+        """Linearize one routing leaf into its main Sample (+ drift-fork Samples).
+
+        Drift forks come first, then the main sample, matching the original
+        drain order. Reward is left at 0.0 here and assigned by the caller.
+        """
+        chain = leaf.path_from_root()
+        # Only assistant leaves carrying this turn's sglang snapshot
+        # participate in TITO accumulation. Routing assistant nodes mounted
+        # from prior-turn replay (turn_prompt_ids is None) carry no token
+        # signal and would otherwise be misread as a full-trajectory drift.
+        asst_chain = [n for n in chain if n.role == "assistant" and n.turn_prompt_ids is not None]
+        accum = self._accumulate_chain(sid, asst_chain)
+        first_sys = next((n for n in chain if n.role == "system"), None)
+        base_md = {"tools": first_sys.metadata.get("tools") if first_sys else None}
+        first_prompt_len = len(asst_chain[0].turn_prompt_ids or []) if asst_chain else 0
+
+        # Build one Sample from a linearized segment (a _DriftFork or the accum
+        # itself — both expose tokens/loss_mask/logprobs). The base/extra/clamp
+        # args are constant across segments, so this closure carries them.
+        def build(seg: _DriftFork | _LeafAccum, leaf_md: dict[str, Any]) -> Sample:
+            return self._build_leaf_sample(
+                base_sample=base_sample,
+                extra_metadata=extra_metadata,
+                leaf_metadata={**base_md, **leaf_md},
+                tokens=seg.tokens,
+                loss_mask=seg.loss_mask,
+                logprobs=seg.logprobs,
+                first_prompt_len=first_prompt_len,
+            )
+
+        # Drift forks first, then the main sample — matching the original drain
+        # order. A fork's loss_mask is complementary (0 on [0:L], L >=
+        # first_prompt_len), so the response-region clamp never touches a loss=1
+        # position and sum(loss_mask) is the final loss-token count.
+        samples = [
+            build(
+                fork,
+                {
+                    "finish_reason": fork.prev_finish_reason,
+                    "tito_drift_fork": True,
+                    "tito_drift_fork_at_turn": fork.drift_turn_index,
+                    "tito_drift_fork_loss_tokens": sum(fork.loss_mask),
+                },
+            )
+            for fork in accum.drift_forks
+        ]
+        samples.append(build(accum, self._main_leaf_metadata(accum, asst_chain)))
+        return samples
+
+    @staticmethod
+    def _main_leaf_metadata(accum: _LeafAccum, asst_chain: list[Node]) -> dict[str, Any]:
+        """Assemble the main sample's leaf metadata (conditional drift/merge keys)."""
+        last_asst = asst_chain[-1] if asst_chain else None
+        md: dict[str, Any] = {"finish_reason": last_asst.turn_finish_reason if last_asst else None}
+        if accum.dropped_tokens > 0:
+            md["tito_dropped_tokens"] = accum.dropped_tokens
+            md["tito_dropped_turns"] = accum.dropped_turns
+        if accum.drift_forks:
+            md["tito_drift_forks_emitted"] = len(accum.drift_forks)
+        if accum.fork_merge_masked_tokens > 0:
+            md["fork_merge_masked_tokens"] = accum.fork_merge_masked_tokens
+            md["fork_merge_turns"] = accum.fork_merge_turns
+        return md
+
+    def _build_leaf_sample(
+        self,
+        *,
+        base_sample: Sample,
+        extra_metadata: dict[str, Any] | None,
+        leaf_metadata: dict[str, Any],
+        tokens: list[int],
+        loss_mask: list[int],
+        logprobs: list[float],
+        first_prompt_len: int,
+    ) -> Sample:
+        """Build one Sample from a linearized token segment.
+
+        ``loss_mask`` / ``logprobs`` are clamped to the response region (the
+        leading first-turn prompt prefix is stripped) per the slime contract:
+        ``response_length == len(loss_mask)`` and loss_mask/logprobs cover only
+        the response region. ``reward`` is left at 0.0; the caller assigns the
+        per-sample share.
+        """
+        loss_resp, lp_resp = self._response_region(loss_mask, logprobs, first_prompt_len)
+        metadata = {
+            **(base_sample.metadata or {}),
+            **(extra_metadata or {}),
+            **leaf_metadata,
+        }
+        return Sample(
+            index=base_sample.index,
+            group_id=base_sample.group_id if base_sample.group_id is not None else base_sample.index,
+            prompt=base_sample.prompt,
+            label=base_sample.label,
+            tokens=list(tokens),
+            response_length=len(loss_resp),
+            loss_mask=loss_resp,
+            rollout_log_probs=lp_resp,
+            reward=0.0,
+            status=Sample.Status.COMPLETED,
+            metadata=metadata,
+        )
+
+    def _accumulate_chain(self, sid: str, asst_chain: list[Node]) -> _LeafAccum:
+        """Apply LCP drop-and-replace to an assistant chain in turn order.
+
+        Mutates and returns ``accum``. See the module docstring for the
+        algorithm, drift-fork contract, and fork-merge masking rule.
+        """
+        accum = _LeafAccum()
+        for k, asst in enumerate(asst_chain, start=1):
+            # Read-only views: only fed to _lcp_len / .extend(), never mutated
+            # in place, so no defensive copy is needed here (the leaf already
+            # owns isolated copies from _attach_assistant_leaf).
+            prompt_ids = asst.turn_prompt_ids or []
+            response_ids = asst.turn_response_ids or []
+            response_logprobs = asst.turn_response_logprobs
+            is_merged = bool(asst.metadata.get("fork_merged"))
+
+            # k == 1 falls out of the general case: LCP([], prompt) == 0 so
+            # _fork_or_drop_drift trivially returns the full prompt with no drop.
+            prev_finish_reason = asst_chain[k - 2].turn_finish_reason if k >= 2 else None
+            emit_prompt = self._fork_or_drop_drift(
+                sid,
+                accum,
+                prev_finish_reason=prev_finish_reason,
+                drift_turn_index=asst.turn_index,
+                prompt=prompt_ids,
+            )
+
+            accum.tokens.extend(emit_prompt)
+            accum.loss_mask.extend([0] * len(emit_prompt))
+            accum.logprobs.extend([0.0] * len(emit_prompt))
+
+            accum.tokens.extend(response_ids)
+            # fork-merged sibling: its response is "stale" — present in the tree
+            # only as a routing placeholder for the rewrites that collapsed onto
+            # it; mask it out of training.
+            accum.loss_mask.extend([0 if is_merged else 1] * len(response_ids))
+            accum.logprobs.extend(response_logprobs if response_logprobs is not None else [0.0] * len(response_ids))
+
+            if is_merged:
+                accum.fork_merge_masked_tokens += len(response_ids)
+                accum.fork_merge_turns += 1
+        return accum
+
+    def _fork_or_drop_drift(
+        self,
+        sid: str,
+        accum: _LeafAccum,
+        *,
+        prev_finish_reason: str | None,
+        drift_turn_index: int | None,
+        prompt: list[int],
+    ) -> list[int]:
+        """Resolve a TITO drift between cumulative tokens and the next prompt.
+
+        Compute LCP ``L``; if there's no drift suffix, just return the prompt
+        tail. Otherwise decide FORK vs DROP (fork is the primary path), then
+        truncate ``accum.{tokens,loss_mask,logprobs}`` to ``L`` and return
+        ``prompt[L:]`` for the caller to emit.
+
+        FORK (drift loses >= ``self._fork_threshold`` loss_mask=1 tokens):
+            append a complementary-mask ``_DriftFork`` to ``accum`` so the
+            dropped training signal survives as a sibling output leaf. The
+            drift is NOT counted toward ``accum.dropped_*``.
+        DROP (below threshold, or a pure-prompt drift losing 0 loss tokens):
+            drop-and-replace only, counted toward ``accum.dropped_*``.
+        """
+        L = _lcp_len(accum.tokens, prompt)
+        drift = len(accum.tokens) - L
+        if drift == 0:
+            return prompt[L:]
+
+        drift_loss_tokens = sum(accum.loss_mask[L:])
+        # PRIMARY: fork — losing >= threshold loss tokens is worth a
+        # complementary-mask fork leaf so the dropped signal survives. The
+        # drift_loss_tokens>0 guard keeps pure-prompt drift on the DROP path
+        # even if the threshold is set to <=0.
+        forked = drift_loss_tokens > 0 and drift_loss_tokens >= self._fork_threshold
+        if forked:
+            accum.drift_forks.append(
+                _DriftFork(
+                    tokens=list(accum.tokens),
+                    loss_mask=[0] * L + list(accum.loss_mask[L:]),
+                    logprobs=[0.0] * L
+                    + [(accum.logprobs[i] if accum.loss_mask[i] == 1 else 0.0) for i in range(L, len(accum.tokens))],
+                    drift_turn_index=drift_turn_index,
+                    prev_finish_reason=prev_finish_reason,
+                )
+            )
+        else:
+            # SECONDARY: drop-and-replace only.
+            accum.dropped_tokens += drift
+            accum.dropped_turns += 1
+
+        logger.warning(
+            "get_trajectory(sid=%s leaf turn=%s): TITO drift detected, "
+            "dropping %d prior tokens (incl. previous-turn response) to "
+            "realign with this turn's prompt%s",
+            sid,
+            drift_turn_index,
+            drift,
+            f"; forked {drift_loss_tokens} loss tokens" if forked else "",
+        )
+
+        del accum.tokens[L:]
+        del accum.loss_mask[L:]
+        del accum.logprobs[L:]
+        return prompt[L:]
+
+    @staticmethod
+    def _response_region(
+        loss_mask: list[int],
+        logprobs: list[float],
+        first_prompt_len: int,
+    ) -> tuple[list[int], list[float]]:
+        """Strip the leading first-turn prompt prefix from loss_mask / logprobs
+        so what remains is the response-region view slime expects (see
+        slime/backends/megatron_utils/data.py:139, slime/ray/rollout.py:695)."""
+        strip = min(first_prompt_len, len(loss_mask))
+        return loss_mask[strip:], logprobs[strip:]
 
     @staticmethod
     def _first_system_already_set(start: Node) -> bool:

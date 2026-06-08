@@ -73,7 +73,7 @@ class OpenAIAdapter(BaseAdapter):
         sglang_url,
         tool_parser=None,
         reasoning_parser=None,
-        tito_snapshot_min_loss_tokens: int | None = None,
+        drift_fork_min_loss_tokens: int | None = None,
         fork_merge_max_response_tokens: int | None = None,
         max_turns_per_sid: int | None = None,
         on_turn_appended: Callable[..., None] | None = None,
@@ -88,8 +88,8 @@ class OpenAIAdapter(BaseAdapter):
         # Mirror AnthropicAdapter: only forward kwargs the caller actually
         # specified, so TrajectoryManager's own defaults stay authoritative.
         mgr_kwargs: dict[str, int] = {}
-        if tito_snapshot_min_loss_tokens is not None:
-            mgr_kwargs["tito_snapshot_min_loss_tokens"] = tito_snapshot_min_loss_tokens
+        if drift_fork_min_loss_tokens is not None:
+            mgr_kwargs["drift_fork_min_loss_tokens"] = drift_fork_min_loss_tokens
         if fork_merge_max_response_tokens is not None:
             mgr_kwargs["fork_merge_max_response_tokens"] = fork_merge_max_response_tokens
         self.manager = TrajectoryManager(**mgr_kwargs)
@@ -499,23 +499,17 @@ async def _handle_chat_completions(request: web.Request) -> web.StreamResponse:
             )
             wire_message, manager_message, wire_finish = _build_oai_response(parsed, turn.finish_reason)
 
-            output_ids = list(turn.output_ids)
             finish_reason_mgr = _finish_reason_for_manager(turn.finish_reason, parsed.tool_uses)
+            turn = dataclasses.replace(turn, finish_reason=finish_reason_mgr)
+            output_ids = list(turn.output_ids)
 
             try:
                 adapter.manager.append_turn(
                     sid,
+                    turn=turn,
                     prompt_messages=translated,
                     tools=tools_schema,
-                    prompt_ids=prompt_ids,
-                    response_ids=output_ids,
-                    response_logprobs=(
-                        list(turn.output_log_probs)
-                        if turn.output_log_probs and len(turn.output_log_probs) == len(turn.output_ids)
-                        else None
-                    ),
                     response_message=manager_message,
-                    finish_reason=finish_reason_mgr,
                     metadata={"sid": sid},
                 )
             except Exception:

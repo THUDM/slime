@@ -97,46 +97,17 @@ class _State(metaclass=SingletonMeta):
                 "Without it the sandbox cannot dial back and the rollout will "
                 "silently abort."
             )
-        # Snapshot threshold: env override only. Absent => let TrajectoryManager
-        # take its built-in default. ``0`` disables, malformed values are
-        # ignored with a warning.
-        _snap_env = os.environ.get("SLIME_TITO_SNAPSHOT_MIN_LOSS_TOKENS")
-        _snap_threshold: int | None
-        if _snap_env is None:
-            _snap_threshold = None
-        else:
-            try:
-                _snap_threshold = int(_snap_env)
-            except ValueError:
-                logger.warning(
-                    "SLIME_TITO_SNAPSHOT_MIN_LOSS_TOKENS=%r is not an int; falling back to TrajectoryManager default",
-                    _snap_env,
-                )
-                _snap_threshold = None
-        # Fork-merge threshold: same env-override convention. Triggers the
-        # rescue path in trajectory_manager when claude-code reformats a prior
-        # assistant message and the existing sibling's response is short
-        # enough to mask out instead of forking the tree.
-        _fork_merge_env = os.environ.get("SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS")
-        _fork_merge_threshold: int | None
-        if _fork_merge_env is None:
-            _fork_merge_threshold = None
-        else:
-            try:
-                _fork_merge_threshold = int(_fork_merge_env)
-            except ValueError:
-                logger.warning(
-                    "SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS=%r is not an int; falling back to TrajectoryManager default",
-                    _fork_merge_env,
-                )
-                _fork_merge_threshold = None
+        drift_fork_threshold = os.environ.get("SLIME_DRIFT_FORK_MIN_LOSS_TOKENS")
+        drift_fork_threshold = int(drift_fork_threshold) if drift_fork_threshold else None
+        fork_merge_threshold = os.environ.get("SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS")
+        fork_merge_threshold = int(fork_merge_threshold) if fork_merge_threshold else None
         self.adapter = AnthropicAdapter(
             tokenizer=self.tokenizer,
             sglang_url=sglang_url,
             tool_parser=self.tool_parser,
             reasoning_parser=self.reasoning_parser,
-            tito_snapshot_min_loss_tokens=_snap_threshold,
-            fork_merge_max_response_tokens=_fork_merge_threshold,
+            drift_fork_min_loss_tokens=drift_fork_threshold,
+            fork_merge_max_response_tokens=fork_merge_threshold,
         )
         # handler_cancellation=True so a client disconnect cancels the handler
         # coroutine, arming the fire-and-forget /abort_request inside the

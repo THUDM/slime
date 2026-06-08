@@ -66,7 +66,7 @@ class AnthropicAdapter(BaseAdapter):
         sglang_url,
         tool_parser=None,
         reasoning_parser=None,
-        tito_snapshot_min_loss_tokens: int | None = None,
+        drift_fork_min_loss_tokens: int | None = None,
         fork_merge_max_response_tokens: int | None = None,
         max_turns_per_sid: int | None = None,
         on_turn_appended: Callable[..., None] | None = None,
@@ -81,8 +81,8 @@ class AnthropicAdapter(BaseAdapter):
         # ``None`` here means "caller did not specify" → let TrajectoryManager's
         # own default take over. Pass an int (incl. 0 to disable) to override.
         mgr_kwargs: dict[str, int] = {}
-        if tito_snapshot_min_loss_tokens is not None:
-            mgr_kwargs["tito_snapshot_min_loss_tokens"] = tito_snapshot_min_loss_tokens
+        if drift_fork_min_loss_tokens is not None:
+            mgr_kwargs["drift_fork_min_loss_tokens"] = drift_fork_min_loss_tokens
         if fork_merge_max_response_tokens is not None:
             mgr_kwargs["fork_merge_max_response_tokens"] = fork_merge_max_response_tokens
         self.manager = TrajectoryManager(**mgr_kwargs)
@@ -485,8 +485,6 @@ async def _handle_request(request: web.Request) -> web.StreamResponse:
             )
         adapter._sid_turn_count[sid] = prior + 1
 
-    # Fold mid-list ``role: system`` messages into a neighbouring user message
-    # so Qwen3 chat templates accept them. No-op when no mid-list system msgs.
     _fold_mid_list_system_into_user(body)
 
     app = request.app
@@ -521,8 +519,9 @@ async def _handle_request(request: web.Request) -> web.StreamResponse:
             )
             blocks, stop_reason, response_message = _build_blocks_and_response_message(parsed, turn.finish_reason)
 
-            output_ids = list(turn.output_ids)
             finish_reason = _finish_reason_for_manager(turn.finish_reason, parsed.tool_uses)
+            turn = dataclasses.replace(turn, finish_reason=finish_reason)
+            output_ids = list(turn.output_ids)
 
             if _is_cc_title_generation_request(translated, tools_schema):
                 # Claude Code meta request (per-session title generation).
@@ -539,17 +538,10 @@ async def _handle_request(request: web.Request) -> web.StreamResponse:
                 try:
                     adapter.manager.append_turn(
                         sid,
+                        turn=turn,
                         prompt_messages=translated,
                         tools=tools_schema,
-                        prompt_ids=prompt_ids,
-                        response_ids=output_ids,
-                        response_logprobs=(
-                            list(turn.output_log_probs)
-                            if turn.output_log_probs and len(turn.output_log_probs) == len(turn.output_ids)
-                            else None
-                        ),
                         response_message=response_message,
-                        finish_reason=finish_reason,
                         metadata={"sid": sid},
                     )
                 except Exception:
