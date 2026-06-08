@@ -279,6 +279,24 @@ def _leaves(mgr, sid):
     return [leaf for leaf in mgr._trees[sid].leaves() if not leaf.is_root]
 
 
+def _iter_all(root):
+    """Yield every non-root node in the tree (pre-order)."""
+    stack = list(root.children)
+    while stack:
+        n = stack.pop()
+        yield n
+        stack.extend(n.children)
+
+
+# A minimal OpenAI-shape tool spec, used to exercise tools-metadata routing.
+TOOLS = [
+    {
+        "type": "function",
+        "function": {"name": "run", "description": "Run.", "parameters": {"type": "object"}},
+    }
+]
+
+
 # Tree text snapshot captured the instant before get_trajectory drains the sid,
 # so the human-readable dump can show [tree] AND [samples] side by side even
 # though get_trajectory consumes the session.
@@ -950,6 +968,166 @@ def test_3_8_long_mixed_session():
 
 
 # ===========================================================================
+# §2 Group 4 — boundary / defensive / feature-completion
+#
+# Fills coverage gaps the matrix above left open: tools-metadata routing,
+# input-validation contracts, mixed-logprobs trajectories, the case-B1 drift
+# threshold boundary, and the default-base_sample path.
+# ===========================================================================
+
+
+def test_4_1_tools_metadata_on_first_system_only():
+    """tools passed to append_turn attach to the FIRST system node only; a later
+    turn carrying the same system must NOT re-attach (dedup via the
+    system-ancestor walk)."""
+    mgr = TrajectoryManager()
+    sid = "4.1"
+    s, u = sys_msg("S"), usr_msg("u")
+    a1, t1 = asst_msg("call"), tool_msg("t")
+    append(mgr, sid, [s, u], "call", finish_reason="tool_calls", tools=TOOLS)
+    append(mgr, sid, [s, u, a1, t1], "done", tools=TOOLS)
+    sys_node = mgr._trees[sid].children[0]
+    assert sys_node.role == "system"
+    assert sys_node.metadata.get("tools") == TOOLS, "tools land on the first system node"
+    # No other node carries tools.
+    others = [n for n in _iter_all(mgr._trees[sid]) if n is not sys_node]
+    assert all(n.metadata.get("tools") is None for n in others), "tools attached exactly once"
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    assert len(samples) == 1
+    _check_invariants(samples)
+    _record("4.1 tools metadata on first system only", mgr, sid, samples)
+    print("PASS 4.1")
+
+
+def test_4_2_logprobs_length_mismatch_raises():
+    """output_log_probs whose length != output_ids -> ValueError at append_turn."""
+    mgr = TrajectoryManager()
+    sid = "4.2"
+    s, u = sys_msg("S"), usr_msg("u")
+    bad = TurnRecord(
+        prompt_ids=render_prompt([s, u]),
+        output_ids=[9101, 9102, 9103],
+        finish_reason="stop",
+        output_log_probs=[-0.1, -0.2],  # length 2 != 3
+    )
+    raised = False
+    try:
+        mgr.append_turn(
+            sid,
+            turn=bad,
+            prompt_messages=messages([s, u]),
+            tools=None,
+            response_message={"role": "assistant", "content": "x"},
+        )
+    except ValueError as e:
+        raised = True
+        assert "output_log_probs" in str(e)
+    assert raised, "expected ValueError on logprobs/ids length mismatch"
+    print("PASS 4.2")
+
+
+def test_4_3_empty_prompt_messages_skipped():
+    """Empty prompt_messages -> append_turn is a no-op (warns, no node, no turn)."""
+    mgr = TrajectoryManager()
+    sid = "4.3"
+    mgr.append_turn(
+        sid,
+        turn=turn([1], [2], finish_reason="stop"),
+        prompt_messages=[],
+        tools=None,
+        response_message=None,
+    )
+    assert mgr.turn_count(sid) == 0
+    # The tree may be created empty (root only) or absent; either way no leaf.
+    assert not mgr.has_session(sid) or list(_leaves(mgr, sid)) == []
+    print("PASS 4.3")
+
+
+def test_4_4_default_base_sample():
+    """get_trajectory with base_sample=None uses a default Sample(index=0)."""
+    mgr = TrajectoryManager()
+    sid = "4.4"
+    s, u = sys_msg("S"), usr_msg("u")
+    append(mgr, sid, [s, u], "a")
+    # snapshot tree before drain so the dump still renders it
+    _TREE_SNAP[sid] = dump_tree_txt(mgr, sid)
+    _REWARD_IN[sid] = 1.0
+    samples = mgr.get_trajectory(sid, reward=1.0)  # no base_sample
+    assert len(samples) == 1
+    assert samples[0].index == 0
+    _check_invariants(samples)
+    _record("4.4 default base_sample (None)", mgr, sid, samples)
+    print("PASS 4.4")
+
+
+def test_4_5_mixed_logprobs_across_turns():
+    """A trajectory where turn 1 carries logprobs and turn 2 does NOT: the
+    sample's turn-1 response region has real logprobs, the turn-2 region is
+    padded with 0.0 (the response is still trained, loss=1)."""
+    mgr = TrajectoryManager()
+    sid = "4.5"
+    s, u = sys_msg("S"), usr_msg("u")
+    a1, t1 = asst_msg("call"), tool_msg("t")
+    p1, r1 = append(mgr, sid, [s, u], "call", finish_reason="tool_calls", logprobs=[-0.5] * 2)
+    p2, r2 = append(mgr, sid, [s, u, a1, t1], "done", logprobs=None)  # no logprobs
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    assert len(samples) == 1
+    s0 = samples[0]
+    L = _lcp_len(p1 + r1, p2)
+    # turn-1 region: real logprobs; prompt tail: 0.0; turn-2 region: 0.0 (padded).
+    assert s0.rollout_log_probs == [-0.5] * len(r1) + [0.0] * (len(p2) - L) + [0.0] * len(r2)
+    # both responses still trained.
+    assert s0.loss_mask == [1] * len(r1) + [0] * (len(p2) - L) + [1] * len(r2)
+    _check_invariants(samples)
+    _record("4.5 mixed logprobs across turns (turn2 padded 0.0)", mgr, sid, samples)
+    print("PASS 4.5")
+
+
+def test_4_6_drift_B1_threshold_boundary():
+    """case-B1 threshold is exclusive: a drift tail of length d == threshold
+    forks, d == threshold-1 replaces. Verify both sides of the boundary."""
+
+    def run(threshold, drift_tail_len):
+        mgr = TrajectoryManager(fork_merge_max_response_tokens=threshold)
+        sid = f"4.6-{threshold}-{drift_tail_len}"
+        s, u = sys_msg("S"), usr_msg("u")
+        # 4-token response so the divergence can sit d tokens before its end.
+        p1 = render_prompt([s, u])
+        r1 = [9001, 9002, 9003, 9004]
+        mgr.append_turn(
+            sid,
+            turn=turn(p1, r1, finish_reason="tool_calls"),
+            prompt_messages=messages([s, u]),
+            tools=None,
+            response_message={"role": "assistant", "content": "a1"},
+        )
+        a1m = {"role": "assistant", "content": "a1"}
+        tm = tool_msg("t")
+        # honest turn-2 prompt echoes p1 + r1 then the tool block + gen marker.
+        p2_honest = p1 + r1 + tm.render() + [_GEN]
+        # divergence d tokens before the end of r1's echo (inside its response span).
+        drift_idx = len(p1) + len(r1) - drift_tail_len
+        p2 = drift_replace(p2_honest, drift_idx)
+        r2 = [9101, 9102]
+        mgr.append_turn(
+            sid,
+            turn=turn(p2, r2, finish_reason="stop"),
+            prompt_messages=[*messages([s, u]), a1m, tm.message],
+            tools=None,
+            response_message={"role": "assistant", "content": "done"},
+        )
+        return get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+
+    forked = run(threshold=2, drift_tail_len=2)  # d == threshold -> fork
+    assert len(forked) == 2, f"d==threshold must fork, got {len(forked)}"
+    replaced = run(threshold=2, drift_tail_len=1)  # d < threshold -> replace
+    assert len(replaced) == 1, f"d<threshold must replace, got {len(replaced)}"
+    _check_invariants(forked)
+    _check_invariants(replaced)
+    print("PASS 4.6")
+
+
+# ===========================================================================
 # §3 Dual-mode printer
 # ===========================================================================
 
@@ -1046,6 +1224,12 @@ _CASES = [
     test_3_6_tree_fork_plus_token_drift,
     test_3_7_deep_multi_leaf_dedup,
     test_3_8_long_mixed_session,
+    test_4_1_tools_metadata_on_first_system_only,
+    test_4_2_logprobs_length_mismatch_raises,
+    test_4_3_empty_prompt_messages_skipped,
+    test_4_4_default_base_sample,
+    test_4_5_mixed_logprobs_across_turns,
+    test_4_6_drift_B1_threshold_boundary,
 ]
 
 
