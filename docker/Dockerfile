@@ -16,7 +16,7 @@ WORKDIR /root/
 # ======================================== Apt dependencies =============================================
 
 RUN apt update
-RUN apt install -y nvtop rsync dnsutils
+RUN apt install -y nvtop rsync dnsutils prometheus
 
 # ====================================== Python dependencies ============================================
 

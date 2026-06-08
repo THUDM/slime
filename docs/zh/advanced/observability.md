@@ -82,6 +82,8 @@ prometheus \
   --web.listen-address=0.0.0.0:9090
 ```
 
+slime 镜像里已经安装了 `prometheus`，可以直接在容器里用上面的命令启动。也可以从同一个镜像再起一个旁路容器，只要它能访问 router 地址，并把 `/path/to/prometheus-data` 挂到持久化目录即可。
+
 如果 `--storage.tsdb.path` 在容器本地盘里，容器回收后数据也会丢；如果挂到 NFS、持久化卷或作业输出目录，训练结束后可以重新启动 Prometheus 指向同一个 TSDB 目录，再用 Prometheus UI 或 Grafana 查询历史时间段。这里的“回放”是时间序列回放和图表分析，不是 per-request trace 的完整重放；per-sample request timing 仍然走 sample trace / debug rollout 数据。
 
 ## Trace viewer

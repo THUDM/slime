@@ -84,6 +84,8 @@ prometheus \
   --web.listen-address=0.0.0.0:9090
 ```
 
+The slime image includes the `prometheus` binary, so this command can run directly inside the container. You can also start a side container from the same image as long as it can reach the router address and mounts `/path/to/prometheus-data` on persistent storage.
+
 If `--storage.tsdb.path` points to container-local disk, the data is lost when the container is removed. If it points to NFS, a persistent volume, or a job output directory, you can restart Prometheus with the same TSDB directory after training and query the historical time range in the Prometheus UI or Grafana. This is time-series replay, not full per-request trace replay; per-sample request timings still come from sample traces / debug rollout data.
 
 ## Trace Viewer
