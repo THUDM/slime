@@ -1830,7 +1830,9 @@ def slime_validate_args(args):
     else:
         # If OPD is not enabled, teacher checkpoints should not be set.
         if args.opd_teacher_load is not None or args.opd_teacher_loads is not None:
-            raise ValueError("OPD teacher checkpoints are set but --use-opd is not enabled. Please add --use-opd flag.")
+            raise ValueError(
+                "OPD teacher checkpoints are set but --use-opd is not enabled. Please add --use-opd flag."
+            )
 
     if args.megatron_to_hf_mode == "bridge":
         if (

@@ -2,7 +2,6 @@ from argparse import Namespace
 from collections.abc import Callable, Iterator
 from typing import Any
 
-import math
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -1029,7 +1028,6 @@ def policy_loss_function(
     return loss, reported_loss
 
 
-
 class TPLogSumExp(torch.autograd.Function):
     @staticmethod
     def forward(ctx, logits_chunk: torch.Tensor, tp_group):
@@ -1393,8 +1391,7 @@ def topk_opd_loss_function(
     tail_advantages = teacher_tail - old_tail
 
     per_token_loss = -(
-        (old_probs * topk_ratio * topk_advantages).sum(dim=-1)
-        + old_tail_probs * tail_ratio * tail_advantages
+        (old_probs * topk_ratio * topk_advantages).sum(dim=-1) + old_tail_probs * tail_ratio * tail_advantages
     )
     opd_loss = args.opd_kl_coef * sum_of_sample_mean(per_token_loss)
 
@@ -1412,6 +1409,7 @@ def topk_opd_loss_function(
         "topk_opd_reverse_kl": sum_of_sample_mean(reverse_kl).clone().detach(),
         "topk_opd_ratio_abs": sum_of_sample_mean(avg_ratio_abs).clone().detach(),
     }
+
 
 def value_loss_function(
     args: Namespace,

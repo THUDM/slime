@@ -112,6 +112,8 @@ python3 examples/on_policy_distillation/topkopd_train.py \
 
 Teachers must be homogeneous with the student model. Multiple teacher checkpoints are averaged in probability space before computing the top-k OPD loss.
 
+The top-k example uses `examples.on_policy_distillation.topk_opd_helpers` to provide zero rewards and placeholder advantages. This keeps the rollout reward path runnable for pure top-k OPD; the actual training signal still comes from `topk_opd_loss`, which compares the current policy with the Megatron teacher distribution on the student's top-k tokens plus tail mass.
+
 
 # Preliminary Results
 Using Qwen3-8B-Base model sfted on part of the [OpenThoughts3-1.2M](https://huggingface.co/datasets/open-thoughts/OpenThoughts3-1.2M) dataset, we performed on-policy distillation with a Qwen3-32B teacher on the remaining data. Evaluation on Math500 shows:

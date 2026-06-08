@@ -1,14 +1,15 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 
 SLIME_ROOT = Path(__file__).resolve().parents[2]
 if str(SLIME_ROOT) not in sys.path:
     sys.path.insert(0, str(SLIME_ROOT))
 
+from train import train
+
 from slime.backends.megatron_utils.topk_opd_actor import TopKOPDMegatronTrainRayActor
 from slime.ray.actor_group import set_train_actor_cls
 from slime.utils.arguments import parse_args
-from train import train
 
 
 def main():

@@ -6,8 +6,8 @@ import os
 from argparse import Namespace
 from collections.abc import Callable, Sequence
 from functools import partial
-from typing import Any
 from pathlib import Path
+from typing import Any
 
 import torch
 from megatron.core import mpu
@@ -28,6 +28,7 @@ try:
     from megatron.core.pipeline_parallel.utils import unwrap_model
 except ImportError:
     from megatron.core.utils import unwrap_model
+
 from slime.utils import logging_utils
 from slime.utils.memory_utils import clear_memory
 

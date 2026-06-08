@@ -26,9 +26,7 @@ class TopKOPDMegatronTrainRayActor(MegatronTrainRayActor):
     """
 
     def _teacher_tags(self) -> list[str]:
-        tags = [
-            tag for tag in self.weights_backuper.backup_tags if tag == "teacher" or tag.startswith("teacher_")
-        ]
+        tags = [tag for tag in self.weights_backuper.backup_tags if tag == "teacher" or tag.startswith("teacher_")]
         return sorted(tags, key=lambda tag: (-1 if tag == "teacher" else int(tag.rsplit("_", 1)[1])))
 
     def compute_topk_log_prob(

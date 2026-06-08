@@ -48,7 +48,9 @@ ROLLOUT_ARGS=(
 )
 
 RM_ARGS=(
-   --rm-type math
+   --custom-rm-path examples.on_policy_distillation.topk_opd_helpers.zero_reward_func
+   --custom-reward-post-process-path examples.on_policy_distillation.topk_opd_helpers.zero_reward_post_process
+   --custom-advantage-function-path examples.on_policy_distillation.topk_opd_helpers.placeholder_advantage_function
 )
 
 EVAL_ARGS=(
