@@ -67,6 +67,16 @@ def name_of(tok: int) -> str:
     return TOKEN_NAMES.get(tok, str(tok))
 
 
+def _vis(label: str) -> str:
+    """Make whitespace visible in a token label for the dump.
+
+    Whitespace-only drift (e.g. a trailing space from a cc rewrite) is invisible
+    in a terminal, which makes ``r:ok`` vs ``r:ok `` indistinguishable. Render
+    spaces as ``␣`` so the difference is obvious in the readable output.
+    """
+    return label.replace(" ", "␣")
+
+
 _ASST_BODY: dict[str, int] = {}
 
 
@@ -85,7 +95,7 @@ def _asst_body(label: str) -> int:
     if label not in _ASST_BODY:
         body = _BANDS["assistant"] + 100 + len(_ASST_BODY)
         _ASST_BODY[label] = body
-        TOKEN_NAMES[body] = f"r:{label}"
+        TOKEN_NAMES[body] = f"r:{_vis(label)}"
     return _ASST_BODY[label]
 
 
@@ -121,7 +131,7 @@ class MsgTok:
             idx = MsgTok._body_counter.setdefault(role, 0) + 1
             MsgTok._body_counter[role] = idx
             self.body = base + 10 + idx
-            TOKEN_NAMES[self.body] = f"{role}:{label}"
+            TOKEN_NAMES[self.body] = f"{role}:{_vis(label)}"
         # message dict as the manager sees it (drives node_match_key).
         self.message = {"role": role, "content": label}
 
@@ -248,7 +258,7 @@ def append(
     # consumes them.
     _TURN_LOG.setdefault(sid, []).append(
         {
-            "prompt_msgs": [f"{m.role}:{m.label}" for m in prompt_msgs],
+            "prompt_msgs": [f"{m.role}:{_vis(m.label)}" for m in prompt_msgs],
             "prompt_ids": p,
             "response_ids": r,
             "finish": finish_reason,
