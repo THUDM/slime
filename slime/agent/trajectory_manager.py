@@ -185,14 +185,16 @@ class TrajectoryManager:
     ancestor) + exactly 1 assistant leaf carrying that turn's sglang snapshot.
     """
 
-    def __init__(self, *, fork_merge_max_response_tokens: int = 1024) -> None:
-        # Rewrite-merge threshold: when DFS breaks at an assistant message and
-        # exactly one eligible short-response *leaf* sibling exists, absorb the
-        # rewrite onto it (demoted to routing-only -> 0 training tokens),
-        # compared against the abandoned turn's own turn_response_ids length.
-        # Default 1024 (ON); set <=0 to disable. This is the single tolerated
-        # exception to the strict exact-prefix contract; see module docstring.
-        self._fork_merge_threshold = fork_merge_max_response_tokens
+    def __init__(self, *, fork_merge_max_response_tokens: int | None = None) -> None:
+        # Drift fork/replace threshold (see module docstring + spec). Only a
+        # case-B1 drift (divergence inside the immediately-previous turn's
+        # response region) compares its drift length against this value:
+        # drift < threshold -> replace (truncate + realign, dropped tail
+        # counted in tito_dropped_*); drift >= threshold -> fork. case A
+        # (prompt region) and case B2 (drift in an earlier turn's response)
+        # always fork regardless. <=0 forces B1 to fork too (max fidelity).
+        # ``None`` from the caller means "use the default".
+        self._fork_threshold: int = 1024 if fork_merge_max_response_tokens is None else fork_merge_max_response_tokens
         self._trees: dict[str, Node] = {}
         self._turn_count: dict[str, int] = {}
 
@@ -323,7 +325,7 @@ class TrajectoryManager:
         needed there). Any other mismatch (non-assistant message, long response,
         non-leaf or ambiguous candidates) is left to fork as usual.
         """
-        if self._fork_merge_threshold <= 0:
+        if self._fork_threshold <= 0:
             return cur, i  # feature off
         if i >= len(prompt_messages) or prompt_messages[i].get("role") != "assistant":
             return cur, i  # genuine non-assistant history fork -> leave it
@@ -338,7 +340,7 @@ class TrajectoryManager:
             and not c.children
             # A real turn leaf carrying this turn's snapshot, not an already-
             # demoted routing node (turn_prompt_ids cleared by a prior merge).
-            and c.turn_prompt_ids is not None and len(c.turn_response_ids or []) < self._fork_merge_threshold
+            and c.turn_prompt_ids is not None and len(c.turn_response_ids or []) < self._fork_threshold
         ]
         if len(candidates) != 1:
             if len(candidates) >= 2:
