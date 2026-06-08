@@ -1,0 +1,908 @@
+"""End-to-end tests for TrajectoryManager via append_turn / get_trajectory.
+
+This script drives the two public interfaces of
+``slime.agent.trajectory_manager.TrajectoryManager`` and exhaustively covers the
+ways a trajectory can branch, organized as a two-axis matrix:
+
+  * LAYER 1 — routing tree (append_turn). DFS merges on (role, node_match_key)
+    only, so MESSAGE IDENTITY决定 tree shape; token ids are irrelevant here.
+  * LAYER 2 — linearization (get_trajectory). TOKEN-ID prefix决定 how each leaf
+    chain becomes Samples (clean continuation / drift case A·B1·B2 / cross-leaf
+    dedup / reward split).
+  * COMBINED — both layers interacting (rewrite-merge, tree-fork + token-drift
+    stacked, deep multi-leaf dedup, long mixed session).
+
+Readability:
+  Token ids are SEMANTIC small integers (see TOKEN_NAMES). Each message renders
+  to ``[START, ...body, END]`` with a per-role band, so an id like 2001 reads as
+  ``u:compute`` and 7001 reads as ``<DRIFT>``. Expected token sequences are built
+  with the same render_* helpers used to feed append_turn, never hand-typed
+  magic numbers.
+
+Dual mode:
+  Every case is a ``test_*`` function doing strict assertions. ``main()`` runs
+  them all and, after each, prints the routing tree (token ids decoded to names)
+  and every linearized Sample with token / loss_mask aligned, so a human can read
+  exactly where each branch happened. Run with::
+
+      python -m tests.test_agent.test_trajectory_manager_e2e
+"""
+
+from __future__ import annotations
+
+from tests.test_agent.test_claude_code_agent._dump_helpers import dump_tree_txt  # noqa: E402
+
+from slime.agent.adapters.common import TurnRecord  # noqa: E402
+from slime.agent.trajectory_manager import TrajectoryManager, _lcp_len  # noqa: E402
+from slime.utils.types import Sample  # noqa: E402
+
+# ===========================================================================
+# §1 Semantic token vocabulary + reverse table
+# ===========================================================================
+#
+# Per-role band. A message renders to [START, ...body, END]; the generation
+# prompt appends the assistant START as the open-turn marker.
+
+_BANDS = {
+    "system": 1000,
+    "user": 2000,
+    "assistant": 9000,
+    "tool": 3000,
+}
+_GEN = _BANDS["assistant"]  # add_generation_prompt marker
+_DRIFT_BAND = 7000
+
+# Reverse table: token id -> human-readable name. Filled lazily as messages are
+# registered so dumps translate ids back to labels.
+TOKEN_NAMES: dict[int, str] = {}
+_ABBR = {"system": "sys", "user": "usr", "assistant": "ast", "tool": "tul"}
+for _role, _base in _BANDS.items():
+    TOKEN_NAMES[_base] = f"<{_ABBR[_role]}>"
+    TOKEN_NAMES[_base + 9] = f"</{_ABBR[_role]}>"
+TOKEN_NAMES[_GEN] = "<gen>"
+
+
+def name_of(tok: int) -> str:
+    """Human-readable name for a token id (falls back to the raw int)."""
+    return TOKEN_NAMES.get(tok, str(tok))
+
+
+def _asst_body(label: str) -> int:
+    """Stable assistant body token for a response/message label.
+
+    An assistant message replayed in a later prompt must render to the SAME
+    tokens the model generated for it, otherwise a clean continuation can never
+    hold (the cumulative prompt+response would not prefix the next prompt). So
+    both ``render_response`` and an assistant ``MsgTok`` derive their body token
+    from this one function, keyed on the label.
+    """
+    body = _BANDS["assistant"] + 100 + (sum(ord(c) for c in label) % 800)
+    TOKEN_NAMES[body] = f"r:{label}"
+    return body
+
+
+def render_ids(ids: list[int]) -> str:
+    """Decode an id list into a space-joined readable string."""
+    return " ".join(name_of(t) for t in ids)
+
+
+class MsgTok:
+    """A message bound to a fixed, deterministic token rendering.
+
+    The same MsgTok always renders to the same token segment regardless of which
+    turn replays it (a clean tokenizer). Token-id drift is injected explicitly by
+    tests via ``drift`` — never by re-rendering.
+    """
+
+    _body_counter: dict[str, int] = {}
+
+    def __init__(self, role: str, label: str) -> None:
+        self.role = role
+        self.label = label
+        base = _BANDS[role]
+        if role == "assistant":
+            # An assistant message must render to the same body token as the
+            # response it represents (label-keyed), so a replayed assistant in a
+            # later prompt token-matches the original generation -> clean
+            # continuation. See _asst_body.
+            self.body = _asst_body(label)
+        else:
+            # Allocate one stable body token per (role, label). Offset past the
+            # END marker (base+9): the counter is shared across cases, so bodies
+            # must never climb into base+9 (END) or they'd collide with it.
+            idx = MsgTok._body_counter.setdefault(role, 0) + 1
+            MsgTok._body_counter[role] = idx
+            self.body = base + 10 + idx
+            TOKEN_NAMES[self.body] = f"{role}:{label}"
+        # message dict as the manager sees it (drives node_match_key).
+        self.message = {"role": role, "content": label}
+
+    def render(self) -> list[int]:
+        """[START, body, END] for this message."""
+        base = _BANDS[self.role]
+        return [base, self.body, base + 9]
+
+
+def sys_msg(label: str) -> MsgTok:
+    return MsgTok("system", label)
+
+
+def usr_msg(label: str) -> MsgTok:
+    return MsgTok("user", label)
+
+
+def asst_msg(label: str) -> MsgTok:
+    return MsgTok("assistant", label)
+
+
+def tool_msg(label: str) -> MsgTok:
+    return MsgTok("tool", label)
+
+
+def render_prompt(msgs: list[MsgTok]) -> list[int]:
+    """Render a prompt message list, appending the generation-prompt marker."""
+    out: list[int] = []
+    for m in msgs:
+        out.extend(m.render())
+    out.append(_GEN)
+    return out
+
+
+def render_response(label: str) -> list[int]:
+    """Render an assistant response: [body, </asst>].
+
+    The generation-prompt marker ``<gen>`` equals the assistant START token, so
+    ``<gen> + render_response(x)`` == the assistant message ``[<asst>, body,
+    </asst>]`` replayed in a later prompt. That identity is what makes a clean
+    continuation hold across turns.
+    """
+    return [_asst_body(label), _BANDS["assistant"] + 9]
+
+
+def messages(msgs: list[MsgTok]) -> list[dict]:
+    """The plain message dicts append_turn wants for prompt_messages."""
+    return [m.message for m in msgs]
+
+
+def drift(ids: list[int], at: int, sentinel: int = _DRIFT_BAND + 1) -> list[int]:
+    """Return a copy of ``ids`` with a sentinel spliced at index ``at``.
+
+    The sentinel sits in the drift band (7000+), so a dump shows ``<DRIFT>`` at
+    the exact divergence point. Splicing (insert) makes ``len`` grow by one,
+    which is enough to make the lcp diverge at ``at``.
+    """
+    TOKEN_NAMES[sentinel] = "<DRIFT>"
+    return ids[:at] + [sentinel] + ids[at:]
+
+
+def drift_replace(ids: list[int], at: int, sentinel: int = _DRIFT_BAND + 2) -> list[int]:
+    """Return a copy of ``ids`` with the token at ``at`` REPLACED by a sentinel.
+
+    Unlike ``drift`` this keeps length constant — used when a test wants the
+    divergence inside a response span without changing the cumulative length.
+    """
+    TOKEN_NAMES[sentinel] = "<DRIFT>"
+    out = list(ids)
+    out[at] = sentinel
+    return out
+
+
+def turn(prompt_ids, response_ids, *, finish_reason="stop", logprobs=None) -> TurnRecord:
+    return TurnRecord(
+        prompt_ids=list(prompt_ids),
+        output_ids=list(response_ids),
+        finish_reason=finish_reason,
+        output_log_probs=list(logprobs) if logprobs is not None else [],
+    )
+
+
+# A scratch space for the dual-mode printer: each case appends (title, mgr, sid,
+# samples) so main() can render after the assertions pass.
+_PRINT_LOG: list[tuple[str, object, str, list]] = []
+
+
+def _record(title: str, mgr, sid: str, samples: list) -> None:
+    _PRINT_LOG.append((title, mgr, sid, samples))
+
+
+# Convenience: append a turn with semantic messages, auto-rendering prompt unless
+# an explicit prompt_ids is supplied (for drift injection).
+def append(
+    mgr: TrajectoryManager,
+    sid: str,
+    prompt_msgs: list[MsgTok],
+    response_label: str | None,
+    *,
+    prompt_ids=None,
+    response_ids=None,
+    finish_reason="stop",
+    logprobs=None,
+    tools=None,
+    response_message=None,
+):
+    p = list(prompt_ids) if prompt_ids is not None else render_prompt(prompt_msgs)
+    if response_ids is not None:
+        r = list(response_ids)
+    elif response_label is not None:
+        r = render_response(response_label)
+    else:
+        r = []
+    rmsg = response_message
+    if rmsg is None and response_label is not None:
+        rmsg = {"role": "assistant", "content": response_label}
+    lp = logprobs
+    mgr.append_turn(
+        sid,
+        turn=turn(p, r, finish_reason=finish_reason, logprobs=lp),
+        prompt_messages=messages(prompt_msgs),
+        tools=tools,
+        response_message=rmsg,
+    )
+    return p, r
+
+
+def _leaves(mgr, sid):
+    return [leaf for leaf in mgr._trees[sid].leaves() if not leaf.is_root]
+
+
+def _check_invariants(samples):
+    for s in samples:
+        assert len(s.loss_mask) == len(s.rollout_log_probs) == s.response_length, (
+            "alignment broken",
+            len(s.loss_mask),
+            len(s.rollout_log_probs),
+            s.response_length,
+        )
+        assert sum(s.loss_mask) > 0, "fully-masked sample emitted"
+
+
+# ===========================================================================
+# §2 Group 1 — routing tree layer (append_turn shapes the tree)
+# ===========================================================================
+
+
+def test_1_1_single_turn_chain():
+    mgr = TrajectoryManager()
+    sid = "1.1"
+    s = sys_msg("S")
+    u = usr_msg("compute")
+    append(mgr, sid, [s, u], "ok")
+    chain = _leaves(mgr, sid)[0].path_from_root()
+    assert [n.role for n in chain] == ["system", "user", "assistant"]
+    assert chain[-1].turn_index == 1
+    _record("1.1 single turn -> linear chain", mgr, sid, [])
+    print("PASS 1.1")
+
+
+def test_1_2_clean_multiturn_with_tool():
+    mgr = TrajectoryManager()
+    sid = "1.2"
+    s, u = sys_msg("S"), usr_msg("compute")
+    a1, t1 = asst_msg("call"), tool_msg("4")
+    append(mgr, sid, [s, u], "call", finish_reason="tool_calls")
+    append(mgr, sid, [s, u, a1, t1], "done")
+    chain = _leaves(mgr, sid)[0].path_from_root()
+    assert [n.role for n in chain] == ["system", "user", "assistant", "tool", "assistant"]
+    assert mgr.turn_count(sid) == 2
+    _record("1.2 clean 2-turn with tool -> single chain", mgr, sid, [])
+    print("PASS 1.2")
+
+
+def test_1_3_system_fork():
+    mgr = TrajectoryManager()
+    sid = "1.3"
+    for sl in ["SA", "SB"]:
+        append(mgr, sid, [sys_msg(sl), usr_msg("u")], "a")
+    root = mgr._trees[sid]
+    assert len(root.children) == 2, "different system -> two subtrees at root"
+    assert len(_leaves(mgr, sid)) == 2
+    _record("1.3 system fork -> two subtrees at root", mgr, sid, [])
+    print("PASS 1.3")
+
+
+def test_1_4_user_fork_shared_system():
+    mgr = TrajectoryManager()
+    sid = "1.4"
+    s = sys_msg("S")
+    for ul in ["A", "B"]:
+        append(mgr, sid, [s, usr_msg(ul)], ul.lower())
+    root = mgr._trees[sid]
+    assert len(root.children) == 1, "system shared"
+    assert len(root.children[0].children) == 2, "user level forks"
+    assert len(_leaves(mgr, sid)) == 2
+    _record("1.4 user fork (shared system)", mgr, sid, [])
+    print("PASS 1.4")
+
+
+def test_1_5_assistant_message_fork():
+    """Same (sys,user) prefix, two distinct assistant turns -> assistant fork."""
+    mgr = TrajectoryManager()
+    sid = "1.5"
+    s, u = sys_msg("S"), usr_msg("u")
+    append(mgr, sid, [s, u], "a1")
+    append(mgr, sid, [s, u], "a2")
+    user_node = mgr._trees[sid].children[0].children[0]
+    assert len(user_node.children) == 2, "two assistant leaves hang off shared user"
+    _record("1.5 assistant fork under shared user", mgr, sid, [])
+    print("PASS 1.5")
+
+
+def test_1_6_tool_fork_shared_assistant():
+    """Same first assistant turn, two different tool results -> tool-level fork,
+    making the first assistant a shared snapshot node with 2 children."""
+    mgr = TrajectoryManager()
+    sid = "1.6"
+    s, u, a1 = sys_msg("S"), usr_msg("u"), asst_msg("call")
+    append(mgr, sid, [s, u], "call", finish_reason="tool_calls")
+    append(mgr, sid, [s, u, a1, tool_msg("x")], "ax")
+    append(mgr, sid, [s, u, a1, tool_msg("y")], "ay")
+    asst1 = mgr._trees[sid].children[0].children[0].children[0]
+    assert asst1.role == "assistant" and asst1.turn_prompt_ids is not None
+    assert len(asst1.children) == 2, "shared assistant forks at the tool level"
+    assert len(_leaves(mgr, sid)) == 2
+    _record("1.6 tool fork (shared assistant snapshot)", mgr, sid, [])
+    print("PASS 1.6")
+
+
+def test_1_7_token_only_drift_no_fork():
+    """Identical messages, tampered prompt_ids -> NO fork (DFS ignores tokens)."""
+    mgr = TrajectoryManager()
+    sid = "1.7"
+    s, u = sys_msg("S"), usr_msg("u")
+    p1, _ = append(mgr, sid, [s, u], "a")
+    tampered = drift(p1, 1)
+    append(mgr, sid, [s, u], "b", prompt_ids=tampered)
+    user_node = mgr._trees[sid].children[0].children[0]
+    assert len(user_node.children) == 2, "two assistant turns share the (sys,user) path"
+    # but the path above the assistant is single (not forked on tokens)
+    assert len(mgr._trees[sid].children) == 1
+    _record("1.7 token-only drift -> no tree fork", mgr, sid, [])
+    print("PASS 1.7")
+
+
+def test_1_8_multi_tool_per_turn():
+    mgr = TrajectoryManager()
+    sid = "1.8"
+    s, u, a1 = sys_msg("S"), usr_msg("u"), asst_msg("call")
+    ta, tb = tool_msg("A"), tool_msg("B")
+    append(mgr, sid, [s, u], "call", finish_reason="tool_calls")
+    append(mgr, sid, [s, u, a1, ta, tb], "done")
+    chain = _leaves(mgr, sid)[0].path_from_root()
+    assert [n.role for n in chain] == ["system", "user", "assistant", "tool", "tool", "assistant"]
+    assert chain[3].messages == [ta.message]
+    assert chain[4].messages == [tb.message]
+    _record("1.8 multi-tool turn -> one node per tool", mgr, sid, [])
+    print("PASS 1.8")
+
+
+def test_1_9_cross_sid_isolation():
+    mgr = TrajectoryManager()
+    s = sys_msg("S")
+    for sid, ul in [("sid-a", "A"), ("sid-b", "B")]:
+        append(mgr, sid, [s, usr_msg(ul)], ul.lower())
+    assert len(_leaves(mgr, "sid-a")) == 1
+    assert len(_leaves(mgr, "sid-b")) == 1
+    assert mgr._trees["sid-a"] is not mgr._trees["sid-b"]
+    print("PASS 1.9")
+
+
+def test_1_10_empty_response():
+    mgr = TrajectoryManager()
+    sid = "1.10"
+    s, u = sys_msg("S"), usr_msg("u")
+    append(mgr, sid, [s, u], None, response_ids=[], response_message=None, finish_reason="length")
+    asst = _leaves(mgr, sid)[0]
+    assert asst.role == "assistant"
+    assert asst.turn_response_ids == []
+    assert asst.messages == []
+    _record("1.10 empty response -> assistant leaf, no message", mgr, sid, [])
+    print("PASS 1.10")
+
+
+# ===========================================================================
+# §2 Group 2 — linearization layer (get_trajectory token routing)
+# ===========================================================================
+
+
+def test_2_1_single_turn_linearize():
+    mgr = TrajectoryManager()
+    sid = "2.1"
+    s, u = sys_msg("S"), usr_msg("u")
+    p, r = append(mgr, sid, [s, u], "a", logprobs=None)
+    # attach explicit logprobs so we can check propagation
+    leaf = _leaves(mgr, sid)[0]
+    leaf.turn_response_logprobs = [-0.5] * len(r)
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=7, prompt="hi"), reward=1.0)
+    assert len(samples) == 1
+    s0 = samples[0]
+    assert s0.tokens == p + r
+    assert s0.loss_mask == [1] * len(r)
+    assert s0.rollout_log_probs == [-0.5] * len(r)
+    assert s0.response_length == len(r)
+    assert s0.reward == 1.0
+    _check_invariants(samples)
+    _record("2.1 single-turn linearize", mgr, sid, samples)
+    print("PASS 2.1")
+
+
+def test_2_2_clean_multiturn_linearize():
+    mgr = TrajectoryManager()
+    sid = "2.2"
+    s, u, a1, t1 = sys_msg("S"), usr_msg("u"), asst_msg("call"), tool_msg("4")
+    p1, r1 = append(mgr, sid, [s, u], "call", finish_reason="tool_calls", logprobs=[-0.5] * 2)
+    p2, r2 = append(mgr, sid, [s, u, a1, t1], "done", logprobs=[-0.4] * 2)
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    assert len(samples) == 1
+    s0 = samples[0]
+    L = _lcp_len(p1 + r1, p2)
+    assert L == len(p1) + len(r1)
+    assert s0.tokens == p1 + r1 + p2[L:] + r2
+    assert s0.loss_mask == [1] * len(r1) + [0] * (len(p2) - L) + [1] * len(r2)
+    assert s0.rollout_log_probs == [-0.5] * len(r1) + [0.0] * (len(p2) - L) + [-0.4] * len(r2)
+    _check_invariants(samples)
+    _record("2.2 clean 2-turn linearize", mgr, sid, samples)
+    print("PASS 2.2")
+
+
+def test_2_3_drift_case_A_forks():
+    """Drift inside a PROMPT region -> case A -> fork, no token dropped."""
+    mgr = TrajectoryManager()
+    sid = "2.3"
+    s, u, a1, t = sys_msg("S"), usr_msg("u"), asst_msg("call"), tool_msg("t")
+    p1, r1 = append(mgr, sid, [s, u], "call", finish_reason="tool_calls", logprobs=[-0.5] * 2)
+    p2_honest = render_prompt([s, u, a1, t])
+    p2 = drift(p2_honest, len(p1) - 1)  # inside p1's prompt region
+    p2, r2 = append(mgr, sid, [s, u, a1, t], "done", prompt_ids=p2, logprobs=[-0.4] * 2)
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    assert len(samples) == 2
+    s1, s2 = samples
+    assert s1.tokens == p1 + r1
+    assert s1.loss_mask == [1] * len(r1)
+    assert s2.tokens == p2 + r2
+    assert s2.loss_mask == [1] * len(r2)
+    assert all(s.reward == 1.0 for s in samples)
+    _check_invariants(samples)
+    _record("2.3 drift case A (prompt region) -> fork", mgr, sid, samples)
+    print("PASS 2.3")
+
+
+def test_2_4_drift_case_B1_short_replaces():
+    """Small drift inside the most-recent response span -> replace."""
+    mgr = TrajectoryManager()  # default threshold 1024
+    sid = "2.4"
+    s, u, a1, t = sys_msg("S"), usr_msg("u"), asst_msg("call"), tool_msg("t")
+    p1, r1 = append(mgr, sid, [s, u], "call", finish_reason="tool_calls", logprobs=[-0.5] * 2)
+    p2_honest = render_prompt([s, u, a1, t])
+    assert p2_honest[: len(p1) + len(r1)] == p1 + r1
+    drift_idx = len(p1) + len(r1) - 1  # last token of r1's echo
+    p2 = drift_replace(p2_honest, drift_idx)
+    p2, r2 = append(mgr, sid, [s, u, a1, t], "done", prompt_ids=p2, logprobs=[-0.4] * 2)
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    assert len(samples) == 1
+    s0 = samples[0]
+    L = _lcp_len(p1 + r1, p2)
+    assert L == drift_idx
+    assert s0.tokens == p2 + r2
+    assert s0.loss_mask == [1] * (L - len(p1)) + [0] * (len(p2) - L) + [1] * len(r2)
+    assert s0.rollout_log_probs == [-0.5] * (L - len(p1)) + [0.0] * (len(p2) - L) + [-0.4] * len(r2)
+    _check_invariants(samples)
+    _record("2.4 drift case B1 (small) -> replace", mgr, sid, samples)
+    print("PASS 2.4")
+
+
+def test_2_5_drift_case_B1_long_forks():
+    mgr = TrajectoryManager(fork_merge_max_response_tokens=1)  # d>=1 -> fork
+    sid = "2.5"
+    s, u, a1, t = sys_msg("S"), usr_msg("u"), asst_msg("call"), tool_msg("t")
+    p1, r1 = append(mgr, sid, [s, u], "call", finish_reason="tool_calls")
+    p2_honest = render_prompt([s, u, a1, t])
+    p2 = drift_replace(p2_honest, len(p1) + len(r1) - 1)
+    p2, r2 = append(mgr, sid, [s, u, a1, t], "done", prompt_ids=p2)
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    assert len(samples) == 2
+    assert samples[0].tokens == p1 + r1
+    assert samples[1].tokens == p2 + r2
+    assert all(s.reward == 1.0 for s in samples)
+    _check_invariants(samples)
+    _record("2.5 drift case B1 (long) -> fork", mgr, sid, samples)
+    print("PASS 2.5")
+
+
+def test_2_6_drift_case_B1_threshold_zero_forks():
+    mgr = TrajectoryManager(fork_merge_max_response_tokens=0)
+    sid = "2.6"
+    s, u, a1, t = sys_msg("S"), usr_msg("u"), asst_msg("call"), tool_msg("t")
+    p1, r1 = append(mgr, sid, [s, u], "call", finish_reason="tool_calls")
+    p2_honest = render_prompt([s, u, a1, t])
+    p2 = drift_replace(p2_honest, len(p1) + len(r1) - 1)
+    append(mgr, sid, [s, u, a1, t], "done", prompt_ids=p2)
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    assert len(samples) == 2
+    _check_invariants(samples)
+    _record("2.6 drift case B1 threshold=0 -> fork", mgr, sid, samples)
+    print("PASS 2.6")
+
+
+def test_2_7_drift_case_B2_earlier_turn_forks():
+    """Drift inside an EARLIER turn's response span -> always fork."""
+    mgr = TrajectoryManager()
+    sid = "2.7"
+    s, u = sys_msg("S"), usr_msg("u")
+    a1, t1 = asst_msg("a1"), tool_msg("t1")
+    a2, t2 = asst_msg("a2"), tool_msg("t2")
+    p1, r1 = append(mgr, sid, [s, u], "a1", finish_reason="tool_calls", logprobs=[-0.5] * 2)
+    p2, r2 = append(mgr, sid, [s, u, a1, t1], "a2", finish_reason="tool_calls", logprobs=[-0.4] * 2)
+    p3_honest = render_prompt([s, u, a1, t1, a2, t2])
+    p3 = drift_replace(p3_honest, len(p1) + len(r1) - 1)  # inside r1 (earlier span)
+    p3, r3 = append(mgr, sid, [s, u, a1, t1, a2, t2], "a3", prompt_ids=p3, logprobs=[-0.3] * 2)
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    assert len(samples) == 2
+    s1, s2 = samples
+    L12 = _lcp_len(p1 + r1, p2)
+    assert s1.tokens == p1 + r1 + p2[L12:] + r2
+    assert s2.tokens == p3 + r3
+    assert all(s.reward == 1.0 for s in samples)
+    _check_invariants(samples)
+    _record("2.7 drift case B2 (earlier turn) -> fork", mgr, sid, samples)
+    print("PASS 2.7")
+
+
+def test_2_8_fork_reward_split():
+    mgr = TrajectoryManager()
+    sid = "2.8"
+    s, u, a1, t = sys_msg("S"), usr_msg("u"), asst_msg("call"), tool_msg("t")
+    p1, _ = append(mgr, sid, [s, u], "call", finish_reason="tool_calls")
+    p2_honest = render_prompt([s, u, a1, t])
+    p2 = drift(p2_honest, len(p1) - 1)  # prompt region -> case A fork
+    append(mgr, sid, [s, u, a1, t], "done", prompt_ids=p2)
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=3.0)
+    assert len(samples) == 2
+    assert all(abs(s.reward - 1.5) < 1e-9 for s in samples)
+    _record("2.8 fork reward split (3.0 / 2)", mgr, sid, samples)
+    print("PASS 2.8")
+
+
+def test_2_9_two_leaves_reward_split():
+    mgr = TrajectoryManager()
+    sid = "2.9"
+    s = sys_msg("S")
+    for ul in ["A", "B"]:
+        append(mgr, sid, [s, usr_msg(ul)], ul.lower())
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    assert len(samples) == 2
+    assert all(s.reward == 1.0 for s in samples)
+    _check_invariants(samples)
+    _record("2.9 two leaves reward split (2.0 / 2)", mgr, sid, samples)
+    print("PASS 2.9")
+
+
+def test_2_10_cross_leaf_dedup():
+    """Shared assistant trained on first leaf only; second leaf re-emits it
+    as loss=0 context."""
+    mgr = TrajectoryManager()
+    sid = "2.10"
+    s, u, a1 = sys_msg("S"), usr_msg("u"), asst_msg("call")
+    tx, ty = tool_msg("x"), tool_msg("y")
+    p1, r1 = append(mgr, sid, [s, u], "call", finish_reason="tool_calls", logprobs=[-0.5] * 2)
+    p2, r2 = append(mgr, sid, [s, u, a1, tx], "a2", logprobs=[-0.4] * 2)
+    p3, r3 = append(mgr, sid, [s, u, a1, ty], "a3", logprobs=[-0.3] * 2)
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    assert len(samples) == 2
+    s_first, s_second = samples
+    L2 = _lcp_len(p1 + r1, p2)
+    assert s_first.tokens == p2 + r2
+    assert s_first.loss_mask == [1] * len(r1) + [0] * (len(p2) - L2) + [1] * len(r2)
+    assert s_second.tokens == p3 + r3
+    assert s_second.loss_mask == [0] * (len(p3) - len(p1)) + [1] * len(r3)
+    assert s_second.rollout_log_probs == [0.0] * (len(p3) - len(p1)) + [-0.3] * len(r3)
+    _check_invariants(samples)
+    _record("2.10 cross-leaf dedup (shared assistant trained once)", mgr, sid, samples)
+    print("PASS 2.10")
+
+
+def test_2_11_routing_only_assistant_filtered():
+    """cc replays an assistant the manager never recorded -> mounts routing-only,
+    must be filtered out of the strict-prefix walk (no raise)."""
+    mgr = TrajectoryManager()
+    sid = "2.11"
+    s, u = sys_msg("S"), usr_msg("u")
+    a1, t1 = asst_msg("a1"), tool_msg("t1")
+    a2 = asst_msg("a2")
+    append(mgr, sid, [s, u], "a1", finish_reason="tool_calls")
+    append(mgr, sid, [s, u, a1, t1], "a2", finish_reason="tool_calls")
+    foreign = asst_msg("foreign")
+    t2 = tool_msg("t2")
+    append(mgr, sid, [s, u, a1, t1, a2, foreign, t2], "a3")
+    leaves = _leaves(mgr, sid)
+    assert len(leaves) == 1
+    chain = leaves[0].path_from_root()
+    routing = [n for n in chain if n.role == "assistant" and n.turn_prompt_ids is None]
+    assert len(routing) == 1 and routing[0].messages[0]["content"] == "foreign"
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""))
+    assert len(samples) == 1
+    _record("2.11 routing-only assistant filtered (no raise)", mgr, sid, samples)
+    print("PASS 2.11")
+
+
+def test_2_12_drop_clears_sid():
+    mgr = TrajectoryManager()
+    sid = "2.12"
+    s, u = sys_msg("S"), usr_msg("u")
+    append(mgr, sid, [s, u], "a")
+    assert mgr.has_session(sid)
+    mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""))
+    assert not mgr.has_session(sid)
+    assert mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt="")) == []
+    print("PASS 2.12")
+
+
+# ===========================================================================
+# §2 Group 3 — combined / stress (both layers interacting)
+# ===========================================================================
+
+
+def test_3_1_rewrite_merge_absorbs_short():
+    mgr = TrajectoryManager()
+    sid = "3.1"
+    s, u = sys_msg("S"), usr_msg("u")
+    a1_rw = asst_msg("ok ")  # cc-rewritten (different message identity)
+    t1 = tool_msg("t")
+    p1, r1 = append(mgr, sid, [s, u], "ok", finish_reason="tool_calls", logprobs=[-0.5] * 2)
+    p2, r2 = append(mgr, sid, [s, u, a1_rw, t1], "done", logprobs=[-0.4] * 2)
+    leaves = _leaves(mgr, sid)
+    assert len(leaves) == 1, "short rewrite absorbed, not forked"
+    chain = leaves[0].path_from_root()
+    merged = chain[2]
+    assert merged.turn_prompt_ids is None and merged.turn_index is None
+    assert merged.messages == [a1_rw.message]
+    assert merged.metadata["merged_rewrite"]["abandoned_turn_index"] == 1
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    assert len(samples) == 1
+    assert samples[0].tokens == p2 + r2
+    assert samples[0].loss_mask == [1] * len(r2)
+    _check_invariants(samples)
+    _record("3.1 rewrite-merge absorbs short assistant", mgr, sid, samples)
+    print("PASS 3.1")
+
+
+def test_3_2_rewrite_merge_long_forks():
+    mgr = TrajectoryManager(fork_merge_max_response_tokens=1)  # r1 len 2 >= 1
+    sid = "3.2"
+    s, u = sys_msg("S"), usr_msg("u")
+    a1_rw, t1 = asst_msg("ok2 "), tool_msg("t")
+    append(mgr, sid, [s, u], "ok", finish_reason="tool_calls")
+    append(mgr, sid, [s, u, a1_rw, t1], "done")
+    assert len(_leaves(mgr, sid)) == 2, "long rewrite forks"
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    assert len(samples) == 2
+    _check_invariants(samples)
+    _record("3.2 rewrite-merge long -> fork", mgr, sid, samples)
+    print("PASS 3.2")
+
+
+def test_3_3_rewrite_merge_threshold_zero_forks():
+    mgr = TrajectoryManager(fork_merge_max_response_tokens=0)
+    sid = "3.3"
+    s, u = sys_msg("S"), usr_msg("u")
+    a1_rw, t1 = asst_msg("ok3 "), tool_msg("t")
+    append(mgr, sid, [s, u], "ok", finish_reason="tool_calls")
+    append(mgr, sid, [s, u, a1_rw, t1], "done")
+    assert len(_leaves(mgr, sid)) == 2
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    _check_invariants(samples)
+    _record("3.3 rewrite-merge threshold=0 -> fork", mgr, sid, samples)
+    print("PASS 3.3")
+
+
+def test_3_4_rewrite_merge_ambiguous_forks():
+    mgr = TrajectoryManager()
+    sid = "3.4"
+    s, u = sys_msg("S"), usr_msg("u")
+    # two short assistant leaves under shared (sys,user)
+    append(mgr, sid, [s, u], "a")
+    append(mgr, sid, [s, u], "b")
+    a_c, t1 = asst_msg("c"), tool_msg("t")
+    append(mgr, sid, [s, u, a_c, t1], "d")
+    assert len(_leaves(mgr, sid)) == 3, "ambiguous candidates fork"
+    _record("3.4 rewrite-merge ambiguous -> fork", mgr, sid, [])
+    print("PASS 3.4")
+
+
+def test_3_5_rewrite_merge_match_key_updated():
+    """After merge, a later turn replaying the rewritten message must descend
+    through the merged node (match_key updated), not fork again."""
+    mgr = TrajectoryManager()
+    sid = "3.5"
+    s, u = sys_msg("S"), usr_msg("u")
+    a1_rw = asst_msg("ok5 ")
+    t1, a2, t2 = tool_msg("t1"), asst_msg("second"), tool_msg("t2")
+    append(mgr, sid, [s, u], "ok", finish_reason="tool_calls")
+    p2, r2 = append(mgr, sid, [s, u, a1_rw, t1], "second", finish_reason="tool_calls", logprobs=[-0.4] * 2)
+    p3, r3 = append(mgr, sid, [s, u, a1_rw, t1, a2, t2], "third", logprobs=[-0.3] * 2)
+    leaves = _leaves(mgr, sid)
+    assert len(leaves) == 1, "match_key updated -> no spurious fork"
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""))
+    assert len(samples) == 1
+    L = _lcp_len(p2 + r2, p3)
+    assert samples[0].tokens == p2 + r2 + p3[L:] + r3
+    _check_invariants(samples)
+    _record("3.5 rewrite-merge match_key updated", mgr, sid, samples)
+    print("PASS 3.5")
+
+
+def test_3_6_tree_fork_plus_token_drift():
+    """A tree fork (two leaves) where ONE leaf also drift-forks internally,
+    yielding 3 Samples total. Combines layer-1 (message fork) with layer-2
+    (token drift fork)."""
+    mgr = TrajectoryManager()
+    sid = "3.6"
+    s, u = sys_msg("S"), usr_msg("u")
+    a1, tx, ty = asst_msg("call"), tool_msg("x"), tool_msg("y")
+    ax2 = asst_msg("ax2")
+    p1, r1 = append(mgr, sid, [s, u], "call", finish_reason="tool_calls", logprobs=[-0.5] * 2)
+    # Leaf X: clean continuation, then a third turn with a case-A prompt drift.
+    p2, r2 = append(mgr, sid, [s, u, a1, tx], "ax2", finish_reason="tool_calls", logprobs=[-0.4] * 2)
+    txx = tool_msg("xx")
+    p3_honest = render_prompt([s, u, a1, tx, ax2, txx])
+    p3 = drift(p3_honest, len(p1) - 1)  # case A drift -> fork inside leaf X
+    append(mgr, sid, [s, u, a1, tx, ax2, txx], "ax3", prompt_ids=p3, logprobs=[-0.2] * 2)
+    # Leaf Y: a separate tool result off the shared assistant.
+    append(mgr, sid, [s, u, a1, ty], "ay2", logprobs=[-0.1] * 2)
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=3.0)
+    # Leaf X -> 2 samples (drift fork), Leaf Y -> 1 sample. Total 3.
+    assert len(samples) == 3, [s.tokens for s in samples]
+    assert all(abs(s.reward - 1.0) < 1e-9 for s in samples)
+    _check_invariants(samples)
+    _record("3.6 tree fork + token drift -> 3 samples", mgr, sid, samples)
+    print("PASS 3.6")
+
+
+def test_3_7_deep_multi_leaf_dedup():
+    """Three leaves sharing a 2-level assistant prefix; the shared turns are
+    trained exactly once across all leaves."""
+    mgr = TrajectoryManager()
+    sid = "3.7"
+    s, u = sys_msg("S"), usr_msg("u")
+    a1, t1 = asst_msg("a1"), tool_msg("t1")
+    a2 = asst_msg("a2")
+    p1, r1 = append(mgr, sid, [s, u], "a1", finish_reason="tool_calls", logprobs=[-0.5] * 2)
+    p2, r2 = append(mgr, sid, [s, u, a1, t1], "a2", finish_reason="tool_calls", logprobs=[-0.4] * 2)
+    # three different tool results off a2 -> three leaves sharing a1+a2
+    for lbl in ["p", "q", "r"]:
+        append(mgr, sid, [s, u, a1, t1, a2, tool_msg(lbl)], f"end-{lbl}", logprobs=[-0.3] * 2)
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=3.0)
+    assert len(samples) == 3
+    # Count trained tokens for r1 and r2 across all samples: each shared turn
+    # trained exactly once (first leaf), others loss=0.
+    # First leaf trains r1+r2+end; others train only their own end.
+    trained_first = sum(samples[0].loss_mask)
+    trained_rest = [sum(x.loss_mask) for x in samples[1:]]
+    assert trained_first > max(trained_rest), (trained_first, trained_rest)
+    _check_invariants(samples)
+    _record("3.7 deep multi-leaf dedup (3 leaves, shared trained once)", mgr, sid, samples)
+    print("PASS 3.7")
+
+
+def test_3_8_long_mixed_session():
+    """A ~7-turn session combining clean continuation, a mid-session B1 replace,
+    and a final case-A fork — verifying the mechanisms chain without interfering."""
+    mgr = TrajectoryManager()
+    sid = "3.8"
+    s, u = sys_msg("S"), usr_msg("u")
+    a = [asst_msg(f"a{i}") for i in range(6)]
+    t = [tool_msg(f"t{i}") for i in range(6)]
+    lp = [-0.5, -0.5]
+    # turn 1
+    p1, r1 = append(mgr, sid, [s, u], "a0", finish_reason="tool_calls", logprobs=lp)
+    # turns 2..4 clean
+    prefix = [s, u, a[0], t[0]]
+    append(mgr, sid, prefix, "a1", finish_reason="tool_calls", logprobs=lp)
+    prefix = prefix + [a[1], t[1]]
+    append(mgr, sid, prefix, "a2", finish_reason="tool_calls", logprobs=lp)
+    prefix = prefix + [a[2], t[2]]
+    # turn 5: B1 small replace — drift the last token of the previous response.
+    p5_honest = render_prompt(prefix)
+    p5 = drift_replace(p5_honest, len(p5_honest) - 2)  # near tail, inside last resp echo region
+    append(mgr, sid, prefix, "a3", prompt_ids=p5, finish_reason="tool_calls", logprobs=lp)
+    prefix = prefix + [a[3], t[3]]
+    # turn 6: clean
+    append(mgr, sid, prefix, "a4", finish_reason="tool_calls", logprobs=lp)
+    prefix = prefix + [a[4], t[4]]
+    # turn 7: case-A fork (drift in early prompt region)
+    p7_honest = render_prompt(prefix)
+    p7 = drift(p7_honest, len(p1) - 1)
+    append(mgr, sid, prefix, "a5", prompt_ids=p7, logprobs=lp)
+    samples = mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""), reward=4.0)
+    # The final case-A fork splits the single leaf chain into >=2 segments.
+    assert len(samples) >= 2, len(samples)
+    assert abs(sum(s.reward for s in samples) - 4.0) < 1e-9
+    _check_invariants(samples)
+    _record(f"3.8 long mixed session -> {len(samples)} samples", mgr, sid, samples)
+    print("PASS 3.8")
+
+
+# ===========================================================================
+# §3 Dual-mode printer
+# ===========================================================================
+
+
+def _print_sample(idx: int, s: Sample) -> None:
+    toks = s.tokens
+    resp_start = len(toks) - s.response_length
+    # build aligned token/loss rows over the response region (the trained part);
+    # the leading prompt prefix has no loss_mask entry.
+    names = [name_of(t) for t in toks]
+    loss = ["-"] * resp_start + [str(x) for x in s.loss_mask]
+    widths = [max(len(names[i]), len(loss[i])) for i in range(len(toks))]
+    tok_row = " ".join(names[i].ljust(widths[i]) for i in range(len(toks)))
+    loss_row = " ".join(loss[i].ljust(widths[i]) for i in range(len(toks)))
+    print(f"  Sample#{idx} reward={s.reward:.3f} resp_len={s.response_length}")
+    print(f"    tok : {tok_row}")
+    print(f"    loss: {loss_row}")
+
+
+def _print_case(title: str, mgr, sid: str, samples: list) -> None:
+    print(f"\n=== CASE {title} ===")
+    txt = dump_tree_txt(mgr, sid) if mgr.has_session(sid) else "<drained>"
+    print("[tree]")
+    for line in txt.splitlines():
+        print("  " + line)
+    if samples:
+        print(f"[samples] {len(samples)}")
+        for i, s in enumerate(samples):
+            _print_sample(i, s)
+
+
+# ===========================================================================
+# main
+# ===========================================================================
+
+
+_CASES = [
+    test_1_1_single_turn_chain,
+    test_1_2_clean_multiturn_with_tool,
+    test_1_3_system_fork,
+    test_1_4_user_fork_shared_system,
+    test_1_5_assistant_message_fork,
+    test_1_6_tool_fork_shared_assistant,
+    test_1_7_token_only_drift_no_fork,
+    test_1_8_multi_tool_per_turn,
+    test_1_9_cross_sid_isolation,
+    test_1_10_empty_response,
+    test_2_1_single_turn_linearize,
+    test_2_2_clean_multiturn_linearize,
+    test_2_3_drift_case_A_forks,
+    test_2_4_drift_case_B1_short_replaces,
+    test_2_5_drift_case_B1_long_forks,
+    test_2_6_drift_case_B1_threshold_zero_forks,
+    test_2_7_drift_case_B2_earlier_turn_forks,
+    test_2_8_fork_reward_split,
+    test_2_9_two_leaves_reward_split,
+    test_2_10_cross_leaf_dedup,
+    test_2_11_routing_only_assistant_filtered,
+    test_2_12_drop_clears_sid,
+    test_3_1_rewrite_merge_absorbs_short,
+    test_3_2_rewrite_merge_long_forks,
+    test_3_3_rewrite_merge_threshold_zero_forks,
+    test_3_4_rewrite_merge_ambiguous_forks,
+    test_3_5_rewrite_merge_match_key_updated,
+    test_3_6_tree_fork_plus_token_drift,
+    test_3_7_deep_multi_leaf_dedup,
+    test_3_8_long_mixed_session,
+]
+
+
+def main() -> None:
+    for case in _CASES:
+        case()
+    # Replay the captured tree / sample snapshots as human-readable dumps.
+    print("\n" + "=" * 70)
+    print("HUMAN-READABLE DUMPS")
+    print("=" * 70)
+    for title, mgr, sid, samples in _PRINT_LOG:
+        _print_case(title, mgr, sid, samples)
+    print(f"\nALL E2E CASES PASSED ({len(_CASES)} cases)")
+
+
+if __name__ == "__main__":
+    main()
