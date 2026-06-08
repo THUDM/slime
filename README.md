@@ -112,6 +112,10 @@ See the [Customization Guide](docs/en/get_started/customization.md) for which in
 
 These are not just demos. They are independent systems that use slime as a reusable RL substrate for production-scale post-training, agentic RL, domain RL, and rollout-system research.
 
+### 🔷 vime: vLLM-Native RL Post-Training Built on slime
+
+[**vime**](https://github.com/vllm-project/vime) is a post-training framework built on slime and maintained by the vLLM project. It keeps slime's Megatron training stack, Data Buffer dataflow, and custom data-generation design, with its main change being a rollout backend swapped to [**vLLM**](https://github.com/vllm-project/vllm) with [vllm-router](https://github.com/vllm-project/router). Starting from an existing slime launch script, adjusting only rollout-related parameters is enough to quickly run training with vime.
+
 ### 🌈 Relax: Asynchronous RL Engine for Omni-Modal Agentic Training
 
 [**Relax**](https://github.com/redai-infra/Relax) (Reinforcement Engine Leveraging Agentic X-modality) is an omni-modal agentic RL framework open-sourced by the RedAI Infra team, built upon the slime infrastructure stack that combines Ray, Megatron-LM, and SGLang. Relax adopts a service-oriented architecture on Ray Serve with Megatron-LM and SGLang as training/inference backends. It uses [TransferQueue](https://github.com/Ascend/TransferQueue) to fully decouple Actor, Rollout, ActorFwd, Reference, and Advantage computation onto independent GPU clusters, and introduces **DCS (Distributed Checkpoint Service)** — an NCCL-broadcast weight-sync engine that streams updated Actor weights to Rollout/ActorFwd/Reference asynchronously and overlaps the transfer with the next training step, enabling fully-async training at configurable staleness. Relax supports end-to-end RL for text, vision, and audio (including Qwen3-Omni) and agentic multi-turn rollouts.
