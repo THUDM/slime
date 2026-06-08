@@ -10,8 +10,7 @@ Wire-up:
     2. ``sandbox.git_diff`` captures the model-produced patch.
     3. ``sandbox.evaluate`` scores that patch in a second clean sandbox.
     4. ``_merge_samples`` combines reward + the ``list[Sample]`` returned by
-       ``adapter.finish_session(sid)`` (which drains the per-sid trajectory
-       tree inside ``TrajectoryManager``).
+       ``adapter.finish_session(sid)``.
 
 All sandbox-side details live in ``sandbox.py``; the LLM plumbing
 (Anthropic <-> SGLang /generate, token capture, 3-kind segment split) uses
@@ -97,19 +96,8 @@ class _State(metaclass=SingletonMeta):
                 "Without it the sandbox cannot dial back and the rollout will "
                 "silently abort."
             )
-        # Assistant-rewrite merge threshold (see TrajectoryManager): when cc
-        # re-renders a short prior assistant, absorb it onto the existing leaf
-        # instead of forking a reward-diluting stub Sample. None -> manager
-        # default (1024); <=0 disables.
         fork_merge_threshold = os.environ.get("SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS")
         fork_merge_threshold = int(fork_merge_threshold) if fork_merge_threshold else None
-        # drift-fork remains unimplemented in the strict core; warn if set.
-        if os.environ.get("SLIME_DRIFT_FORK_MIN_LOSS_TOKENS"):
-            logger.warning(
-                "[coding_agent_rl] SLIME_DRIFT_FORK_MIN_LOSS_TOKENS is set but "
-                "currently ignored: TrajectoryManager uses strict exact-prefix "
-                "linearization and raises on TITO drift."
-            )
         self.adapter = AnthropicAdapter(
             tokenizer=self.tokenizer,
             sglang_url=sglang_url,
@@ -145,9 +133,6 @@ class _State(metaclass=SingletonMeta):
 
 # ---------------------------------------------------------------------------
 # Trajectory -> Sample conversion
-# adapter.finish_session(sid) drains the per-sid tree in TrajectoryManager and
-# returns a list[Sample]. One trajectory yields >=1 samples because the agent
-# may compact + reset mid-run, forking sub-trees that each become a sample.
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class RewardResult:
@@ -190,14 +175,6 @@ def _merge_samples(
     elapsed_sec: float,
     instance_id: str,
 ) -> list[Sample]:
-    """Decorate per-leaf Samples returned by TrajectoryManager.get_trajectory.
-
-    The manager already filled tokens / loss_mask / rollout_log_probs /
-    response_length / reward (reward / N). We decode ``sample.response`` from
-    the response tokens slice -- slime's training logging path reads this
-    string. Per-trajectory metadata is intentionally NOT attached to the
-    samples (kept empty); revisit when dump/analysis needs it.
-    """
     if not samples:
         return _abort_result(sample, "adapter_session_empty")
 

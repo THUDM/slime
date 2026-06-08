@@ -22,15 +22,6 @@ REASONING_PARSER_KEY = web.AppKey("reasoning_parser", object)
 
 @dataclasses.dataclass(frozen=True)
 class TurnRecord:
-    """Exact token snapshot for one assistant generation, returned by
-    :func:`call_sglang_generate`.
-
-    ``prompt_ids`` is the full tokenized prompt sent to the generator for that
-    turn. ``output_ids`` is the raw generated output, and
-    ``output_log_probs`` is aligned with it when the rollout engine returns
-    per-token log probabilities.
-    """
-
     prompt_ids: list[int]
     output_ids: list[int]
     finish_reason: str
