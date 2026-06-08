@@ -79,6 +79,7 @@ slime 的设计目标，是让这两大能力彼此强化，同时避免把系�
    advanced/low-precision.md
    advanced/reproducibility.md
    advanced/fault-tolerance.md
+   advanced/observability.md
    advanced/pd-disaggregation.md
    advanced/external-rollout-engines.md
    advanced/delta-weight-sync.md
