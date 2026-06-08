@@ -274,17 +274,34 @@ def _leaves(mgr, sid):
 # though get_trajectory consumes the session.
 _TREE_SNAP: dict[str, str] = {}
 
+# Input reward passed to get_trajectory, keyed by sid, so the dump can show the
+# split (input_reward / n_samples == per_sample_reward) explicitly.
+_REWARD_IN: dict[str, float] = {}
+
 
 def get_traj(mgr, sid, *args, **kwargs):
     """get_trajectory wrapper that snapshots the tree before draining.
 
     Linearization (get_trajectory) pops the sid, so a later dump would only see
     ``<drained>``. Capturing the tree text here keeps the routing tree visible
-    next to the Samples it produced.
+    next to the Samples it produced. The input ``reward`` is captured too so the
+    dump can show how it splits across the emitted samples.
     """
     if mgr.has_session(sid):
         _TREE_SNAP[sid] = dump_tree_txt(mgr, sid)
-    return mgr.get_trajectory(sid, *args, **kwargs)
+    _REWARD_IN[sid] = kwargs.get("reward", 0.0)
+    samples = mgr.get_trajectory(sid, *args, **kwargs)
+    # Reward conservation: get_trajectory splits the input reward evenly across
+    # every emitted sample, so the per-sample shares must sum back to the input
+    # (modulo float error). This is the "averaged over sample count" invariant.
+    if samples:
+        total = sum(s.reward for s in samples)
+        assert abs(total - _REWARD_IN[sid]) < 1e-9, (
+            "reward not conserved across split",
+            total,
+            _REWARD_IN[sid],
+        )
+    return samples
 
 
 def _check_invariants(samples):
@@ -970,7 +987,13 @@ def _print_case(title: str, mgr, sid: str, samples: list) -> None:
     print("[tree]")
     for line in txt.splitlines():
         print("  " + line)
-    print(f"[samples] {len(samples)}")
+    n = len(samples)
+    if n:
+        r_in = _REWARD_IN.get(sid, 0.0)
+        per = r_in / n
+        print(f"[samples] {n}  (reward split: {r_in:.3f} / {n} = {per:.3f} per sample)")
+    else:
+        print(f"[samples] {n}")
     for i, s in enumerate(samples):
         _print_sample(i, s)
 
