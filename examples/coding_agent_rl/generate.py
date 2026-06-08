@@ -97,17 +97,23 @@ class _State(metaclass=SingletonMeta):
                 "Without it the sandbox cannot dial back and the rollout will "
                 "silently abort."
             )
+        # Kept for the staged re-add of drift tolerance: the strict
+        # exact-prefix TrajectoryManager no longer honors these, so warn loudly
+        # if an operator set them expecting fork/merge behavior.
         drift_fork_threshold = os.environ.get("SLIME_DRIFT_FORK_MIN_LOSS_TOKENS")
-        drift_fork_threshold = int(drift_fork_threshold) if drift_fork_threshold else None
         fork_merge_threshold = os.environ.get("SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS")
-        fork_merge_threshold = int(fork_merge_threshold) if fork_merge_threshold else None
+        if drift_fork_threshold or fork_merge_threshold:
+            logger.warning(
+                "[coding_agent_rl] SLIME_DRIFT_FORK_MIN_LOSS_TOKENS / "
+                "SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS are set but currently "
+                "ignored: TrajectoryManager uses strict exact-prefix "
+                "linearization and raises on TITO drift."
+            )
         self.adapter = AnthropicAdapter(
             tokenizer=self.tokenizer,
             sglang_url=sglang_url,
             tool_parser=self.tool_parser,
             reasoning_parser=self.reasoning_parser,
-            drift_fork_min_loss_tokens=drift_fork_threshold,
-            fork_merge_max_response_tokens=fork_merge_threshold,
         )
         # handler_cancellation=True so a client disconnect cancels the handler
         # coroutine, arming the fire-and-forget /abort_request inside the
@@ -185,29 +191,15 @@ def _merge_samples(
     """Decorate per-leaf Samples returned by TrajectoryManager.get_trajectory.
 
     The manager already filled tokens / loss_mask / rollout_log_probs /
-    response_length / reward (reward / N). We add per-trajectory metadata
-    (is_solved / applied_cleanly / elapsed_sec / segment_idx) and decode
-    ``sample.response`` from the response tokens slice -- slime's training
-    logging path reads this string.
+    response_length / reward (reward / N). We decode ``sample.response`` from
+    the response tokens slice -- slime's training logging path reads this
+    string. Per-trajectory metadata is intentionally NOT attached to the
+    samples (kept empty); revisit when dump/analysis needs it.
     """
     if not samples:
         return _abort_result(sample, "adapter_session_empty")
 
-    trajectory_metadata = {
-        "instance_id": instance_id,
-        "is_solved": reward_result.is_solved,
-        "applied_cleanly": reward_result.applied_cleanly,
-        "elapsed_sec": elapsed_sec,
-    }
-
-    k = len(samples)
-    for i, s in enumerate(samples):
-        s.metadata = {
-            **(s.metadata or {}),
-            **trajectory_metadata,
-            "segment_idx": i,
-            "num_segments": k,
-        }
+    for s in samples:
         rlen = int(s.response_length or 0)
         if rlen and s.tokens:
             s.response = state.tokenizer.decode(s.tokens[-rlen:], skip_special_tokens=False)
@@ -221,7 +213,7 @@ def _merge_samples(
         reward_result.is_solved,
         reward_result.applied_cleanly,
         elapsed_sec,
-        k,
+        len(samples),
     )
     return samples
 

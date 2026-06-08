@@ -73,8 +73,6 @@ class OpenAIAdapter(BaseAdapter):
         sglang_url,
         tool_parser=None,
         reasoning_parser=None,
-        drift_fork_min_loss_tokens: int | None = None,
-        fork_merge_max_response_tokens: int | None = None,
         max_turns_per_sid: int | None = None,
         on_turn_appended: Callable[..., None] | None = None,
     ) -> None:
@@ -85,14 +83,7 @@ class OpenAIAdapter(BaseAdapter):
             reasoning_parser=reasoning_parser,
         )
         # ONE manager shared across all sids; per-sid trees live inside.
-        # Mirror AnthropicAdapter: only forward kwargs the caller actually
-        # specified, so TrajectoryManager's own defaults stay authoritative.
-        mgr_kwargs: dict[str, int] = {}
-        if drift_fork_min_loss_tokens is not None:
-            mgr_kwargs["drift_fork_min_loss_tokens"] = drift_fork_min_loss_tokens
-        if fork_merge_max_response_tokens is not None:
-            mgr_kwargs["fork_merge_max_response_tokens"] = fork_merge_max_response_tokens
-        self.manager = TrajectoryManager(**mgr_kwargs)
+        self.manager = TrajectoryManager()
         # Optional debug hook invoked after each successful append_turn.
         # Signature mirrors AnthropicAdapter.on_turn_appended:
         #   (sid, prompt_messages, tools, response_message,
