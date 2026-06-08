@@ -666,15 +666,15 @@ class RolloutManager:
         assert len(raw_rewards) == len(samples)
         assert len(rewards) == len(samples)
 
-        # Rollout id (one per rollout execution). Default rollouts emit one
-        # sample per rollout, so we fall back to ``sample.index`` (unique).
-        # Compact / subagent paths that emit multiple training samples per
-        # rollout set ``rollout_id`` explicitly so all siblings share a
-        # value; the loss reducer then aggregates them as one rollout.
-        if samples[0].rollout_id is None:
-            rollout_ids = list(range(len(samples)))
-        else:
-            rollout_ids = [sample.rollout_id for sample in samples]
+        rollout_ids = [sample.rollout_id for sample in samples]
+        existed_rollout_id_values = set(rid for rid in rollout_ids if rid is not None)
+        tmp_id = 0
+        for i in range(len(rollout_ids)):
+            if rollout_ids[i] is None:
+                while tmp_id in existed_rollout_id_values:
+                    tmp_id += 1
+                rollout_ids[i] = tmp_id
+                existed_rollout_id_values.add(tmp_id)
 
         train_data = {
             "tokens": [sample.tokens for sample in samples],
