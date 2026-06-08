@@ -208,6 +208,7 @@ class Dataset:
         seed=42,
         apply_chat_template=False,
         apply_chat_template_kwargs=None,
+        prompt_messages_key=None,
     ):
         origin_samples = []
         for data in read_file(path):
@@ -216,6 +217,9 @@ class Dataset:
             prompt = _build_messages(data, prompt_key, as_conversation, multimodal_keys)
 
             metadata = data.get(metadata_key) or {}
+            if prompt_messages_key is not None and isinstance(prompt, list):
+                metadata = dict(metadata)
+                metadata[prompt_messages_key] = prompt
             tools = None
             if tool_key is not None and tool_key in data:
                 tools = data[tool_key]

@@ -11,6 +11,8 @@ On-policy distillation (OPD) enables a student model to learn from a larger teac
 | `--opd-kl-coef` | OPD KL penalty coefficient (default: 1.0). Controls the weight of the distillation signal relative to the RL advantage. |
 | `--opd-teacher-load` | Path to teacher Megatron checkpoint. **Required** when `--opd-type=megatron`, **must not be set** when `--opd-type=sglang`. |
 | `--opd-teacher-ckpt-step` | Optional checkpoint step for teacher model. |
+| `--teacher-tokenizer-path` | Teacher tokenizer path for cross-vocabulary SGLang OPD. |
+| `--opd-prompt-messages-key` | Metadata key used to preserve raw chat messages so the teacher can render the prompt with its own chat template. |
 
 ## How It Works
 
@@ -47,6 +49,20 @@ The teacher runs on an external SGLang server. Teacher log-probs are obtained du
 --custom-reward-post-process-path slime.rollout.on_policy_distillation.post_process_rewards
 --rm-url http://<TEACHER_IP>:<TEACHER_PORT>/generate
 ```
+
+For a teacher with a different tokenizer, keep `--opd-type sglang` and use the cross-vocabulary hooks:
+```bash
+--use-opd
+--opd-type sglang
+--opd-kl-coef 1.0
+--custom-rm-path slime.rollout.on_policy_distillation.reward_func_cross_vocab
+--custom-reward-post-process-path slime.rollout.on_policy_distillation.post_process_rewards_cross_vocab
+--teacher-tokenizer-path /path/to/teacher_hf_checkpoint
+--opd-prompt-messages-key opd_messages
+--rm-url http://<TEACHER_IP>:<TEACHER_PORT>/generate
+```
+
+When `--opd-prompt-messages-key` is set and the dataset prompt is chat messages, slime stores the raw messages in `sample.metadata[opd_messages]` before applying the student chat template. The teacher request renders those messages with the teacher tokenizer, then applies OPD only to response tokens whose decoded token text matches at the same text position. Non-matching tokenizer boundaries fall back to the student rollout log-prob, making the OPD delta zero there.
 
 ### Megatron Mode (`--opd-type megatron`)
 
