@@ -13,9 +13,13 @@ perf/request/count
 perf/request/profiled_count
 perf/decode/throughput/mean
 perf/prefill/bootstrap_queue_duration/mean
+perf/prefill/bootstrap_duration/mean
+perf/prefill/alloc_wait_duration/mean
 perf/prefill/forward_duration/max
 perf/prefill/transfer_speed_gb_s/mean
 perf/decode/prealloc_duration/mean
+perf/decode/bootstrap_duration/mean
+perf/decode/alloc_wait_duration/mean
 perf/decode/transfer_duration/max
 perf/decode/forward_duration/mean
 ```

@@ -43,6 +43,8 @@ _SGLANG_REQUEST_PERF_FIELDS = (
 )
 _SGLANG_PREFILL_PERF_FIELDS = (
     ("prefill/bootstrap_queue_duration", "pd_prefill_bootstrap_queue_duration"),
+    ("prefill/bootstrap_duration", "pd_prefill_bootstrap_duration"),
+    ("prefill/alloc_wait_duration", "pd_prefill_alloc_wait_duration"),
     ("prefill/forward_duration", "pd_prefill_forward_duration"),
     ("prefill/transfer_queue_duration", "pd_prefill_transfer_queue_duration"),
     ("prefill/transfer_speed_gb_s", "pd_transfer_speed_gb_s"),
@@ -51,12 +53,10 @@ _SGLANG_PREFILL_PERF_FIELDS = (
 )
 _SGLANG_DECODE_PERF_FIELDS = (
     ("decode/prealloc_duration", "pd_decode_prealloc_duration"),
+    ("decode/bootstrap_duration", "pd_decode_bootstrap_duration"),
+    ("decode/alloc_wait_duration", "pd_decode_alloc_wait_duration"),
     ("decode/transfer_duration", "pd_decode_transfer_duration"),
     ("decode/forward_duration", "pd_decode_forward_duration"),
-)
-_SGLANG_ROLE_SHARED_PERF_FIELDS = (
-    ("bootstrap_duration", "pd_bootstrap_duration"),
-    ("alloc_wait_duration", "pd_alloc_waiting_duration"),
 )
 
 
@@ -1312,24 +1312,11 @@ def _compute_sglang_request_perf_metrics(all_samples: list[Sample]):
         for metric_key, source_key in _SGLANG_REQUEST_PERF_FIELDS:
             request_has_perf |= add_value(metric_key, source_key, attrs)
 
-        has_prefill_detail = False
         for metric_key, source_key in _SGLANG_PREFILL_PERF_FIELDS:
-            added = add_value(metric_key, source_key, attrs)
-            request_has_perf |= added
-            has_prefill_detail |= added
+            request_has_perf |= add_value(metric_key, source_key, attrs)
 
-        has_decode_detail = False
         for metric_key, source_key in _SGLANG_DECODE_PERF_FIELDS:
-            added = add_value(metric_key, source_key, attrs)
-            request_has_perf |= added
-            has_decode_detail |= added
-
-        if has_decode_detail:
-            for metric_suffix, source_key in _SGLANG_ROLE_SHARED_PERF_FIELDS:
-                request_has_perf |= add_value(f"decode/{metric_suffix}", source_key, attrs)
-        elif has_prefill_detail:
-            for metric_suffix, source_key in _SGLANG_ROLE_SHARED_PERF_FIELDS:
-                request_has_perf |= add_value(f"prefill/{metric_suffix}", source_key, attrs)
+            request_has_perf |= add_value(metric_key, source_key, attrs)
 
         if request_has_perf:
             profiled_request_count += 1
