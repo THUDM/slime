@@ -67,6 +67,9 @@ def name_of(tok: int) -> str:
     return TOKEN_NAMES.get(tok, str(tok))
 
 
+_ASST_BODY: dict[str, int] = {}
+
+
 def _asst_body(label: str) -> int:
     """Stable assistant body token for a response/message label.
 
@@ -74,11 +77,16 @@ def _asst_body(label: str) -> int:
     tokens the model generated for it, otherwise a clean continuation can never
     hold (the cumulative prompt+response would not prefix the next prompt). So
     both ``render_response`` and an assistant ``MsgTok`` derive their body token
-    from this one function, keyed on the label.
+    from this one function, keyed on the label. Bodies are assigned by a stable
+    per-label counter (NOT a hash) so distinct labels never collide on one id —
+    a collision would mislabel tokens in the dump and could spuriously match
+    across turns.
     """
-    body = _BANDS["assistant"] + 100 + (sum(ord(c) for c in label) % 800)
-    TOKEN_NAMES[body] = f"r:{label}"
-    return body
+    if label not in _ASST_BODY:
+        body = _BANDS["assistant"] + 100 + len(_ASST_BODY)
+        _ASST_BODY[label] = body
+        TOKEN_NAMES[body] = f"r:{label}"
+    return _ASST_BODY[label]
 
 
 def render_ids(ids: list[int]) -> str:
@@ -304,7 +312,10 @@ def test_1_1_single_turn_chain():
     chain = _leaves(mgr, sid)[0].path_from_root()
     assert [n.role for n in chain] == ["system", "user", "assistant"]
     assert chain[-1].turn_index == 1
-    _record("1.1 single turn -> linear chain", mgr, sid, [])
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    assert len(samples) == 1
+    _check_invariants(samples)
+    _record("1.1 single turn -> linear chain", mgr, sid, samples)
     print("PASS 1.1")
 
 
@@ -318,7 +329,10 @@ def test_1_2_clean_multiturn_with_tool():
     chain = _leaves(mgr, sid)[0].path_from_root()
     assert [n.role for n in chain] == ["system", "user", "assistant", "tool", "assistant"]
     assert mgr.turn_count(sid) == 2
-    _record("1.2 clean 2-turn with tool -> single chain", mgr, sid, [])
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    assert len(samples) == 1
+    _check_invariants(samples)
+    _record("1.2 clean 2-turn with tool -> single chain", mgr, sid, samples)
     print("PASS 1.2")
 
 
@@ -330,7 +344,10 @@ def test_1_3_system_fork():
     root = mgr._trees[sid]
     assert len(root.children) == 2, "different system -> two subtrees at root"
     assert len(_leaves(mgr, sid)) == 2
-    _record("1.3 system fork -> two subtrees at root", mgr, sid, [])
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    assert len(samples) == 2
+    _check_invariants(samples)
+    _record("1.3 system fork -> two subtrees at root", mgr, sid, samples)
     print("PASS 1.3")
 
 
@@ -344,7 +361,10 @@ def test_1_4_user_fork_shared_system():
     assert len(root.children) == 1, "system shared"
     assert len(root.children[0].children) == 2, "user level forks"
     assert len(_leaves(mgr, sid)) == 2
-    _record("1.4 user fork (shared system)", mgr, sid, [])
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    assert len(samples) == 2
+    _check_invariants(samples)
+    _record("1.4 user fork (shared system)", mgr, sid, samples)
     print("PASS 1.4")
 
 
@@ -357,7 +377,10 @@ def test_1_5_assistant_message_fork():
     append(mgr, sid, [s, u], "a2")
     user_node = mgr._trees[sid].children[0].children[0]
     assert len(user_node.children) == 2, "two assistant leaves hang off shared user"
-    _record("1.5 assistant fork under shared user", mgr, sid, [])
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    assert len(samples) == 2
+    _check_invariants(samples)
+    _record("1.5 assistant fork under shared user", mgr, sid, samples)
     print("PASS 1.5")
 
 
@@ -374,7 +397,12 @@ def test_1_6_tool_fork_shared_assistant():
     assert asst1.role == "assistant" and asst1.turn_prompt_ids is not None
     assert len(asst1.children) == 2, "shared assistant forks at the tool level"
     assert len(_leaves(mgr, sid)) == 2
-    _record("1.6 tool fork (shared assistant snapshot)", mgr, sid, [])
+    # The shared assistant (turn 1) is trained on the first leaf only; the second
+    # re-emits it as loss=0 context (cross-leaf dedup).
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=2.0)
+    assert len(samples) == 2
+    _check_invariants(samples)
+    _record("1.6 tool fork (shared assistant snapshot)", mgr, sid, samples)
     print("PASS 1.6")
 
 
@@ -422,7 +450,10 @@ def test_1_8_multi_tool_per_turn():
     assert [n.role for n in chain] == ["system", "user", "assistant", "tool", "tool", "assistant"]
     assert chain[3].messages == [ta.message]
     assert chain[4].messages == [tb.message]
-    _record("1.8 multi-tool turn -> one node per tool", mgr, sid, [])
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    assert len(samples) == 1
+    _check_invariants(samples)
+    _record("1.8 multi-tool turn -> one node per tool", mgr, sid, samples)
     print("PASS 1.8")
 
 
@@ -434,6 +465,13 @@ def test_1_9_cross_sid_isolation():
     assert len(_leaves(mgr, "sid-a")) == 1
     assert len(_leaves(mgr, "sid-b")) == 1
     assert mgr._trees["sid-a"] is not mgr._trees["sid-b"]
+    sa = get_traj(mgr, "sid-a", base_sample=Sample(index=0, prompt=""), reward=1.0)
+    sb = get_traj(mgr, "sid-b", base_sample=Sample(index=1, prompt=""), reward=1.0)
+    assert len(sa) == 1 and len(sb) == 1
+    _check_invariants(sa)
+    _check_invariants(sb)
+    _record("1.9 cross-sid isolation (sid-a)", mgr, "sid-a", sa)
+    _record("1.9 cross-sid isolation (sid-b)", mgr, "sid-b", sb)
     print("PASS 1.9")
 
 
@@ -446,7 +484,11 @@ def test_1_10_empty_response():
     assert asst.role == "assistant"
     assert asst.turn_response_ids == []
     assert asst.messages == []
-    _record("1.10 empty response -> assistant leaf, no message", mgr, sid, [])
+    # Empty response -> the only turn has no trainable token, so its segment is
+    # dropped at linearization (no fully-masked sample). Zero samples is correct.
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    assert len(samples) == 0
+    _record("1.10 empty response -> assistant leaf, no message (0 samples)", mgr, sid, samples)
     print("PASS 1.10")
 
 
@@ -681,9 +723,12 @@ def test_2_12_drop_clears_sid():
     s, u = sys_msg("S"), usr_msg("u")
     append(mgr, sid, [s, u], "a")
     assert mgr.has_session(sid)
-    mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt=""))
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    assert len(samples) == 1
     assert not mgr.has_session(sid)
     assert mgr.get_trajectory(sid, base_sample=Sample(index=0, prompt="")) == []
+    _check_invariants(samples)
+    _record("2.12 drop clears sid (2nd get_trajectory -> [])", mgr, sid, samples)
     print("PASS 2.12")
 
 
@@ -755,7 +800,10 @@ def test_3_4_rewrite_merge_ambiguous_forks():
     a_c, t1 = asst_msg("c"), tool_msg("t")
     append(mgr, sid, [s, u, a_c, t1], "d")
     assert len(_leaves(mgr, sid)) == 3, "ambiguous candidates fork"
-    _record("3.4 rewrite-merge ambiguous -> fork", mgr, sid, [])
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=3.0)
+    assert len(samples) == 3
+    _check_invariants(samples)
+    _record("3.4 rewrite-merge ambiguous -> fork", mgr, sid, samples)
     print("PASS 3.4")
 
 
@@ -922,10 +970,9 @@ def _print_case(title: str, mgr, sid: str, samples: list) -> None:
     print("[tree]")
     for line in txt.splitlines():
         print("  " + line)
-    if samples:
-        print(f"[samples] {len(samples)}")
-        for i, s in enumerate(samples):
-            _print_sample(i, s)
+    print(f"[samples] {len(samples)}")
+    for i, s in enumerate(samples):
+        _print_sample(i, s)
 
 
 # ===========================================================================
