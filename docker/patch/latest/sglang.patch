@@ -1208,10 +1208,22 @@ index 293335f..51e5669 100644
  class CheckWeightsReqInput(BaseReq):
      action: str
 diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
-index feecc54..28b189c 100755
+index feecc54..6fce256 100755
 --- a/python/sglang/srt/managers/schedule_batch.py
 +++ b/python/sglang/srt/managers/schedule_batch.py
-@@ -2193,7 +2193,10 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+@@ -874,6 +874,11 @@ class Req(ReqDllmMixin):
+         self.metrics_collector = metrics_collector
+         if time_stats is not None:
+             self.time_stats = SchedulerReqTimeStats.new_from_obj(time_stats)
++            # Force the scheduler-side disagg_mode: new_from_obj copies
++            # disagg_mode from the source object (APIServerReqTimeStats from
++            # the tokenizer manager has disagg_mode=NULL), which breaks the
++            # PD timing getters in SchedulerReqTimeStats.
++            self.time_stats.disagg_mode = disagg_mode
+         else:
+             self.time_stats = SchedulerReqTimeStats(disagg_mode=disagg_mode)
+         self.time_stats.set_metrics_collector(metrics_collector)
+@@ -2193,7 +2198,10 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
          while first_iter or (
              not self.check_decode_mem(selected_indices=sorted_indices)
          ):
@@ -2478,7 +2490,7 @@ index fb9fd85..b1cbc9b 100644
              image_data=image_data,
              video_data=request_obj.video_data,
 diff --git a/python/sglang/srt/observability/req_time_stats.py b/python/sglang/srt/observability/req_time_stats.py
-index 326aace..4994a63 100644
+index 326aace..b62804c 100644
 --- a/python/sglang/srt/observability/req_time_stats.py
 +++ b/python/sglang/srt/observability/req_time_stats.py
 @@ -21,7 +21,10 @@ import uuid
@@ -2508,7 +2520,7 @@ index 326aace..4994a63 100644
  
      def __getstate__(self) -> object:
          # send to detokenizer/tokenizer
-@@ -582,9 +593,31 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+@@ -582,10 +593,38 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
              return {}
  
          state = {
@@ -2538,9 +2550,16 @@ index 326aace..4994a63 100644
 +            "fwd_transfer_total_mb": self.fwd_transfer_total_mb,
 +            "fwd_prefill_retry_count": self.fwd_prefill_retry_count,
              "diff_realtime_monotonic": global_diff_realtime_monotonic,
++            # SLIME PATCH: preserve enable_metrics across IPC hops.
++            # Otherwise detokenizer-side enable_metrics defaults to False (from
++            # the dataclass default, not from the scheduler value), and when
++            # the same object is forwarded to tokenizer_manager the early
++            # `if not self.enable_metrics: return {}` strips PD timing fields.
++            "enable_metrics": self.enable_metrics,
          }
          return state
-@@ -974,6 +1007,172 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+ 
+@@ -974,6 +1013,172 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
      def get_queueing_time(self) -> float:
          return self.forward_entry_time - self.wait_queue_entry_time
  
@@ -2713,7 +2732,7 @@ index 326aace..4994a63 100644
      def convert_to_duration(self) -> str:
          if self.disagg_mode == DisaggregationMode.NULL:
              queue_duration = self.duration_between(
-@@ -1107,6 +1306,26 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+@@ -1107,6 +1312,26 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
                  "queue_time": self.get_queueing_time(),
              }
          )
