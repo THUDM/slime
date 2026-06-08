@@ -33,6 +33,19 @@ per-message routing 2026-06-08):
   optional drift-fork / drop-accounting / fork-merge. That machinery is
   removed here in favor of failing loudly; it can be re-added as an explicit
   layer later if real drift turns out to be unavoidable.)
+
+* ONE tolerated exception to the strict contract: an assistant-rewrite merge.
+  cc sometimes re-renders a previously-recorded assistant message when feeding
+  it back as prompt (tool_call arg order, whitespace). The message no longer
+  matches, so DFS forks at that assistant — which does NOT raise (the rewrite
+  mounts as a routing-only node, skipped at linearization) but leaves the
+  original short turn as a standalone stub leaf -> its own Sample, diluting the
+  trajectory's evenly-split reward. ``_try_merge_assistant_rewrite`` absorbs
+  such a rewrite onto the existing leaf when its response is short enough
+  (``fork_merge_max_response_tokens``), demoting that node to routing-only so it
+  contributes 0 training tokens. Non-assistant mismatches, long responses, and
+  ambiguous cases are left to fork as usual; same-message-different-token drift
+  still raises.
 """
 
 from __future__ import annotations
@@ -172,7 +185,14 @@ class TrajectoryManager:
     ancestor) + exactly 1 assistant leaf carrying that turn's sglang snapshot.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, fork_merge_max_response_tokens: int = 1024) -> None:
+        # Rewrite-merge threshold: when DFS breaks at an assistant message and
+        # exactly one eligible short-response *leaf* sibling exists, absorb the
+        # rewrite onto it (demoted to routing-only -> 0 training tokens),
+        # compared against the abandoned turn's own turn_response_ids length.
+        # Default 1024 (ON); set <=0 to disable. This is the single tolerated
+        # exception to the strict exact-prefix contract; see module docstring.
+        self._fork_merge_threshold = fork_merge_max_response_tokens
         self._trees: dict[str, Node] = {}
         self._turn_count: dict[str, int] = {}
 
@@ -206,6 +226,7 @@ class TrajectoryManager:
         root = self._trees.setdefault(sid, Node())
 
         cur, i = self._find_mount_point(root, prompt_messages)
+        cur, i = self._try_merge_assistant_rewrite(sid, cur, prompt_messages, i)
         cur = self._mount_prompt_messages(cur, prompt_messages[i:], tools)
         self._attach_assistant_leaf(sid, cur, turn=turn, response_message=response_message, metadata=metadata)
 
@@ -275,6 +296,83 @@ class TrajectoryManager:
             cur = match
             i += 1
         return cur, i
+
+    def _try_merge_assistant_rewrite(
+        self,
+        sid: str,
+        cur: Node,
+        prompt_messages: list[dict[str, Any]],
+        i: int,
+    ) -> tuple[Node, int]:
+        """Absorb a short assistant-rewrite onto its existing node instead of forking.
+
+        cc sometimes re-renders a previously-recorded assistant message when
+        feeding it back as prompt (tool_call arg order, whitespace). That breaks
+        DFS at the assistant and forks a fresh subtree, leaving the original
+        short turn as a standalone stub leaf -> its own Sample, diluting the
+        trajectory's evenly-split reward. Forking does NOT raise (the rewritten
+        message mounts as a routing-only node and is already skipped at
+        linearization); this merge is purely a reward-hygiene / de-fragmentation
+        optimization.
+
+        When the diverging message is an assistant and exactly one eligible
+        *short-response leaf* sibling exists, adopt the rewritten message onto
+        that node and DEMOTE it to routing-only (clear its turn snapshot), so it
+        contributes 0 training tokens -- handled by the existing
+        ``turn_prompt_ids is not None`` filter in ``_chain_to_sample`` (no change
+        needed there). Any other mismatch (non-assistant message, long response,
+        non-leaf or ambiguous candidates) is left to fork as usual.
+        """
+        if self._fork_merge_threshold <= 0:
+            return cur, i  # feature off
+        if i >= len(prompt_messages) or prompt_messages[i].get("role") != "assistant":
+            return cur, i  # genuine non-assistant history fork -> leave it
+
+        candidates = [
+            c
+            for c in cur.children
+            if c.role == "assistant"
+            # Leaf == rewrite of the immediately-previous assistant: no later
+            # turn has extended it yet. A non-leaf assistant has already grown a
+            # subchain; merging onto it would tangle that history.
+            and not c.children
+            # A real turn leaf carrying this turn's snapshot, not an already-
+            # demoted routing node (turn_prompt_ids cleared by a prior merge).
+            and c.turn_prompt_ids is not None and len(c.turn_response_ids or []) < self._fork_merge_threshold
+        ]
+        if len(candidates) != 1:
+            if len(candidates) >= 2:
+                # Ambiguous: don't pick arbitrarily — fork as usual and hint.
+                logger.warning(
+                    "append_turn(sid=%s turn=%s): %d eligible rewrite-merge "
+                    "candidates; forking instead (ambiguous mixed state).",
+                    sid,
+                    self._turn_count.get(sid, 0) + 1,
+                    len(candidates),
+                )
+            return cur, i
+
+        sib = candidates[0]
+        # Observability breadcrumb only (NOT read by linearization).
+        sib.metadata["merged_rewrite"] = {
+            "abandoned_turn_index": sib.turn_index,
+            "abandoned_response_tokens": len(sib.turn_response_ids or []),
+        }
+        # Demote to routing-only: snapshot cleared -> skipped by the existing
+        # ``turn_prompt_ids is not None`` filter at linearization. Clearing
+        # turn_prompt_ids also prevents this node from being re-selected as a
+        # merge candidate on a later turn.
+        sib.turn_prompt_ids = None
+        sib.turn_response_ids = None
+        sib.turn_response_logprobs = None
+        sib.turn_finish_reason = None
+        sib.turn_index = None
+        # Adopt the rewritten message; the match_key cache MUST follow messages
+        # so a later turn's DFS descends through this (now rewritten) node
+        # instead of forking again.
+        sib.messages = [prompt_messages[i]]
+        sib.match_key = node_match_key(sib.messages)
+        return sib, i + 1
 
     def _mount_prompt_messages(
         self,

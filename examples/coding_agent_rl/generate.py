@@ -97,16 +97,17 @@ class _State(metaclass=SingletonMeta):
                 "Without it the sandbox cannot dial back and the rollout will "
                 "silently abort."
             )
-        # Kept for the staged re-add of drift tolerance: the strict
-        # exact-prefix TrajectoryManager no longer honors these, so warn loudly
-        # if an operator set them expecting fork/merge behavior.
-        drift_fork_threshold = os.environ.get("SLIME_DRIFT_FORK_MIN_LOSS_TOKENS")
+        # Assistant-rewrite merge threshold (see TrajectoryManager): when cc
+        # re-renders a short prior assistant, absorb it onto the existing leaf
+        # instead of forking a reward-diluting stub Sample. None -> manager
+        # default (1024); <=0 disables.
         fork_merge_threshold = os.environ.get("SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS")
-        if drift_fork_threshold or fork_merge_threshold:
+        fork_merge_threshold = int(fork_merge_threshold) if fork_merge_threshold else None
+        # drift-fork remains unimplemented in the strict core; warn if set.
+        if os.environ.get("SLIME_DRIFT_FORK_MIN_LOSS_TOKENS"):
             logger.warning(
-                "[coding_agent_rl] SLIME_DRIFT_FORK_MIN_LOSS_TOKENS / "
-                "SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS are set but currently "
-                "ignored: TrajectoryManager uses strict exact-prefix "
+                "[coding_agent_rl] SLIME_DRIFT_FORK_MIN_LOSS_TOKENS is set but "
+                "currently ignored: TrajectoryManager uses strict exact-prefix "
                 "linearization and raises on TITO drift."
             )
         self.adapter = AnthropicAdapter(
@@ -114,6 +115,7 @@ class _State(metaclass=SingletonMeta):
             sglang_url=sglang_url,
             tool_parser=self.tool_parser,
             reasoning_parser=self.reasoning_parser,
+            fork_merge_max_response_tokens=fork_merge_threshold,
         )
         # handler_cancellation=True so a client disconnect cancels the handler
         # coroutine, arming the fire-and-forget /abort_request inside the
