@@ -74,7 +74,7 @@ class OpenAIAdapter(BaseAdapter):
         tool_parser=None,
         reasoning_parser=None,
         max_turns_per_sid: int | None = None,
-        fork_merge_max_response_tokens: int | None = None,
+        fork_threshold_tokens: int | None = None,
         on_turn_appended: Callable[..., None] | None = None,
     ) -> None:
         super().__init__(
@@ -87,8 +87,8 @@ class OpenAIAdapter(BaseAdapter):
         # ``None`` means "caller did not specify" -> let TrajectoryManager use
         # its own default for the assistant-rewrite merge threshold.
         mgr_kwargs: dict[str, int] = {}
-        if fork_merge_max_response_tokens is not None:
-            mgr_kwargs["fork_merge_max_response_tokens"] = fork_merge_max_response_tokens
+        if fork_threshold_tokens is not None:
+            mgr_kwargs["fork_threshold_tokens"] = fork_threshold_tokens
         self.manager = TrajectoryManager(**mgr_kwargs)
         # Optional debug hook invoked after each successful append_turn.
         # Signature mirrors AnthropicAdapter.on_turn_appended:

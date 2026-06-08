@@ -14,38 +14,62 @@ per-message routing 2026-06-08):
   / ``turn_finish_reason`` / ``turn_index``. Non-assistant nodes carry no
   token attribution at all.
 
-* ``get_trajectory`` linearizes each leaf turn-by-turn with a STRICT
-  exact-prefix contract: walking the leaf's assistant chain root→leaf, the
-  cumulative ``(prompt + response)`` tokens emitted so far MUST be an exact
-  prefix of the next turn's ``turn_prompt_ids``. When it is, the new prompt
-  tail ``prompt[len(cumulative):]`` is appended as loss_mask=0, then the
-  turn's ``response`` is appended as loss_mask=1 with real logprobs.
+* ``get_trajectory`` linearizes each leaf turn-by-turn. Walking the leaf's
+  assistant chain root→leaf, the cumulative ``(prompt + response)`` tokens
+  emitted so far are matched against the next turn's ``turn_prompt_ids``:
 
-* When the prefix does NOT match, the upstream tokenization drifted (the
-  same history re-tokenized differently across turns). That is a bug to
-  surface, not to paper over: ``get_trajectory`` raises ``ValueError`` with
-  the sid, turn_index, common-prefix length, and drift size so the
-  offending turn is locatable. Note a drift introduced at an early turn can
-  surface several turns later — the prefix check catches it whenever the
-  re-rendered early region first diverges from the accumulated tokens.
+  - **Clean continuation** — the cumulative tokens are an exact prefix of the
+    turn's prompt. The new prompt tail ``prompt[len(cumulative):]`` is appended
+    as loss_mask=0, then the turn's ``response`` is appended as loss_mask=1 with
+    real logprobs.
 
-  (History: an earlier design tolerated drift via LCP drop-and-replace plus
-  optional drift-fork / drop-accounting / fork-merge. That machinery is
-  removed here in favor of failing loudly; it can be re-added as an explicit
-  layer later if real drift turns out to be unavoidable.)
+  - **Drift** — the same history re-tokenized differently across turns (TITO
+    drift: tool_call arg order, whitespace, reasoning-block reordering). Rather
+    than raise, ``get_trajectory`` tolerates the drift by where the divergence
+    index ``L`` (the common-prefix length) falls, never letting logprobs
+    misalign with tokens:
 
-* ONE tolerated exception to the strict contract: an assistant-rewrite merge.
-  cc sometimes re-renders a previously-recorded assistant message when feeding
-  it back as prompt (tool_call arg order, whitespace). The message no longer
-  matches, so DFS forks at that assistant — which does NOT raise (the rewrite
-  mounts as a routing-only node, skipped at linearization) but leaves the
-  original short turn as a standalone stub leaf -> its own Sample, diluting the
-  trajectory's evenly-split reward. ``_try_merge_assistant_rewrite`` absorbs
-  such a rewrite onto the existing leaf when its response is short enough
-  (``fork_merge_max_response_tokens``), demoting that node to routing-only so it
-  contributes 0 training tokens. Non-assistant mismatches, long responses, and
-  ambiguous cases are left to fork as usual; same-message-different-token drift
-  still raises.
+      * **case A** — ``L`` lands in a prompt region (outside every recorded
+        response span): a genuine prompt-level re-render → **fork** (finalize
+        the current coherent segment as its own Sample, restart a fresh segment
+        at this turn). Fork discards nothing.
+      * **case B1** — ``L`` lands inside the most-recent response span (the
+        immediately-previous turn's response got re-rendered). Let
+        ``d = len(cumulative) - L`` be the drifted tail length: ``d <
+        fork_threshold`` → **replace** (truncate to ``L``, silently drop the
+        drifted tail, realign to this turn's prompt); ``d >= fork_threshold`` →
+        **fork**.
+      * **case B2** — ``L`` lands inside an *earlier* turn's response span.
+        Replacing would discard that turn's tail plus every later turn, so this
+        always **forks** regardless of drift size.
+
+  A fork splits one leaf into >=2 Samples; reward is split evenly across all
+  emitted Samples (see ``get_trajectory``).
+
+* ONE tolerated exception at the ROUTING (tree) layer: an assistant-rewrite
+  merge. cc sometimes re-renders a previously-recorded assistant message when
+  feeding it back as prompt (tool_call arg order, whitespace). The message no
+  longer matches, so DFS forks at that assistant — leaving the original short
+  turn as a standalone stub leaf -> its own Sample, diluting the trajectory's
+  evenly-split reward. ``_try_merge_assistant_rewrite`` absorbs such a rewrite
+  onto the existing leaf when its response is short enough
+  (``fork_threshold_tokens``), demoting that node to routing-only so it
+  contributes 0 training tokens. This is the MESSAGE-level dual of case B1's
+  TOKEN-level replace: the rewrite-merge triggers when the message dict differs
+  (DFS would fork), case B1 triggers when the message is identical but its
+  tokens drift inside one chain. They live at different layers and handle
+  different causes, so both are kept.
+
+* Cross-leaf dedup at the LINEARIZATION layer: a snapshot assistant node can be
+  shared by >=2 sibling leaves (it is the SAME Node object on each chain, since
+  ``_find_mount_point`` reuses children). Linearizing every leaf from the root
+  would otherwise train that shared prefix once per leaf. Instead the first leaf
+  to reach a node (DFS / build order) trains its response (loss=1); later leaves
+  re-emit it as loss=0 context (``trained=False`` in ``_Segment.extend``), so the
+  shared prefix is trained exactly once. The tree is left intact (unlike the
+  rewrite-merge's node demotion); only the per-leaf loss signal is masked. A
+  leaf's terminal turn is its own freshly-created node, never pre-claimed, so
+  every leaf keeps >=1 trained turn.
 """
 
 from __future__ import annotations
@@ -80,22 +104,6 @@ class Node:
         turn_finish_reason:     str | None
         turn_index:             int          1-based, monotonic per session
     """
-
-    __slots__ = (
-        # routing
-        "role",
-        "messages",
-        "metadata",
-        "parent",
-        "children",
-        "match_key",
-        # per-turn snapshot (assistant leaves)
-        "turn_prompt_ids",
-        "turn_response_ids",
-        "turn_response_logprobs",
-        "turn_finish_reason",
-        "turn_index",
-    )
 
     def __init__(
         self,
@@ -173,6 +181,111 @@ def _lcp_len(a: list[int], b: list[int]) -> int:
 
 
 # ===========================================================================
+# Segment — one coherent linearized run (a fork boundary closes it)
+# ===========================================================================
+
+
+class _Segment:
+    """Token accumulator for one coherent linearized run within a chain.
+
+    Holds the running ``buffer`` with aligned ``loss`` / ``logprobs`` and per-turn
+    response ``spans`` (``[start, end)`` half-open). Invariant: ``absorb_turn``
+    always ends by appending a response, so ``spans[-1]`` is the most-recent
+    response span and the buffer ends at its end. A fork closes the segment and a
+    fresh one opens at the diverging turn (see module docstring case A/B1/B2).
+    """
+
+    def __init__(self) -> None:
+        self.buffer: list[int] = []
+        self.loss: list[int] = []
+        self.logprobs: list[float] = []
+        # Each span: (start, end, turn_index) over self.buffer, half-open.
+        self.spans: list[tuple[int, int, int | None]] = []
+        self.first_prompt_len: int = 0
+
+    def measure_drift(self, prompt_ids: list[int]) -> int:
+        """Length of the segment's token tail this turn's ``prompt_ids`` failed to reproduce.
+
+        Normally 0 (clean continuation). A positive value IS token-id drift — the
+        same history re-tokenized differently this turn (TITO drift) — not an error.
+        """
+        return len(self.buffer) - _lcp_len(self.buffer, prompt_ids)
+
+    def can_absorb_drift(self, drift: int, fork_threshold: int) -> bool:
+        """Whether a ``drift``-token re-tokenization can be realigned into this segment.
+
+        Realignable only when the drift is confined to the most-recent response
+        span (case B1) and shorter than ``fork_threshold``; otherwise the caller
+        forks. See module docstring for case A/B1/B2.
+        """
+        if drift == 0:
+            return True
+        realign_at = len(self.buffer) - drift
+        if not self.spans or realign_at < self.spans[-1][0]:
+            return False  # case A (prompt region) or B2 (earlier response span)
+        return fork_threshold > 0 and drift < fork_threshold
+
+    def absorb_turn(
+        self,
+        drift: int,
+        prompt_ids: list[int],
+        response_ids: list[int],
+        response_logprobs: list[float] | None,
+        turn_index: int | None,
+        *,
+        trained: bool = True,
+    ) -> None:
+        """Append one turn, dropping any re-tokenization drift first so logprobs stay aligned.
+
+        Drop the last ``drift`` tokens so the buffer re-anchors on the prefix this
+        turn's ``prompt_ids`` reproduced (shrinking the prior span if cut), then
+        append this turn's prompt tail (loss=0) and response (loss=1). A truncated
+        prior span stays loss=1: that region is both the prior turn's response and
+        this turn's prompt context.
+
+        ``trained=False`` appends the response as loss=0 / logprob=0.0 instead — the
+        node is already owned by an earlier sibling leaf, so re-training it would
+        double-count the shared prefix (see ``_chain_to_sample`` claim-on-first-visit).
+        """
+        realign_at = len(self.buffer) - drift
+        del self.buffer[realign_at:]
+        del self.loss[realign_at:]
+        del self.logprobs[realign_at:]
+        if self.spans and realign_at < self.spans[-1][1]:
+            s, _e, j = self.spans[-1]
+            self.spans[-1] = (s, realign_at, j)  # may collapse to empty (s == realign_at); harmless
+
+        is_first_turn = not self.spans
+        tail = prompt_ids[realign_at:]
+        self.buffer.extend(tail)
+        self.loss.extend([0] * len(tail))
+        self.logprobs.extend([0.0] * len(tail))
+
+        start = len(self.buffer)
+        self.buffer.extend(response_ids)
+        self.loss.extend([1 if trained else 0] * len(response_ids))
+        self.logprobs.extend(
+            response_logprobs if (trained and response_logprobs is not None) else [0.0] * len(response_ids)
+        )
+        self.spans.append((start, len(self.buffer), turn_index))
+
+        if is_first_turn:
+            self.first_prompt_len = len(prompt_ids)  # stripped at build time
+
+    def response_strip(self) -> int:
+        """Start index of the response region (the leading first-turn prompt prefix)."""
+        return min(self.first_prompt_len, len(self.loss))
+
+    def has_trained_response(self) -> bool:
+        """Whether the response region carries any loss=1 token.
+
+        False only when every turn in the segment was claimed by an earlier
+        sibling leaf (cross-leaf dedup) -> no training signal to emit.
+        """
+        return any(self.loss[self.response_strip() :])
+
+
+# ===========================================================================
 # TrajectoryManager
 # ===========================================================================
 
@@ -185,16 +298,11 @@ class TrajectoryManager:
     ancestor) + exactly 1 assistant leaf carrying that turn's sglang snapshot.
     """
 
-    def __init__(self, *, fork_merge_max_response_tokens: int | None = None) -> None:
-        # Drift fork/replace threshold (see module docstring + spec). Only a
-        # case-B1 drift (divergence inside the immediately-previous turn's
-        # response region) compares its drift length against this value:
-        # drift < threshold -> replace (truncate + realign, dropped tail
-        # counted in tito_dropped_*); drift >= threshold -> fork. case A
-        # (prompt region) and case B2 (drift in an earlier turn's response)
-        # always fork regardless. <=0 forces B1 to fork too (max fidelity).
-        # ``None`` from the caller means "use the default".
-        self._fork_threshold: int = 1024 if fork_merge_max_response_tokens is None else fork_merge_max_response_tokens
+    def __init__(self, *, fork_threshold_tokens: int | None = None) -> None:
+        # Drift fork/replace threshold for case-B1 (see module docstring case
+        # A/B1/B2). <=0 forces every B1 to fork (max fidelity); ``None`` means
+        # "use the default".
+        self._fork_threshold: int = 1024 if fork_threshold_tokens is None else fork_threshold_tokens
         self._trees: dict[str, Node] = {}
         self._turn_count: dict[str, int] = {}
 
@@ -256,11 +364,17 @@ class TrajectoryManager:
             return []
 
         samples: list[Sample] = []
+        # Cross-leaf dedup (see module docstring): a snapshot node shared by sibling
+        # leaves is trained only by the first leaf to reach it. ``claimed`` carries
+        # node identity (id()) across leaves to enforce that.
+        claimed: set[int] = set()
         for routing_leaf in root.leaves():
             if routing_leaf.is_root:
                 continue
             chain = routing_leaf.path_from_root()
-            samples.extend(self._chain_to_sample(sid, chain, base_sample=base_sample, extra_metadata=extra_metadata))
+            samples.extend(
+                self._chain_to_sample(chain, base_sample=base_sample, extra_metadata=extra_metadata, claimed=claimed)
+            )
 
         # Reward is split evenly across every emitted sample (one per leaf); the
         # token-weighted reducer downstream then gives each loss token the
@@ -308,22 +422,14 @@ class TrajectoryManager:
     ) -> tuple[Node, int]:
         """Absorb a short assistant-rewrite onto its existing node instead of forking.
 
-        cc sometimes re-renders a previously-recorded assistant message when
-        feeding it back as prompt (tool_call arg order, whitespace). That breaks
-        DFS at the assistant and forks a fresh subtree, leaving the original
-        short turn as a standalone stub leaf -> its own Sample, diluting the
-        trajectory's evenly-split reward. Forking does NOT raise (the rewritten
-        message mounts as a routing-only node and is already skipped at
-        linearization); this merge is purely a reward-hygiene / de-fragmentation
-        optimization.
+        See module docstring (rewrite-merge bullet) for the why. Purely a
+        reward-hygiene / de-fragmentation optimization — forking is already safe
+        (the rewrite mounts as a routing-only node, skipped at linearization).
 
         When the diverging message is an assistant and exactly one eligible
-        *short-response leaf* sibling exists, adopt the rewritten message onto
-        that node and DEMOTE it to routing-only (clear its turn snapshot), so it
-        contributes 0 training tokens -- handled by the existing
-        ``turn_prompt_ids is not None`` filter in ``_chain_to_sample`` (no change
-        needed there). Any other mismatch (non-assistant message, long response,
-        non-leaf or ambiguous candidates) is left to fork as usual.
+        *short-response leaf* sibling exists, adopt the rewritten message onto that
+        node and DEMOTE it to routing-only (clear its turn snapshot). Any other
+        mismatch (non-assistant, long response, non-leaf or ambiguous) forks as usual.
         """
         if self._fork_threshold <= 0:
             return cur, i  # feature off
@@ -355,15 +461,13 @@ class TrajectoryManager:
             return cur, i
 
         sib = candidates[0]
-        # Observability breadcrumb only (NOT read by linearization).
-        sib.metadata["merged_rewrite"] = {
+        sib.metadata["merged_rewrite"] = {  # observability breadcrumb only
             "abandoned_turn_index": sib.turn_index,
             "abandoned_response_tokens": len(sib.turn_response_ids or []),
         }
-        # Demote to routing-only: snapshot cleared -> skipped by the existing
-        # ``turn_prompt_ids is not None`` filter at linearization. Clearing
-        # turn_prompt_ids also prevents this node from being re-selected as a
-        # merge candidate on a later turn.
+        # Demote to routing-only: snapshot cleared -> skipped by the
+        # ``turn_prompt_ids is not None`` filter at linearization, and never
+        # re-selected as a merge candidate on a later turn.
         sib.turn_prompt_ids = None
         sib.turn_response_ids = None
         sib.turn_response_logprobs = None
@@ -384,13 +488,10 @@ class TrajectoryManager:
     ) -> Node:
         """Attach each remaining prompt message as a routing node under ``cur``.
 
-        One node per message (``node.messages`` is a singleton list). Token
-        attribution happens at get_trajectory time, not here. The tools
-        metadata is placed only on the FIRST system node on the path —
-        ``_first_system_already_set(cur)`` walks ``cur → root`` looking for a
-        system ancestor that already carries it, and ``cur`` here is the
-        deepest node from descent (+ optional merge), so the walk sees every
-        ancestor that's already mounted.
+        One node per message; token attribution happens at get_trajectory time, not
+        here. The tools metadata is placed only on the FIRST system node on the path
+        (``_first_system_already_set`` walks ``cur → root``; ``cur`` is the deepest
+        mounted node, so the walk sees every already-mounted ancestor).
         """
         for m in remaining_messages:
             role = m.get("role")
@@ -425,95 +526,61 @@ class TrajectoryManager:
 
     def _chain_to_sample(
         self,
-        sid: str,
         chain: list[Node],
         *,
         base_sample: Sample,
         extra_metadata: dict[str, Any] | None,
+        claimed: set[int],
     ) -> list[Sample]:
-        """Linearize one root→leaf chain into a single Sample (strict exact-prefix).
+        """Linearize one root→leaf chain into >=1 Samples (see module docstring).
 
-        Walk the chain's assistant nodes root→leaf, accumulating tokens. Each
-        turn's cumulative ``(prompt + response)`` so far MUST be an exact prefix
-        of the next turn's ``turn_prompt_ids``; otherwise the upstream
-        tokenization drifted and we raise (see module docstring). Reward is left
-        at 0.0 here and assigned by the caller.
+        Each turn either grows the current segment or forks a new one (case
+        A/B1-too-long/B2). ``claimed`` deduplicates snapshot nodes shared across
+        sibling leaves; a leaf's terminal node is never pre-claimed, so every leaf
+        keeps >=1 trained turn. Reward is left at 0.0 and assigned by the caller.
         """
         # Only assistant leaves carrying this turn's sglang snapshot participate.
         # Routing assistant nodes mounted from prior-turn replay (turn_prompt_ids
         # is None) carry no token signal and are skipped.
         asst_chain = [n for n in chain if n.role == "assistant" and n.turn_prompt_ids is not None]
 
-        tokens: list[int] = []
-        loss_mask: list[int] = []
-        logprobs: list[float] = []
+        segments: list[_Segment] = []
+        seg = _Segment()
         for asst in asst_chain:
-            prompt = asst.turn_prompt_ids or []
-            response = asst.turn_response_ids or []
-            response_logprobs = asst.turn_response_logprobs
+            prompt_ids = asst.turn_prompt_ids or []
+            drift = seg.measure_drift(prompt_ids)
+            if not seg.can_absorb_drift(drift, self._fork_threshold):
+                segments.append(seg)  # fork: close this segment, start fresh here
+                seg = _Segment()
+                drift = 0
+            trained = id(asst) not in claimed
+            claimed.add(id(asst))
+            seg.absorb_turn(
+                drift,
+                prompt_ids,
+                asst.turn_response_ids or [],
+                asst.turn_response_logprobs,
+                asst.turn_index,
+                trained=trained,
+            )
+        segments.append(seg)
 
-            # Strict prefix check: tokens accumulated so far must be an exact
-            # prefix of this turn's prompt. For the first turn `tokens` is empty
-            # so this trivially holds.
-            n = len(tokens)
-            if prompt[:n] != tokens:
-                self._raise_prefix_drift(sid, asst_chain, asst, tokens, prompt)
-
-            new_prompt = prompt[n:]
-            tokens.extend(new_prompt)
-            loss_mask.extend([0] * len(new_prompt))
-            logprobs.extend([0.0] * len(new_prompt))
-
-            tokens.extend(response)
-            loss_mask.extend([1] * len(response))
-            logprobs.extend(response_logprobs if response_logprobs is not None else [0.0] * len(response))
-
-        first_prompt_len = len(asst_chain[0].turn_prompt_ids or []) if asst_chain else 0
+        # Drop empty / fully-masked segments: an in-chain fork can isolate a run of
+        # turns all claimed by an earlier sibling leaf (no loss=1 token), which would
+        # trip the downstream "not fully masked" assert. A leaf's terminal turn is
+        # never pre-claimed, so its final segment always survives.
         return [
             self._build_leaf_sample(
                 base_sample=base_sample,
                 extra_metadata=extra_metadata,
-                tokens=tokens,
-                loss_mask=loss_mask,
-                logprobs=logprobs,
-                first_prompt_len=first_prompt_len,
+                tokens=seg.buffer,
+                loss_mask=seg.loss,
+                logprobs=seg.logprobs,
+                strip=seg.response_strip(),
             )
+            for seg in segments
+            if seg.buffer and seg.has_trained_response()
         ]
-
-    @staticmethod
-    def _raise_prefix_drift(
-        sid: str,
-        asst_chain: list[Node],
-        asst: Node,
-        tokens: list[int],
-        prompt: list[int],
-    ) -> None:
-        """Raise on a TITO drift: accumulated tokens are not a prefix of prompt.
-
-        Reports the common-prefix length and drift size, plus which earlier
-        assistant turn's prompt region the divergence falls in — a drift
-        introduced at an early turn can surface only when a later turn
-        re-renders that early region differently.
-        """
-        L = _lcp_len(tokens, prompt)
-        drift = len(tokens) - L
-        # Locate which turn's prompt region L lands in, so an early-turn drift
-        # that surfaces several turns later is still attributable.
-        drift_in_turn = None
-        for prior in asst_chain:
-            if prior is asst:
-                break
-            if L < len(prior.turn_prompt_ids or []):
-                drift_in_turn = prior.turn_index
-                break
-        raise ValueError(
-            f"get_trajectory(sid={sid} turn={asst.turn_index}): TITO drift — "
-            f"accumulated tokens are not a prefix of this turn's prompt "
-            f"(common_prefix_len={L}, drift={drift} tokens; divergence falls in "
-            f"turn {drift_in_turn}'s prompt region). The same history "
-            f"re-tokenized differently across turns; refusing to silently "
-            f"drop/realign."
-        )
 
     def _build_leaf_sample(
         self,
@@ -523,26 +590,20 @@ class TrajectoryManager:
         tokens: list[int],
         loss_mask: list[int],
         logprobs: list[float],
-        first_prompt_len: int,
+        strip: int,
     ) -> Sample:
         """Build one Sample from a linearized token segment.
 
-        ``loss_mask`` / ``logprobs`` are clamped to the response region (the
-        leading first-turn prompt prefix is stripped) per the slime contract:
-        ``response_length == len(loss_mask)`` and loss_mask/logprobs cover only
-        the response region. ``reward`` is left at 0.0; the caller assigns the
-        per-sample share.
+        ``loss_mask`` / ``logprobs`` are clamped to the response region (``strip``
+        drops the leading first-turn prompt prefix) per the slime contract:
+        ``response_length == len(loss_mask)``, covering only the response region
+        (see backends/megatron_utils/data.py:139, ray/rollout.py:695). ``reward``
+        is left at 0.0; the caller assigns the per-sample share.
 
-        Sample metadata carries only ``extra_metadata`` (empty on the
-        production path): the per-row dataset metadata and per-turn tool /
-        finish_reason snapshot are intentionally NOT propagated onto the leaf
-        Sample. Dump/analysis tooling reads those off the tree nodes instead.
+        Per-row dataset metadata and the per-turn tool / finish_reason snapshot are
+        intentionally NOT propagated here (dump/analysis tooling reads them off the
+        tree nodes); only ``extra_metadata`` rides along.
         """
-        # Clamp loss_mask/logprobs to the response region: strip the leading
-        # first-turn prompt prefix so response_length == len(loss_mask), per the
-        # slime contract (see backends/megatron_utils/data.py:139,
-        # ray/rollout.py:695).
-        strip = min(first_prompt_len, len(loss_mask))
         loss_resp, lp_resp = loss_mask[strip:], logprobs[strip:]
         metadata = dict(extra_metadata or {})
         return Sample(

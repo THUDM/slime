@@ -115,7 +115,7 @@ class _State(metaclass=SingletonMeta):
             sglang_url=sglang_url,
             tool_parser=self.tool_parser,
             reasoning_parser=self.reasoning_parser,
-            fork_merge_max_response_tokens=fork_merge_threshold,
+            fork_threshold_tokens=fork_merge_threshold,
         )
         # handler_cancellation=True so a client disconnect cancels the handler
         # coroutine, arming the fire-and-forget /abort_request inside the
