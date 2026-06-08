@@ -200,6 +200,11 @@ def turn(prompt_ids, response_ids, *, finish_reason="stop", logprobs=None) -> Tu
 # samples) so main() can render after the assertions pass.
 _PRINT_LOG: list[tuple[str, object, str, list]] = []
 
+# Raw append_turn inputs, keyed by sid, captured at call time so the printer can
+# show the SOURCE data (prompt_ids / response_ids / finish / logprobs) that fed
+# the tree — before any tree-building or linearization happened.
+_TURN_LOG: dict[str, list[dict]] = {}
+
 
 def _record(title: str, mgr, sid: str, samples: list) -> None:
     _PRINT_LOG.append((title, mgr, sid, samples))
@@ -231,6 +236,17 @@ def append(
     if rmsg is None and response_label is not None:
         rmsg = {"role": "assistant", "content": response_label}
     lp = logprobs
+    # Capture the raw turn inputs for the human-readable dump before the manager
+    # consumes them.
+    _TURN_LOG.setdefault(sid, []).append(
+        {
+            "prompt_msgs": [f"{m.role}:{m.label}" for m in prompt_msgs],
+            "prompt_ids": p,
+            "response_ids": r,
+            "finish": finish_reason,
+            "has_lp": lp is not None,
+        }
+    )
     mgr.append_turn(
         sid,
         turn=turn(p, r, finish_reason=finish_reason, logprobs=lp),
@@ -841,8 +857,27 @@ def _print_sample(idx: int, s: Sample) -> None:
     print(f"    loss: {loss_row}")
 
 
+def _print_raw_turns(sid: str) -> None:
+    """Print the raw append_turn inputs (the SOURCE data) for a sid.
+
+    Shows, per turn, the prompt message labels and the actual prompt_ids /
+    response_ids decoded to readable names, plus finish_reason and whether
+    logprobs were attached. This is what fed the tree, before any building or
+    linearization.
+    """
+    turns = _TURN_LOG.get(sid, [])
+    print(f"[raw turns] {len(turns)}")
+    for k, t in enumerate(turns, start=1):
+        msgs = " , ".join(t["prompt_msgs"])
+        print(f"  turn#{k} finish={t['finish']} has_logprobs={t['has_lp']}")
+        print(f"    msgs   : {msgs}")
+        print(f"    prompt : {render_ids(t['prompt_ids'])}")
+        print(f"    output : {render_ids(t['response_ids']) or '<empty>'}")
+
+
 def _print_case(title: str, mgr, sid: str, samples: list) -> None:
     print(f"\n=== CASE {title} ===")
+    _print_raw_turns(sid)
     txt = dump_tree_txt(mgr, sid) if mgr.has_session(sid) else "<drained>"
     print("[tree]")
     for line in txt.splitlines():
