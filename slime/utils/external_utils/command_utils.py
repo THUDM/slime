@@ -189,8 +189,43 @@ def check_has_nvlink():
 
 
 def get_default_wandb_args(test_file: str, run_name_prefix: str | None = None, run_id: str | None = None):
-    if not os.environ.get("WANDB_API_KEY"):
-        print("Skip wandb configuration since WANDB_API_KEY is not found")
+    return get_default_tracking_args(test_file, run_name_prefix=run_name_prefix, run_id=run_id, backend="wandb")
+
+
+def get_default_swanlab_args(test_file: str, run_name_prefix: str | None = None, run_id: str | None = None):
+    return get_default_tracking_args(test_file, run_name_prefix=run_name_prefix, run_id=run_id, backend="swanlab")
+
+
+def get_default_tracking_args(
+    test_file: str,
+    run_name_prefix: str | None = None,
+    run_id: str | None = None,
+    backend: str | None = None,
+):
+    if backend is None:
+        backend = "swanlab" if os.environ.get("SWANLAB_API_KEY") else "wandb"
+
+    if backend == "wandb":
+        api_key_env = "WANDB_API_KEY"
+        use_flag = "--use-wandb"
+        project_flag = "--wandb-project"
+        group_flag = "--wandb-group"
+        key_flag = "--wandb-key"
+        suffix_flag = "--disable-wandb-random-suffix"
+        skip_msg = "Skip wandb configuration since WANDB_API_KEY is not found"
+    elif backend == "swanlab":
+        api_key_env = "SWANLAB_API_KEY"
+        use_flag = "--use-swanlab"
+        project_flag = "--swanlab-project"
+        group_flag = "--swanlab-group"
+        key_flag = "--swanlab-key"
+        suffix_flag = "--disable-swanlab-random-suffix"
+        skip_msg = "Skip swanlab configuration since SWANLAB_API_KEY is not found"
+    else:
+        raise ValueError(f"Unsupported backend: {backend}")
+
+    if not os.environ.get(api_key_env):
+        print(skip_msg)
         return ""
 
     test_file = Path(test_file)
@@ -198,20 +233,20 @@ def get_default_wandb_args(test_file: str, run_name_prefix: str | None = None, r
     if len(test_name) < 6:
         test_name = f"{test_file.parent.name}_{test_name}"
 
-    wandb_run_name = run_id or create_run_id()
+    run_name = run_id or create_run_id()
     if (x := os.environ.get("GITHUB_COMMIT_NAME")) is not None:
-        wandb_run_name += f"_{x}"
+        run_name += f"_{x}"
     if (x := run_name_prefix) is not None:
-        wandb_run_name = f"{x}_{wandb_run_name}"
+        run_name = f"{x}_{run_name}"
 
     # Use the actual key value from environment to avoid shell expansion issues
-    wandb_key = os.environ.get("WANDB_API_KEY")
+    api_key = os.environ.get(api_key_env)
     return (
-        "--use-wandb "
-        f"--wandb-project slime-{test_name} "
-        f"--wandb-group {wandb_run_name} "
-        f"--wandb-key '{wandb_key}' "
-        "--disable-wandb-random-suffix "
+        f"{use_flag} "
+        f"{project_flag} slime-{test_name} "
+        f"{group_flag} {run_name} "
+        f"{key_flag} '{api_key}' "
+        f"{suffix_flag} "
     )
 
 
