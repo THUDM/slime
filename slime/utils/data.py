@@ -162,7 +162,7 @@ def _build_messages(data: dict, prompt_key: str, as_conversation: bool, multimod
                             f"than {mt.name}s provided in data"
                         )
                         item = content.pop(0)
-                        # Support rich image config from https://github.com/QwenLM/Qwen3-VL/blob/main/README.md:
+                        # Support rich image config from https://github.com/QwenLM/Qwen3-VL/blob/main/README.md
                         # define min_pixels and max_pixels: Images will be resized to maintain 
                         # their aspect ratio within the range of min_pixels and max_pixels
                         # "images": [{"type": "image", "image": "path/to/img/01.jpeg", "max_pixels": 50176, "min_pixels": 50176}, {...}]
