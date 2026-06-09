@@ -22,15 +22,6 @@ REASONING_PARSER_KEY = web.AppKey("reasoning_parser", object)
 
 @dataclasses.dataclass(frozen=True)
 class TurnRecord:
-    """Exact token snapshot for one assistant generation, returned by
-    :func:`call_sglang_generate`.
-
-    ``prompt_ids`` is the full tokenized prompt sent to the generator for that
-    turn. ``output_ids`` is the raw generated output, and
-    ``output_log_probs`` is aligned with it when the rollout engine returns
-    per-token log probabilities.
-    """
-
     prompt_ids: list[int]
     output_ids: list[int]
     finish_reason: str
@@ -41,8 +32,11 @@ class BaseAdapter:
     """Base HTTP adapter with per-instance session lifecycle state."""
 
     session_cls: type
+    # Set by subclass __init__: the shared TrajectoryManager keyed by sid.
+    manager: Any
 
     def __init__(self, *, tokenizer, sglang_url, tool_parser=None, reasoning_parser=None) -> None:
+        self.tokenizer = tokenizer
         self.store: dict[str, Any] = {}
         self.inflight: dict[str, set[asyncio.Task]] = {}
         self.closed: set[str] = set()
@@ -71,8 +65,39 @@ class BaseAdapter:
     async def shutdown_session(self, sid: str, *, wait_timeout: float = 5.0) -> None:
         await shutdown_session_tasks(sid, self.closed, self.inflight, wait_timeout=wait_timeout)
 
-    async def finish_session(self, sid: str, *, wait_timeout: float = 5.0) -> list:
-        raise NotImplementedError
+    async def finish_session(
+        self,
+        sid: str,
+        *,
+        base_sample=None,
+        reward: float = 0.0,
+        extra_metadata: dict | None = None,
+        wait_timeout: float = 5.0,
+    ) -> list:
+        """Drain a session's trajectory into fully-formed Sample objects.
+
+        Waits out in-flight requests for ``sid``, linearises the per-sid tree
+        via ``TrajectoryManager.get_trajectory``, then decodes each sample's
+        trained tail into ``.response`` (the manager is tokenizer-free, so the
+        adapter that owns the tokenizer fills this in). Idempotent -- a second
+        call for an already-popped sid returns ``[]``.
+        """
+        await self.shutdown_session(sid, wait_timeout=wait_timeout)
+        # Drop the per-sid adapter Session; the trajectory itself lives in the
+        # manager's per-sid tree and is popped by get_trajectory(drop=True).
+        self.store.pop(sid, None)
+        samples = self.manager.get_trajectory(
+            sid,
+            base_sample=base_sample,
+            reward=reward,
+            extra_metadata=extra_metadata,
+        )
+        for s in samples:
+            rlen = int(s.response_length or 0)
+            s.response = (
+                self.tokenizer.decode(s.tokens[-rlen:], skip_special_tokens=False) if rlen and s.tokens else ""
+            )
+        return samples
 
 
 def request_session_id(

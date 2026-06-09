@@ -36,7 +36,6 @@ from slime.agent.adapters.common import (
 )
 from slime.agent.parsing import ParsedModelOutput, parse_model_output
 from slime.agent.trajectory_manager import TrajectoryManager
-from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +65,8 @@ class AnthropicAdapter(BaseAdapter):
         sglang_url,
         tool_parser=None,
         reasoning_parser=None,
-        tito_snapshot_min_loss_tokens: int | None = None,
-        fork_merge_max_response_tokens: int | None = None,
         max_turns_per_sid: int | None = None,
+        fork_threshold_tokens: int | None = None,
         on_turn_appended: Callable[..., None] | None = None,
     ) -> None:
         super().__init__(
@@ -78,13 +76,11 @@ class AnthropicAdapter(BaseAdapter):
             reasoning_parser=reasoning_parser,
         )
         # ONE manager shared across all sids; per-sid trees live inside.
-        # ``None`` here means "caller did not specify" → let TrajectoryManager's
-        # own default take over. Pass an int (incl. 0 to disable) to override.
+        # ``None`` means "caller did not specify" -> let TrajectoryManager use
+        # its own default for the assistant-rewrite merge threshold.
         mgr_kwargs: dict[str, int] = {}
-        if tito_snapshot_min_loss_tokens is not None:
-            mgr_kwargs["tito_snapshot_min_loss_tokens"] = tito_snapshot_min_loss_tokens
-        if fork_merge_max_response_tokens is not None:
-            mgr_kwargs["fork_merge_max_response_tokens"] = fork_merge_max_response_tokens
+        if fork_threshold_tokens is not None:
+            mgr_kwargs["fork_threshold_tokens"] = fork_threshold_tokens
         self.manager = TrajectoryManager(**mgr_kwargs)
         # Optional debug hook invoked after each successful append_turn.
         # Signature: (sid, prompt_messages, tools, response_message,
@@ -100,32 +96,6 @@ class AnthropicAdapter(BaseAdapter):
         self.app.router.add_post("/v1/messages/count_tokens", _count_tokens)
         self.app.router.add_get("/healthz", _ok)
         self.app.router.add_get("/v1/models", _ok)
-
-    async def finish_session(
-        self,
-        sid: str,
-        *,
-        base_sample: Sample | None = None,
-        reward: float = 0.0,
-        extra_metadata: dict[str, Any] | None = None,
-        wait_timeout: float = 5.0,
-    ) -> list[Sample]:
-        """Drain a session's trajectory into Sample objects.
-
-        Waits out in-flight requests for ``sid``, then linearises the
-        per-sid tree via ``TrajectoryManager.get_trajectory``. Idempotent --
-        a second call for an already-popped sid returns ``[]``.
-        """
-        await self.shutdown_session(sid, wait_timeout=wait_timeout)
-        # Drop the per-sid adapter Session; the trajectory itself is in
-        # manager._trees and will be popped by get_trajectory(drop=True).
-        self.store.pop(sid, None)
-        return self.manager.get_trajectory(
-            sid,
-            base_sample=base_sample,
-            reward=reward,
-            extra_metadata=extra_metadata,
-        )
 
 
 # =============================================================================
@@ -485,8 +455,6 @@ async def _handle_request(request: web.Request) -> web.StreamResponse:
             )
         adapter._sid_turn_count[sid] = prior + 1
 
-    # Fold mid-list ``role: system`` messages into a neighbouring user message
-    # so Qwen3 chat templates accept them. No-op when no mid-list system msgs.
     _fold_mid_list_system_into_user(body)
 
     app = request.app
@@ -521,8 +489,9 @@ async def _handle_request(request: web.Request) -> web.StreamResponse:
             )
             blocks, stop_reason, response_message = _build_blocks_and_response_message(parsed, turn.finish_reason)
 
-            output_ids = list(turn.output_ids)
             finish_reason = _finish_reason_for_manager(turn.finish_reason, parsed.tool_uses)
+            turn = dataclasses.replace(turn, finish_reason=finish_reason)
+            output_ids = list(turn.output_ids)
 
             if _is_cc_title_generation_request(translated, tools_schema):
                 # Claude Code meta request (per-session title generation).
@@ -539,17 +508,10 @@ async def _handle_request(request: web.Request) -> web.StreamResponse:
                 try:
                     adapter.manager.append_turn(
                         sid,
+                        turn=turn,
                         prompt_messages=translated,
                         tools=tools_schema,
-                        prompt_ids=prompt_ids,
-                        response_ids=output_ids,
-                        response_logprobs=(
-                            list(turn.output_log_probs)
-                            if turn.output_log_probs and len(turn.output_log_probs) == len(turn.output_ids)
-                            else None
-                        ),
                         response_message=response_message,
-                        finish_reason=finish_reason,
                         metadata={"sid": sid},
                     )
                 except Exception:

@@ -43,7 +43,6 @@ from slime.agent.adapters.common import (
 )
 from slime.agent.parsing import ParsedModelOutput, parse_model_output
 from slime.agent.trajectory_manager import TrajectoryManager
-from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +72,8 @@ class OpenAIAdapter(BaseAdapter):
         sglang_url,
         tool_parser=None,
         reasoning_parser=None,
-        tito_snapshot_min_loss_tokens: int | None = None,
-        fork_merge_max_response_tokens: int | None = None,
         max_turns_per_sid: int | None = None,
+        fork_threshold_tokens: int | None = None,
         on_turn_appended: Callable[..., None] | None = None,
     ) -> None:
         super().__init__(
@@ -85,13 +83,11 @@ class OpenAIAdapter(BaseAdapter):
             reasoning_parser=reasoning_parser,
         )
         # ONE manager shared across all sids; per-sid trees live inside.
-        # Mirror AnthropicAdapter: only forward kwargs the caller actually
-        # specified, so TrajectoryManager's own defaults stay authoritative.
+        # ``None`` means "caller did not specify" -> let TrajectoryManager use
+        # its own default for the assistant-rewrite merge threshold.
         mgr_kwargs: dict[str, int] = {}
-        if tito_snapshot_min_loss_tokens is not None:
-            mgr_kwargs["tito_snapshot_min_loss_tokens"] = tito_snapshot_min_loss_tokens
-        if fork_merge_max_response_tokens is not None:
-            mgr_kwargs["fork_merge_max_response_tokens"] = fork_merge_max_response_tokens
+        if fork_threshold_tokens is not None:
+            mgr_kwargs["fork_threshold_tokens"] = fork_threshold_tokens
         self.manager = TrajectoryManager(**mgr_kwargs)
         # Optional debug hook invoked after each successful append_turn.
         # Signature mirrors AnthropicAdapter.on_turn_appended:
@@ -106,30 +102,6 @@ class OpenAIAdapter(BaseAdapter):
         self.app.router.add_post("/v1/chat/completions", _handle_chat_completions)
         self.app.router.add_get("/healthz", _ok)
         self.app.router.add_get("/v1/models", _ok)
-
-    async def finish_session(
-        self,
-        sid: str,
-        *,
-        base_sample: Sample | None = None,
-        reward: float = 0.0,
-        extra_metadata: dict[str, Any] | None = None,
-        wait_timeout: float = 5.0,
-    ) -> list[Sample]:
-        """Drain a session's trajectory into Sample objects.
-
-        Waits out in-flight requests for ``sid``, then linearises the
-        per-sid tree via ``TrajectoryManager.get_trajectory``. Idempotent --
-        a second call for an already-popped sid returns ``[]``.
-        """
-        await self.shutdown_session(sid, wait_timeout=wait_timeout)
-        self.store.pop(sid, None)
-        return self.manager.get_trajectory(
-            sid,
-            base_sample=base_sample,
-            reward=reward,
-            extra_metadata=extra_metadata,
-        )
 
 
 # =============================================================================
@@ -499,23 +471,17 @@ async def _handle_chat_completions(request: web.Request) -> web.StreamResponse:
             )
             wire_message, manager_message, wire_finish = _build_oai_response(parsed, turn.finish_reason)
 
-            output_ids = list(turn.output_ids)
             finish_reason_mgr = _finish_reason_for_manager(turn.finish_reason, parsed.tool_uses)
+            turn = dataclasses.replace(turn, finish_reason=finish_reason_mgr)
+            output_ids = list(turn.output_ids)
 
             try:
                 adapter.manager.append_turn(
                     sid,
+                    turn=turn,
                     prompt_messages=translated,
                     tools=tools_schema,
-                    prompt_ids=prompt_ids,
-                    response_ids=output_ids,
-                    response_logprobs=(
-                        list(turn.output_log_probs)
-                        if turn.output_log_probs and len(turn.output_log_probs) == len(turn.output_ids)
-                        else None
-                    ),
                     response_message=manager_message,
-                    finish_reason=finish_reason_mgr,
                     metadata={"sid": sid},
                 )
             except Exception:

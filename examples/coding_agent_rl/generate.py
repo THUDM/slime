@@ -9,9 +9,8 @@ Wire-up:
     1. ``sandbox.run_claude_code`` prepares the agent sandbox and runs claude-code.
     2. ``sandbox.git_diff`` captures the model-produced patch.
     3. ``sandbox.evaluate`` scores that patch in a second clean sandbox.
-    4. ``_merge_samples`` combines reward + the ``list[Sample]`` returned by
-       ``adapter.finish_session(sid)`` (which drains the per-sid trajectory
-       tree inside ``TrajectoryManager``).
+    4. ``adapter.finish_session`` drains the session tree into reward-weighted
+       ``Sample`` objects with ``.response`` already decoded; ``generate`` logs.
 
 All sandbox-side details live in ``sandbox.py``; the LLM plumbing
 (Anthropic <-> SGLang /generate, token capture, 3-kind segment split) uses
@@ -50,7 +49,6 @@ import os
 import secrets
 import time
 import traceback
-from dataclasses import dataclass
 from typing import Any
 
 from slime.agent.adapters import AnthropicAdapter
@@ -97,46 +95,13 @@ class _State(metaclass=SingletonMeta):
                 "Without it the sandbox cannot dial back and the rollout will "
                 "silently abort."
             )
-        # Snapshot threshold: env override only. Absent => let TrajectoryManager
-        # take its built-in default. ``0`` disables, malformed values are
-        # ignored with a warning.
-        _snap_env = os.environ.get("SLIME_TITO_SNAPSHOT_MIN_LOSS_TOKENS")
-        _snap_threshold: int | None
-        if _snap_env is None:
-            _snap_threshold = None
-        else:
-            try:
-                _snap_threshold = int(_snap_env)
-            except ValueError:
-                logger.warning(
-                    "SLIME_TITO_SNAPSHOT_MIN_LOSS_TOKENS=%r is not an int; falling back to TrajectoryManager default",
-                    _snap_env,
-                )
-                _snap_threshold = None
-        # Fork-merge threshold: same env-override convention. Triggers the
-        # rescue path in trajectory_manager when claude-code reformats a prior
-        # assistant message and the existing sibling's response is short
-        # enough to mask out instead of forking the tree.
-        _fork_merge_env = os.environ.get("SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS")
-        _fork_merge_threshold: int | None
-        if _fork_merge_env is None:
-            _fork_merge_threshold = None
-        else:
-            try:
-                _fork_merge_threshold = int(_fork_merge_env)
-            except ValueError:
-                logger.warning(
-                    "SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS=%r is not an int; falling back to TrajectoryManager default",
-                    _fork_merge_env,
-                )
-                _fork_merge_threshold = None
+        fork_merge_threshold = int(v) if (v := os.environ.get("SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS")) else None
         self.adapter = AnthropicAdapter(
             tokenizer=self.tokenizer,
             sglang_url=sglang_url,
             tool_parser=self.tool_parser,
             reasoning_parser=self.reasoning_parser,
-            tito_snapshot_min_loss_tokens=_snap_threshold,
-            fork_merge_max_response_tokens=_fork_merge_threshold,
+            fork_threshold_tokens=fork_merge_threshold,
         )
         # handler_cancellation=True so a client disconnect cancels the handler
         # coroutine, arming the fire-and-forget /abort_request inside the
@@ -165,18 +130,8 @@ class _State(metaclass=SingletonMeta):
 
 
 # ---------------------------------------------------------------------------
-# Trajectory -> Sample conversion
-# adapter.finish_session(sid) drains the per-sid tree in TrajectoryManager and
-# returns a list[Sample]. One trajectory yields >=1 samples because the agent
-# may compact + reset mid-run, forking sub-trees that each become a sample.
+# Session setup
 # ---------------------------------------------------------------------------
-@dataclass(frozen=True)
-class RewardResult:
-    reward: float
-    is_solved: bool
-    applied_cleanly: bool
-
-
 def _start_session(
     state: _State,
     sample: Sample,
@@ -202,64 +157,11 @@ def _start_session(
     return session_id
 
 
-def _merge_samples(
-    *,
-    sample: Sample,
-    state: _State,
-    samples: list[Sample],
-    reward_result: RewardResult,
-    elapsed_sec: float,
-    instance_id: str,
-) -> list[Sample]:
-    """Decorate per-leaf Samples returned by TrajectoryManager.get_trajectory.
-
-    The manager already filled tokens / loss_mask / rollout_log_probs /
-    response_length / reward (reward / N). We add per-trajectory metadata
-    (is_solved / applied_cleanly / elapsed_sec / segment_idx) and decode
-    ``sample.response`` from the response tokens slice -- slime's training
-    logging path reads this string.
-    """
-    if not samples:
-        return _abort_result(sample, "adapter_session_empty")
-
-    trajectory_metadata = {
-        "instance_id": instance_id,
-        "is_solved": reward_result.is_solved,
-        "applied_cleanly": reward_result.applied_cleanly,
-        "elapsed_sec": elapsed_sec,
-    }
-
-    k = len(samples)
-    for i, s in enumerate(samples):
-        s.metadata = {
-            **(s.metadata or {}),
-            **trajectory_metadata,
-            "segment_idx": i,
-            "num_segments": k,
-        }
-        rlen = int(s.response_length or 0)
-        if rlen and s.tokens:
-            s.response = state.tokenizer.decode(s.tokens[-rlen:], skip_special_tokens=False)
-        else:
-            s.response = ""
-
-    logger.info(
-        "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs segments=%d",
-        instance_id,
-        reward_result.reward,
-        reward_result.is_solved,
-        reward_result.applied_cleanly,
-        elapsed_sec,
-        k,
-    )
-    return samples
-
-
 # ---------------------------------------------------------------------------
 # Main per-sample agent function
 #
 # The four calls inside the timeout are the high-level rollout recipe:
-# run_claude_code -> git_diff -> sandbox.evaluate -> merge_samples.
+# run_claude_code -> git_diff -> sandbox.evaluate -> finish_session.
 # ---------------------------------------------------------------------------
 async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
     """Per-sample agent function with wall-clock guard. See
@@ -296,24 +198,26 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
                 pre_commands=md["pre_commands"],
                 timeout_sec=SWE_EVAL_TIMEOUT_SEC,
             )
-            reward_result = RewardResult(
-                reward=float(reward),
-                is_solved=bool(is_solved),
-                applied_cleanly=bool(applied_cleanly),
-            )
             samples = await state.adapter.finish_session(
                 session_id,
                 base_sample=sample,
-                reward=float(reward_result.reward),
+                reward=float(reward),
             )
-            return _merge_samples(
-                sample=sample,
-                state=state,
-                samples=samples,
-                reward_result=reward_result,
-                elapsed_sec=time.time() - t0,
-                instance_id=instance_id,
+            if not samples:
+                return _abort_result(sample, "adapter_session_empty")
+
+            # finish_session already linearized, reward-weighted and decoded
+            # each segment's .response; here we only log a summary.
+            logger.info(
+                "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs segments=%d",
+                instance_id,
+                float(reward),
+                bool(is_solved),
+                bool(applied_cleanly),
+                time.time() - t0,
+                len(samples),
             )
+            return samples
 
     except asyncio.TimeoutError:
         _log_timeout_diagnostic(t0)
