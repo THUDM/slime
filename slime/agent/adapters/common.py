@@ -1,12 +1,18 @@
 """Shared adapter primitives for token-capturing agent rollouts.
 
-A protocol adapter (Anthropic / OpenAI) is just a thin subclass of
-:class:`BaseAdapter` that fills in a handful of wire-specific hooks
-(``_session_id``, ``_translate``, ``_build``, ``_respond``,
-``_register_routes``) plus a few class attributes. All the cross-protocol
-scaffolding -- session lifecycle, the per-sid turn cap, the inflight-task
-bookkeeping, the one-turn request pipeline, and the ``on_turn_appended``
-hook -- lives here so the two adapters stay in lockstep.
+A protocol adapter (Anthropic / OpenAI) is a thin subclass of
+:class:`BaseAdapter`: it fills in the wire-specific hooks
+(:meth:`~BaseAdapter._register_routes`, :meth:`~BaseAdapter._session_id`,
+:meth:`~BaseAdapter._translate`, :meth:`~BaseAdapter._build`,
+:meth:`~BaseAdapter._respond`, optionally :meth:`~BaseAdapter._preprocess_body`)
+plus four class attributes (``logger``, ``log_prefix``, ``max_token_keys``,
+``stop_keys``). Everything else -- session lifecycle, the per-sid turn cap, the
+inflight-task bookkeeping, the one-turn :meth:`~BaseAdapter._run_turn` pipeline,
+the ``on_turn_appended`` hook -- is inherited, so the adapters stay in lockstep.
+
+:mod:`slime.agent.adapters.anthropic` is the canonical template to copy when
+adding a harness; :func:`flatten_content`, :func:`tool_call_dict` and
+:func:`manager_finish_reason` cover the parts both protocols do identically.
 """
 
 from __future__ import annotations
@@ -27,12 +33,6 @@ from slime.agent.trajectory_manager import TrajectoryManager, TurnRecord
 
 __all__ = ["TurnRecord"]
 
-ADAPTER_KEY = web.AppKey("adapter", object)
-TOKENIZER_KEY = web.AppKey("tokenizer", object)
-SGLANG_URL_KEY = web.AppKey("sglang_url", object)
-TOOL_PARSER_KEY = web.AppKey("tool_parser", object)
-REASONING_PARSER_KEY = web.AppKey("reasoning_parser", object)
-
 
 @dataclasses.dataclass
 class Session:
@@ -49,14 +49,13 @@ class Session:
 
 @dataclasses.dataclass
 class Reply:
-    """Output of an adapter's ``_build`` step, consumed by ``_run_turn``.
+    """Output of an adapter's ``_build``, consumed by ``_run_turn``.
 
-    ``manager_message`` and ``finish_reason`` feed ``append_turn`` + the
-    ``on_turn_appended`` hook (protocol-neutral). ``wire`` is an opaque
-    protocol-specific payload that only the adapter's own ``_respond``
-    understands. ``skip_append`` lets an adapter drop a turn from the
-    trajectory (e.g. cc title-generation meta requests) while still firing
-    the hook.
+    ``manager_message`` / ``finish_reason`` feed ``append_turn`` + the
+    ``on_turn_appended`` hook (protocol-neutral). ``wire`` is opaque to the
+    pipeline -- only the adapter's own ``_respond`` understands it.
+    ``skip_append`` drops a turn from the trajectory (e.g. cc title-generation
+    meta requests) while still firing the hook.
     """
 
     manager_message: dict
@@ -72,11 +71,7 @@ def _render_token_ids(
     tools: list[dict] | None,
     add_generation_prompt: bool = True,
 ) -> list[int]:
-    """Render a chat-message list to token ids with the served chat template.
-
-    Protocol-neutral: both adapters route a translated message list through
-    here before calling sglang.
-    """
+    """Render a chat-message list to token ids with the served chat template."""
     enc = tokenizer.apply_chat_template(
         messages,
         tools=tools,
@@ -87,13 +82,71 @@ def _render_token_ids(
     return list(ids)
 
 
+# =============================================================================
+# Shared translation helpers (used by every adapter's wire translation)
+# =============================================================================
+
+
+def flatten_content(c: Any) -> str:
+    """Flatten a wire content value into a chat-template string.
+
+    Recursive and protocol-neutral (handles Anthropic and OpenAI block shapes).
+    NOTE: a non-list value (str / dict / other) returns ``str(c)`` unchanged --
+    the per-block handling only applies when iterating an actual content list.
+    """
+    if c is None:
+        return ""
+    if isinstance(c, str):
+        return c
+    if not isinstance(c, list):
+        return str(c)
+    parts: list[str] = []
+    for b in c:
+        if isinstance(b, str):
+            parts.append(b)
+            continue
+        if not isinstance(b, dict):
+            parts.append(str(b))
+            continue
+        t = b.get("type")
+        if t in {"text", "input_text", "output_text"}:
+            parts.append(b.get("text", ""))
+        elif t == "tool_result":
+            parts.append(flatten_content(b.get("content")))
+        elif t in {"image", "image_url", "input_image"}:
+            parts.append("[image omitted]")
+        elif "content" in b:
+            parts.append(flatten_content(b.get("content")))
+        elif "text" in b:
+            parts.append(str(b.get("text") or ""))
+    return "\n".join(p for p in parts if p)
+
+
+def tool_call_dict(name: str, arguments: dict | None) -> dict:
+    """Canonical OpenAI-shape tool call for every adapter's ``manager_message``,
+    so ``TrajectoryManager.node_match_key`` hashes a sampled leaf and its
+    replayed echo identically.
+
+    ``arguments`` stays a dict (NOT a JSON string): the same list is fed to the
+    chat template (Qwen3's ``arguments | items`` needs a mapping -- a string
+    raises "Can only get item pairs from a mapping"), and node_match_key's
+    ``json.dumps(sort_keys=True)`` hashes equivalent dicts identically. The
+    wire-only ``tool_use`` / ``call`` id is dropped so leaf and echo match.
+    """
+    return {"type": "function", "function": {"name": name, "arguments": arguments or {}}}
+
+
+def manager_finish_reason(tool_uses: list[dict], raw_finish: str) -> str:
+    """Finish reason stored on the manager turn (protocol-neutral): a turn with
+    tool calls is ``tool_calls`` regardless of the raw sglang finish."""
+    return "tool_calls" if tool_uses else (raw_finish or "stop")
+
+
 class BaseAdapter:
     """Base HTTP adapter: session lifecycle + the shared one-turn pipeline.
 
-    Subclasses set the class attributes ``session_cls``, ``logger``,
-    ``log_prefix``, ``max_token_keys``, ``stop_keys`` and implement the wire
-    hooks ``_register_routes``, ``_session_id``, ``_translate``, ``_build``,
-    ``_respond`` (and optionally ``_preprocess_body``).
+    See the module docstring for the four class attributes and five hooks a
+    subclass must supply; everything else is inherited.
     """
 
     session_cls: type = Session
@@ -103,7 +156,6 @@ class BaseAdapter:
     # carry stop sequences, in priority order.
     max_token_keys: tuple[str, ...] = ()
     stop_keys: tuple[str, ...] = ()
-    # Set by __init__: the shared TrajectoryManager keyed by sid.
     manager: Any
 
     def __init__(
@@ -118,15 +170,13 @@ class BaseAdapter:
         on_turn_appended: Callable[..., None] | None = None,
     ) -> None:
         self.tokenizer = tokenizer
+        self.sglang_url = sglang_url.rstrip("/") if isinstance(sglang_url, str) else sglang_url
+        self.tool_parser = tool_parser
+        self.reasoning_parser = reasoning_parser
         self.store: dict[str, Any] = {}
         self.inflight: dict[str, set[asyncio.Task]] = {}
         self.closed: set[str] = set()
         self.app = web.Application(client_max_size=64 * 1024 * 1024)
-        self.app[ADAPTER_KEY] = self
-        self.app[TOKENIZER_KEY] = tokenizer
-        self.app[SGLANG_URL_KEY] = sglang_url.rstrip("/") if isinstance(sglang_url, str) else sglang_url
-        self.app[TOOL_PARSER_KEY] = tool_parser
-        self.app[REASONING_PARSER_KEY] = reasoning_parser
 
         # ONE manager shared across all sids; per-sid trees live inside.
         # ``fork_threshold_tokens is None`` means "caller did not specify" ->
@@ -147,8 +197,8 @@ class BaseAdapter:
         self.max_turns_per_sid: int | None = max_turns_per_sid
         self._sid_turn_count: dict[str, int] = {}
 
-        self.app.router.add_get("/healthz", _ok)
-        self.app.router.add_get("/v1/models", _ok)
+        self.app.router.add_get("/healthz", _health)
+        self.app.router.add_get("/v1/models", _health)
         self._register_routes(self.app)
 
     # -- wire hooks (subclass overrides) -------------------------------------
@@ -191,16 +241,24 @@ class BaseAdapter:
         sampling_defaults: dict | None = None,
         max_context_tokens: int = 0,
     ) -> None:
-        register_session(
-            self.store,
-            sid,
-            self.session_cls,
-            sampling_defaults=sampling_defaults,
-            max_context_tokens=max_context_tokens,
-        )
+        """Register a fresh per-sid :class:`Session`; sids must be unique."""
+        if sid in self.store:
+            raise ValueError(f"session_id {sid!r} already exists; sids must be unique per agent run")
+        session = self.store[sid] = self.session_cls()
+        session.sampling_defaults = dict(sampling_defaults or {})
+        session.max_context_tokens = int(max_context_tokens or 0)
 
     async def shutdown_session(self, sid: str, *, wait_timeout: float = 5.0) -> None:
-        await shutdown_session_tasks(sid, self.closed, self.inflight, wait_timeout=wait_timeout)
+        """Mark a sid closed and drain its in-flight turn tasks."""
+        self.closed.add(sid)
+        tasks = [t for t in self.inflight.pop(sid, ()) if not t.done()]
+        if not tasks:
+            return
+        _, pending = await asyncio.wait(tasks, timeout=wait_timeout)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def finish_session(
         self,
@@ -288,8 +346,7 @@ class BaseAdapter:
         if capped is not None:
             return capped
 
-        app = request.app
-        tok = app[TOKENIZER_KEY]
+        tok = self.tokenizer
         s = self.store.setdefault(sid, self.session_cls())
         task = asyncio.current_task()
         self.inflight.setdefault(sid, set()).add(task)
@@ -298,24 +355,14 @@ class BaseAdapter:
                 translated, tools_schema = self._translate(body)
                 prompt_ids = _render_token_ids(translated, tok, tools=tools_schema, add_generation_prompt=True)
 
-                turn = await call_sglang_generate(
-                    prompt_ids,
-                    s,
-                    body,
-                    app,
-                    max_token_keys=self.max_token_keys,
-                    stop_keys=self.stop_keys,
-                    log_prefix=self.log_prefix,
-                    logger=self.logger,
-                    session_id=sid,
-                )
+                turn = await call_sglang_generate(prompt_ids, s, body, adapter=self, session_id=sid)
 
                 raw_output = tok.decode(turn.output_ids, skip_special_tokens=False) if turn.output_ids else ""
                 parsed = parse_model_output(
                     raw_output,
                     tools_schema=tools_schema,
-                    tool_parser_name=app[TOOL_PARSER_KEY],
-                    reasoning_parser_name=app[REASONING_PARSER_KEY],
+                    tool_parser_name=self.tool_parser,
+                    reasoning_parser_name=self.reasoning_parser,
                 )
                 reply = self._build(parsed, turn.finish_reason, translated, tools_schema)
                 turn = dataclasses.replace(turn, finish_reason=reply.finish_reason)
@@ -382,21 +429,6 @@ def request_session_id(
     return "default"
 
 
-def register_session(
-    store: dict[str, Any],
-    sid: str,
-    session_factory: Callable[[], Any],
-    *,
-    sampling_defaults: dict | None = None,
-    max_context_tokens: int = 0,
-) -> None:
-    if sid in store:
-        raise ValueError(f"session_id {sid!r} already exists; sids must be unique per agent run")
-    session = store[sid] = session_factory()
-    session.sampling_defaults = dict(sampling_defaults or {})
-    session.max_context_tokens = int(max_context_tokens or 0)
-
-
 def _sampling_params(session: Any, body: dict, *, max_token_keys: tuple[str, ...], stop_keys: tuple[str, ...]) -> dict:
     sp: dict[str, Any] = {
         "skip_special_tokens": False,
@@ -427,29 +459,31 @@ async def call_sglang_generate(
     prompt_ids: list[int],
     session: Any,
     body: dict,
-    app,
     *,
-    max_token_keys: tuple[str, ...],
-    stop_keys: tuple[str, ...],
-    log_prefix: str,
-    logger: logging.Logger,
+    adapter: BaseAdapter,
     session_id: str | None = None,
 ) -> TurnRecord:
-    sp = _sampling_params(session, body, max_token_keys=max_token_keys, stop_keys=stop_keys)
+    """POST one turn to sglang ``/generate`` and pack the reply into a TurnRecord.
+
+    Module-level (not a method) so tests can ``monkeypatch.setattr(common,
+    "call_sglang_generate", ...)``.
+    """
+    logger = adapter.logger
+    sp = _sampling_params(session, body, max_token_keys=adapter.max_token_keys, stop_keys=adapter.stop_keys)
 
     if session.max_context_tokens > 0:
         remaining_context = session.max_context_tokens - len(prompt_ids)
         if remaining_context <= 0:
             logger.warning(
                 "[%s] prompt exceeds max_context_tokens (%d >= %d)",
-                log_prefix,
+                adapter.log_prefix,
                 len(prompt_ids),
                 session.max_context_tokens,
             )
             return TurnRecord(prompt_ids=list(prompt_ids), output_ids=[], finish_reason="length")
         sp["max_new_tokens"] = min(int(sp.get("max_new_tokens", remaining_context)), remaining_context)
 
-    sglang_url = app[SGLANG_URL_KEY]
+    sglang_url = adapter.sglang_url
     rid = uuid.uuid4().hex
     headers = {"X-SMG-Routing-Key": session_id} if session_id and session_id != "default" else None
     timeout = aiohttp.ClientTimeout(total=None, sock_read=900)
@@ -474,6 +508,8 @@ async def call_sglang_generate(
         output_log_probs = [float(x[0]) for x in output_token_logprobs]
         finish = (meta.get("finish_reason") or {}).get("type", "stop") or "stop"
     except (asyncio.CancelledError, aiohttp.ClientError, asyncio.TimeoutError):
+        # Free the sglang slot eagerly on client cancel/timeout; otherwise the
+        # orphaned generation keeps occupying KV until it hits its own length cap.
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as s2:
                 await s2.post(f"{sglang_url}/abort_request", json={"rid": rid})
@@ -489,28 +525,6 @@ async def call_sglang_generate(
     )
 
 
-async def shutdown_session_tasks(
-    sid: str,
-    closed: set[str],
-    inflight: dict[str, set[asyncio.Task]],
-    *,
-    wait_timeout: float = 5.0,
-) -> None:
-    closed.add(sid)
-    tasks = [t for t in inflight.pop(sid, ()) if not t.done()]
-    if not tasks:
-        return
-    _, pending = await asyncio.wait(tasks, timeout=wait_timeout)
-    for task in pending:
-        task.cancel()
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
-
-
-async def ok_response(request: web.Request) -> web.Response:
-    return web.json_response({"ok": True})
-
-
-async def _ok(request: web.Request) -> web.Response:
+async def _health(request: web.Request) -> web.Response:
     """Handler for /healthz and /v1/models readiness probes."""
-    return await ok_response(request)
+    return web.json_response({"ok": True})

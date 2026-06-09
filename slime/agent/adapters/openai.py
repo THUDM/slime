@@ -15,7 +15,8 @@ leaf), so we do not track explicit chains here.
 
 Only ``/v1/chat/completions`` is implemented; the older Responses API
 (``/v1/responses``) is intentionally out of scope -- Codex 0.30.0 uses
-``wire_api = "chat"``.
+``wire_api = "chat"``. The section layout (Adapter class -> translation ->
+reply building -> request framing) mirrors :mod:`slime.agent.adapters.anthropic`.
 """
 
 from __future__ import annotations
@@ -28,21 +29,16 @@ from typing import Any
 
 from aiohttp import web
 
-from slime.agent.adapters.common import BaseAdapter, Reply, request_session_id
+from slime.agent.adapters.common import BaseAdapter, Reply, flatten_content, manager_finish_reason, request_session_id
 from slime.agent.parsing import ParsedModelOutput
 
 logger = logging.getLogger(__name__)
 
 
 class OpenAIAdapter(BaseAdapter):
-    """OpenAI Chat-Completions-compatible HTTP adapter.
-
-    Exposes ``/v1/chat/completions``. The older Responses API
-    (``/v1/responses``) is intentionally out of scope -- Codex 0.30.0 uses
-    ``wire_api = "chat"``. All shared turn machinery lives in
-    :class:`~slime.agent.adapters.common.BaseAdapter`; this class only supplies
-    the OpenAI wire translation and reply framing.
-    """
+    """OpenAI Chat-Completions-compatible HTTP adapter: wire translation +
+    reply framing only; the turn machinery is inherited from
+    :class:`BaseAdapter`."""
 
     logger = logger
     log_prefix = "openai_adapter"
@@ -59,57 +55,28 @@ class OpenAIAdapter(BaseAdapter):
         messages = body.get("messages") or []
         if not isinstance(messages, list):
             raise web.HTTPBadRequest(text="messages must be a list")
-        translated = _translate_openai_chat(messages)
-        tools_schema = _openai_tools_to_chat_tools(body.get("tools"))
+        translated = _translate_messages(messages)
+        tools_schema = _tools_to_chat_tools(body.get("tools"))
         return translated, tools_schema
 
     def _build(self, parsed, raw_finish, translated, tools_schema) -> Reply:
-        wire_message, manager_message, wire_finish = _build_oai_response(parsed, raw_finish)
+        wire_message, manager_message, wire_finish = _build_reply_parts(parsed, raw_finish)
         return Reply(
             manager_message=manager_message,
-            finish_reason=_finish_reason_for_manager(raw_finish, parsed.tool_uses),
+            finish_reason=manager_finish_reason(parsed.tool_uses, raw_finish),
             wire=(wire_message, wire_finish),
         )
 
     async def _respond(self, request, body, reply, in_tok, out_tok, stream) -> web.StreamResponse:
         wire_message, wire_finish = reply.wire
         if stream:
-            return await _stream_chat_completion(request, body, wire_message, wire_finish, in_tok, out_tok)
-        return web.json_response(_chat_completion_response(body, wire_message, wire_finish, in_tok, out_tok))
+            return await _render_stream(request, body, wire_message, wire_finish, in_tok, out_tok)
+        return web.json_response(_render_response(body, wire_message, wire_finish, in_tok, out_tok))
 
 
 # =============================================================================
-# Translation (OpenAI wire <-> chat-template messages)
+# Translation (OpenAI wire -> chat-template messages)
 # =============================================================================
-
-
-def _flatten_content(content: Any) -> str:
-    """Flatten OpenAI text/content parts into a chat-template string."""
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return str(content)
-
-    parts: list[str] = []
-    for item in content:
-        if isinstance(item, str):
-            parts.append(item)
-            continue
-        if not isinstance(item, dict):
-            parts.append(str(item))
-            continue
-        typ = item.get("type")
-        if typ in {"text", "input_text", "output_text"}:
-            parts.append(item.get("text", ""))
-        elif typ in {"image_url", "input_image"}:
-            parts.append("[image omitted]")
-        elif "content" in item:
-            parts.append(_flatten_content(item.get("content")))
-        elif "text" in item:
-            parts.append(str(item.get("text") or ""))
-    return "\n".join(p for p in parts if p)
 
 
 def _arguments_as_dict(arguments: Any) -> dict[str, Any]:
@@ -136,10 +103,10 @@ def _arguments_as_dict(arguments: Any) -> dict[str, Any]:
     return {"_raw_arguments": str(arguments)}
 
 
-def _translate_openai_chat(messages: list[dict]) -> list[dict]:
+def _translate_messages(messages: list[dict]) -> list[dict]:
     """OpenAI chat messages -> tokenizer chat-template messages.
 
-    Mirrors :func:`slime.agent.adapters.anthropic._translate_anthropic` so that
+    Mirrors :func:`slime.agent.adapters.anthropic._translate_messages` so that
     a replayed assistant turn hashes identically (via
     ``trajectory_manager.node_match_key``) to the leaf the manager appended on
     the previous request. Two invariants must hold:
@@ -163,14 +130,14 @@ def _translate_openai_chat(messages: list[dict]) -> list[dict]:
             role = "system"
 
         if role in {"system", "user"}:
-            translated.append({"role": role, "content": _flatten_content(content)})
+            translated.append({"role": role, "content": flatten_content(content)})
         elif role == "tool":
             # DROP tool_call_id -- wire-only correlation field; see docstring.
-            translated.append({"role": "tool", "content": _flatten_content(content)})
+            translated.append({"role": "tool", "content": flatten_content(content)})
         elif role == "assistant":
             assistant: dict[str, Any] = {
                 "role": "assistant",
-                "content": _flatten_content(content),
+                "content": flatten_content(content),
             }
             reasoning = msg.get("reasoning_content")
             if reasoning:
@@ -203,7 +170,7 @@ def _translate_openai_chat(messages: list[dict]) -> list[dict]:
     return translated
 
 
-def _openai_tools_to_chat_tools(tools: list[dict] | None) -> list[dict] | None:
+def _tools_to_chat_tools(tools: list[dict] | None) -> list[dict] | None:
     """Convert OpenAI tools list to tokenizer chat-template tool schema."""
     if not tools:
         return None
@@ -246,12 +213,12 @@ def _openai_tools_to_chat_tools(tools: list[dict] | None) -> list[dict] | None:
 
 
 # =============================================================================
-# Reply building: parsed output -> OpenAI wire message + manager response_message
+# Reply building: parsed output -> OpenAI wire message + manager_message
 # =============================================================================
 
 
-def _build_oai_response(parsed: ParsedModelOutput, finish: str) -> tuple[dict[str, Any], dict[str, Any], str]:
-    """Return ``(wire_message, manager_message, finish_reason)``.
+def _build_reply_parts(parsed: ParsedModelOutput, finish: str) -> tuple[dict[str, Any], dict[str, Any], str]:
+    """Return ``(wire_message, manager_message, wire_finish)``.
 
     ``wire_message`` follows OpenAI Chat-Completions spec: ``tool_calls[].id``
     is a unique correlation id, and ``tool_calls[].function.arguments`` is a
@@ -261,7 +228,9 @@ def _build_oai_response(parsed: ParsedModelOutput, finish: str) -> tuple[dict[st
     ``tool_calls[].function.arguments`` is a **dict** so chat-template replay
     (Qwen3 etc.) succeeds and ``node_match_key`` hashes match the echo on the
     next turn. The wire-only ``id`` is omitted (the next turn's echo will not
-    include it; matching anthropic.py:444-470).
+    include it; matching anthropic.py's tool_call_dict). The manager finish
+    reason is derived separately via
+    :func:`~slime.agent.adapters.common.manager_finish_reason`.
     """
     wire_tool_calls: list[dict[str, Any]] = []
     manager_tool_calls: list[dict[str, Any]] = []
@@ -335,22 +304,8 @@ def _build_oai_response(parsed: ParsedModelOutput, finish: str) -> tuple[dict[st
     return wire_message, manager_message, wire_finish
 
 
-def _finish_reason_for_manager(finish: str, tool_uses: list[dict]) -> str:
-    if tool_uses:
-        return "tool_calls"
-    return finish or "stop"
-
-
-def _usage(in_tok: int, out_tok: int) -> dict[str, int]:
-    return {
-        "prompt_tokens": in_tok,
-        "completion_tokens": out_tok,
-        "total_tokens": in_tok + out_tok,
-    }
-
-
 # =============================================================================
-# Request handling -- session id + wire response framing
+# Request framing: session id + wire response/stream rendering
 # =============================================================================
 
 
@@ -364,7 +319,15 @@ def _request_session_id(request: web.Request, body: dict) -> str:
     return request_session_id(request, body=body)
 
 
-def _chat_completion_response(
+def _usage(in_tok: int, out_tok: int) -> dict[str, int]:
+    return {
+        "prompt_tokens": in_tok,
+        "completion_tokens": out_tok,
+        "total_tokens": in_tok + out_tok,
+    }
+
+
+def _render_response(
     body: dict,
     wire_message: dict[str, Any],
     wire_finish: str,
@@ -387,7 +350,7 @@ def _chat_completion_response(
     }
 
 
-async def _stream_chat_completion(
+async def _render_stream(
     request: web.Request,
     body: dict,
     wire_message: dict[str, Any],
