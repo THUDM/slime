@@ -164,6 +164,10 @@ class _VocabParallelLogProbsAndEntropy(torch.autograd.Function):
     def forward(ctx, vocab_parallel_logits: torch.Tensor, target: torch.Tensor, process_group):
         from megatron.core.tensor_parallel.utils import VocabUtility
 
+        # Pass None (not a zero-filled tensor) for an output whose grad does not flow,
+        # so the single-output backward paths skip a wasted full-vocab allocation.
+        ctx.set_materialize_grads(False)
+
         logits_max = vocab_parallel_logits.max(dim=-1).values
         dist.all_reduce(logits_max, op=dist.ReduceOp.MAX, group=process_group)
 

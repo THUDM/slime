@@ -186,6 +186,29 @@ def test_fused_backward_matches_naive_reference_with_bf16_tolerance():
     torch.testing.assert_close(logits.grad, ref_logits.grad, atol=4e-3, rtol=4e-3)
 
 
+def test_fused_entropy_only_backward_matches_naive_reference():
+    _install_megatron_stubs()
+    from slime.utils.ppo_utils import calculate_log_probs_and_entropy
+
+    logits, tokens = _make_inputs(requires_grad=True)
+    with _single_rank_all_reduce():
+        log_probs, entropy = calculate_log_probs_and_entropy(
+            logits, tokens, _FakeSingleRankGroup(), with_entropy=True
+        )
+        # Only entropy contributes to the loss, so autograd passes
+        # grad_log_prob=None into the fused backward, exercising the
+        # entropy-only branch.
+        entropy.float().sum().backward()
+
+    ref_logits = logits.detach().clone().requires_grad_(True)
+    _, ref_entropy = _naive_log_probs_and_entropy(ref_logits, tokens)
+    ref_entropy.float().sum().backward()
+
+    assert logits.grad is not None
+    assert torch.isfinite(logits.grad).all()
+    torch.testing.assert_close(logits.grad, ref_logits.grad, atol=4e-3, rtol=4e-3)
+
+
 def _tp2_worker(rank: int, master_port: int, result_path: str) -> None:
     import os
 
