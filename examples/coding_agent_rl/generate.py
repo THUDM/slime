@@ -9,8 +9,8 @@ Wire-up:
     1. ``sandbox.run_claude_code`` prepares the agent sandbox and runs claude-code.
     2. ``sandbox.git_diff`` captures the model-produced patch.
     3. ``sandbox.evaluate`` scores that patch in a second clean sandbox.
-    4. ``_merge_samples`` combines reward + the ``list[Sample]`` returned by
-       ``adapter.finish_session(sid)``.
+    4. ``adapter.finish_session`` drains the session tree into reward-weighted
+       ``Sample`` objects with ``.response`` already decoded; ``generate`` logs.
 
 All sandbox-side details live in ``sandbox.py``; the LLM plumbing
 (Anthropic <-> SGLang /generate, token capture, 3-kind segment split) uses
@@ -49,7 +49,6 @@ import os
 import secrets
 import time
 import traceback
-from dataclasses import dataclass
 from typing import Any
 
 from slime.agent.adapters import AnthropicAdapter
@@ -96,8 +95,7 @@ class _State(metaclass=SingletonMeta):
                 "Without it the sandbox cannot dial back and the rollout will "
                 "silently abort."
             )
-        fork_merge_threshold = os.environ.get("SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS")
-        fork_merge_threshold = int(fork_merge_threshold) if fork_merge_threshold else None
+        fork_merge_threshold = int(v) if (v := os.environ.get("SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS")) else None
         self.adapter = AnthropicAdapter(
             tokenizer=self.tokenizer,
             sglang_url=sglang_url,
@@ -132,15 +130,8 @@ class _State(metaclass=SingletonMeta):
 
 
 # ---------------------------------------------------------------------------
-# Trajectory -> Sample conversion
+# Session setup
 # ---------------------------------------------------------------------------
-@dataclass(frozen=True)
-class RewardResult:
-    reward: float
-    is_solved: bool
-    applied_cleanly: bool
-
-
 def _start_session(
     state: _State,
     sample: Sample,
@@ -166,42 +157,11 @@ def _start_session(
     return session_id
 
 
-def _merge_samples(
-    *,
-    sample: Sample,
-    state: _State,
-    samples: list[Sample],
-    reward_result: RewardResult,
-    elapsed_sec: float,
-    instance_id: str,
-) -> list[Sample]:
-    if not samples:
-        return _abort_result(sample, "adapter_session_empty")
-
-    for s in samples:
-        rlen = int(s.response_length or 0)
-        if rlen and s.tokens:
-            s.response = state.tokenizer.decode(s.tokens[-rlen:], skip_special_tokens=False)
-        else:
-            s.response = ""
-
-    logger.info(
-        "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs segments=%d",
-        instance_id,
-        reward_result.reward,
-        reward_result.is_solved,
-        reward_result.applied_cleanly,
-        elapsed_sec,
-        len(samples),
-    )
-    return samples
-
-
 # ---------------------------------------------------------------------------
 # Main per-sample agent function
 #
 # The four calls inside the timeout are the high-level rollout recipe:
-# run_claude_code -> git_diff -> sandbox.evaluate -> merge_samples.
+# run_claude_code -> git_diff -> sandbox.evaluate -> finish_session.
 # ---------------------------------------------------------------------------
 async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
     """Per-sample agent function with wall-clock guard. See
@@ -238,24 +198,26 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
                 pre_commands=md["pre_commands"],
                 timeout_sec=SWE_EVAL_TIMEOUT_SEC,
             )
-            reward_result = RewardResult(
-                reward=float(reward),
-                is_solved=bool(is_solved),
-                applied_cleanly=bool(applied_cleanly),
-            )
             samples = await state.adapter.finish_session(
                 session_id,
                 base_sample=sample,
-                reward=float(reward_result.reward),
+                reward=float(reward),
             )
-            return _merge_samples(
-                sample=sample,
-                state=state,
-                samples=samples,
-                reward_result=reward_result,
-                elapsed_sec=time.time() - t0,
-                instance_id=instance_id,
+            if not samples:
+                return _abort_result(sample, "adapter_session_empty")
+
+            # finish_session already linearized, reward-weighted and decoded
+            # each segment's .response; here we only log a summary.
+            logger.info(
+                "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs segments=%d",
+                instance_id,
+                float(reward),
+                bool(is_solved),
+                bool(applied_cleanly),
+                time.time() - t0,
+                len(samples),
             )
+            return samples
 
     except asyncio.TimeoutError:
         _log_timeout_diagnostic(t0)

@@ -104,20 +104,20 @@ class _Segment:
     """Token accumulator for one coherent linearized run within a chain."""
 
     def __init__(self) -> None:
-        self.buffer: list[int] = []
-        self.loss: list[int] = []
+        self.tokens: list[int] = []
+        self.loss_mask: list[int] = []
         self.logprobs: list[float] = []
-        # Each span: (start, end, turn_index) over self.buffer, half-open.
+        # Each span: (start, end, turn_index) over self.tokens, half-open.
         self.spans: list[tuple[int, int, int | None]] = []
         self.first_prompt_len: int = 0
 
-    def measure_drift(self, prompt_ids: list[int]) -> int:
-        return len(self.buffer) - _lcp_len(self.buffer, prompt_ids)
+    def measure_token_drift(self, prompt_ids: list[int]) -> int:
+        return len(self.tokens) - _lcp_len(self.tokens, prompt_ids)
 
     def can_absorb_drift(self, drift: int, fork_threshold: int) -> bool:
         if drift == 0:
             return True
-        realign_at = len(self.buffer) - drift
+        realign_at = len(self.tokens) - drift
         if not self.spans or realign_at < self.spans[-1][0]:
             return False
         return fork_threshold > 0 and drift < fork_threshold
@@ -133,9 +133,9 @@ class _Segment:
         trained: bool = True,
     ) -> None:
         """Append one turn, dropping any re-tokenization drift first so logprobs stay aligned."""
-        realign_at = len(self.buffer) - drift
-        del self.buffer[realign_at:]
-        del self.loss[realign_at:]
+        realign_at = len(self.tokens) - drift
+        del self.tokens[realign_at:]
+        del self.loss_mask[realign_at:]
         del self.logprobs[realign_at:]
         if self.spans and realign_at < self.spans[-1][1]:
             s, _e, j = self.spans[-1]
@@ -145,26 +145,26 @@ class _Segment:
 
         is_first_turn = not self.spans
         tail = prompt_ids[realign_at:]
-        self.buffer.extend(tail)
-        self.loss.extend([0] * len(tail))
+        self.tokens.extend(tail)
+        self.loss_mask.extend([0] * len(tail))
         self.logprobs.extend([0.0] * len(tail))
 
-        start = len(self.buffer)
-        self.buffer.extend(response_ids)
-        self.loss.extend([1 if trained else 0] * len(response_ids))
+        start = len(self.tokens)
+        self.tokens.extend(response_ids)
+        self.loss_mask.extend([1 if trained else 0] * len(response_ids))
         self.logprobs.extend(
             response_logprobs if (trained and response_logprobs is not None) else [0.0] * len(response_ids)
         )
-        self.spans.append((start, len(self.buffer), turn_index))
+        self.spans.append((start, len(self.tokens), turn_index))
 
         if is_first_turn:
             self.first_prompt_len = len(prompt_ids)  # stripped at build time
 
     def response_strip(self) -> int:
-        return min(self.first_prompt_len, len(self.loss))
+        return min(self.first_prompt_len, len(self.loss_mask))
 
     def has_trained_response(self) -> bool:
-        return any(self.loss[self.response_strip() :])
+        return any(self.loss_mask[self.response_strip() :])
 
 
 # ===========================================================================
@@ -369,7 +369,7 @@ class TrajectoryManager:
         seg = _Segment()
         for asst in asst_chain:
             prompt_ids = asst.turn_prompt_ids or []
-            drift = seg.measure_drift(prompt_ids)
+            drift = seg.measure_token_drift(prompt_ids)
             if not seg.can_absorb_drift(drift, self._fork_threshold):
                 segments.append(seg)
                 seg = _Segment()
@@ -396,13 +396,13 @@ class TrajectoryManager:
             self._build_leaf_sample(
                 base_sample=base_sample,
                 extra_metadata=extra_metadata,
-                tokens=seg.buffer,
-                loss_mask=seg.loss,
+                tokens=seg.tokens,
+                loss_mask=seg.loss_mask,
                 logprobs=seg.logprobs,
                 strip=seg.response_strip(),
             )
             for seg in segments
-            if seg.buffer and seg.has_trained_response()
+            if seg.tokens and seg.has_trained_response()
         ]
 
     def _build_leaf_sample(
@@ -419,7 +419,8 @@ class TrajectoryManager:
         metadata = dict(extra_metadata or {})
         return Sample(
             index=base_sample.index,
-            group_id=base_sample.group_id if base_sample.group_id is not None else base_sample.index,
+            group_index=base_sample.group_index,
+            rollout_id=base_sample.rollout_id if base_sample.rollout_id is not None else base_sample.index,
             prompt=base_sample.prompt,
             label=base_sample.label,
             tokens=list(tokens),

@@ -36,7 +36,6 @@ from slime.agent.adapters.common import (
 )
 from slime.agent.parsing import ParsedModelOutput, parse_model_output
 from slime.agent.trajectory_manager import TrajectoryManager
-from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
 
@@ -97,32 +96,6 @@ class AnthropicAdapter(BaseAdapter):
         self.app.router.add_post("/v1/messages/count_tokens", _count_tokens)
         self.app.router.add_get("/healthz", _ok)
         self.app.router.add_get("/v1/models", _ok)
-
-    async def finish_session(
-        self,
-        sid: str,
-        *,
-        base_sample: Sample | None = None,
-        reward: float = 0.0,
-        extra_metadata: dict[str, Any] | None = None,
-        wait_timeout: float = 5.0,
-    ) -> list[Sample]:
-        """Drain a session's trajectory into Sample objects.
-
-        Waits out in-flight requests for ``sid``, then linearises the
-        per-sid tree via ``TrajectoryManager.get_trajectory``. Idempotent --
-        a second call for an already-popped sid returns ``[]``.
-        """
-        await self.shutdown_session(sid, wait_timeout=wait_timeout)
-        # Drop the per-sid adapter Session; the trajectory itself is in
-        # manager._trees and will be popped by get_trajectory(drop=True).
-        self.store.pop(sid, None)
-        return self.manager.get_trajectory(
-            sid,
-            base_sample=base_sample,
-            reward=reward,
-            extra_metadata=extra_metadata,
-        )
 
 
 # =============================================================================
