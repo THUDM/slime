@@ -630,6 +630,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             parser.add_argument("--metadata-key", type=str, default="metadata", help="JSON dataset key")
             parser.add_argument(
+                "--num-workers",
+                type=int,
+                default=1,
+                help=(
+                    "Number of threads for parallel dataset loading. "
+                    "Set to 1 to disable threading and load sequentially."
+                ),
+            )
+            parser.add_argument(
                 "--tool-key",
                 type=str,
                 default="tools",

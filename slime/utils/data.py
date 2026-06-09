@@ -4,6 +4,8 @@ import logging
 import os
 import random
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import ray
@@ -161,7 +163,11 @@ def _build_messages(data: dict, prompt_key: str, as_conversation: bool, multimod
                             f"Not enough {mt.name} data: more '{mt.placeholder}' placeholders in prompt "
                             f"than {mt.name}s provided in data"
                         )
-                        content_list.append({"type": mt.name, mt.name: content.pop(0)})
+                        item = content.pop(0)
+                        if isinstance(item, dict):
+                            content_list.append(item)
+                        else:
+                            content_list.append({"type": mt.name, mt.name: item})
                     else:
                         content_list.append({"type": "text", "text": segment})
                 message["content"] = content_list
@@ -208,11 +214,15 @@ class Dataset:
         seed=42,
         apply_chat_template=False,
         apply_chat_template_kwargs=None,
+        num_workers=1,
     ):
-        origin_samples = []
-        for data in read_file(path):
-            # Both chat templates and multimodal inputs require conversation format (list of message dicts)
-            as_conversation = apply_chat_template or (multimodal_keys is not None)
+        rows = list(read_file(path))
+        logger.info("Read %d rows from %s", len(rows), path)
+
+        as_conversation = apply_chat_template or (multimodal_keys is not None)
+
+        # Per-row processing function
+        def _process_row(data):
             prompt = _build_messages(data, prompt_key, as_conversation, multimodal_keys)
 
             metadata = data.get(metadata_key) or {}
@@ -247,14 +257,53 @@ class Dataset:
             else:
                 multimodal_inputs = None
 
-            origin_samples.append(
-                Sample(
-                    prompt=output_prompt,
-                    label=data[label_key] if label_key is not None else None,
-                    metadata=metadata,
-                    multimodal_inputs=multimodal_inputs,
-                )
+            return Sample(
+                prompt=output_prompt,
+                label=data[label_key] if label_key is not None else None,
+                metadata=metadata,
+                multimodal_inputs=multimodal_inputs,
             )
+
+        # Parallel loading
+        t0 = time.time()
+        if num_workers > 1:
+            logger.info(
+                "Loading dataset with %d workers (%d rows) ...",
+                num_workers,
+                len(rows),
+            )
+            origin_samples = [None] * len(rows)
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                future_to_idx = {executor.submit(_process_row, row): i for i, row in enumerate(rows)}
+                done = 0
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    origin_samples[idx] = future.result()
+                    done += 1
+                    if done % 1000 == 0 or done == len(rows):
+                        elapsed = time.time() - t0
+                        logger.info(
+                            "  loading: %d/%d rows done, %.1fs elapsed, %.2f rows/s",
+                            done,
+                            len(rows),
+                            elapsed,
+                            done / elapsed,
+                        )
+        # Fallback to single-threaded loading
+        else:
+            origin_samples = []
+            for row in rows:
+                origin_samples.append(_process_row(row))
+
+        elapsed = time.time() - t0
+        has_mm = processor is not None
+        logger.info(
+            "Dataset loaded: %d samples, multimodal=%s, %.1fs total (%.2f rows/s)",
+            len(origin_samples),
+            has_mm,
+            elapsed,
+            len(origin_samples) / elapsed if elapsed > 0 else float("inf"),
+        )
 
         if max_length is not None:
             self.origin_samples = filter_long_prompt(origin_samples, tokenizer, processor, max_length)

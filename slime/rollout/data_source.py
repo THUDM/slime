@@ -81,6 +81,7 @@ class RolloutDataSource(DataSource):
                 apply_chat_template=args.apply_chat_template,
                 apply_chat_template_kwargs=args.apply_chat_template_kwargs,
                 seed=args.rollout_seed,
+                num_workers=args.num_workers),
             )
             if self.args.rollout_shuffle:
                 self.dataset.shuffle(self.epoch_id)
