@@ -14,88 +14,61 @@ leaf), so we no longer track ``main`` / ``active_sub`` chains here.
 
 from __future__ import annotations
 
-import asyncio
-import dataclasses
 import json
 import logging
 import secrets
-from collections.abc import Callable
 from typing import Any
 
 from aiohttp import web
 
-from slime.agent.adapters.common import (
-    ADAPTER_KEY,
-    REASONING_PARSER_KEY,
-    TOKENIZER_KEY,
-    TOOL_PARSER_KEY,
-    BaseAdapter,
-    call_sglang_generate,
-    ok_response,
-    request_session_id,
-)
-from slime.agent.parsing import ParsedModelOutput, parse_model_output
-from slime.agent.trajectory_manager import TrajectoryManager
+from slime.agent.adapters.common import BaseAdapter, Reply, request_session_id
+from slime.agent.parsing import ParsedModelOutput
 
 logger = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass
-class Session:
-    """Per-sid adapter state: sampling defaults, context budget, request lock.
+class AnthropicAdapter(BaseAdapter):
+    """Anthropic Messages-compatible HTTP adapter.
 
-    Trajectory state lives in ``AnthropicAdapter.manager`` (one shared
-    TrajectoryManager keyed by sid across all sessions).
+    Exposes ``/v1/messages`` and ``/v1/messages/count_tokens``. All the
+    shared turn machinery lives in :class:`~slime.agent.adapters.common.BaseAdapter`;
+    this class only supplies the Anthropic wire translation and reply framing.
     """
 
-    sampling_defaults: dict = dataclasses.field(default_factory=dict)
-    max_context_tokens: int = 0
-    lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
+    logger = logger
+    log_prefix = "anthropic_adapter"
+    max_token_keys = ("max_tokens",)
+    stop_keys = ("stop_sequences",)
 
+    def _register_routes(self, app: web.Application) -> None:
+        app.router.add_post("/v1/messages", self._run_turn)
+        app.router.add_post("/v1/messages/count_tokens", _count_tokens)
 
-class AnthropicAdapter(BaseAdapter):
-    """Anthropic Messages-compatible HTTP adapter with session lifecycle helpers."""
+    def _session_id(self, request: web.Request, body: dict) -> str:
+        return _request_session_id(request)
 
-    session_cls = Session
+    def _preprocess_body(self, body: dict) -> None:
+        _fold_mid_list_system_into_user(body)
 
-    def __init__(
-        self,
-        *,
-        tokenizer,
-        sglang_url,
-        tool_parser=None,
-        reasoning_parser=None,
-        max_turns_per_sid: int | None = None,
-        fork_threshold_tokens: int | None = None,
-        on_turn_appended: Callable[..., None] | None = None,
-    ) -> None:
-        super().__init__(
-            tokenizer=tokenizer,
-            sglang_url=sglang_url,
-            tool_parser=tool_parser,
-            reasoning_parser=reasoning_parser,
+    def _translate(self, body: dict) -> tuple[list[dict], list[dict] | None]:
+        translated = _translate_anthropic(body.get("messages") or [], body.get("system"))
+        tools_schema = _anthropic_tools_to_chat_tools(body.get("tools"))
+        return translated, tools_schema
+
+    def _build(self, parsed, raw_finish, translated, tools_schema) -> Reply:
+        blocks, stop_reason, response_message, finish_reason = _build_blocks_and_response_message(parsed, raw_finish)
+        return Reply(
+            manager_message=response_message,
+            finish_reason=finish_reason,
+            wire=(blocks, stop_reason),
+            skip_append=_is_cc_title_generation_request(translated, tools_schema),
         )
-        # ONE manager shared across all sids; per-sid trees live inside.
-        # ``None`` means "caller did not specify" -> let TrajectoryManager use
-        # its own default for the assistant-rewrite merge threshold.
-        mgr_kwargs: dict[str, int] = {}
-        if fork_threshold_tokens is not None:
-            mgr_kwargs["fork_threshold_tokens"] = fork_threshold_tokens
-        self.manager = TrajectoryManager(**mgr_kwargs)
-        # Optional debug hook invoked after each successful append_turn.
-        # Signature: (sid, prompt_messages, tools, response_message,
-        #             prompt_ids, response_ids, finish_reason) -> None.
-        # Exceptions are swallowed; never block the SSE response.
-        self.on_turn_appended: Callable[..., None] | None = on_turn_appended
-        # Per-sid turn cap; None disables. When set, /v1/messages returns 429
-        # once a sid has made this many turns. Prevents runaway agents from
-        # burning the whole budget.
-        self.max_turns_per_sid: int | None = max_turns_per_sid
-        self._sid_turn_count: dict[str, int] = {}
-        self.app.router.add_post("/v1/messages", _handle_request)
-        self.app.router.add_post("/v1/messages/count_tokens", _count_tokens)
-        self.app.router.add_get("/healthz", _ok)
-        self.app.router.add_get("/v1/models", _ok)
+
+    async def _respond(self, request, body, reply, in_tok, out_tok, stream) -> web.StreamResponse:
+        blocks, stop_reason = reply.wire
+        if stream:
+            return await _stream_response(request, blocks, stop_reason, in_tok, out_tok)
+        return web.json_response(_message_response(body, blocks, stop_reason, in_tok, out_tok))
 
 
 # =============================================================================
@@ -237,6 +210,20 @@ def _is_cc_title_generation_request(
     return False
 
 
+def _tool_call_dict(name: str, arguments: dict | None) -> dict:
+    """Canonical OpenAI-shape tool call used both for echoed history and sampled
+    leaves so TrajectoryManager.node_match_key hashes them identically.
+
+    ``arguments`` stays a dict (NOT a JSON string): the same list is fed to the
+    chat template (Qwen3's template does ``arguments | items``, which needs a
+    mapping -- a string raises "Can only get item pairs from a mapping"), and
+    node_match_key's ``json.dumps(sort_keys=True)`` hashes equivalent dicts
+    identically regardless of key order. The wire-only ``tool_use`` id is
+    intentionally dropped so a sampled leaf and its replayed echo match.
+    """
+    return {"type": "function", "function": {"name": name, "arguments": arguments or {}}}
+
+
 def _translate_anthropic(msgs: list[dict], system: Any) -> list[dict]:
     """Anthropic messages + system -> chat-template messages. Pure function."""
     translated: list[dict] = []
@@ -266,28 +253,9 @@ def _translate_anthropic(msgs: list[dict], system: Any) -> list[dict]:
                 elif b.get("type") == "thinking":
                     thinkings.append(b.get("thinking", ""))
                 elif b.get("type") == "tool_use":
-                    # Match the canonical shape produced by
-                    # _build_blocks_and_response_message for sampled leaves so
-                    # that node_match_key (json.dumps sort_keys) hashes a
-                    # replayed assistant identically to its leaf. We drop the
-                    # wire-only "id" — see the matching note on the leaf side.
-                    # NB: arguments stays a dict here (NOT a JSON string).
-                    # The translated list is also fed to the chat template
-                    # via apply_chat_template; Qwen3's template calls
-                    # `arguments | items` which requires a mapping. A JSON
-                    # string would raise "Can only get item pairs from a
-                    # mapping." mid-render. node_match_key's json.dumps
-                    # sort_keys=True recursively sorts dict keys so two
-                    # equivalent dicts still hash identically.
-                    tcs.append(
-                        {
-                            "type": "function",
-                            "function": {
-                                "name": b.get("name", "tool"),
-                                "arguments": b.get("input") or {},
-                            },
-                        }
-                    )
+                    # Drop the wire-only "id"; see _tool_call_dict for why
+                    # arguments stays a dict and ids are dropped.
+                    tcs.append(_tool_call_dict(b.get("name", "tool"), b.get("input")))
             mo: dict[str, Any] = {"role": "assistant", "content": "".join(texts)}
             if thinkings:
                 mo["reasoning_content"] = "".join(thinkings)
@@ -321,31 +289,6 @@ def _anthropic_tools_to_chat_tools(anth_tools: list[dict] | None) -> list[dict] 
 
 
 # =============================================================================
-# Local chat-template render helper.
-#
-# The Anthropic adapter renders directly from a message list -- no chain
-# bookkeeping needed because TrajectoryManager is the routing authority.
-# =============================================================================
-
-
-def _render_token_ids(
-    messages: list[dict],
-    tokenizer,
-    *,
-    tools: list[dict] | None,
-    add_generation_prompt: bool = True,
-) -> list[int]:
-    enc = tokenizer.apply_chat_template(
-        messages,
-        tools=tools,
-        tokenize=True,
-        add_generation_prompt=add_generation_prompt,
-    )
-    ids = enc["input_ids"] if hasattr(enc, "__getitem__") and "input_ids" in enc else enc
-    return list(ids)
-
-
-# =============================================================================
 # Reply building: parsed output -> Anthropic blocks + OpenAI-shape response_message
 # =============================================================================
 
@@ -353,14 +296,15 @@ def _render_token_ids(
 def _build_blocks_and_response_message(
     parsed: ParsedModelOutput,
     finish: str,
-) -> tuple[list[dict], str, dict[str, Any]]:
+) -> tuple[list[dict], str, dict[str, Any], str]:
     """Pack parsed model output into:
       - Anthropic content blocks (sent over the wire),
-      - stop_reason,
-      - response_message (OpenAI shape) for TrajectoryManager.append_turn.
+      - wire ``stop_reason`` (tool_use / max_tokens / end_turn),
+      - response_message (OpenAI shape) for TrajectoryManager.append_turn,
+      - manager ``finish_reason`` (tool_calls / raw finish) for the TurnRecord.
 
-    The tool_calls inside response_message use canonical JSON args (sorted
-    keys, str-encoded) so the node_match_key the manager computes for this
+    The tool_calls inside response_message use canonical args (see
+    ``_tool_call_dict``) so the node_match_key the manager computes for this
     assistant turn matches the same turn replayed as history on the next
     /v1/messages request.
     """
@@ -374,36 +318,19 @@ def _build_blocks_and_response_message(
     for tu in parsed.tool_uses:
         tu_id = f"toolu_{secrets.token_hex(8)}"
         blocks.append({"type": "tool_use", "id": tu_id, "name": tu["name"], "input": tu["input"]})
-        # NB: do NOT include tu_id here. The id is wire-only (clients use it
-        # to correlate tool_result blocks). When cc echoes this assistant on
-        # the next /v1/messages, it sends the original id; slime regenerates
-        # a fresh id each call. Including the id in response_message would
-        # make node_match_key differ between leaf and echo, breaking the
-        # leaf-vs-replay merge — see trajectory_manager DFS Step 1.
-        #
-        # arguments stays a dict to mirror _translate_anthropic. The
-        # trajectory_manager node_match_key uses json.dumps(sort_keys=True)
-        # which is invariant to dict key order, so two equivalent dicts
-        # hash identically.
-        response_tcs.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": tu["name"],
-                    "arguments": tu.get("input") or {},
-                },
-            }
-        )
+        # The id above is wire-only; _tool_call_dict drops it (and keeps
+        # arguments a dict) so the leaf matches its replayed echo.
+        response_tcs.append(_tool_call_dict(tu["name"], tu.get("input")))
 
     if not blocks:
         blocks.append({"type": "text", "text": ""})
 
     if parsed.tool_uses:
-        stop_reason = "tool_use"
+        stop_reason, finish_reason = "tool_use", "tool_calls"
     elif finish == "length":
-        stop_reason = "max_tokens"
+        stop_reason, finish_reason = "max_tokens", finish
     else:
-        stop_reason = "end_turn"
+        stop_reason, finish_reason = "end_turn", finish or "stop"
 
     response_message: dict[str, Any] = {"role": "assistant", "content": parsed.text or ""}
     if parsed.reasoning:
@@ -411,134 +338,16 @@ def _build_blocks_and_response_message(
     if response_tcs:
         response_message["tool_calls"] = response_tcs
 
-    return blocks, stop_reason, response_message
-
-
-def _finish_reason_for_manager(finish: str, tool_uses: list[dict]) -> str:
-    if tool_uses:
-        return "tool_calls"
-    return finish or "stop"
+    return blocks, stop_reason, response_message, finish_reason
 
 
 # =============================================================================
-# Request handling -- one full turn + SSE wrap
+# Request handling -- session id + wire response framing
 # =============================================================================
 
 
 def _request_session_id(request: web.Request) -> str:
     return request_session_id(request, include_x_api_key=True)
-
-
-async def _handle_request(request: web.Request) -> web.StreamResponse:
-    body = await request.json()
-    sid = _request_session_id(request)
-    adapter = request.app[ADAPTER_KEY]
-    if sid in adapter.closed:  # session drained; refuse stragglers
-        return web.Response(status=503, text="session closed")
-
-    # Per-sid turn cap (HTTP 429). When the adapter was constructed with a
-    # ``max_turns_per_sid`` ceiling, refuse further /v1/messages calls past
-    # that count so a runaway agent in a sandbox exits cleanly instead of
-    # burning the whole token budget. ``None`` (default) disables.
-    cap = adapter.max_turns_per_sid
-    if cap is not None:
-        prior = adapter._sid_turn_count.get(sid, 0)
-        if prior >= cap:
-            return web.json_response(
-                {
-                    "error": {
-                        "type": "rate_limit_error",
-                        "message": (f"adapter: sid {sid!r} exceeded max_turns_per_sid={cap}; killing run"),
-                    }
-                },
-                status=429,
-            )
-        adapter._sid_turn_count[sid] = prior + 1
-
-    _fold_mid_list_system_into_user(body)
-
-    app = request.app
-    tok = app[TOKENIZER_KEY]
-    s = adapter.store.setdefault(sid, Session())
-    task = asyncio.current_task()
-    adapter.inflight.setdefault(sid, set()).add(task)
-    try:
-        async with s.lock:  # same sid -> serialized
-            translated = _translate_anthropic(body.get("messages") or [], body.get("system"))
-            tools_schema = _anthropic_tools_to_chat_tools(body.get("tools"))
-            prompt_ids = _render_token_ids(translated, tok, tools=tools_schema, add_generation_prompt=True)
-
-            turn = await call_sglang_generate(
-                prompt_ids,
-                s,
-                body,
-                app,
-                max_token_keys=("max_tokens",),
-                stop_keys=("stop_sequences",),
-                log_prefix="anthropic_adapter",
-                logger=logger,
-                session_id=sid,
-            )
-
-            raw_output = tok.decode(turn.output_ids, skip_special_tokens=False) if turn.output_ids else ""
-            parsed = parse_model_output(
-                raw_output,
-                tools_schema=tools_schema,
-                tool_parser_name=app[TOOL_PARSER_KEY],
-                reasoning_parser_name=app[REASONING_PARSER_KEY],
-            )
-            blocks, stop_reason, response_message = _build_blocks_and_response_message(parsed, turn.finish_reason)
-
-            finish_reason = _finish_reason_for_manager(turn.finish_reason, parsed.tool_uses)
-            turn = dataclasses.replace(turn, finish_reason=finish_reason)
-            output_ids = list(turn.output_ids)
-
-            if _is_cc_title_generation_request(translated, tools_schema):
-                # Claude Code meta request (per-session title generation).
-                # Skip the trajectory so it doesn't pollute the tree / become
-                # an RL sample. The on_turn_appended hook below still fires,
-                # so per-turn dumps (request, sse, openai.json) keep landing
-                # on disk for debugging. See spec
-                # docs/superpowers/specs/2026-06-04-skip-cc-title-gen-from-trajectory-design.md.
-                logger.info(
-                    "skipping append_turn for cc title-generation request (sid=%s)",
-                    sid,
-                )
-            else:
-                try:
-                    adapter.manager.append_turn(
-                        sid,
-                        turn=turn,
-                        prompt_messages=translated,
-                        tools=tools_schema,
-                        response_message=response_message,
-                        metadata={"sid": sid},
-                    )
-                except Exception:
-                    logger.exception("append_turn(sid=%s) failed", sid)
-
-            hook = adapter.on_turn_appended
-            if hook is not None:
-                try:
-                    hook(
-                        sid,
-                        translated,
-                        tools_schema,
-                        response_message,
-                        prompt_ids,
-                        output_ids,
-                        finish_reason,
-                    )
-                except Exception:
-                    logger.exception("on_turn_appended hook failed (sid=%s)", sid)
-
-            in_tok, out_tok = len(prompt_ids), len(turn.output_ids)
-
-        if body.get("stream") is True or "text/event-stream" in request.headers.get("Accept", ""):
-            return await _stream_response(request, blocks, stop_reason, in_tok, out_tok)
-        return web.json_response(_message_response(body, blocks, stop_reason, in_tok, out_tok))
-    finally:
-        adapter.inflight.get(sid, set()).discard(task)
 
 
 def _message_response(body: dict, blocks: list[dict], stop_reason: str, in_tok: int, out_tok: int) -> dict:
@@ -620,12 +429,8 @@ async def _stream_response(request, blocks, stop_reason, in_tok, out_tok) -> web
     return out
 
 
-# Trivial endpoints claude-code probes during a session: count_tokens runs
-# every turn (return 0 -- client uses it as a hint, not a hard budget),
-# healthz/v1/models are startup readiness checks.
+# count_tokens runs every turn; claude-code uses it as a hint, not a hard
+# budget, so returning 0 is fine. (healthz / v1/models readiness probes are
+# served by BaseAdapter via common._ok.)
 async def _count_tokens(request: web.Request) -> web.Response:
     return web.json_response({"input_tokens": 0})
-
-
-async def _ok(request: web.Request) -> web.Response:
-    return await ok_response(request)

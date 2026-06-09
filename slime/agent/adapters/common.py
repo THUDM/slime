@@ -1,4 +1,13 @@
-"""Shared adapter primitives for token-capturing agent rollouts."""
+"""Shared adapter primitives for token-capturing agent rollouts.
+
+A protocol adapter (Anthropic / OpenAI) is just a thin subclass of
+:class:`BaseAdapter` that fills in a handful of wire-specific hooks
+(``_session_id``, ``_translate``, ``_build``, ``_respond``,
+``_register_routes``) plus a few class attributes. All the cross-protocol
+scaffolding -- session lifecycle, the per-sid turn cap, the inflight-task
+bookkeeping, the one-turn request pipeline, and the ``on_turn_appended``
+hook -- lives here so the two adapters stay in lockstep.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +21,11 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
+from slime.agent.parsing import parse_model_output
+from slime.agent.trajectory_manager import TrajectoryManager, TurnRecord
+
+
+__all__ = ["TurnRecord"]
 
 ADAPTER_KEY = web.AppKey("adapter", object)
 TOKENIZER_KEY = web.AppKey("tokenizer", object)
@@ -20,22 +34,89 @@ TOOL_PARSER_KEY = web.AppKey("tool_parser", object)
 REASONING_PARSER_KEY = web.AppKey("reasoning_parser", object)
 
 
-@dataclasses.dataclass(frozen=True)
-class TurnRecord:
-    prompt_ids: list[int]
-    output_ids: list[int]
+@dataclasses.dataclass
+class Session:
+    """Per-sid adapter state: sampling defaults, context budget, request lock.
+
+    Trajectory state lives in ``BaseAdapter.manager`` (one shared
+    TrajectoryManager keyed by sid across all sessions), not here.
+    """
+
+    sampling_defaults: dict = dataclasses.field(default_factory=dict)
+    max_context_tokens: int = 0
+    lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
+
+
+@dataclasses.dataclass
+class Reply:
+    """Output of an adapter's ``_build`` step, consumed by ``_run_turn``.
+
+    ``manager_message`` and ``finish_reason`` feed ``append_turn`` + the
+    ``on_turn_appended`` hook (protocol-neutral). ``wire`` is an opaque
+    protocol-specific payload that only the adapter's own ``_respond``
+    understands. ``skip_append`` lets an adapter drop a turn from the
+    trajectory (e.g. cc title-generation meta requests) while still firing
+    the hook.
+    """
+
+    manager_message: dict
     finish_reason: str
-    output_log_probs: list[float] = dataclasses.field(default_factory=list)
+    wire: Any
+    skip_append: bool = False
+
+
+def _render_token_ids(
+    messages: list[dict],
+    tokenizer,
+    *,
+    tools: list[dict] | None,
+    add_generation_prompt: bool = True,
+) -> list[int]:
+    """Render a chat-message list to token ids with the served chat template.
+
+    Protocol-neutral: both adapters route a translated message list through
+    here before calling sglang.
+    """
+    enc = tokenizer.apply_chat_template(
+        messages,
+        tools=tools,
+        tokenize=True,
+        add_generation_prompt=add_generation_prompt,
+    )
+    ids = enc["input_ids"] if hasattr(enc, "__getitem__") and "input_ids" in enc else enc
+    return list(ids)
 
 
 class BaseAdapter:
-    """Base HTTP adapter with per-instance session lifecycle state."""
+    """Base HTTP adapter: session lifecycle + the shared one-turn pipeline.
 
-    session_cls: type
-    # Set by subclass __init__: the shared TrajectoryManager keyed by sid.
+    Subclasses set the class attributes ``session_cls``, ``logger``,
+    ``log_prefix``, ``max_token_keys``, ``stop_keys`` and implement the wire
+    hooks ``_register_routes``, ``_session_id``, ``_translate``, ``_build``,
+    ``_respond`` (and optionally ``_preprocess_body``).
+    """
+
+    session_cls: type = Session
+    logger: logging.Logger = logging.getLogger(__name__)
+    log_prefix: str = "adapter"
+    # sglang sampling-param extraction: which body keys cap max_new_tokens and
+    # carry stop sequences, in priority order.
+    max_token_keys: tuple[str, ...] = ()
+    stop_keys: tuple[str, ...] = ()
+    # Set by __init__: the shared TrajectoryManager keyed by sid.
     manager: Any
 
-    def __init__(self, *, tokenizer, sglang_url, tool_parser=None, reasoning_parser=None) -> None:
+    def __init__(
+        self,
+        *,
+        tokenizer,
+        sglang_url,
+        tool_parser=None,
+        reasoning_parser=None,
+        max_turns_per_sid: int | None = None,
+        fork_threshold_tokens: int | None = None,
+        on_turn_appended: Callable[..., None] | None = None,
+    ) -> None:
         self.tokenizer = tokenizer
         self.store: dict[str, Any] = {}
         self.inflight: dict[str, set[asyncio.Task]] = {}
@@ -46,6 +127,62 @@ class BaseAdapter:
         self.app[SGLANG_URL_KEY] = sglang_url.rstrip("/") if isinstance(sglang_url, str) else sglang_url
         self.app[TOOL_PARSER_KEY] = tool_parser
         self.app[REASONING_PARSER_KEY] = reasoning_parser
+
+        # ONE manager shared across all sids; per-sid trees live inside.
+        # ``fork_threshold_tokens is None`` means "caller did not specify" ->
+        # let TrajectoryManager use its own assistant-rewrite merge threshold.
+        mgr_kwargs: dict[str, int] = {}
+        if fork_threshold_tokens is not None:
+            mgr_kwargs["fork_threshold_tokens"] = fork_threshold_tokens
+        self.manager = TrajectoryManager(**mgr_kwargs)
+
+        # Optional debug hook invoked after each turn (appended or skipped).
+        # Signature: (sid, prompt_messages, tools, response_message,
+        #             prompt_ids, response_ids, finish_reason) -> None.
+        # Exceptions are swallowed; never block the HTTP response.
+        self.on_turn_appended: Callable[..., None] | None = on_turn_appended
+        # Per-sid turn cap; None disables. When set, the turn handler returns
+        # 429 once a sid has made this many turns, so a runaway agent exits
+        # cleanly instead of burning the whole token budget.
+        self.max_turns_per_sid: int | None = max_turns_per_sid
+        self._sid_turn_count: dict[str, int] = {}
+
+        self.app.router.add_get("/healthz", _ok)
+        self.app.router.add_get("/v1/models", _ok)
+        self._register_routes(self.app)
+
+    # -- wire hooks (subclass overrides) -------------------------------------
+
+    def _register_routes(self, app: web.Application) -> None:
+        """Register the protocol's POST route(s); bind ``self._run_turn``."""
+        raise NotImplementedError
+
+    def _session_id(self, request: web.Request, body: dict) -> str:
+        raise NotImplementedError
+
+    def _preprocess_body(self, body: dict) -> None:
+        """Mutate the parsed body in place before sid resolution (default no-op)."""
+
+    def _translate(self, body: dict) -> tuple[list[dict], list[dict] | None]:
+        """Return ``(chat_messages, tools_schema)`` from the wire body."""
+        raise NotImplementedError
+
+    def _build(self, parsed, raw_finish: str, translated: list[dict], tools_schema: list[dict] | None) -> Reply:
+        """Pack parsed model output into a :class:`Reply`."""
+        raise NotImplementedError
+
+    async def _respond(
+        self,
+        request: web.Request,
+        body: dict,
+        reply: Reply,
+        in_tok: int,
+        out_tok: int,
+        stream: bool,
+    ) -> web.StreamResponse:
+        raise NotImplementedError
+
+    # -- session lifecycle ---------------------------------------------------
 
     def open_session(
         self,
@@ -98,6 +235,124 @@ class BaseAdapter:
                 self.tokenizer.decode(s.tokens[-rlen:], skip_special_tokens=False) if rlen and s.tokens else ""
             )
         return samples
+
+    # -- shared request pipeline ---------------------------------------------
+
+    def _check_turn_cap(self, sid: str) -> web.Response | None:
+        """Enforce ``max_turns_per_sid``; return a 429 response once exceeded.
+
+        Increments the per-sid counter as a side effect when under the cap.
+        """
+        cap = self.max_turns_per_sid
+        if cap is None:
+            return None
+        prior = self._sid_turn_count.get(sid, 0)
+        if prior >= cap:
+            return web.json_response(
+                {
+                    "error": {
+                        "type": "rate_limit_error",
+                        "message": (f"adapter: sid {sid!r} exceeded max_turns_per_sid={cap}; killing run"),
+                    }
+                },
+                status=429,
+            )
+        self._sid_turn_count[sid] = prior + 1
+        return None
+
+    def _fire_hook(
+        self, sid, translated, tools_schema, manager_message, prompt_ids, output_ids, finish_reason
+    ) -> None:
+        hook = self.on_turn_appended
+        if hook is None:
+            return
+        try:
+            hook(sid, translated, tools_schema, manager_message, prompt_ids, output_ids, finish_reason)
+        except Exception:
+            self.logger.exception("on_turn_appended hook failed (sid=%s)", sid)
+
+    async def _run_turn(self, request: web.Request) -> web.StreamResponse:
+        """One full agent turn: translate -> sglang -> parse -> append -> respond.
+
+        The wire-specific steps are delegated to the subclass hooks; everything
+        else (sid resolution, closed/cap guards, the per-sid serialisation
+        lock, inflight tracking, append_turn, the hook) is identical across
+        protocols and lives here.
+        """
+        body = await request.json()
+        self._preprocess_body(body)
+        sid = self._session_id(request, body)
+        if sid in self.closed:  # session drained; refuse stragglers
+            return web.Response(status=503, text="session closed")
+        capped = self._check_turn_cap(sid)
+        if capped is not None:
+            return capped
+
+        app = request.app
+        tok = app[TOKENIZER_KEY]
+        s = self.store.setdefault(sid, self.session_cls())
+        task = asyncio.current_task()
+        self.inflight.setdefault(sid, set()).add(task)
+        try:
+            async with s.lock:  # same sid -> serialized
+                translated, tools_schema = self._translate(body)
+                prompt_ids = _render_token_ids(translated, tok, tools=tools_schema, add_generation_prompt=True)
+
+                turn = await call_sglang_generate(
+                    prompt_ids,
+                    s,
+                    body,
+                    app,
+                    max_token_keys=self.max_token_keys,
+                    stop_keys=self.stop_keys,
+                    log_prefix=self.log_prefix,
+                    logger=self.logger,
+                    session_id=sid,
+                )
+
+                raw_output = tok.decode(turn.output_ids, skip_special_tokens=False) if turn.output_ids else ""
+                parsed = parse_model_output(
+                    raw_output,
+                    tools_schema=tools_schema,
+                    tool_parser_name=app[TOOL_PARSER_KEY],
+                    reasoning_parser_name=app[REASONING_PARSER_KEY],
+                )
+                reply = self._build(parsed, turn.finish_reason, translated, tools_schema)
+                turn = dataclasses.replace(turn, finish_reason=reply.finish_reason)
+
+                if reply.skip_append:
+                    # Meta request (e.g. cc title-generation): keep it out of
+                    # the tree / RL samples, but still fire the hook below so
+                    # per-turn debug dumps keep landing on disk.
+                    self.logger.info("skipping append_turn (sid=%s)", sid)
+                else:
+                    try:
+                        self.manager.append_turn(
+                            sid,
+                            turn=turn,
+                            prompt_messages=translated,
+                            tools=tools_schema,
+                            response_message=reply.manager_message,
+                            metadata={"sid": sid},
+                        )
+                    except Exception:
+                        self.logger.exception("append_turn(sid=%s) failed", sid)
+
+                self._fire_hook(
+                    sid,
+                    translated,
+                    tools_schema,
+                    reply.manager_message,
+                    prompt_ids,
+                    turn.output_ids,
+                    reply.finish_reason,
+                )
+                in_tok, out_tok = len(prompt_ids), len(turn.output_ids)
+
+            stream = body.get("stream") is True or "text/event-stream" in request.headers.get("Accept", "")
+            return await self._respond(request, body, reply, in_tok, out_tok, stream)
+        finally:
+            self.inflight.get(sid, set()).discard(task)
 
 
 def request_session_id(
@@ -254,3 +509,8 @@ async def shutdown_session_tasks(
 
 async def ok_response(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
+
+
+async def _ok(request: web.Request) -> web.Response:
+    """Handler for /healthz and /v1/models readiness probes."""
+    return await ok_response(request)

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end SWE coding-agent RL on 8 nodes.
 #
-# Same model and training loop as run_qwen36_35b_a3b_swe_8node.sh, with three
-# extra layers that actively encourage the rollout to dispatch sub-agents.
+# Standard model and training loop, with three extra layers that actively
+# encourage the rollout to dispatch sub-agents.
 # Trajectory trees produced by this script show real `sibling` branches:
 #
 #   (1) An `investigator` sub-agent is registered via claude-code's --agents

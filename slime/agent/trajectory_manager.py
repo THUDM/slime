@@ -9,15 +9,33 @@ re-tokenization drift via fork/replace.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from collections.abc import Iterator
 from typing import Any
 
-from slime.agent.adapters.common import TurnRecord
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
+
+
+# ===========================================================================
+# TurnRecord
+# ===========================================================================
+
+
+@dataclasses.dataclass(frozen=True)
+class TurnRecord:
+    """One sglang ``/generate`` snapshot: the contract between an adapter and
+    the manager. Adapters build it from a turn's prompt/output token ids;
+    ``append_turn`` consumes it. Re-exported from ``adapters.common`` for
+    backwards-compatible imports."""
+
+    prompt_ids: list[int]
+    output_ids: list[int]
+    finish_reason: str
+    output_log_probs: list[float] = dataclasses.field(default_factory=list)
 
 
 # ===========================================================================

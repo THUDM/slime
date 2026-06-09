@@ -20,88 +20,62 @@ Only ``/v1/chat/completions`` is implemented; the older Responses API
 
 from __future__ import annotations
 
-import asyncio
-import dataclasses
 import json
 import logging
 import secrets
 import time
-from collections.abc import Callable
 from typing import Any
 
 from aiohttp import web
 
-from slime.agent.adapters.common import (
-    ADAPTER_KEY,
-    REASONING_PARSER_KEY,
-    TOKENIZER_KEY,
-    TOOL_PARSER_KEY,
-    BaseAdapter,
-    call_sglang_generate,
-    ok_response,
-    request_session_id,
-)
-from slime.agent.parsing import ParsedModelOutput, parse_model_output
-from slime.agent.trajectory_manager import TrajectoryManager
+from slime.agent.adapters.common import BaseAdapter, Reply, request_session_id
+from slime.agent.parsing import ParsedModelOutput
 
 logger = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass
-class Session:
-    """Per-sid adapter state: sampling defaults, context budget, request lock.
+class OpenAIAdapter(BaseAdapter):
+    """OpenAI Chat-Completions-compatible HTTP adapter.
 
-    Trajectory state lives in ``OpenAIAdapter.manager`` (one shared
-    TrajectoryManager keyed by sid across all sessions).
+    Exposes ``/v1/chat/completions``. The older Responses API
+    (``/v1/responses``) is intentionally out of scope -- Codex 0.30.0 uses
+    ``wire_api = "chat"``. All shared turn machinery lives in
+    :class:`~slime.agent.adapters.common.BaseAdapter`; this class only supplies
+    the OpenAI wire translation and reply framing.
     """
 
-    sampling_defaults: dict = dataclasses.field(default_factory=dict)
-    max_context_tokens: int = 0
-    lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
+    logger = logger
+    log_prefix = "openai_adapter"
+    max_token_keys = ("max_completion_tokens", "max_tokens", "max_output_tokens")
+    stop_keys = ("stop",)
 
+    def _register_routes(self, app: web.Application) -> None:
+        app.router.add_post("/v1/chat/completions", self._run_turn)
 
-class OpenAIAdapter(BaseAdapter):
-    """OpenAI Chat-Completions-compatible HTTP adapter with session lifecycle helpers."""
+    def _session_id(self, request: web.Request, body: dict) -> str:
+        return _request_session_id(request, body)
 
-    session_cls = Session
+    def _translate(self, body: dict) -> tuple[list[dict], list[dict] | None]:
+        messages = body.get("messages") or []
+        if not isinstance(messages, list):
+            raise web.HTTPBadRequest(text="messages must be a list")
+        translated = _translate_openai_chat(messages)
+        tools_schema = _openai_tools_to_chat_tools(body.get("tools"))
+        return translated, tools_schema
 
-    def __init__(
-        self,
-        *,
-        tokenizer,
-        sglang_url,
-        tool_parser=None,
-        reasoning_parser=None,
-        max_turns_per_sid: int | None = None,
-        fork_threshold_tokens: int | None = None,
-        on_turn_appended: Callable[..., None] | None = None,
-    ) -> None:
-        super().__init__(
-            tokenizer=tokenizer,
-            sglang_url=sglang_url,
-            tool_parser=tool_parser,
-            reasoning_parser=reasoning_parser,
+    def _build(self, parsed, raw_finish, translated, tools_schema) -> Reply:
+        wire_message, manager_message, wire_finish = _build_oai_response(parsed, raw_finish)
+        return Reply(
+            manager_message=manager_message,
+            finish_reason=_finish_reason_for_manager(raw_finish, parsed.tool_uses),
+            wire=(wire_message, wire_finish),
         )
-        # ONE manager shared across all sids; per-sid trees live inside.
-        # ``None`` means "caller did not specify" -> let TrajectoryManager use
-        # its own default for the assistant-rewrite merge threshold.
-        mgr_kwargs: dict[str, int] = {}
-        if fork_threshold_tokens is not None:
-            mgr_kwargs["fork_threshold_tokens"] = fork_threshold_tokens
-        self.manager = TrajectoryManager(**mgr_kwargs)
-        # Optional debug hook invoked after each successful append_turn.
-        # Signature mirrors AnthropicAdapter.on_turn_appended:
-        #   (sid, prompt_messages, tools, response_message,
-        #    prompt_ids, response_ids, finish_reason) -> None.
-        # Exceptions are swallowed; never block the HTTP response.
-        self.on_turn_appended: Callable[..., None] | None = on_turn_appended
-        # Per-sid turn cap; None disables. When set, /v1/chat/completions
-        # returns 429 once a sid has made this many turns.
-        self.max_turns_per_sid: int | None = max_turns_per_sid
-        self._sid_turn_count: dict[str, int] = {}
-        self.app.router.add_post("/v1/chat/completions", _handle_chat_completions)
-        self.app.router.add_get("/healthz", _ok)
-        self.app.router.add_get("/v1/models", _ok)
+
+    async def _respond(self, request, body, reply, in_tok, out_tok, stream) -> web.StreamResponse:
+        wire_message, wire_finish = reply.wire
+        if stream:
+            return await _stream_chat_completion(request, body, wire_message, wire_finish, in_tok, out_tok)
+        return web.json_response(_chat_completion_response(body, wire_message, wire_finish, in_tok, out_tok))
 
 
 # =============================================================================
@@ -272,28 +246,6 @@ def _openai_tools_to_chat_tools(tools: list[dict] | None) -> list[dict] | None:
 
 
 # =============================================================================
-# Local chat-template render helper. Mirrors anthropic.py:_render_token_ids.
-# =============================================================================
-
-
-def _render_token_ids(
-    messages: list[dict],
-    tokenizer,
-    *,
-    tools: list[dict] | None,
-    add_generation_prompt: bool = True,
-) -> list[int]:
-    enc = tokenizer.apply_chat_template(
-        messages,
-        tools=tools,
-        tokenize=True,
-        add_generation_prompt=add_generation_prompt,
-    )
-    ids = enc["input_ids"] if hasattr(enc, "__getitem__") and "input_ids" in enc else enc
-    return list(ids)
-
-
-# =============================================================================
 # Reply building: parsed output -> OpenAI wire message + manager response_message
 # =============================================================================
 
@@ -398,7 +350,7 @@ def _usage(in_tok: int, out_tok: int) -> dict[str, int]:
 
 
 # =============================================================================
-# Request handling -- one full turn + JSON or SSE response
+# Request handling -- session id + wire response framing
 # =============================================================================
 
 
@@ -410,105 +362,6 @@ def _request_session_id(request: web.Request, body: dict) -> str:
     to body-level hints (``metadata.session_id`` / ``user``).
     """
     return request_session_id(request, body=body)
-
-
-async def _handle_chat_completions(request: web.Request) -> web.StreamResponse:
-    body = await request.json()
-    messages = body.get("messages") or []
-    if not isinstance(messages, list):
-        raise web.HTTPBadRequest(text="messages must be a list")
-
-    sid = _request_session_id(request, body)
-    adapter = request.app[ADAPTER_KEY]
-    if sid in adapter.closed:
-        return web.Response(status=503, text="session closed")
-
-    # Per-sid turn cap (HTTP 429). Mirrors anthropic.py:517-530.
-    cap = adapter.max_turns_per_sid
-    if cap is not None:
-        prior = adapter._sid_turn_count.get(sid, 0)
-        if prior >= cap:
-            return web.json_response(
-                {
-                    "error": {
-                        "type": "rate_limit_error",
-                        "message": (f"adapter: sid {sid!r} exceeded max_turns_per_sid={cap}; killing run"),
-                    }
-                },
-                status=429,
-            )
-        adapter._sid_turn_count[sid] = prior + 1
-
-    app = request.app
-    tok = app[TOKENIZER_KEY]
-    s = adapter.store.setdefault(sid, Session())
-    task = asyncio.current_task()
-    adapter.inflight.setdefault(sid, set()).add(task)
-    try:
-        async with s.lock:  # same sid -> serialized
-            translated = _translate_openai_chat(messages)
-            tools_schema = _openai_tools_to_chat_tools(body.get("tools"))
-            prompt_ids = _render_token_ids(translated, tok, tools=tools_schema, add_generation_prompt=True)
-
-            turn = await call_sglang_generate(
-                prompt_ids,
-                s,
-                body,
-                app,
-                max_token_keys=("max_completion_tokens", "max_tokens", "max_output_tokens"),
-                stop_keys=("stop",),
-                log_prefix="openai_adapter",
-                logger=logger,
-                session_id=sid,
-            )
-
-            raw_output = tok.decode(turn.output_ids, skip_special_tokens=False) if turn.output_ids else ""
-            parsed = parse_model_output(
-                raw_output,
-                tools_schema=tools_schema,
-                tool_parser_name=app[TOOL_PARSER_KEY],
-                reasoning_parser_name=app[REASONING_PARSER_KEY],
-            )
-            wire_message, manager_message, wire_finish = _build_oai_response(parsed, turn.finish_reason)
-
-            finish_reason_mgr = _finish_reason_for_manager(turn.finish_reason, parsed.tool_uses)
-            turn = dataclasses.replace(turn, finish_reason=finish_reason_mgr)
-            output_ids = list(turn.output_ids)
-
-            try:
-                adapter.manager.append_turn(
-                    sid,
-                    turn=turn,
-                    prompt_messages=translated,
-                    tools=tools_schema,
-                    response_message=manager_message,
-                    metadata={"sid": sid},
-                )
-            except Exception:
-                logger.exception("append_turn(sid=%s) failed", sid)
-
-            hook = adapter.on_turn_appended
-            if hook is not None:
-                try:
-                    hook(
-                        sid,
-                        translated,
-                        tools_schema,
-                        manager_message,
-                        prompt_ids,
-                        output_ids,
-                        finish_reason_mgr,
-                    )
-                except Exception:
-                    logger.exception("on_turn_appended hook failed (sid=%s)", sid)
-
-            in_tok, out_tok = len(prompt_ids), len(turn.output_ids)
-
-        if body.get("stream") is True or "text/event-stream" in request.headers.get("Accept", ""):
-            return await _stream_chat_completion(request, body, wire_message, wire_finish, in_tok, out_tok)
-        return web.json_response(_chat_completion_response(body, wire_message, wire_finish, in_tok, out_tok))
-    finally:
-        adapter.inflight.get(sid, set()).discard(task)
 
 
 def _chat_completion_response(
@@ -592,7 +445,3 @@ async def _stream_chat_completion(
     await emit({}, finish_reason=wire_finish, usage=_usage(in_tok, out_tok))
     await out.write(b"data: [DONE]\n\n")
     return out
-
-
-async def _ok(request: web.Request) -> web.Response:
-    return await ok_response(request)

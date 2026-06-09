@@ -52,12 +52,12 @@ import traceback
 from typing import Any
 
 from slime.agent.adapters import AnthropicAdapter
+from slime.agent.aiohttp_threaded import FilteredAccessLogger, run_app_in_thread
 from slime.utils.misc import SingletonMeta
 from slime.utils.processing_utils import load_tokenizer
 from slime.utils.types import Sample
 
 from . import sandbox
-from .aiohttp_threaded import FilteredAccessLogger, run_app_in_thread
 
 logger = logging.getLogger(__name__)
 
@@ -302,7 +302,9 @@ def _coerce_prompt(prompt) -> str:
     return ""
 
 
-def _abort(sample: Sample, reason: str) -> Sample:
+def _abort_result(sample: Sample, reason: str) -> list[Sample]:
+    """Mark ``sample`` aborted in place and return it in the list shape this
+    fan-out generate function always yields."""
     sample.tokens = [0, 0]
     sample.response = ""
     sample.response_length = 1
@@ -311,9 +313,4 @@ def _abort(sample: Sample, reason: str) -> Sample:
     sample.status = Sample.Status.ABORTED
     sample.metadata = {**(sample.metadata or {}), "abort_reason": reason}
     logger.warning("[coding_agent_rl] aborted: %s", reason)
-    return sample
-
-
-def _abort_result(sample: Sample, reason: str):
-    """Return a uniform list shape for this fan-out generate function."""
-    return [_abort(sample, reason)]
+    return [sample]

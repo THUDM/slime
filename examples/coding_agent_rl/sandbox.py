@@ -326,8 +326,8 @@ async def evaluate(
 
         if swepro:
             r, s = await _run_swepro(ev, workdir, swepro, timeout_sec)
-            return r, s, True
-        r, s = await _run_eval_cmd(ev, workdir, eval_cmd, timeout_sec)
+        else:
+            r, s = await _run_eval_cmd(ev, workdir, eval_cmd, timeout_sec)
         return r, s, True
 
 
@@ -336,8 +336,7 @@ async def _setup_swepro_assets(ev: Sandbox, swepro: dict) -> None:
     for k, dst in [("run_script_path", "run_script.sh"), ("parser_script_path", "parser.py")]:
         host_p = swepro.get(k)
         if host_p:
-            text = Path(host_p).read_text()
-            await ev.write_file(f"{_SWEPRO_DIR}/{dst}", text, user="root")
+            await ev.write_file(f"{_SWEPRO_DIR}/{dst}", Path(host_p), user="root")
     await ev.exec(f"chmod 755 {_SWEPRO_DIR}/* && chown -R agent:agent {_SWEPRO_DIR}", user="root", check=True)
 
 
