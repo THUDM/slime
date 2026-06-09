@@ -30,6 +30,8 @@ Dual mode:
 
 from __future__ import annotations
 
+import pytest  # noqa: E402
+
 from tests.test_agent.test_claude_code_agent._dump_helpers import dump_tree_txt  # noqa: E402
 
 from slime.agent.adapters.common import TurnRecord  # noqa: E402
@@ -1202,20 +1204,13 @@ def test_4_3_empty_prompt_messages_skipped():
 
 
 def test_4_4_default_base_sample():
-    """get_trajectory with base_sample=None uses a default Sample(index=0)."""
+    """get_trajectory without base_sample is rejected by an assert."""
     mgr = TrajectoryManager()
     sid = "4.4"
     s, u = sys_msg("S"), usr_msg("u")
     append(mgr, sid, [s, u], "a")
-    # snapshot tree before drain so the dump still renders it
-    _TREE_SNAP[sid] = dump_tree_txt(mgr, sid)
-    _REWARD_IN[sid] = 1.0
-    samples = mgr.get_trajectory(sid, reward=1.0)  # no base_sample
-    assert len(samples) == 1
-    assert samples[0].index == 0
-    assert goldens(samples) == ["<sys> system:S </sys> <usr> user:u </usr> <gen> [r:a] [</ast>]"]
-    _check_invariants(samples)
-    _record("4.4 default base_sample (None)", mgr, sid, samples)
+    with pytest.raises(AssertionError):
+        mgr.get_trajectory(sid, reward=1.0)  # no base_sample
     print("PASS 4.4")
 
 

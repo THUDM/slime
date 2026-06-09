@@ -227,8 +227,7 @@ class TrajectoryManager:
         across all of them. The sid is dropped afterwards, so a second call for
         the same sid returns ``[]``.
         """
-        if base_sample is None:
-            base_sample = Sample(index=0, prompt="")
+        assert base_sample is not None, "get_trajectory requires a base_sample"
 
         root = self._trees.get(sid)
         if root is None:
