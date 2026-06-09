@@ -139,8 +139,12 @@ class _Segment:
         del self.logprobs[realign_at:]
         if self.spans and realign_at < self.spans[-1][1]:
             s, _e, j = self.spans[-1]
-            # NOTE: the truncated prior span stays loss=1 -- that region is both
-            # the prior turn's response and this turn's prompt context.
+            # Drift inside this span means the prior response no longer faithfully
+            # echoes what the model generated, so mask the WHOLE surviving span.
+            # Still absorb (not fork) to keep it token-contiguous in one segment.
+            n = realign_at - s
+            self.loss_mask[s:realign_at] = [0] * n
+            self.logprobs[s:realign_at] = [0.0] * n
             self.spans[-1] = (s, realign_at, j)  # may collapse to empty (s == realign_at); harmless
 
         is_first_turn = not self.spans

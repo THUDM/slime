@@ -680,14 +680,15 @@ def test_2_4_drift_case_B1_short_replaces():
     s0 = samples[0]
     L = _lcp_len(p1 + r1, p2)
     assert L == drift_idx
-    # replace: the drifted r:call tail is dropped and re-supplied as loss=0 prompt
-    # context (the <DRIFT> token marks the divergence); only the surviving head of
-    # r:call and the new r:done train.
+    # replace: the drifted r:call response is no longer a faithful echo of what the
+    # model generated (its tail diverged), so the WHOLE surviving span is masked and
+    # re-supplied as loss=0 prompt context (the <DRIFT> token marks the divergence);
+    # only the new r:done trains.
     assert goldens(samples) == [
-        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] <DRIFT> "
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> r:call <DRIFT> "
         "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
     ]
-    assert s0.rollout_log_probs == [-0.5] * (L - len(p1)) + [0.0] * (len(p2) - L) + [-0.4] * len(r2)
+    assert s0.rollout_log_probs == [0.0] * (len(p2) - len(p1)) + [-0.4] * len(r2)
     _check_invariants(samples)
     _record("2.4 drift case B1 (small) -> replace", mgr, sid, samples)
     print("PASS 2.4")
@@ -1287,11 +1288,10 @@ def test_4_6_drift_B1_threshold_boundary():
     # d < threshold -> replace: one coherent segment realigned to p2.
     replaced, p1b, r1b, p2b, r2b = run(threshold=2, drift_tail_len=1)
     assert len(replaced) == 1, f"d<threshold must replace, got {len(replaced)}"
-    L = _lcp_len(p1b + r1b, p2b)
     assert replaced[0].tokens == p2b + r2b
-    # surviving r1 head stays loss=1, the realigned (dropped+resupplied) tail is
-    # loss=0 prompt context, r2 trains.
-    assert replaced[0].loss_mask == [1] * (L - len(p1b)) + [0] * (len(p2b) - L) + [1] * len(r2b)
+    # the drifted r1 echo is not a faithful response anymore -> the WHOLE r1 span is
+    # masked (loss=0 prompt context), r2 trains.
+    assert replaced[0].loss_mask == [0] * (len(p2b) - len(p1b)) + [1] * len(r2b)
     _check_invariants(forked)
     _check_invariants(replaced)
     print("PASS 4.6")
