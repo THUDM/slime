@@ -17,10 +17,10 @@
 OPD 通过减去一个 KL 惩罚项来修改 advantage 计算，鼓励学生匹配教师的输出分布：
 
 $$
-\hat{A}_t = A_t - \lambda_{\text{opd}} \cdot D_{\text{KL}}(P_{\text{teacher}} \| P_{\text{student}})_t
+\hat{A}_t = A_t - \lambda_{\text{opd}} \cdot D_{\text{KL}}(P_{\text{student}} \| P_{\text{teacher}})_t
 $$
 
-其中 $A_t$ 是基础 estimator（如 GRPO）的原始 advantage，$\lambda_{\text{opd}}$ 是 `--opd-kl-coef`，$D_{\text{KL}}$ 是 token 级的逆 KL 散度。
+其中 $A_t$ 是基础 estimator（如 GRPO）的原始 advantage，$\lambda_{\text{opd}}$ 是 `--opd-kl-coef`，$D_{\text{KL}}(P_{\text{student}} \| P_{\text{teacher}})$ 是 token 级的逆 KL 散度。
 
 因此 OPD 可以与任何 advantage estimator 组合使用，包括 GRPO、PPO、REINFORCE++ 和 GSPO。
 

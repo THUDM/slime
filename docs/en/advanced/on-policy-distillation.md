@@ -17,10 +17,10 @@ On-policy distillation (OPD) enables a student model to learn from a larger teac
 OPD modifies the advantage computation by subtracting a KL penalty term that encourages the student to match the teacher's output distribution:
 
 $$
-\hat{A}_t = A_t - \lambda_{\text{opd}} \cdot D_{\text{KL}}(P_{\text{teacher}} \| P_{\text{student}})_t
+\hat{A}_t = A_t - \lambda_{\text{opd}} \cdot D_{\text{KL}}(P_{\text{student}} \| P_{\text{teacher}})_t
 $$
 
-Where $A_t$ is the original advantage from the base estimator (e.g., GRPO), $\lambda_{\text{opd}}$ is `--opd-kl-coef`, and $D_{\text{KL}}$ is the token-level reverse KL divergence.
+Where $A_t$ is the original advantage from the base estimator (e.g., GRPO), $\lambda_{\text{opd}}$ is `--opd-kl-coef`, and $D_{\text{KL}}(P_{\text{student}} \| P_{\text{teacher}})$ is the token-level reverse KL divergence.
 
 This means OPD can be combined with any advantage estimator, including GRPO, PPO, REINFORCE++, and GSPO.
 
