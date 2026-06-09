@@ -1321,15 +1321,11 @@ def _compute_sglang_request_perf_metrics(all_samples: list[Sample]):
         if request_has_perf:
             profiled_request_count += 1
 
-    metrics: dict[str, float] = {
-        "request/count": len(attrs_by_request),
-        "request/profiled_count": profiled_request_count,
-    }
+    metrics: dict[str, float] = {}
     for key, values in values_by_metric.items():
         if not values:
             continue
         metrics |= dict_add_prefix(compute_statistics(values), f"{key}/")
-        metrics[f"{key}/count"] = len(values)
 
     return metrics
 
