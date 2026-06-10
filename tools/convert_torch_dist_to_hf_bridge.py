@@ -4,6 +4,7 @@ import os
 import megatron.bridge.training.model_load_save as _model_load_save_module
 from megatron.bridge import AutoBridge
 
+import slime_plugins.megatron_bridge  # noqa: F401  # register custom bridges before AutoBridge
 from slime.utils.megatron_bridge_utils import patch_auto_bridge_hf_config
 
 

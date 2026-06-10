@@ -340,6 +340,114 @@ def save_tensors(args, model_name, state_dict, output_dir, chunk_size, vocab_siz
             print(f"{filename} saved in {elapsed:.2f} sec.")
 
 
+def _merge_missing_keys_from_origin_hf(origin_hf_dir, output_dir, converted_weight_map, chunk_size):
+    """Merge missing keys from the original HF model into the converted checkpoint.
+
+    For VLM models, the Megatron checkpoint only contains the language model weights.
+    The visual encoder weights (e.g., model.visual.*) must be copied from the original
+    HF checkpoint to ensure the model can load correctly for inference.
+    """
+    origin_index_path = os.path.join(origin_hf_dir, "model.safetensors.index.json")
+    if not os.path.exists(origin_index_path):
+        print("No model.safetensors.index.json found in origin HF dir. Skipping missing key merge.")
+        return
+
+    with open(origin_index_path) as f:
+        origin_index = json.load(f)
+
+    origin_keys = set(origin_index["weight_map"].keys())
+    converted_keys = set(converted_weight_map.keys())
+    missing_keys = sorted(origin_keys - converted_keys)
+
+    if not missing_keys:
+        print("No missing keys detected. Skipping missing key merge.")
+        return
+
+    print(f"Found {len(missing_keys)} missing keys in converted checkpoint. Merging from origin HF model.")
+
+    # Identify which safetensors files from the origin contain missing keys
+    # Group missing keys by their source file
+    missing_by_file = {}
+    for key in missing_keys:
+        src_file = origin_index["weight_map"][key]
+        if src_file not in missing_by_file:
+            missing_by_file[src_file] = []
+        missing_by_file[src_file].append(key)
+
+    # Load missing tensors from origin HF safetensors
+    missing_tensors = {}
+    for src_file, keys in tqdm(missing_by_file.items(), desc="Loading missing keys from origin HF"):
+        src_path = os.path.join(origin_hf_dir, src_file)
+        if not os.path.exists(src_path):
+            print(f"Warning: {src_path} not found. Skipping keys: {keys}")
+            continue
+        from safetensors import safe_open
+        with safe_open(src_path, framework="pt", device="cpu") as f:
+            for key in keys:
+                missing_tensors[key] = f.get_tensor(key)
+
+    # Now we need to insert these tensors into the existing safetensors files.
+    # Strategy: find the last safetensors file, add the missing tensors there,
+    # or create a new file if it would exceed chunk_size.
+    total_files = max(
+        int(v.split("-")[-2]) for v in converted_weight_map.values()
+    )
+    # Re-number files to include the missing keys in a new shard
+    # First, collect existing tensors from the last file and append missing ones
+    last_file_pattern = f"model-{total_files:05d}-of-{total_files:05d}.safetensors"
+    last_file_path = os.path.join(output_dir, last_file_pattern)
+
+    existing_last_tensors = {}
+    if os.path.exists(last_file_path):
+        existing_last_tensors = safetensors.torch.load_file(last_file_path)
+
+    # Calculate sizes
+    existing_size = sum(t.numel() * t.element_size() for t in existing_last_tensors.values())
+    missing_size = sum(t.numel() * t.element_size() for t in missing_tensors.values())
+
+    if existing_size + missing_size <= chunk_size:
+        # Fits in the last file - just append
+        combined_tensors = {**existing_last_tensors, **missing_tensors}
+        safetensors.torch.save_file(combined_tensors, last_file_path)
+        for key in missing_tensors:
+            converted_weight_map[key] = last_file_pattern
+    else:
+        # Need a new shard
+        new_total = total_files + 1
+        # Save missing tensors to a new file with updated numbering
+        new_file_name = f"model-{new_total:05d}-of-{new_total:05d}.safetensors"
+        safetensors.torch.save_file(missing_tensors, os.path.join(output_dir, new_file_name))
+        for key in missing_tensors:
+            converted_weight_map[key] = new_file_name
+
+        # Rename all existing files to update the total count
+        for i in range(1, total_files + 1):
+            old_name = f"model-{i:05d}-of-{total_files:05d}.safetensors"
+            new_name = f"model-{i:05d}-of-{new_total:05d}.safetensors"
+            old_path = os.path.join(output_dir, old_name)
+            new_path = os.path.join(output_dir, new_name)
+            if os.path.exists(old_path):
+                shutil.move(old_path, new_path)
+            # Update weight map references
+            for k, v in converted_weight_map.items():
+                if v == old_name:
+                    converted_weight_map[k] = new_name
+
+    # Update total_size in metadata
+    new_total_size = sum(t.numel() * t.element_size() for t in missing_tensors.values())
+    index_data = json.load(open(os.path.join(output_dir, "model.safetensors.index.json")))
+    index_data["metadata"]["total_size"] = index_data["metadata"].get("total_size", 0) + new_total_size
+    index_data["weight_map"] = converted_weight_map
+    with open(os.path.join(output_dir, "model.safetensors.index.json"), "w") as f:
+        json.dump(index_data, f, indent=2)
+
+    print(f"Successfully merged {len(missing_tensors)} missing keys into the converted checkpoint.")
+    for key in missing_keys[:10]:
+        print(f"  + {key}")
+    if len(missing_keys) > 10:
+        print(f"  ... and {len(missing_keys) - 10} more")
+
+
 def copy_assets(origin_hf_dir, output_dir):
     for filename in os.listdir(origin_hf_dir):
         if filename == "model.safetensors.index.json" or filename.endswith(".safetensors"):
@@ -574,5 +682,9 @@ if __name__ == "__main__":
     json.dump(index_data, open(os.path.join(args.output_dir, "model.safetensors.index.json"), "w"), indent=2)
     print("Model converted and saved.")
 
+    # Merge missing keys from the original HF model (e.g., visual encoder weights for VLM models)
+    # These keys exist in the original HF checkpoint but are not present in the Megatron checkpoint,
+    # because Megatron only trains the language model part.
     if args.origin_hf_dir:
+        _merge_missing_keys_from_origin_hf(args.origin_hf_dir, args.output_dir, final_weight_map_fixed, args.chunk_size)
         copy_assets(args.origin_hf_dir, args.output_dir)

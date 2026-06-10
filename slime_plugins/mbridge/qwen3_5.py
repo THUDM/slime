@@ -13,6 +13,11 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
     Bridge for Qwen3.5 models (both dense and MoE variants).
     Qwen3.5 is a VLM model with weights under model.language_model.layers prefix,
     separate in_proj_qkv + in_proj_z for linear attention, and nested text_config.
+
+    MoE expert weights can be stored in two formats in HF checkpoints:
+    - Fused format: gate_up_proj / down_proj as a single 3D tensor [num_experts, ...]
+    - Per-expert format: {expert_id}.gate_proj.weight / {expert_id}.up_proj.weight / {expert_id}.down_proj.weight
+    This bridge auto-detects the format from the checkpoint's safetensors index.
     """
 
     _DIRECT_MAPPING = {
@@ -62,7 +67,8 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
         ]
     }
 
-    _MLP_MAPPING = {
+    # Fused expert format: single 3D tensor for all experts
+    _MLP_MAPPING_FUSED_EXPERTS = {
         "mlp.linear_fc1.weight": [
             "model.language_model.layers.{layer_number}.mlp.gate_proj.weight",
             "model.language_model.layers.{layer_number}.mlp.up_proj.weight",
@@ -82,12 +88,44 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
         ],
         "mlp.router.weight": ["model.language_model.layers.{layer_number}.mlp.gate.weight"],
         "shared_experts.gate_weight": ["model.language_model.layers.{layer_number}.mlp.shared_expert_gate.weight"],
-        # Fused expert format: single 3D tensor for all experts
         "mlp.experts.linear_fc1": [
             "model.language_model.layers.{layer_number}.mlp.experts.gate_up_proj",
         ],
         "mlp.experts.linear_fc2": ["model.language_model.layers.{layer_number}.mlp.experts.down_proj"],
     }
+
+    # Per-expert format: separate tensors per expert (e.g., Qwen3.5-397B checkpoints)
+    _MLP_MAPPING_PER_EXPERT = {
+        "mlp.linear_fc1.weight": [
+            "model.language_model.layers.{layer_number}.mlp.gate_proj.weight",
+            "model.language_model.layers.{layer_number}.mlp.up_proj.weight",
+        ],
+        "mlp.linear_fc1.layer_norm_weight": [
+            "model.language_model.layers.{layer_number}.post_attention_layernorm.weight"
+        ],
+        "mlp.linear_fc2.weight": ["model.language_model.layers.{layer_number}.mlp.down_proj.weight"],
+        # MoE mappings
+        "shared_experts.linear_fc1.weight": [
+            "model.language_model.layers.{layer_number}.mlp.shared_expert.gate_proj.weight",
+            "model.language_model.layers.{layer_number}.mlp.shared_expert.up_proj.weight",
+        ],
+        "pre_mlp_layernorm": ["model.language_model.layers.{layer_number}.post_attention_layernorm.weight"],
+        "shared_experts.linear_fc2.weight": [
+            "model.language_model.layers.{layer_number}.mlp.shared_expert.down_proj.weight"
+        ],
+        "mlp.router.weight": ["model.language_model.layers.{layer_number}.mlp.gate.weight"],
+        "shared_experts.gate_weight": ["model.language_model.layers.{layer_number}.mlp.shared_expert_gate.weight"],
+        "mlp.experts.linear_fc1": [
+            "model.language_model.layers.{layer_number}.mlp.experts.{expert_id}.gate_proj.weight",
+            "model.language_model.layers.{layer_number}.mlp.experts.{expert_id}.up_proj.weight",
+        ],
+        "mlp.experts.linear_fc2": [
+            "model.language_model.layers.{layer_number}.mlp.experts.{expert_id}.down_proj.weight",
+        ],
+    }
+
+    # Default: use fused format (backward compatible)
+    _MLP_MAPPING = _MLP_MAPPING_FUSED_EXPERTS
 
     # MTP layer uses individual expert format (not fused)
     _MTP_MLP_MAPPING = {
@@ -125,6 +163,74 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
         if tie_word_embeddings:
             self._DIRECT_MAPPING = dict(self._DIRECT_MAPPING)
             self._DIRECT_MAPPING["output_layer.weight"] = "model.language_model.embed_tokens.weight"
+
+    def _detect_expert_weight_format(self, weights_path: str) -> None:
+        """Auto-detect whether the HF checkpoint uses fused or per-expert format for MoE weights.
+
+        Fused format: model.language_model.layers.{N}.mlp.experts.gate_up_proj
+        Per-expert format: model.language_model.layers.{N}.mlp.experts.{E}.gate_proj.weight
+
+        This sets self._MLP_MAPPING accordingly.
+        """
+        has_num_experts = hasattr(self._get_text_config(), "num_experts")
+        if not has_num_experts:
+            return
+
+        # Resolve the actual local path (handles HF hub IDs via _get_actual_hf_path)
+        try:
+            actual_path = self._get_actual_hf_path(weights_path)
+        except Exception:
+            actual_path = weights_path
+
+        # Check the safetensors index for the weight format
+        import json
+        import os
+
+        index_file = os.path.join(actual_path, "model.safetensors.index.json")
+        if os.path.exists(index_file):
+            with open(index_file, "r") as f:
+                index = json.load(f)
+            weight_map = index.get("weight_map", {})
+            # Check if fused key exists
+            fused_key = "model.language_model.layers.0.mlp.experts.gate_up_proj"
+            per_expert_key = "model.language_model.layers.0.mlp.experts.0.gate_proj.weight"
+            if fused_key in weight_map:
+                self._MLP_MAPPING = self._MLP_MAPPING_FUSED_EXPERTS
+            elif per_expert_key in weight_map:
+                self._MLP_MAPPING = self._MLP_MAPPING_PER_EXPERT
+            else:
+                # Fallback: scan all keys for any expert weight pattern
+                for key in weight_map:
+                    if ".mlp.experts.gate_up_proj" in key:
+                        self._MLP_MAPPING = self._MLP_MAPPING_FUSED_EXPERTS
+                        return
+                    if ".mlp.experts.0.gate_proj.weight" in key:
+                        self._MLP_MAPPING = self._MLP_MAPPING_PER_EXPERT
+                        return
+                # Default to fused if no expert keys found (may not be MoE)
+                self._MLP_MAPPING = self._MLP_MAPPING_FUSED_EXPERTS
+        else:
+            # No index file; scan safetensors files directly
+            from glob import glob
+            from safetensors import safe_open
+
+            safetensor_files = glob(os.path.join(actual_path, "*.safetensors"))
+            for sf in safetensor_files:
+                with safe_open(sf, framework="pt", device="cpu") as f:
+                    keys = f.keys()
+                    for key in keys:
+                        if ".mlp.experts.gate_up_proj" in key:
+                            self._MLP_MAPPING = self._MLP_MAPPING_FUSED_EXPERTS
+                            return
+                        if ".mlp.experts.0.gate_proj.weight" in key:
+                            self._MLP_MAPPING = self._MLP_MAPPING_PER_EXPERT
+                            return
+            self._MLP_MAPPING = self._MLP_MAPPING_FUSED_EXPERTS
+
+    def load_weights(self, models, weights_path, memory_efficient=False):
+        """Override to auto-detect expert weight format before loading."""
+        self._detect_expert_weight_format(weights_path)
+        return super().load_weights(models, weights_path, memory_efficient)
 
     def _supports_transformer_config_kwarg(self, kwarg_name: str) -> bool:
         """Check whether the current TransformerConfig accepts a given kwarg."""

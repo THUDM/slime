@@ -67,6 +67,7 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    --rollout-batch-size 4
    --n-samples-per-prompt 4
+   --rollout-max-prompt-len 9216
    --rollout-max-response-len 2048
    --rollout-temperature 0.8
 

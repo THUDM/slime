@@ -42,12 +42,15 @@ def _convert_to_hf_core(args, model_name, name, param):
         converted_named_tensors = convert_glm4_to_hf(args, name, param)
     elif "gpt_oss" in model_name or "gpt-oss" in model_name or "gptoss" in model_name:
         converted_named_tensors = convert_gpt_oss_to_hf(args, name, param)
-    elif "qwen3moe" in model_name:
-        converted_named_tensors = convert_qwen3moe_to_hf(args, name, param)
+    elif "qwen3_5" in model_name:
+        # Must match before "qwen3moe" since "qwen3_5moe" contains neither
+        # "qwen3moe" as a substring, but if someone passes --model-name qwen3moe
+        # for a Qwen3.5-MoE model, they should use qwen3_5 instead.
+        converted_named_tensors = convert_qwen3_5_to_hf(args, name, param)
     elif "qwen3next" in model_name:
         converted_named_tensors = convert_qwen3_next_to_hf(args, name, param)
-    elif "qwen3_5" in model_name:
-        converted_named_tensors = convert_qwen3_5_to_hf(args, name, param)
+    elif "qwen3moe" in model_name:
+        converted_named_tensors = convert_qwen3moe_to_hf(args, name, param)
     elif "qwen3vl" in model_name:
         converted_named_tensors = convert_qwen3vl_to_hf(args, name, param)
     elif "qwen2" in model_name or "qwen3" in model_name:
