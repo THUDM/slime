@@ -378,7 +378,6 @@ class BaseAdapter:
                             sid,
                             turn=turn,
                             prompt_messages=translated,
-                            tools=tools_schema,
                             response_message=reply.manager_message,
                             metadata={"sid": sid},
                         )

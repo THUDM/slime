@@ -57,10 +57,6 @@ class Node:
         self.metadata = dict(metadata or {})
         self.parent: Node | None = parent
         self.children: list[Node] = []
-        # messages is immutable after construction (only children are appended,
-        # never the message list itself), so the routing key is computed once
-        # here and reused on every descent instead of re-serializing per turn.
-        self.match_key = node_match_key(self.messages)
         self.turn_prompt_ids: list[int] | None = None
         self.turn_response_ids: list[int] | None = None
         self.turn_response_logprobs: list[float] | None = None
@@ -100,8 +96,13 @@ class Node:
 
 
 def node_match_key(messages: list[dict[str, Any]]) -> str:
-    # sort_keys sorts dict-internal keys but PRESERVES list order -- message
-    # order and tool_calls order are both semantically significant.
+    # Canonical serialization of a message list, defining when two messages route
+    # to the same node: dict-internal keys are sorted (key order is irrelevant)
+    # while list order is PRESERVED (message order and tool_calls order are both
+    # semantically significant). The hot path (_find_mount_point) no longer calls
+    # this -- it compares dicts structurally, which is equivalent and far cheaper
+    # (no serialization + short-circuits on the first differing field). Kept as
+    # the reference definition of message-equality and for callers/tests.
     return json.dumps(messages, sort_keys=True, ensure_ascii=False)
 
 
@@ -214,7 +215,6 @@ class TrajectoryManager:
         *,
         turn: TurnRecord,
         prompt_messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None,
         response_message: dict[str, Any] | None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
@@ -231,7 +231,7 @@ class TrajectoryManager:
 
         cur, i = self._find_mount_point(root, prompt_messages)
         cur, i = self._try_merge_assistant_rewrite(sid, cur, prompt_messages, i)
-        cur = self._mount_prompt_messages(cur, prompt_messages[i:], tools)
+        cur = self._mount_prompt_messages(cur, prompt_messages[i:])
         self._attach_assistant_leaf(sid, cur, turn=turn, response_message=response_message, metadata=metadata)
 
     def get_trajectory(
@@ -277,20 +277,20 @@ class TrajectoryManager:
     # -------------------- internals ----------------------------------------
 
     def _find_mount_point(self, root: Node, messages: list[dict[str, Any]]) -> tuple[Node, int]:
-        cur = root
-        i = 0
-        while i < len(messages):
-            m = messages[i]
-            m_key = node_match_key([m])
-            match = next(
-                (c for c in cur.children if c.role == m.get("role") and c.match_key == m_key),
-                None,
-            )
-            if match is None:
+        node = root
+        matched = 0
+        while matched < len(messages):
+            msg = messages[matched]
+            matched_child = None
+            for child in node.children:
+                if child.role == msg.get("role") and len(child.messages) == 1 and child.messages[0] == msg:
+                    matched_child = child
+                    break
+            if matched_child is None:
                 break
-            cur = match
-            i += 1
-        return cur, i
+            node = matched_child
+            matched += 1
+        return node, matched
 
     def _try_merge_assistant_rewrite(
         self,
@@ -337,21 +337,15 @@ class TrajectoryManager:
         sib.turn_finish_reason = None
         sib.turn_index = None
         sib.messages = [prompt_messages[i]]
-        sib.match_key = node_match_key(sib.messages)
         return sib, i + 1
 
     def _mount_prompt_messages(
         self,
         cur: Node,
         remaining_messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None,
     ) -> Node:
         for m in remaining_messages:
-            role = m.get("role")
-            md: dict[str, Any] = {}
-            if role == "system" and tools is not None and not self._first_system_already_set(cur):
-                md["tools"] = list(tools)
-            cur = cur.add_child(Node(role=role, messages=[m], metadata=md))
+            cur = cur.add_child(Node(role=m.get("role"), messages=[m]))
         return cur
 
     def _attach_assistant_leaf(
@@ -452,15 +446,6 @@ class TrajectoryManager:
             status=Sample.Status.COMPLETED,
             metadata=metadata,
         )
-
-    @staticmethod
-    def _first_system_already_set(start: Node) -> bool:
-        cur: Node | None = start
-        while cur is not None and not cur.is_root:
-            if cur.role == "system" and cur.metadata.get("tools") is not None:
-                return True
-            cur = cur.parent
-        return False
 
 
 __all__ = [

@@ -242,7 +242,6 @@ def append(
     response_ids=None,
     finish_reason="stop",
     logprobs=None,
-    tools=None,
     response_message=None,
 ):
     p = list(prompt_ids) if prompt_ids is not None else render_prompt(prompt_msgs)
@@ -271,7 +270,6 @@ def append(
         sid,
         turn=turn(p, r, finish_reason=finish_reason, logprobs=lp),
         prompt_messages=messages(prompt_msgs),
-        tools=tools,
         response_message=rmsg,
     )
     return p, r
@@ -288,15 +286,6 @@ def _iter_all(root):
         n = stack.pop()
         yield n
         stack.extend(n.children)
-
-
-# A minimal OpenAI-shape tool spec, used to exercise tools-metadata routing.
-TOOLS = [
-    {
-        "type": "function",
-        "function": {"name": "run", "description": "Run.", "parameters": {"type": "object"}},
-    }
-]
 
 
 # Tree text snapshot captured the instant before get_trajectory drains the sid,
@@ -1128,36 +1117,10 @@ def test_3_8_long_mixed_session():
 # ===========================================================================
 # §2 Group 4 — boundary / defensive / feature-completion
 #
-# Fills coverage gaps the matrix above left open: tools-metadata routing,
+# Fills coverage gaps the matrix above left open:
 # input-validation contracts, mixed-logprobs trajectories, the case-B1 drift
 # threshold boundary, and the default-base_sample path.
 # ===========================================================================
-
-
-def test_4_1_tools_metadata_on_first_system_only():
-    """tools passed to append_turn attach to the FIRST system node only; a later
-    turn carrying the same system must NOT re-attach (dedup via the
-    system-ancestor walk)."""
-    mgr = TrajectoryManager()
-    sid = "4.1"
-    s, u = sys_msg("S"), usr_msg("u")
-    a1, t1 = asst_msg("call"), tool_msg("t")
-    append(mgr, sid, [s, u], "call", finish_reason="tool_calls", tools=TOOLS)
-    append(mgr, sid, [s, u, a1, t1], "done", tools=TOOLS)
-    sys_node = mgr._trees[sid].children[0]
-    assert sys_node.role == "system"
-    assert sys_node.metadata.get("tools") == TOOLS, "tools land on the first system node"
-    # No other node carries tools.
-    others = [n for n in _iter_all(mgr._trees[sid]) if n is not sys_node]
-    assert all(n.metadata.get("tools") is None for n in others), "tools attached exactly once"
-    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
-    assert goldens(samples) == [
-        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] [</ast>] "
-        "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
-    ]
-    _check_invariants(samples)
-    _record("4.1 tools metadata on first system only", mgr, sid, samples)
-    print("PASS 4.1")
 
 
 def test_4_2_logprobs_length_mismatch_raises():
@@ -1177,7 +1140,6 @@ def test_4_2_logprobs_length_mismatch_raises():
             sid,
             turn=bad,
             prompt_messages=messages([s, u]),
-            tools=None,
             response_message={"role": "assistant", "content": "x"},
         )
     except ValueError as e:
@@ -1195,7 +1157,6 @@ def test_4_3_empty_prompt_messages_skipped():
         sid,
         turn=turn([1], [2], finish_reason="stop"),
         prompt_messages=[],
-        tools=None,
         response_message=None,
     )
     assert mgr.turn_count(sid) == 0
@@ -1257,7 +1218,6 @@ def test_4_6_drift_B1_threshold_boundary():
             sid,
             turn=turn(p1, r1, finish_reason="tool_calls"),
             prompt_messages=messages([s, u]),
-            tools=None,
             response_message={"role": "assistant", "content": "a1"},
         )
         a1m = {"role": "assistant", "content": "a1"}
@@ -1272,7 +1232,6 @@ def test_4_6_drift_B1_threshold_boundary():
             sid,
             turn=turn(p2, r2, finish_reason="stop"),
             prompt_messages=[*messages([s, u]), a1m, tm.message],
-            tools=None,
             response_message={"role": "assistant", "content": "done"},
         )
         samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
@@ -1394,7 +1353,6 @@ _CASES = [
     test_3_6_tree_fork_plus_token_drift,
     test_3_7_deep_multi_leaf_dedup,
     test_3_8_long_mixed_session,
-    test_4_1_tools_metadata_on_first_system_only,
     test_4_2_logprobs_length_mismatch_raises,
     test_4_3_empty_prompt_messages_skipped,
     test_4_4_default_base_sample,
