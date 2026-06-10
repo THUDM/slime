@@ -103,7 +103,7 @@ PERF_ARGS=(
 
    # --use-dynamic-batch-size
    --max-tokens-per-gpu 2048
-   --train-memory-margin-bytes 536870912
+   --train-memory-margin-bytes 268435456
 )
 
 MOPD_ARGS=(

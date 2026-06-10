@@ -25,7 +25,7 @@
 #      Example for a single 397B MoE teacher on 16 GPUs:
 #
 #      python3 -m sglang.launch_server \
-#          --model-path /personal/ckpt/Qwen3.5-397B-A17B_skin_multiturn/ \
+#          --model-path /path/to/Qwen3.5-397B-A17B_teacher/ \
 #          --host 0.0.0.0 --port 13141 \
 #          --tp 8 --ep-size 16 \
 #          --chunked-prefill-size 4096 \
@@ -38,8 +38,8 @@
 #      PYTHONPATH=/root/Megatron-LM torchrun --nproc_per_node=8 \
 #          tools/convert_hf_to_torch_dist.py \
 #          ${MODEL_ARGS[@]} \
-#          --hf-checkpoint /personal/ckpt/Qwen3.5-397B-A17B_Swift_SFT_Stage3b_Text1p5 \
-#          --save /personal/ckpt/Qwen3.5-397B-A17B_Swift_SFT_Stage3b_Text1p5_torch_dist
+#          --hf-checkpoint /path/to/Qwen3.5-397B-A17B \
+#          --save /path/to/Qwen3.5-397B-A17B_torch_dist
 #
 # usage: bash examples/multi_teacher_on_policy_distillation/run-qwen35-397B-A17B-mopd-topk-sglang.sh
 
@@ -62,20 +62,20 @@ source "${SLIME_DIR}/scripts/models/qwen3.5-397B-A17B.sh"
 # ============================================================================
 # Paths — adjust these to your environment
 # ============================================================================
-BASE_DIR=/personal/ckpt
+BASE_DIR=/path/to/checkpoints
 
-HF_CKPT=${BASE_DIR}/Qwen3.5-397B-A17B_Swift_SFT_Stage3b_Text1p5
-TORCH_DIST_CKPT=${BASE_DIR}/Qwen3.5-397B-A17B_Swift_SFT_Stage3b_Text1p5_torch_dist
-SAVE_DIR=/amed/share/s1-amed-spfs-ckpt/yanyi/Qwen3.5-397B-A17B-Stage3b-Mopd-Topk-Skin-Multiturn-Enhanced
+HF_CKPT=${BASE_DIR}/Qwen3.5-397B-A17B
+TORCH_DIST_CKPT=${BASE_DIR}/Qwen3.5-397B-A17B_torch_dist
+SAVE_DIR=${BASE_DIR}/Qwen3.5-397B-A17B-MOPD-TopK-Output
 
-DATA_PATH="/mnt/amed-s3/dataset/14019ba0_text_report_Interpretation/a3967912440becb0d70748a478696f12b6bbf6ac/train_text_think_nothink.jsonl"
+DATA_PATH="/path/to/your/training_data.jsonl"
 
 # MOPD teachers JSON config (single teacher for this example)
 export MOPD_TEACHERS_JSON='[{"name":"teacher","domain":"default"}]'
 
 # MOPD teacher SGLang server URLs
 # For multi-teacher, add all domains: {"math":"https://...","code":"https://..."}
-TEACHER_IP="aistudio.alipay.com/proxy/rayjob/aistudio-dvm9s0jw-tfjob-master-0"
+TEACHER_IP="your-teacher-server-host"
 TEACHER_PORT=8300
 export MOPD_TEACHER_URLS="{\"default\":\"https://$TEACHER_IP:$TEACHER_PORT/generate\"}"
 

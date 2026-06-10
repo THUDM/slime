@@ -39,7 +39,7 @@ TEACHER_LOG_FILE="/tmp/sglang_teacher_$(head /dev/urandom | tr -dc A-Za-z0-9 | h
 
 # Launch teacher on GPU 0-3 (4 GPUs for TP=4, or adjust TP as needed)
 CUDA_VISIBLE_DEVICES=0,1,2,3 python3 -m sglang.launch_server \
-    --model-path /mnt4/data/open_source/Qwen3.5-35B-A3B/ \
+    --model-path /path/to/checkpoints/Qwen3.5-35B-A3B/ \
     --host 0.0.0.0 \
     --port $TEACHER_PORT \
     --tp 4 \
@@ -71,7 +71,7 @@ else
 fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
-source "/mntfn/yanyi/code/slime/scripts/models/qwen3.5-35B-A3B.sh"
+source "/path/to/slime/scripts/models/qwen3.5-35B-A3B.sh"
 
 # MOPD teachers JSON config
 export MOPD_TEACHERS_JSON='[{"name":"self_teacher","domain":"default"}]'
@@ -86,24 +86,24 @@ export MOPD_TEACHER_URLS="{\"default\":\"http://$TEACHER_IP:$TEACHER_PORT/genera
 # IMPORTANT: Before running this script, convert the HF checkpoint to Megatron
 # torch_dist format:
 #
-#   cd /mntfn/yanyi/code/slime
+#   cd /path/to/slime
 #   source scripts/models/qwen3.5-35B-A3B.sh
 #
 #   PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
 #       ${MODEL_ARGS[@]} \
-#       --hf-checkpoint /mnt4/data/open_source/Qwen3.5-35B-A3B \
-#       --save /mnt4/data/open_source/Qwen3.5-35B-A3B_torch_dist
+#       --hf-checkpoint /path/to/checkpoints/Qwen3.5-35B-A3B \
+#       --save /path/to/checkpoints/Qwen3.5-35B-A3B_torch_dist
 
 CKPT_ARGS=(
-   --hf-checkpoint /mnt4/data/open_source/Qwen3.5-35B-A3B/
-   --ref-load /mnt4/data/open_source/Qwen3.5-35B-A3B_torch_dist/
-   --load /mnt4/data/zhixiaobao/yanyi/Qwen3.5-35B-A3B-mopd-test/
-   --save /mnt4/data/zhixiaobao/yanyi/Qwen3.5-35B-A3B-mopd-test/
+   --hf-checkpoint /path/to/checkpoints/Qwen3.5-35B-A3B/
+   --ref-load /path/to/checkpoints/Qwen3.5-35B-A3B_torch_dist/
+   --load /path/to/output/Qwen3.5-35B-A3B-mopd-test/
+   --save /path/to/output/Qwen3.5-35B-A3B-mopd-test/
    --save-interval 10
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data /mntfn/yanyi/dataset/train_text_user_only.jsonl
+   --prompt-data /path/to/dataset/train_text_user_only.jsonl
    --input-key messages
    --apply-chat-template
    --rollout-shuffle

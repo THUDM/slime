@@ -11,8 +11,11 @@ class Sample:
 
     group_index: int | None = None
     index: int | None = None
-    # prompt
+    # prompt (after chat template — always a str when apply_chat_template=True)
     prompt: str | list[dict[str, str]] = ""
+    # Raw message list before chat template application; needed for multimodal
+    # processing in filter_long_prompt when prompt has already been templated.
+    messages: list[dict] | None = None
     tokens: list[int] = field(default_factory=list)
     multimodal_inputs: dict[str, Any] | None = None  # raw multimodal data, e.g. images, videos, etc.
     multimodal_train_inputs: dict[str, Any] | None = None  # processed multimodal data, e.g. pixel_values, etc.

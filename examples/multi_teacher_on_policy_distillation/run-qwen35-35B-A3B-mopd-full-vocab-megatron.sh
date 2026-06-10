@@ -47,7 +47,7 @@ else
 fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
-source "/mntfn/yanyi/code/slime/scripts/models/qwen3.5-35B-A3B.sh"
+source "/path/to/slime/scripts/models/qwen3.5-35B-A3B.sh"
 
 # MOPD teachers JSON config
 export MOPD_TEACHERS_JSON='[{"name":"self_teacher","domain":"default"}]'
@@ -57,15 +57,15 @@ export MOPD_TEACHERS_JSON='[{"name":"self_teacher","domain":"default"}]'
 # ============================================================================
 
 CKPT_ARGS=(
-   --hf-checkpoint /mnt4/data/open_source/Qwen3.5-35B-A3B/
-   --ref-load /mnt4/data/open_source/Qwen3.5-35B-A3B_torch_dist/
-   --load /mnt4/data/zhixiaobao/yanyi/Qwen3.5-35B-A3B-mopd-full-vocab-test/
-   --save /mnt4/data/zhixiaobao/yanyi/Qwen3.5-35B-A3B-mopd-full-vocab-test/
+   --hf-checkpoint /path/to/checkpoints/Qwen3.5-35B-A3B/
+   --ref-load /path/to/checkpoints/Qwen3.5-35B-A3B_torch_dist/
+   --load /path/to/output/Qwen3.5-35B-A3B-mopd-full-vocab-test/
+   --save /path/to/output/Qwen3.5-35B-A3B-mopd-full-vocab-test/
    --save-interval 10
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data /mntfn/yanyi/dataset/train_text_user_only.jsonl
+   --prompt-data /path/to/dataset/train_text_user_only.jsonl
    --input-key messages
    --apply-chat-template
    --rollout-shuffle
@@ -151,7 +151,7 @@ MOPD_ARGS=(
    --mopd-distill-type full_vocab
 
    # Teacher checkpoint = same as ref model (self-distillation for validation)
-   --mopd-teacher-loads /mnt4/data/open_source/Qwen3.5-35B-A3B_torch_dist/
+   --mopd-teacher-loads /path/to/checkpoints/Qwen3.5-35B-A3B_torch_dist/
 
    # MOPD hyperparameters
    --mopd-alpha 0.0                # Pure distillation, no ORM
