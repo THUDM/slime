@@ -14,7 +14,7 @@ printf -v MOE_LAYER_FREQ "[%s]" "$(IFS=', '; echo "${arr[*]}")"
 
 
 MODEL_ARGS=(
-   --spec "slime_plugins.models.qwen3_5" "get_qwen3_5_spec"
+   --megatron-to-hf-mode bridge
 
    --disable-bias-linear
    --qk-layernorm

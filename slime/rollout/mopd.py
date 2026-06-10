@@ -72,9 +72,22 @@ def _build_payload(sample, args):
     - token_level: return_logprob=True, no top_logprobs_num
     - top_k: return_logprob=True, top_logprobs_num=mopd_topk_k
     - full_vocab: raises ValueError (not supported with SGLang)
+
+    For multimodal samples (with images), we use ``text`` + ``image_data``
+    instead of ``input_ids`` + ``image_data`` to avoid a mismatch between
+    the pre-tokenized ``input_ids`` (which contain expanded image-pad tokens
+    from the student's processor) and the SGLang teacher's multimodal
+    processor which re-tokenizes the image data and may produce a different
+    number of ``image_grid_thw`` entries, causing IndexError crashes in
+    Qwen3-VL's ``processing_qwen3_vl.py``.
+
+    Using ``text`` (prompt + response) lets the teacher's own processor
+    correctly tokenize the entire sequence including image placeholders,
+    ensuring ``image_grid_thw`` dimensions are consistent with the text.
     """
+    has_images = sample.multimodal_inputs and sample.multimodal_inputs.get("images")
+
     payload = {
-        "input_ids": sample.tokens,
         "sampling_params": {
             "temperature": 0,
             "max_new_tokens": 0,
@@ -100,9 +113,32 @@ def _build_payload(sample, args):
         )
     # token_level: no additional parameters needed
 
-    if sample.multimodal_inputs and sample.multimodal_inputs.get("images"):
+    if has_images:
+        # For multimodal samples, we must use ``text`` + ``image_data`` instead
+        # of ``input_ids`` + ``image_data``.  When SGLang receives both
+        # ``input_ids`` and ``image_data``, it decodes the ``input_ids`` back
+        # to text and runs the multimodal processor on it.  The decoded text
+        # may contain a different number of image placeholder groups than the
+        # ``image_data`` list (e.g. because ``input_ids`` includes response
+        # tokens whose decoding introduces extra ``<|vision_start|>...<|vision_end|>``
+        # patterns), leading to IndexError in the Qwen3-VL processor.
+        #
+        # Using ``text`` = prompt + response lets the teacher's processor
+        # correctly tokenize the full sequence from scratch, producing
+        # ``image_grid_thw`` that is consistent with the ``image_data``.
+        if not isinstance(sample.prompt, str):
+            raise ValueError(
+                f"MOPD multimodal request requires sample.prompt to be a string "
+                f"(got {type(sample.prompt).__name__}). Ensure --apply-chat-template "
+                f"is enabled so that prompt is pre-formatted as text."
+            )
+        payload["text"] = sample.prompt + sample.response
         image_data = sample.multimodal_inputs["images"]
         payload["image_data"] = [encode_image_for_rollout_engine(image) for image in image_data]
+    else:
+        # For text-only samples, ``input_ids`` is more efficient because it
+        # skips re-tokenization and avoids chat-template overhead.
+        payload["input_ids"] = sample.tokens
 
     return payload
 

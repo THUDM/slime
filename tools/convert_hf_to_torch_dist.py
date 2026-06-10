@@ -9,8 +9,6 @@ from megatron.training.arguments import parse_args, validate_args
 from megatron.training.checkpointing import get_checkpoint_name, get_checkpoint_tracker_filename, save_checkpoint
 from megatron.training.training import get_model
 
-import slime_plugins.mbridge  # noqa: F401
-from mbridge import AutoBridge
 from slime.backends.megatron_utils.arguments import set_default_megatron_args
 from slime.backends.megatron_utils.initialize import init
 from slime.backends.megatron_utils.model_provider import get_model_provider_func
@@ -35,7 +33,7 @@ def add_convertion_args(parser):
 
 
 def get_args():
-    args = parse_args(add_convertion_args)
+    args = parse_args(add_convertion_args, ignore_unknown_args=True)
     args = set_default_megatron_args(args)
 
     # set to pass megatron validate_args
@@ -113,11 +111,31 @@ def main():
 
     model = get_model(get_model_provider_func(args), ModelType.encoder_or_decoder, wrap_with_ddp=False)
 
-    # Load model
+    # Load model weights
     hf_model_path = args.hf_checkpoint
-    bridge = AutoBridge.from_pretrained(hf_model_path, trust_remote_code=True)
-    bridge.load_weights(model, hf_model_path, memory_efficient=True)
-    print(f"Model loaded: {hf_model_path}")
+    if args.megatron_to_hf_mode == "bridge":
+        # Bridge mode: use megatron.bridge for weight loading
+        # The bridge was already created inside get_model_provider_func; we need
+        # a fresh one here for weight loading only.
+        from megatron.bridge import AutoBridge as MegatronAutoBridge
+
+        import slime_plugins.megatron_bridge  # noqa: F401  # register custom bridges
+        from slime.utils.megatron_bridge_utils import patch_auto_bridge_hf_config
+
+        bridge = patch_auto_bridge_hf_config(
+            MegatronAutoBridge.from_hf_pretrained(hf_model_path, trust_remote_code=True)
+        )
+        bridge.load_hf_weights(model)
+        print(f"Model loaded (bridge mode): {hf_model_path}")
+    else:
+        # Raw mode: use mbridge for weight loading
+        import slime_plugins.mbridge  # noqa: F401
+
+        from mbridge import AutoBridge
+
+        bridge = AutoBridge.from_pretrained(hf_model_path, trust_remote_code=True)
+        bridge.load_weights(model, hf_model_path, memory_efficient=True)
+        print(f"Model loaded (raw mode): {hf_model_path}")
 
     if args.use_cpu_initialization:
         model[0] = model[0].cpu()
