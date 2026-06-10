@@ -54,8 +54,9 @@ CKPT_ARGS=(
    --hf-checkpoint ${HF_CKPT}/
    --load ${TORCH_DIST_CKPT}/
    --save ${SAVE_DIR}/
-   --save-interval 10
+   --save-interval 32
    --no-save-optim
+   --no-ckpt-fully-parallel-save
 )
 
 ROLLOUT_ARGS=(
@@ -93,15 +94,16 @@ PERF_ARGS=(
    --sequence-parallel
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
-   --expert-model-parallel-size 8
+   --expert-model-parallel-size 32
    --expert-tensor-parallel-size 1
 
    --recompute-granularity full
    --recompute-method uniform
-   --recompute-num-layers 1
+   --recompute-num-layers 4
 
    # --use-dynamic-batch-size
    --max-tokens-per-gpu 2048
+   --train-memory-margin-bytes 536870912
 )
 
 MOPD_ARGS=(
@@ -115,7 +117,7 @@ MOPD_ARGS=(
 
    # top_k distillation type
    --mopd-distill-type top_k
-   --mopd-topk-k 16
+   --mopd-topk-k 96
 
    # No --mopd-teacher-loads in SGLang mode!
    # Teacher data comes from SGLang server via HTTP during rollout.
@@ -129,7 +131,7 @@ MOPD_ARGS=(
 
 OPTIMIZER_ARGS=(
    --optimizer adam
-   --lr 5e-7                       # Conservative LR for stability
+   --lr 1e-6                       # Conservative LR for stability
    --lr-decay-style constant
    --weight-decay 0.1
    --adam-beta1 0.9
@@ -144,9 +146,9 @@ OPTIMIZER_ARGS=(
 WANDB_ARGS=()
 
 SGLANG_ARGS=(
-    --rollout-num-gpus-per-engine 8
-    --sglang-mem-fraction-static 0.25
-    --sglang-ep-size 8
+    --rollout-num-gpus-per-engine 16
+    --sglang-mem-fraction-static 0.10
+    --sglang-ep-size 16
 )
 
 MISC_ARGS=(
@@ -161,7 +163,7 @@ MISC_ARGS=(
    --no-check-for-nan-in-loss-and-grad
 
    --recompute-loss-function
-   --log-probs-chunk-size 1024
+   --log-probs-chunk-size 512
    --qkv-format bshd
    --micro-batch-size 1
    --colocate
@@ -192,7 +194,7 @@ print(json.dumps({'env_vars': env}))
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 ../workspace/bin/slime/train.py \
-   --actor-num-nodes 1 \
+   --actor-num-nodes 4 \
    --actor-num-gpus-per-node 8 \
    --update-weight-buffer-size $(( 1024 * 1024 * 1024 * 4 )) \
    ${MODEL_ARGS[@]} \

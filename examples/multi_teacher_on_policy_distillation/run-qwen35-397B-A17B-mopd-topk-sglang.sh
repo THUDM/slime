@@ -1,15 +1,16 @@
 #!/bin/bash
 
-# Multi-Teacher On-Policy Distillation (MOPD) — Top-K KL Divergence, SGLang Mode
+# Multi-Teacher On-Policy Distillation (MOPD) — Top-K KL Divergence, SGLang Non-colocate Mode
 # Model: Qwen3.5-397B-A17B (MoE, 512 experts, 10 active)
-# Environment: 16 nodes × 8 L20X (143GB each), 128 GPUs total
-# Teacher: Skin-multiturn teacher (running on external SGLang servers)
-# Mode: SGLang (teacher runs on separate SGLang inference servers, no CPU OOM)
+# Environment: 36 nodes × 8 GPUs (143GB each), 288 GPUs total
+#   - 32 nodes (256 GPUs) for Megatron actor training (non-colocate)
+#   -  4 nodes ( 32 GPUs) for SGLang rollout (2 engines × 16 GPUs each)
+# Teacher: Teacher model (running on external SGLang servers)
+# Mode: SGLang non-colocate (actor training and rollout on separate GPU groups)
 # Distill Type: top_k (approximate reverse KL with top-k teacher logits + tail correction)
 #
-# SGLang mode avoids loading teacher model weights into the Megatron training process,
-# eliminating the CPU RAM overhead of TensorBackuper pin_memory backups (~150GB per
-# teacher for 397B MoE on each node). The teacher runs on independent SGLang servers,
+# Non-colocate mode separates actor training GPUs from SGLang rollout GPUs,
+# avoiding GPU memory contention and allowing larger actor parallelism.
 # and its top-k logprobs are collected during rollout via HTTP requests.
 #
 # Key differences from Megatron top_k mode:
@@ -194,7 +195,12 @@ MISC_ARGS=(
    # --moe-enable-deepep  # DeepEP internode kernel assertion fails when EP=128
    --no-check-for-nan-in-loss-and-grad
 
-   --colocate
+   --recompute-loss-function
+   --log-probs-chunk-size 512
+   --qkv-format bshd
+   --micro-batch-size 1
+   # Non-colocate mode: actor training and rollout on separate GPU groups
+   # Remove --colocate to use non-colocate mode
 )
 
 # ============================================================================

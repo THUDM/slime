@@ -15,12 +15,18 @@ from slime.utils.distributed_utils import get_gloo_group, init_process_group
 
 from ..megatron_to_hf import convert_to_hf
 from .common import all_gather_param, named_params_and_buffers
+from .hf_weight_iterator_base import HfWeightIteratorBase
 
 
 class UpdateWeightFromDistributed:
     """
     Update distributed engines via NCCL. Each PP rank: group "slime-pp_{pp_rank}",
     only DP=TP=0 broadcasts. Non-expert (TP) and expert (EP) params separate.
+
+    When megatron_to_hf_mode=="bridge", uses HfWeightIteratorBridge for Megatron→HF
+    conversion (which supports models like Qwen3.5-VL MoE with vision encoders that
+    the manual convert_to_hf path does not handle). Otherwise falls back to the
+    direct convert_to_hf path.
     """
 
     def __init__(
@@ -37,10 +43,21 @@ class UpdateWeightFromDistributed:
         """
         self.args = args
         self.model = model
+        self.weights_getter = weights_getter
         self.model_name = model_name
         self.quantization_config = quantization_config
         self.weight_version = 0
         self._model_update_groups = None
+
+        # When megatron_to_hf_mode is "bridge", use HfWeightIteratorBridge for
+        # Megatron→HF conversion. This supports models (e.g. Qwen3.5-VL MoE)
+        # with vision encoders whose weight mappings are registered via
+        # megatron.bridge but not in the manual convert_to_hf functions.
+        self._use_bridge = getattr(args, "megatron_to_hf_mode", "raw") == "bridge"
+        if self._use_bridge:
+            self._hf_weight_iterator = HfWeightIteratorBase.create(
+                args=args, model=model, model_name=model_name, quantization_config=quantization_config
+            )
 
     def connect_rollout_engines(
         self,
@@ -89,7 +106,11 @@ class UpdateWeightFromDistributed:
     @torch.no_grad()
     def update_weights(self) -> None:
         """
-        Pause → flush → non-expert (TP) → expert (EP) → continue. Progress on PP source.
+        Pause → flush → convert HF → broadcast → continue.
+
+        When megatron_to_hf_mode=="bridge", uses HfWeightIteratorBridge for
+        Megatron→HF conversion. Otherwise uses the manual convert_to_hf path
+        with separate non-expert and expert parameter processing.
         """
         self.weight_version += 1
 
@@ -106,11 +127,59 @@ class UpdateWeightFromDistributed:
                 )
         dist.barrier(group=get_gloo_group())
 
+        pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_pp_src_rank else None
+
+        if self._use_bridge:
+            self._update_weights_bridge(pbar)
+        else:
+            self._update_weights_direct(pbar)
+
+        dist.barrier(group=get_gloo_group())
+        if dist.get_rank() == 0:
+            # int4/fp4 post_process
+            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+                post_process_weights(
+                    restore_weights_before_load=False,
+                    post_process_quantization=True,
+                    rollout_engines=self.rollout_engines,
+                )
+            ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
+        dist.barrier(group=get_gloo_group())
+
+    @torch.no_grad()
+    def _update_weights_bridge(self, pbar: tqdm | None = None) -> None:
+        """Update weights using HfWeightIteratorBridge for Megatron→HF conversion.
+
+        This path supports models with vision encoders and other components whose
+        weight mappings are registered via megatron.bridge (e.g. Qwen3.5-VL MoE)
+        but not in the manual convert_to_hf functions.
+
+        The bridge iterator handles TP/EP/PP synchronization and HF conversion
+        internally. We only need to broadcast the resulting HF weights to rollout
+        engines via NCCL.
+
+        All ranks must iterate through get_hf_weight_chunks because the bridge
+        internally performs collective operations (TP all-gather, EP all-gather,
+        PP broadcast) that require participation from every rank. Only the
+        PP source rank (DP=TP=0) broadcasts the converted HF weights to the
+        rollout engines.
+        """
+        megatron_local_weights = self.weights_getter()
+
+        for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights):
+            if self._is_pp_src_rank:
+                self._update_bucket_weights_from_distributed(hf_named_tensors, pbar=pbar)
+
+    @torch.no_grad()
+    def _update_weights_direct(self, pbar: tqdm | None = None) -> None:
+        """Update weights using the manual convert_to_hf path.
+
+        Processes non-expert and expert parameters separately with manual
+        TP all-gather and EP all-gather, then converts to HF format.
+        """
         buffer_size = 0
         converted_named_tensors = []
         # non expert params
-        pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_pp_src_rank else None
-
         for name, param in named_params_and_buffers(self.args, self.model):
             if ".experts." in name:
                 continue
@@ -134,18 +203,6 @@ class UpdateWeightFromDistributed:
 
         if named_tensors:
             self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
-
-        dist.barrier(group=get_gloo_group())
-        if dist.get_rank() == 0:
-            # int4/fp4 post_process
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
-                post_process_weights(
-                    restore_weights_before_load=False,
-                    post_process_quantization=True,
-                    rollout_engines=self.rollout_engines,
-                )
-            ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
-        dist.barrier(group=get_gloo_group())
 
     def _update_weight_from_distributed(
         self,
