@@ -215,8 +215,10 @@ def create_rollout_manager(args, pg):
     from .rollout import RolloutManager
 
     rollout_manager = RolloutManager.options(
-        num_cpus=1,
-        num_gpus=0,
+        num_cpus=args.rollout_manager_num_cpus,
+        num_gpus=args.rollout_manager_num_gpus,
+        memory=args.rollout_manager_memory,
+        object_store_memory=args.rollout_manager_object_store_memory,
     ).remote(args, pg)
 
     # calculate num_rollout from num_epoch
