@@ -37,7 +37,7 @@ import pytest  # noqa: E402
 from tests.test_agent.test_claude_code_agent._dump_helpers import dump_tree_txt  # noqa: E402
 
 from slime.agent.adapters.common import TurnRecord  # noqa: E402
-from slime.agent.trajectory_manager import TrajectoryManager, _lcp_len  # noqa: E402
+from slime.agent.trajectory_manager import TrajectoryManager, _common_prefix_len  # noqa: E402
 from slime.utils.types import Sample  # noqa: E402
 
 # ===========================================================================
@@ -620,7 +620,7 @@ def test_2_2_clean_multiturn_linearize():
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 1
     s0 = samples[0]
-    L = _lcp_len(p1 + r1, p2)
+    L = _common_prefix_len(p1 + r1, p2)
     assert goldens(samples) == [
         "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] [</ast>] "
         "<tul> tool:4 </tul> <gen> [r:done] [</ast>]",
@@ -669,7 +669,7 @@ def test_2_4_drift_case_B1_short_replaces():
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 1
     s0 = samples[0]
-    L = _lcp_len(p1 + r1, p2)
+    L = _common_prefix_len(p1 + r1, p2)
     assert L == drift_idx
     # replace: the drifted r:call response is no longer a faithful echo of what the
     # model generated (its tail diverged), so the WHOLE surviving span is masked and
@@ -1191,7 +1191,7 @@ def test_4_5_mixed_logprobs_across_turns():
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 1
     s0 = samples[0]
-    L = _lcp_len(p1 + r1, p2)
+    L = _common_prefix_len(p1 + r1, p2)
     # both responses still trained (golden shows the loss layout)...
     assert goldens(samples) == [
         "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] [</ast>] "

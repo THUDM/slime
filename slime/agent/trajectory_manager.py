@@ -115,12 +115,18 @@ class MessageNode:
 # short-circuits on the first differing field.
 
 
-def _lcp_len(a: list[int], b: list[int]) -> int:
-    n = min(len(a), len(b))
-    i = 0
-    while i < n and a[i] == b[i]:
-        i += 1
-    return i
+def _common_prefix_len(a: list[int], b: list[int], chunk: int = 4096) -> int:
+    limit = min(len(a), len(b))
+    matched = 0
+    while matched < limit:
+        chunk_end = min(matched + chunk, limit)
+        if a[matched:chunk_end] == b[matched:chunk_end]:
+            matched = chunk_end
+        else:
+            while matched < chunk_end and a[matched] == b[matched]:
+                matched += 1
+            return matched
+    return matched
 
 
 # ===========================================================================
@@ -140,7 +146,7 @@ class _Segment:
         self.first_prompt_len: int = 0
 
     def measure_token_drift(self, prompt_ids: list[int]) -> int:
-        return len(self.tokens) - _lcp_len(self.tokens, prompt_ids)
+        return len(self.tokens) - _common_prefix_len(self.tokens, prompt_ids)
 
     def can_absorb_drift(self, drift: int, fork_threshold: int) -> bool:
         if drift == 0:
@@ -456,5 +462,5 @@ class TrajectoryManager:
 __all__ = [
     "MessageNode",
     "TrajectoryManager",
-    "_lcp_len",
+    "_common_prefix_len",
 ]
