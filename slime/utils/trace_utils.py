@@ -18,15 +18,20 @@ SGLANG_TRACE_META_KEYS = (
     "prompt_tokens",
     "completion_tokens",
     "cached_tokens",
+    "queue_time",
+    "e2e_latency",
+    "decode_throughput",
     "pd_prefill_bootstrap_queue_duration",
     "pd_prefill_forward_duration",
     "pd_prefill_transfer_queue_duration",
     "pd_prefill_retry_count",
+    "pd_prefill_bootstrap_duration",
+    "pd_prefill_alloc_wait_duration",
     "pd_decode_prealloc_duration",
     "pd_decode_transfer_duration",
     "pd_decode_forward_duration",
-    "pd_bootstrap_duration",
-    "pd_alloc_waiting_duration",
+    "pd_decode_bootstrap_duration",
+    "pd_decode_alloc_wait_duration",
     "pd_transfer_speed_gb_s",
     "pd_transfer_total_mb",
 )
@@ -123,6 +128,8 @@ def _new_span_id() -> str:
 
 def build_sglang_meta_trace_attrs(meta: dict[str, Any]) -> dict[str, Any]:
     attrs = {key: meta[key] for key in SGLANG_TRACE_META_KEYS if key in meta and meta[key] is not None}
+    if meta.get("id") is not None:
+        attrs["sglang_request_id"] = meta["id"]
     attrs["finish_reason"] = meta["finish_reason"]["type"]
     return attrs
 

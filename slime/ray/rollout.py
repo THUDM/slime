@@ -14,6 +14,7 @@ import torch
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
+from slime.backends.sglang_utils.external import start_external_rollout_servers
 from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
@@ -34,6 +35,29 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+_SGLANG_REQUEST_PERF_FIELDS = (
+    ("request/e2e_latency", "e2e_latency"),
+    ("request/queue_time", "queue_time"),
+    ("decode/throughput", "decode_throughput"),
+)
+_SGLANG_PREFILL_PERF_FIELDS = (
+    ("prefill/bootstrap_queue_duration", "pd_prefill_bootstrap_queue_duration"),
+    ("prefill/bootstrap_duration", "pd_prefill_bootstrap_duration"),
+    ("prefill/alloc_wait_duration", "pd_prefill_alloc_wait_duration"),
+    ("prefill/forward_duration", "pd_prefill_forward_duration"),
+    ("prefill/transfer_queue_duration", "pd_prefill_transfer_queue_duration"),
+    ("prefill/transfer_speed_gb_s", "pd_transfer_speed_gb_s"),
+    ("prefill/transfer_total_mb", "pd_transfer_total_mb"),
+    ("prefill/retry_count", "pd_prefill_retry_count"),
+)
+_SGLANG_DECODE_PERF_FIELDS = (
+    ("decode/prealloc_duration", "pd_decode_prealloc_duration"),
+    ("decode/bootstrap_duration", "pd_decode_bootstrap_duration"),
+    ("decode/alloc_wait_duration", "pd_decode_alloc_wait_duration"),
+    ("decode/transfer_duration", "pd_decode_transfer_duration"),
+    ("decode/forward_duration", "pd_decode_forward_duration"),
+)
 
 
 @dataclasses.dataclass
@@ -158,22 +182,17 @@ class ServerGroup:
         if self.num_new_engines == 0:
             return [], port_cursors
 
-        if self.args.rollout_external:
-            addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(
-                args=self.args, rollout_engines=rollout_engines
-            )
-        else:
-            # Compute base_port from the maximum cursor across all nodes that
-            # this group's engines may land on (conservative: just use global max).
-            base_port = max(port_cursors.values()) if port_cursors else 15000
-            addr_and_ports, port_cursors = _allocate_rollout_engine_addr_and_ports_normal(
-                args=self.args,
-                rollout_engines=rollout_engines,
-                worker_type=self.worker_type,
-                num_gpus_per_engine=self.num_gpus_per_engine,
-                rank_offset=self.rank_offset,
-                base_port=base_port,
-            )
+        # Compute base_port from the maximum cursor across all nodes that
+        # this group's engines may land on (conservative: just use global max).
+        base_port = max(port_cursors.values()) if port_cursors else 15000
+        addr_and_ports, port_cursors = _allocate_rollout_engine_addr_and_ports_normal(
+            args=self.args,
+            rollout_engines=rollout_engines,
+            worker_type=self.worker_type,
+            num_gpus_per_engine=self.num_gpus_per_engine,
+            rank_offset=self.rank_offset,
+            base_port=base_port,
+        )
 
         init_handles = [
             engine.init.remote(
@@ -384,7 +403,7 @@ class RolloutManager:
         logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
         if self.args.debug_train_only:
-            self.servers: dict[str, RolloutServer] = {}
+            self.servers: dict[str, Any] = {}
         else:
             init_http_client(args)
             self.servers = start_rollout_servers(args, pg)
@@ -427,7 +446,12 @@ class RolloutManager:
         # Only inject fault once
         self._ci_fault_injection_pending = False
 
-        if self.server and self.server.server_groups[0].all_engines and self.server.server_groups[0].all_engines[0]:
+        if (
+            self.server
+            and self.server.server_groups
+            and self.server.server_groups[0].all_engines
+            and self.server.server_groups[0].all_engines[0]
+        ):
             logger.info("CI Fault Injection: Simulating crash on engine 0 during generate")
             try:
                 # This will cause the ray actor to exit
@@ -446,13 +470,13 @@ class RolloutManager:
         logging_utils.finish_tracking(self.args)
 
     @property
-    def server(self) -> RolloutServer | None:
+    def server(self) -> Any | None:
         """Default server (first model).  For backward compatibility."""
         if not self.servers:
             return None
         return next(iter(self.servers.values()))
 
-    def _get_updatable_server(self) -> RolloutServer | None:
+    def _get_updatable_server(self) -> Any | None:
         """Return the server with ``update_weights=True``.
 
         When multiple updatable servers exist, returns the first one
@@ -665,15 +689,15 @@ class RolloutManager:
         assert len(raw_rewards) == len(samples)
         assert len(rewards) == len(samples)
 
-        # Rollout id (one per rollout execution). Default rollouts emit one
-        # sample per rollout, so we fall back to ``sample.index`` (unique).
-        # Compact / subagent paths that emit multiple training samples per
-        # rollout set ``rollout_id`` explicitly so all siblings share a
-        # value; the loss reducer then aggregates them as one rollout.
-        if samples[0].rollout_id is None:
-            rollout_ids = list(range(len(samples)))
-        else:
-            rollout_ids = [sample.rollout_id for sample in samples]
+        rollout_ids = [sample.rollout_id for sample in samples]
+        existed_rollout_id_values = set(rid for rid in rollout_ids if rid is not None)
+        tmp_id = 0
+        for i in range(len(rollout_ids)):
+            if rollout_ids[i] is None:
+                while tmp_id in existed_rollout_id_values:
+                    tmp_id += 1
+                rollout_ids[i] = tmp_id
+                existed_rollout_id_values.add(tmp_id)
 
         train_data = {
             "tokens": [sample.tokens for sample in samples],
@@ -845,20 +869,6 @@ def _validate_rollout_id_annotated(node, depth=0):
         _validate_rollout_id_annotated(item, depth + 1)
 
 
-def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):
-    addr_and_ports = {}
-    for rank, _ in rollout_engines:
-        addr = args.rollout_external_engine_addrs[rank]
-        [host, port] = addr.split(":")
-        addr_and_ports[rank] = dict(
-            dist_init_addr=addr,
-            nccl_port=None,
-            host=host,
-            port=int(port),
-        )
-    return addr_and_ports
-
-
 def _allocate_rollout_engine_addr_and_ports_normal(
     *,
     args,
@@ -1018,7 +1028,7 @@ def _compute_megatron_num_gpus(args) -> int:
     return num
 
 
-def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
+def start_rollout_servers(args, pg) -> dict[str, Any]:
     """Start rollout servers: one per model, each with its own router.
 
     Each model defined in the sglang config gets its own router and set
@@ -1031,6 +1041,9 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
     Note: ``init_http_client`` should be called separately before this,
     as the HTTP client is shared across all servers.
     """
+    if args.rollout_external:
+        return start_external_rollout_servers(args, start_router=_start_router)
+
     config = _resolve_sglang_config(args)
 
     servers: dict[str, RolloutServer] = {}
@@ -1273,8 +1286,61 @@ def compute_perf_metrics_from_samples(args, samples, rollout_time):
 
     token_perf([sample.response_length for sample in samples], non_generation_time, key="")
     token_perf([sample.effective_response_length for sample in samples], non_generation_time, key="effective_")
+    log_dict |= _compute_sglang_request_perf_metrics(samples)
 
     return log_dict
+
+
+def _compute_sglang_request_perf_metrics(all_samples: list[Sample]):
+    attrs_by_request = list(_iter_sglang_generate_attrs(all_samples))
+    if not attrs_by_request:
+        return {}
+
+    values_by_metric: dict[str, list[float]] = {}
+    profiled_request_count = 0
+
+    def add_value(metric_key: str, source_key: str, attrs: dict) -> bool:
+        value = attrs.get(source_key)
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not np.isfinite(value):
+            return False
+        values_by_metric.setdefault(metric_key, []).append(float(value))
+        return True
+
+    for attrs in attrs_by_request:
+        request_has_perf = False
+
+        for metric_key, source_key in _SGLANG_REQUEST_PERF_FIELDS:
+            request_has_perf |= add_value(metric_key, source_key, attrs)
+
+        for metric_key, source_key in _SGLANG_PREFILL_PERF_FIELDS:
+            request_has_perf |= add_value(metric_key, source_key, attrs)
+
+        for metric_key, source_key in _SGLANG_DECODE_PERF_FIELDS:
+            request_has_perf |= add_value(metric_key, source_key, attrs)
+
+        if request_has_perf:
+            profiled_request_count += 1
+
+    metrics: dict[str, float] = {}
+    for key, values in values_by_metric.items():
+        if not values:
+            continue
+        metrics |= dict_add_prefix(compute_statistics(values), f"{key}/")
+
+    return metrics
+
+
+def _iter_sglang_generate_attrs(all_samples: list[Sample]):
+    for sample in all_samples:
+        trace = getattr(sample, "trace", None)
+        if not isinstance(trace, dict):
+            continue
+        for event in trace.get("events") or []:
+            if event.get("type") != "span_end" or event.get("name") != "sglang_generate":
+                continue
+            attrs = event.get("attrs")
+            if isinstance(attrs, dict):
+                yield attrs
 
 
 def _compute_zero_std_metrics(args, all_samples: list[Sample]):

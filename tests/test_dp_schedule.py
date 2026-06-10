@@ -20,12 +20,22 @@ def make_args(
     use_dynamic_batch_size=False,
     max_tokens_per_gpu=None,
     balance_data=False,
+    balance_by_flops=False,
 ):
     return SimpleNamespace(
         micro_batch_size=micro_batch_size,
         use_dynamic_batch_size=use_dynamic_batch_size,
         max_tokens_per_gpu=max_tokens_per_gpu,
         balance_data=balance_data,
+        balance_by_flops=balance_by_flops,
+        hidden_size=16,
+        num_attention_heads=2,
+        num_query_groups=2,
+        vocab_size=32,
+        ffn_hidden_size=64,
+        num_experts=None,
+        num_layers=2,
+        kv_channels=8,
     )
 
 
@@ -127,6 +137,31 @@ def test_static_balance_multi_step():
         nmb,
         dp_size=2,
         expected_global_sample_indices=range(16),
+        total_lengths=total_lengths,
+    )
+
+
+@pytest.mark.unit
+def test_balance_data_distributes_by_flops():
+    """balance_data uses FLOPs weights for rank assignment, not raw token sums."""
+    total_lengths = [1, 2, 3, 4, 5, 7, 9, 10]
+    rollout_indices = list(range(8))
+    args = make_args(micro_batch_size=1, balance_data=True)
+    tp = make_tp(dp_size=2)
+
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
+        args, tp, total_lengths, global_batch_size=8, rollout_indices=rollout_indices
+    )
+
+    assert partitions == [[1, 2, 5, 6], [0, 3, 4, 7]]
+    assert nmb == [4]
+    assert gbs_per_step == [8]
+    assert_invariants(
+        partitions,
+        mbi,
+        nmb,
+        dp_size=2,
+        expected_global_sample_indices=range(8),
         total_lengths=total_lengths,
     )
 

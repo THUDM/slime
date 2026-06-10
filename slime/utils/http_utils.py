@@ -198,13 +198,26 @@ async def _post(client, url, payload, max_retries=60, headers=None):
     return output
 
 
+def get_rollout_num_engines(args) -> int:
+    """Return the number of rollout HTTP engines behind the router."""
+    if (num_engines := getattr(args, "rollout_num_engines", None)) is not None:
+        return int(num_engines)
+
+    rollout_num_gpus = getattr(args, "rollout_num_gpus", None) or 0
+    rollout_num_gpus_per_engine = getattr(args, "rollout_num_gpus_per_engine", None) or 1
+    if rollout_num_gpus <= 0:
+        return 0
+    return max(1, rollout_num_gpus // rollout_num_gpus_per_engine)
+
+
 def init_http_client(args):
     """Initialize HTTP client and optionally enable distributed POST via Ray."""
     global _http_client, _client_concurrency, _distributed_post_enabled
-    if not args.rollout_num_gpus:
+    num_engines = get_rollout_num_engines(args)
+    if num_engines <= 0:
         return
 
-    _client_concurrency = args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
+    _client_concurrency = args.sglang_server_concurrency * num_engines
     if _http_client is None:
         _http_client = httpx.AsyncClient(
             limits=httpx.Limits(max_connections=_client_concurrency),

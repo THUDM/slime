@@ -3,6 +3,7 @@ import os
 import random
 from argparse import Namespace
 from contextlib import nullcontext
+from pathlib import Path
 
 import numpy as np
 import ray
@@ -29,10 +30,12 @@ from ...utils.tensor_backper import TensorBackuper
 from .checkpoint import load_checkpoint
 from .cp_utils import slice_log_prob_with_cp, slice_with_cp
 from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data
+from .hf_checkpoint_saver import save_hf_model_to_path
 from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight.common import named_params_and_buffers
+from .update_weight.update_weight_from_disk import UpdateWeightFromDisk
 from .update_weight.update_weight_from_distributed import UpdateWeightFromDistributed
 from .update_weight.update_weight_from_tensor import UpdateWeightFromTensor
 
@@ -135,6 +138,9 @@ class MegatronTrainRayActor(TrainRayActor):
             self.args.vocab_size = hf_vocab if hf_vocab is not None else self.tokenizer.vocab_size
 
         if self.args.colocate:
+            assert (
+                self.args.update_weight_mode == "full"
+            ), "--update-weight-mode=delta is not supported with --colocate"
             update_weight_cls = UpdateWeightFromTensor
         elif self.args.update_weight_mode == "delta":
             # Lazy import: the delta module pulls DeltaEncoding/DeltaParam/DeltaSpec from
@@ -144,7 +150,14 @@ class MegatronTrainRayActor(TrainRayActor):
 
             update_weight_cls = UpdateWeightFromDistributedDelta
         else:
-            update_weight_cls = UpdateWeightFromDistributed
+            assert self.args.update_weight_mode == "full"
+            if self.args.update_weight_transport == "disk":
+                update_weight_cls = UpdateWeightFromDisk
+            else:
+                assert (
+                    self.args.update_weight_mode == "full" and self.args.update_weight_transport == "nccl"
+                ), f"unsupported weight sync mode/transport: {self.args.update_weight_mode!r}/{self.args.update_weight_transport!r}"
+                update_weight_cls = UpdateWeightFromDistributed
         self.weight_updater = update_weight_cls(
             self.args,
             self.model,
@@ -584,9 +597,7 @@ class MegatronTrainRayActor(TrainRayActor):
             maybe_finalize_async_save(blocking=True)
 
         if self.args.save_hf is not None and self.role == "actor":
-            from slime.backends.megatron_utils.model import save_hf_model
-
-            save_hf_model(self.args, rollout_id, self.model)
+            save_hf_model_to_path(self.args, Path(self.args.save_hf.format(rollout_id=rollout_id)), self.model)
 
         if self.args.offload_train:
             self.sleep()
@@ -628,7 +639,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.weight_updater.update_weights()
             print_memory("after update_weights")
 
-            if self.args.ci_test and len(rollout_engines) > 0:
+            if self.args.ci_test and len(rollout_engines) > 0 and self.weight_updater.weight_version > 0:
                 engine = random.choice(rollout_engines)
                 engine_version = ray.get(engine.get_weight_version.remote())
                 if str(engine_version) != str(self.weight_updater.weight_version):

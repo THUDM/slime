@@ -1,3 +1,38 @@
+diff --git a/python/sglang/srt/configs/model_config.py b/python/sglang/srt/configs/model_config.py
+index 111145e..454ec96 100644
+--- a/python/sglang/srt/configs/model_config.py
++++ b/python/sglang/srt/configs/model_config.py
+@@ -427,12 +427,18 @@ class ModelConfig:
+             self.hf_config.architectures[0] = "DeepseekV4ForCausalLMNextN"
+             self.hf_config.num_nextn_predict_layers = 1
+ 
+-        if is_draft_model and self.hf_config.architectures[0] in [
+-            "Glm4MoeForCausalLM",
+-            "Glm4MoeLiteForCausalLM",
+-        ]:
++        if (
++            is_draft_model
++            and self.hf_config.architectures[0] == "Glm4MoeForCausalLM"
++        ):
+             self.hf_config.architectures[0] = "Glm4MoeForCausalLMNextN"
+ 
++        if (
++            is_draft_model
++            and self.hf_config.architectures[0] == "Glm4MoeLiteForCausalLM"
++        ):
++            self.hf_config.architectures[0] = "Glm4MoeLiteForCausalLMNextN"
++
+         if is_draft_model and self.hf_config.architectures[0] in [
+             "GlmOcrForConditionalGeneration",
+         ]:
+@@ -602,6 +608,7 @@ class ModelConfig:
+             or "DeepseekV3ForCausalLM" in self.hf_config.architectures
+             or "DeepseekV3ForCausalLMNextN" in self.hf_config.architectures
+             or "Glm4MoeLiteForCausalLM" in self.hf_config.architectures
++            or "Glm4MoeLiteForCausalLMNextN" in self.hf_config.architectures
+             or "GlmMoeDsaForCausalLM" in self.hf_config.architectures
+             or "LongcatFlashForCausalLM" in self.hf_config.architectures
+             or "LongcatFlashForCausalLMNextN" in self.hf_config.architectures
 diff --git a/python/sglang/srt/disaggregation/base/conn.py b/python/sglang/srt/disaggregation/base/conn.py
 index 097a841..eb56a55 100644
 --- a/python/sglang/srt/disaggregation/base/conn.py
@@ -512,7 +547,7 @@ index 0e2ed6a..78658f1 100644
                  release_kv_cache(req, self.tree_cache)  # unlock the tree
                  req.finished_reason = FINISH_LENGTH(length=0)
 diff --git a/python/sglang/srt/disaggregation/utils.py b/python/sglang/srt/disaggregation/utils.py
-index 951fa5b..acb6eb3 100644
+index 951fa5b..abf1817 100644
 --- a/python/sglang/srt/disaggregation/utils.py
 +++ b/python/sglang/srt/disaggregation/utils.py
 @@ -28,6 +28,17 @@ if TYPE_CHECKING:
@@ -524,8 +559,8 @@ index 951fa5b..acb6eb3 100644
 +    ("fwd_prefill_bootstrap_queue_duration", float),
 +    ("fwd_prefill_forward_duration", float),
 +    ("fwd_prefill_transfer_queue_duration", float),
-+    ("fwd_bootstrap_duration", float),
-+    ("fwd_alloc_waiting_duration", float),
++    ("fwd_prefill_bootstrap_duration", float),
++    ("fwd_prefill_alloc_wait_duration", float),
 +    ("fwd_transfer_speed_gb_s", float),
 +    ("fwd_transfer_total_mb", float),
 +    ("fwd_prefill_retry_count", int),
@@ -938,10 +973,13 @@ index 97a5bfc..4cca7a0 100644
          )
  
 diff --git a/python/sglang/srt/layers/moe/moe_runner/deep_gemm.py b/python/sglang/srt/layers/moe/moe_runner/deep_gemm.py
-index 61af5533f5..661735e5c9 100644
+index 61af553..661735e 100644
 --- a/python/sglang/srt/layers/moe/moe_runner/deep_gemm.py
 +++ b/python/sglang/srt/layers/moe/moe_runner/deep_gemm.py
-@@ -866,5 +866,7 @@ def _varlen_deep_gemm_silu_mul_quant(
+@@ -863,8 +863,10 @@ def _varlen_deep_gemm_silu_mul_quant(
+         dtype=torch.float8_e4m3fn,
+     )
+ 
 -    if envs.SGLANG_OPT_USE_JIT_EP_ACTIVATION.get():
 -        assert N % 4 == 0 and G % 4 == 0
 +    use_jit_ep_activation = (
@@ -1170,10 +1208,22 @@ index 293335f..51e5669 100644
  class CheckWeightsReqInput(BaseReq):
      action: str
 diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
-index feecc54..28b189c 100755
+index feecc54..6fce256 100755
 --- a/python/sglang/srt/managers/schedule_batch.py
 +++ b/python/sglang/srt/managers/schedule_batch.py
-@@ -2193,7 +2193,10 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+@@ -874,6 +874,11 @@ class Req(ReqDllmMixin):
+         self.metrics_collector = metrics_collector
+         if time_stats is not None:
+             self.time_stats = SchedulerReqTimeStats.new_from_obj(time_stats)
++            # Force the scheduler-side disagg_mode: new_from_obj copies
++            # disagg_mode from the source object (APIServerReqTimeStats from
++            # the tokenizer manager has disagg_mode=NULL), which breaks the
++            # PD timing getters in SchedulerReqTimeStats.
++            self.time_stats.disagg_mode = disagg_mode
+         else:
+             self.time_stats = SchedulerReqTimeStats(disagg_mode=disagg_mode)
+         self.time_stats.set_metrics_collector(metrics_collector)
+@@ -2193,7 +2198,10 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
          while first_iter or (
              not self.check_decode_mem(selected_indices=sorted_indices)
          ):
@@ -2072,49 +2122,11 @@ index eff3a56..5b1eec9 100644
  
  def _model_load_weights_direct(model, named_tensors: List[Tuple[str, torch.Tensor]]):
      params_dict = dict(model.named_parameters())
-diff --git a/python/sglang/srt/configs/model_config.py b/python/sglang/srt/configs/model_config.py
-index 31a6b28d5a..4c02196d81 100644
---- a/python/sglang/srt/configs/model_config.py
-+++ b/python/sglang/srt/configs/model_config.py
-@@ -425,12 +425,18 @@ class ModelConfig:
-             self.hf_config.architectures[0] = "DeepseekV4ForCausalLMNextN"
-             self.hf_config.num_nextn_predict_layers = 1
- 
--        if is_draft_model and self.hf_config.architectures[0] in [
--            "Glm4MoeForCausalLM",
--            "Glm4MoeLiteForCausalLM",
--        ]:
-+        if (
-+            is_draft_model
-+            and self.hf_config.architectures[0] == "Glm4MoeForCausalLM"
-+        ):
-             self.hf_config.architectures[0] = "Glm4MoeForCausalLMNextN"
- 
-+        if (
-+            is_draft_model
-+            and self.hf_config.architectures[0] == "Glm4MoeLiteForCausalLM"
-+        ):
-+            self.hf_config.architectures[0] = "Glm4MoeLiteForCausalLMNextN"
-+
-         if is_draft_model and self.hf_config.architectures[0] in [
-             "GlmOcrForConditionalGeneration",
-         ]:
-@@ -602,6 +603,7 @@ class ModelConfig:
-             or "DeepseekV3ForCausalLM" in self.hf_config.architectures
-             or "DeepseekV3ForCausalLMNextN" in self.hf_config.architectures
-             or "Glm4MoeLiteForCausalLM" in self.hf_config.architectures
-+            or "Glm4MoeLiteForCausalLMNextN" in self.hf_config.architectures
-             or "GlmMoeDsaForCausalLM" in self.hf_config.architectures
-             or "LongcatFlashForCausalLM" in self.hf_config.architectures
-             or "LongcatFlashForCausalLMNextN" in self.hf_config.architectures
 diff --git a/python/sglang/srt/model_loader/weight_utils.py b/python/sglang/srt/model_loader/weight_utils.py
-index 1ff3bb0b42..9ad1234c1c 100644
+index 84c57c1..3373f25 100644
 --- a/python/sglang/srt/model_loader/weight_utils.py
 +++ b/python/sglang/srt/model_loader/weight_utils.py
-@@ -682,10 +682,16 @@ def maybe_add_mtp_safetensors(
-     num_nextn_layers = getattr(
-         getattr(hf_config, "text_config", hf_config),
-         "num_nextn_predict_layers",
+@@ -685,7 +685,13 @@ def maybe_add_mtp_safetensors(
          getattr(hf_config, "num_nextn_predict_layers", 0),
      )
      if not (
@@ -2129,105 +2141,12 @@ index 1ff3bb0b42..9ad1234c1c 100644
          and num_nextn_layers > 0
      ):
          return hf_weights_files
-diff --git a/python/sglang/srt/models/glm4_moe_nextn.py b/python/sglang/srt/models/glm4_moe_nextn.py
-index 3c2a1a3134..6e2f62b521 100644
---- a/python/sglang/srt/models/glm4_moe_nextn.py
-+++ b/python/sglang/srt/models/glm4_moe_nextn.py
-@@ -31,11 +31,14 @@ from sglang.srt.model_executor.forward_batch_info import ForwardBatch
- from sglang.srt.models.glm4_moe import Glm4MoeDecoderLayer, Glm4MoeForCausalLM
- from sglang.srt.server_args import get_global_server_args
--from sglang.srt.utils import add_prefix
-+from sglang.srt.utils import BumpAllocator, add_prefix
- 
- logger = logging.getLogger(__name__)
- 
- 
- class Glm4MoeModelNextN(nn.Module):
-+    decoder_layer_cls = Glm4MoeDecoderLayer
-+    decoder_needs_zero_allocator = False
-+
-     def __init__(
-         self,
-         config: PretrainedConfig,
-@@ -65,7 +69,7 @@ class Glm4MoeModelNextN(nn.Module):
- 
-         self.eh_proj = nn.Linear(2 * config.hidden_size, config.hidden_size, bias=False)
- 
--        self.decoder = Glm4MoeDecoderLayer(
-+        self.decoder = self.decoder_layer_cls(
-             config,
-             0,
-             quant_config=quant_config,
-@@ -104,9 +108,19 @@ class Glm4MoeModelNextN(nn.Module):
- 
-         residual = None
-         with get_global_expert_distribution_recorder().disable_this_region():
--            hidden_states, residual = self.decoder(
--                positions, hidden_states, forward_batch, residual
--            )
-+            if self.decoder_needs_zero_allocator:
-+                zero_allocator = BumpAllocator(
-+                    buffer_size=2 * (2 if forward_batch.can_run_tbo else 1),
-+                    dtype=torch.float32,
-+                    device=hidden_states.device,
-+                )
-+                hidden_states, residual, _ = self.decoder(
-+                    positions, hidden_states, forward_batch, residual, zero_allocator
-+                )
-+            else:
-+                hidden_states, residual = self.decoder(
-+                    positions, hidden_states, forward_batch, residual
-+                )
- 
-         if not forward_batch.forward_mode.is_idle():
-             if residual is not None:
-@@ -120,6 +135,8 @@ class Glm4MoeModelNextN(nn.Module):
- 
- 
- class Glm4MoeForCausalLMNextN(Glm4MoeForCausalLM):
-+    model_cls = Glm4MoeModelNextN
-+
-     def __init__(
-         self,
-         config: PretrainedConfig,
-@@ -138,7 +155,7 @@ class Glm4MoeForCausalLMNextN(Glm4MoeForCausalLM):
-             or quant_config is not None
-         )
-         quant_config = quant_config if self.needs_quant_draft else None
--        self.model = Glm4MoeModelNextN(
-+        self.model = self.model_cls(
-             config, quant_config, prefix=add_prefix("model", prefix)
-         )
-         self.lm_head = ParallelLMHead(
-@@ -176,4 +193,22 @@ class Glm4MoeForCausalLMNextN(Glm4MoeForCausalLM):
-         super().load_weights(weights, is_nextn=True)
- 
- 
--EntryClass = [Glm4MoeForCausalLMNextN]
-+from sglang.srt.models.glm4_moe_lite import (
-+    Glm4MoeLiteDecoderLayer,
-+    Glm4MoeLiteForCausalLM,
-+)
-+
-+
-+class Glm4MoeLiteModelNextN(Glm4MoeModelNextN):
-+    decoder_layer_cls = Glm4MoeLiteDecoderLayer
-+    decoder_needs_zero_allocator = True
-+
-+
-+class Glm4MoeLiteForCausalLMNextN(Glm4MoeForCausalLMNextN, Glm4MoeLiteForCausalLM):
-+    model_cls = Glm4MoeLiteModelNextN
-+
-+    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-+        Glm4MoeLiteForCausalLM.load_weights(self, weights, is_nextn=True)
-+
-+
-+EntryClass = [Glm4MoeForCausalLMNextN, Glm4MoeLiteForCausalLMNextN]
 diff --git a/python/sglang/srt/models/glm4_moe_lite.py b/python/sglang/srt/models/glm4_moe_lite.py
-index 80a0351628..1f7cdd1f4d 100644
+index 80a0351..1f7cdd1 100644
 --- a/python/sglang/srt/models/glm4_moe_lite.py
 +++ b/python/sglang/srt/models/glm4_moe_lite.py
-@@ -274,9 +274,15 @@ class Glm4MoeLiteSparseMoeBlock(DeepseekV2MoE):
+@@ -273,10 +273,16 @@ class Glm4MoeLiteSparseMoeBlock(DeepseekV2MoE):
+ 
          self.shared_experts_is_int8 = False
          self.shared_experts_is_fp8 = False
 -        # self.shared_experts_weight_block_size = None
@@ -2261,6 +2180,101 @@ index 80a0351628..1f7cdd1f4d 100644
              is_packed_weight = hasattr(
                  self.shared_experts.gate_up_proj.quant_method, "quant_config"
              )
+diff --git a/python/sglang/srt/models/glm4_moe_nextn.py b/python/sglang/srt/models/glm4_moe_nextn.py
+index dfbd458..93b3e1a 100644
+--- a/python/sglang/srt/models/glm4_moe_nextn.py
++++ b/python/sglang/srt/models/glm4_moe_nextn.py
+@@ -36,12 +36,15 @@ from sglang.srt.layers.vocab_parallel_embedding import (
+ from sglang.srt.model_executor.forward_batch_info import ForwardBatch
+ from sglang.srt.models.glm4_moe import Glm4MoeDecoderLayer, Glm4MoeForCausalLM
+ from sglang.srt.server_args import get_global_server_args
+-from sglang.srt.utils import add_prefix
++from sglang.srt.utils import BumpAllocator, add_prefix
+ 
+ logger = logging.getLogger(__name__)
+ 
+ 
+ class Glm4MoeModelNextN(nn.Module):
++    decoder_layer_cls = Glm4MoeDecoderLayer
++    decoder_needs_zero_allocator = False
++
+     def __init__(
+         self,
+         config: PretrainedConfig,
+@@ -69,7 +72,7 @@ class Glm4MoeModelNextN(nn.Module):
+ 
+         self.eh_proj = nn.Linear(2 * config.hidden_size, config.hidden_size, bias=False)
+ 
+-        self.decoder = Glm4MoeDecoderLayer(
++        self.decoder = self.decoder_layer_cls(
+             config,
+             0,
+             quant_config=quant_config,
+@@ -105,9 +108,19 @@ class Glm4MoeModelNextN(nn.Module):
+ 
+         residual = None
+         with get_global_expert_distribution_recorder().disable_this_region():
+-            hidden_states, residual = self.decoder(
+-                positions, hidden_states, forward_batch, residual
+-            )
++            if self.decoder_needs_zero_allocator:
++                zero_allocator = BumpAllocator(
++                    buffer_size=2 * (2 if forward_batch.can_run_tbo else 1),
++                    dtype=torch.float32,
++                    device=hidden_states.device,
++                )
++                hidden_states, residual, _ = self.decoder(
++                    positions, hidden_states, forward_batch, residual, zero_allocator
++                )
++            else:
++                hidden_states, residual = self.decoder(
++                    positions, hidden_states, forward_batch, residual
++                )
+ 
+         if not forward_batch.forward_mode.is_idle():
+             if residual is not None:
+@@ -119,6 +132,8 @@ class Glm4MoeModelNextN(nn.Module):
+ 
+ 
+ class Glm4MoeForCausalLMNextN(Glm4MoeForCausalLM):
++    model_cls = Glm4MoeModelNextN
++
+     def __init__(
+         self,
+         config: PretrainedConfig,
+@@ -133,7 +148,7 @@ class Glm4MoeForCausalLMNextN(Glm4MoeForCausalLM):
+             or quant_config is not None
+         )
+         quant_config = quant_config if self.needs_quant_draft else None
+-        self.model = Glm4MoeModelNextN(
++        self.model = self.model_cls(
+             config, quant_config, prefix=add_prefix("model", prefix)
+         )
+         self.lm_head = ParallelLMHead(
+@@ -177,4 +192,22 @@ class Glm4MoeForCausalLMNextN(Glm4MoeForCausalLM):
+         super().load_weights(weights, is_nextn=True)
+ 
+ 
+-EntryClass = [Glm4MoeForCausalLMNextN]
++from sglang.srt.models.glm4_moe_lite import (
++    Glm4MoeLiteDecoderLayer,
++    Glm4MoeLiteForCausalLM,
++)
++
++
++class Glm4MoeLiteModelNextN(Glm4MoeModelNextN):
++    decoder_layer_cls = Glm4MoeLiteDecoderLayer
++    decoder_needs_zero_allocator = True
++
++
++class Glm4MoeLiteForCausalLMNextN(Glm4MoeForCausalLMNextN, Glm4MoeLiteForCausalLM):
++    model_cls = Glm4MoeLiteModelNextN
++
++    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
++        Glm4MoeLiteForCausalLM.load_weights(self, weights, is_nextn=True)
++
++
++EntryClass = [Glm4MoeForCausalLMNextN, Glm4MoeLiteForCausalLMNextN]
 diff --git a/python/sglang/srt/models/glm4v_moe.py b/python/sglang/srt/models/glm4v_moe.py
 index 2f00749..1f99193 100644
 --- a/python/sglang/srt/models/glm4v_moe.py
@@ -2476,7 +2490,7 @@ index fb9fd85..b1cbc9b 100644
              image_data=image_data,
              video_data=request_obj.video_data,
 diff --git a/python/sglang/srt/observability/req_time_stats.py b/python/sglang/srt/observability/req_time_stats.py
-index 326aace..a111256 100644
+index 326aace..b62804c 100644
 --- a/python/sglang/srt/observability/req_time_stats.py
 +++ b/python/sglang/srt/observability/req_time_stats.py
 @@ -21,7 +21,10 @@ import uuid
@@ -2498,15 +2512,15 @@ index 326aace..a111256 100644
 +    fwd_prefill_bootstrap_queue_duration: Optional[float] = None
 +    fwd_prefill_forward_duration: Optional[float] = None
 +    fwd_prefill_transfer_queue_duration: Optional[float] = None
-+    fwd_bootstrap_duration: Optional[float] = None
-+    fwd_alloc_waiting_duration: Optional[float] = None
++    fwd_prefill_bootstrap_duration: Optional[float] = None
++    fwd_prefill_alloc_wait_duration: Optional[float] = None
 +    fwd_transfer_speed_gb_s: Optional[float] = None
 +    fwd_transfer_total_mb: Optional[float] = None
 +    fwd_prefill_retry_count: Optional[int] = None
  
      def __getstate__(self) -> object:
          # send to detokenizer/tokenizer
-@@ -582,9 +593,31 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+@@ -582,10 +593,38 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
              return {}
  
          state = {
@@ -2530,15 +2544,22 @@ index 326aace..a111256 100644
 +            ),
 +            "fwd_prefill_forward_duration": self.fwd_prefill_forward_duration,
 +            "fwd_prefill_transfer_queue_duration": self.fwd_prefill_transfer_queue_duration,
-+            "fwd_bootstrap_duration": self.fwd_bootstrap_duration,
-+            "fwd_alloc_waiting_duration": self.fwd_alloc_waiting_duration,
++            "fwd_prefill_bootstrap_duration": self.fwd_prefill_bootstrap_duration,
++            "fwd_prefill_alloc_wait_duration": self.fwd_prefill_alloc_wait_duration,
 +            "fwd_transfer_speed_gb_s": self.fwd_transfer_speed_gb_s,
 +            "fwd_transfer_total_mb": self.fwd_transfer_total_mb,
 +            "fwd_prefill_retry_count": self.fwd_prefill_retry_count,
              "diff_realtime_monotonic": global_diff_realtime_monotonic,
++            # SLIME PATCH: preserve enable_metrics across IPC hops.
++            # Otherwise detokenizer-side enable_metrics defaults to False (from
++            # the dataclass default, not from the scheduler value), and when
++            # the same object is forwarded to tokenizer_manager the early
++            # `if not self.enable_metrics: return {}` strips PD timing fields.
++            "enable_metrics": self.enable_metrics,
          }
          return state
-@@ -974,6 +1007,162 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+ 
+@@ -974,6 +1013,172 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
      def get_queueing_time(self) -> float:
          return self.forward_entry_time - self.wait_queue_entry_time
  
@@ -2630,39 +2651,49 @@ index 326aace..a111256 100644
 +            return self.completion_time - self.forward_entry_time
 +        return None
 +
-+    def get_pd_bootstrap_duration(self) -> Optional[float]:
++    def get_pd_prefill_bootstrap_duration(self) -> Optional[float]:
 +        if not is_slime_profiling_enabled():
 +            return None
-+        if self.fwd_bootstrap_duration is not None:
-+            return self.fwd_bootstrap_duration
-+        if self.bootstrap_done_time <= 0.0:
-+            return None
++        if self.fwd_prefill_bootstrap_duration is not None:
++            return self.fwd_prefill_bootstrap_duration
 +        if (
 +            self.disagg_mode == DisaggregationMode.PREFILL
 +            and self.prefill_bootstrap_queue_entry_time > 0.0
++            and self.bootstrap_done_time > 0.0
 +        ):
 +            return self.bootstrap_done_time - self.prefill_bootstrap_queue_entry_time
++        return None
++
++    def get_pd_prefill_alloc_wait_duration(self) -> Optional[float]:
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_prefill_alloc_wait_duration is not None:
++            return self.fwd_prefill_alloc_wait_duration
++        if (
++            self.disagg_mode == DisaggregationMode.PREFILL
++            and self.bootstrap_done_time > 0.0
++            and self.wait_queue_entry_time > 0.0
++        ):
++            return self.wait_queue_entry_time - self.bootstrap_done_time
++        return None
++
++    def get_pd_decode_bootstrap_duration(self) -> Optional[float]:
++        if not is_slime_profiling_enabled():
++            return None
 +        if (
 +            self.disagg_mode == DisaggregationMode.DECODE
 +            and self.decode_prealloc_queue_entry_time > 0.0
++            and self.bootstrap_done_time > 0.0
 +        ):
 +            return self.bootstrap_done_time - self.decode_prealloc_queue_entry_time
 +        return None
 +
-+    def get_pd_alloc_waiting_duration(self) -> Optional[float]:
++    def get_pd_decode_alloc_wait_duration(self) -> Optional[float]:
 +        if not is_slime_profiling_enabled():
 +            return None
-+        if self.fwd_alloc_waiting_duration is not None:
-+            return self.fwd_alloc_waiting_duration
-+        if self.bootstrap_done_time <= 0.0:
-+            return None
-+        if (
-+            self.disagg_mode == DisaggregationMode.PREFILL
-+            and self.wait_queue_entry_time > 0.0
-+        ):
-+            return self.wait_queue_entry_time - self.bootstrap_done_time
 +        if (
 +            self.disagg_mode == DisaggregationMode.DECODE
++            and self.bootstrap_done_time > 0.0
 +            and self.decode_transfer_queue_entry_time > 0.0
 +        ):
 +            return self.decode_transfer_queue_entry_time - self.bootstrap_done_time
@@ -2701,7 +2732,7 @@ index 326aace..a111256 100644
      def convert_to_duration(self) -> str:
          if self.disagg_mode == DisaggregationMode.NULL:
              queue_duration = self.duration_between(
-@@ -1107,6 +1296,24 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+@@ -1107,6 +1312,26 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
                  "queue_time": self.get_queueing_time(),
              }
          )
@@ -2712,11 +2743,13 @@ index 326aace..a111256 100644
 +                ),
 +                "pd_prefill_forward_duration": self.get_pd_prefill_forward_duration(),
 +                "pd_prefill_transfer_queue_duration": self.get_pd_prefill_transfer_queue_duration(),
++                "pd_prefill_bootstrap_duration": self.get_pd_prefill_bootstrap_duration(),
++                "pd_prefill_alloc_wait_duration": self.get_pd_prefill_alloc_wait_duration(),
 +                "pd_decode_prealloc_duration": self.get_pd_decode_prealloc_duration(),
 +                "pd_decode_transfer_duration": self.get_pd_decode_transfer_duration(),
 +                "pd_decode_forward_duration": self.get_pd_decode_forward_duration(),
-+                "pd_bootstrap_duration": self.get_pd_bootstrap_duration(),
-+                "pd_alloc_waiting_duration": self.get_pd_alloc_waiting_duration(),
++                "pd_decode_bootstrap_duration": self.get_pd_decode_bootstrap_duration(),
++                "pd_decode_alloc_wait_duration": self.get_pd_decode_alloc_wait_duration(),
 +                "pd_transfer_speed_gb_s": self.get_pd_transfer_speed_gb_s(),
 +                "pd_transfer_total_mb": self.get_pd_transfer_total_mb(),
 +                "pd_prefill_retry_count": self.get_pd_prefill_retry_count(),

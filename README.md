@@ -42,7 +42,7 @@ slime is not just a framework that can call an inference backend. It keeps the M
 - [PD Disaggregation](docs/en/advanced/pd-disaggregation.md) for multi-turn and agentic workloads with different prefill/decode resource needs;
 - router policies such as session affinity for multi-turn agents;
 - [Delta Weight Sync](docs/en/advanced/delta-weight-sync.md) for training/inference disaggregation and large-model update efficiency;
-- external rollout engines for deployments where serving is managed outside the training job.
+- [External Rollout Engines](docs/en/advanced/external-rollout-engines.md) for deployments where serving is managed outside the training job. The SGLang serving side can use an independent environment, and with disk transport can even run on different GPU models or vendors while using full-checkpoint update from disk or delta update over a shared filesystem.
 
 This pass-through design makes slime native from the start. Most upstream engine improvements remain accessible as the engines evolve, while slime focuses on the RL loop, dataflow, synchronization, and correctness checks.
 
@@ -112,6 +112,10 @@ See the [Customization Guide](docs/en/get_started/customization.md) for which in
 
 These are not just demos. They are independent systems that use slime as a reusable RL substrate for production-scale post-training, agentic RL, domain RL, and rollout-system research.
 
+### 🔷 vime: vLLM-Native RL Post-Training Built on slime
+
+[**vime**](https://github.com/vllm-project/vime) is a post-training framework built on slime and maintained by the vLLM project. It keeps slime's Megatron training stack, Data Buffer dataflow, and custom data-generation design, with its main change being a rollout backend swapped to [**vLLM**](https://github.com/vllm-project/vllm) with [vllm-router](https://github.com/vllm-project/router). Starting from an existing slime launch script, adjusting only rollout-related parameters is enough to quickly run training with vime.
+
 ### 🌈 Relax: Asynchronous RL Engine for Omni-Modal Agentic Training
 
 [**Relax**](https://github.com/redai-infra/Relax) (Reinforcement Engine Leveraging Agentic X-modality) is an omni-modal agentic RL framework open-sourced by the RedAI Infra team, built upon the slime infrastructure stack that combines Ray, Megatron-LM, and SGLang. Relax adopts a service-oriented architecture on Ray Serve with Megatron-LM and SGLang as training/inference backends. It uses [TransferQueue](https://github.com/Ascend/TransferQueue) to fully decouple Actor, Rollout, ActorFwd, Reference, and Advantage computation onto independent GPU clusters, and introduces **DCS (Distributed Checkpoint Service)** — an NCCL-broadcast weight-sync engine that streams updated Actor weights to Rollout/ActorFwd/Reference asynchronously and overlaps the transfer with the next training step, enabling fully-async training at configurable staleness. Relax supports end-to-end RL for text, vision, and audio (including Qwen3-Omni) and agentic multi-turn rollouts.
@@ -139,6 +143,10 @@ These are not just demos. They are independent systems that use slime as a reusa
 ### 🏟️ qqr: Scaling Open-Ended Agents with ArenaRL & MCP
 
 [**qqr**](https://github.com/Alibaba-NLP/qqr) (a.k.a. hilichurl) is a lightweight extension for slime designed to evolve open-ended agents. It implements the **ArenaRL** algorithm to tackle discriminative collapse through tournament-based relative ranking (**e.g., Seeded Single-Elimination, Round-Robin**) and seamlessly integrates the **Model Context Protocol (MCP)**. qqr leverages slime's high-throughput training capabilities to enable scalable, distributed evolution of agents in standardized, decoupled tool environments.
+
+### ☁️ ART: Scalable and Sandboxed Agentic RL on AWS Bedrock AgentCore Runtime
+
+[**ART (AgentCore RL Toolkit)**](https://github.com/awslabs/agentcore-rl-toolkit) is an SDK that adapts production agents for RL training on **AWS Bedrock AgentCore Runtime**. AgentCore Runtime provides auto-scaled and sandboxed agent execution environments well-suited for running many parallel agent rollouts securely. Using ART, user only needs to apply a decorator (`@app.rollout_entrypoint`) to their agent codes for RL adaption while the same production agent harness is reused directly, where token capture for RL is handled at model gateway layer. ART uses slime as one option of training backends, enabling users to easily optimizing the production agent model with RL training algorithms in slime.
 
 Together, these projects show the main idea behind slime: one high-performance RL kernel can support frontier model post-training, online agent optimization, verifiable environments, omni-modal rollouts, kernel-generation agents, and rollout-system research without changing the core training loop.
 

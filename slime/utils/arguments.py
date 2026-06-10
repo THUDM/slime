@@ -3,6 +3,7 @@ import copy
 import json
 import logging
 import os
+import warnings
 from typing import Any
 
 import yaml
@@ -10,6 +11,7 @@ from sglang_router.launch_router import RouterArgs
 
 from slime.backends.sglang_utils.arguments import sglang_parse_args
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
+from slime.backends.sglang_utils.external import apply_external_engine_info_to_args
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
 from slime.utils.logging_utils import configure_logger
 
@@ -153,9 +155,30 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 choices=["nccl", "disk"],
                 default="nccl",
                 help=(
-                    "Per-flush carrier for --update-weight-mode=delta. 'nccl' broadcasts each "
-                    "bucket; 'disk' writes each bucket as a safetensors file under "
-                    "--update-weight-delta-dir and pushes once at end-of-sync."
+                    "Carrier for weight sync. In full mode, 'nccl' broadcasts chunks and "
+                    "'disk' writes a complete HF checkpoint under --update-weight-disk-dir "
+                    "before engines reload it. In delta mode, 'nccl' broadcasts sparse deltas; "
+                    "'disk' writes sparse safetensors under --update-weight-disk-dir and pushes "
+                    "once at end-of-sync."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-disk-dir",
+                type=str,
+                default=None,
+                help=(
+                    "Filesystem directory for disk-backed weight sync. In --update-weight-mode=full, "
+                    "one complete HF checkpoint directory is written per sync. In delta mode, "
+                    "one sparse-delta directory is written per sync."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-disk-keep-files",
+                action="store_true",
+                default=False,
+                help=(
+                    "Skip cleanup of full-checkpoint directories written by "
+                    "--update-weight-mode=full --update-weight-transport=disk."
                 ),
             )
             parser.add_argument(
@@ -175,10 +198,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
                 help=(
-                    "Filesystem directory for per-sync delta safetensors. Writable by the "
-                    "trainer, readable by every rollout engine. Required when "
-                    "--update-weight-transport=disk. One subdirectory per sync "
-                    "(``weight_v{N:06d}``), removed after every engine has acknowledged."
+                    "Deprecated alias for --update-weight-disk-dir and will be removed in a future "
+                    "release. Prefer the transport-level directory flag for both full and delta disk sync."
                 ),
             )
             parser.add_argument(
@@ -507,12 +528,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--rollout-external",
-                action="store_true",
-                default=False,
-                help="Use external SGLang instances instead of launching them inside the framework.",
-            )
-            parser.add_argument(
                 "--rollout-external-engine-addrs",
                 type=str,
                 default=None,
@@ -667,8 +682,26 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_true",
                 default=False,
                 help=(
-                    "Balance the number of tokens between data parallel ranks with `karmarkar_karp` for verl. "
+                    "Balance estimated training FLOPs between data parallel ranks with `karmarkar_karp`. "
+                    "Micro-batch packing still follows the configured static/dynamic batching unless "
+                    "`--balance-by-flops` is also set. "
                     "Note that this may allocate the different response of the same prompt into different training steps."
+                ),
+            )
+
+            parser.add_argument(
+                "--balance-by-flops",
+                action="store_true",
+                default=False,
+                help=(
+                    "Use FLOPs-based workload estimation (coeff*L + L²) for micro-batch "
+                    "partitioning via Karmarkar-Karp instead of first-fit token packing. "
+                    "The linear coefficient is auto-computed from model config (hidden_size, "
+                    "ffn_hidden_size, swiglu, MoE experts). Captures the quadratic cost of "
+                    "attention, producing more balanced micro-batches when sequence lengths "
+                    "vary widely. This may create micro-batches whose total tokens exceed "
+                    "--max-tokens-per-gpu and cause OOM. Also enables --balance-data. "
+                    "Requires --use-dynamic-batch-size."
                 ),
             )
 
@@ -1658,6 +1691,57 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
     return eval_datasets
 
 
+def _resolve_update_weight_disk_dir(args) -> None:
+    """Normalize disk-sync directory args.
+
+    ``--update-weight-delta-dir`` is kept only as a compatibility alias. New
+    code should use ``--update-weight-disk-dir`` because the directory belongs
+    to the transport, not to the delta encoding mode.
+    """
+    disk_dir = args.update_weight_disk_dir
+    delta_dir = args.update_weight_delta_dir
+    if disk_dir and delta_dir and disk_dir != delta_dir:
+        raise ValueError(
+            "--update-weight-delta-dir is deprecated alias for --update-weight-disk-dir; "
+            "please set only one of them or set both to the same path."
+        )
+
+    if delta_dir:
+        warnings.warn(
+            "--update-weight-delta-dir is deprecated and will be removed in a future release; "
+            "use --update-weight-disk-dir instead.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    disk_dir = disk_dir or delta_dir
+    if args.update_weight_transport == "disk":
+        if not disk_dir:
+            raise ValueError(
+                "--update-weight-transport=disk requires --update-weight-disk-dir to point at "
+                "a filesystem shared between the trainer and the rollout engines."
+            )
+        args.update_weight_disk_dir = disk_dir
+        args.update_weight_delta_dir = disk_dir
+
+
+def _validate_update_weight_args(args) -> None:
+    _resolve_update_weight_disk_dir(args)
+
+    if args.update_weight_mode == "delta":
+        if args.update_weight_transport not in ("nccl", "disk"):
+            raise ValueError(
+                "--update-weight-mode=delta supports only --update-weight-transport=nccl or disk, "
+                f"got {args.update_weight_transport!r}."
+            )
+        if args.colocate:
+            raise ValueError(
+                "--update-weight-mode=delta is not supported with --colocate. Colocate transfers "
+                "weights via CUDA IPC (only a handle crosses processes), so the delta bookkeeping "
+                "(snapshot + diff + sparse encode) is pure overhead."
+            )
+
+
 def slime_validate_args(args):
     args.eval_datasets = _resolve_eval_datasets(args)
 
@@ -1769,6 +1853,10 @@ def slime_validate_args(args):
         if args.log_probs_max_tokens_per_gpu is None:
             args.log_probs_max_tokens_per_gpu = args.max_tokens_per_gpu
 
+    if getattr(args, "balance_by_flops", False):
+        assert args.use_dynamic_batch_size, "--balance-by-flops requires --use-dynamic-batch-size"
+        args.balance_data = True
+
     if args.eps_clip_high is None:
         args.eps_clip_high = args.eps_clip
 
@@ -1785,6 +1873,11 @@ def slime_validate_args(args):
             "will not instantiate sglang servers and will only run the training process."
         )
         args.debug_train_only = True
+
+    args.rollout_external = args.rollout_external_engine_addrs is not None
+
+    if args.rollout_external and not args.debug_train_only:
+        apply_external_engine_info_to_args(args, logger=logger)
 
     args.use_critic = args.advantage_estimator == "ppo"
     # Critic always uses the same GPU count as actor.
@@ -1915,15 +2008,4 @@ def slime_validate_args(args):
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")
 
-    if args.update_weight_mode == "delta":
-        if args.colocate:
-            raise ValueError(
-                "--update-weight-mode=delta is not supported with --colocate. Colocate transfers "
-                "weights via CUDA IPC (only a handle crosses processes), so the delta bookkeeping "
-                "(snapshot + diff + sparse encode) is pure overhead."
-            )
-        if args.update_weight_transport == "disk" and not args.update_weight_delta_dir:
-            raise ValueError(
-                "--update-weight-transport=disk requires --update-weight-delta-dir to point at "
-                "a filesystem shared between the trainer and the rollout engines."
-            )
+    _validate_update_weight_args(args)

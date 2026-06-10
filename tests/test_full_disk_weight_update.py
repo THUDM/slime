@@ -1,8 +1,7 @@
-"""E2E smoke test for disk-backed delta weight updates.
+"""E2E smoke test for full checkpoint weight updates through disk.
 
-Runs a tiny Qwen3.5-0.8B job so the first weight update seeds the delta
-snapshot and the post-train update publishes sparse delta files through
-``update_weights_from_disk(load_format="delta", files=...)``.
+Runs a tiny Qwen3.5-0.8B job where each weight sync writes a complete HF
+checkpoint and rollout engines reload it through ``update_weights_from_disk``.
 """
 
 import os
@@ -31,7 +30,7 @@ def prepare():
 
 
 def execute():
-    with tempfile.TemporaryDirectory(prefix="slime_delta_weight_update_") as delta_dir:
+    with tempfile.TemporaryDirectory(prefix="slime_full_disk_weight_update_") as disk_dir:
         ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load {TORCH_DIST_CKPT} "
 
         rollout_args = (
@@ -67,9 +66,6 @@ def execute():
             "--use-kl-loss "
             "--kl-loss-coef 0.00 "
             "--kl-loss-type low_var_kl "
-            # Nonzero entropy coef guarantees a nonzero gradient even when all
-            # rewards in a group tie (advantages=0), so the delta sync writes
-            # real sparse files instead of an empty no-op.
             "--entropy-coef 0.01 "
             "--eps-clip 0.2 "
             "--eps-clip-high 0.28 "
@@ -92,12 +88,11 @@ def execute():
             "--sglang-enable-metrics "
         )
 
-        delta_args = (
-            "--update-weight-mode delta "
+        disk_update_args = (
+            "--update-weight-mode full "
             "--update-weight-transport disk "
-            "--update-weight-encoding deltas "
-            f"--update-weight-disk-dir {delta_dir} "
-            "--update-weight-delta-keep-files "
+            f"--update-weight-disk-dir {disk_dir} "
+            "--update-weight-disk-keep-files "
         )
 
         ci_args = "--ci-test "
@@ -121,7 +116,7 @@ def execute():
             f"{U.get_default_wandb_args(__file__)} "
             f"{perf_args} "
             f"{sglang_args} "
-            f"{delta_args} "
+            f"{disk_update_args} "
             f"{ci_args} "
             f"{misc_args} "
         )
@@ -132,8 +127,10 @@ def execute():
             megatron_model_type=MODEL_TYPE,
         )
 
-        delta_files = list(Path(delta_dir).glob("weight_v*/*.safetensors"))
-        assert delta_files, f"No disk delta safetensors were written under {delta_dir}"
+        checkpoint_dirs = sorted(Path(disk_dir).glob("weight_v*"))
+        assert checkpoint_dirs, f"No disk checkpoint directories were written under {disk_dir}"
+        assert any((path / "model.safetensors.index.json").exists() for path in checkpoint_dirs)
+        assert any(list(path.glob("*.safetensors")) for path in checkpoint_dirs)
 
 
 if __name__ == "__main__":
