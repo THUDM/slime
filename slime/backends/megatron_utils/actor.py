@@ -31,7 +31,7 @@ from .checkpoint import load_checkpoint
 from .cp_utils import slice_log_prob_with_cp, slice_with_cp
 from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data
 from .initialize import init, is_megatron_main_rank
-from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
+from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_logits_for_distill, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight.common import named_params_and_buffers
 from .update_weight.update_weight_from_distributed import UpdateWeightFromDistributed
@@ -395,17 +395,19 @@ class MegatronTrainRayActor(TrainRayActor):
         data_iterator: list[DataIterator],
         num_microbatches: list[int],
         store_prefix: str = "",
+        return_logits: bool = False,
     ) -> dict[str, list[torch.Tensor]]:
 
         with timer(f"{store_prefix}log_probs"):
-            return forward_only(
-                get_log_probs_and_entropy,
+            result = forward_only(
+                get_logits_for_distill if return_logits else get_log_probs_and_entropy,
                 self.args,
                 self.model,
                 data_iterator,
                 num_microbatches,
                 store_prefix=store_prefix,
             )
+            return result
 
     def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):
         if self.args.debug_rollout_only:
@@ -490,21 +492,35 @@ class MegatronTrainRayActor(TrainRayActor):
                 # Forward each MOPD teacher model for Megatron-based MOPD
                 if getattr(self.args, "use_mopd", False) and hasattr(self, "_mopd_teacher_domains") and self._mopd_teacher_domains:
                     mopd_teacher_log_probs = {}
+                    use_full_vocab = getattr(self.args, "mopd_distill_type", "token_level") == "full_vocab"
                     for domain in self._mopd_teacher_domains:
                         tag = f"mopd_teacher_{domain}"
                         if tag in self.weights_backuper.backup_tags:
                             if self.args.use_routing_replay:
                                 os.environ["ROUTING_REPLAY_STAGE"] = "fallthrough"
                             self._switch_model(tag)
-                            teacher_result = self.compute_log_prob(
-                                data_iterator,
-                                num_microbatches,
-                                store_prefix=f"mopd_teacher_{domain}_",
-                            )
-                            # Store with domain-specific key
-                            lp_key = f"mopd_teacher_{domain}_log_probs"
-                            if lp_key in teacher_result:
-                                mopd_teacher_log_probs[domain] = teacher_result[lp_key]
+                            if use_full_vocab:
+                                # Full-vocab mode: get full logits for exact KL computation
+                                teacher_result = self.compute_log_prob(
+                                    data_iterator,
+                                    num_microbatches,
+                                    store_prefix=f"mopd_teacher_{domain}_fv_",
+                                    return_logits=True,
+                                )
+                                # Store logits as a flat per-sample list under a domain-specific key
+                                logits_key = f"mopd_teacher_{domain}_fv_logits"
+                                if logits_key in teacher_result:
+                                    rollout_data[logits_key] = teacher_result[logits_key]
+                            else:
+                                # Token-level mode: only need log_probs
+                                teacher_result = self.compute_log_prob(
+                                    data_iterator,
+                                    num_microbatches,
+                                    store_prefix=f"mopd_teacher_{domain}_",
+                                )
+                                lp_key = f"mopd_teacher_{domain}_log_probs"
+                                if lp_key in teacher_result:
+                                    mopd_teacher_log_probs[domain] = teacher_result[lp_key]
                     if mopd_teacher_log_probs:
                         rollout_data["mopd_teacher_log_probs"] = mopd_teacher_log_probs
 

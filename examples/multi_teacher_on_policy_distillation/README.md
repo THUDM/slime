@@ -13,7 +13,9 @@ This example shows how to run **multi-teacher on-policy distillation (MOPD)** us
 
 ## Algorithm
 
-For each teacher domain *d*, MOPD computes:
+### Token-Level Mode (`--mopd-distill-type token_level`, default)
+
+Uses sampled token log-prob difference as a reverse KL approximation:
 
 ```
 reverse_kl_d = sg[log π_d(y_t) - log π_θ(y_t)]          # per-teacher reverse KL
@@ -21,6 +23,24 @@ w_t = sg[π_θ(y_t) / μ_θ(y_t)]  clipped to [ε_low, ε_high] # IS weight
 Â_MOPD,t = (1/D) Σ_d (reverse_kl_d + α · Â_ORM)          # averaged across D teachers
 L = -E[1/|y| Σ_t w_t · Â_MOPD,t · log π_θ(y_t)]          # proxy policy loss
 ```
+
+### Full-Vocabulary Mode (`--mopd-distill-type full_vocab`)
+
+Computes the exact full-vocabulary reverse KL divergence instead of the token-level approximation. This provides a more accurate distillation signal at the cost of increased memory usage.
+
+```
+D_KL(π_θ ∥ π_d) = Σ_y π_θ(y) [log π_θ(y) - log π_d(y)]  # exact full-vocab KL
+w_t = sg[π_θ(y_t) / μ_θ(y_t)]  clipped to [ε_low, ε_high] # IS weight
+L_fv_kl = (1/D) Σ_d (1/|y| Σ_t w_t · D_KL(π_θ ∥ π_d))    # IS-corrected KL loss
+L = L_fv_kl + α · L_pg                                      # combined with PG loss
+```
+
+When `α = 0`: `L = L_fv_kl` (pure distillation, no ORM needed).
+When `α > 0`: `L = L_fv_kl + α · L_pg` (distillation + ORM policy gradient).
+
+**Requirements**: `full_vocab` mode requires `--mopd-teacher-loads` (Megatron teacher mode). SGLang mode is not supported because the full logits tensor cannot be obtained from SGLang rollout.
+
+**Memory note**: `full_vocab` stores teacher logits `[R, V]` per sample per teacher. For large vocabularies (V=152K), this can be significant. Reduce `--rollout-batch-size` or `--rollout-max-response-len` if OOM occurs.
 
 ## Key Arguments
 
@@ -34,6 +54,7 @@ L = -E[1/|y| Σ_t w_t · Â_MOPD,t · log π_θ(y_t)]          # proxy policy lo
 | `--mopd-eps-low` | IS weight lower bound for clipping (default: 0.2). Weights below this are zeroed. |
 | `--mopd-eps-high` | IS weight upper bound for clipping (default: 5.0). Weights above this are zeroed. |
 | `--mopd-sampling-logprobs-key` | Key in rollout_data for sampling log-probs used in IS weight computation (default: `rollout_log_probs`). |
+| `--mopd-distill-type` | Distillation type: `token_level` (default) uses sampled token log-prob difference as a reverse KL approximation applied at the advantage level; `full_vocab` computes the exact full-vocabulary reverse KL divergence D_KL(π_θ ∥ π_d) using complete logits. `full_vocab` requires `--mopd-teacher-loads` (Megatron mode). |
 
 ## SGLang vs Megatron Mode
 
@@ -224,3 +245,10 @@ For string convenience, you can also use a single string instead of a list:
 
 5. **Why is `--group-rm` not supported with MOPD?**
    MOPD's `reward_func` returns per-domain dicts (not scalar rewards), which is incompatible with the batch `group_rm` reward path. Use the default per-sample reward path (no `--group-rm`).
+
+6. **What is the difference between `token_level` and `full_vocab` distillation types?**
+    - `token_level` (default): Approximates reverse KL using the sampled token log-prob difference `sg[log π_d(y_t) - log π_θ(y_t)]`. This is efficient and works with both SGLang and Megatron teacher modes, but only captures the KL at the sampled token position.
+    - `full_vocab`: Computes the exact full-vocabulary reverse KL divergence `D_KL(π_θ ∥ π_d) = Σ_y π_θ(y) [log π_θ(y) - log π_d(y)]`. Provides a more accurate distillation signal but requires full logits from the teacher, which means it only works with Megatron mode (`--mopd-teacher-loads`). Memory usage is significantly higher because teacher logits `[R, V]` must be stored for each sample.
+
+7. **When should I use `full_vocab` mode?**
+    Use `full_vocab` when you need more precise distillation signal and have sufficient GPU/CPU memory. It is particularly beneficial when the student and teacher distributions differ significantly, as the token-level approximation can underestimate the true KL divergence. For memory-constrained scenarios, stick with `token_level`.

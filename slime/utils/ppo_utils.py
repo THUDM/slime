@@ -198,6 +198,118 @@ def compute_entropy_from_logits(logits: torch.Tensor, process_group) -> torch.Te
     return _VocabParallelEntropy.apply(logits, process_group)
 
 
+class _VocabParallelReverseKL(torch.autograd.Function):
+    """Compute D_KL(π_student ∥ π_teacher) over a vocabulary-parallel partition.
+
+    Both *student_logits* and *teacher_logits* are partial tensors along the
+    vocab dimension (each TP rank holds V/tp_size entries).  The function
+    performs the necessary all-reduces to compute the exact reverse KL
+    divergence in a numerically stable manner:
+
+        D_KL(π_s ∥ π_t) = Σ_y π_s(y) [log π_s(y) - log π_t(y)]
+
+    Forward returns a tensor of shape [R] (one KL value per response token).
+    Backward propagates gradients w.r.t. *student_logits* only; teacher logits
+    are treated as constants (detached).
+
+    Gradient derivation:
+        KL = Σ_y π_s(y) [log π_s(y) - log π_t(y)]
+        ∂KL/∂z_j = π_s(j) [log π_s(j) - log π_t(j) + 1 - Σ_k π_s(k)(log π_s(k) - log π_t(k) + 1)]
+                  = π_s(j) [log π_s(j) - log π_t(j) - KL]     (since Σ_k π_s(k) = 1)
+    where z_j are the student logits and log π_s is log_softmax(z).
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        student_logits: torch.Tensor,
+        teacher_logits: torch.Tensor,
+        process_group: dist.ProcessGroup,
+    ) -> torch.Tensor:
+        # --- student softmax (numerically stable, TP-aware) ---
+        s_max = student_logits.max(dim=-1, keepdim=True).values
+        dist.all_reduce(s_max, op=dist.ReduceOp.MAX, group=process_group)
+        s_shifted = student_logits - s_max
+        s_exp = s_shifted.exp()
+        s_sum_exp = s_exp.sum(dim=-1, keepdim=True)
+        dist.all_reduce(s_sum_exp, op=dist.ReduceOp.SUM, group=process_group)
+        s_softmax = s_exp / s_sum_exp  # π_s(y)  [R, V_local]
+        s_log_sum_exp = s_sum_exp.log()  # [R, 1]
+
+        # --- teacher log-softmax (numerically stable, TP-aware) ---
+        t_max = teacher_logits.max(dim=-1, keepdim=True).values
+        dist.all_reduce(t_max, op=dist.ReduceOp.MAX, group=process_group)
+        t_shifted = teacher_logits - t_max
+        t_exp = t_shifted.exp()
+        t_sum_exp = t_exp.sum(dim=-1, keepdim=True)
+        dist.all_reduce(t_sum_exp, op=dist.ReduceOp.SUM, group=process_group)
+        t_log_sum_exp = t_sum_exp.log()  # [R, 1]
+
+        # --- KL = Σ_y π_s(y) [log π_s(y) - log π_t(y)] ---
+        # log π_s(y) = s_shifted - s_log_sum_exp  (local slice)
+        # log π_t(y) = t_shifted - t_log_sum_exp  (local slice)
+        local_s_log_prob = s_shifted - s_log_sum_exp
+        local_t_log_prob = t_shifted - t_log_sum_exp
+
+        local_kl_sum = (s_softmax * (local_s_log_prob - local_t_log_prob)).sum(dim=-1, keepdim=True)
+        dist.all_reduce(local_kl_sum, op=dist.ReduceOp.SUM, group=process_group)
+        kl = local_kl_sum.squeeze(dim=-1)  # [R]
+
+        # Save for backward
+        # We need: s_softmax, local_s_log_prob, local_t_log_prob, and kl (per-token)
+        ctx.save_for_backward(s_softmax, local_s_log_prob.detach(), local_t_log_prob.detach(), kl.detach())
+        ctx.process_group = process_group
+        return kl
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        s_softmax, local_s_log_prob, local_t_log_prob, kl = ctx.saved_tensors
+        process_group = ctx.process_group
+
+        # Gradient: ∂KL/∂z_j = π_s(j) * [log π_s(j) - log π_t(j) - KL]
+        # This is completely local per token — no all_reduce needed in backward.
+        grad_local = s_softmax * (local_s_log_prob - local_t_log_prob - kl.unsqueeze(-1))
+
+        grad_input = grad_output.unsqueeze(-1) * grad_local  # [R, V_local]
+        return grad_input, None, None
+
+
+def vocab_parallel_reverse_kl(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    process_group: dist.ProcessGroup,
+) -> torch.Tensor:
+    """Compute D_KL(π_student ∥ π_teacher) with TP-aware vocab parallelism.
+
+    Both inputs are partial logits along the vocab dimension (each TP rank
+    holds V/tp_size logits).  Returns per-token KL of shape [R].
+
+    Teacher logits are detached (no gradient flows to the teacher).
+
+    Args:
+        student_logits: [R, V_local] student logits (with grad).
+        teacher_logits: [R, V_local] teacher logits (detached).
+        process_group: TP process group for all-reduce.
+
+    Returns:
+        Per-token KL divergence tensor of shape [R].
+    """
+    # Detach teacher logits — we never backprop through the teacher
+    teacher_logits = teacher_logits.detach()
+
+    tp_size = dist.get_world_size(group=process_group) if process_group is not None else 1
+    if tp_size <= 1:
+        # No TP — simple local computation
+        student_log_probs = F.log_softmax(student_logits, dim=-1)
+        student_probs = student_log_probs.exp()
+        teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
+        kl = (student_probs * (student_log_probs - teacher_log_probs)).sum(dim=-1)
+        return kl
+
+    # TP mode — use custom autograd function with correct backward
+    return _VocabParallelReverseKL.apply(student_logits, teacher_logits, process_group)
+
+
 def get_grpo_returns(
     rewards: torch.Tensor,
     kl: list[torch.Tensor],

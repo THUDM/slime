@@ -1098,6 +1098,22 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "'log_probs': use the training engine log-probs."
                 ),
             )
+            parser.add_argument(
+                "--mopd-distill-type",
+                type=str,
+                choices=["token_level", "full_vocab"],
+                default="token_level",
+                help=(
+                    "MOPD distillation type. "
+                    "'token_level' (default): use the sampled token log-prob difference as a reverse KL approximation, "
+                    "applied at the advantage level. "
+                    "'full_vocab': compute the exact full-vocabulary reverse KL divergence D_KL(π_θ ∥ π_d) "
+                    "using complete logits from both student and teacher models. This is only supported with "
+                    "megatron teacher mode (--mopd-teacher-loads), as it requires access to teacher logits "
+                    "during training. The full-vocab KL loss is computed directly in the loss function rather "
+                    "than through advantage modification."
+                ),
+            )
             return parser
 
         def add_router_arguments(parser):
@@ -1801,6 +1817,15 @@ def slime_validate_args(args):
             raise ValueError(
                 f"--mopd-eps-high ({args.mopd_eps_high}) must be > --mopd-eps-low ({args.mopd_eps_low})."
             )
+
+        # Validate mopd_distill_type: full_vocab mode requires megatron teachers
+        if args.mopd_distill_type == "full_vocab":
+            if args.mopd_teacher_loads is None:
+                raise ValueError(
+                    "--mopd-distill-type=full_vocab requires --mopd-teacher-loads (megatron teacher mode). "
+                    "SGLang-based teachers cannot return full-vocabulary logits efficiently. "
+                    "Please provide teacher checkpoints via --mopd-teacher-loads."
+                )
 
         # MOPD with megatron-based teachers requires weights_backuper (to backup multiple models)
         if args.mopd_teacher_loads is not None and not args.enable_weights_backuper:

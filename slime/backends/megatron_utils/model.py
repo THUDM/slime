@@ -463,24 +463,37 @@ def train_one_step(
         """
 
         # Get the batch.
+        # Collect base keys needed by all loss functions
+        batch_keys = [
+            "tokens",
+            "multimodal_train_inputs",
+            "packed_seq_params",
+            "total_lengths",
+            "response_lengths",
+            "loss_masks",
+            "log_probs",
+            "ref_log_probs",
+            "values",
+            "advantages",
+            "returns",
+            "rollout_log_probs",
+            "max_seq_lens",
+            "teacher_log_probs",
+        ]
+        # Add MOPD full-vocab teacher logits keys if present
+        # These are stored as "mopd_teacher_{domain}_fv_logits" per domain
+        use_mopd_full_vocab = (
+            getattr(args, "use_mopd", False) and getattr(args, "mopd_distill_type", "token_level") == "full_vocab"
+        )
+        if use_mopd_full_vocab and hasattr(args, "_mopd_teachers_parsed"):
+            for teacher_cfg in args._mopd_teachers_parsed:
+                domain = teacher_cfg["domain"]
+                logits_key = f"mopd_teacher_{domain}_fv_logits"
+                batch_keys.append(logits_key)
+
         batch = get_batch(
             data_iterator,
-            [
-                "tokens",
-                "multimodal_train_inputs",
-                "packed_seq_params",
-                "total_lengths",
-                "response_lengths",
-                "loss_masks",
-                "log_probs",
-                "ref_log_probs",
-                "values",
-                "advantages",
-                "returns",
-                "rollout_log_probs",
-                "max_seq_lens",
-                "teacher_log_probs",
-            ],
+            batch_keys,
             args.data_pad_size_multiplier,
             args.qkv_format,
             args.allgather_cp,

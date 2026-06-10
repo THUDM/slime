@@ -418,8 +418,12 @@ def log_rollout_data(
                 "dynamic_global_batch_size",
                 # Dict-typed keys that cannot be averaged directly
                 "mopd_teacher_log_probs",
+                "mopd_teacher_logits",
                 "mopd_reverse_kl",
             ]:
+                continue
+            # Skip per-domain full-vocab teacher logits (too large for averaging)
+            if key.startswith("mopd_teacher_") and key.endswith("_fv_logits"):
                 continue
             # Upload per sample mean for each rollout value
             # There are the following assumptions:
