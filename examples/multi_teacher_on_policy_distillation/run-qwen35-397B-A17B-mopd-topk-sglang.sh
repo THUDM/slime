@@ -96,10 +96,10 @@ ROLLOUT_ARGS=(
    --input-key messages
    --apply-chat-template
    --rollout-shuffle
-   --rollout-batch-size 64
-   --n-samples-per-prompt 1
+   --rollout-batch-size 16
+   --n-samples-per-prompt 4
    --rollout-max-response-len 4096
-   --rollout-temperature 0.5
+   --rollout-temperature 0.8
 
    --global-batch-size 64
    --balance-data
@@ -116,7 +116,7 @@ RM_ARGS=(
 EVAL_ARGS=()
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 2
+   --tensor-model-parallel-size 16
    --sequence-parallel
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
@@ -129,6 +129,7 @@ PERF_ARGS=(
 
    --use-dynamic-batch-size
    --max-tokens-per-gpu 4096
+   --train-memory-margin-bytes 268435456
 )
 
 MOPD_ARGS=(

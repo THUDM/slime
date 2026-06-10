@@ -1210,9 +1210,17 @@ def apply_mopd_full_vocab_to_loss(
         "mopd_is_nonzero_frac": is_nonzero_frac.clone().detach(),
     }
 
-    # Per-teacher KL for logging (re-use KL values computed in the main loop)
-    for domain, domain_kls in per_domain_kls.items():
-        metrics[f"mopd_fv_kl/{domain}"] = sum_of_sample_mean(torch.cat(domain_kls, dim=0)).clone().detach()
+    # Per-teacher KL for logging (re-use KL values computed in the main loop).
+    # Iterate over ALL configured teacher domains (not just per_domain_kls) so
+    # that every microbatch emits the same set of metric keys.  Without this
+    # Megatron's cross-microbatch loss reduction (model.py: values += x["values"])
+    # can crash with a tensor-size mismatch when different microbatches have
+    # different subsets of active domains.
+    for domain in teacher_logits_per_domain:
+        if domain in per_domain_kls and len(per_domain_kls[domain]) > 0:
+            metrics[f"mopd_fv_kl/{domain}"] = sum_of_sample_mean(torch.cat(per_domain_kls[domain], dim=0)).clone().detach()
+        else:
+            metrics[f"mopd_fv_kl/{domain}"] = torch.tensor(0.0, device=all_kl_cat.device)
 
     return kl_loss, metrics
 
@@ -1277,7 +1285,7 @@ def apply_mopd_topk_to_loss(
             f"MOPD top_k requires '{sampling_logprobs_key}' in batch for importance sampling."
         )
 
-    vocab_size = args.padded_vocab_size
+    vocab_size = args.vocab_size
     num_samples = len(student_logits_per_sample)
     if len(sampling_log_probs) != num_samples:
         raise ValueError(
@@ -1303,11 +1311,16 @@ def apply_mopd_topk_to_loss(
 
             t_topk_logits = teacher_topk_logits_per_domain[domain][i]  # [R_i, k]
 
-            # Skip fallback sentinel tensors (all -inf) from failed teacher requests.
-            # These would produce KL=0 anyway, so skipping avoids unnecessary
-            # computation and TP all-reduce calls.
-            if t_topk_logits.isinf().all():
-                continue
+            # IMPORTANT: Do NOT skip the vocab_parallel_topk_reverse_kl call even
+            # when all teacher logits are -inf.  Each TP rank independently shards
+            # the top-k tokens into its vocab range, so one rank may see all -inf
+            # (no tokens in its shard) while another rank has valid entries.
+            # Skipping on only some ranks creates an inconsistent TP collective call
+            # (all_reduce inside vocab_parallel_topk_reverse_kl), causing an
+            # irreversible NCCL deadlock.  When all entries are -inf,
+            # vocab_parallel_topk_reverse_kl correctly produces KL=0 (the
+            # valid_topk_mask is all-False), so the numerical result is identical
+            # -- but the collective operations remain consistent across TP ranks.
 
             t_topk_indices = teacher_topk_indices_per_domain[domain][i]  # [R_i, k]
 
@@ -1394,8 +1407,16 @@ def apply_mopd_topk_to_loss(
         "mopd_is_nonzero_frac": is_nonzero_frac.clone().detach(),
     }
 
-    for domain, domain_kls in per_domain_kls.items():
-        metrics[f"mopd_topk_kl/{domain}"] = sum_of_sample_mean(torch.cat(domain_kls, dim=0)).clone().detach()
+    for domain in teacher_topk_logits_per_domain:
+        if domain in per_domain_kls and len(per_domain_kls[domain]) > 0:
+            metrics[f"mopd_topk_kl/{domain}"] = sum_of_sample_mean(torch.cat(per_domain_kls[domain], dim=0)).clone().detach()
+        else:
+            # No samples contributed valid teacher data for this domain in this
+            # microbatch.  Emit a zero metric so that every microbatch produces
+            # the same set of metric keys — this is required for Megatron's
+            # loss-reduction across microbatches which uses tensor addition
+            # (model.py: values += x["values"]) and demands identical sizes.
+            metrics[f"mopd_topk_kl/{domain}"] = torch.tensor(0.0, device=all_kl_cat.device)
 
     return kl_loss, metrics
 
@@ -1568,6 +1589,24 @@ def policy_loss_function(
         else:
             logger.warning("MOPD full_vocab enabled but no teacher logits found in batch. Skipping full_vocab KL loss.")
 
+        # Ensure per-domain metric keys AND base MOPD metric keys exist for
+        # ALL configured teacher domains, even when the batch contains no valid
+        # data for some (or all) domains.  Megatron's loss-reduction
+        # (model.py: values += x["values"]) requires every microbatch to emit
+        # the same set of metric keys; missing keys cause a tensor-size
+        # mismatch across microbatches.
+        _device = logits.device
+        for teacher_cfg in mopd_teachers_parsed:
+            domain = teacher_cfg["domain"]
+            _domain_key = f"mopd_fv_kl/{domain}"
+            if _domain_key not in mopd_fv_metrics:
+                mopd_fv_metrics[_domain_key] = torch.tensor(0.0, device=_device)
+        # Ensure base MOPD metrics are present even when no teacher data was
+        # available for the entire microbatch (apply_mopd_full_vocab_to_loss not called).
+        for _base_key in ("mopd_fv_kl", "mopd_is_weight_mean", "mopd_is_nonzero_frac"):
+            if _base_key not in mopd_fv_metrics:
+                mopd_fv_metrics[_base_key] = torch.tensor(0.0, device=_device)
+
     # MOPD top_k: compute top-k approximate reverse KL divergence loss
     # L = (1/D) Σ_d w_d · KL_topk+d(π_θ ∥ π_d) + alpha * pg_loss
     if use_mopd_top_k:
@@ -1615,6 +1654,24 @@ def policy_loss_function(
             batch["_mopd_fv_kl_loss"] = topk_kl_loss
         else:
             logger.warning("MOPD top_k enabled but no teacher top-k data found in batch. Skipping top_k KL loss.")
+
+        # Ensure per-domain metric keys AND base MOPD metric keys exist for
+        # ALL configured teacher domains, even when the batch contains no valid
+        # data for some (or all) domains.  Megatron's loss-reduction
+        # (model.py: values += x["values"]) requires every microbatch to emit
+        # the same set of metric keys; missing keys cause a tensor-size
+        # mismatch across microbatches.
+        _device = logits.device
+        for teacher_cfg in mopd_teachers_parsed:
+            domain = teacher_cfg["domain"]
+            _domain_key = f"mopd_topk_kl/{domain}"
+            if _domain_key not in mopd_fv_metrics:
+                mopd_fv_metrics[_domain_key] = torch.tensor(0.0, device=_device)
+        # Ensure base MOPD metrics are present even when no teacher data was
+        # available for the entire microbatch (apply_mopd_topk_to_loss not called).
+        for _base_key in ("mopd_topk_kl", "mopd_is_weight_mean", "mopd_is_nonzero_frac"):
+            if _base_key not in mopd_fv_metrics:
+                mopd_fv_metrics[_base_key] = torch.tensor(0.0, device=_device)
 
     # Apply off-policy correction using importance sampling if enabled
     if args.get_mismatch_metrics or args.use_tis:
@@ -1758,15 +1815,29 @@ def policy_loss_function(
         reported_loss["mopd_is_nonzero_frac"] = sum_of_sample_mean(mopd_is_nonzero).clone().detach()
 
         if "mopd_reverse_kl" in batch:
-            for domain, domain_kls in batch["mopd_reverse_kl"].items():
-                domain_kl_tensor = torch.cat(domain_kls, dim=0)
-                reported_loss[f"mopd_reverse_kl/{domain}"] = sum_of_sample_mean(domain_kl_tensor).clone().detach()
+            # Iterate over ALL configured teacher domains — not just the
+            # keys present in this microbatch — so that every microbatch
+            # produces the same set of metric keys (required for Megatron's
+            # loss-reduction across microbatches).
+            _all_mopd_domains = [
+                t["domain"] for t in getattr(args, "_mopd_teachers_parsed", [])
+            ]
+            _mopd_reverse_kl_domains = _all_mopd_domains if _all_mopd_domains else list(batch["mopd_reverse_kl"].keys())
+            for domain in _mopd_reverse_kl_domains:
+                if domain in batch["mopd_reverse_kl"]:
+                    domain_kl_tensor = torch.cat(batch["mopd_reverse_kl"][domain], dim=0)
+                    reported_loss[f"mopd_reverse_kl/{domain}"] = sum_of_sample_mean(domain_kl_tensor).clone().detach()
+                else:
+                    reported_loss[f"mopd_reverse_kl/{domain}"] = torch.tensor(0.0, device=mopd_is_weights.device)
 
         if "mopd_advantages" in batch:
             mopd_advantages = torch.cat(batch["mopd_advantages"], dim=0)
             reported_loss["mopd_advantage_mean"] = sum_of_sample_mean(mopd_advantages).clone().detach()
 
-    # Log MOPD logits-based distillation metrics (full_vocab / top_k)
+    # Log MOPD logits-based distillation metrics (full_vocab / top_k).
+    # mopd_fv_metrics already contains zero-valued entries for domains that
+    # had no valid teacher data in this microbatch (see apply_mopd_topk_to_loss
+    # and apply_mopd_full_vocab_to_loss), ensuring consistent key sets.
     if use_mopd_logits_based:
         for key, value in mopd_fv_metrics.items():
             reported_loss[key] = value

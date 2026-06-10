@@ -599,16 +599,27 @@ class MegatronTrainRayActor(TrainRayActor):
                         if sglang_topk_logits and sglang_topk_indices:
                             tp_rank = mpu.get_tensor_model_parallel_rank()
                             tp_size = mpu.get_tensor_model_parallel_world_size()
+                            # Use the ORIGINAL vocab_size (not padded_vocab_size) for
+                            # TP shard calculations. Megatron's ColumnParallelLinear
+                            # output layer dimensions are based on the actual
+                            # vocab_size / tp_size (loaded from HF checkpoint),
+                            # NOT padded_vocab_size / tp_size. Using padded values
+                            # causes local indices to exceed the model's actual
+                            # vocab dimension, leading to gather-index-out-of-bounds
+                            # errors in the downstream KL computation.
+                            #   padded_vocab_size = 249856 → per-shard = 15616
+                            #   vocab_size          = 248320 → per-shard = 15520 (actual)
+                            #   Overflow range: [15520, 15615] (96 phantom indices)
+                            vocab_size = self.args.vocab_size
                             padded_vocab_size = self.args.padded_vocab_size
-                            vocab_local_size = padded_vocab_size // tp_size
+                            vocab_local_size = vocab_size // tp_size
                             vocab_offset = tp_rank * vocab_local_size
                             topk_k = self.args.mopd_topk_k
 
                             # Check that SGLang teacher's vocab size is consistent
-                            # with the student's padded_vocab_size. If teacher
-                            # token IDs exceed the student vocab range, the
-                            # global→local TP index conversion will produce
-                            # silently incorrect results.
+                            # with the student's vocab_size. If teacher token IDs
+                            # exceed the student vocab range, the global→local TP
+                            # index conversion will produce silently incorrect results.
                             _vocab_checked = False
 
                             for domain in sglang_topk_logits:
@@ -659,16 +670,23 @@ class MegatronTrainRayActor(TrainRayActor):
                                         if not _vocab_checked:
                                             _vocab_checked = True
                                             max_token_id = global_indices.max().item()
-                                            if max_token_id >= padded_vocab_size:
+                                            min_token_id = global_indices.min().item()
+                                            logger.info(
+                                                f"[MOPD] Vocab sharding: tp_rank={tp_rank}, "
+                                                f"tp_size={tp_size}, vocab_size={vocab_size}, "
+                                                f"padded_vocab_size={padded_vocab_size}, "
+                                                f"vocab_local_size={vocab_local_size}, "
+                                                f"vocab_offset={vocab_offset}, topk_k={topk_k}"
+                                            )
+                                            logger.info(
+                                                f"[MOPD] global_indices range=[{min_token_id}, "
+                                                f"{max_token_id}], shape={global_indices.shape}"
+                                            )
+                                            if max_token_id >= vocab_size:
                                                 logger.error(
-                                                    f"MOPD top_k: SGLang teacher returned token ID "
-                                                    f"{max_token_id} which exceeds student "
-                                                    f"padded_vocab_size={padded_vocab_size}. "
-                                                    f"The teacher and student vocab sizes are "
-                                                    f"mismatched — this will produce incorrect "
-                                                    f"TP index conversion and wrong KL divergence. "
-                                                    f"Ensure the teacher model uses the same "
-                                                    f"tokenizer/vocab as the student."
+                                                    f"[MOPD] TOKEN ID OVERFLOW! "
+                                                    f"max_token_id={max_token_id} >= "
+                                                    f"vocab_size={vocab_size}"
                                                 )
 
                                         seq_len = global_indices.size(0)
@@ -700,6 +718,15 @@ class MegatronTrainRayActor(TrainRayActor):
                                             if n_in_shard > 0:
                                                 local_topk_logits[row, :n_in_shard] = shard_logits[:n_in_shard]
                                                 local_topk_indices[row, :n_in_shard] = shard_local_idx[:n_in_shard]
+
+                                        # [MOPD] Check local_topk_indices range after conversion
+                                        _local_max = local_topk_indices.max().item()
+                                        if _local_max >= vocab_local_size:
+                                            logger.error(
+                                                f"[MOPD] LOCAL INDEX OVERFLOW! sample={i} "
+                                                f"max_local={_local_max} >= "
+                                                f"vocab_local_size={vocab_local_size}"
+                                            )
 
                                         topk_logits_list.append(local_topk_logits)
                                         topk_indices_list.append(local_topk_indices)

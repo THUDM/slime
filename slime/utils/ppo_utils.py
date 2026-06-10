@@ -2,10 +2,13 @@
 # and https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/trainer/ppo_utils/experience_maker.py
 
 from argparse import Namespace
+import logging
 
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+
+logger = logging.getLogger(__name__)
 
 
 @torch.compile(dynamic=True)
@@ -404,6 +407,17 @@ def vocab_parallel_topk_reverse_kl(
 
     # Gather student probs and log-probs at teacher's top-k positions
     # teacher_topk_indices are LOCAL to this TP shard
+    # Defensive: clamp indices to valid range in case of mismatch between
+    # the padded vocab size used for TP shard calculation and the model's
+    # actual output dimension (e.g., when padded_vocab_size > vocab_size).
+    _v_local = s_softmax.size(-1)
+    if teacher_topk_indices.max() >= _v_local or teacher_topk_indices.min() < 0:
+        logger.warning(
+            f"teacher_topk_indices out of range for s_softmax.size(-1)={_v_local}, "
+            f"clamping indices. This typically indicates a mismatch between "
+            f"padded_vocab_size and the model's actual vocab dimension."
+        )
+        teacher_topk_indices = teacher_topk_indices.clamp(min=0, max=_v_local - 1)
     student_topk_probs = s_softmax.gather(-1, teacher_topk_indices)  # [R, k]
     student_topk_shifted = s_shifted.gather(-1, teacher_topk_indices)  # [R, k]
     student_topk_log_probs = student_topk_shifted - s_log_sum_exp  # [R, k]
