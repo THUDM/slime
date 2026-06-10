@@ -425,6 +425,9 @@ def log_rollout_data(
             # Skip per-domain full-vocab teacher logits (too large for averaging)
             if key.startswith("mopd_teacher_") and key.endswith("_fv_logits"):
                 continue
+            # Skip per-domain top-k teacher logits/indices (too large for averaging)
+            if key.startswith("mopd_teacher_") and (key.endswith("_topk_logits") or key.endswith("_topk_indices")):
+                continue
             # Upload per sample mean for each rollout value
             # There are the following assumptions:
             # - Each dp rank has the same number of samples

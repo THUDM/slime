@@ -492,25 +492,44 @@ class MegatronTrainRayActor(TrainRayActor):
                 # Forward each MOPD teacher model for Megatron-based MOPD
                 if getattr(self.args, "use_mopd", False) and hasattr(self, "_mopd_teacher_domains") and self._mopd_teacher_domains:
                     mopd_teacher_log_probs = {}
-                    use_full_vocab = getattr(self.args, "mopd_distill_type", "token_level") == "full_vocab"
+                    mopd_distill_type = getattr(self.args, "mopd_distill_type", "token_level")
+                    use_full_vocab = mopd_distill_type == "full_vocab"
+                    use_top_k = mopd_distill_type == "top_k"
                     for domain in self._mopd_teacher_domains:
                         tag = f"mopd_teacher_{domain}"
                         if tag in self.weights_backuper.backup_tags:
                             if self.args.use_routing_replay:
                                 os.environ["ROUTING_REPLAY_STAGE"] = "fallthrough"
                             self._switch_model(tag)
-                            if use_full_vocab:
-                                # Full-vocab mode: get full logits for exact KL computation
+                            if use_full_vocab or use_top_k:
+                                # Full-vocab / top-k mode: get full logits from teacher
                                 teacher_result = self.compute_log_prob(
                                     data_iterator,
                                     num_microbatches,
                                     store_prefix=f"mopd_teacher_{domain}_fv_",
                                     return_logits=True,
                                 )
-                                # Store logits as a flat per-sample list under a domain-specific key
-                                logits_key = f"mopd_teacher_{domain}_fv_logits"
-                                if logits_key in teacher_result:
-                                    rollout_data[logits_key] = teacher_result[logits_key]
+                                if use_full_vocab:
+                                    # Full-vocab: store all logits [R_i, V_local]
+                                    logits_key = f"mopd_teacher_{domain}_fv_logits"
+                                    if logits_key in teacher_result:
+                                        rollout_data[logits_key] = teacher_result[logits_key]
+                                elif use_top_k:
+                                    # Top-k: store top-k logits + indices [R_i, k] per sample
+                                    topk_k = self.args.mopd_topk_k
+                                    logits_list = teacher_result.get(f"mopd_teacher_{domain}_fv_logits", [])
+                                    if logits_list:
+                                        topk_logits_key = f"mopd_teacher_{domain}_topk_logits"
+                                        topk_indices_key = f"mopd_teacher_{domain}_topk_indices"
+                                        topk_logits_list = []
+                                        topk_indices_list = []
+                                        for sample_logits in logits_list:
+                                            # sample_logits: [R_i, V_local]
+                                            topk_vals, topk_idx = sample_logits.topk(topk_k, dim=-1)
+                                            topk_logits_list.append(topk_vals.detach().float())
+                                            topk_indices_list.append(topk_idx.detach().int())
+                                        rollout_data[topk_logits_key] = topk_logits_list
+                                        rollout_data[topk_indices_key] = topk_indices_list
                             else:
                                 # Token-level mode: only need log_probs
                                 teacher_result = self.compute_log_prob(

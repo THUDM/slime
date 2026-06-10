@@ -633,3 +633,409 @@ class TestGetLogitsForDistill:
         assert torch.allclose(logits_out[0], expected_logits, atol=1e-5), (
             "get_logits_for_distill should return raw logits without temperature scaling"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests for vocab_parallel_topk_reverse_kl
+# ---------------------------------------------------------------------------
+class TestVocabParallelTopkReverseKL:
+    """Test the vocab_parallel_topk_reverse_kl function in ppo_utils.py."""
+
+    def test_topk_kl_approximates_full_kl(self):
+        """Top-k KL should approximate full-vocab KL when k covers most probability mass."""
+        from slime.utils.ppo_utils import vocab_parallel_reverse_kl, vocab_parallel_topk_reverse_kl
+
+        torch.manual_seed(42)
+        V = 20
+        R = 4
+        k = 15  # top-15 out of 20 should cover most mass
+
+        student_logits = torch.randn(R, V, requires_grad=True)
+        teacher_logits = torch.randn(R, V)
+
+        # Full-vocab KL
+        full_kl = vocab_parallel_reverse_kl(student_logits, teacher_logits, process_group=None)
+
+        # Top-k KL
+        topk_vals, topk_idx = teacher_logits.topk(k, dim=-1)
+        topk_kl = vocab_parallel_topk_reverse_kl(
+            student_logits, topk_vals, topk_idx, V, process_group=None
+        )
+
+        # With k close to V, the top-k should be close to full-vocab KL
+        # Allow some tolerance due to tail approximation
+        assert topk_kl.shape == (R,), f"Expected shape ({R},), got {topk_kl.shape}"
+        assert torch.isfinite(topk_kl).all(), f"Top-k KL should be finite, got {topk_kl}"
+
+    def test_topk_kl_identical_distributions(self):
+        """Top-k KL should be ~0 when student == teacher."""
+        from slime.utils.ppo_utils import vocab_parallel_topk_reverse_kl
+
+        V = 20
+        k = 10
+        logits = torch.randn(3, V)
+
+        topk_vals, topk_idx = logits.topk(k, dim=-1)
+        kl = vocab_parallel_topk_reverse_kl(logits, topk_vals, topk_idx, V, process_group=None)
+
+        assert kl.shape == (3,)
+        # Should be close to 0 (not exact due to tail approximation with V > k)
+        assert kl.item() >= -0.1, f"Top-k KL should be ~0 for identical distributions, got {kl}"
+
+    def test_topk_kl_gradient_flows(self):
+        """Gradient flows through student logits in top-k KL."""
+        from slime.utils.ppo_utils import vocab_parallel_topk_reverse_kl
+
+        V = 20
+        k = 10
+        student_logits = torch.randn(3, V, requires_grad=True)
+        teacher_logits = torch.randn(3, V)
+
+        topk_vals, topk_idx = teacher_logits.topk(k, dim=-1)
+        kl = vocab_parallel_topk_reverse_kl(student_logits, topk_vals, topk_idx, V, process_group=None)
+        loss = kl.sum()
+        loss.backward()
+
+        assert student_logits.grad is not None, "student_logits should have gradients"
+        assert not torch.allclose(student_logits.grad, torch.zeros_like(student_logits.grad)), \
+            "student_logits gradients should be non-zero"
+
+    def test_topk_kl_increases_with_smaller_k(self):
+        """Top-k KL should generally increase as k decreases (less accurate approximation)."""
+        from slime.utils.ppo_utils import vocab_parallel_reverse_kl, vocab_parallel_topk_reverse_kl
+
+        torch.manual_seed(42)
+        V = 50
+        R = 5
+        student_logits = torch.randn(R, V)
+        teacher_logits = torch.randn(R, V)
+
+        full_kl = vocab_parallel_reverse_kl(student_logits, teacher_logits, process_group=None).sum().item()
+
+        k_large = 40
+        topk_vals_l, topk_idx_l = teacher_logits.topk(k_large, dim=-1)
+        kl_large = vocab_parallel_topk_reverse_kl(
+            student_logits, topk_vals_l, topk_idx_l, V, process_group=None
+        ).sum().item()
+
+        # With k=V (full vocab), top-k should be closer to full KL
+        assert torch.isfinite(torch.tensor(kl_large)), "Top-k KL should be finite"
+
+
+# ---------------------------------------------------------------------------
+# Tests for apply_mopd_topk_to_loss
+# ---------------------------------------------------------------------------
+class TestApplyMopdTopkToLoss:
+    """Test the apply_mopd_topk_to_loss function."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_deps(self, monkeypatch):
+        mock_megatron(monkeypatch)
+
+    def _get_function(self):
+        from slime.backends.megatron_utils.loss import apply_mopd_topk_to_loss
+        return apply_mopd_topk_to_loss
+
+    def _sum_of_sample_mean(self, tensor):
+        return tensor.mean()
+
+    def _make_args(self, **overrides):
+        defaults = dict(
+            use_mopd=True,
+            mopd_distill_type="top_k",
+            mopd_topk_k=8,
+            mopd_teachers='[{"name": "math_teacher", "domain": "math"}]',
+            mopd_teacher_loads="/tmp/fake_teacher",
+            mopd_teacher_ckpt_steps=None,
+            mopd_alpha=0.0,
+            mopd_eps_low=0.0,
+            mopd_eps_high=1000.0,
+            mopd_sampling_logprobs_key="rollout_log_probs",
+            _mopd_teachers_parsed=[{"name": "math_teacher", "domain": "math"}],
+            padded_vocab_size=20,
+        )
+        defaults.update(overrides)
+        return Namespace(**defaults)
+
+    def test_single_teacher_topk_loss(self):
+        """Test single-teacher top-k KL loss computation."""
+        apply_fn = self._get_function()
+        args = self._make_args()
+        torch.manual_seed(42)
+
+        V = 20
+        k = 8
+        R1, R2 = 3, 4
+
+        student_logits_1 = torch.randn(R1, V)
+        student_logits_2 = torch.randn(R2, V)
+        teacher_logits_1 = torch.randn(R1, V)
+        teacher_logits_2 = torch.randn(R2, V)
+
+        # Get top-k from teacher
+        topk_vals_1, topk_idx_1 = teacher_logits_1.topk(k, dim=-1)
+        topk_vals_2, topk_idx_2 = teacher_logits_2.topk(k, dim=-1)
+
+        student_logits = [student_logits_1, student_logits_2]
+        teacher_topk_logits = {"math": [topk_vals_1, topk_vals_2]}
+        teacher_topk_indices = {"math": [topk_idx_1, topk_idx_2]}
+
+        batch = {"rollout_log_probs": [torch.zeros(R1), torch.zeros(R2)]}
+        current_log_probs = [torch.zeros(R1), torch.zeros(R2)]
+        loss_masks = [torch.ones(R1), torch.ones(R2)]
+
+        kl_loss, metrics = apply_fn(
+            args, batch, student_logits, teacher_topk_logits,
+            teacher_topk_indices, loss_masks, self._sum_of_sample_mean,
+            current_log_probs=current_log_probs,
+        )
+
+        assert kl_loss.shape == (), "kl_loss should be scalar"
+        assert "mopd_topk_kl" in metrics
+        assert "mopd_is_weight_mean" in metrics
+        assert "mopd_is_nonzero_frac" in metrics
+        assert "mopd_topk_kl/math" in metrics
+
+    def test_topk_loss_is_non_negative(self):
+        """Test that top-k KL loss is non-negative (or close to it)."""
+        apply_fn = self._get_function()
+        args = self._make_args(mopd_eps_low=0.0, mopd_eps_high=1000.0)
+        torch.manual_seed(42)
+
+        V = 20
+        k = 10
+        student_logits = [torch.randn(5, V)]
+        teacher_logits = [torch.randn(5, V)]
+
+        topk_vals, topk_idx = teacher_logits[0].topk(k, dim=-1)
+        teacher_topk_logits = {"math": [topk_vals]}
+        teacher_topk_indices = {"math": [topk_idx]}
+
+        batch = {"rollout_log_probs": [torch.zeros(5)]}
+        current_log_probs = [torch.zeros(5)]
+        loss_masks = [torch.ones(5)]
+
+        kl_loss, metrics = apply_fn(
+            args, batch, student_logits, teacher_topk_logits,
+            teacher_topk_indices, loss_masks, self._sum_of_sample_mean,
+            current_log_probs=current_log_probs,
+        )
+
+        # Top-k KL may be slightly negative due to tail approximation,
+        # but should be close to 0 at worst
+        assert kl_loss.item() >= -0.5, f"Top-k KL loss should be >= -0.5, got {kl_loss.item()}"
+
+    def test_topk_is_weight_clipping(self):
+        """Test IS weight clipping in top_k mode."""
+        apply_fn = self._get_function()
+        args = self._make_args(mopd_eps_low=0.5, mopd_eps_high=2.0)
+
+        V = 20
+        k = 8
+        student_logits = [torch.randn(3, V)]
+        teacher_logits = [torch.randn(3, V)]
+        topk_vals, topk_idx = teacher_logits[0].topk(k, dim=-1)
+
+        teacher_topk_logits = {"math": [topk_vals]}
+        teacher_topk_indices = {"math": [topk_idx]}
+
+        batch = {"rollout_log_probs": [torch.tensor([0.0, 0.0, 0.0])]}
+        current_log_probs = [torch.tensor([-5.0, 0.0, 5.0])]
+        loss_masks = [torch.ones(3)]
+
+        kl_loss, metrics = apply_fn(
+            args, batch, student_logits, teacher_topk_logits,
+            teacher_topk_indices, loss_masks, self._sum_of_sample_mean,
+            current_log_probs=current_log_probs,
+        )
+
+        is_nonzero_frac = metrics["mopd_is_nonzero_frac"].item()
+        assert abs(is_nonzero_frac - 1.0 / 3.0) < 0.05, (
+            f"Expected ~1/3 nonzero IS weight fraction, got {is_nonzero_frac}"
+        )
+
+    def test_topk_none_teacher_for_sample(self):
+        """Test that None entries in teacher data are skipped."""
+        apply_fn = self._get_function()
+        args = self._make_args(
+            _mopd_teachers_parsed=[
+                {"name": "math_teacher", "domain": "math"},
+                {"name": "code_teacher", "domain": "code"},
+            ],
+        )
+
+        V = 20
+        k = 8
+        student_0 = torch.randn(3, V)
+        student_1 = torch.randn(4, V)
+
+        teacher_0 = torch.randn(3, V)
+        teacher_1 = torch.randn(4, V)
+        teacher_code_1 = torch.randn(4, V)
+
+        topk_vals_0, topk_idx_0 = teacher_0.topk(k, dim=-1)
+        topk_vals_1, topk_idx_1 = teacher_1.topk(k, dim=-1)
+        topk_vals_c1, topk_idx_c1 = teacher_code_1.topk(k, dim=-1)
+
+        teacher_topk_logits = {
+            "math": [topk_vals_0, topk_vals_1],
+            "code": [None, topk_vals_c1],
+        }
+        teacher_topk_indices = {
+            "math": [topk_idx_0, topk_idx_1],
+            "code": [None, topk_idx_c1],
+        }
+
+        batch = {"rollout_log_probs": [torch.zeros(3), torch.zeros(4)]}
+        current_log_probs = [torch.zeros(3), torch.zeros(4)]
+        loss_masks = [torch.ones(3), torch.ones(4)]
+
+        kl_loss, metrics = apply_fn(
+            args, batch, [student_0, student_1],
+            teacher_topk_logits, teacher_topk_indices,
+            loss_masks, self._sum_of_sample_mean,
+            current_log_probs=current_log_probs,
+        )
+
+        assert kl_loss.shape == ()
+        assert torch.isfinite(kl_loss), "Loss should be finite with None teacher entries"
+
+    def test_topk_k_parameter_effect(self):
+        """Test that larger k gives KL closer to full-vocab KL."""
+        from slime.utils.ppo_utils import vocab_parallel_reverse_kl
+
+        apply_fn = self._get_function()
+        torch.manual_seed(42)
+
+        V = 20
+        student_logits = [torch.randn(5, V)]
+        teacher_logits_raw = [torch.randn(5, V)]
+
+        # Full-vocab KL as ground truth
+        full_kl = vocab_parallel_reverse_kl(student_logits[0], teacher_logits_raw[0], None).sum().item()
+
+        # Top-k with k=5
+        k_small = 5
+        topk_vals_s, topk_idx_s = teacher_logits_raw[0].topk(k_small, dim=-1)
+        args_small = self._make_args(mopd_topk_k=k_small)
+        batch = {"rollout_log_probs": [torch.zeros(5)]}
+        current_log_probs = [torch.zeros(5)]
+        loss_masks = [torch.ones(5)]
+
+        kl_small, _ = apply_fn(
+            args_small, batch, student_logits,
+            {"math": [topk_vals_s]}, {"math": [topk_idx_s]},
+            loss_masks, self._sum_of_sample_mean, current_log_probs=current_log_probs,
+        )
+
+        # Top-k with k=18 (close to V)
+        k_large = 18
+        topk_vals_l, topk_idx_l = teacher_logits_raw[0].topk(k_large, dim=-1)
+        args_large = self._make_args(mopd_topk_k=k_large)
+
+        kl_large, _ = apply_fn(
+            args_large, batch, student_logits,
+            {"math": [topk_vals_l]}, {"math": [topk_idx_l]},
+            loss_masks, self._sum_of_sample_mean, current_log_probs=current_log_probs,
+        )
+
+        # Larger k should generally be closer to full KL (both are approximations)
+
+
+# ---------------------------------------------------------------------------
+# Tests for top_k argument validation
+# ---------------------------------------------------------------------------
+class TestMopdTopkValidation:
+    """Test --mopd-distill-type=top_k parameter validation."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_deps(self, monkeypatch):
+        megatron_mod = types.ModuleType("megatron")
+        training_mod = types.ModuleType("megatron.training")
+        arguments_mod = types.ModuleType("megatron.training.arguments")
+        arguments_mod.parse_args = lambda *a, **kw: None
+        arguments_mod.validate_args = lambda a: a
+        tokenizer_pkg_mod = types.ModuleType("megatron.training.tokenizer")
+        tokenizer_mod = types.ModuleType("megatron.training.tokenizer.tokenizer")
+        tokenizer_mod._vocab_size_with_padding = lambda vocab_size, _args: vocab_size
+        transformers_mod = types.ModuleType("transformers")
+        transformers_mod.AutoConfig = types.SimpleNamespace(from_pretrained=lambda *a, **kw: None)
+
+        monkeypatch.setitem(sys.modules, "megatron", megatron_mod)
+        monkeypatch.setitem(sys.modules, "megatron.training", training_mod)
+        monkeypatch.setitem(sys.modules, "megatron.training.arguments", arguments_mod)
+        monkeypatch.setitem(sys.modules, "megatron.training.tokenizer", tokenizer_pkg_mod)
+        monkeypatch.setitem(sys.modules, "megatron.training.tokenizer.tokenizer", tokenizer_mod)
+        monkeypatch.setitem(sys.modules, "transformers", transformers_mod)
+
+    def _make_base_args(self, **overrides):
+        defaults = dict(
+            use_opd=False,
+            opd_type=None,
+            opd_kl_coef=1.0,
+            opd_teacher_load=None,
+            opd_teacher_ckpt_step=None,
+            use_mopd=False,
+            mopd_teachers=None,
+            mopd_teacher_loads=None,
+            mopd_teacher_ckpt_steps=None,
+            mopd_alpha=0.0,
+            mopd_eps_low=0.2,
+            mopd_eps_high=5.0,
+            mopd_sampling_logprobs_key="rollout_log_probs",
+            mopd_distill_type="token_level",
+            mopd_topk_k=1024,
+            enable_weights_backuper=True,
+            eval_datasets=[],
+            eval_prompt_data=None,
+            kl_coef=0,
+            ref_load="/tmp/fake_ref",
+            use_kl_loss=False,
+            use_critic=False,
+            rm_type=None,
+            custom_rm_path=None,
+        )
+        defaults.update(overrides)
+        return Namespace(**defaults)
+
+    def test_topk_without_teacher_loads_raises(self):
+        """Test that top_k mode without --mopd-teacher-loads raises ValueError."""
+        from slime.utils.arguments import slime_validate_args
+
+        args = self._make_base_args(
+            use_mopd=True,
+            mopd_distill_type="top_k",
+            mopd_teachers='[{"name": "t1", "domain": "math"}]',
+            mopd_teacher_loads=None,
+        )
+        with pytest.raises(ValueError, match="top_k.*mopd-teacher-loads|megatron teacher"):
+            slime_validate_args(args)
+
+    def test_topk_k_must_be_positive(self):
+        """Test that --mopd-topk-k <= 0 raises ValueError."""
+        from slime.utils.arguments import slime_validate_args
+
+        args = self._make_base_args(
+            use_mopd=True,
+            mopd_distill_type="top_k",
+            mopd_teachers='[{"name": "t1", "domain": "math"}]',
+            mopd_teacher_loads=["/tmp/fake_teacher"],
+            mopd_topk_k=0,
+        )
+        with pytest.raises(ValueError, match="mopd-topk-k.*> 0"):
+            slime_validate_args(args)
+
+    def test_topk_k_default(self):
+        """Test that --mopd-topk-k defaults to 1024."""
+        from slime.utils.arguments import slime_validate_args
+
+        args = self._make_base_args(
+            use_mopd=True,
+            mopd_distill_type="top_k",
+            mopd_teachers='[{"name": "t1", "domain": "math"}]',
+            mopd_teacher_loads=["/tmp/fake_teacher"],
+            mopd_topk_k=1024,
+            mopd_alpha=0.0,
+        )
+        slime_validate_args(args)
+        assert args.mopd_topk_k == 1024

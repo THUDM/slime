@@ -310,6 +310,163 @@ def vocab_parallel_reverse_kl(
     return _VocabParallelReverseKL.apply(student_logits, teacher_logits, process_group)
 
 
+def vocab_parallel_topk_reverse_kl(
+    student_logits: torch.Tensor,
+    teacher_topk_logits: torch.Tensor,
+    teacher_topk_indices: torch.Tensor,
+    vocab_size: int,
+    process_group: dist.ProcessGroup,
+) -> torch.Tensor:
+    """Compute approximate D_KL(π_student ∥ π_teacher) using top-k teacher logits plus tail correction.
+
+    This is a memory-efficient alternative to full-vocab KL. The teacher provides only
+    its top-k logits and indices (pre-computed during the teacher forward pass), while
+    the student has full vocab logits.
+
+    The KL is decomposed into:
+        KL = KL_topk + KL_tail
+    where:
+        KL_topk = Σ_{y ∈ topk} π_s(y) [log π_s(y) - log π_t(y)]
+        KL_tail ≈ π_s_tail * log(π_s_tail / π_t_tail)
+
+    For TP: teacher_topk_indices are LOCAL indices within each TP shard. We gather
+    the student logits at those local positions directly (no cross-shard indexing needed).
+
+    Args:
+        student_logits: [R, V_local] student logits (with grad), vocab-sharded across TP.
+        teacher_topk_logits: [R, k] teacher top-k logits (detached), fp32.
+        teacher_topk_indices: [R, k] teacher top-k LOCAL indices within each TP shard, int.
+        vocab_size: Full (unsharded) vocabulary size V.
+        process_group: TP process group for all-reduce.
+
+    Returns:
+        Per-token KL divergence tensor of shape [R].
+    """
+    # Detach teacher inputs
+    teacher_topk_logits = teacher_topk_logits.detach()
+    teacher_topk_indices = teacher_topk_indices.detach()
+
+    # torch.gather requires LongTensor (int64) indices.
+    # Accept int32 from the data pipeline and cast defensively.
+    if teacher_topk_indices.dtype != torch.int64:
+        teacher_topk_indices = teacher_topk_indices.long()
+
+    tp_size = dist.get_world_size(group=process_group) if process_group is not None else 1
+    k = teacher_topk_logits.size(-1)
+
+    # --- student softmax (numerically stable, TP-aware) ---
+    s_max = student_logits.max(dim=-1, keepdim=True).values
+    if tp_size > 1:
+        dist.all_reduce(s_max, op=dist.ReduceOp.MAX, group=process_group)
+    s_shifted = student_logits - s_max
+    s_exp = s_shifted.exp()
+    s_sum_exp = s_exp.sum(dim=-1, keepdim=True)
+    if tp_size > 1:
+        dist.all_reduce(s_sum_exp, op=dist.ReduceOp.SUM, group=process_group)
+    s_softmax = s_exp / s_sum_exp  # π_s(y)  [R, V_local]
+    s_log_sum_exp = s_sum_exp.log()  # [R, 1]
+
+    # Gather student probs and log-probs at teacher's top-k positions
+    # teacher_topk_indices are LOCAL to this TP shard
+    student_topk_probs = s_softmax.gather(-1, teacher_topk_indices)  # [R, k]
+    student_topk_shifted = s_shifted.gather(-1, teacher_topk_indices)  # [R, k]
+    student_topk_log_probs = student_topk_shifted - s_log_sum_exp  # [R, k]
+
+    # --- teacher log-softmax for top-k logits (numerically stable, TP-aware) ---
+    t_max = teacher_topk_logits.max(dim=-1, keepdim=True).values
+    if tp_size > 1:
+        # teacher_topk_logits are per-shard, so we need global max across shards
+        # BUT: each shard's top-k is independent (local indices).
+        # To compute the correct global log_sum_exp, we need:
+        #   (a) the global max of ALL top-k logits across shards, and
+        #   (b) the sum of exp(logits - global_max) across all shards.
+        dist.all_reduce(t_max, op=dist.ReduceOp.MAX, group=process_group)
+    t_shifted = teacher_topk_logits - t_max
+    t_exp = t_shifted.exp()
+    t_sum_exp = t_exp.sum(dim=-1, keepdim=True)
+    if tp_size > 1:
+        # Sum of exp across all shards (each shard contributes its k top-k values)
+        dist.all_reduce(t_sum_exp, op=dist.ReduceOp.SUM, group=process_group)
+    t_log_sum_exp = t_sum_exp.log()  # [R, 1]
+
+    # Teacher probs on top-k: exp(topk_logits) / Z_teacher
+    # But Z_teacher is NOT just the sum over top-k tokens.
+    # We need an approximation: Z_teacher ≈ sum_topk(exp) + (V_eff - k) * exp(tail_max).
+    # However, we don't have the exact partition function for teacher.
+    # Instead, we compute teacher_topk_log_probs using a CLOSED-over-topk partition function
+    # (treating top-k as if they were the entire vocab), then apply tail correction.
+    #
+    # Simple approach: compute teacher log-probs normalizing over top-k only,
+    # then estimate the tail correction analytically.
+    teacher_topk_log_probs_approx = t_shifted - t_log_sum_exp  # [R, k]
+    teacher_topk_probs = (t_shifted.exp() / t_sum_exp)  # [R, k], probs normalizing over top-k
+
+    # --- tail mass ---
+    # Student tail mass: 1 - sum(π_s(y) for y in top-k of this shard)
+    student_topk_mass = student_topk_probs.sum(dim=-1)  # [R]
+    if tp_size > 1:
+        # Sum the top-k mass across all TP shards to get the total mass in all shards' top-k
+        dist.all_reduce(student_topk_mass, op=dist.ReduceOp.SUM, group=process_group)
+    student_tail_mass = (1.0 - student_topk_mass).clamp(min=0.0)  # [R]
+
+    # Teacher tail mass: 1 - sum(π_t_topk(y) for y in top-k)
+    # Here π_t_topk is the teacher prob normalizing over the FULL vocab.
+    # We need the global partition function Z_t for teacher.
+    # We approximate by computing the partition function as:
+    #   Z_t = sum of all exp(teacher_logits - global_max).
+    # But we only have top-k logits per shard. We approximate the tail as uniform.
+    #
+    # For each shard, we know its top-k contributes t_sum_exp_local = sum(exp(t_shifted)).
+    # The total Z_t ≈ (tp_size * k / vocab_size) * avg_exp would be wrong.
+    #
+    # Better: we already computed t_sum_exp across all shards (the sum of all top-k exp values).
+    # The full Z_t over the COMPLETE vocab is NOT available (we discarded non-top-k logits).
+    #
+    # Approximation: assume the full Z_t = t_sum_exp (treat top-k as the full support).
+    # This IS what teacher_topk_log_probs_approx normalizes over.
+    # So the tail of this approximate distribution has zero mass by construction.
+    # The tail correction accounts for the mass that SHOULD be in the tail.
+    #
+    # We use: teacher_tail_mass ≈ (V - k*tp_size) / V  (uniform prior on tail)
+    V_eff = k * tp_size  # effective number of tokens in the top-k across all shards
+    teacher_tail_mass = max(0.0, (vocab_size - V_eff) / vocab_size)
+    # Scale: the teacher_topk_probs already sum to ~1 within the top-k partition,
+    # so the actual mass on top-k is (1 - teacher_tail_mass).
+    # We need to rescale teacher_topk_log_probs to reflect this:
+    #   π_t(y) for y in top-k ≈ teacher_topk_probs(y) * (1 - teacher_tail_mass)
+    #   log π_t(y) = teacher_topk_log_probs_approx + log(1 - teacher_tail_mass)
+    if teacher_tail_mass > 0 and teacher_tail_mass < 1.0:
+        teacher_topk_log_probs = teacher_topk_log_probs_approx + torch.log(
+            torch.tensor(1.0 - teacher_tail_mass, device=teacher_topk_logits.device, dtype=teacher_topk_logits.dtype)
+        )
+    else:
+        teacher_topk_log_probs = teacher_topk_log_probs_approx
+
+    # --- KL computation ---
+    # KL_topk = Σ_{y ∈ top-k (all shards)} π_s(y) [log π_s(y) - log π_t(y)]
+    local_kl_topk = (student_topk_probs * (student_topk_log_probs - teacher_topk_log_probs)).sum(dim=-1)  # [R]
+    if tp_size > 1:
+        dist.all_reduce(local_kl_topk, op=dist.ReduceOp.SUM, group=process_group)
+
+    # KL_tail ≈ π_s_tail * log(π_s_tail / π_t_tail)
+    # π_s_tail = student_tail_mass per token
+    # π_t_tail = teacher_tail_mass (estimated above)
+    # Note: we don't have per-token variance in teacher_tail_mass, but this is an approximation.
+    kl_tail = torch.zeros_like(student_tail_mass)
+    tail_mask = (student_tail_mass > 1e-10) & (teacher_tail_mass > 1e-10)
+    kl_tail[tail_mask] = student_tail_mass[tail_mask] * (
+        torch.log(student_tail_mass[tail_mask]) - torch.log(
+            torch.tensor(teacher_tail_mass, device=student_tail_mass.device, dtype=student_tail_mass.dtype)
+        )
+    )
+    # If teacher_tail_mass ≈ 0 but student_tail_mass > 0, we have an unbounded KL.
+    # This shouldn't happen if k is large enough. We treat it as 0 for numerical safety.
+
+    kl = local_kl_topk + kl_tail  # [R]
+
+    return kl
+
+
 def get_grpo_returns(
     rewards: torch.Tensor,
     kl: list[torch.Tensor],

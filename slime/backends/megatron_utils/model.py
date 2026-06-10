@@ -491,6 +491,18 @@ def train_one_step(
                 logits_key = f"mopd_teacher_{domain}_fv_logits"
                 batch_keys.append(logits_key)
 
+        # Add MOPD top-k teacher logits/indices keys if present
+        use_mopd_top_k = (
+            getattr(args, "use_mopd", False) and getattr(args, "mopd_distill_type", "token_level") == "top_k"
+        )
+        if use_mopd_top_k and hasattr(args, "_mopd_teachers_parsed"):
+            for teacher_cfg in args._mopd_teachers_parsed:
+                domain = teacher_cfg["domain"]
+                topk_logits_key = f"mopd_teacher_{domain}_topk_logits"
+                topk_indices_key = f"mopd_teacher_{domain}_topk_indices"
+                batch_keys.append(topk_logits_key)
+                batch_keys.append(topk_indices_key)
+
         batch = get_batch(
             data_iterator,
             batch_keys,

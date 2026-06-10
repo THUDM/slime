@@ -1101,7 +1101,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--mopd-distill-type",
                 type=str,
-                choices=["token_level", "full_vocab"],
+                choices=["token_level", "full_vocab", "top_k"],
                 default="token_level",
                 help=(
                     "MOPD distillation type. "
@@ -1111,7 +1111,21 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "using complete logits from both student and teacher models. This is only supported with "
                     "megatron teacher mode (--mopd-teacher-loads), as it requires access to teacher logits "
                     "during training. The full-vocab KL loss is computed directly in the loss function rather "
-                    "than through advantage modification."
+                    "than through advantage modification. "
+                    "'top_k': compute an approximate reverse KL divergence using the top-k teacher logits "
+                    "plus tail probability correction. Stores only [R, k] logits+indices per sample "
+                    "(k controlled by --mopd-topk-k, default 1024), greatly reducing memory compared to "
+                    "full_vocab while being more accurate than token_level. Requires --mopd-teacher-loads."
+                ),
+            )
+            parser.add_argument(
+                "--mopd-topk-k",
+                type=int,
+                default=1024,
+                help=(
+                    "Number of top-k tokens to keep per position for MOPD top_k distillation. "
+                    "Only used when --mopd-distill-type=top_k. Higher k gives more accurate KL "
+                    "approximation at the cost of more memory. Default: 1024."
                 ),
             )
             return parser
@@ -1818,14 +1832,18 @@ def slime_validate_args(args):
                 f"--mopd-eps-high ({args.mopd_eps_high}) must be > --mopd-eps-low ({args.mopd_eps_low})."
             )
 
-        # Validate mopd_distill_type: full_vocab mode requires megatron teachers
-        if args.mopd_distill_type == "full_vocab":
+        # Validate mopd_distill_type: full_vocab and top_k modes require megatron teachers
+        if args.mopd_distill_type in ("full_vocab", "top_k"):
             if args.mopd_teacher_loads is None:
                 raise ValueError(
-                    "--mopd-distill-type=full_vocab requires --mopd-teacher-loads (megatron teacher mode). "
+                    f"--mopd-distill-type={args.mopd_distill_type} requires --mopd-teacher-loads (megatron teacher mode). "
                     "SGLang-based teachers cannot return full-vocabulary logits efficiently. "
                     "Please provide teacher checkpoints via --mopd-teacher-loads."
                 )
+
+        # Validate mopd_topk_k
+        if args.mopd_distill_type == "top_k" and args.mopd_topk_k <= 0:
+            raise ValueError(f"--mopd-topk-k must be > 0, got {args.mopd_topk_k}.")
 
         # MOPD with megatron-based teachers requires weights_backuper (to backup multiple models)
         if args.mopd_teacher_loads is not None and not args.enable_weights_backuper:

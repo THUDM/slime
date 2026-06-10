@@ -130,6 +130,15 @@ PERF_ARGS=(
 #
 #   5. IS weight correction still applies (same as token_level mode)
 #
+# Alternative: Use top_k mode for memory-efficient approximate KL:
+#   Replace --mopd-distill-type full_vocab with:
+#     --mopd-distill-type top_k
+#     --mopd-topk-k 1024
+#   This stores only [R_i, k] teacher logits+indices per sample (k=1024 by default),
+#   plus a tail probability correction. Memory per sample ≈ k*5B per token
+#   (vs V*4B for full_vocab). For k=1024, V=248320: ~98.7% memory reduction.
+#   Teacher logits per GPU ≈ 4×4096×1024×(4+4)B ≈ 128MB (negligible vs full_vocab).
+#
 # For this connectivity test, the teacher IS the same model (self-distillation).
 MOPD_ARGS=(
    --advantage-estimator grpo
