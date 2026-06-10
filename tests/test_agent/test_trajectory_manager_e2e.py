@@ -4,7 +4,7 @@ This script drives the two public interfaces of
 ``slime.agent.trajectory_manager.TrajectoryManager`` and exhaustively covers the
 ways a trajectory can branch, organized as a two-axis matrix:
 
-  * LAYER 1 — routing tree (append_turn). DFS merges on (role, node_match_key)
+  * LAYER 1 — routing tree (append_turn). DFS merges on (role, message-equality)
     only, so MESSAGE IDENTITY决定 tree shape; token ids are irrelevant here.
   * LAYER 2 — linearization (get_trajectory). TOKEN-ID prefix决定 how each leaf
     chain becomes Samples (clean continuation / drift case A·B1·B2 / cross-leaf
@@ -29,6 +29,8 @@ Dual mode:
 """
 
 from __future__ import annotations
+
+import dataclasses  # noqa: E402
 
 import pytest  # noqa: E402
 
@@ -134,7 +136,7 @@ class MsgTok:
             MsgTok._body_counter[role] = idx
             self.body = base + 10 + idx
             TOKEN_NAMES[self.body] = f"{role}:{_vis(label)}"
-        # message dict as the manager sees it (drives node_match_key).
+        # message dict as the manager sees it (drives routing equality).
         self.message = {"role": role, "content": label}
 
     def render(self) -> list[int]:
@@ -468,7 +470,7 @@ def test_1_5_assistant_message_fork():
 
 def test_1_6_tool_fork_shared_assistant():
     """Same first assistant turn, two different tool results -> tool-level fork,
-    making the first assistant a shared snapshot node with 2 children."""
+    making the first assistant a shared generated turn with 2 children."""
     mgr = TrajectoryManager()
     sid = "1.6"
     s, u, a1 = sys_msg("S"), usr_msg("u"), asst_msg("call")
@@ -476,7 +478,7 @@ def test_1_6_tool_fork_shared_assistant():
     append(mgr, sid, [s, u, a1, tool_msg("x")], "ax")
     append(mgr, sid, [s, u, a1, tool_msg("y")], "ay")
     asst1 = mgr._trees[sid].children[0].children[0].children[0]
-    assert asst1.role == "assistant" and asst1.turn_prompt_ids is not None
+    assert asst1.role == "assistant" and asst1.turn is not None
     assert len(asst1.children) == 2, "shared assistant forks at the tool level"
     assert len(_leaves(mgr, sid)) == 2
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
@@ -575,7 +577,7 @@ def test_1_10_empty_response():
     append(mgr, sid, [s, u], None, response_ids=[], response_message=None, finish_reason="length")
     asst = _leaves(mgr, sid)[0]
     assert asst.role == "assistant"
-    assert asst.turn_response_ids == []
+    assert asst.turn.output_ids == []
     assert asst.messages == []
     # Empty response -> the only turn has no trainable token, so its segment is
     # dropped at linearization (no fully-masked sample). Zero samples is correct.
@@ -597,7 +599,7 @@ def test_2_1_single_turn_linearize():
     p, r = append(mgr, sid, [s, u], "a", logprobs=None)
     # attach explicit logprobs so we can check propagation
     leaf = _leaves(mgr, sid)[0]
-    leaf.turn_response_logprobs = [-0.5] * len(r)
+    leaf.turn = dataclasses.replace(leaf.turn, output_log_probs=[-0.5] * len(r))
     samples = get_traj(mgr, sid, base_sample=Sample(index=7, prompt="hi"), reward=1.0)
     assert len(samples) == 1
     s0 = samples[0]
@@ -838,7 +840,7 @@ def test_2_11_routing_only_assistant_filtered():
     leaves = _leaves(mgr, sid)
     assert len(leaves) == 1
     chain = leaves[0].path_from_root()
-    routing = [n for n in chain if n.role == "assistant" and n.turn_prompt_ids is None]
+    routing = [n for n in chain if n.role == "assistant" and n.turn is None]
     assert len(routing) == 1 and routing[0].messages[0]["content"] == "foreign"
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 1
@@ -885,7 +887,7 @@ def test_3_1_rewrite_merge_absorbs_short():
     assert len(leaves) == 1, "short rewrite absorbed, not forked"
     chain = leaves[0].path_from_root()
     merged = chain[2]
-    assert merged.turn_prompt_ids is None and merged.turn_index is None
+    assert merged.turn is None and merged.turn_index is None
     assert merged.messages == [a1_rw.message]
     assert merged.metadata["merged_rewrite"]["abandoned_turn_index"] == 1
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)

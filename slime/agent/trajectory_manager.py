@@ -10,7 +10,6 @@ re-tokenization drift via fork/replace.
 from __future__ import annotations
 
 import dataclasses
-import json
 import logging
 from collections.abc import Iterator
 from typing import Any
@@ -39,50 +38,64 @@ class TurnRecord:
 
 
 # ===========================================================================
-# Node
+# MessageNode
 # ===========================================================================
 
 
-class Node:
+class MessageNode:
+    """One node in a session's routing tree, carrying a single chat message
+    (except the dummy root, which carries none).
+
+    The two kinds are distinguished by whether ``turn`` is set, which reflects
+    WHERE the message came from:
+
+    * **generated** (``turn is not None``): an assistant message the model
+      actually generated this turn, fed in via ``append_turn``. ``turn`` holds
+      its :class:`TurnRecord` -- the prompt/output ids, logprobs and finish
+      reason that ``get_trajectory`` linearizes into training tokens.
+    * **routing-only** (``turn is None``): the message came from the prompt, not
+      from generation, so it only exists to route. This is every
+      system/user/tool node, AND any assistant we did NOT generate: a foreign
+      assistant the client replayed in a later prompt, or a prior generated turn
+      demoted by the rewrite-merge in ``_try_merge_assistant_rewrite``.
+    """
+
     def __init__(
         self,
         *,
         role: str | None = None,
         messages: list[dict[str, Any]] | None = None,
         metadata: dict[str, Any] | None = None,
-        parent: Node | None = None,
+        parent: MessageNode | None = None,
     ) -> None:
         self.role = role
         self.messages = list(messages or [])
         self.metadata = dict(metadata or {})
-        self.parent: Node | None = parent
-        self.children: list[Node] = []
-        self.turn_prompt_ids: list[int] | None = None
-        self.turn_response_ids: list[int] | None = None
-        self.turn_response_logprobs: list[float] | None = None
-        self.turn_finish_reason: str | None = None
+        self.parent: MessageNode | None = parent
+        self.children: list[MessageNode] = []
+        self.turn: TurnRecord | None = None  # the generated TurnRecord, else None (routing-only)
         self.turn_index: int | None = None
 
     @property
     def is_root(self) -> bool:
         return self.parent is None
 
-    def add_child(self, child: Node) -> Node:
+    def add_child(self, child: MessageNode) -> MessageNode:
         child.parent = self
         self.children.append(child)
         return child
 
-    def path_from_root(self) -> list[Node]:
+    def path_from_root(self) -> list[MessageNode]:
         """Ordered list of nodes from the first non-root ancestor down to self."""
-        chain: list[Node] = []
-        cur: Node | None = self
+        chain: list[MessageNode] = []
+        cur: MessageNode | None = self
         while cur is not None and not cur.is_root:
             chain.append(cur)
             cur = cur.parent
         chain.reverse()
         return chain
 
-    def leaves(self) -> Iterator[Node]:
+    def leaves(self) -> Iterator[MessageNode]:
         if not self.children:
             yield self
             return
@@ -91,19 +104,15 @@ class Node:
 
 
 # ===========================================================================
-# node_match_key + message helpers
+# message helpers
 # ===========================================================================
-
-
-def node_match_key(messages: list[dict[str, Any]]) -> str:
-    # Canonical serialization of a message list, defining when two messages route
-    # to the same node: dict-internal keys are sorted (key order is irrelevant)
-    # while list order is PRESERVED (message order and tool_calls order are both
-    # semantically significant). The hot path (_find_mount_point) no longer calls
-    # this -- it compares dicts structurally, which is equivalent and far cheaper
-    # (no serialization + short-circuits on the first differing field). Kept as
-    # the reference definition of message-equality and for callers/tests.
-    return json.dumps(messages, sort_keys=True, ensure_ascii=False)
+#
+# Two messages route to the same node iff their dicts compare equal (==).
+# Python dict equality is key-order-independent (so canonicalization is
+# unnecessary) while list equality preserves order (message order and
+# tool_calls order are both semantically significant). _find_mount_point
+# does this structural compare directly -- no serialization, and it
+# short-circuits on the first differing field.
 
 
 def _lcp_len(a: list[int], b: list[int]) -> int:
@@ -175,9 +184,10 @@ class _Segment:
         start = len(self.tokens)
         self.tokens.extend(response_ids)
         self.loss_mask.extend([1 if trained else 0] * len(response_ids))
-        self.logprobs.extend(
-            response_logprobs if (trained and response_logprobs is not None) else [0.0] * len(response_ids)
-        )
+        # Empty response_logprobs means "no logprob signal for this turn" (the
+        # TurnRecord default); fall back to zeros so the array stays length-
+        # aligned with response_ids. Truthiness covers both None and [].
+        self.logprobs.extend(response_logprobs if (trained and response_logprobs) else [0.0] * len(response_ids))
         self.spans.append((start, len(self.tokens), turn_index))
 
         if is_first_turn:
@@ -198,7 +208,7 @@ class _Segment:
 class TrajectoryManager:
     def __init__(self, *, fork_threshold_tokens: int | None = None) -> None:
         self._fork_threshold: int = 1024 if fork_threshold_tokens is None else fork_threshold_tokens
-        self._trees: dict[str, Node] = {}
+        self._trees: dict[str, MessageNode] = {}
         self._turn_count: dict[str, int] = {}
 
     # -------------------- public ------------------------------------------
@@ -227,7 +237,7 @@ class TrajectoryManager:
                 f"turn.output_ids length {len(turn.output_ids)}"
             )
 
-        root = self._trees.setdefault(sid, Node())
+        root = self._trees.setdefault(sid, MessageNode())
 
         cur, i = self._find_mount_point(root, prompt_messages)
         cur, i = self._try_merge_assistant_rewrite(sid, cur, prompt_messages, i)
@@ -276,7 +286,7 @@ class TrajectoryManager:
 
     # -------------------- internals ----------------------------------------
 
-    def _find_mount_point(self, root: Node, messages: list[dict[str, Any]]) -> tuple[Node, int]:
+    def _find_mount_point(self, root: MessageNode, messages: list[dict[str, Any]]) -> tuple[MessageNode, int]:
         node = root
         matched = 0
         while matched < len(messages):
@@ -295,10 +305,10 @@ class TrajectoryManager:
     def _try_merge_assistant_rewrite(
         self,
         sid: str,
-        cur: Node,
+        cur: MessageNode,
         prompt_messages: list[dict[str, Any]],
         i: int,
-    ) -> tuple[Node, int]:
+    ) -> tuple[MessageNode, int]:
         """Absorb a short assistant-rewrite onto its node instead of forking -- reward
         hygiene only; forking is already safe (a rewrite mounts as routing-only)."""
         if self._fork_threshold <= 0:
@@ -311,8 +321,8 @@ class TrajectoryManager:
             for c in cur.children
             if c.role == "assistant"
             and not c.children
-            and c.turn_prompt_ids is not None
-            and len(c.turn_response_ids or []) < self._fork_threshold
+            and c.turn is not None
+            and len(c.turn.output_ids) < self._fork_threshold
         ]
         if len(candidates) != 1:
             if len(candidates) >= 2:
@@ -328,62 +338,57 @@ class TrajectoryManager:
         sib = candidates[0]
         sib.metadata["merged_rewrite"] = {
             "abandoned_turn_index": sib.turn_index,
-            "abandoned_response_tokens": len(sib.turn_response_ids or []),
+            "abandoned_response_tokens": len(sib.turn.output_ids),
         }
 
-        sib.turn_prompt_ids = None
-        sib.turn_response_ids = None
-        sib.turn_response_logprobs = None
-        sib.turn_finish_reason = None
+        sib.turn = None
         sib.turn_index = None
         sib.messages = [prompt_messages[i]]
         return sib, i + 1
 
     def _mount_prompt_messages(
         self,
-        cur: Node,
+        cur: MessageNode,
         remaining_messages: list[dict[str, Any]],
-    ) -> Node:
+    ) -> MessageNode:
         for m in remaining_messages:
-            cur = cur.add_child(Node(role=m.get("role"), messages=[m]))
+            cur = cur.add_child(MessageNode(role=m.get("role"), messages=[m]))
         return cur
 
     def _attach_assistant_leaf(
         self,
         sid: str,
-        cur: Node,
+        cur: MessageNode,
         *,
         turn: TurnRecord,
         response_message: dict[str, Any] | None,
         metadata: dict[str, Any] | None,
     ) -> None:
-        asst = Node(
+        asst = MessageNode(
             role="assistant",
             messages=[response_message] if response_message is not None else [],
             metadata=dict(metadata or {}),
         )
-        asst.turn_prompt_ids = list(turn.prompt_ids)
-        asst.turn_response_ids = list(turn.output_ids)
-        asst.turn_response_logprobs = list(turn.output_log_probs) if turn.output_log_probs else None
-        asst.turn_finish_reason = turn.finish_reason
+        asst.turn = turn
         asst.turn_index = self._turn_count.get(sid, 0) + 1
         cur.add_child(asst)
         self._turn_count[sid] = asst.turn_index
 
     def _chain_to_sample(
         self,
-        chain: list[Node],
+        chain: list[MessageNode],
         *,
         base_sample: Sample,
         extra_metadata: dict[str, Any] | None,
         claimed: set[int],
     ) -> list[Sample]:
-        asst_chain = [n for n in chain if n.role == "assistant" and n.turn_prompt_ids is not None]
+        asst_chain = [n for n in chain if n.role == "assistant" and n.turn is not None]
 
         segments: list[_Segment] = []
         seg = _Segment()
         for asst in asst_chain:
-            prompt_ids = asst.turn_prompt_ids or []
+            turn = asst.turn
+            prompt_ids = turn.prompt_ids
             drift = seg.measure_token_drift(prompt_ids)
             if not seg.can_absorb_drift(drift, self._fork_threshold):
                 segments.append(seg)
@@ -391,14 +396,14 @@ class TrajectoryManager:
                 drift = 0
             trained = id(asst) not in claimed
             claimed.add(id(asst))
-            # A snapshot node can be shared by sibling leaves (same Node object).
+            # A generated turn can be shared by sibling leaves (same MessageNode object).
             # Train it only on the first leaf to reach it; later leaves re-emit it
             # as loss=0 context so the shared prefix isn't double-counted.
             seg.absorb_turn(
                 drift,
                 prompt_ids,
-                asst.turn_response_ids or [],
-                asst.turn_response_logprobs,
+                turn.output_ids,
+                turn.output_log_probs,
                 asst.turn_index,
                 trained=trained,
             )
@@ -449,8 +454,7 @@ class TrajectoryManager:
 
 
 __all__ = [
-    "Node",
+    "MessageNode",
     "TrajectoryManager",
-    "node_match_key",
     "_lcp_len",
 ]
