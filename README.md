@@ -112,6 +112,10 @@ See the [Customization Guide](docs/en/get_started/customization.md) for which in
 
 These are not just demos. They are independent systems that use slime as a reusable RL substrate for production-scale post-training, agentic RL, domain RL, and rollout-system research.
 
+### ⛵ Miles: Production-Focused Reinforcement Learning Framework Built on slime
+
+[**Miles**](https://github.com/radixark/miles) builds on the foundation of slime to provide a production-focused reinforcement learning framework for large-scale model post-training. It stays closely aligned with slime's upstream development while extending it with enterprise-oriented features: deeper [SGLang](https://github.com/sgl-project/sglang) integration, operational tooling, deployment support, and optimizations for new [models](https://www.radixark.com/miles/docs/models) and [hardware](https://www.radixark.com/miles/docs/platforms). Miles also adds production features such as LoRA, TITO, and low-precision training.
+
 ### 🔷 vime: vLLM-Native RL Post-Training Built on slime
 
 [**vime**](https://github.com/vllm-project/vime) is a post-training framework built on slime and maintained by the vLLM project. It keeps slime's Megatron training stack, Data Buffer dataflow, and custom data-generation design, with its main change being a rollout backend swapped to [**vLLM**](https://github.com/vllm-project/vllm) with [vllm-router](https://github.com/vllm-project/router). Starting from an existing slime launch script, adjusting only rollout-related parameters is enough to quickly run training with vime.
