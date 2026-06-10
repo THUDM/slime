@@ -274,7 +274,29 @@ def postprocess_function(args, samples: list[list[Sample]]) -> None
 - 自定义重要性采样比率计算
 - 高级离策略校正方法
 
-**示例**: `examples/train_infer_mismatch_helper/mis.py:compute_mis_weights_with_cp`
+**函数签名**:
+```python
+def custom_tis_function(
+    args,
+    *,
+    pg_loss: torch.Tensor,
+    train_log_probs: list[torch.Tensor],
+    current_log_probs: list[torch.Tensor],
+    rollout_log_probs: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+    advantages: torch.Tensor,
+    **kwargs,
+) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]
+```
+
+**示例**: `examples.train_infer_mismatch_helper.mis.compute_mis_weights_with_cp`
+
+**说明**:
+- 当 `--use-rollout-logprobs` 和 `--use-tis` 同时开启时，必须提供自定义 TIS 函数。
+- 内置 TIS 默认假设的是 train-vs-rollout 的 decoupled 校正语义；如果你想做 rollout-proxy 校正，请使用自定义 hook，例如 `examples.train_infer_mismatch_helper.mis.compute_rollout_proxy_pg_loss_with_cp`。
+- 现在传给自定义 TIS hook 的参数里同时包含 `train_log_probs` 和 `current_log_probs`，可以自行决定实现 decoupled correction 还是 direct rollout-proxy correction。
 
 ---
 
