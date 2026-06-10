@@ -156,7 +156,10 @@ def create_training_models(args, pgs, rollout_manager):
             actor_args,
             role="actor",
             with_ref=actor_args.kl_coef != 0 or actor_args.use_kl_loss,
-            with_opd_teacher=actor_args.use_opd and actor_args.opd_type == "megatron",
+            with_opd_teacher=(
+                (actor_args.use_opd and actor_args.opd_type == "megatron")
+                or (getattr(actor_args, "use_mopd", False) and getattr(actor_args, "mopd_teacher_loads", None) is not None)
+            ),
         )
     )
     # TODO how to decide rollout start id when critic is involved? For now we just require user to specify it via args.

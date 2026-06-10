@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import random
@@ -108,8 +109,19 @@ class MegatronTrainRayActor(TrainRayActor):
             self.load_other_checkpoint("ref", args.ref_load)
 
         # Load teacher model for Megatron-based on-policy distillation
-        if with_opd_teacher:
+        if with_opd_teacher and not getattr(args, "use_mopd", False):
             self.load_other_checkpoint("teacher", args.opd_teacher_load)
+
+        # Load multiple teacher models for Megatron-based MOPD
+        self._mopd_teacher_domains: list[str] = []
+        if getattr(args, "use_mopd", False) and getattr(args, "mopd_teacher_loads", None):
+            mopd_teachers = json.loads(args.mopd_teachers) if isinstance(args.mopd_teachers, str) else args.mopd_teachers
+            for i, teacher_cfg in enumerate(mopd_teachers):
+                domain = teacher_cfg["domain"]
+                tag = f"mopd_teacher_{domain}"
+                self._mopd_teacher_domains.append(domain)
+                self.load_other_checkpoint(tag, args.mopd_teacher_loads[i])
+                logger.info(f"Loaded MOPD teacher model for domain '{domain}' from {args.mopd_teacher_loads[i]}")
 
         if self.args.keep_old_actor:
             # Load old_actor checkpoint
@@ -133,12 +145,15 @@ class MegatronTrainRayActor(TrainRayActor):
             quantization_config=getattr(self.hf_config, "quantization_config", None),
         )
 
+        # Ensure actor weights are on GPU and _active_model_tag is correct
+        # after loading ref/teacher/mopd_teacher/old_actor checkpoints.
+        if self._active_model_tag != "actor":
+            self._switch_model("actor")
+
         # empty cache after initialization
         clear_memory()
 
         if self.args.offload_train:
-            # recover to actor in the end.
-            self._switch_model("actor")
             self.sleep()
 
         self.rollout_engines = None
@@ -252,6 +267,39 @@ class MegatronTrainRayActor(TrainRayActor):
                     )
                 )
             ]
+
+        # Process MOPD teacher log_probs (dict: domain -> list)
+        # Some entries may be None due to per-sample domain routing (SGLang mode).
+        if "mopd_teacher_log_probs" in rollout_data:
+            mopd_lp_dict = rollout_data["mopd_teacher_log_probs"]
+            processed = {}
+            for domain, lp_list in mopd_lp_dict.items():
+                processed[domain] = [
+                    (
+                        None
+                        if log_prob is None
+                        else torch.tensor(
+                            slice_log_prob_with_cp(
+                                log_prob,
+                                total_length,
+                                response_length,
+                                self.args.qkv_format,
+                                rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
+                            ),
+                            device=torch.cuda.current_device(),
+                            dtype=torch.float32,
+                        )
+                    )
+                    for i, (log_prob, total_length, response_length) in enumerate(
+                        zip(
+                            lp_list,
+                            rollout_data["total_lengths"],
+                            rollout_data["response_lengths"],
+                            strict=False,
+                        )
+                    )
+                ]
+            rollout_data["mopd_teacher_log_probs"] = processed
         if "rollout_routed_experts" in rollout_data:
             rollout_data["rollout_routed_experts"] = [
                 torch.from_numpy(r) for r in rollout_data["rollout_routed_experts"]
@@ -439,6 +487,27 @@ class MegatronTrainRayActor(TrainRayActor):
                         )
                     )
 
+                # Forward each MOPD teacher model for Megatron-based MOPD
+                if getattr(self.args, "use_mopd", False) and hasattr(self, "_mopd_teacher_domains") and self._mopd_teacher_domains:
+                    mopd_teacher_log_probs = {}
+                    for domain in self._mopd_teacher_domains:
+                        tag = f"mopd_teacher_{domain}"
+                        if tag in self.weights_backuper.backup_tags:
+                            if self.args.use_routing_replay:
+                                os.environ["ROUTING_REPLAY_STAGE"] = "fallthrough"
+                            self._switch_model(tag)
+                            teacher_result = self.compute_log_prob(
+                                data_iterator,
+                                num_microbatches,
+                                store_prefix=f"mopd_teacher_{domain}_",
+                            )
+                            # Store with domain-specific key
+                            lp_key = f"mopd_teacher_{domain}_log_probs"
+                            if lp_key in teacher_result:
+                                mopd_teacher_log_probs[domain] = teacher_result[lp_key]
+                    if mopd_teacher_log_probs:
+                        rollout_data["mopd_teacher_log_probs"] = mopd_teacher_log_probs
+
                 self._switch_model("old_actor" if self.args.keep_old_actor else "actor")
                 can_reuse_log_probs_in_loss = (
                     len(num_microbatches) == 1
@@ -449,6 +518,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     and not self.args.use_critic
                     and not self.args.keep_old_actor
                     and not self.args.use_opd
+                    and not getattr(self.args, "use_mopd", False)
                     and not self.args.use_routing_replay
                     and self.args.advantage_estimator != "gspo"
                 )
@@ -631,6 +701,16 @@ class MegatronTrainRayActor(TrainRayActor):
         elif model_tag == "teacher" and self.args.opd_teacher_ckpt_step is not None:
             old_ckpt_step = self.args.ckpt_step
             self.args.ckpt_step = self.args.opd_teacher_ckpt_step
+        elif model_tag.startswith("mopd_teacher_"):
+            # MOPD teacher checkpoint step: look up from mopd_teacher_ckpt_steps by domain
+            domain = model_tag[len("mopd_teacher_"):]
+            if getattr(self.args, "mopd_teacher_ckpt_steps", None) is not None:
+                mopd_teachers = json.loads(self.args.mopd_teachers) if isinstance(self.args.mopd_teachers, str) else self.args.mopd_teachers
+                for i, t in enumerate(mopd_teachers):
+                    if t["domain"] == domain and i < len(self.args.mopd_teacher_ckpt_steps):
+                        old_ckpt_step = self.args.ckpt_step
+                        self.args.ckpt_step = self.args.mopd_teacher_ckpt_steps[i]
+                        break
 
         _, _ = load_checkpoint(
             self.model,

@@ -568,6 +568,145 @@ def apply_opd_kl_to_advantages(
     rollout_data["opd_reverse_kl"] = reverse_kls
 
 
+def apply_mopd_to_advantages(
+    args: Namespace,
+    rollout_data: RolloutBatch,
+    advantages: list[torch.Tensor],
+    student_log_probs: list[torch.Tensor] | None,
+) -> None:
+    """Apply Multi-Teacher On-Policy Distillation (MOPD) to advantages.
+
+    MOPD computes per-teacher reverse KL advantages and importance sampling weights,
+    then applies a weighted proxy loss. The core formulas are:
+
+        Â_MOPD,t = sg[log(π_domain(y_t|x,y_<t) / π_θ(y_t|x,y_<t))]
+        w_t = sg[π_θ(y_t) / μ_θ(y_t)]  (clipped to [eps_low, eps_high], zeroed otherwise)
+        L_MOPD(θ) = -E[1/|y| Σ_t w_t * Â_MOPD,t * log π_θ(y_t|x,y_<t)]
+
+    When `mopd_alpha > 0`, the ORM advantage is combined:
+        Â_MOPD,t = sg[log(π_domain/π_θ)] + α * Â_ORM
+
+    Args:
+        args: Configuration containing `use_mopd`, `mopd_alpha`, `mopd_eps_low`, `mopd_eps_high`,
+              and `mopd_sampling_logprobs_key`.
+        rollout_data: Dict containing "mopd_teacher_log_probs" (dict: domain -> list[Tensor])
+                      and optionally the sampling log-probs key.
+        advantages: List of advantage tensors to modify in-place.
+        student_log_probs: List of student (training) log-probability tensors.
+    """
+
+    if student_log_probs is None:
+        return
+
+    mopd_teacher_log_probs: dict[str, list[torch.Tensor]] = rollout_data.get("mopd_teacher_log_probs")
+    if not mopd_teacher_log_probs:
+        raise ValueError(
+            "MOPD requires mopd_teacher_log_probs in rollout_data, but it is missing. "
+            "Ensure teacher log-probs are collected during rollout or training."
+        )
+
+    # Get sampling log-probs μ_θ for importance sampling weight
+    sampling_logprobs_key = args.mopd_sampling_logprobs_key
+    sampling_log_probs = rollout_data.get(sampling_logprobs_key)
+    if sampling_log_probs is None and sampling_logprobs_key == "rollout_log_probs":
+        # Fall back to old_log_probs (which may be rollout_log_probs depending on config)
+        sampling_log_probs = rollout_data.get("log_probs")
+    if sampling_log_probs is None:
+        raise ValueError(
+            f"MOPD requires '{sampling_logprobs_key}' in rollout_data for importance sampling, "
+            f"but it is missing."
+        )
+
+    device = student_log_probs[0].device
+    sampling_log_probs = [s.to(device=device) for s in sampling_log_probs]
+
+    # Compute MOPD advantages from each teacher and aggregate
+    # For each teacher, compute reverse KL and IS weights, then sum weighted advantages
+    all_mopd_advantages = []
+    all_is_weights_list = []
+    all_reverse_kls = []
+
+    for domain, teacher_lp_list in mopd_teacher_log_probs.items():
+        domain_advantages = []
+        domain_is_weights = []
+        domain_reverse_kls = []
+
+        for i in range(len(advantages)):
+            # If this sample has no teacher log-probs for this domain (per-sample routing),
+            # use zeros as placeholder — this domain contributes nothing to this sample.
+            if teacher_lp_list[i] is None:
+                domain_advantages.append(None)
+                domain_is_weights.append(None)
+                domain_reverse_kls.append(None)
+                continue
+
+            teacher_lp = teacher_lp_list[i].to(device=device)
+
+            # reverse_kl = log(π_domain(y_t)) - log(π_θ(y_t)), with stop-gradient
+            # student_log_probs here is π_θ (the training engine log-probs)
+            with torch.no_grad():
+                reverse_kl = teacher_lp - student_log_probs[i]
+
+                # Importance sampling weight: w_t = π_θ(y_t) / μ_θ(y_t)
+                # = exp(student_log_probs[i] - sampling_log_probs[i])
+                is_weight = torch.exp(student_log_probs[i] - sampling_log_probs[i])
+
+                # Zero out weights outside [eps_low, eps_high]
+                is_weight = torch.where(
+                    (is_weight >= args.mopd_eps_low) & (is_weight <= args.mopd_eps_high),
+                    is_weight,
+                    torch.zeros_like(is_weight),
+                )
+
+            # MOPD advantage: Â_MOPD,t = reverse_kl + α * Â_ORM
+            mopd_adv = reverse_kl
+            if args.mopd_alpha > 0:
+                mopd_adv = reverse_kl + args.mopd_alpha * advantages[i]
+
+            domain_advantages.append(mopd_adv)
+            domain_is_weights.append(is_weight)
+            domain_reverse_kls.append(reverse_kl)
+
+        all_mopd_advantages.append(domain_advantages)
+        all_is_weights_list.append(domain_is_weights)
+        all_reverse_kls.append(domain_reverse_kls)
+
+    # Aggregate across teachers: average the weighted advantages
+    # For each sample, only average over domains that have valid (non-None) entries.
+    # This supports per-sample domain routing where different samples may use different teachers.
+    aggregated_mopd_advantages = []
+    aggregated_is_weights = []
+
+    for i in range(len(advantages)):
+        # Collect valid (non-None) teacher contributions for this sample
+        valid_advs = [all_mopd_advantages[t][i] for t in range(len(all_mopd_advantages)) if all_mopd_advantages[t][i] is not None]
+        valid_is = [all_is_weights_list[t][i] for t in range(len(all_is_weights_list)) if all_is_weights_list[t][i] is not None]
+
+        if len(valid_advs) == 0:
+            # No valid teachers for this sample — use zero advantages and zero IS weights
+            aggregated_mopd_advantages.append(torch.zeros_like(advantages[i]))
+            aggregated_is_weights.append(torch.zeros_like(advantages[i]))
+        else:
+            avg_adv = sum(valid_advs) / len(valid_advs)
+            avg_is_weight = sum(valid_is) / len(valid_is)
+            aggregated_mopd_advantages.append(avg_adv)
+            aggregated_is_weights.append(avg_is_weight)
+
+    # Store MOPD data for use in policy_loss_function
+    rollout_data["mopd_advantages"] = aggregated_mopd_advantages
+    rollout_data["mopd_is_weights"] = aggregated_is_weights
+
+    # Also store per-teacher reverse KL for logging
+    # Use zeros for samples that don't have this domain (per-sample routing)
+    per_teacher_reverse_kl = {}
+    for t_idx, domain in enumerate(mopd_teacher_log_probs.keys()):
+        per_teacher_reverse_kl[domain] = [
+            all_reverse_kls[t_idx][i] if all_reverse_kls[t_idx][i] is not None else torch.zeros_like(advantages[i])
+            for i in range(len(advantages))
+        ]
+    rollout_data["mopd_reverse_kl"] = per_teacher_reverse_kl
+
+
 def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) -> None:
     """Compute advantages and returns in-place based on `args.advantage_estimator`.
 
@@ -678,6 +817,15 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
     # Apply on-policy distillation KL penalty to advantages (orthogonal to advantage estimator)
     if args.use_opd:
         apply_opd_kl_to_advantages(
+            args=args,
+            rollout_data=rollout_data,
+            advantages=advantages,
+            student_log_probs=log_probs,
+        )
+
+    # Apply Multi-Teacher On-Policy Distillation (MOPD) to advantages
+    if args.use_mopd:
+        apply_mopd_to_advantages(
             args=args,
             rollout_data=rollout_data,
             advantages=advantages,
@@ -897,6 +1045,18 @@ def policy_loss_function(
     if args.use_opsm:
         pg_loss = pg_loss * opsm_mask
 
+    # Apply MOPD: replace advantages with mopd_advantages and apply IS weights
+    # L_MOPD(θ) = -E[1/|y| Σ_t w_t * Â_MOPD,t * log π_θ(y_t|x,y_<t)]
+    # We recompute pg_loss with mopd_advantages and then multiply by IS weights.
+    if getattr(args, "use_mopd", False) and "mopd_advantages" in batch:
+        mopd_advantages = torch.cat(batch["mopd_advantages"], dim=0).detach()
+        pg_loss_mopd, _ = compute_policy_loss(ppo_kl, mopd_advantages, args.eps_clip, args.eps_clip_high)
+        pg_loss = pg_loss_mopd
+
+    if getattr(args, "use_mopd", False) and "mopd_is_weights" in batch:
+        mopd_is_weights = torch.cat(batch["mopd_is_weights"], dim=0).detach()
+        pg_loss = pg_loss * mopd_is_weights
+
     # Apply off-policy correction using importance sampling if enabled
     if args.get_mismatch_metrics or args.use_tis:
         # NOTE:
@@ -1016,6 +1176,23 @@ def policy_loss_function(
     if "opd_reverse_kl" in batch:
         opd_reverse_kl = torch.cat(batch["opd_reverse_kl"], dim=0)
         reported_loss["opd_reverse_kl"] = sum_of_sample_mean(opd_reverse_kl).clone().detach()
+
+    # Log MOPD metrics (IS weights and per-teacher reverse KL are already applied during
+    # advantage computation and pg_loss re-weighting in the MOPD section above)
+    if getattr(args, "use_mopd", False) and "mopd_is_weights" in batch:
+        mopd_is_weights = torch.cat(batch["mopd_is_weights"], dim=0)
+        reported_loss["mopd_is_weight_mean"] = sum_of_sample_mean(mopd_is_weights).clone().detach()
+        mopd_is_nonzero = (mopd_is_weights != 0).float()
+        reported_loss["mopd_is_nonzero_frac"] = sum_of_sample_mean(mopd_is_nonzero).clone().detach()
+
+        if "mopd_reverse_kl" in batch:
+            for domain, domain_kls in batch["mopd_reverse_kl"].items():
+                domain_kl_tensor = torch.cat(domain_kls, dim=0)
+                reported_loss[f"mopd_reverse_kl/{domain}"] = sum_of_sample_mean(domain_kl_tensor).clone().detach()
+
+        if "mopd_advantages" in batch:
+            mopd_advantages = torch.cat(batch["mopd_advantages"], dim=0)
+            reported_loss["mopd_advantage_mean"] = sum_of_sample_mean(mopd_advantages).clone().detach()
 
     return loss, reported_loss
 

@@ -746,6 +746,22 @@ class RolloutManager:
         if samples[0].teacher_log_probs is not None:
             train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
 
+        # Add MOPD teacher log probabilities (dict: domain -> list[float])
+        if samples[0].mopd_teacher_log_probs is not None:
+            # Collect all domains across all samples (may differ due to per-sample routing)
+            all_domains = set()
+            for sample in samples:
+                if sample.mopd_teacher_log_probs:
+                    all_domains.update(sample.mopd_teacher_log_probs.keys())
+            mopd_teacher_log_probs = {}
+            for domain in all_domains:
+                # Use None as placeholder for samples without this domain
+                mopd_teacher_log_probs[domain] = [
+                    sample.mopd_teacher_log_probs.get(domain) if sample.mopd_teacher_log_probs else None
+                    for sample in samples
+                ]
+            train_data["mopd_teacher_log_probs"] = mopd_teacher_log_probs
+
         return train_data
 
     def set_train_parallel_config(self, config: dict):
@@ -790,6 +806,12 @@ class RolloutManager:
                     continue
                 val = [data[key][j] for j in partition]
                 rollout_data[key] = val
+            # Handle mopd_teacher_log_probs (dict: domain -> list[list[float]])
+            if "mopd_teacher_log_probs" in data:
+                mopd_lp_dict = {}
+                for domain, lp_list in data["mopd_teacher_log_probs"].items():
+                    mopd_lp_dict[domain] = [lp_list[j] for j in partition]
+                rollout_data["mopd_teacher_log_probs"] = mopd_lp_dict
             # keys that need to be splited at train side
             for key in [
                 "raw_reward",
