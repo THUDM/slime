@@ -762,6 +762,27 @@ class RolloutManager:
                 ]
             train_data["mopd_teacher_log_probs"] = mopd_teacher_log_probs
 
+        # Add MOPD teacher top-k data (SGLang mode, top_k distill type)
+        # Format: {domain -> list[list[list[float]]]]} — domain -> per-sample [seq_len][k]
+        if any(s.mopd_teacher_topk_logits is not None for s in samples):
+            all_domains_topk = set()
+            for sample in samples:
+                if sample.mopd_teacher_topk_logits:
+                    all_domains_topk.update(sample.mopd_teacher_topk_logits.keys())
+            mopd_teacher_topk_logits = {}
+            mopd_teacher_topk_indices = {}
+            for domain in all_domains_topk:
+                mopd_teacher_topk_logits[domain] = [
+                    sample.mopd_teacher_topk_logits.get(domain) if sample.mopd_teacher_topk_logits else None
+                    for sample in samples
+                ]
+                mopd_teacher_topk_indices[domain] = [
+                    sample.mopd_teacher_topk_indices.get(domain) if sample.mopd_teacher_topk_indices else None
+                    for sample in samples
+                ]
+            train_data["mopd_teacher_topk_logits"] = mopd_teacher_topk_logits
+            train_data["mopd_teacher_topk_indices"] = mopd_teacher_topk_indices
+
         return train_data
 
     def set_train_parallel_config(self, config: dict):
@@ -812,6 +833,17 @@ class RolloutManager:
                 for domain, lp_list in data["mopd_teacher_log_probs"].items():
                     mopd_lp_dict[domain] = [lp_list[j] for j in partition]
                 rollout_data["mopd_teacher_log_probs"] = mopd_lp_dict
+            # Handle mopd_teacher_topk_logits/indices (dict: domain -> list, SGLang MOPD top_k mode)
+            if "mopd_teacher_topk_logits" in data:
+                mopd_topk_logits_dict = {}
+                for domain, v_list in data["mopd_teacher_topk_logits"].items():
+                    mopd_topk_logits_dict[domain] = [v_list[j] for j in partition]
+                rollout_data["mopd_teacher_topk_logits"] = mopd_topk_logits_dict
+            if "mopd_teacher_topk_indices" in data:
+                mopd_topk_indices_dict = {}
+                for domain, v_list in data["mopd_teacher_topk_indices"].items():
+                    mopd_topk_indices_dict[domain] = [v_list[j] for j in partition]
+                rollout_data["mopd_teacher_topk_indices"] = mopd_topk_indices_dict
             # keys that need to be splited at train side
             for key in [
                 "raw_reward",
@@ -1266,12 +1298,26 @@ def _compute_zero_std_metrics(args, all_samples: list[Sample]):
 
     def _is_zero_std(samples: list[Sample]):
         rewards = [sample.get_reward_value(args) for sample in samples]
-        return len(rewards) == 0 or all(rewards[0] == r for r in rewards)
+        if len(rewards) == 0:
+            return True
+        # Only compare numeric rewards; skip groups with non-numeric rewards
+        # (e.g., MOPD SGLang mode where sample.reward is still a dict).
+        if not isinstance(rewards[0], (int, float)):
+            return False
+        return all(rewards[0] == r for r in rewards)
 
     all_sample_groups = group_by(all_samples, lambda s: s.group_index)
     interesting_sample_groups = [g for g in all_sample_groups.values() if _is_zero_std(g)]
 
-    interesting_rewards = [str(round(g[0].get_reward_value(args), 1)) for g in interesting_sample_groups]
+    # Guard against non-numeric reward values (e.g., MOPD SGLang mode where
+    # sample.reward may still be a dict before post-processing completes).
+    interesting_rewards = []
+    for g in interesting_sample_groups:
+        rv = g[0].get_reward_value(args)
+        if isinstance(rv, (int, float)):
+            interesting_rewards.append(str(round(rv, 1)))
+        else:
+            interesting_rewards.append(str(type(rv).__name__))
 
     return {f"zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
 
@@ -1302,6 +1348,18 @@ def _compute_reward_cat_metrics(args, all_samples: list[Sample]):
     if reward_cat_key is None:
         return {}
 
-    samples_of_reward_cat = group_by(all_samples, lambda s: s.reward[reward_cat_key])
+    # Guard against non-dict rewards (e.g., float in MOPD pure distillation mode)
+    # or dict rewards that don't contain the key.
+    def _get_reward_cat(s):
+        if isinstance(s.reward, dict) and reward_cat_key in s.reward:
+            return s.reward[reward_cat_key]
+        return None
+
+    samples_of_reward_cat = group_by(all_samples, _get_reward_cat)
+    # Filter out None category (samples where reward_cat_key is not available)
+    samples_of_reward_cat.pop(None, None)
+
+    if not samples_of_reward_cat:
+        return {}
 
     return {f"error_cat/{reward_cat}": len(s) / len(all_samples) for reward_cat, s in samples_of_reward_cat.items()}

@@ -728,6 +728,8 @@ def apply_mopd_to_advantages(
         for i in range(len(advantages)):
             # If this sample has no teacher log-probs for this domain (per-sample routing),
             # use zeros as placeholder — this domain contributes nothing to this sample.
+            # Also detect fallback sentinel tensors (all -inf) that were inserted when
+            # MOPD teacher requests failed, to avoid contaminating advantages with -inf.
             if teacher_lp_list[i] is None:
                 domain_advantages.append(None)
                 domain_is_weights.append(None)
@@ -735,6 +737,13 @@ def apply_mopd_to_advantages(
                 continue
 
             teacher_lp = teacher_lp_list[i].to(device=device)
+            if teacher_lp.isinf().all():
+                # All -inf: teacher data was unavailable (fallback sentinel).
+                # Treat same as None — this domain contributes nothing.
+                domain_advantages.append(None)
+                domain_is_weights.append(None)
+                domain_reverse_kls.append(None)
+                continue
 
             # reverse_kl = log(π_domain(y_t)) - log(π_θ(y_t)), with stop-gradient
             # student_log_probs here is π_θ (the training engine log-probs)
@@ -1217,6 +1226,7 @@ def apply_mopd_topk_to_loss(
     loss_masks: list[torch.Tensor],
     sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
     current_log_probs: list[torch.Tensor] | None = None,
+    teacher_topk_log_sum_exp_per_domain: dict[str, list[torch.Tensor | None]] | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute the top-k approximate reverse KL divergence loss for MOPD.
 
@@ -1246,6 +1256,12 @@ def apply_mopd_topk_to_loss(
         current_log_probs: List of per-sample log-probs from the current training
             forward pass. Used for importance sampling weight computation.
             If None, falls back to batch["log_probs"].
+        teacher_topk_log_sum_exp_per_domain: Optional dict mapping domain to list of
+            per-sample teacher log_sum_exp tensors [R_i] (computed from full-vocab logits
+            during Megatron teacher forward pass). Used for exact tail mass estimation
+            in Megatron mode. When provided, teacher_tail_mass is computed exactly as
+            1 - sum(exp(topk_logits - log_sum_exp)) instead of the uniform assumption
+            (V - V_eff) / V.
 
     Returns:
         Tuple of (kl_loss, metrics) where kl_loss is a scalar tensor and
@@ -1286,7 +1302,20 @@ def apply_mopd_topk_to_loss(
                 continue
 
             t_topk_logits = teacher_topk_logits_per_domain[domain][i]  # [R_i, k]
+
+            # Skip fallback sentinel tensors (all -inf) from failed teacher requests.
+            # These would produce KL=0 anyway, so skipping avoids unnecessary
+            # computation and TP all-reduce calls.
+            if t_topk_logits.isinf().all():
+                continue
+
             t_topk_indices = teacher_topk_indices_per_domain[domain][i]  # [R_i, k]
+
+            # Get teacher log_sum_exp for exact tail mass (Megatron mode only)
+            t_topk_log_sum_exp = None
+            if teacher_topk_log_sum_exp_per_domain and domain in teacher_topk_log_sum_exp_per_domain:
+                if i < len(teacher_topk_log_sum_exp_per_domain[domain]) and teacher_topk_log_sum_exp_per_domain[domain][i] is not None:
+                    t_topk_log_sum_exp = teacher_topk_log_sum_exp_per_domain[domain][i]  # [R_i]
 
             kl_i = vocab_parallel_topk_reverse_kl(
                 student_logits_per_sample[i],
@@ -1294,6 +1323,8 @@ def apply_mopd_topk_to_loss(
                 t_topk_indices,
                 vocab_size,
                 tp_group,
+                is_log_probs=(getattr(args, "mopd_teacher_mode", "megatron") == "sglang"),
+                teacher_log_sum_exp=t_topk_log_sum_exp,
             )  # [R_i]
             sample_kl_values.append(kl_i)
             valid_teacher_count += 1
@@ -1556,13 +1587,18 @@ def policy_loss_function(
         mopd_teachers_parsed = getattr(args, "_mopd_teachers_parsed", [])
         teacher_topk_logits_per_domain = {}
         teacher_topk_indices_per_domain = {}
+        teacher_topk_log_sum_exp_per_domain = {}
         for teacher_cfg in mopd_teachers_parsed:
             domain = teacher_cfg["domain"]
             topk_logits_key = f"mopd_teacher_{domain}_topk_logits"
             topk_indices_key = f"mopd_teacher_{domain}_topk_indices"
+            topk_log_sum_exp_key = f"mopd_teacher_{domain}_topk_log_sum_exp"
             if topk_logits_key in batch and batch[topk_logits_key] is not None:
                 teacher_topk_logits_per_domain[domain] = batch[topk_logits_key]
                 teacher_topk_indices_per_domain[domain] = batch[topk_indices_key]
+                # log_sum_exp is only available in Megatron mode (computed from full logits)
+                if topk_log_sum_exp_key in batch and batch[topk_log_sum_exp_key] is not None:
+                    teacher_topk_log_sum_exp_per_domain[domain] = batch[topk_log_sum_exp_key]
 
         if teacher_topk_logits_per_domain:
             topk_kl_loss, mopd_fv_metrics = apply_mopd_topk_to_loss(
@@ -1571,6 +1607,7 @@ def policy_loss_function(
                 student_logits_per_sample=student_logits_per_sample,
                 teacher_topk_logits_per_domain=teacher_topk_logits_per_domain,
                 teacher_topk_indices_per_domain=teacher_topk_indices_per_domain,
+                teacher_topk_log_sum_exp_per_domain=teacher_topk_log_sum_exp_per_domain,
                 loss_masks=batch["loss_masks"],
                 sum_of_sample_mean=sum_of_sample_mean,
                 current_log_probs=current_log_probs_list,
