@@ -71,7 +71,7 @@ SAVE_DIR=/amed/share/s1-amed-spfs-ckpt/yanyi/Qwen3.5-397B-A17B-Stage3b-Mopd-Topk
 DATA_PATH="/mnt/amed-s3/dataset/14019ba0_text_report_Interpretation/a3967912440becb0d70748a478696f12b6bbf6ac/train_text_think_nothink.jsonl"
 
 # MOPD teachers JSON config (single teacher for this example)
-export MOPD_TEACHERS_JSON='[{"name":"skin-multiturn","domain":"default"}]'
+export MOPD_TEACHERS_JSON='[{"name":"teacher","domain":"default"}]'
 
 # MOPD teacher SGLang server URLs
 # For multi-teacher, add all domains: {"math":"https://...","code":"https://..."}

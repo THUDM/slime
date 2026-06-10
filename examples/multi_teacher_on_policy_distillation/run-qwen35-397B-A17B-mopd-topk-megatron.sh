@@ -3,7 +3,7 @@
 # Multi-Teacher On-Policy Distillation (MOPD) — Top-K KL Divergence Mode
 # Model: Qwen3.5-397B-A17B (MoE, 512 experts, 10 active)
 # Environment: 16 nodes × 8 L20X (143GB each), 128 GPUs total
-# Teacher: Skin-multiturn teacher (different from student for production distillation)
+# Teacher: Teacher model (different from student for production distillation)
 # Mode: Megatron (teacher loaded into CPU memory via TensorBackuper)
 # Distill Type: top_k (approximate reverse KL with top-k teacher logits + tail correction)
 #
@@ -58,7 +58,7 @@ SAVE_DIR=/amed/share/s1-amed-spfs-ckpt/yanyi/Qwen3.5-397B-A17B-Stage3b-Mopd-Topk
 DATA_PATH="/mnt/amed-s3/dataset/14019ba0_text_report_Interpretation/a3967912440becb0d70748a478696f12b6bbf6ac/train_text_think_nothink.jsonl"
 
 # MOPD teachers JSON config
-export MOPD_TEACHERS_JSON='[{"name":"skin-multiturn","domain":"default"}]'
+export MOPD_TEACHERS_JSON='[{"name":"teacher","domain":"default"}]'
 
 # ============================================================================
 # Configure training arguments
