@@ -192,9 +192,7 @@ def test_fused_entropy_only_backward_matches_naive_reference():
 
     logits, tokens = _make_inputs(requires_grad=True)
     with _single_rank_all_reduce():
-        log_probs, entropy = calculate_log_probs_and_entropy(
-            logits, tokens, _FakeSingleRankGroup(), with_entropy=True
-        )
+        log_probs, entropy = calculate_log_probs_and_entropy(logits, tokens, _FakeSingleRankGroup(), with_entropy=True)
         # Only entropy contributes to the loss, so autograd passes
         # grad_log_prob=None into the fused backward, exercising the
         # entropy-only branch.
