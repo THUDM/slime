@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Jun 08, 2026"/>
+    <meta name="docbuild:last-update" content="Jun 11, 2026"/>
   </head>
   
   
@@ -525,37 +525,32 @@
 <td><p>CPU</p></td>
 <td><p>Always-on agent adapter tests with optional provider SDK dependencies.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-short</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-short</span></code></p></td>
-<td><p>GPU</p></td>
-<td><p>Lightweight smoke tests with small Qwen models. Fast GPU feedback loop.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-sglang-config</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-sglang-config</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-sglang-config</span></code></p></td>
 <td><p>GPU</p></td>
 <td><p>SGLang config tests for advanced rollout engine deployment and mixed/offload scenarios.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-megatron</span></code></p></td>
 <td><p>GPU</p></td>
 <td><p>Core Megatron training tests covering dense, MoE, PPO, MTP, OPD, async rollout, PD/Mooncake, and debug replay paths.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-precision</span></code></p></td>
 <td><p>GPU</p></td>
 <td><p>Numerical precision validation and parallel consistency checks.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-ckpt</span></code></p></td>
 <td><p>GPU</p></td>
 <td><p>Checkpoint save/load correctness, including CPU/GPU optimizer states and async save.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-image</span></code></p></td>
 <td><p>GPU</p></td>
-<td><p>Broad image validation suite on <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code>.</p></td>
+<td><p>Runs the <code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code> matrix on <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-changed</span></code></p></td>
 <td><p>Mixed</p></td>
 <td><p>Runs only changed tests, using each file’s <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span></code> value.</p></td>
@@ -589,12 +584,11 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
 <h2>GPU E2E Tests<a class="headerlink" href="#gpu-e2e-tests" title="Link to this heading">#</a></h2>
 <p>GPU e2e tests validate the integrated training/rollout behavior that CPU tests cannot cover:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-short</span></code>: small-model smoke coverage for quick GPU feedback.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">run-ci-sglang-config</span></code>: advanced SGLang deployment paths, including config-based engine layouts.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code>: main Megatron backend coverage for dense/MoE recipes, async rollout, OPD, PPO-style paths, PD/Mooncake, and debug rollout-then-train replay.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code>: numerical consistency across parallel settings.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code>: checkpoint save/load combinations and async save.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code>: broad validation of the release/test image.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code>: the same matrix as <code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code>, but on the release/test image.</p></li>
 </ul>
 <p>Use targeted labels for routine PRs. Use <code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code> sparingly because it consumes significantly more GPU time.</p>
 </section>
@@ -774,7 +768,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jun 08, 2026.
+  Last updated on Jun 11, 2026.
   <br/>
 </p>
   </div>

@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 06 月 08 日"/>
+    <meta name="docbuild:last-update" content="2026 年 06 月 11 日"/>
   </head>
   
   
@@ -521,37 +521,32 @@
 <td><p>CPU</p></td>
 <td><p>默认运行的 agent adapter tests，包含额外 provider SDK 依赖。</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-short</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-short</span></code></p></td>
-<td><p>GPU</p></td>
-<td><p>小模型轻量级 smoke tests，用于快速 GPU 反馈。</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-sglang-config</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-sglang-config</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-sglang-config</span></code></p></td>
 <td><p>GPU</p></td>
 <td><p>SGLang config 测试，覆盖高级 rollout engine deployment 和 mixed/offload 场景。</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-megatron</span></code></p></td>
 <td><p>GPU</p></td>
 <td><p>核心 Megatron 训练测试，覆盖 dense、MoE、PPO、MTP、OPD、async rollout、PD/Mooncake 和 debug replay 路径。</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-precision</span></code></p></td>
 <td><p>GPU</p></td>
 <td><p>数值精度和并行一致性检查。</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-ckpt</span></code></p></td>
 <td><p>GPU</p></td>
 <td><p>Checkpoint save/load 正确性，包括 CPU/GPU optimizer state 和 async save。</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-image</span></code></p></td>
 <td><p>GPU</p></td>
-<td><p>在 <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code> 上运行更完整的镜像验证套件。</p></td>
+<td><p>在 <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code> 上运行与 <code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code> 相同的 matrix。</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-changed</span></code></p></td>
 <td><p>Mixed</p></td>
 <td><p>只运行 changed tests，并使用每个文件中的 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span></code>。</p></td>
@@ -585,12 +580,11 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
 <h2>GPU E2E Tests<a class="headerlink" href="#gpu-e2e-tests" title="链接到此标题。">#</a></h2>
 <p>GPU e2e tests 验证 CPU tests 无法覆盖的集成训练/rollout 行为：</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-short</span></code>：小模型 smoke coverage，用于快速 GPU 反馈。</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">run-ci-sglang-config</span></code>：高级 SGLang deployment path，包括 config-based engine layouts。</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code>：主要 Megatron backend coverage，包括 dense/MoE recipe、async rollout、OPD、PPO-style path、PD/Mooncake 和 debug rollout-then-train replay。</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code>：不同并行设置下的数值一致性。</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code>：checkpoint save/load 组合和 async save。</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code>：release/test image 的较完整验证。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code>：与 <code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code> 相同的 matrix，但运行在 release/test image 上。</p></li>
 </ul>
 <p>日常 PR 优先使用 targeted labels。<code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code> 消耗 GPU 时间较多，应谨慎使用。</p>
 </section>
@@ -770,7 +764,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 06 月 08 日.
+  最后更新于 2026 年 06 月 11 日.
   <br/>
 </p>
   </div>
