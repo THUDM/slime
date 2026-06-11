@@ -29,7 +29,7 @@ from slime.utils.types import Sample
 
 from ..utils.metric_utils import has_repetition
 from .rollout_validation import validate_server_group_gpu_indices
-from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
+from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock, add_default_ray_env_vars
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -163,7 +163,7 @@ class ServerGroup:
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
                 runtime_env={
-                    "env_vars": env_vars,
+                    "env_vars": add_default_ray_env_vars(env_vars),
                 },
             ).remote(
                 self.args,
@@ -409,7 +409,11 @@ class RolloutManager:
             self.servers = start_rollout_servers(args, pg)
 
         init_tracking(args, primary=False)
-        self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
+        self.rollout_engine_lock = Lock.options(
+            num_cpus=1,
+            num_gpus=0,
+            runtime_env={"env_vars": add_default_ray_env_vars()},
+        ).remote()
         self.rollout_id = -1
 
         self._health_monitors = []
