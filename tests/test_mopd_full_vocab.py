@@ -716,7 +716,7 @@ class TestVocabParallelTopkReverseKL:
 
         assert kl.shape == (3,)
         # Should be close to 0 (not exact due to tail approximation with V > k)
-        assert kl.item() >= -0.1, f"Top-k KL should be ~0 for identical distributions, got {kl}"
+        assert (kl >= -0.1).all(), f"Top-k KL should be ~0 for identical distributions, got {kl}"
 
     def test_topk_kl_gradient_flows(self):
         """Gradient flows through student logits in top-k KL."""
@@ -793,6 +793,7 @@ class TestApplyMopdTopkToLoss:
             mopd_sampling_logprobs_key="rollout_log_probs",
             _mopd_teachers_parsed=[{"name": "math_teacher", "domain": "math"}],
             padded_vocab_size=20,
+            vocab_size=20,
         )
         defaults.update(overrides)
         return Namespace(**defaults)
