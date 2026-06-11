@@ -134,26 +134,6 @@ class DriftKind(enum.Enum):
     FORK = "fork"  # everything else: close this builder, open a fresh one as a fork
 
 
-def classify_drift(
-    held_tokens: list[int],
-    prompt_ids: list[int],
-    last_response_start_idx: int | None,
-    fork_threshold: int,
-) -> DriftKind:
-    """Classify how ``prompt_ids`` relates to the tokens a builder already holds."""
-    realign_at = _common_prefix_len(held_tokens, prompt_ids)
-    drift = len(held_tokens) - realign_at
-
-    if drift == 0:
-        return DriftKind.CLEAN
-
-    # REALIGN only heals drift that falls inside the most-recent response span
-    # (and is short); divergence anywhere earlier, or an empty builder, forks.
-    if last_response_start_idx is not None and realign_at >= last_response_start_idx and drift < fork_threshold:
-        return DriftKind.REALIGN
-    return DriftKind.FORK
-
-
 # ===========================================================================
 # SampleBuilder — accumulates turns into one trainable Sample (fork closes it)
 # ===========================================================================
@@ -162,11 +142,21 @@ def classify_drift(
 class _SampleBuilder:
     """Accumulates a chain's turns into the token sequence of one ``Sample``.
 
-    A chain of turns is appended one at a time via :meth:`append_turn`. Each turn
-    must extend the tokens we already hold as an exact prefix; a turn whose
-    prompt diverges too far (re-tokenization drift past what we can silently
-    drop) is rejected, and the caller closes this builder and starts a fresh one
-    -- that boundary is the "fork". Each surviving builder yields one Sample.
+    A chain of turns is appended one at a time via :meth:`append_turn`. Ideally
+    each turn's prompt exactly extends the tokens we already hold, but a replayed
+    turn rarely re-tokenizes byte-for-byte: TITO round-trips and chat-template
+    re-rendering both perturb the ids of content we've already seen. The builder
+    handles this drift in a source-agnostic way, classified by where and how far
+    the prompt diverges from the held tokens (see :meth:`classify_token_drift`):
+
+    * **CLEAN** -- no drift; append the prompt tail beyond what we hold.
+    * **REALIGN** -- a short divergence inside the most-recent response span;
+      overwrite that span from the prompt as loss=0 and keep accumulating.
+    * **FORK** -- divergence too large or too early to absorb; this builder is
+      rejected and the caller closes it and opens a fresh one. That boundary is
+      the "fork".
+
+    Each surviving builder yields one Sample.
     """
 
     def __init__(self, fork_threshold: int) -> None:
@@ -177,8 +167,28 @@ class _SampleBuilder:
         self.last_response_start_idx: int | None = None
         self.leading_prompt_len: int = 0
 
-    def token_drift(self, turn: TurnRecord) -> DriftKind:
-        return classify_drift(self.tokens, turn.prompt_ids, self.last_response_start_idx, self._fork_threshold)
+    def classify_token_drift(self, turn: TurnRecord) -> DriftKind:
+        """Decide how this builder should absorb ``turn``'s prompt.
+
+        The incoming turn's prompt is expected to match the tokens this builder
+        already holds as an exact prefix. When token drift has occurred -- the
+        prompt diverges from the held tokens -- we decide whether to REALIGN
+        (heal a short divergence inside the most-recent response span) or to FORK
+        (the divergence is too large or too early to absorb). With no drift the
+        turn is handled the CLEAN way -- a plain prefix extension.
+        """
+        realign_at = _common_prefix_len(self.tokens, turn.prompt_ids)
+        drift = len(self.tokens) - realign_at
+
+        if drift == 0:
+            return DriftKind.CLEAN
+
+        # REALIGN only heals drift that falls inside the most-recent response span
+        # (and is short); divergence anywhere earlier, or an empty builder, forks.
+        start = self.last_response_start_idx
+        if start is not None and realign_at >= start and drift < self._fork_threshold:
+            return DriftKind.REALIGN
+        return DriftKind.FORK
 
     def append_turn(self, turn: TurnRecord, kind: DriftKind, *, trained: bool = True) -> None:
         """Append one turn into this SampleBuilder, branching on ``kind``: for REALIGN
@@ -440,7 +450,7 @@ class TrajectoryManager:
             trained = not asst_node.response_trained
             asst_node.response_trained = True
 
-            if not builders or (kind := builders[-1].token_drift(asst_node.turn)) is DriftKind.FORK:
+            if not builders or (kind := builders[-1].classify_token_drift(asst_node.turn)) is DriftKind.FORK:
                 builders.append(_SampleBuilder(self._fork_threshold))
                 builders[-1].append_turn(asst_node.turn, DriftKind.CLEAN, trained=trained)
             else:
