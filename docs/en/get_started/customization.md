@@ -28,6 +28,7 @@ Below is a summary of all available customization interfaces and their purposes.
 | [`--custom-megatron-init-path`](#17-megatron-hooks) | Custom initialization after Megatron setup. |
 | [`--custom-megatron-before-log-prob-hook-path`](#17-megatron-hooks) | Custom logic before log probability computation. |
 | [`--custom-megatron-before-train-step-hook-path`](#17-megatron-hooks) | Custom logic before each training step. |
+| [`--custom-rollout-request-hook-path`](#19-rollout-request-hook---custom-rollout-request-hook-path) | Customize each default SGLang `/generate` request before dispatch. |
 
 ## Agentic workflows through customization interfaces
 
@@ -457,6 +458,25 @@ Stabilize MoE RL training by recording and replaying expert routing decisions to
 | `--use-routing-replay` | Forward-backward routing consistency in training. ([arXiv:2507.18071](https://arxiv.org/abs/2507.18071)) |
 | `--use-rollout-routing-replay` | R3: Replay routing from rollout during training. Supported by slime's default `sglang_router` path. ([arXiv:2510.11370](https://arxiv.org/abs/2510.11370)) |
 
+---
+
+### 19. Rollout Request Hook (`--custom-rollout-request-hook-path`)
+
+**Signature**:
+```python
+def hook(args, sample, request) -> None | dict
+```
+
+**Purpose**: Customize each default SGLang rollout `/generate` request before it
+is sent. `request` contains `url`, `payload`, `headers`, `max_retries`,
+`retry_sleep`, `rollout_id`, and `evaluation`. Mutate it in place or return a
+dict of updates.
+
+This hook is useful for external rollout providers that need request-level
+admission control, for example adding `payload["weight_version"]` so a request
+routed to a lagging replica fails and retries before doing unusable rollout
+compute.
+
 ## Testing Custom Function Paths
 
 slime also provides CPU-only contract tests for customization interfaces. These tests resolve components through import-path strings, so they can validate both built-in hooks and user-defined implementations passed through the same CLI arguments used by training.
@@ -470,7 +490,7 @@ The tests live under `tests/plugin_contracts/` and are grouped by hook shape:
 - `tests/plugin_contracts/test_plugin_path_loading_contracts.py`
   Covers `--eval-function-path`, `--custom-rm-path`, `--dynamic-sampling-filter-path`, `--buffer-filter-path`, `--data-source-path`, `--rollout-sample-filter-path`, and `--rollout-all-samples-process-path`
 - `tests/plugin_contracts/test_plugin_runtime_hook_contracts.py`
-  Covers `--custom-rollout-log-function-path`, `--custom-eval-rollout-log-function-path`, `--custom-reward-post-process-path`, `--custom-convert-samples-to-train-data-path`, and `--rollout-data-postprocess-path`
+  Covers `--custom-rollout-log-function-path`, `--custom-eval-rollout-log-function-path`, `--custom-reward-post-process-path`, `--custom-convert-samples-to-train-data-path`, `--rollout-data-postprocess-path`, and `--custom-rollout-request-hook-path`
 
 Run all customization contract tests locally:
 

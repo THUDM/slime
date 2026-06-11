@@ -4,6 +4,7 @@
 - [Quick Start](#quick-start)
 - [Mode vs Transport](#mode-vs-transport)
 - [How It Works](#how-it-works)
+- [Publish-Only Disk Delta](#publish-only-disk-delta)
 - [Encoding Choice](#encoding-choice)
 - [Why Not Colocated](#why-not-colocated)
 
@@ -91,6 +92,35 @@ Delta NCCL and delta disk share one sender pipeline, one wire layout, and one re
 For both transports, the receiver ends up calling the same `_apply_delta_payload(encoding, params, positions, values)` helper. It decodes each param's slice into a full-shape tensor with NaN at unchanged positions, then routes it through `model.load_weights(...)` under a `_delta_apply_context` that patches `Tensor.copy_` / `Tensor.fill_` to perform NaN-masked overwrite. Auxiliary writes (scratch buffers, fp8 scales, MoE biases via `post_load_weights`) keep their normal semantics.
 
 Selective overwrite has no arithmetic — the receiver writes the trainer's exact bytes at changed positions — so it's lossless by construction and there's no notion of drift to fight with periodic base re-syncs.
+
+## Publish-Only Disk Delta
+
+The disk path above pushes each version to known engines: rank 0 calls every engine's `update_weights_from_disk(load_format="delta")` and the sync ends when all engines acknowledge. That requires stable engine handles. When the serving side is an elastic fleet that consumes published versions on its own schedule — e.g. behind an [opaque HTTP rollout endpoint](external-rollout-engines.md#opaque-http-rollout-endpoint) — invert the direction with publish-only mode:
+
+```bash
+--update-weight-mode delta
+--update-weight-transport disk
+--update-weight-delta-publish-only
+--custom-delta-publish-path my_pkg.publish.publish_delta
+--update-weight-delta-keep-files
+```
+
+Instead of firing per-engine RPCs, rank 0 invokes your publish hook once per sync, after every delta file has been written and the optional `--custom-delta-pre-push-path` hook has committed:
+
+```python
+def publish_delta(args, version_dir: str, files: list[str], weight_version: str, rollout_engines) -> list | None:
+    ...  # e.g. upload version_dir to object storage, then announce weight_version
+```
+
+Returned Ray ObjectRefs are awaited before the version counts as settled. Behavior differences from the direct disk path:
+
+- **One complete version per sync.** Direct disk transport publishes at each pass boundary so receivers can overlap apply with later encoding; publish-only defers everything to finalize, so external consumers never observe a partially published version.
+- **Publish wait is configurable.** By default, `--update-weight-delta-publish-wait=next-sync` leaves the dispatched publish in flight across the next training step and settles it at the start of the next sync (or on disconnect). A failed publish therefore surfaces one sync late, on rank 0. Set `--update-weight-delta-publish-wait=sync` when the publish hook should block `update_weights`, for example because it polls an external rollout fleet until enough replicas report the new version ready.
+- **Engines are left alone.** Generation is not paused, caches are not flushed, and no update RPCs are issued; consumers decide when to pick up a version. If the rollout endpoint supports request-level weight constraints, attach them from a `--custom-rollout-request-hook-path` hook so requests routed to lagging replicas fail/retry before doing unusable rollout compute.
+- **No cleanup.** slime cannot know when consumers finish reading a version, so `--update-weight-delta-keep-files` is required and version-directory lifecycle belongs to you (e.g. the publish hook can prune old versions once uploaded).
+- **No-op versions still publish.** If a sync produces no changed bytes, the hook is still called with an empty file list so consumers' version counters can advance.
+
+`--update-weight-delta-root` optionally names a root directory for publish-side metadata; it defaults to the parent of `--update-weight-disk-dir` and is passed through to hooks via `args`.
 
 ## Encoding Choice
 
