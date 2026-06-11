@@ -5,7 +5,6 @@ import ray
 import torch
 from slime.ray.ray_actor import RayActor
 
-
 # Refer to
 # https://github.com/ray-project/ray/blob/161849364a784442cc659fb9780f1a6adee85fce/python/ray/_private/accelerators/nvidia_gpu.py#L95-L96
 # https://github.com/ray-project/ray/blob/161849364a784442cc659fb9780f1a6adee85fce/python/ray/_private/accelerators/amd_gpu.py#L102-L103
@@ -23,6 +22,15 @@ NOSET_VISIBLE_DEVICES_ENV_VARS_LIST = [
     "RAY_EXPERIMENTAL_NOSET_TPU_VISIBLE_CHIPS",
     "RAY_EXPERIMENTAL_NOSET_ONEAPI_DEVICE_SELECTOR",
 ]
+
+RAY_DEFAULT_ENV_VARS = {
+    # Ray's uvloop integration has caused intermittent async actor issues.
+    "RAY_USE_UVLOOP": "0",
+}
+
+
+def add_default_ray_env_vars(env_vars: dict[str, str] | None = None) -> dict[str, str]:
+    return RAY_DEFAULT_ENV_VARS | (env_vars or {})
 
 
 def ray_noset_visible_devices(env_vars=os.environ):
