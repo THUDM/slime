@@ -2,6 +2,7 @@
 # This file is auto-generated from the .j2 file via generate_github_workflows.py. Do not edit manually.
 ################################################################################
 
+
 name: PR Test
 
 on:
@@ -28,89 +29,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-
-  e2e-test-short:
-
-    if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-short'))
-
-
-    runs-on: self-hosted
-
-    strategy:
-      fail-fast: false
-      matrix:
-        info: [{"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"}, {"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_ppo_critic_only_short.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_fanout_short.py"}, {"num_gpus": 4, "test_file": "test_delta_weight_update.py"}]
-    defaults:
-      run:
-        working-directory: ${{ github.workspace }}
-    env:
-      GITHUB_COMMIT_NAME: ${{ github.sha }}_${{ github.event.pull_request.number || 'non-pr' }}
-      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
-      SLIME_TEST_ENABLE_INFINITE_RUN: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.infinite_run) || 'false' }}
-      SLIME_TEST_USE_DEEPEP: ${{ matrix.info.use_deepep || '0' }}
-      SLIME_TEST_USE_FP8_ROLLOUT: ${{ matrix.info.use_fp8_rollout || '0' }}
-      SLIME_TEST_ENABLE_EVAL: ${{ matrix.info.enable_eval || '1' }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-
-
-      - name: Execute
-        shell: bash
-        run: |
-
-          docker run --pull=always --rm \
-            --privileged \
-            --cap-add SYS_NICE \
-            --security-opt seccomp=unconfined \
-            --network host \
-            --gpus all \
-            --ipc=host \
-            --shm-size=16g \
-            --ulimit memlock=-1 \
-            --ulimit stack=67108864 \
-            --memory=0 \
-            --memory-swap=0 \
-            -e http_proxy \
-            -e https_proxy \
-            -e HTTP_PROXY \
-            -e HTTPS_PROXY \
-            -e GITHUB_COMMIT_NAME \
-            -e WANDB_API_KEY \
-            -e SLIME_TEST_ENABLE_INFINITE_RUN \
-            -e SLIME_TEST_USE_DEEPEP \
-            -e SLIME_TEST_USE_FP8_ROLLOUT \
-            -e SLIME_TEST_ENABLE_EVAL \
-            -e TEST_FILE="${{ matrix.info.test_file }}" \
-            -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
-            -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
-            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
-            -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
-            -v /mnt/nvme0n1/slime_ci/models:/root/models \
-            -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
-            -w "$GITHUB_WORKSPACE" \
-            slimerl/slime:latest \
-            bash -lc '
-              set -euo pipefail
-              pip install -e . --no-deps --break-system-packages
-              TEST_PATH="$TEST_FILE"
-              if [[ "$TEST_PATH" != tests/* ]]; then
-                TEST_PATH="tests/$TEST_PATH"
-              fi
-              if [[ -n "$TEST_ARGS" ]]; then
-                read -r -a TEST_ARGS_ARRAY < <(printf "%s\n" "$TEST_ARGS")
-              else
-                TEST_ARGS_ARRAY=()
-              fi
-              if [ "$NUM_GPUS" = "0" ]; then
-                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
-              else
-                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
-              fi
-            '
-
 
   e2e-test-sglang-config:
 
@@ -205,7 +123,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        info: [{"num_gpus": 4, "test_file": "test_full_disk_weight_update.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_quick_start_glm4_9B.py"}, {"num_gpus": 8, "test_file": "test_glm4.7_30B_A3B_pd_mooncake.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_30B_A3B.py", "use_deepep": "1", "use_fp8_rollout": "1"}, {"num_gpus": 8, "test_file": "test_qwen3.6_35B_A3B_pd_mooncake.py", "use_deepep": "1"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_30B_A3B_r3.py", "use_deepep": "1", "use_fp8_rollout": "1"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_4B_ppo.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_4B_ppo_disaggregate.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_4B_ppo_train_critic_only.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_moonlight_16B_A3B.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_moonlight_16B_A3B_r3.py"}, {"num_gpus": 8, "test_file": "test_mimo_7B_mtp_only_grad.py"}, {"num_gpus": 8, "test_file": "test_qwen3_0.6B_parallel_check.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_debug_rollout_then_train.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_opd_sglang.py"}, {"num_gpus": 6, "test_file": "test_qwen3_4B_external_pd.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_fully_async_short.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_streaming_partial_rollout.py"}, {"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"}, {"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"}, {"num_gpus": 8, "test_args": "--save-optimizer gpu --load-optimizer gpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer gpu --load-optimizer cpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer cpu --load-optimizer cpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer cpu --load-optimizer gpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--async-save", "test_file": "test_qwen3_4B_ckpt.py"}]
+        info: [{"num_gpus": 4, "test_file": "test_full_disk_weight_update.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_quick_start_glm4_9B.py"}, {"num_gpus": 8, "test_file": "test_glm4.7_30B_A3B_pd_mooncake.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_30B_A3B.py", "use_deepep": "1", "use_fp8_rollout": "1"}, {"num_gpus": 8, "test_file": "test_qwen3.6_35B_A3B_pd_mooncake.py", "use_deepep": "1"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_30B_A3B_r3.py", "use_deepep": "1", "use_fp8_rollout": "1"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_4B_ppo.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_4B_ppo_disaggregate.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_4B_ppo_train_critic_only.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_moonlight_16B_A3B.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_moonlight_16B_A3B_r3.py"}, {"num_gpus": 8, "test_file": "test_mimo_7B_mtp_only_grad.py"}, {"num_gpus": 8, "test_file": "test_qwen3_0.6B_parallel_check.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_debug_rollout_then_train.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_opd_sglang.py"}, {"num_gpus": 6, "test_file": "test_qwen3_4B_external_pd.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_fully_async_short.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_fanout_short.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_streaming_partial_rollout.py"}, {"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"}, {"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"}, {"num_gpus": 8, "test_args": "--save-optimizer gpu --load-optimizer gpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer gpu --load-optimizer cpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer cpu --load-optimizer cpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer cpu --load-optimizer gpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--async-save", "test_file": "test_qwen3_4B_ckpt.py"}]
     defaults:
       run:
         working-directory: ${{ github.workspace }}
@@ -588,7 +506,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        info: [{"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"}, {"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_quick_start_glm4_9B.py"}, {"num_gpus": 8, "test_file": "test_glm4.7_30B_A3B_pd_mooncake.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_30B_A3B.py"}, {"num_gpus": 8, "test_file": "test_qwen3.6_35B_A3B_pd_mooncake.py", "use_deepep": "1"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_4B_ppo.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_moonlight_16B_A3B.py"}, {"num_gpus": 8, "test_file": "test_mimo_7B_mtp_only_grad.py"}, {"num_gpus": 8, "test_file": "test_qwen3_0.6B_parallel_check.py"}, {"num_gpus": 8, "test_args": "--save-optimizer gpu --load-optimizer gpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer gpu --load-optimizer cpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer cpu --load-optimizer cpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer cpu --load-optimizer gpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--async-save", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_debug_rollout_then_train.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_opd_sglang.py"}]
+        info: [{"num_gpus": 4, "test_file": "test_full_disk_weight_update.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_quick_start_glm4_9B.py"}, {"num_gpus": 8, "test_file": "test_glm4.7_30B_A3B_pd_mooncake.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_30B_A3B.py", "use_deepep": "1", "use_fp8_rollout": "1"}, {"num_gpus": 8, "test_file": "test_qwen3.6_35B_A3B_pd_mooncake.py", "use_deepep": "1"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_30B_A3B_r3.py", "use_deepep": "1", "use_fp8_rollout": "1"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_4B_ppo.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_4B_ppo_disaggregate.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_qwen3_4B_ppo_train_critic_only.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_moonlight_16B_A3B.py"}, {"enable_eval": "0", "num_gpus": 8, "test_file": "test_moonlight_16B_A3B_r3.py"}, {"num_gpus": 8, "test_file": "test_mimo_7B_mtp_only_grad.py"}, {"num_gpus": 8, "test_file": "test_qwen3_0.6B_parallel_check.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_debug_rollout_then_train.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_opd_sglang.py"}, {"num_gpus": 6, "test_file": "test_qwen3_4B_external_pd.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_fully_async_short.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_fanout_short.py"}, {"num_gpus": 8, "test_file": "test_qwen3_4B_streaming_partial_rollout.py"}, {"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"}, {"num_gpus": 4, "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"}, {"num_gpus": 8, "test_args": "--save-optimizer gpu --load-optimizer gpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer gpu --load-optimizer cpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer cpu --load-optimizer cpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--save-optimizer cpu --load-optimizer gpu", "test_file": "test_qwen3_4B_ckpt.py"}, {"num_gpus": 8, "test_args": "--async-save", "test_file": "test_qwen3_4B_ckpt.py"}]
     defaults:
       run:
         working-directory: ${{ github.workspace }}

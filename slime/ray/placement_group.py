@@ -7,6 +7,7 @@ from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from .actor_group import RayTrainGroup
+from .utils import add_default_ray_env_vars
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ def _create_placement_group(num_gpus):
                 scheduling_strategy=PlacementGroupSchedulingStrategy(
                     placement_group=pg,
                     placement_group_bundle_index=i,
-                )
+                ),
             ).remote()
         )
     gpu_ids = ray.get([actor.get_ip_and_gpu_id.remote() for actor in info_actors])
@@ -217,6 +218,7 @@ def create_rollout_manager(args, pg):
     rollout_manager = RolloutManager.options(
         num_cpus=1,
         num_gpus=0,
+        runtime_env={"env_vars": add_default_ray_env_vars()},
     ).remote(args, pg)
 
     # calculate num_rollout from num_epoch

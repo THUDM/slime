@@ -49,12 +49,11 @@ The changed-test job itself runs through the self-hosted Docker path. When `NUM_
 |---|---|---|---|
 | Automatic | `cpu-unittest` | CPU | Always-on unit and contract tests for argument validation, schedules, rewards, samples, rollout validation, checkpoint utilities, and plugin contracts. |
 | Automatic | `agent-adapter-test` | CPU | Always-on agent adapter tests with optional provider SDK dependencies. |
-| `run-ci-short` | `e2e-test-short` | GPU | Lightweight smoke tests with small Qwen models. Fast GPU feedback loop. |
 | `run-ci-sglang-config` | `e2e-test-sglang-config` | GPU | SGLang config tests for advanced rollout engine deployment and mixed/offload scenarios. |
 | `run-ci-megatron` | `e2e-test-megatron` | GPU | Core Megatron training tests covering dense, MoE, PPO, MTP, OPD, async rollout, PD/Mooncake, and debug replay paths. |
 | `run-ci-precision` | `e2e-test-precision` | GPU | Numerical precision validation and parallel consistency checks. |
 | `run-ci-ckpt` | `e2e-test-ckpt` | GPU | Checkpoint save/load correctness, including CPU/GPU optimizer states and async save. |
-| `run-ci-image` | `e2e-test-image` | GPU | Broad image validation suite on `slimerl/slime-test:latest`. |
+| `run-ci-image` | `e2e-test-image` | GPU | Runs the `run-ci-megatron` matrix on `slimerl/slime-test:latest`. |
 | `run-ci-changed` | `e2e-test-changed` | Mixed | Runs only changed tests, using each file's `NUM_GPUS` value. |
 
 `workflow_dispatch` can be used from the Actions page for manual validation. It runs the registered jobs according to the workflow conditions.
@@ -86,12 +85,11 @@ python -m pytest tests/test_megatron_argument_validation.py tests/plugin_contrac
 
 GPU e2e tests validate the integrated training/rollout behavior that CPU tests cannot cover:
 
-- `run-ci-short`: small-model smoke coverage for quick GPU feedback.
 - `run-ci-sglang-config`: advanced SGLang deployment paths, including config-based engine layouts.
 - `run-ci-megatron`: main Megatron backend coverage for dense/MoE recipes, async rollout, OPD, PPO-style paths, PD/Mooncake, and debug rollout-then-train replay.
 - `run-ci-precision`: numerical consistency across parallel settings.
 - `run-ci-ckpt`: checkpoint save/load combinations and async save.
-- `run-ci-image`: broad validation of the release/test image.
+- `run-ci-image`: the same matrix as `run-ci-megatron`, but on the release/test image.
 
 Use targeted labels for routine PRs. Use `run-ci-image` sparingly because it consumes significantly more GPU time.
 
