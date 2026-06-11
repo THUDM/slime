@@ -1,10 +1,10 @@
-"""End-to-end tests for TrajectoryManager via append_turn / get_trajectory.
+"""End-to-end tests for TrajectoryManager via record_turn / get_trajectory.
 
 This script drives the two public interfaces of
 ``slime.agent.trajectory_manager.TrajectoryManager`` and exhaustively covers the
 ways a trajectory can branch, organized as a two-axis matrix:
 
-  * LAYER 1 — routing tree (append_turn). DFS merges on (role, message-equality)
+  * LAYER 1 — routing tree (record_turn). DFS merges on (role, message-equality)
     only, so MESSAGE IDENTITY决定 tree shape; token ids are irrelevant here.
   * LAYER 2 — linearization (get_trajectory). TOKEN-ID prefix决定 how each leaf
     chain becomes Samples (clean continuation / drift case A·B1·B2 / cross-leaf
@@ -16,7 +16,7 @@ Readability:
   Token ids are SEMANTIC small integers (see TOKEN_NAMES). Each message renders
   to ``[START, ...body, END]`` with a per-role band, so an id like 2001 reads as
   ``u:compute`` and 7001 reads as ``<DRIFT>``. Expected token sequences are built
-  with the same render_* helpers used to feed append_turn, never hand-typed
+  with the same render_* helpers used to feed record_turn, never hand-typed
   magic numbers.
 
 Dual mode:
@@ -182,7 +182,7 @@ def render_response(label: str) -> list[int]:
 
 
 def messages(msgs: list[MsgTok]) -> list[dict]:
-    """The plain message dicts append_turn wants for prompt_messages."""
+    """The plain message dicts record_turn wants for prompt_messages."""
     return [m.message for m in msgs]
 
 
@@ -222,7 +222,7 @@ def turn(prompt_ids, response_ids, *, finish_reason="stop", logprobs=None) -> Tu
 # samples) so main() can render after the assertions pass.
 _PRINT_LOG: list[tuple[str, object, str, list]] = []
 
-# Raw append_turn inputs, keyed by sid, captured at call time so the printer can
+# Raw record_turn inputs, keyed by sid, captured at call time so the printer can
 # show the SOURCE data (prompt_ids / response_ids / finish / logprobs) that fed
 # the tree — before any tree-building or linearization happened.
 _TURN_LOG: dict[str, list[dict]] = {}
@@ -268,7 +268,7 @@ def append(
             "has_lp": lp is not None,
         }
     )
-    mgr.append_turn(
+    mgr.record_turn(
         sid,
         turn=turn(p, r, finish_reason=finish_reason, logprobs=lp),
         prompt_messages=messages(prompt_msgs),
@@ -366,7 +366,7 @@ def goldens(samples) -> list[str]:
 
 
 # ===========================================================================
-# §2 Group 1 — routing tree layer (append_turn shapes the tree)
+# §2 Group 1 — routing tree layer (record_turn shapes the tree)
 # ===========================================================================
 
 
@@ -538,8 +538,8 @@ def test_1_8_multi_tool_per_turn():
     append(mgr, sid, [s, u, a1, ta, tb], "done")
     chain = _leaves(mgr, sid)[0].path_from_root()
     assert [n.role for n in chain] == ["system", "user", "assistant", "tool", "tool", "assistant"]
-    assert chain[3].messages == [ta.message]
-    assert chain[4].messages == [tb.message]
+    assert chain[3].message == ta.message
+    assert chain[4].message == tb.message
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 1
     assert goldens(samples) == [
@@ -578,7 +578,7 @@ def test_1_10_empty_response():
     asst = _leaves(mgr, sid)[0]
     assert asst.role == "assistant"
     assert asst.turn.output_ids == []
-    assert asst.messages == []
+    assert asst.message is None
     # Empty response -> the only turn has no trainable token, so its segment is
     # dropped at linearization (no fully-masked sample). Zero samples is correct.
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
@@ -841,7 +841,7 @@ def test_2_11_routing_only_assistant_filtered():
     assert len(leaves) == 1
     chain = leaves[0].path_from_root()
     routing = [n for n in chain if n.role == "assistant" and n.turn is None]
-    assert len(routing) == 1 and routing[0].messages[0]["content"] == "foreign"
+    assert len(routing) == 1 and routing[0].message["content"] == "foreign"
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 1
     # The foreign assistant (r:foreign) is routing-only -> appears as bare context
@@ -888,7 +888,7 @@ def test_3_1_rewrite_merge_absorbs_short():
     chain = leaves[0].path_from_root()
     merged = chain[2]
     assert merged.turn is None and merged.turn_index is None
-    assert merged.messages == [a1_rw.message]
+    assert merged.message == a1_rw.message
     assert merged.metadata["merged_rewrite"]["abandoned_turn_index"] == 1
     samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
     assert len(samples) == 1
@@ -1126,7 +1126,7 @@ def test_3_8_long_mixed_session():
 
 
 def test_4_2_logprobs_length_mismatch_raises():
-    """output_log_probs whose length != output_ids -> ValueError at append_turn."""
+    """output_log_probs whose length != output_ids -> ValueError at record_turn."""
     mgr = TrajectoryManager()
     sid = "4.2"
     s, u = sys_msg("S"), usr_msg("u")
@@ -1138,7 +1138,7 @@ def test_4_2_logprobs_length_mismatch_raises():
     )
     raised = False
     try:
-        mgr.append_turn(
+        mgr.record_turn(
             sid,
             turn=bad,
             prompt_messages=messages([s, u]),
@@ -1152,10 +1152,10 @@ def test_4_2_logprobs_length_mismatch_raises():
 
 
 def test_4_3_empty_prompt_messages_skipped():
-    """Empty prompt_messages -> append_turn is a no-op (warns, no node, no turn)."""
+    """Empty prompt_messages -> record_turn is a no-op (warns, no node, no turn)."""
     mgr = TrajectoryManager()
     sid = "4.3"
-    mgr.append_turn(
+    mgr.record_turn(
         sid,
         turn=turn([1], [2], finish_reason="stop"),
         prompt_messages=[],
@@ -1168,12 +1168,12 @@ def test_4_3_empty_prompt_messages_skipped():
 
 
 def test_4_4_default_base_sample():
-    """get_trajectory without base_sample is rejected by an assert."""
+    """get_trajectory without base_sample is rejected (required keyword-only arg)."""
     mgr = TrajectoryManager()
     sid = "4.4"
     s, u = sys_msg("S"), usr_msg("u")
     append(mgr, sid, [s, u], "a")
-    with pytest.raises(AssertionError):
+    with pytest.raises(TypeError):
         mgr.get_trajectory(sid, reward=1.0)  # no base_sample
     print("PASS 4.4")
 
@@ -1216,7 +1216,7 @@ def test_4_6_drift_B1_threshold_boundary():
         # 4-token response so the divergence can sit d tokens before its end.
         p1 = render_prompt([s, u])
         r1 = [9001, 9002, 9003, 9004]
-        mgr.append_turn(
+        mgr.record_turn(
             sid,
             turn=turn(p1, r1, finish_reason="tool_calls"),
             prompt_messages=messages([s, u]),
@@ -1230,7 +1230,7 @@ def test_4_6_drift_B1_threshold_boundary():
         drift_idx = len(p1) + len(r1) - drift_tail_len
         p2 = drift_replace(p2_honest, drift_idx)
         r2 = [9101, 9102]
-        mgr.append_turn(
+        mgr.record_turn(
             sid,
             turn=turn(p2, r2, finish_reason="stop"),
             prompt_messages=[*messages([s, u]), a1m, tm.message],
@@ -1279,7 +1279,7 @@ def _print_sample(idx: int, s: Sample) -> None:
 
 
 def _print_raw_turns(sid: str) -> None:
-    """Print the raw append_turn inputs (the SOURCE data) for a sid.
+    """Print the raw record_turn inputs (the SOURCE data) for a sid.
 
     Shows, per turn, the prompt message labels and the actual prompt_ids /
     response_ids decoded to readable names, plus finish_reason and whether

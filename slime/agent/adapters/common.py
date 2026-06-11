@@ -51,7 +51,7 @@ class Session:
 class Reply:
     """Output of an adapter's ``_build``, consumed by ``_run_turn``.
 
-    ``manager_message`` / ``finish_reason`` feed ``append_turn`` + the
+    ``manager_message`` / ``finish_reason`` feed ``record_turn`` + the
     ``on_turn_appended`` hook (protocol-neutral). ``wire`` is opaque to the
     pipeline -- only the adapter's own ``_respond`` understands it.
     ``skip_append`` drops a turn from the trajectory (e.g. cc title-generation
@@ -334,7 +334,7 @@ class BaseAdapter:
 
         The wire-specific steps are delegated to the subclass hooks; everything
         else (sid resolution, closed/cap guards, the per-sid serialisation
-        lock, inflight tracking, append_turn, the hook) is identical across
+        lock, inflight tracking, record_turn, the hook) is identical across
         protocols and lives here.
         """
         body = await request.json()
@@ -371,10 +371,10 @@ class BaseAdapter:
                     # Meta request (e.g. cc title-generation): keep it out of
                     # the tree / RL samples, but still fire the hook below so
                     # per-turn debug dumps keep landing on disk.
-                    self.logger.info("skipping append_turn (sid=%s)", sid)
+                    self.logger.info("skipping record_turn (sid=%s)", sid)
                 else:
                     try:
-                        self.manager.append_turn(
+                        self.manager.record_turn(
                             sid,
                             turn=turn,
                             prompt_messages=translated,
@@ -382,7 +382,7 @@ class BaseAdapter:
                             metadata={"sid": sid},
                         )
                     except Exception:
-                        self.logger.exception("append_turn(sid=%s) failed", sid)
+                        self.logger.exception("record_turn(sid=%s) failed", sid)
 
                 self._fire_hook(
                     sid,

@@ -224,7 +224,7 @@ def _build_reply_parts(parsed: ParsedModelOutput, finish: str) -> tuple[dict[str
     is a unique correlation id, and ``tool_calls[].function.arguments`` is a
     JSON-encoded **string** (clients depend on this).
 
-    ``manager_message`` is the shape fed to ``TrajectoryManager.append_turn``:
+    ``manager_message`` is the shape fed to ``TrajectoryManager.record_turn``:
     ``tool_calls[].function.arguments`` is a **dict** so chat-template replay
     (Qwen3 etc.) succeeds and ``node_match_key`` hashes match the echo on the
     next turn. The wire-only ``id`` is omitted (the next turn's echo will not

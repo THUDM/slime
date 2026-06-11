@@ -1,6 +1,6 @@
 """Build a per-session training trajectory from multi-turn conversation data.
 
-The :class:`TrajectoryManager` builds one trajectory per session. ``append_turn``
+The :class:`TrajectoryManager` builds one trajectory per session. ``record_turn``
 feeds in each turn (prompt messages + the served model's sglang snapshot),
 routing it into a per-sid message tree; ``get_trajectory`` then linearizes that
 tree into a ``list[Sample]`` of loss-masked training rows, tolerating TITO
@@ -10,6 +10,7 @@ re-tokenization drift via fork/replace.
 from __future__ import annotations
 
 import dataclasses
+import enum
 import logging
 from collections.abc import Iterator
 from typing import Any
@@ -26,10 +27,9 @@ logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass(frozen=True)
 class TurnRecord:
-    """One sglang ``/generate`` snapshot: the contract between an adapter and
-    the manager. Adapters build it from a turn's prompt/output token ids;
-    ``append_turn`` consumes it. Re-exported from ``adapters.common`` for
-    backwards-compatible imports."""
+    """One sglang ``/generate`` snapshot: the contract between an adapter and the
+    manager. Adapters build it from a turn's prompt/output token ids; ``record_turn``
+    consumes it."""
 
     prompt_ids: list[int]
     output_ids: list[int]
@@ -44,13 +44,14 @@ class TurnRecord:
 
 class MessageNode:
     """One node in a session's routing tree, carrying a single chat message
-    (except the dummy root, which carries none).
+    (``None`` for the dummy root and for an assistant leaf we generated but
+    whose ``response_message`` was empty).
 
     The two kinds are distinguished by whether ``turn`` is set, which reflects
     WHERE the message came from:
 
     * **generated** (``turn is not None``): an assistant message the model
-      actually generated this turn, fed in via ``append_turn``. ``turn`` holds
+      actually generated this turn, fed in via ``record_turn``. ``turn`` holds
       its :class:`TurnRecord` -- the prompt/output ids, logprobs and finish
       reason that ``get_trajectory`` linearizes into training tokens.
     * **routing-only** (``turn is None``): the message came from the prompt, not
@@ -64,17 +65,20 @@ class MessageNode:
         self,
         *,
         role: str | None = None,
-        messages: list[dict[str, Any]] | None = None,
+        message: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
         parent: MessageNode | None = None,
     ) -> None:
         self.role = role
-        self.messages = list(messages or [])
+        self.message = message
         self.metadata = dict(metadata or {})
         self.parent: MessageNode | None = parent
         self.children: list[MessageNode] = []
         self.turn: TurnRecord | None = None  # the generated TurnRecord, else None (routing-only)
         self.turn_index: int | None = None
+        # Shared by sibling leaf paths; the first to reach it trains on it, the rest
+        # re-emit it as loss=0 context -- so each response is trained exactly once.
+        self.response_trained: bool = False
 
     @property
     def is_root(self) -> bool:
@@ -88,10 +92,10 @@ class MessageNode:
     def path_from_root(self) -> list[MessageNode]:
         """Ordered list of nodes from the first non-root ancestor down to self."""
         chain: list[MessageNode] = []
-        cur: MessageNode | None = self
-        while cur is not None and not cur.is_root:
-            chain.append(cur)
-            cur = cur.parent
+        node: MessageNode | None = self
+        while node is not None and not node.is_root:
+            chain.append(node)
+            node = node.parent
         chain.reverse()
         return chain
 
@@ -104,15 +108,8 @@ class MessageNode:
 
 
 # ===========================================================================
-# message helpers
+# drift classification — how an incoming turn's prompt relates to held tokens
 # ===========================================================================
-#
-# Two messages route to the same node iff their dicts compare equal (==).
-# Python dict equality is key-order-independent (so canonicalization is
-# unnecessary) while list equality preserves order (message order and
-# tool_calls order are both semantically significant). _find_mount_point
-# does this structural compare directly -- no serialization, and it
-# short-circuits on the first differing field.
 
 
 def _common_prefix_len(a: list[int], b: list[int], chunk: int = 4096) -> int:
@@ -129,81 +126,117 @@ def _common_prefix_len(a: list[int], b: list[int], chunk: int = 4096) -> int:
     return matched
 
 
+class DriftKind(enum.Enum):
+    CLEAN = "clean"  # drift == 0: prompt_ids exactly extends held tokens; append the tail beyond them
+    REALIGN = (
+        "realign"  # small drift inside the most-recent response span; replace that whole span from prompt_ids (loss=0)
+    )
+    FORK = "fork"  # everything else: close this builder, open a fresh one as a fork
+
+
+def classify_drift(
+    held_tokens: list[int],
+    prompt_ids: list[int],
+    last_response_start_idx: int | None,
+    fork_threshold: int,
+) -> DriftKind:
+    """Classify how ``prompt_ids`` relates to the tokens a builder already holds."""
+    realign_at = _common_prefix_len(held_tokens, prompt_ids)
+    drift = len(held_tokens) - realign_at
+
+    if drift == 0:
+        return DriftKind.CLEAN
+
+    # REALIGN only heals drift that falls inside the most-recent response span
+    # (and is short); divergence anywhere earlier, or an empty builder, forks.
+    if last_response_start_idx is not None and realign_at >= last_response_start_idx and drift < fork_threshold:
+        return DriftKind.REALIGN
+    return DriftKind.FORK
+
+
 # ===========================================================================
-# Segment — one coherent linearized run (a fork boundary closes it)
+# SampleBuilder — accumulates turns into one trainable Sample (fork closes it)
 # ===========================================================================
 
 
-class _Segment:
-    """Token accumulator for one coherent linearized run within a chain."""
+class _SampleBuilder:
+    """Accumulates a chain's turns into the token sequence of one ``Sample``.
 
-    def __init__(self) -> None:
+    A chain of turns is appended one at a time via :meth:`append_turn`. Each turn
+    must extend the tokens we already hold as an exact prefix; a turn whose
+    prompt diverges too far (re-tokenization drift past what we can silently
+    drop) is rejected, and the caller closes this builder and starts a fresh one
+    -- that boundary is the "fork". Each surviving builder yields one Sample.
+    """
+
+    def __init__(self, fork_threshold: int) -> None:
+        self._fork_threshold = fork_threshold
         self.tokens: list[int] = []
         self.loss_mask: list[int] = []
         self.logprobs: list[float] = []
-        # Each span: (start, end, turn_index) over self.tokens, half-open.
-        self.spans: list[tuple[int, int, int | None]] = []
-        self.first_prompt_len: int = 0
+        self.last_response_start_idx: int | None = None
+        self.leading_prompt_len: int = 0
 
-    def measure_token_drift(self, prompt_ids: list[int]) -> int:
-        return len(self.tokens) - _common_prefix_len(self.tokens, prompt_ids)
+    def token_drift(self, turn: TurnRecord) -> DriftKind:
+        return classify_drift(self.tokens, turn.prompt_ids, self.last_response_start_idx, self._fork_threshold)
 
-    def can_absorb_drift(self, drift: int, fork_threshold: int) -> bool:
-        if drift == 0:
-            return True
-        realign_at = len(self.tokens) - drift
-        if not self.spans or realign_at < self.spans[-1][0]:
-            return False
-        return fork_threshold > 0 and drift < fork_threshold
+    def append_turn(self, turn: TurnRecord, kind: DriftKind, *, trained: bool = True) -> None:
+        """Append one turn into this SampleBuilder, branching on ``kind``: for REALIGN
+        we overwrite the already-saved response span, for CLEAN we just append this
+        turn's prompt tail."""
+        assert kind is not DriftKind.FORK, "append_turn called on a builder that would fork"
 
-    def absorb_turn(
-        self,
-        drift: int,
-        prompt_ids: list[int],
-        response_ids: list[int],
-        response_logprobs: list[float] | None,
-        turn_index: int | None,
-        *,
-        trained: bool = True,
-    ) -> None:
-        """Append one turn, dropping any re-tokenization drift first so logprobs stay aligned."""
-        realign_at = len(self.tokens) - drift
-        del self.tokens[realign_at:]
-        del self.loss_mask[realign_at:]
-        del self.logprobs[realign_at:]
-        if self.spans and realign_at < self.spans[-1][1]:
-            s, _e, j = self.spans[-1]
-            # Drift inside this span means the prior response no longer faithfully
-            # echoes what the model generated, so mask the WHOLE surviving span.
-            # Still absorb (not fork) to keep it token-contiguous in one segment.
-            n = realign_at - s
-            self.loss_mask[s:realign_at] = [0] * n
-            self.logprobs[s:realign_at] = [0.0] * n
-            self.spans[-1] = (s, realign_at, j)  # may collapse to empty (s == realign_at); harmless
+        is_first_turn = self.last_response_start_idx is None
 
-        is_first_turn = not self.spans
-        tail = prompt_ids[realign_at:]
-        self.tokens.extend(tail)
-        self.loss_mask.extend([0] * len(tail))
-        self.logprobs.extend([0.0] * len(tail))
+        # --- append this turn's prompt tail (loss=0) ---
+        if kind is DriftKind.REALIGN:
+            self._align_to_prompt(turn.prompt_ids)  # drop the drifted tail, re-append from prompt
+        else:  # CLEAN: held tokens are an exact prefix of prompt_ids; append the tail beyond them
+            self._append_tokens(turn.prompt_ids[len(self.tokens) :], loss=0)
 
-        start = len(self.tokens)
-        self.tokens.extend(response_ids)
-        self.loss_mask.extend([1 if trained else 0] * len(response_ids))
-        # Empty response_logprobs means "no logprob signal for this turn" (the
-        # TurnRecord default); fall back to zeros so the array stays length-
-        # aligned with response_ids. Truthiness covers both None and [].
-        self.logprobs.extend(response_logprobs if (trained and response_logprobs) else [0.0] * len(response_ids))
-        self.spans.append((start, len(self.tokens), turn_index))
+        # --- append this turn's generated response (loss=1 unless re-emitted as context) ---
+        self.last_response_start_idx = len(self.tokens)
+        self._append_tokens(turn.output_ids, loss=int(trained), logprobs=turn.output_log_probs if trained else None)
 
         if is_first_turn:
-            self.first_prompt_len = len(prompt_ids)  # stripped at build time
+            self.leading_prompt_len = len(turn.prompt_ids)
 
-    def response_strip(self) -> int:
-        return min(self.first_prompt_len, len(self.loss_mask))
+    def _align_to_prompt(self, prompt_ids: list[int]) -> None:
+        """Heal REALIGN drift by overwriting the most-recent response span with
+        ``prompt_ids`` as loss=0: the drifted tokens carry no signal, and re-appending
+        from the prompt keeps the builder contiguous. Earlier turns are untouched."""
+        response_start = self.last_response_start_idx
+        tail = prompt_ids[response_start:]
+        self.tokens[response_start:] = tail
+        self.loss_mask[response_start:] = [0] * len(tail)
+        self.logprobs[response_start:] = [0.0] * len(tail)
+
+    def _append_tokens(self, ids: list[int], *, loss: int, logprobs: list[float] | None = None) -> None:
+        self.tokens.extend(ids)
+        self.loss_mask.extend([loss] * len(ids))
+        self.logprobs.extend(logprobs if logprobs else [0.0] * len(ids))
 
     def has_trained_response(self) -> bool:
-        return any(self.loss_mask[self.response_strip() :])
+        return any(self.loss_mask[self.leading_prompt_len :])
+
+    def to_sample(self, base_sample: Sample, extra_metadata: dict[str, Any] | None) -> Sample:
+        """Emit the accumulated tokens as one ``Sample``, stripping the first-turn
+        prompt so loss_mask / logprobs cover only the response region."""
+        start = self.leading_prompt_len  # first-turn prompt stripped; response region starts here
+        return Sample(
+            index=base_sample.index,
+            group_index=base_sample.group_index,
+            rollout_id=base_sample.rollout_id if base_sample.rollout_id is not None else base_sample.index,
+            prompt=base_sample.prompt,
+            label=base_sample.label,
+            tokens=list(self.tokens),
+            response_length=len(self.loss_mask) - start,
+            loss_mask=self.loss_mask[start:],
+            rollout_log_probs=self.logprobs[start:],
+            reward=0.0,
+            status=Sample.Status.COMPLETED,
+            metadata=dict(extra_metadata or {}),
+        )
 
 
 # ===========================================================================
@@ -225,7 +258,7 @@ class TrajectoryManager:
     def turn_count(self, sid: str) -> int:
         return self._turn_count.get(sid, 0)
 
-    def append_turn(
+    def record_turn(
         self,
         sid: str,
         *,
@@ -235,7 +268,7 @@ class TrajectoryManager:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         if not prompt_messages:
-            logger.warning("append_turn(sid=%s): empty prompt_messages; skipping", sid)
+            logger.warning("record_turn(sid=%s): empty prompt_messages; skipping", sid)
             return
         if turn.output_log_probs and len(turn.output_log_probs) != len(turn.output_ids):
             raise ValueError(
@@ -245,19 +278,19 @@ class TrajectoryManager:
 
         root = self._trees.setdefault(sid, MessageNode())
 
-        cur, i = self._find_mount_point(root, prompt_messages)
-        cur, i = self._try_merge_assistant_rewrite(sid, cur, prompt_messages, i)
-        cur = self._mount_prompt_messages(cur, prompt_messages[i:])
-        self._attach_assistant_leaf(sid, cur, turn=turn, response_message=response_message, metadata=metadata)
+        node, depth = self._find_mount_point(root, prompt_messages)
+        node, depth = self._try_merge_assistant_rewrite(sid, node, prompt_messages, depth)
+        node = self._mount_prompt_messages(node, prompt_messages[depth:])
+        self._attach_assistant_leaf(sid, node, turn=turn, response_message=response_message, metadata=metadata)
 
     def get_trajectory(
         self,
         sid: str,
         *,
-        base_sample=None,
+        base_sample: Sample,
         reward: float = 0.0,
         extra_metadata: dict[str, Any] | None = None,
-    ) -> list:
+    ) -> list[Sample]:
         """Linearize this sid's routing tree into slime ``Sample`` objects and
         consume the session.
 
@@ -265,21 +298,16 @@ class TrajectoryManager:
         across all of them. The sid is dropped afterwards, so a second call for
         the same sid returns ``[]``.
         """
-        assert base_sample is not None, "get_trajectory requires a base_sample"
-
         root = self._trees.get(sid)
         if root is None:
             return []
 
         samples: list[Sample] = []
-        claimed: set[int] = set()
         for routing_leaf in root.leaves():
             if routing_leaf.is_root:
                 continue
             chain = routing_leaf.path_from_root()
-            samples.extend(
-                self._chain_to_sample(chain, base_sample=base_sample, extra_metadata=extra_metadata, claimed=claimed)
-            )
+            samples.extend(self._chain_to_samples(chain, base_sample=base_sample, extra_metadata=extra_metadata))
 
         # TODO custom reward func
         per_sample_reward = (reward / len(samples)) if samples else 0.0
@@ -293,78 +321,94 @@ class TrajectoryManager:
     # -------------------- internals ----------------------------------------
 
     def _find_mount_point(self, root: MessageNode, messages: list[dict[str, Any]]) -> tuple[MessageNode, int]:
+        """Walk down the tree matching each message by role and dict equality (==),
+        returning the deepest node that still matches and where to mount the rest."""
         node = root
-        matched = 0
-        while matched < len(messages):
-            msg = messages[matched]
-            matched_child = None
+        depth = 0
+        while depth < len(messages):
+            msg = messages[depth]
+            next_child = None
             for child in node.children:
-                if child.role == msg.get("role") and len(child.messages) == 1 and child.messages[0] == msg:
-                    matched_child = child
+                if child.role == msg.get("role") and child.message == msg:
+                    next_child = child
                     break
-            if matched_child is None:
+            if next_child is None:
                 break
-            node = matched_child
-            matched += 1
-        return node, matched
+            node = next_child
+            depth += 1
+        return node, depth
 
     def _try_merge_assistant_rewrite(
         self,
         sid: str,
-        cur: MessageNode,
+        node: MessageNode,
         prompt_messages: list[dict[str, Any]],
-        i: int,
+        depth: int,
     ) -> tuple[MessageNode, int]:
-        """Absorb a short assistant-rewrite onto its node instead of forking -- reward
-        hygiene only; forking is already safe (a rewrite mounts as routing-only)."""
-        if self._fork_threshold <= 0:
-            return cur, i  # feature off
-        if i >= len(prompt_messages) or prompt_messages[i].get("role") != "assistant":
-            return cur, i  # genuine non-assistant history fork -> leave it
+        """Merge a short assistant-rewrite onto its node instead of forking.
 
-        candidates = [
-            c
-            for c in cur.children
-            if c.role == "assistant"
-            and not c.children
-            and c.turn is not None
-            and len(c.turn.output_ids) < self._fork_threshold
-        ]
-        if len(candidates) != 1:
-            if len(candidates) >= 2:
+        A harness may replay a prior assistant message slightly re-rendered (e.g.
+        whitespace) in a later prompt. It no longer matches the node we generated,
+        so it would fork -- stranding the original generated turn as a dead-end
+        leaf that still emits its own training Sample. Instead we overwrite that
+        node's message in place and stop training its generated content (demote to
+        routing-only), so only the live branch trains. This only applies below
+        ``fork_threshold``: a long abandoned response carries enough real signal
+        to fork and train standalone.
+
+        Forking is always safe (a rewrite mounts as routing-only); this is purely
+        a cleanup. So we merge only when the mount point has exactly one assistant
+        child that is a leaf, generated (``turn`` set), and short (response <
+        ``fork_threshold``), and fork otherwise, since absorbing destroys a
+        generated TurnRecord irreversibly.
+        """
+        if self._fork_threshold <= 0:
+            return node, depth  # feature off
+        if depth >= len(prompt_messages) or prompt_messages[depth].get("role") != "assistant":
+            return node, depth  # genuine non-assistant history fork -> leave it
+
+        asst_children = [c for c in node.children if c.role == "assistant"]
+        if len(asst_children) != 1:
+            if len(asst_children) > 1:
                 logger.warning(
-                    "append_turn(sid=%s turn=%s): %d eligible rewrite-merge "
-                    "candidates; forking instead (ambiguous mixed state).",
+                    "record_turn(sid=%s turn=%s): %d assistant children at mount "
+                    "point; can't tell which the rewrite targets, so forking.",
                     sid,
                     self._turn_count.get(sid, 0) + 1,
-                    len(candidates),
+                    len(asst_children),
                 )
-            return cur, i
+            return node, depth
 
-        sib = candidates[0]
-        sib.metadata["merged_rewrite"] = {
-            "abandoned_turn_index": sib.turn_index,
-            "abandoned_response_tokens": len(sib.turn.output_ids),
+        rewritten_node = asst_children[0]
+        if (
+            rewritten_node.children
+            or rewritten_node.turn is None
+            or len(rewritten_node.turn.output_ids) >= self._fork_threshold
+        ):
+            return node, depth
+
+        rewritten_node.metadata["merged_rewrite"] = {
+            "abandoned_turn_index": rewritten_node.turn_index,
+            "abandoned_response_tokens": len(rewritten_node.turn.output_ids),
         }
-
-        sib.turn = None
-        sib.turn_index = None
-        sib.messages = [prompt_messages[i]]
-        return sib, i + 1
+        rewritten_node.turn = None
+        rewritten_node.turn_index = None
+        rewritten_node.message = prompt_messages[depth]
+        return rewritten_node, depth + 1
 
     def _mount_prompt_messages(
         self,
-        cur: MessageNode,
+        node: MessageNode,
         remaining_messages: list[dict[str, Any]],
     ) -> MessageNode:
         for m in remaining_messages:
-            cur = cur.add_child(MessageNode(role=m.get("role"), messages=[m]))
-        return cur
+            node = node.add_child(MessageNode(role=m.get("role"), message=m))
+        return node
 
     def _attach_assistant_leaf(
         self,
         sid: str,
-        cur: MessageNode,
+        node: MessageNode,
         *,
         turn: TurnRecord,
         response_message: dict[str, Any] | None,
@@ -372,95 +416,52 @@ class TrajectoryManager:
     ) -> None:
         asst = MessageNode(
             role="assistant",
-            messages=[response_message] if response_message is not None else [],
+            message=response_message,
             metadata=dict(metadata or {}),
         )
         asst.turn = turn
         asst.turn_index = self._turn_count.get(sid, 0) + 1
-        cur.add_child(asst)
+        node.add_child(asst)
         self._turn_count[sid] = asst.turn_index
 
-    def _chain_to_sample(
+    def _split_chain_into_builders(self, chain: list[MessageNode]) -> list[_SampleBuilder]:
+        """Pack the chain's generated turns into per-Sample token builders.
+
+        Turns flow into the current builder until one can't extend it as an
+        exact prefix (re-tokenization drift past what we can drop); that turn
+        opens a new builder -- a fork. A generated turn shared by sibling leaves
+        is trained only on the first leaf to claim it; later leaves re-emit it
+        as loss=0 context so the shared prefix isn't double-counted.
+        """
+        asst_nodes = [n for n in chain if n.role == "assistant" and n.turn is not None]
+
+        builders: list[_SampleBuilder] = []
+        for asst_node in asst_nodes:
+            trained = not asst_node.response_trained
+            asst_node.response_trained = True
+
+            if not builders or (kind := builders[-1].token_drift(asst_node.turn)) is DriftKind.FORK:
+                builders.append(_SampleBuilder(self._fork_threshold))
+                builders[-1].append_turn(asst_node.turn, DriftKind.CLEAN, trained=trained)
+            else:
+                builders[-1].append_turn(asst_node.turn, kind, trained=trained)
+        return builders
+
+    def _chain_to_samples(
         self,
         chain: list[MessageNode],
         *,
         base_sample: Sample,
         extra_metadata: dict[str, Any] | None,
-        claimed: set[int],
     ) -> list[Sample]:
-        asst_chain = [n for n in chain if n.role == "assistant" and n.turn is not None]
-
-        segments: list[_Segment] = []
-        seg = _Segment()
-        for asst in asst_chain:
-            turn = asst.turn
-            prompt_ids = turn.prompt_ids
-            drift = seg.measure_token_drift(prompt_ids)
-            if not seg.can_absorb_drift(drift, self._fork_threshold):
-                segments.append(seg)
-                seg = _Segment()
-                drift = 0
-            trained = id(asst) not in claimed
-            claimed.add(id(asst))
-            # A generated turn can be shared by sibling leaves (same MessageNode object).
-            # Train it only on the first leaf to reach it; later leaves re-emit it
-            # as loss=0 context so the shared prefix isn't double-counted.
-            seg.absorb_turn(
-                drift,
-                prompt_ids,
-                turn.output_ids,
-                turn.output_log_probs,
-                asst.turn_index,
-                trained=trained,
-            )
-        segments.append(seg)
-
-        # Drop fully-masked segments (all turns claimed by an earlier leaf) -- they'd
-        # trip the downstream "not fully masked" assert. A leaf's terminal turn is
-        # never pre-claimed, so its final segment always survives.
         return [
-            self._build_leaf_sample(
-                base_sample=base_sample,
-                extra_metadata=extra_metadata,
-                tokens=seg.tokens,
-                loss_mask=seg.loss_mask,
-                logprobs=seg.logprobs,
-                strip=seg.response_strip(),
-            )
-            for seg in segments
-            if seg.tokens and seg.has_trained_response()
+            builder.to_sample(base_sample, extra_metadata)
+            for builder in self._split_chain_into_builders(chain)
+            if builder.has_trained_response()
         ]
-
-    def _build_leaf_sample(
-        self,
-        *,
-        base_sample: Sample,
-        extra_metadata: dict[str, Any] | None,
-        tokens: list[int],
-        loss_mask: list[int],
-        logprobs: list[float],
-        strip: int,
-    ) -> Sample:
-        loss_resp, lp_resp = loss_mask[strip:], logprobs[strip:]
-        metadata = dict(extra_metadata or {})
-        return Sample(
-            index=base_sample.index,
-            group_index=base_sample.group_index,
-            rollout_id=base_sample.rollout_id if base_sample.rollout_id is not None else base_sample.index,
-            prompt=base_sample.prompt,
-            label=base_sample.label,
-            tokens=list(tokens),
-            response_length=len(loss_resp),
-            loss_mask=loss_resp,
-            rollout_log_probs=lp_resp,
-            reward=0.0,
-            status=Sample.Status.COMPLETED,
-            metadata=metadata,
-        )
 
 
 __all__ = [
-    "MessageNode",
     "TrajectoryManager",
-    "_common_prefix_len",
+    "TurnRecord",
 ]
