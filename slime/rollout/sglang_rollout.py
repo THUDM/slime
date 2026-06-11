@@ -19,7 +19,7 @@ from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_fil
 from slime.utils.async_utils import run
 from slime.utils.data import Dataset
 from slime.utils.eval_config import EvalDatasetConfig
-from slime.utils.http_utils import get, post
+from slime.utils.http_utils import get, get_rollout_num_engines, post
 from slime.utils.misc import SingletonMeta, load_function
 from slime.utils.processing_utils import (
     build_processor_kwargs,
@@ -91,9 +91,7 @@ class GenerateState(metaclass=SingletonMeta):
         self.tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
         self.processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
-        self.semaphore = asyncio.Semaphore(
-            args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
-        )
+        self.semaphore = asyncio.Semaphore(args.sglang_server_concurrency * get_rollout_num_engines(args))
         self.sampling_params: dict[str, Any] = dict(
             temperature=args.rollout_temperature,
             top_p=args.rollout_top_p,
@@ -309,7 +307,14 @@ async def generate_and_rm(
 )
 async def generate_and_rm_group(
     args: Namespace, group: list[Sample], sampling_params: dict[str, Any], evaluation: bool = False
-) -> list[Sample]:
+) -> list[Sample] | list[list[Sample]]:
+    # ``generate_and_rm`` may return either a ``Sample`` or a ``list[Sample]``
+    # depending on whether the ``--custom-generate-function-path`` callable
+    # emits one trainable sample or several (e.g. multi-turn agent rollouts
+    # that fan out into multiple prefix-chained samples). The asyncio.gather
+    # below preserves whichever shape each task produced, so the group is
+    # ``list[Sample]`` for plain rollouts and ``list[list[Sample]]`` for
+    # the fan-out case.
     state = GenerateState(args)
 
     if state.aborted:

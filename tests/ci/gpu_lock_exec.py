@@ -3,6 +3,8 @@ import argparse
 import fcntl
 import os
 import random
+import signal
+import subprocess
 import sys
 import time
 
@@ -25,14 +27,64 @@ def main():
     os.environ[args.target_env_name] = dev_list
     print(f"[gpu_lock_exec] Acquired GPUs: {dev_list}", flush=True)
 
-    _os_execvp(args)
+    try:
+        exit_code = _run_command(args)
+    finally:
+        for fd_lock in fd_locks:
+            fd_lock.close()
+    sys.exit(exit_code)
 
 
-def _os_execvp(args):
+def _run_command(args):
     cmd = args.cmd
     if cmd[0] == "--":
         cmd = cmd[1:]
-    os.execvp(cmd[0], cmd)
+
+    child = subprocess.Popen(cmd, start_new_session=True)
+
+    def terminate_child(signum, _frame):
+        if child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=5)
+                sys.exit(128 + signum)
+            except subprocess.TimeoutExpired:
+                pass
+
+            try:
+                os.killpg(child.pid, signum)
+            except ProcessLookupError:
+                pass
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                child.wait()
+        sys.exit(128 + signum)
+
+    previous_handlers = {}
+    for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        previous_handlers[signum] = signal.getsignal(signum)
+        signal.signal(signum, terminate_child)
+
+    try:
+        while True:
+            returncode = child.poll()
+            if returncode is not None:
+                return _normalize_returncode(returncode)
+            time.sleep(1)
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+
+
+def _normalize_returncode(returncode: int) -> int:
+    if returncode < 0:
+        return 128 - returncode
+    return returncode
 
 
 def _parse_args():
@@ -155,8 +207,6 @@ class FdLock:
     def open(self):
         assert self.fd is None
         self.fd = open(self.path, "a+")
-        # try to avoid lock disappear when execvp
-        os.set_inheritable(self.fd.fileno(), True)
 
     def lock(self):
         assert self.fd is not None

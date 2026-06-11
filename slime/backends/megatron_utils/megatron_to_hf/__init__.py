@@ -4,6 +4,7 @@ from .glm4moe import convert_glm4moe_to_hf
 from .gpt_oss import convert_gpt_oss_to_hf
 from .llama import convert_llama_to_hf
 from .mimo import convert_mimo_to_hf
+from .minimax_m2 import convert_minimax_m2_to_hf
 from .processors import quantize_params, remove_padding
 from .qwen2 import convert_qwen2_to_hf
 from .qwen3_5 import convert_qwen3_5_to_hf
@@ -34,7 +35,9 @@ _cached_tensors = {}
 
 # TODO optimize code details
 def _convert_to_hf_core(args, model_name, name, param):
-    if "glm4moelite" in model_name or "deepseekv3" in model_name:
+    if "minimaxm2" in model_name or "minimax_m2" in model_name:
+        converted_named_tensors = convert_minimax_m2_to_hf(args, name, param)
+    elif "glm4moelite" in model_name or "deepseekv3" in model_name:
         converted_named_tensors = convert_deepseekv3_to_hf(args, name, param)
     elif "glm4moe" in model_name:
         converted_named_tensors = convert_glm4moe_to_hf(args, name, param)

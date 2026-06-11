@@ -119,20 +119,39 @@ def load_module(module_name: str):
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
-    ("module_name", "class_name"),
+    ("module_name", "class_name", "args", "expected_backend"),
     [
-        ("slime_plugins.models.qwen3_5", "Qwen3_5GatedDeltaNet"),
-        ("slime_plugins.models.qwen3_next", "Qwen3NextGatedDeltaNet"),
+        ("slime_plugins.models.qwen3_5", "Qwen3_5GatedDeltaNet", None, "fla"),
+        (
+            "slime_plugins.models.qwen3_5",
+            "Qwen3_5GatedDeltaNet",
+            SimpleNamespace(qwen_gdn_backend="flashqla"),
+            "flashqla",
+        ),
+        ("slime_plugins.models.qwen3_next", "Qwen3NextGatedDeltaNet", None, "fla"),
+        (
+            "slime_plugins.models.qwen3_next",
+            "Qwen3NextGatedDeltaNet",
+            SimpleNamespace(qwen_gdn_backend="flashqla"),
+            "flashqla",
+        ),
     ],
 )
-def test_linear_attention_forwards_cu_seqlens_to_chunk_kernel(monkeypatch, module_name: str, class_name: str):
+def test_linear_attention_forwards_cu_seqlens_to_chunk_kernel(
+    monkeypatch,
+    module_name: str,
+    class_name: str,
+    args,
+    expected_backend: str,
+):
     module = load_module(module_name)
 
     monkeypatch.setattr(module.torch.cuda, "current_device", lambda: "cpu")
-    monkeypatch.setattr(module, "ShortConvolution", FakeShortConvolution)
-    monkeypatch.setattr(module, "FusedRMSNormGated", FakeFusedRMSNormGated)
+    monkeypatch.setattr(module, "ShortConvolution", FakeShortConvolution, raising=False)
+    monkeypatch.setattr(module, "FusedRMSNormGated", FakeFusedRMSNormGated, raising=False)
 
     chunk_calls = []
+    selected_backends = []
 
     def fake_chunk_gated_delta_rule(
         q,
@@ -152,14 +171,20 @@ def test_linear_attention_forwards_cu_seqlens_to_chunk_kernel(monkeypatch, modul
         assert cu_seqlens is not None
         return torch.zeros_like(v), None
 
-    monkeypatch.setattr(module, "chunk_gated_delta_rule", fake_chunk_gated_delta_rule)
+    def fake_get_chunk_gated_delta_rule(backend):
+        selected_backends.append(backend)
+        return fake_chunk_gated_delta_rule
 
-    layer = getattr(module, class_name)(make_config(), layer_idx=0)
+    monkeypatch.setattr(module, "get_chunk_gated_delta_rule", fake_get_chunk_gated_delta_rule)
+
+    layer = getattr(module, class_name)(make_config(), layer_idx=0, args=args)
     hidden_states = torch.randn(1, 7, 32)
     cu_seqlens = torch.tensor([0, 3, 7], dtype=torch.int32)
 
     output = layer(hidden_states, cu_seqlens=cu_seqlens)
 
+    assert selected_backends == [expected_backend]
+    assert layer.gdn_backend == expected_backend
     assert output.shape == hidden_states.shape
     assert len(chunk_calls) == 1
     assert torch.equal(chunk_calls[0], cu_seqlens)

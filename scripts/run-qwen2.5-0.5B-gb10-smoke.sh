@@ -17,7 +17,7 @@ ray stop --force 2>/dev/null || true
 pkill -9 ray python 2>/dev/null || true
 sleep 2
 
-export PYTHONBUFFERED=1
+export PYTHONUNBUFFERED=1
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/qwen2.5-0.5B.sh"

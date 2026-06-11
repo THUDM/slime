@@ -29,6 +29,23 @@ Below is a summary of all available customization interfaces and their purposes.
 | [`--custom-megatron-before-log-prob-hook-path`](#17-megatron-hooks) | Custom logic before log probability computation. |
 | [`--custom-megatron-before-train-step-hook-path`](#17-megatron-hooks) | Custom logic before each training step. |
 
+## Agentic workflows through customization interfaces
+
+Agentic workflows — multi-turn tool use, sandbox interaction, environment feedback, verifier/test-based rewards — are an important class of data generation workflows. They plug into slime through the existing customization interfaces; slime does not require a separate agent framework.
+
+For most agentic use cases, **start with `--custom-generate-function-path` plus `--custom-rm-path`**, and only override the full rollout function when the default rollout loop is insufficient.
+
+| If you need to … | Use |
+| :--- | :--- |
+| Run a custom agent loop, tool calls, RAG, sandbox execution, browser/terminal interaction, or multi-turn generation for each sample, while reusing slime's default rollout loop | [`--custom-generate-function-path`](#2-custom-generate-function---custom-generate-function-path) |
+| Compute verifier rewards, test-based rewards, environment success checks, rule-based rewards, or call an external reward service | [`--custom-rm-path`](#3-reward-model---custom-rm-path) |
+| Replace the entire rollout orchestration (only when per-sample customization is not enough) | [`--rollout-function-path`](#1-rollout-function---rollout-function-path) |
+| Control task sampling, buffering, requeueing, or custom prompt/task sources | [`--data-source-path`](#15-data-source---data-source-path) |
+| Attach custom loss masks, metadata, or convert agentic outputs into training data | [`--rollout-data-postprocess-path`](#8-rollout-data-postprocess---rollout-data-postprocess-path), [`--custom-convert-samples-to-train-data-path`](#13-samples-to-train-data-conversion---custom-convert-samples-to-train-data-path) |
+| Debug long-running custom generation, verifier calls, tool calls, or sandbox steps | trace utilities in [`slime.utils.trace_utils`](../developer_guide/trace.md) |
+
+A native example of this pattern is [`examples/search-r1`](../../../examples/search-r1/), which adds search-augmented multi-turn generation via `--custom-generate-function-path` while keeping slime's default `sglang_rollout` outer loop. See also [`examples/multi_agent`](../../../examples/multi_agent/README.md) for a `--rollout-function-path`-based multi-agent pattern and [`examples/fully_async`](../../../examples/fully_async/README.md) for long-tail agentic generation.
+
 ## Detailed Interface Reference
 
 ### 1. Rollout Function (`--rollout-function-path`)
@@ -59,13 +76,45 @@ def generate_rollout(args, rollout_id, data_source, evaluation=False) -> Rollout
 
 **Signature**:
 ```python
-async def custom_generate(args, sample: Sample, sampling_params: dict) -> Sample
+async def custom_generate(args, sample: Sample, sampling_params: dict) -> Sample | list[Sample]
 ```
 
 **Use Cases**:
 - Implementing tool-calling or function-calling capabilities
 - Adding retrieval-augmented generation (RAG)
 - Multi-turn conversation handling
+
+#### Returning multiple training samples for one prompt
+
+In agentic settings such as subagents, multi-agent execution, or context compaction, one prompt rollout can naturally split into multiple trainable segments. For example, a subagent trajectory and the main-agent continuation may both need to be trained, or the context before and after compaction may be represented as separate segments.
+
+You do not need to replace the whole rollout function for this. A `custom_generate` function may return `list[Sample]`. The key contract is that sibling samples produced by the same rollout must share the same `rollout_id`, so slime keeps them together for train-step splitting and loss aggregation instead of counting them as independent rollouts.
+
+```python
+import copy
+
+from slime.utils.types import Sample
+
+
+async def custom_generate(args, sample: Sample, sampling_params: dict) -> list[Sample]:
+    segments = await run_agent_and_split_segments(args, sample, sampling_params)
+    rollout_id = sample.rollout_id if sample.rollout_id is not None else sample.index
+
+    samples: list[Sample] = []
+    for segment in segments:
+        s = copy.copy(sample)
+        s.tokens = segment.tokens
+        s.response = segment.response
+        s.response_length = segment.response_length
+        s.loss_mask = segment.loss_mask
+        s.reward = segment.reward
+        s.status = Sample.Status.COMPLETED
+        s.rollout_id = rollout_id
+        samples.append(s)
+    return samples
+```
+
+If one full trajectory has a single total reward but is split into `K` training segments, a common pattern is to distribute that reward across the segments, for example by assigning `reward / K` to each segment, so the same rollout reward is not amplified.
 
 **Example**: See [examples/search-r1/generate_with_search.py](../../../examples/search-r1/generate_with_search.py)
 
@@ -435,7 +484,7 @@ python -m pytest \
 
 Each test file can also be executed directly with `python tests/plugin_contracts/<file>.py`, which keeps them compatible with `run-ci-changed`.
 
-A dedicated `run-ci-plugin-contracts` CI label is also available. Adding it to a PR triggers all four contract test files in parallel (no GPU required).
+A dedicated `run-ci-cpu-unittest` CI label is also available. Adding it to a PR triggers the CPU-only unit-test job, which runs the contract tests plus other lightweight unit tests in parallel (no GPU required).
 
 For user-defined implementations, you can either export environment variables such as `SLIME_CONTRACT_ROLLOUT_FUNCTION_PATH` and `SLIME_CONTRACT_CUSTOM_RM_PATH`, or pass overrides directly when running a test file, for example:
 

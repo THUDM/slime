@@ -11,11 +11,11 @@ from transformers.activations import ACT2FN
 
 try:
     from fla.modules import FusedRMSNormGated, ShortConvolution
-    from fla.ops.gated_delta_rule import chunk_gated_delta_rule
 except ImportError:
     pass
 
 from .hf_attention import HuggingfaceAttention, _load_hf_config
+from .qwen_gdn_backend import get_chunk_gated_delta_rule
 
 
 def _get_text_config(hf_config):
@@ -33,8 +33,10 @@ class Qwen3_5GatedDeltaNet(nn.Module):
     separate in_proj_qkv (for Q,K,V) and in_proj_z (for Z).
     """
 
-    def __init__(self, config, layer_idx: int):
+    def __init__(self, config, layer_idx: int, args=None):
         super().__init__()
+        self.gdn_backend = getattr(args, "qwen_gdn_backend", "fla")
+        self.chunk_gated_delta_rule = get_chunk_gated_delta_rule(self.gdn_backend)
         self.hidden_size = config.hidden_size
         self.num_v_heads = config.linear_num_value_heads
         self.num_k_heads = config.linear_num_key_heads
@@ -118,7 +120,14 @@ class Qwen3_5GatedDeltaNet(nn.Module):
             query = query.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
             key = key.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
 
-        core_attn_out, last_recurrent_state = chunk_gated_delta_rule(
+        if self.gdn_backend == "flashqla":
+            query = query.contiguous()
+            key = key.contiguous()
+            value = value.contiguous()
+            g = g.contiguous()
+            beta = beta.contiguous()
+
+        core_attn_out, last_recurrent_state = self.chunk_gated_delta_rule(
             query,
             key,
             value,
@@ -162,7 +171,7 @@ class Attention(HuggingfaceAttention):
         self.hf_config = _get_text_config(self.hf_config)
         self.hf_config._attn_implementation = "flash_attention_2"
 
-        self.linear_attn = Qwen3_5GatedDeltaNet(self.hf_config, self.hf_layer_idx)
+        self.linear_attn = Qwen3_5GatedDeltaNet(self.hf_config, self.hf_layer_idx, args=args)
 
         # Use a simple RMSNorm
         try:

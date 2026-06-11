@@ -1,69 +1,128 @@
 # CI (Continuous Integration)
 
-slime uses GitHub Actions for CI. Tests are triggered by **PR labels** — adding a specific label to a PR will run the corresponding test suite.
+slime CI has two layers:
+
+1. **Always-on CPU correctness tests** that run on every PR, every push to `main`, and manual `workflow_dispatch`.
+2. **Label-gated GPU end-to-end tests** that validate real Megatron + SGLang training and rollout paths on self-hosted GPU runners.
+
+This split is intentional. Most invariants should be checked quickly without waiting for the GPU fleet, while full training/rollout behavior is still covered by GPU e2e jobs.
 
 ## How It Works
 
-The workflow is defined in `.github/workflows/pr-test.yml` (auto-generated from `pr-test.yml.j2`). Each CI job:
+The workflow is defined in `.github/workflows/pr-test.yml`, which is auto-generated from `.github/workflows/pr-test.yml.j2`.
 
-1. Runs on a self-hosted GPU runner via `docker run`; most tests use `slimerl/slime:latest`, while image validation uses `slimerl/slime-test:latest`.
+### CPU Jobs
+
+CPU jobs run on GitHub-hosted `ubuntu-latest` runners:
+
+- `cpu-unittest` installs CPU PyTorch and lightweight dependencies, then runs registered unit and contract tests with `python tests/<test_file>.py`.
+- `agent-adapter-test` does the same for agent adapter tests, with extra dependencies such as `openai`, `openai-agents`, and `anthropic`.
+
+CPU jobs do not use Docker, do not acquire GPUs, and do not call `tests/ci/gpu_lock_exec.py`.
+
+### GPU E2E Jobs
+
+GPU jobs run on self-hosted GPU runners. Each job:
+
+1. Starts a Docker container, usually `slimerl/slime:latest`; image validation uses `slimerl/slime-test:latest`.
 2. Installs slime with `pip install -e . --no-deps`.
-3. Acquires the required GPUs via `tests/ci/gpu_lock_exec.py --count <num_gpus>`.
-4. Executes the test file: `python <test_path>.py` or `python tests/<test_file>.py`, depending on whether the test lives under `tests/` or a subdirectory such as `tests/plugin_contracts/`.
+3. Acquires the requested GPUs with `tests/ci/gpu_lock_exec.py --count <num_gpus>`.
+4. Executes the registered test file with `python tests/<test_file>.py`.
 
-Each test file follows a standard pattern: a `prepare()` function downloads models/datasets, and an `execute()` function builds CLI arguments and calls `U.execute_train(...)`.
+GPU tests usually follow the e2e pattern: `prepare()` downloads models/datasets, and `execute()` builds CLI arguments and calls `U.execute_train(...)`.
 
-## CI Labels
+### Changed-Test Job
 
-Add a label to your PR to trigger the corresponding test suite:
+`run-ci-changed` dynamically detects added or modified files under `tests/test_*.py` and `tests/plugin_contracts/test_*.py` relative to `origin/main`.
 
-| Label | Job | Description |
-|---|---|---|
-| `run-ci-short` | `e2e-test-short` | Lightweight smoke tests with Qwen2.5-0.5B (4 GPUs). Fast feedback loop. |
-| `run-ci-megatron` | `e2e-test-megatron` | Core Megatron training tests covering dense, MoE, PPO, MTP, OPD, etc. |
-| `run-ci-precision` | `e2e-test-precision` | Numerical precision validation (parallel check). |
-| `run-ci-ckpt` | `e2e-test-ckpt` | Checkpoint save/load correctness (sync and async-save). |
-| `run-ci-image` | `e2e-test-image` | Full test suite run on `slimerl/slime-test:latest` image (for image validation). |
-| `run-ci-changed` | `e2e-test-changed` | **Dynamically** detects new/modified test files in the PR and runs only those. |
+For each changed test file, it extracts a top-level `NUM_GPUS = <N>` constant and builds a matrix. If `NUM_GPUS` is missing, CI defaults to `8`, so CPU-only tests should declare:
 
-All labels also run when triggered via `workflow_dispatch` (manual run from the Actions tab).
+```python
+NUM_GPUS = 0
+```
 
-## Key Labels Explained
+The changed-test job itself runs through the self-hosted Docker path. When `NUM_GPUS = 0`, it runs the test without acquiring GPUs.
 
-### `run-ci-changed` — Run Only New or Modified Tests
+## CI Jobs and Triggers
 
-This is the most useful label for development. When you add a new test file or modify an existing one, just add `run-ci-changed` to your PR and CI will:
+| Trigger | Job | Type | Description |
+|---|---|---|---|
+| Automatic | `cpu-unittest` | CPU | Always-on unit and contract tests for argument validation, schedules, rewards, samples, rollout validation, checkpoint utilities, and plugin contracts. |
+| Automatic | `agent-adapter-test` | CPU | Always-on agent adapter tests with optional provider SDK dependencies. |
+| `run-ci-short` | `e2e-test-short` | GPU | Lightweight smoke tests with small Qwen models. Fast GPU feedback loop. |
+| `run-ci-sglang-config` | `e2e-test-sglang-config` | GPU | SGLang config tests for advanced rollout engine deployment and mixed/offload scenarios. |
+| `run-ci-megatron` | `e2e-test-megatron` | GPU | Core Megatron training tests covering dense, MoE, PPO, MTP, OPD, async rollout, PD/Mooncake, and debug replay paths. |
+| `run-ci-precision` | `e2e-test-precision` | GPU | Numerical precision validation and parallel consistency checks. |
+| `run-ci-ckpt` | `e2e-test-ckpt` | GPU | Checkpoint save/load correctness, including CPU/GPU optimizer states and async save. |
+| `run-ci-image` | `e2e-test-image` | GPU | Broad image validation suite on `slimerl/slime-test:latest`. |
+| `run-ci-changed` | `e2e-test-changed` | Mixed | Runs only changed tests, using each file's `NUM_GPUS` value. |
 
-1. **Detect** which `tests/test_*.py` or `tests/plugin_contracts/test_*.py` files are added or modified relative to `origin/main` (via `git diff --diff-filter=AM`).
-2. **Extract** the `NUM_GPUS` value from each detected test file automatically.
-3. **Build** a dynamic GitHub Actions matrix and run each test in parallel.
+`workflow_dispatch` can be used from the Actions page for manual validation. It runs the registered jobs according to the workflow conditions.
 
-This means you don't need to manually register your new test in the workflow — just make sure your test file has a top-level `NUM_GPUS = <N>` constant and `run-ci-changed` will pick it up.
+## CPU Unit Tests
 
-**Example**: If your PR adds `tests/test_qwen3_8B_opd_sglang.py` with `NUM_GPUS = 8`, adding the `run-ci-changed` label will automatically run that test on 8 GPUs.
+The CPU suite is the first line of defense for correctness. It is designed to catch silent RL infrastructure bugs before a change reaches expensive GPU runs.
 
-### `run-ci-image` — Full Suite on Test Image
+The registered CPU suite currently covers:
 
-This runs **all** registered tests on the `slimerl/slime-test:latest` Docker image. Use this label to:
+- Megatron argument and HF config validation;
+- DP/CP scheduling utilities and CP loss invariance;
+- metric reporting and distributed metric aggregation;
+- reward-model grading utilities for math, GPQA, F1, DeepScaler, and DAPO-style math;
+- `Sample` behavior, rollout validation, and agent trajectory merging;
+- HF checkpoint saver behavior;
+- customization hook contracts for rollout functions, generate functions, runtime hooks, and path loading.
 
-- Validate a newly built Docker image before release.
-- Run the entire test suite for a comprehensive pre-merge check.
+Agent adapter tests are kept in a separate CPU job because they need extra SDK dependencies.
 
-Since this includes every test, it consumes significant GPU time — use it sparingly and prefer more targeted labels for routine development.
+Useful local commands:
 
-### `run-ci-megatron` — Core Megatron Tests
+```bash
+python tests/test_agent_trajectory.py
+python -m pytest tests/test_megatron_argument_validation.py tests/plugin_contracts/test_plugin_generate_contracts.py
+```
 
-This is the primary label for validating Megatron-backend changes. It covers:
+## GPU E2E Tests
 
-- Dense models: GLM4-9B, Qwen3-4B (PPO)
-- MoE models: Qwen3-30B-A3B (with DeepEP + FP8), Qwen3.6-35B-A3B PD + Mooncake, Moonlight-16B-A3B
-- Specialized: MiMo-7B MTP, Qwen2.5-0.5B debug rollout-then-train, OPD with sglang teacher
+GPU e2e tests validate the integrated training/rollout behavior that CPU tests cannot cover:
 
-All tests use 8 GPUs. If you are modifying Megatron training logic, loss computation, or checkpoint conversion, this is the label to use.
+- `run-ci-short`: small-model smoke coverage for quick GPU feedback.
+- `run-ci-sglang-config`: advanced SGLang deployment paths, including config-based engine layouts.
+- `run-ci-megatron`: main Megatron backend coverage for dense/MoE recipes, async rollout, OPD, PPO-style paths, PD/Mooncake, and debug rollout-then-train replay.
+- `run-ci-precision`: numerical consistency across parallel settings.
+- `run-ci-ckpt`: checkpoint save/load combinations and async save.
+- `run-ci-image`: broad validation of the release/test image.
+
+Use targeted labels for routine PRs. Use `run-ci-image` sparingly because it consumes significantly more GPU time.
 
 ## Writing a New Test
 
-1. Create `tests/test_<your_test_name>.py` following the standard pattern:
+### CPU Tests
+
+For CPU-only tests:
+
+1. Add the test under `tests/test_*.py`, `tests/utils/test_*.py`, or `tests/plugin_contracts/test_*.py`, following nearby patterns.
+2. Add a top-level `NUM_GPUS = 0` if the file may be run by `run-ci-changed`.
+3. Make the file executable directly:
+
+```python
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))
+```
+
+4. If the test should run permanently, register it in the `cpu-unittest` or `agent-adapter-test` job in `.github/workflows/pr-test.yml.j2`, then regenerate the workflow.
+
+### GPU E2E Tests
+
+For GPU e2e tests:
+
+1. Create `tests/test_<your_test_name>.py` following the existing `prepare()` / `execute()` pattern.
+2. Declare the required GPU count with `NUM_GPUS = <N>`.
+3. Download required models/datasets in `prepare()`.
+4. Build arguments and call `U.execute_train(...)` in `execute()`.
+5. Register the test in the appropriate GPU job in `.github/workflows/pr-test.yml.j2`, then regenerate the workflow.
+
+Example skeleton:
 
 ```python
 import os
@@ -71,12 +130,11 @@ import slime.utils.external_utils.command_utils as U
 
 MODEL_NAME = "Qwen2.5-0.5B-Instruct"
 MODEL_TYPE = "qwen2.5-0.5B"
-NUM_GPUS = 4  # This constant is used by run-ci-changed
+NUM_GPUS = 4
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
-    # Download datasets as needed ...
 
 def execute():
     # Build argument strings and call U.execute_train(...)
@@ -89,34 +147,25 @@ if __name__ == "__main__":
     execute()
 ```
 
-2. **For quick validation**: Just push your test file and add `run-ci-changed` to the PR. It will be auto-detected.
-
-3. **To register in a permanent label group**: Edit `.github/workflows/pr-test.yml.j2`, add an entry to the desired job's `tests` list, then regenerate:
-
-```bash
-cd .github/workflows && python generate_github_workflows.py
-```
-
-Remember to commit both the `.j2` and the generated `.yml` file.
-
 ## Workflow Generation
 
-The workflow file `pr-test.yml` is auto-generated from the Jinja2 template `pr-test.yml.j2`. **Do not edit `pr-test.yml` directly.** To make changes:
+The workflow file `pr-test.yml` is auto-generated from the Jinja2 template `pr-test.yml.j2`. Do not edit `pr-test.yml` directly.
+
+To change the permanent CI matrix:
 
 1. Edit `.github/workflows/pr-test.yml.j2`.
-2. Run `python .github/workflows/generate_github_workflows.py`.
-3. Commit both files.
-
-## Customization Contract Tests
-
-For CPU-only contract tests that validate hooks loaded from function paths, run:
+2. Run:
 
 ```bash
-python -m pytest \
-  tests/plugin_contracts/test_plugin_rollout_contracts.py \
-  tests/plugin_contracts/test_plugin_generate_contracts.py \
-  tests/plugin_contracts/test_plugin_path_loading_contracts.py \
-  tests/plugin_contracts/test_plugin_runtime_hook_contracts.py
+python .github/workflows/generate_github_workflows.py
 ```
 
-These files also support direct execution as `python tests/plugin_contracts/<file>.py`. They declare `NUM_GPUS = 0`, so `run-ci-changed` can pick them up without treating them as GPU-heavy end-to-end tests.
+3. Commit both `.github/workflows/pr-test.yml.j2` and the generated `.github/workflows/pr-test.yml`.
+
+## Choosing Checks for a PR
+
+- Pure argument parsing, reward, schedule, sample, trajectory, or hook-contract changes: rely on CPU tests first.
+- SGLang topology or rollout engine deployment changes: use `run-ci-sglang-config`.
+- Megatron training, loss, checkpoint conversion, or model recipe changes: use `run-ci-megatron`; add `run-ci-precision` or `run-ci-ckpt` when relevant.
+- Docker image or dependency changes: use `run-ci-image`.
+- New or modified tests: use `run-ci-changed` for quick targeted validation.

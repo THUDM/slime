@@ -168,6 +168,18 @@ RUN pip install --no-deps \
         flash-linear-attention==0.4.1 \
         tilelang==0.1.8
 
+# FlashQLA (--qwen-gdn-backend flashqla): Qwen GDN kernels built for Hopper (SM90).
+# This image targets GB10 (sm_121a, aarch64). FlashQLA is not validated here;
+# compiling from source often fails and --qwen-gdn-backend flashqla is unsupported
+# at runtime even if install succeeds. Use the default backend fla (FLA above).
+# Opt in only for experiments: docker build --build-arg INSTALL_FLASHQLA=1 ...
+ARG INSTALL_FLASHQLA=0
+RUN if [ "${INSTALL_FLASHQLA}" = "1" ]; then \
+      pip install git+https://github.com/QwenLM/FlashQLA.git --no-build-isolation; \
+    else \
+      echo "Skipping FlashQLA (INSTALL_FLASHQLA=0; use --qwen-gdn-backend fla on GB10)"; \
+    fi
+
 RUN pip install --no-deps --no-build-isolation \
         "git+https://github.com/fzyzcjy/Megatron-Bridge.git@dev_rl" \
         "nvidia-modelopt>=0.37.0"

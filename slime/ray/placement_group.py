@@ -1,3 +1,4 @@
+import copy
 import logging
 import socket
 
@@ -6,7 +7,7 @@ from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from .actor_group import RayTrainGroup
-from .rollout import RolloutManager
+from .utils import add_default_ray_env_vars
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +41,31 @@ def sort_key(x):
 
 def _create_placement_group(num_gpus):
     """Create a placement group with the specified number of GPUs."""
+    if num_gpus == 0:
+        return None, [], []
+
     bundles = [{"GPU": 1, "CPU": 1} for _ in range(num_gpus)]
     pg = placement_group(bundles, strategy="PACK")
     num_bundles = len(bundles)
 
-    ray.get(pg.ready())
+    # Wait for the placement group to be scheduled. Poll rather than a bare
+    # ray.get(pg.ready()) so the wait is observable: when it can't be placed yet
+    # (a node's GPUs haven't registered with the GCS, or an autoscaler is still
+    # bringing nodes up) log the GPU counts periodically instead of hanging with no
+    # output. The wait stays unbounded, so autoscaling clusters — where a pending
+    # placement group is what drives scale-up — are unaffected.
+    ready_ref = pg.ready()
+    elapsed = 0
+    log_interval = 30
+    while not ray.wait([ready_ref], timeout=log_interval)[0]:
+        elapsed += log_interval
+        total = ray.cluster_resources().get("GPU", 0)
+        available = ray.available_resources().get("GPU", 0)
+        logger.info(
+            f"Waiting for placement group of {num_gpus} GPUs (elapsed {elapsed}s): "
+            f"{total:g} GPUs registered with Ray, {available:g} available."
+        )
+
     # use info actor to get the GPU id
     info_actors = []
     for i in range(num_bundles):
@@ -53,7 +74,7 @@ def _create_placement_group(num_gpus):
                 scheduling_strategy=PlacementGroupSchedulingStrategy(
                     placement_group=pg,
                     placement_group_bundle_index=i,
-                )
+                ),
             ).remote()
         )
     gpu_ids = ray.get([actor.get_ip_and_gpu_id.remote() for actor in info_actors])
@@ -76,22 +97,30 @@ def _create_placement_group(num_gpus):
     return pg, pg_reordered_bundle_indices, pg_reordered_gpu_ids
 
 
+def _get_placement_group_layout(args) -> tuple[int, int]:
+    actor_num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
+
+    if args.debug_train_only:
+        return actor_num_gpus, 0
+
+    if args.rollout_external:
+        if args.debug_rollout_only:
+            return 0, 0
+        return actor_num_gpus, actor_num_gpus
+
+    if args.debug_rollout_only:
+        return args.rollout_num_gpus, 0
+
+    if args.colocate:
+        return actor_num_gpus, 0
+
+    return actor_num_gpus + args.rollout_num_gpus, actor_num_gpus
+
+
 def create_placement_groups(args):
     """Create placement groups for actor, critic, and rollout engines."""
 
-    num_gpus = 0
-    if args.debug_train_only:
-        num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
-        rollout_offset = 0
-    elif args.debug_rollout_only:
-        num_gpus = args.rollout_num_gpus
-        rollout_offset = 0
-    elif args.colocate:
-        num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
-        rollout_offset = 0
-    else:
-        num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node + args.rollout_num_gpus
-        rollout_offset = args.actor_num_nodes * args.actor_num_gpus_per_node
+    num_gpus, rollout_offset = _get_placement_group_layout(args)
 
     logger.info(f"Creating placement group with {num_gpus} GPUs...")
     pg, actor_pg_reordered_bundle_indices, actor_pg_reordered_gpu_ids = _create_placement_group(num_gpus)
@@ -140,8 +169,11 @@ def create_training_models(args, pgs, rollout_manager):
         critic_args = (
             parse_megatron_role_args(args, args.megatron_config_path, role="critic")
             if args.megatron_config_path is not None
-            else args
+            else copy.deepcopy(args)
         )
+        if args.megatron_config_path is None:
+            critic_args.disable_param_buffers_cpu_backup = False
+
         critic_model = allocate_train_group(
             args=critic_args,
             num_nodes=args.critic_num_nodes,
@@ -184,9 +216,12 @@ def create_training_models(args, pgs, rollout_manager):
 
 
 def create_rollout_manager(args, pg):
+    from .rollout import RolloutManager
+
     rollout_manager = RolloutManager.options(
         num_cpus=1,
         num_gpus=0,
+        runtime_env={"env_vars": add_default_ray_env_vars()},
     ).remote(args, pg)
 
     # calculate num_rollout from num_epoch

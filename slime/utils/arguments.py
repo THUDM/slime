@@ -3,6 +3,7 @@ import copy
 import json
 import logging
 import os
+import warnings
 from typing import Any
 
 import yaml
@@ -10,6 +11,7 @@ from sglang_router.launch_router import RouterArgs
 
 from slime.backends.sglang_utils.arguments import sglang_parse_args
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
+from slime.backends.sglang_utils.external import apply_external_engine_info_to_args
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
 from slime.utils.logging_utils import configure_logger
 
@@ -113,6 +115,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="The qkv layout for Megatron backend.",
             )
             parser.add_argument(
+                "--qwen-gdn-backend",
+                type=str,
+                choices=["fla", "flashqla"],
+                default="fla",
+                help="GDN implementation backend for Qwen linear-attention layers.",
+            )
+            parser.add_argument(
                 "--train-env-vars",
                 type=json.loads,
                 default="{}",
@@ -125,16 +134,90 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Add margin for train memory allocation. By default we will reserve 1GB as margin.",
             )
             parser.add_argument(
-                "--disable-weights-backuper",
-                action="store_false",
-                dest="enable_weights_backuper",
-                help="Whether to disable weights backuper to save host memory.",
-            )
-            parser.add_argument(
                 "--megatron-to-hf-mode",
                 choices=["raw", "bridge"],
                 default="raw",
                 help="The method to convert megatron weights to hugging face weights for SGLang.",
+            )
+            # Delta weight sync.
+            parser.add_argument(
+                "--update-weight-mode",
+                choices=["full", "delta"],
+                default="full",
+                help=(
+                    "Weight sync strategy. 'full' (default) broadcasts every parameter "
+                    "every sync. 'delta' detects byte-level changes against a pinned-CPU "
+                    "snapshot of the previous broadcast and ships only the changed positions + values."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-transport",
+                choices=["nccl", "disk"],
+                default="nccl",
+                help=(
+                    "Carrier for weight sync. In full mode, 'nccl' broadcasts chunks and "
+                    "'disk' writes a complete HF checkpoint under --update-weight-disk-dir "
+                    "before engines reload it. In delta mode, 'nccl' broadcasts sparse deltas; "
+                    "'disk' writes sparse safetensors under --update-weight-disk-dir and pushes "
+                    "once at end-of-sync."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-disk-dir",
+                type=str,
+                default=None,
+                help=(
+                    "Filesystem directory for disk-backed weight sync. In --update-weight-mode=full, "
+                    "one complete HF checkpoint directory is written per sync. In delta mode, "
+                    "one sparse-delta directory is written per sync."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-disk-keep-files",
+                action="store_true",
+                default=False,
+                help=(
+                    "Skip cleanup of full-checkpoint directories written by "
+                    "--update-weight-mode=full --update-weight-transport=disk."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-encoding",
+                choices=["indices", "deltas", "deltas_zstd"],
+                default="indices",
+                help=(
+                    "Position encoding for partial flushes. 'indices': int32 absolute "
+                    "positions (largest, lowest compute). 'deltas': uint16 gap-deltas "
+                    "with uint32 fallback (smaller). 'deltas_zstd': 'deltas' with the "
+                    "safetensors blob wrapped in zstd L1 (smallest, heaviest compute — "
+                    "best for shared-FS bandwidth ≤ ~300 MB/s)."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-delta-dir",
+                type=str,
+                default=None,
+                help=(
+                    "Deprecated alias for --update-weight-disk-dir and will be removed in a future "
+                    "release. Prefer the transport-level directory flag for both full and delta disk sync."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-delta-keep-files",
+                action="store_true",
+                default=False,
+                help="Skip post-apply cleanup of per-sync version directories. Useful for debugging.",
+            )
+            parser.add_argument(
+                "--custom-delta-pre-push-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a custom function called by --update-weight-transport=disk after each "
+                    "trainer rank's files are durably on local disk, before rank 0 fires the engine "
+                    "RPCs. Signature: ``def hook(args, version_dir: str, rollout_engines) -> None``. "
+                    "Called from every trainer rank; the hook gates itself."
+                ),
             )
             parser.add_argument(
                 "--custom-model-provider-path",
@@ -445,12 +528,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--rollout-external",
-                action="store_true",
-                default=False,
-                help="Use external SGLang instances instead of launching them inside the framework.",
-            )
-            parser.add_argument(
                 "--rollout-external-engine-addrs",
                 type=str,
                 default=None,
@@ -605,8 +682,26 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_true",
                 default=False,
                 help=(
-                    "Balance the number of tokens between data parallel ranks with `karmarkar_karp` for verl. "
+                    "Balance estimated training FLOPs between data parallel ranks with `karmarkar_karp`. "
+                    "Micro-batch packing still follows the configured static/dynamic batching unless "
+                    "`--balance-by-flops` is also set. "
                     "Note that this may allocate the different response of the same prompt into different training steps."
+                ),
+            )
+
+            parser.add_argument(
+                "--balance-by-flops",
+                action="store_true",
+                default=False,
+                help=(
+                    "Use FLOPs-based workload estimation (coeff*L + L²) for micro-batch "
+                    "partitioning via Karmarkar-Karp instead of first-fit token packing. "
+                    "The linear coefficient is auto-computed from model config (hidden_size, "
+                    "ffn_hidden_size, swiglu, MoE experts). Captures the quadratic cost of "
+                    "attention, producing more balanced micro-batches when sequence lengths "
+                    "vary widely. This may create micro-batches whose total tokens exceed "
+                    "--max-tokens-per-gpu and cause OOM. Also enables --balance-data. "
+                    "Requires --use-dynamic-batch-size."
                 ),
             )
 
@@ -738,6 +833,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Path to save the model in HuggingFace format when using Megatron backend. "
                     "The model will be saved to `save_hf.format(rollout_id)`. "
+                    "In raw Megatron-to-HF mode, weights are saved with the same quantization config "
+                    "as `--hf-checkpoint`. "
                 ),
             )
             reset_arg(parser, "--seed", type=int, default=1234)
@@ -1281,6 +1378,21 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             # --load-debug-rollout-data, --debug-rollout-only, --debug-train-only
             # are parsed early in _pre_parse_mode() and merged later.
             parser.add_argument(
+                "--load-forge-rollout-data",
+                type=str,
+                default=None,
+                help=(
+                    "Path (or {rollout_id} template) to a dumped rollout .pt file replayed by "
+                    "slime.rollout.forge_load.generate_rollout. Mirrors --load-debug-rollout-data's "
+                    "format(rollout_id=...) convention: a path without the placeholder is treated as "
+                    "a literal file and reused across every rollout_id; a path containing {rollout_id} "
+                    "loads a per-rollout file (with eval_<id>.pt for the eval pipeline). Unlike "
+                    "--load-debug-rollout-data, this does NOT force debug_train_only / skip_sglang -- "
+                    "sglang servers, router, weight_update and the colocate offload/onload dance all "
+                    "stay live, which is the point (memory measurement at long context)."
+                ),
+            )
+            parser.add_argument(
                 "--load-debug-rollout-data-subsample",
                 type=float,
                 default=None,
@@ -1325,6 +1437,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 choices=["torch", "memray"],
                 default="torch",
             )
+            reset_arg(parser, "--record-memory-history", action="store_true", default=False)
             parser.add_argument("--check-weight-update-equal", action="store_true")
             return parser
 
@@ -1452,18 +1565,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Path to the rollout all samples process function that "
                     "can process all samples including filtered ones."
                 ),
-            )
-            parser.add_argument(
-                "--disable-rollout-trim-samples",
-                action="store_true",
-                default=False,
-                help="disable trim samples in rollout buffer when converting samples to train data",
-            )
-            parser.add_argument(
-                "--use-dynamic-global-batch-size",
-                action="store_true",
-                default=False,
-                help="enable dynamic global batch size, disable trim samples in rollout buffer when converting samples to train data",
             )
             return parser
 
@@ -1652,6 +1753,8 @@ def _apply_megatron_role_overrides(base_args, overrides, role):
         role_args.use_mopd = False
         role_args.custom_advantage_function_path = None
         role_args.untie_embeddings_and_output_weights = True
+        if "disable_param_buffers_cpu_backup" not in overrides:
+            role_args.disable_param_buffers_cpu_backup = False
 
     return role_args
 
@@ -1745,6 +1848,57 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
         args.eval_prompt_data = None
 
     return eval_datasets
+
+
+def _resolve_update_weight_disk_dir(args) -> None:
+    """Normalize disk-sync directory args.
+
+    ``--update-weight-delta-dir`` is kept only as a compatibility alias. New
+    code should use ``--update-weight-disk-dir`` because the directory belongs
+    to the transport, not to the delta encoding mode.
+    """
+    disk_dir = args.update_weight_disk_dir
+    delta_dir = args.update_weight_delta_dir
+    if disk_dir and delta_dir and disk_dir != delta_dir:
+        raise ValueError(
+            "--update-weight-delta-dir is deprecated alias for --update-weight-disk-dir; "
+            "please set only one of them or set both to the same path."
+        )
+
+    if delta_dir:
+        warnings.warn(
+            "--update-weight-delta-dir is deprecated and will be removed in a future release; "
+            "use --update-weight-disk-dir instead.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    disk_dir = disk_dir or delta_dir
+    if args.update_weight_transport == "disk":
+        if not disk_dir:
+            raise ValueError(
+                "--update-weight-transport=disk requires --update-weight-disk-dir to point at "
+                "a filesystem shared between the trainer and the rollout engines."
+            )
+        args.update_weight_disk_dir = disk_dir
+        args.update_weight_delta_dir = disk_dir
+
+
+def _validate_update_weight_args(args) -> None:
+    _resolve_update_weight_disk_dir(args)
+
+    if args.update_weight_mode == "delta":
+        if args.update_weight_transport not in ("nccl", "disk"):
+            raise ValueError(
+                "--update-weight-mode=delta supports only --update-weight-transport=nccl or disk, "
+                f"got {args.update_weight_transport!r}."
+            )
+        if args.colocate:
+            raise ValueError(
+                "--update-weight-mode=delta is not supported with --colocate. Colocate transfers "
+                "weights via CUDA IPC (only a handle crosses processes), so the delta bookkeeping "
+                "(snapshot + diff + sparse encode) is pure overhead."
+            )
 
 
 def slime_validate_args(args):
@@ -2075,6 +2229,10 @@ def slime_validate_args(args):
         if args.log_probs_max_tokens_per_gpu is None:
             args.log_probs_max_tokens_per_gpu = args.max_tokens_per_gpu
 
+    if getattr(args, "balance_by_flops", False):
+        assert args.use_dynamic_batch_size, "--balance-by-flops requires --use-dynamic-batch-size"
+        args.balance_data = True
+
     if args.eps_clip_high is None:
         args.eps_clip_high = args.eps_clip
 
@@ -2091,6 +2249,11 @@ def slime_validate_args(args):
             "will not instantiate sglang servers and will only run the training process."
         )
         args.debug_train_only = True
+
+    args.rollout_external = args.rollout_external_engine_addrs is not None
+
+    if args.rollout_external and not args.debug_train_only:
+        apply_external_engine_info_to_args(args, logger=logger)
 
     args.use_critic = args.advantage_estimator == "ppo"
     # Critic always uses the same GPU count as actor.
@@ -2130,8 +2293,6 @@ def slime_validate_args(args):
                 f"* actor_num_nodes {args.actor_num_nodes}, overriding rollout_num_gpus to match actor_num_gpus_per_node * actor_num_nodes."
             )
             args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
-            if args.use_critic:
-                args.rollout_num_gpus += args.critic_num_gpus_per_node * args.critic_num_nodes
 
     if args.offload_train is None:
         args.offload_train = False
@@ -2140,6 +2301,10 @@ def slime_validate_args(args):
 
     if args.use_critic:
         args.offload_train = True
+
+    if args.offload_train:
+        args.disable_grad_buffers_cpu_backup = True
+        args.disable_param_buffers_cpu_backup = True
 
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path
@@ -2218,3 +2383,5 @@ def slime_validate_args(args):
 
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")
+
+    _validate_update_weight_args(args)
