@@ -238,7 +238,22 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "and the pre-push hook has completed. Signature: "
                     "``def hook(args, version_dir: str, files: list[str], weight_version: str, "
                     "rollout_engines) -> list | None``. Returned Ray ObjectRefs are awaited before "
-                    "the sync completes."
+                    "the sync completes. With --update-weight-delta-publish-only, "
+                    "--update-weight-delta-publish-wait controls whether this happens in the same "
+                    "sync or at the start of the next sync."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-delta-publish-wait",
+                type=str,
+                choices=["next-sync", "sync"],
+                default="next-sync",
+                help=(
+                    "When --update-weight-delta-publish-only is set, choose when rank 0 waits for "
+                    "--custom-delta-publish-path to finish. 'next-sync' pipelines publish work "
+                    "across the next training step and surfaces failures one sync late. 'sync' "
+                    "blocks update_weights until the publish hook returns, useful when the hook "
+                    "polls rollout-fleet readiness before allowing the next rollout dispatch."
                 ),
             )
             parser.add_argument(

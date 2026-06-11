@@ -14,9 +14,7 @@ def normalize_rollout_http_endpoint_url(url: str) -> str:
     url = url.rstrip("/")
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or parsed.netloc == "":
-        raise ValueError(
-            f"Invalid rollout HTTP endpoint URL {url!r}. Use an absolute http:// or https:// URL."
-        )
+        raise ValueError(f"Invalid rollout HTTP endpoint URL {url!r}. Use an absolute http:// or https:// URL.")
     return url
 
 
