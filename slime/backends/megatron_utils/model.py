@@ -500,6 +500,7 @@ def train_one_step(
             "rollout_log_probs",
             "max_seq_lens",
             "teacher_log_probs",
+            "rollout_mask_sums",
         ]
         # Add MOPD full-vocab teacher logits keys if present
         # These are stored as "mopd_teacher_{domain}_fv_logits" per domain
