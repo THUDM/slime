@@ -1182,6 +1182,9 @@ def _resolve_sglang_config(args) -> SglangConfig:
         assert actual == expected, f"sglang_config total GPUs ({actual}) != rollout_num_gpus ({expected})"
         return config
 
+    if args.rollout_num_gpus == 0:
+        return SglangConfig(models=[ModelConfig(name="default", server_groups=[])])
+
     if args.prefill_num_servers is not None:
         return SglangConfig.from_prefill_num_servers(args)
 

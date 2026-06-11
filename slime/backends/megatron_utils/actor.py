@@ -616,6 +616,11 @@ class MegatronTrainRayActor(TrainRayActor):
             self.rollout_manager.get_updatable_engines_and_lock.remote()
         )
 
+        if not rollout_engines:
+            if dist.get_rank() == 0:
+                logger.info("No updatable SGLang engines are running; skip weight update.")
+            return
+
         reconnect_rollout_engines = self.args.offload_train and self.args.use_critic and not self.args.colocate
 
         if reconnect_rollout_engines:
