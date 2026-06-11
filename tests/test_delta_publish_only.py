@@ -225,7 +225,9 @@ def test_publish_only_finalize_calls_publish_hook_without_engine_rpcs_or_cleanup
     _patch_single_rank_dist(monkeypatch)
     ray_get_calls = []
     monkeypatch.setattr(delta_mod.ray, "get", lambda refs: ray_get_calls.append(refs))
-    monkeypatch.setattr(delta_mod.shutil, "rmtree", lambda *_args, **_kwargs: pytest.fail("publish-only must keep files"))
+    monkeypatch.setattr(
+        delta_mod.shutil, "rmtree", lambda *_args, **_kwargs: pytest.fail("publish-only must keep files")
+    )
 
     hook_calls = []
 
@@ -240,7 +242,6 @@ def test_publish_only_finalize_calls_publish_hook_without_engine_rpcs_or_cleanup
 
     assert updater.writer.drain_calls == 1
     assert updater._pending_files == []
-    assert updater._pending_publishes == []
     assert updater._published_any is True
     assert hook_calls == [
         (
@@ -252,8 +253,16 @@ def test_publish_only_finalize_calls_publish_hook_without_engine_rpcs_or_cleanup
         )
     ]
     assert updater.rollout_engines[0].calls == []
-    assert ray_get_calls == [["publish-ref"]]
+    # The publish stays in flight across the training step: finalize must not
+    # await its refs; the next sync (or disconnect) drains it.
+    assert len(updater._pending_publishes) == 1
+    assert ray_get_calls == []
     assert os.path.isdir(updater._version_dir)
+
+    updater._drain_pending_publishes()
+
+    assert updater._pending_publishes == []
+    assert ray_get_calls == [["publish-ref"]]
 
 
 def test_publish_only_finalize_publishes_noop_version(monkeypatch, tmp_path):
@@ -275,7 +284,27 @@ def test_publish_only_finalize_publishes_noop_version(monkeypatch, tmp_path):
     assert updater._published_any is True
     assert hook_calls == [(updater._version_dir, [], "7", updater.rollout_engines)]
     assert updater.rollout_engines[0].calls == []
+    assert len(updater._pending_publishes) == 1
+
+    updater._drain_pending_publishes()
+
+    assert updater._pending_publishes == []
     assert ray_get_calls == []
+
+
+def test_disconnect_drains_pending_publish(monkeypatch, tmp_path):
+    _patch_single_rank_dist(monkeypatch)
+    ray_get_calls = []
+    monkeypatch.setattr(delta_mod.ray, "get", lambda refs: ray_get_calls.append(refs))
+
+    updater = _make_publish_only_updater(tmp_path, lambda *a: ["publish-ref"])
+    updater._finalize_sync()
+    assert len(updater._pending_publishes) == 1
+
+    updater.disconnect_rollout_engines()
+
+    assert updater._pending_publishes == []
+    assert ray_get_calls == [["publish-ref"]]
 
 
 def test_publish_only_flush_defers_publish_until_finalize(monkeypatch, tmp_path):

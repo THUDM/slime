@@ -239,7 +239,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "and the pre-push hook has completed. Signature: "
                     "``def hook(args, version_dir: str, files: list[str], weight_version: str, "
                     "rollout_engines) -> list | None``. Returned Ray ObjectRefs are awaited before "
-                    "the sync completes."
+                    "the sync completes, except with --update-weight-delta-publish-only, where the "
+                    "publish overlaps the next training step and is awaited at the start of the "
+                    "next sync (failures surface one sync late)."
                 ),
             )
             parser.add_argument(
