@@ -1,8 +1,8 @@
 # Adapt from https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/models/utils.py
 # and https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/trainer/ppo_utils/experience_maker.py
 
-from argparse import Namespace
 import logging
+from argparse import Namespace
 
 import torch
 import torch.distributed as dist
@@ -267,7 +267,6 @@ class _VocabParallelReverseKL(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):
         s_softmax, local_s_log_prob, local_t_log_prob, kl = ctx.saved_tensors
-        process_group = ctx.process_group
 
         # Gradient: ∂KL/∂z_j = π_s(j) * [log π_s(j) - log π_t(j) - KL]
         # This is completely local per token — no all_reduce needed in backward.
@@ -378,7 +377,6 @@ def vocab_parallel_topk_reverse_kl(
         teacher_topk_indices = teacher_topk_indices.long()
 
     tp_size = dist.get_world_size(group=process_group) if process_group is not None else 1
-    k = teacher_topk_logits.size(-1)
 
     # Compute validity mask from teacher_topk_logits if not provided.
     # Entries with -inf logits are padding (e.g., from SGLang TP sharding).
@@ -555,9 +553,7 @@ def vocab_parallel_topk_reverse_kl(
     kl_tail = torch.zeros_like(student_tail_mass)
     tail_mask = (student_tail_mass > 1e-10) & (teacher_tail_mass > 1e-10)
     kl_tail[tail_mask] = student_tail_mass[tail_mask] * (
-        torch.log(student_tail_mass[tail_mask]) - torch.log(
-            teacher_tail_mass[tail_mask]
-        )
+        torch.log(student_tail_mass[tail_mask]) - torch.log(teacher_tail_mass[tail_mask])
     )
     # If teacher_tail_mass ≈ 0 but student_tail_mass > 0, we have an unbounded KL.
     # This shouldn't happen if k is large enough. We treat it as 0 for numerical safety.

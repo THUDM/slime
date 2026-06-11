@@ -25,10 +25,14 @@ from tqdm import tqdm
 
 def main():
     parser = argparse.ArgumentParser(description="Merge missing keys from original HF model into converted checkpoint")
-    parser.add_argument("--origin-hf-dir", type=str, required=True, help="Path to the original HuggingFace model directory")
+    parser.add_argument(
+        "--origin-hf-dir", type=str, required=True, help="Path to the original HuggingFace model directory"
+    )
     parser.add_argument("--converted-dir", type=str, required=True, help="Path to the converted checkpoint directory")
     parser.add_argument("--dry-run", action="store_true", help="Only print missing keys without merging")
-    parser.add_argument("--chunk-size", type=int, default=5 * 1024**3, help="Chunk size for safetensors files (default 5GB)")
+    parser.add_argument(
+        "--chunk-size", type=int, default=5 * 1024**3, help="Chunk size for safetensors files (default 5GB)"
+    )
     args = parser.parse_args()
 
     # Load both index files
@@ -57,6 +61,7 @@ def main():
 
     # Categorize missing keys
     from collections import Counter
+
     prefix_patterns = Counter()
     for key in missing_keys:
         parts = key.split(".")
@@ -104,11 +109,6 @@ def main():
     # Calculate missing size
     missing_size = sum(t.numel() * t.element_size() for t in missing_tensors.values())
     print(f"Missing tensors total size: {missing_size / 1e9:.2f} GB")
-
-    # Find the last file and check its size
-    last_file_idx = total_files
-    last_file_name = f"model-{last_file_idx:05d}-of-{total_files:05d}.safetensors"
-    last_file_path = os.path.join(args.converted_dir, last_file_name)
 
     # Add missing tensors to a new shard
     new_total = total_files + 1

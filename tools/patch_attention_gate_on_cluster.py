@@ -14,15 +14,16 @@ Usage:
 """
 
 import argparse
+import subprocess
 import textwrap
 
 import ray
-import subprocess
 
 FILE_PATH = "/root/Megatron-LM/megatron/core/transformer/attention.py"
 REMOTE_SCRIPT_PATH = "/tmp/_patch_attention_gate.py"
 
-DIAGNOSE_SCRIPT = textwrap.dedent(f"""\
+DIAGNOSE_SCRIPT = textwrap.dedent(
+    f"""\
     import sys
     FILE_PATH = {FILE_PATH!r}
     try:
@@ -64,10 +65,12 @@ DIAGNOSE_SCRIPT = textwrap.dedent(f"""\
         for i, line in enumerate(lines):
             if "output_gate" in line or "gate.reshape" in line:
                 print(f"  {{i+1}}: {{line.rstrip()}}")
-""")
+"""
+)
 
 # Patch script: uses robust line-by-line approach instead of string matching
-PATCH_SCRIPT = textwrap.dedent(f"""\
+PATCH_SCRIPT = textwrap.dedent(
+    f"""\
     import sys, shutil
 
     FILE_PATH = {FILE_PATH!r}
@@ -144,9 +147,11 @@ PATCH_SCRIPT = textwrap.dedent(f"""\
     with open(FILE_PATH, "w") as f:
         f.writelines(new_lines)
     print("PATCHED")
-""")
+"""
+)
 
-ROLLBACK_SCRIPT = textwrap.dedent(f"""\
+ROLLBACK_SCRIPT = textwrap.dedent(
+    f"""\
     import sys, shutil, os
 
     FILE_PATH = {FILE_PATH!r}
@@ -158,7 +163,8 @@ ROLLBACK_SCRIPT = textwrap.dedent(f"""\
 
     shutil.copy2(backup_path, FILE_PATH)
     print("ROLLED_BACK")
-""")
+"""
+)
 
 
 def main():
@@ -176,11 +182,7 @@ def main():
 
     ray.init(address="auto")
 
-    nodes = [
-        n["NodeManagerAddress"]
-        for n in ray.nodes()
-        if n["Alive"]
-    ]
+    nodes = [n["NodeManagerAddress"] for n in ray.nodes() if n["Alive"]]
     print(f"Found {len(nodes)} alive nodes")
 
     # Only check one node for diagnose (they should all be the same)
@@ -188,6 +190,7 @@ def main():
 
     tasks = []
     for node_ip in target_nodes:
+
         @ray.remote(resources={f"node:{node_ip}": 0.001})
         def run_on_node(node_ip=node_ip):
             # Step 1: write script to temp file

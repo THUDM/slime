@@ -38,9 +38,11 @@ class Sample:
     rollout_routed_experts: list[list[int]] | None = None  # Routed experts from rollout engine
     remove_sample: bool = False
     teacher_log_probs: list[float] | None = None  # Log probabilities from teacher model for OPD
-    mopd_teacher_log_probs: dict[str, list[float]] | None = None  # Log probabilities from multiple MOPD teachers (domain -> log_probs)
+    mopd_teacher_log_probs: dict[str, list[float]] | None = (
+        None  # Log probabilities from multiple MOPD teachers (domain -> log_probs)
+    )
     # Full-vocab teacher logits per domain (SGLang MOPD full_vocab mode).
-    #Format: {domain: list[list[float]]} — domain -> [seq_len][vocab_size]
+    # Format: {domain: list[list[float]]} — domain -> [seq_len][vocab_size]
     mopd_teacher_fv_logits: dict[str, list[list[float]]] | None = None
     # Top-k teacher logits per domain (SGLang MOPD top_k mode).
     # Format: {domain: list[list[float]]} — domain -> [seq_len][k]

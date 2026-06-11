@@ -51,9 +51,9 @@ from __future__ import annotations
 
 import itertools
 import logging
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Dict, Mapping
 
 import torch
 from megatron.bridge.models.conversion.mapping_registry import MegatronMappingRegistry
@@ -65,16 +65,16 @@ from megatron.bridge.models.conversion.param_mapping import (
     ReplicatedMapping,
     RowParallelMapping,
 )
+from megatron.bridge.models.qwen.qwen_provider import Qwen3MoEModelProvider
 
 # Official Qwen3.5-VL MoE bridge — we inherit from this to reuse its mature
 # mapping_registry, maybe_modify_converted_hf_weight, and all GDN/MoE/vision
 # mappings.  We only override what differs for our HF-vision-encoder architecture.
 from megatron.bridge.models.qwen_vl.qwen35_vl_bridge import Qwen35VLMoEBridge as _OfficialQwen35VLMoEBridge
-
-from megatron.bridge.utils.common_utils import extract_expert_number_from_param
-
-from megatron.bridge.models.qwen.qwen_provider import Qwen3MoEModelProvider
-from megatron.bridge.utils.common_utils import hook_hf_module_setattr_for_tp_grad_sync
+from megatron.bridge.utils.common_utils import (
+    extract_expert_number_from_param,
+    hook_hf_module_setattr_for_tp_grad_sync,
+)
 from megatron.core import parallel_state, tensor_parallel
 from megatron.core.models.gpt import GPTModel as MCoreGPTModel
 from megatron.core.models.gpt.gpt_layer_specs import get_gpt_decoder_block_spec
@@ -125,9 +125,9 @@ def _infer_parallelism_from_param_name(param_name: str) -> str:
 
     # -- Row-parallel patterns (check first, more specific) --
     row_patterns = [
-        "linear_proj.weight",       # attention output projection
-        "linear_fc2.weight",        # MLP / expert down projection
-        "out_proj.weight",          # GDN output projection
+        "linear_proj.weight",  # attention output projection
+        "linear_fc2.weight",  # MLP / expert down projection
+        "out_proj.weight",  # GDN output projection
         "shared_experts.linear_fc2",  # shared expert down projection
     ]
     for pat in row_patterns:
@@ -136,20 +136,20 @@ def _infer_parallelism_from_param_name(param_name: str) -> str:
 
     # -- Column-parallel patterns --
     col_patterns = [
-        "linear_qkv",               # QKV projection
-        "linear_q_up_proj",         # fused Q+up (some models)
-        "linear_kv_up_proj",        # fused KV+up (some models)
-        "embedding.word_embeddings", # vocabulary embedding
-        "output_layer",             # output projection
-        "linear_fc1.weight",        # MLP / expert gate+up projection
-        "in_proj.weight",           # GDN input projection
-        "in_proj_qkv",             # GDN QKV part of input projection
-        "in_proj_z",                # GDN z gate
-        "in_proj_b",                # GDN b gate
-        "in_proj_a",                # GDN a gate
-        "a_log",                    # GDN A_log parameter
-        "dt_bias",                  # GDT dt_bias parameter
-        "conv1d.weight",            # GDN conv1d
+        "linear_qkv",  # QKV projection
+        "linear_q_up_proj",  # fused Q+up (some models)
+        "linear_kv_up_proj",  # fused KV+up (some models)
+        "embedding.word_embeddings",  # vocabulary embedding
+        "output_layer",  # output projection
+        "linear_fc1.weight",  # MLP / expert gate+up projection
+        "in_proj.weight",  # GDN input projection
+        "in_proj_qkv",  # GDN QKV part of input projection
+        "in_proj_z",  # GDN z gate
+        "in_proj_b",  # GDN b gate
+        "in_proj_a",  # GDN a gate
+        "a_log",  # GDN A_log parameter
+        "dt_bias",  # GDT dt_bias parameter
+        "conv1d.weight",  # GDN conv1d
         "shared_experts.linear_fc1",  # shared expert gate+up
     ]
     for pat in col_patterns:
@@ -158,19 +158,19 @@ def _infer_parallelism_from_param_name(param_name: str) -> str:
 
     # -- Replicated patterns --
     replicated_patterns = [
-        "layernorm",                # any layernorm weight/bias
-        "layer_norm",               # alternative spelling
-        "norm.weight",              # standalone norm
-        "norm.bias",                # standalone norm bias
-        "router.weight",            # MoE router
-        "gate_weight",              # shared expert gate
-        "gate.bias",                # gate bias
-        "input_layernorm",          # input layernorm
-        "pre_mlp_layernorm",        # pre-MLP layernorm
-        "q_layernorm",              # Q layernorm
-        "k_layernorm",              # K layernorm
-        "layer_norm_weight",        # fused TE layernorm weight
-        "layer_norm_bias",          # fused TE layernorm bias
+        "layernorm",  # any layernorm weight/bias
+        "layer_norm",  # alternative spelling
+        "norm.weight",  # standalone norm
+        "norm.bias",  # standalone norm bias
+        "router.weight",  # MoE router
+        "gate_weight",  # shared expert gate
+        "gate.bias",  # gate bias
+        "input_layernorm",  # input layernorm
+        "pre_mlp_layernorm",  # pre-MLP layernorm
+        "q_layernorm",  # Q layernorm
+        "k_layernorm",  # K layernorm
+        "layer_norm_weight",  # fused TE layernorm weight
+        "layer_norm_bias",  # fused TE layernorm bias
     ]
     for pat in replicated_patterns:
         if pat in name:
@@ -389,9 +389,7 @@ def _gather_input_ids_from_cp(
     if cp_size <= 1:
         return input_ids
 
-    gathered = torch.distributed.nn.all_gather(
-        input_ids, group=parallel_state.get_context_parallel_group()
-    )
+    gathered = torch.distributed.nn.all_gather(input_ids, group=parallel_state.get_context_parallel_group())
 
     local_cu_seqlens = cu_seqlens // cp_size
     num_seqs = len(cu_seqlens) - 1
@@ -400,8 +398,7 @@ def _gather_input_ids_from_cp(
         seqlen = (cu_seqlens[i + 1] - cu_seqlens[i]).item()
         chunk_size = seqlen // 2 // cp_size
         whole_list.extend(
-            gathered[cp_rank][0, local_cu_seqlens[i] : local_cu_seqlens[i] + chunk_size]
-            for cp_rank in range(cp_size)
+            gathered[cp_rank][0, local_cu_seqlens[i] : local_cu_seqlens[i] + chunk_size] for cp_rank in range(cp_size)
         )
         whole_list.extend(
             [
@@ -622,9 +619,7 @@ class Qwen35VLMoeVLModel(MegatronModule):
                 if modality == 0:
                     # Text tokens
                     n = end - start
-                    pos_list.append(
-                        torch.arange(n, device=device).view(1, -1).expand(3, -1) + current_pos
-                    )
+                    pos_list.append(torch.arange(n, device=device).view(1, -1).expand(3, -1) + current_pos)
                     current_pos += n
                 else:
                     # Image tokens
@@ -716,9 +711,7 @@ class Qwen35VLMoeVLModel(MegatronModule):
 
             # Scatter to sequence-parallel region if needed
             if self.config.sequence_parallel:
-                combined_embeddings = tensor_parallel.scatter_to_sequence_parallel_region(
-                    combined_embeddings
-                )
+                combined_embeddings = tensor_parallel.scatter_to_sequence_parallel_region(combined_embeddings)
                 combined_embeddings = combined_embeddings.contiguous()
 
         # 3. Compute M-RoPE position IDs
@@ -742,9 +735,7 @@ class Qwen35VLMoeVLModel(MegatronModule):
                 # Non-first PP stage: allocate buffer with correct shape
                 if cu_seqlens is not None:
                     T = cu_seqlens[-1].item()
-                    position_ids = torch.zeros(
-                        3, 1, T, dtype=torch.long, device=torch.cuda.current_device()
-                    )
+                    position_ids = torch.zeros(3, 1, T, dtype=torch.long, device=torch.cuda.current_device())
                 else:
                     raise NotImplementedError(
                         "Non-THD position_ids broadcast not yet supported for non-first PP stages"
@@ -823,6 +814,7 @@ class Qwen35VLMoeVLModelProvider(Qwen3MoEModelProvider):
             from megatron.core.models.gpt.experimental_attention_variant_module_specs import (
                 get_transformer_block_with_experimental_attention_variant_spec,
             )
+
             transformer_layer_spec = get_transformer_block_with_experimental_attention_variant_spec(
                 config=self,
                 vp_stage=vp_stage,
@@ -1046,9 +1038,9 @@ class Qwen35VLMoeBridge(_OfficialQwen35VLMoEBridge):
     def maybe_modify_converted_hf_weight(
         self,
         task: WeightConversionTask,
-        converted_weights_dict: Dict[str, torch.Tensor],
+        converted_weights_dict: dict[str, torch.Tensor],
         hf_state_dict: Mapping,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> dict[str, torch.Tensor]:
         """Merge per-expert weight exports into a single fused [num_experts, ...] tensor.
 
         For **fused HF format** (e.g. 35B model, ``experts.gate_up_proj``), all experts
@@ -1096,7 +1088,7 @@ class Qwen35VLMoeBridge(_OfficialQwen35VLMoEBridge):
             if len(expert_ids_in_dict) > 1:
                 return converted_weights_dict
 
-        result: Dict[str, torch.Tensor] = {}
+        result: dict[str, torch.Tensor] = {}
         for key, value in converted_weights_dict.items():
             if key not in self.hf_weights_cache:
                 self.hf_weights_cache[key] = {}
@@ -1108,8 +1100,7 @@ class Qwen35VLMoeBridge(_OfficialQwen35VLMoEBridge):
                 self.hf_weights_cache[key][local_expert_number] = value
             else:
                 assert value.shape[0] == ep_size, (
-                    f"Expected shape[0]=={ep_size} for EP-gathered expert weight "
-                    f"'{key}', got {value.shape}"
+                    f"Expected shape[0]=={ep_size} for EP-gathered expert weight " f"'{key}', got {value.shape}"
                 )
                 for i, exp_val in enumerate(value):
                     global_expert_number = local_expert_number + (i * experts_per_rank)
@@ -1125,10 +1116,7 @@ class Qwen35VLMoeBridge(_OfficialQwen35VLMoEBridge):
                 # Move back to CUDA for downstream processing
                 result[key] = merged.cuda()
             else:
-                logger.debug(
-                    f"{len(self.hf_weights_cache[key])}/{num_experts} experts "
-                    f"loaded for {key}"
-                )
+                logger.debug(f"{len(self.hf_weights_cache[key])}/{num_experts} experts " f"loaded for {key}")
 
         return result
 
@@ -1156,9 +1144,7 @@ class Qwen35VLMoeBridge(_OfficialQwen35VLMoEBridge):
 
         # Shared expert intermediate size
         moe_ffn = getattr(text_config, "moe_intermediate_size", 512)
-        shared_expert_intermediate = getattr(
-            text_config, "shared_expert_intermediate_size", 512
-        )
+        shared_expert_intermediate = getattr(text_config, "shared_expert_intermediate_size", 512)
 
         # Read attention bias from config
         add_qkv_bias = getattr(text_config, "attention_bias", False)
@@ -1257,6 +1243,7 @@ class Qwen35VLMoeBridge(_OfficialQwen35VLMoEBridge):
         )
 
         return provider
+
 
 # Apply patches at module load time so that they are active whenever this
 # bridge module is imported, regardless of import order.

@@ -130,7 +130,9 @@ class MegatronTrainRayActor(TrainRayActor):
         mopd_teacher_mode = getattr(args, "mopd_teacher_mode", "megatron")
         if getattr(args, "use_mopd", False):
             if mopd_teacher_mode == "megatron" and getattr(args, "mopd_teacher_loads", None):
-                mopd_teachers = json.loads(args.mopd_teachers) if isinstance(args.mopd_teachers, str) else args.mopd_teachers
+                mopd_teachers = (
+                    json.loads(args.mopd_teachers) if isinstance(args.mopd_teachers, str) else args.mopd_teachers
+                )
                 for i, teacher_cfg in enumerate(mopd_teachers):
                     domain = teacher_cfg["domain"]
                     tag = f"mopd_teacher_{domain}"
@@ -338,17 +340,19 @@ class MegatronTrainRayActor(TrainRayActor):
                         # Create a -inf tensor of the correct size as fallback.
                         # -inf log-probs produce zero KL contribution, so this
                         # domain has no effect on the loss for this sample.
-                        sliced_len = len(slice_log_prob_with_cp(
-                            torch.zeros(response_length),
-                            total_length,
-                            response_length,
-                            self.args.qkv_format,
-                            rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
-                        ))
+                        sliced_len = len(
+                            slice_log_prob_with_cp(
+                                torch.zeros(response_length),
+                                total_length,
+                                response_length,
+                                self.args.qkv_format,
+                                rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
+                            )
+                        )
                         domain_processed.append(
-                            torch.full((sliced_len,), float('-inf'),
-                                       device=torch.cuda.current_device(),
-                                       dtype=torch.float32)
+                            torch.full(
+                                (sliced_len,), float("-inf"), device=torch.cuda.current_device(), dtype=torch.float32
+                            )
                         )
                     else:
                         domain_processed.append(
@@ -565,7 +569,12 @@ class MegatronTrainRayActor(TrainRayActor):
                 # Only applies when mopd_teacher_mode == "megatron". In SGLang mode,
                 # teacher data is collected during rollout and arrives in rollout_data.
                 mopd_teacher_mode = getattr(self.args, "mopd_teacher_mode", "megatron")
-                if getattr(self.args, "use_mopd", False) and mopd_teacher_mode == "megatron" and hasattr(self, "_mopd_teacher_domains") and self._mopd_teacher_domains:
+                if (
+                    getattr(self.args, "use_mopd", False)
+                    and mopd_teacher_mode == "megatron"
+                    and hasattr(self, "_mopd_teacher_domains")
+                    and self._mopd_teacher_domains
+                ):
                     mopd_teacher_log_probs = {}
                     mopd_distill_type = getattr(self.args, "mopd_distill_type", "token_level")
                     use_full_vocab = mopd_distill_type == "full_vocab"
@@ -676,7 +685,7 @@ class MegatronTrainRayActor(TrainRayActor):
                                 topk_logits_list = []
                                 topk_indices_list = []
                                 for i, (logits_per_sample, indices_per_sample) in enumerate(
-                                    zip(sglang_topk_logits[domain], sglang_topk_indices[domain])
+                                    zip(sglang_topk_logits[domain], sglang_topk_indices[domain], strict=False)
                                 ):
                                     if logits_per_sample is None or indices_per_sample is None:
                                         # Fallback: create zero-contribution tensors so all DP
@@ -685,14 +694,19 @@ class MegatronTrainRayActor(TrainRayActor):
                                         # Use -inf logits → zero KL divergence contribution.
                                         seq_len = rollout_data["response_lengths"][i]
                                         topk_logits_list.append(
-                                            torch.full((seq_len, topk_k), float('-inf'),
-                                                       device=torch.cuda.current_device(),
-                                                       dtype=torch.float32)
+                                            torch.full(
+                                                (seq_len, topk_k),
+                                                float("-inf"),
+                                                device=torch.cuda.current_device(),
+                                                dtype=torch.float32,
+                                            )
                                         )
                                         topk_indices_list.append(
-                                            torch.zeros((seq_len, topk_k),
-                                                        device=torch.cuda.current_device(),
-                                                        dtype=torch.int64)
+                                            torch.zeros(
+                                                (seq_len, topk_k),
+                                                device=torch.cuda.current_device(),
+                                                dtype=torch.int64,
+                                            )
                                         )
                                     else:
                                         # SGLang returns GLOBAL token IDs, but the Megatron loss
@@ -738,7 +752,9 @@ class MegatronTrainRayActor(TrainRayActor):
 
                                         seq_len = global_indices.size(0)
                                         # Mask for which entries are in this shard
-                                        in_shard = (global_indices >= vocab_offset) & (global_indices < vocab_offset + vocab_local_size)
+                                        in_shard = (global_indices >= vocab_offset) & (
+                                            global_indices < vocab_offset + vocab_local_size
+                                        )
                                         # Convert to local indices
                                         local_indices = global_indices - vocab_offset
                                         # Clamp out-of-range indices to 0 (will be overridden by -inf logits)
@@ -747,12 +763,13 @@ class MegatronTrainRayActor(TrainRayActor):
                                         # Build per-shard top-k: assign in-shard entries, pad rest with -inf
                                         # For each position, we need exactly k entries
                                         local_topk_logits = torch.full(
-                                            (seq_len, topk_k), float('-inf'),
-                                            device=torch.cuda.current_device(), dtype=torch.float32
+                                            (seq_len, topk_k),
+                                            float("-inf"),
+                                            device=torch.cuda.current_device(),
+                                            dtype=torch.float32,
                                         )
                                         local_topk_indices = torch.zeros(
-                                            (seq_len, topk_k),
-                                            device=torch.cuda.current_device(), dtype=torch.int64
+                                            (seq_len, topk_k), device=torch.cuda.current_device(), dtype=torch.int64
                                         )
 
                                         # Scatter: for each position, place the in-shard entries into
@@ -974,9 +991,13 @@ class MegatronTrainRayActor(TrainRayActor):
             self.args.ckpt_step = self.args.opd_teacher_ckpt_step
         elif model_tag.startswith("mopd_teacher_"):
             # MOPD teacher checkpoint step: look up from mopd_teacher_ckpt_steps by domain
-            domain = model_tag[len("mopd_teacher_"):]
+            domain = model_tag[len("mopd_teacher_") :]
             if getattr(self.args, "mopd_teacher_ckpt_steps", None) is not None:
-                mopd_teachers = json.loads(self.args.mopd_teachers) if isinstance(self.args.mopd_teachers, str) else self.args.mopd_teachers
+                mopd_teachers = (
+                    json.loads(self.args.mopd_teachers)
+                    if isinstance(self.args.mopd_teachers, str)
+                    else self.args.mopd_teachers
+                )
                 for i, t in enumerate(mopd_teachers):
                     if t["domain"] == domain and i < len(self.args.mopd_teacher_ckpt_steps):
                         old_ckpt_step = self.args.ckpt_step

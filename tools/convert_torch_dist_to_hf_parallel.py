@@ -382,6 +382,7 @@ def _merge_missing_keys_from_origin_hf(origin_hf_dir, output_dir, converted_weig
             print(f"Warning: {src_path} not found. Skipping keys: {keys}")
             continue
         from safetensors import safe_open
+
         with safe_open(src_path, framework="pt", device="cpu") as f:
             for key in keys:
                 missing_tensors[key] = f.get_tensor(key)
@@ -389,9 +390,7 @@ def _merge_missing_keys_from_origin_hf(origin_hf_dir, output_dir, converted_weig
     # Now we need to insert these tensors into the existing safetensors files.
     # Strategy: find the last safetensors file, add the missing tensors there,
     # or create a new file if it would exceed chunk_size.
-    total_files = max(
-        int(v.split("-")[-2]) for v in converted_weight_map.values()
-    )
+    total_files = max(int(v.split("-")[-2]) for v in converted_weight_map.values())
     # Re-number files to include the missing keys in a new shard
     # First, collect existing tensors from the last file and append missing ones
     last_file_pattern = f"model-{total_files:05d}-of-{total_files:05d}.safetensors"
@@ -686,5 +685,7 @@ if __name__ == "__main__":
     # These keys exist in the original HF checkpoint but are not present in the Megatron checkpoint,
     # because Megatron only trains the language model part.
     if args.origin_hf_dir:
-        _merge_missing_keys_from_origin_hf(args.origin_hf_dir, args.output_dir, final_weight_map_fixed, args.chunk_size)
+        _merge_missing_keys_from_origin_hf(
+            args.origin_hf_dir, args.output_dir, final_weight_map_fixed, args.chunk_size
+        )
         copy_assets(args.origin_hf_dir, args.output_dir)

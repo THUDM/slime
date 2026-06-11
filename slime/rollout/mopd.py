@@ -206,9 +206,13 @@ async def _fetch_teacher_logprobs(
                     )
 
                 return result
-        except (aiohttp.ClientPayloadError, aiohttp.ClientConnectionError,
-                aiohttp.ServerDisconnectedError, asyncio.TimeoutError,
-                aiohttp.ClientResponseError) as exc:
+        except (
+            aiohttp.ClientPayloadError,
+            aiohttp.ClientConnectionError,
+            aiohttp.ServerDisconnectedError,
+            asyncio.TimeoutError,
+            aiohttp.ClientResponseError,
+        ) as exc:
             last_exc = exc
             if attempt < max_retries - 1:
                 # 5xx server errors are retryable; ClientPayloadError (e.g.
@@ -344,19 +348,14 @@ async def _reward_func_single(args, sample, **kwargs):
         for domain, rm_url in url_map.items():
             domains.append(domain)
             tasks.append(
-                _fetch_teacher_logprobs(session, rm_url, payload,
-                                        max_retries=max_retries,
-                                        retry_delay=retry_delay)
+                _fetch_teacher_logprobs(session, rm_url, payload, max_retries=max_retries, retry_delay=retry_delay)
             )
 
         responses = await asyncio.gather(*tasks, return_exceptions=True)
 
-    for domain, resp in zip(domains, responses):
+    for domain, resp in zip(domains, responses, strict=False):
         if isinstance(resp, Exception):
-            logger.warning(
-                f"MOPD teacher '{domain}' failed after retries: {resp}. "
-                f"Skipping this teacher."
-            )
+            logger.warning(f"MOPD teacher '{domain}' failed after retries: {resp}. " f"Skipping this teacher.")
             continue
         results[domain] = resp
 
@@ -460,8 +459,7 @@ def _extract_teacher_data_from_responses(args, samples: list[Sample]):
                     )
                 else:
                     logger.info(
-                        f"MOPD: Received teacher logprobs for domain '{domain}': "
-                        f"len={log_probs.size(0)}, all -inf"
+                        f"MOPD: Received teacher logprobs for domain '{domain}': " f"len={log_probs.size(0)}, all -inf"
                     )
 
                 # --- top_k: extract top-k log-probs and indices per position ---
@@ -489,7 +487,9 @@ def _extract_teacher_data_from_responses(args, samples: list[Sample]):
                         )
                         # Pad with None entries so the loop below generates
                         # [-inf, ..., -inf] / [0, ..., 0] for missing positions
-                        top_logprobs_response = top_logprobs_response + [None] * (response_length - len(top_logprobs_response))
+                        top_logprobs_response = top_logprobs_response + [None] * (
+                            response_length - len(top_logprobs_response)
+                        )
                     if len(top_logprobs_response) > response_length:
                         top_logprobs_response = top_logprobs_response[-response_length:]
 
@@ -503,7 +503,7 @@ def _extract_teacher_data_from_responses(args, samples: list[Sample]):
                     topk_k = getattr(args, "mopd_topk_k", 1024)
                     NEG_INF = float("-inf")
 
-                    topk_logits_list = []   # [seq_len][k] float
+                    topk_logits_list = []  # [seq_len][k] float
                     topk_indices_list = []  # [seq_len][k] int
                     short_positions = 0  # Count positions with fewer than topk_k entries
 
@@ -551,16 +551,18 @@ def _extract_teacher_data_from_responses(args, samples: list[Sample]):
                 # Provide an actionable message for the most common cause:
                 # SGLang server not returning logprobs.
                 if isinstance(e, KeyError) and str(e) in ("'input_token_logprobs'", "input_token_logprobs"):
-                    meta_keys = list(teacher_response.get("meta_info", {}).keys()) if isinstance(teacher_response.get("meta_info"), dict) else "N/A"
+                    meta_keys = (
+                        list(teacher_response.get("meta_info", {}).keys())
+                        if isinstance(teacher_response.get("meta_info"), dict)
+                        else "N/A"
+                    )
                     logger.error(
                         f"MOPD: SGLang response for domain '{domain}' missing "
                         f"'input_token_logprobs'. meta_info keys: {meta_keys}. "
                         f"Check teacher URL configuration."
                     )
                 else:
-                    logger.warning(
-                        f"MOPD: Failed to extract teacher data for domain '{domain}': {e}"
-                    )
+                    logger.warning(f"MOPD: Failed to extract teacher data for domain '{domain}': {e}")
 
     # --- Fill in missing domains with zero/fallback data ---
     # When a teacher request fails (e.g., ContentLengthError, connection reset),
@@ -598,7 +600,7 @@ def _extract_teacher_data_from_responses(args, samples: list[Sample]):
                     f"Filling with -inf log-probs (zero KL contribution)."
                 )
                 sample.mopd_teacher_log_probs[domain] = torch.full(
-                    (response_length,), float('-inf'), dtype=torch.float32
+                    (response_length,), float("-inf"), dtype=torch.float32
                 )
             if mopd_distill_type == "top_k":
                 if sample.mopd_teacher_topk_logits is None:
@@ -608,12 +610,8 @@ def _extract_teacher_data_from_responses(args, samples: list[Sample]):
                 if domain not in sample.mopd_teacher_topk_logits:
                     topk_k = getattr(args, "mopd_topk_k", 1024)
                     NEG_INF = float("-inf")
-                    sample.mopd_teacher_topk_logits[domain] = [
-                        [NEG_INF] * topk_k for _ in range(response_length)
-                    ]
-                    sample.mopd_teacher_topk_indices[domain] = [
-                        [0] * topk_k for _ in range(response_length)
-                    ]
+                    sample.mopd_teacher_topk_logits[domain] = [[NEG_INF] * topk_k for _ in range(response_length)]
+                    sample.mopd_teacher_topk_indices[domain] = [[0] * topk_k for _ in range(response_length)]
 
 
 def post_process_rewards(args, samples: list[Sample], **kwargs):
@@ -696,7 +694,7 @@ async def combined_reward_func(args, sample_or_samples, **kwargs):
             args.custom_rm_path = original_custom_rm_path
 
         # Store MOPD teacher responses in sample metadata
-        for sample, mopd_result in zip(sample_or_samples, mopd_results):
+        for sample, mopd_result in zip(sample_or_samples, mopd_results, strict=False):
             if isinstance(sample.metadata, dict):
                 sample.metadata[_MOPD_TEACHER_RESPONSES_KEY] = mopd_result
             else:
@@ -752,17 +750,14 @@ def combined_post_process_rewards(args, samples: list[Sample], **kwargs):
     _extract_teacher_data_from_responses(args, samples)
 
     # Clean up temporary metadata and restore task rewards
-    for sample, original_reward in zip(samples, original_rewards):
+    for sample, original_reward in zip(samples, original_rewards, strict=False):
         if isinstance(sample.metadata, dict):
             sample.metadata.pop(_MOPD_TEACHER_RESPONSES_KEY, None)
         sample.reward = original_reward
 
     # Step 2: Apply standard reward post-processing
     raw_rewards = [sample.get_reward_value(args) for sample in samples]
-    if (
-        args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]
-        and args.rewards_normalization
-    ):
+    if args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"] and args.rewards_normalization:
         rewards = torch.tensor(raw_rewards, dtype=torch.float)
         if rewards.shape[-1] == args.n_samples_per_prompt * args.rollout_batch_size:
             rewards = rewards.reshape(-1, args.n_samples_per_prompt)

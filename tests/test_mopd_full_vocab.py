@@ -89,9 +89,7 @@ class TestVocabParallelReverseKL:
         teacher_log_probs = torch.log_softmax(teacher_logits, dim=-1)
         expected_kl = (student_probs * (student_log_probs - teacher_log_probs)).sum(dim=-1)
 
-        assert torch.allclose(kl, expected_kl, atol=1e-5), (
-            f"KL mismatch: got {kl}, expected {expected_kl}"
-        )
+        assert torch.allclose(kl, expected_kl, atol=1e-5), f"KL mismatch: got {kl}, expected {expected_kl}"
 
     def test_kl_non_negative(self):
         """KL divergence should always be non-negative (Gibbs' inequality)."""
@@ -118,14 +116,14 @@ class TestVocabParallelReverseKL:
 
         # Student should have gradients
         assert student_logits.grad is not None, "student_logits should have gradients"
-        assert not torch.allclose(student_logits.grad, torch.zeros_like(student_logits.grad)), (
-            "student_logits gradients should be non-zero"
-        )
+        assert not torch.allclose(
+            student_logits.grad, torch.zeros_like(student_logits.grad)
+        ), "student_logits gradients should be non-zero"
 
         # Teacher should NOT have gradients (detached inside function)
-        assert teacher_logits.grad is None or torch.allclose(teacher_logits.grad, torch.zeros_like(teacher_logits.grad)), (
-            "teacher_logits should not have gradients (should be detached)"
-        )
+        assert teacher_logits.grad is None or torch.allclose(
+            teacher_logits.grad, torch.zeros_like(teacher_logits.grad)
+        ), "teacher_logits should not have gradients (should be detached)"
 
     def test_kl_gradient_correctness(self):
         """Verify the gradient of KL matches autograd from manual computation."""
@@ -151,9 +149,9 @@ class TestVocabParallelReverseKL:
         loss_2.backward()
         grad_manual = student_logits_2.grad.clone()
 
-        assert torch.allclose(grad_ours, grad_manual, atol=1e-4), (
-            f"Gradient mismatch: max diff = {(grad_ours - grad_manual).abs().max()}"
-        )
+        assert torch.allclose(
+            grad_ours, grad_manual, atol=1e-4
+        ), f"Gradient mismatch: max diff = {(grad_ours - grad_manual).abs().max()}"
 
     def test_kl_temperature_sensitivity(self):
         """KL should change when student distribution changes."""
@@ -195,6 +193,7 @@ class TestApplyMopdFullVocabToLoss:
 
     def _get_function(self):
         from slime.backends.megatron_utils.loss import apply_mopd_full_vocab_to_loss
+
         return apply_mopd_full_vocab_to_loss
 
     def _sum_of_sample_mean(self, tensor):
@@ -227,8 +226,12 @@ class TestApplyMopdFullVocabToLoss:
         loss_masks = [torch.ones(3), torch.ones(4)]
 
         kl_loss, metrics = apply_fn(
-            args, batch, student_logits, teacher_logits_per_domain,
-            loss_masks, self._sum_of_sample_mean,
+            args,
+            batch,
+            student_logits,
+            teacher_logits_per_domain,
+            loss_masks,
+            self._sum_of_sample_mean,
             current_log_probs=current_log_probs,
         )
 
@@ -260,8 +263,12 @@ class TestApplyMopdFullVocabToLoss:
         loss_masks = [torch.ones(3), torch.ones(4)]
 
         kl_loss, metrics = apply_fn(
-            args, batch, [student_logits_1, student_logits_2],
-            teacher_logits_per_domain, loss_masks, self._sum_of_sample_mean,
+            args,
+            batch,
+            [student_logits_1, student_logits_2],
+            teacher_logits_per_domain,
+            loss_masks,
+            self._sum_of_sample_mean,
             current_log_probs=current_log_probs,
         )
 
@@ -271,7 +278,8 @@ class TestApplyMopdFullVocabToLoss:
         """Test that KL is averaged across multiple teachers."""
         apply_fn = self._get_function()
         args = make_mopd_full_vocab_args(
-            mopd_eps_low=0.0, mopd_eps_high=1000.0,
+            mopd_eps_low=0.0,
+            mopd_eps_high=1000.0,
             _mopd_teachers_parsed=[
                 {"name": "math_teacher", "domain": "math"},
                 {"name": "code_teacher", "domain": "code"},
@@ -296,13 +304,18 @@ class TestApplyMopdFullVocabToLoss:
         loss_masks = [torch.ones(3)]
 
         from slime.utils.ppo_utils import vocab_parallel_reverse_kl
+
         kl_math = vocab_parallel_reverse_kl(student_logits[0], teacher_math[0], None)
         kl_code = vocab_parallel_reverse_kl(student_logits[0], teacher_code[0], None)
-        expected_avg_kl = (kl_math.sum() / 3 + kl_code.sum() / 4) / 2  # Not exact, just check shape
+        expected_avg_kl = (kl_math.sum() / 3 + kl_code.sum() / 4) / 2  # Not exact, just check shape  # noqa: F841
 
         kl_loss, metrics = apply_fn(
-            args, batch, student_logits, teacher_logits_per_domain,
-            loss_masks, self._sum_of_sample_mean,
+            args,
+            batch,
+            student_logits,
+            teacher_logits_per_domain,
+            loss_masks,
+            self._sum_of_sample_mean,
             current_log_probs=current_log_probs,
         )
 
@@ -333,17 +346,21 @@ class TestApplyMopdFullVocabToLoss:
         loss_masks = [torch.ones(3)]
 
         kl_loss, metrics = apply_fn(
-            args, batch, student_logits, teacher_logits_per_domain,
-            loss_masks, self._sum_of_sample_mean,
+            args,
+            batch,
+            student_logits,
+            teacher_logits_per_domain,
+            loss_masks,
+            self._sum_of_sample_mean,
             current_log_probs=current_log_probs,
         )
 
         # IS weight should be clipped — only token 2 (weight=1.0) survives
         # Nonzero fraction should be 1/3
         is_nonzero_frac = metrics["mopd_is_nonzero_frac"].item()
-        assert abs(is_nonzero_frac - 1.0 / 3.0) < 0.05, (
-            f"Expected ~1/3 nonzero IS weight fraction, got {is_nonzero_frac}"
-        )
+        assert (
+            abs(is_nonzero_frac - 1.0 / 3.0) < 0.05
+        ), f"Expected ~1/3 nonzero IS weight fraction, got {is_nonzero_frac}"
 
     def test_none_teacher_for_sample(self):
         """Test that None entries in teacher logits are skipped."""
@@ -351,7 +368,8 @@ class TestApplyMopdFullVocabToLoss:
 
         # Two samples, two teachers; sample 0 has only math, sample 1 has both
         args = make_mopd_full_vocab_args(
-            mopd_eps_low=0.0, mopd_eps_high=1000.0,
+            mopd_eps_low=0.0,
+            mopd_eps_high=1000.0,
             _mopd_teachers_parsed=[
                 {"name": "math_teacher", "domain": "math"},
                 {"name": "code_teacher", "domain": "code"},
@@ -374,8 +392,12 @@ class TestApplyMopdFullVocabToLoss:
         loss_masks = [torch.ones(3), torch.ones(4)]
 
         kl_loss, metrics = apply_fn(
-            args, batch, [student_0, student_1],
-            teacher_logits_per_domain, loss_masks, self._sum_of_sample_mean,
+            args,
+            batch,
+            [student_0, student_1],
+            teacher_logits_per_domain,
+            loss_masks,
+            self._sum_of_sample_mean,
             current_log_probs=current_log_probs,
         )
 
@@ -401,16 +423,24 @@ class TestApplyMopdFullVocabToLoss:
         current_log_probs = [torch.zeros(5)]
 
         kl_loss_masked, _ = apply_fn(
-            args, batch, student_logits, teacher_logits_per_domain,
-            loss_masks, self._sum_of_sample_mean,
+            args,
+            batch,
+            student_logits,
+            teacher_logits_per_domain,
+            loss_masks,
+            self._sum_of_sample_mean,
             current_log_probs=current_log_probs,
         )
 
         # With all-ones mask for comparison
         loss_masks_all = [torch.ones(5)]
         kl_loss_all, _ = apply_fn(
-            args, batch, student_logits, teacher_logits_per_domain,
-            loss_masks_all, self._sum_of_sample_mean,
+            args,
+            batch,
+            student_logits,
+            teacher_logits_per_domain,
+            loss_masks_all,
+            self._sum_of_sample_mean,
             current_log_probs=current_log_probs,
         )
 
@@ -442,16 +472,20 @@ class TestApplyMopdFullVocabToLoss:
         loss_masks = [torch.ones(3)]
 
         kl_loss, metrics = apply_fn(
-            args, batch, student_logits, teacher_logits_per_domain,
-            loss_masks, self._sum_of_sample_mean,
+            args,
+            batch,
+            student_logits,
+            teacher_logits_per_domain,
+            loss_masks,
+            self._sum_of_sample_mean,
             current_log_probs=current_log_probs,
         )
 
         # Only token 1 should survive IS weight clipping → 1/3 nonzero
         is_nonzero_frac = metrics["mopd_is_nonzero_frac"].item()
-        assert abs(is_nonzero_frac - 1.0 / 3.0) < 0.05, (
-            f"Expected ~1/3 nonzero IS weight fraction with current_log_probs, got {is_nonzero_frac}"
-        )
+        assert (
+            abs(is_nonzero_frac - 1.0 / 3.0) < 0.05
+        ), f"Expected ~1/3 nonzero IS weight fraction with current_log_probs, got {is_nonzero_frac}"
 
     def test_current_log_probs_length_mismatch_raises(self):
         """Test that mismatched current_log_probs length raises ValueError."""
@@ -469,8 +503,12 @@ class TestApplyMopdFullVocabToLoss:
 
         with pytest.raises(ValueError, match="student_log_probs length"):
             apply_fn(
-                args, batch, student_logits, teacher_logits_per_domain,
-                loss_masks, self._sum_of_sample_mean,
+                args,
+                batch,
+                student_logits,
+                teacher_logits_per_domain,
+                loss_masks,
+                self._sum_of_sample_mean,
                 current_log_probs=bad_current_log_probs,
             )
 
@@ -630,9 +668,9 @@ class TestGetLogitsForDistill:
         # Compare with manual extraction of response logits from the input
         # Response logits: logits[0, T-R-1:T-1, :] (shifted by 1 for next-token prediction)
         expected_logits = logits[0, T - R - 1 : T - 1, :]  # [R, V]
-        assert torch.allclose(logits_out[0], expected_logits, atol=1e-5), (
-            "get_logits_for_distill should return raw logits without temperature scaling"
-        )
+        assert torch.allclose(
+            logits_out[0], expected_logits, atol=1e-5
+        ), "get_logits_for_distill should return raw logits without temperature scaling"
 
 
 # ---------------------------------------------------------------------------
@@ -654,13 +692,11 @@ class TestVocabParallelTopkReverseKL:
         teacher_logits = torch.randn(R, V)
 
         # Full-vocab KL
-        full_kl = vocab_parallel_reverse_kl(student_logits, teacher_logits, process_group=None)
+        full_kl = vocab_parallel_reverse_kl(student_logits, teacher_logits, process_group=None)  # noqa: F841
 
         # Top-k KL
         topk_vals, topk_idx = teacher_logits.topk(k, dim=-1)
-        topk_kl = vocab_parallel_topk_reverse_kl(
-            student_logits, topk_vals, topk_idx, V, process_group=None
-        )
+        topk_kl = vocab_parallel_topk_reverse_kl(student_logits, topk_vals, topk_idx, V, process_group=None)
 
         # With k close to V, the top-k should be close to full-vocab KL
         # Allow some tolerance due to tail approximation
@@ -697,8 +733,9 @@ class TestVocabParallelTopkReverseKL:
         loss.backward()
 
         assert student_logits.grad is not None, "student_logits should have gradients"
-        assert not torch.allclose(student_logits.grad, torch.zeros_like(student_logits.grad)), \
-            "student_logits gradients should be non-zero"
+        assert not torch.allclose(
+            student_logits.grad, torch.zeros_like(student_logits.grad)
+        ), "student_logits gradients should be non-zero"
 
     def test_topk_kl_increases_with_smaller_k(self):
         """Top-k KL should generally increase as k decreases (less accurate approximation)."""
@@ -710,13 +747,15 @@ class TestVocabParallelTopkReverseKL:
         student_logits = torch.randn(R, V)
         teacher_logits = torch.randn(R, V)
 
-        full_kl = vocab_parallel_reverse_kl(student_logits, teacher_logits, process_group=None).sum().item()
+        full_kl = (  # noqa: F841
+            vocab_parallel_reverse_kl(student_logits, teacher_logits, process_group=None).sum().item()
+        )
 
         k_large = 40
         topk_vals_l, topk_idx_l = teacher_logits.topk(k_large, dim=-1)
-        kl_large = vocab_parallel_topk_reverse_kl(
-            student_logits, topk_vals_l, topk_idx_l, V, process_group=None
-        ).sum().item()
+        kl_large = (
+            vocab_parallel_topk_reverse_kl(student_logits, topk_vals_l, topk_idx_l, V, process_group=None).sum().item()
+        )
 
         # With k=V (full vocab), top-k should be closer to full KL
         assert torch.isfinite(torch.tensor(kl_large)), "Top-k KL should be finite"
@@ -734,6 +773,7 @@ class TestApplyMopdTopkToLoss:
 
     def _get_function(self):
         from slime.backends.megatron_utils.loss import apply_mopd_topk_to_loss
+
         return apply_mopd_topk_to_loss
 
     def _sum_of_sample_mean(self, tensor):
@@ -785,8 +825,13 @@ class TestApplyMopdTopkToLoss:
         loss_masks = [torch.ones(R1), torch.ones(R2)]
 
         kl_loss, metrics = apply_fn(
-            args, batch, student_logits, teacher_topk_logits,
-            teacher_topk_indices, loss_masks, self._sum_of_sample_mean,
+            args,
+            batch,
+            student_logits,
+            teacher_topk_logits,
+            teacher_topk_indices,
+            loss_masks,
+            self._sum_of_sample_mean,
             current_log_probs=current_log_probs,
         )
 
@@ -816,8 +861,13 @@ class TestApplyMopdTopkToLoss:
         loss_masks = [torch.ones(5)]
 
         kl_loss, metrics = apply_fn(
-            args, batch, student_logits, teacher_topk_logits,
-            teacher_topk_indices, loss_masks, self._sum_of_sample_mean,
+            args,
+            batch,
+            student_logits,
+            teacher_topk_logits,
+            teacher_topk_indices,
+            loss_masks,
+            self._sum_of_sample_mean,
             current_log_probs=current_log_probs,
         )
 
@@ -844,15 +894,20 @@ class TestApplyMopdTopkToLoss:
         loss_masks = [torch.ones(3)]
 
         kl_loss, metrics = apply_fn(
-            args, batch, student_logits, teacher_topk_logits,
-            teacher_topk_indices, loss_masks, self._sum_of_sample_mean,
+            args,
+            batch,
+            student_logits,
+            teacher_topk_logits,
+            teacher_topk_indices,
+            loss_masks,
+            self._sum_of_sample_mean,
             current_log_probs=current_log_probs,
         )
 
         is_nonzero_frac = metrics["mopd_is_nonzero_frac"].item()
-        assert abs(is_nonzero_frac - 1.0 / 3.0) < 0.05, (
-            f"Expected ~1/3 nonzero IS weight fraction, got {is_nonzero_frac}"
-        )
+        assert (
+            abs(is_nonzero_frac - 1.0 / 3.0) < 0.05
+        ), f"Expected ~1/3 nonzero IS weight fraction, got {is_nonzero_frac}"
 
     def test_topk_none_teacher_for_sample(self):
         """Test that None entries in teacher data are skipped."""
@@ -891,9 +946,13 @@ class TestApplyMopdTopkToLoss:
         loss_masks = [torch.ones(3), torch.ones(4)]
 
         kl_loss, metrics = apply_fn(
-            args, batch, [student_0, student_1],
-            teacher_topk_logits, teacher_topk_indices,
-            loss_masks, self._sum_of_sample_mean,
+            args,
+            batch,
+            [student_0, student_1],
+            teacher_topk_logits,
+            teacher_topk_indices,
+            loss_masks,
+            self._sum_of_sample_mean,
             current_log_probs=current_log_probs,
         )
 
@@ -912,7 +971,7 @@ class TestApplyMopdTopkToLoss:
         teacher_logits_raw = [torch.randn(5, V)]
 
         # Full-vocab KL as ground truth
-        full_kl = vocab_parallel_reverse_kl(student_logits[0], teacher_logits_raw[0], None).sum().item()
+        full_kl = vocab_parallel_reverse_kl(student_logits[0], teacher_logits_raw[0], None).sum().item()  # noqa: F841
 
         # Top-k with k=5
         k_small = 5
@@ -923,9 +982,14 @@ class TestApplyMopdTopkToLoss:
         loss_masks = [torch.ones(5)]
 
         kl_small, _ = apply_fn(
-            args_small, batch, student_logits,
-            {"math": [topk_vals_s]}, {"math": [topk_idx_s]},
-            loss_masks, self._sum_of_sample_mean, current_log_probs=current_log_probs,
+            args_small,
+            batch,
+            student_logits,
+            {"math": [topk_vals_s]},
+            {"math": [topk_idx_s]},
+            loss_masks,
+            self._sum_of_sample_mean,
+            current_log_probs=current_log_probs,
         )
 
         # Top-k with k=18 (close to V)
@@ -934,9 +998,14 @@ class TestApplyMopdTopkToLoss:
         args_large = self._make_args(mopd_topk_k=k_large)
 
         kl_large, _ = apply_fn(
-            args_large, batch, student_logits,
-            {"math": [topk_vals_l]}, {"math": [topk_idx_l]},
-            loss_masks, self._sum_of_sample_mean, current_log_probs=current_log_probs,
+            args_large,
+            batch,
+            student_logits,
+            {"math": [topk_vals_l]},
+            {"math": [topk_idx_l]},
+            loss_masks,
+            self._sum_of_sample_mean,
+            current_log_probs=current_log_probs,
         )
 
         # Larger k should generally be closer to full KL (both are approximations)

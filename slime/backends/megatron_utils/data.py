@@ -317,7 +317,9 @@ def log_rollout_data(
             if key.startswith("mopd_teacher_") and key.endswith("_fv_logits"):
                 continue
             # Skip per-domain top-k teacher logits/indices (too large for averaging)
-            if key.startswith("mopd_teacher_") and (key.endswith("_topk_logits") or key.endswith("_topk_indices") or key.endswith("_topk_log_sum_exp")):
+            if key.startswith("mopd_teacher_") and (
+                key.endswith("_topk_logits") or key.endswith("_topk_indices") or key.endswith("_topk_log_sum_exp")
+            ):
                 continue
             # Emit (sum, count) so gather_log_data can do a weighted average across
             # DP ranks. This stops the legacy "every rank has the same N samples"

@@ -27,6 +27,7 @@ from types import SimpleNamespace
 # 工具函数
 # ===========================================================================
 
+
 def _softmax(logits):
     """Numerically stable softmax."""
     max_val = max(logits)
@@ -42,12 +43,13 @@ def _log_softmax(logits):
     return [x - log_sum_exp for x in logits]
 
 
-NEG_INF = float('-inf')
+NEG_INF = float("-inf")
 
 
 # ===========================================================================
 # 1. 模拟 SGLang 响应
 # ===========================================================================
+
 
 def make_mock_sglang_response(vocab_size, seq_len, topk_k, input_ids):
     """构造模拟的 SGLang /generate 响应。
@@ -57,6 +59,7 @@ def make_mock_sglang_response(vocab_size, seq_len, topk_k, input_ids):
     - meta_info["input_top_logprobs"]: [[(log_prob, token_id, None), ...], ...]
     """
     import random
+
     random.seed(42)
 
     input_token_logprobs = []
@@ -92,6 +95,7 @@ def make_mock_sglang_response(vocab_size, seq_len, topk_k, input_ids):
 # 测试 1: SGLang 响应格式与字段名
 # ===========================================================================
 
+
 def test_sglang_response_format():
     """验证 SGLang 响应中的字段名与 mopd.py 解析代码一致。"""
     # SGLang 源码 tokenizer_manager.py:1757 中的确认字段名
@@ -125,8 +129,10 @@ def test_sglang_response_format():
 # 测试 2: _build_payload 构造正确的 SGLang 请求
 # ===========================================================================
 
+
 def test_build_payload():
     """验证 _build_payload 根据蒸馏类型构造正确的 payload。"""
+
     # 直接模拟 _build_payload 的逻辑，不导入 slime
     def build_payload(sample_tokens, mopd_distill_type, mopd_topk_k=1024):
         payload = {
@@ -161,7 +167,7 @@ def test_build_payload():
     # full_vocab 模式应报错
     try:
         build_payload([1, 2, 3], "full_vocab")
-        assert False, "full_vocab 应抛出 ValueError"
+        raise AssertionError("full_vocab 应抛出 ValueError")
     except ValueError as e:
         assert "full_vocab" in str(e)
         print("  full_vocab raises ValueError ✓")
@@ -172,6 +178,7 @@ def test_build_payload():
 # ===========================================================================
 # 测试 3: post_process_rewards 提取逻辑
 # ===========================================================================
+
 
 def test_post_process_rewards_extraction():
     """验证从 SGLang 响应中提取 top-k 数据的逻辑。"""
@@ -224,7 +231,7 @@ def test_post_process_rewards_extraction():
     print(f"  top_k: 提取 {response_length} x {topk_k} 数据 ✓")
 
     # 验证：SGLang 返回的 k 等于 topk_k 时，不应有 -inf padding
-    no_padding_count = sum(1 for l in topk_logits_list[0] if l != NEG_INF)
+    no_padding_count = sum(1 for v in topk_logits_list[0] if v != NEG_INF)
     assert no_padding_count == topk_k, f"应无 padding, 实际有效数={no_padding_count}"
     print(f"  top_k: SGLang 返回 {topk_k} 个条目，无 padding ✓")
 
@@ -240,6 +247,7 @@ def test_post_process_rewards_extraction():
 # ===========================================================================
 # 测试 4: TP 分片 — 全局 token ID → 局部索引 + -inf padding
 # ===========================================================================
+
 
 def test_tp_sharding():
     """模拟 actor.py 中 SGLang top-k 数据的 TP 分片逻辑。
@@ -278,14 +286,8 @@ def test_tp_sharding():
 
         for pos in range(seq_len):
             # 模拟分片逻辑
-            in_shard = [
-                (vocab_offset <= idx < vocab_offset + vocab_local_size)
-                for idx in all_topk_indices[pos]
-            ]
-            local_indices = [
-                max(0, min(idx - vocab_offset, vocab_local_size - 1))
-                for idx in all_topk_indices[pos]
-            ]
+            in_shard = [(vocab_offset <= idx < vocab_offset + vocab_local_size) for idx in all_topk_indices[pos]]
+            local_indices = [max(0, min(idx - vocab_offset, vocab_local_size - 1)) for idx in all_topk_indices[pos]]
 
             # 构建 shard 内 top-k
             local_topk_logits = [NEG_INF] * topk_k
@@ -298,23 +300,20 @@ def test_tp_sharding():
                     slot += 1
 
             # 验证 padding 用的是 -inf
-            padding_count = topk_k - slot
             for i in range(slot, topk_k):
                 assert local_topk_logits[i] == NEG_INF, f"padding 应为 -inf, 实际={local_topk_logits[i]}"
                 assert local_topk_indices[i] == 0, f"padding index 应为 0, 实际={local_topk_indices[i]}"
 
             # 验证 valid_topk_mask 自动检测
-            valid_mask = [l != NEG_INF for l in local_topk_logits]
+            valid_mask = [v != NEG_INF for v in local_topk_logits]
             assert sum(valid_mask) == slot, f"rank={tp_rank} pos={pos}: 有效数={sum(valid_mask)}, 期望={slot}"
 
             # 验证有效条目的局部索引正确
             for i in range(slot):
-                expected_local = all_topk_indices[pos][
-                    [j for j, v in enumerate(in_shard) if v][i]
-                ] - vocab_offset
-                assert local_topk_indices[i] == expected_local, (
-                    f"rank={tp_rank} pos={pos}: 局部索引={local_topk_indices[i]}, 期望={expected_local}"
-                )
+                expected_local = all_topk_indices[pos][[j for j, v in enumerate(in_shard) if v][i]] - vocab_offset
+                assert (
+                    local_topk_indices[i] == expected_local
+                ), f"rank={tp_rank} pos={pos}: 局部索引={local_topk_indices[i]}, 期望={expected_local}"
 
     print(f"  分片验证: tp_size={tp_size}, vocab_local_size={vocab_local_size} ✓")
 
@@ -323,10 +322,7 @@ def test_tp_sharding():
         total_valid = 0
         for tp_rank in range(tp_size):
             vocab_offset = tp_rank * vocab_local_size
-            in_shard = sum(
-                1 for idx in all_topk_indices[pos]
-                if vocab_offset <= idx < vocab_offset + vocab_local_size
-            )
+            in_shard = sum(1 for idx in all_topk_indices[pos] if vocab_offset <= idx < vocab_offset + vocab_local_size)
             total_valid += in_shard
         assert total_valid == topk_k, f"pos={pos}: 总有效数={total_valid}, 期望={topk_k}"
 
@@ -335,8 +331,8 @@ def test_tp_sharding():
     # 验证：0.0 padding 的旧 bug 会导致 valid_mask 误判
     old_padding_logits = [2.0, 1.5, NEG_INF, NEG_INF, NEG_INF, NEG_INF, NEG_INF, NEG_INF, NEG_INF, NEG_INF]
     bad_padding_logits = [2.0, 1.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # 旧 bug
-    correct_mask = [l != NEG_INF for l in old_padding_logits]
-    wrong_mask = [l != NEG_INF for l in bad_padding_logits]  # 全部为 True!
+    correct_mask = [v != NEG_INF for v in old_padding_logits]
+    wrong_mask = [v != NEG_INF for v in bad_padding_logits]  # 全部为 True!
     assert sum(correct_mask) == 2, "-inf padding: 2 个有效条目 ✓"
     assert sum(wrong_mask) == topk_k, f"0.0 padding bug: 所有 {topk_k} 个都被误判为有效 ✗"
     print("  -inf padding vs 0.0 padding 对比: 旧 bug 已确认修复 ✓")
@@ -347,6 +343,7 @@ def test_tp_sharding():
 # ===========================================================================
 # 测试 5: 近似 reverse KL 计算（单进程模拟）
 # ===========================================================================
+
 
 def test_topk_reverse_kl_approximation():
     """模拟 vocab_parallel_topk_reverse_kl 核心计算逻辑。
@@ -361,6 +358,7 @@ def test_topk_reverse_kl_approximation():
     seq_len = 3
 
     import random
+
     random.seed(123)
 
     total_error = 0.0
@@ -377,17 +375,13 @@ def test_topk_reverse_kl_approximation():
         s_log_probs = _log_softmax(s_logits)
 
         # 1. 精确 KL (全词表)
-        exact_kl = sum(
-            s_probs[y] * (s_log_probs[y] - t_log_probs[y])
-            for y in range(vocab_size)
-            if s_probs[y] > 1e-15
-        )
+        exact_kl = sum(s_probs[y] * (s_log_probs[y] - t_log_probs[y]) for y in range(vocab_size) if s_probs[y] > 1e-15)
 
         # 2. teacher top-k
         t_indexed = [(t_logits[i], i) for i in range(vocab_size)]
         t_indexed.sort(key=lambda x: -x[0])
         topk_global_indices = [t_indexed[k][1] for k in range(topk_k)]
-        topk_teacher_logits = [t_logits[idx] for idx in topk_global_indices]
+        topk_teacher_logits = [t_logits[idx] for idx in topk_global_indices]  # noqa: F841
 
         # 3. 在 top-k 位置收集 student 概率
         student_topk_probs = [s_probs[idx] for idx in topk_global_indices]
@@ -401,7 +395,7 @@ def test_topk_reverse_kl_approximation():
         # 5. KL_topk = Σ_{y ∈ topk} π_s(y) [log π_s(y) - log π_t(y)]
         kl_topk = sum(
             sp * (slp - tlp)
-            for sp, slp, tlp in zip(student_topk_probs, student_topk_log_probs, teacher_topk_log_probs)
+            for sp, slp, tlp in zip(student_topk_probs, student_topk_log_probs, teacher_topk_log_probs, strict=False)
         )
 
         # 6. 尾部修正
@@ -421,8 +415,10 @@ def test_topk_reverse_kl_approximation():
         max_error = max(max_error, error)
 
         if pos == 0:
-            print(f"  pos=0: exact_kl={exact_kl:.6f}, approx_kl={approx_kl:.6f}, "
-                  f"error={error:.6f} ({error/max(abs(exact_kl), 1e-10)*100:.1f}%)")
+            print(
+                f"  pos=0: exact_kl={exact_kl:.6f}, approx_kl={approx_kl:.6f}, "
+                f"error={error:.6f} ({error/max(abs(exact_kl), 1e-10)*100:.1f}%)"
+            )
             print(f"    kl_topk={kl_topk:.6f}, kl_tail={kl_tail:.6f}")
             print(f"    student_topk_mass={student_topk_mass:.4f}, student_tail_mass={student_tail_mass:.4f}")
             print(f"    teacher_tail_mass={teacher_tail_mass:.4f}")
@@ -439,6 +435,7 @@ def test_topk_reverse_kl_approximation():
 # ===========================================================================
 # 测试 6: combined_reward_func bypass 逻辑
 # ===========================================================================
+
 
 def test_combined_reward_func_bypass():
     """验证 combined_reward_func 中 custom_rm_path bypass 模式。"""
@@ -459,6 +456,7 @@ def test_combined_reward_func_bypass():
 # ===========================================================================
 # 测试 7: arguments.py 自动配置逻辑
 # ===========================================================================
+
 
 def test_arguments_auto_config():
     """验证 SGLang 模式自动配置逻辑。"""
@@ -497,10 +495,7 @@ def test_arguments_auto_config():
     print("  场景2 (alpha>0): 使用 combined 函数 ✓")
 
     # 场景 3: alpha>0 但没有 rm_type → 应该报错
-    _mopd_uses_combined_rm = (
-        args2.custom_rm_path is not None
-        and "combined_reward_func" in args2.custom_rm_path
-    )
+    _mopd_uses_combined_rm = args2.custom_rm_path is not None and "combined_reward_func" in args2.custom_rm_path
     # 在真实代码中，如果 combined_rm 需要 rm_type 但 rm_type=None，应该报错
     assert _mopd_uses_combined_rm
     # 模拟验证逻辑
@@ -531,6 +526,7 @@ def test_arguments_auto_config():
 # ===========================================================================
 # 测试 8: 端到端数据流模拟
 # ===========================================================================
+
 
 def test_end_to_end_data_flow():
     """模拟完整数据流: SGLang响应 → mopd.py提取 → rollout.py收集 → actor.py TP分片。
@@ -603,14 +599,8 @@ def test_end_to_end_data_flow():
                 global_indices = indices_per_sample[pos]
                 global_logits = logits_per_sample[pos]
 
-                in_shard = [
-                    (vocab_offset <= idx < vocab_offset + vocab_local_size)
-                    for idx in global_indices
-                ]
-                local_indices = [
-                    max(0, min(idx - vocab_offset, vocab_local_size - 1))
-                    for idx in global_indices
-                ]
+                in_shard = [(vocab_offset <= idx < vocab_offset + vocab_local_size) for idx in global_indices]
+                local_indices = [max(0, min(idx - vocab_offset, vocab_local_size - 1)) for idx in global_indices]
 
                 l_logits = [NEG_INF] * topk_k
                 l_indices = [0] * topk_k
@@ -629,9 +619,7 @@ def test_end_to_end_data_flow():
 
         # 验证: 每个 shard 中每个位置都有有效条目
         for pos in range(response_length):
-            valid_count = sum(
-                1 for l in local_topk_logits_all[0][pos] if l != NEG_INF
-            )
+            valid_count = sum(1 for v in local_topk_logits_all[0][pos] if v != NEG_INF)
             assert valid_count > 0, f"rank={tp_rank} pos={pos} 无有效条目"
             # padding 条目应为 -inf
             for k in range(valid_count, topk_k):
@@ -658,6 +646,7 @@ def test_end_to_end_data_flow():
 # 测试 9: 边界情况
 # ===========================================================================
 
+
 def test_edge_cases():
     """测试边界情况。"""
     # Case 1: topk_k 大于 vocab_size
@@ -672,16 +661,16 @@ def test_edge_cases():
     assert padding_needed == topk_k - vocab_size
     # padding 用 -inf 和 index 0
     pad_logits = [NEG_INF] * padding_needed
-    pad_indices = [0] * padding_needed
-    assert all(l == NEG_INF for l in pad_logits)
+    pad_indices = [0] * padding_needed  # noqa: F841
+    assert all(v == NEG_INF for v in pad_logits)
     print(f"  边界1: topk_k > vocab_size, padding={padding_needed} ✓")
 
     # Case 2: 空 top-k 数据 (pos_data is None)
     pos_data = None
     if pos_data is None or len(pos_data) == 0:
         pad_logits = [NEG_INF] * 8
-        pad_indices = [0] * 8
-    assert all(l == NEG_INF for l in pad_logits)
+        pad_indices = [0] * 8  # noqa: F841
+    assert all(v == NEG_INF for v in pad_logits)
     print("  边界2: 空位置数据 → 全部 -inf padding ✓")
 
     # Case 3: response 长度小于 top-k 数据长度
@@ -696,6 +685,7 @@ def test_edge_cases():
     # Case 4: 单 teacher (domain="default") 与多 teacher
     # 仅验证 MOPD_TEACHERS_JSON 格式解析
     import json
+
     single_teacher = json.loads('[{"name":"teacher1","domain":"default"}]')
     multi_teacher = json.loads('[{"name":"math","domain":"math"},{"name":"code","domain":"code"}]')
     assert len(single_teacher) == 1
@@ -737,6 +727,7 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"[FAIL] {name}: {e}")
             import traceback
+
             traceback.print_exc()
             failed += 1
 

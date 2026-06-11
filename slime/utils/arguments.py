@@ -1977,7 +1977,7 @@ def slime_validate_args(args):
             else:
                 mopd_teachers = args.mopd_teachers
         except (json.JSONDecodeError, TypeError) as e:
-            raise ValueError(f"--mopd-teachers must be valid JSON: {e}")
+            raise ValueError(f"--mopd-teachers must be valid JSON: {e}") from e
 
         if not isinstance(mopd_teachers, list) or len(mopd_teachers) == 0:
             raise ValueError("--mopd-teachers must be a non-empty JSON list of teacher configs.")
@@ -2023,9 +2023,7 @@ def slime_validate_args(args):
         if args.mopd_eps_low < 0:
             raise ValueError(f"--mopd-eps-low must be >= 0, got {args.mopd_eps_low}.")
         if args.mopd_eps_high <= args.mopd_eps_low:
-            raise ValueError(
-                f"--mopd-eps-high ({args.mopd_eps_high}) must be > --mopd-eps-low ({args.mopd_eps_low})."
-            )
+            raise ValueError(f"--mopd-eps-high ({args.mopd_eps_high}) must be > --mopd-eps-low ({args.mopd_eps_low}).")
 
         # Set default teacher mode based on whether mopd_teacher_loads is provided
         if not hasattr(args, "mopd_teacher_mode") or args.mopd_teacher_mode is None:
@@ -2134,9 +2132,8 @@ def slime_validate_args(args):
         # or custom_rm_path is set, default to "zero" reward.
         # Note: After SGLang auto-config, custom_rm_path may be set to a MOPD function,
         # so we check the combination of mopd_alpha and whether there's a real task reward source.
-        _mopd_uses_combined_rm = (
-            args.custom_rm_path is not None
-            and "slime.rollout.mopd.combined_reward_func" in str(args.custom_rm_path)
+        _mopd_uses_combined_rm = args.custom_rm_path is not None and "slime.rollout.mopd.combined_reward_func" in str(
+            args.custom_rm_path
         )
         if args.mopd_alpha > 0 and args.rm_type is None and not _mopd_uses_combined_rm and args.custom_rm_path is None:
             raise ValueError(

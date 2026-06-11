@@ -7,8 +7,6 @@ Tests cover:
 4. Sample.mopd_teacher_log_probs field
 """
 
-import json
-import os
 import sys
 import types
 from argparse import Namespace
@@ -65,6 +63,7 @@ class TestApplyMopdToAdvantages:
     def _get_apply_mopd(self):
         """Dynamically import apply_mopd_to_advantages from loss.py."""
         from slime.backends.megatron_utils.loss import apply_mopd_to_advantages
+
         return apply_mopd_to_advantages
 
     def test_basic_mopd_advantage_computation(self):
@@ -108,7 +107,7 @@ class TestApplyMopdToAdvantages:
         assert torch.allclose(mopd_adv, expected_reverse_kl, atol=1e-6)
         assert torch.allclose(is_weights, torch.ones(3), atol=1e-6)
 
-    # Check mopd_reverse_kl is pure reverse_kl (not including alpha * orm_advantage)
+        # Check mopd_reverse_kl is pure reverse_kl (not including alpha * orm_advantage)
         reverse_kl_logged = rollout_data["mopd_reverse_kl"]["math"][0]
         expected_pure_reverse_kl = torch.tensor([0.1, 0.1, 0.1])
         assert torch.allclose(reverse_kl_logged, expected_pure_reverse_kl, atol=1e-6)
@@ -531,12 +530,15 @@ class TestSampleMopdField:
 
     def test_default_none(self):
         from slime.utils.types import Sample
+
         s = Sample()
         assert s.mopd_teacher_log_probs is None
 
     def test_set_mopd_teacher_log_probs(self):
-        from slime.utils.types import Sample
         import torch
+
+        from slime.utils.types import Sample
+
         s = Sample()
         s.mopd_teacher_log_probs = {
             "math": torch.tensor([0.1, 0.2, 0.3]),
@@ -548,6 +550,7 @@ class TestSampleMopdField:
 
     def test_to_dict_roundtrip(self):
         from slime.utils.types import Sample
+
         s = Sample(response="hello", response_length=1)
         s.mopd_teacher_log_probs = {"math": [0.1, 0.2, 0.3]}
         d = s.to_dict()

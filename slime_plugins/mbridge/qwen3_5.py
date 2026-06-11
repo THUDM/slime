@@ -188,7 +188,7 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
 
         index_file = os.path.join(actual_path, "model.safetensors.index.json")
         if os.path.exists(index_file):
-            with open(index_file, "r") as f:
+            with open(index_file) as f:
                 index = json.load(f)
             weight_map = index.get("weight_map", {})
             # Check if fused key exists

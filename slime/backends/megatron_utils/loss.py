@@ -1,8 +1,7 @@
+import logging
 from argparse import Namespace
 from collections.abc import Callable, Iterator
 from typing import Any
-
-import logging
 
 import torch
 
@@ -708,8 +707,7 @@ def apply_mopd_to_advantages(
         sampling_log_probs = rollout_data.get("log_probs")
     if sampling_log_probs is None:
         raise ValueError(
-            f"MOPD requires '{sampling_logprobs_key}' in rollout_data for importance sampling, "
-            f"but it is missing."
+            f"MOPD requires '{sampling_logprobs_key}' in rollout_data for importance sampling, " f"but it is missing."
         )
 
     device = student_log_probs[0].device
@@ -721,7 +719,7 @@ def apply_mopd_to_advantages(
     all_is_weights_list = []
     all_reverse_kls = []
 
-    for domain, teacher_lp_list in mopd_teacher_log_probs.items():
+    for _domain, teacher_lp_list in mopd_teacher_log_probs.items():
         domain_advantages = []
         domain_is_weights = []
         domain_reverse_kls = []
@@ -783,8 +781,12 @@ def apply_mopd_to_advantages(
 
     for i in range(len(advantages)):
         # Collect valid (non-None) teacher contributions for this sample
-        valid_advs = [all_mopd_advantages[t][i] for t in range(len(all_mopd_advantages)) if all_mopd_advantages[t][i] is not None]
-        valid_is = [all_is_weights_list[t][i] for t in range(len(all_is_weights_list)) if all_is_weights_list[t][i] is not None]
+        valid_advs = [
+            all_mopd_advantages[t][i] for t in range(len(all_mopd_advantages)) if all_mopd_advantages[t][i] is not None
+        ]
+        valid_is = [
+            all_is_weights_list[t][i] for t in range(len(all_is_weights_list)) if all_is_weights_list[t][i] is not None
+        ]
 
         if len(valid_advs) == 0:
             # No valid teachers for this sample — use zero advantages and zero IS weights
@@ -1095,9 +1097,7 @@ def apply_mopd_full_vocab_to_loss(
     if sampling_logprobs_key == "rollout_log_probs" and sampling_log_probs is None:
         sampling_log_probs = batch.get("log_probs")
     if sampling_log_probs is None:
-        raise ValueError(
-            f"MOPD full_vocab requires '{sampling_logprobs_key}' in batch for importance sampling."
-        )
+        raise ValueError(f"MOPD full_vocab requires '{sampling_logprobs_key}' in batch for importance sampling.")
 
     num_samples = len(student_logits_per_sample)
     if len(sampling_log_probs) != num_samples:
@@ -1219,7 +1219,9 @@ def apply_mopd_full_vocab_to_loss(
     # different subsets of active domains.
     for domain in teacher_logits_per_domain:
         if domain in per_domain_kls and len(per_domain_kls[domain]) > 0:
-            metrics[f"mopd_fv_kl/{domain}"] = sum_of_sample_mean(torch.cat(per_domain_kls[domain], dim=0)).clone().detach()
+            metrics[f"mopd_fv_kl/{domain}"] = (
+                sum_of_sample_mean(torch.cat(per_domain_kls[domain], dim=0)).clone().detach()
+            )
         else:
             metrics[f"mopd_fv_kl/{domain}"] = torch.tensor(0.0, device=all_kl_cat.device)
 
@@ -1282,9 +1284,7 @@ def apply_mopd_topk_to_loss(
     if sampling_logprobs_key == "rollout_log_probs" and sampling_log_probs is None:
         sampling_log_probs = batch.get("log_probs")
     if sampling_log_probs is None:
-        raise ValueError(
-            f"MOPD top_k requires '{sampling_logprobs_key}' in batch for importance sampling."
-        )
+        raise ValueError(f"MOPD top_k requires '{sampling_logprobs_key}' in batch for importance sampling.")
 
     vocab_size = args.vocab_size
     num_samples = len(student_logits_per_sample)
@@ -1304,10 +1304,7 @@ def apply_mopd_topk_to_loss(
         valid_teacher_count = 0
 
         for domain in teacher_topk_logits_per_domain:
-            if (
-                i >= len(teacher_topk_logits_per_domain[domain])
-                or teacher_topk_logits_per_domain[domain][i] is None
-            ):
+            if i >= len(teacher_topk_logits_per_domain[domain]) or teacher_topk_logits_per_domain[domain][i] is None:
                 continue
 
             t_topk_logits = teacher_topk_logits_per_domain[domain][i]  # [R_i, k]
@@ -1328,7 +1325,10 @@ def apply_mopd_topk_to_loss(
             # Get teacher log_sum_exp for exact tail mass (Megatron mode only)
             t_topk_log_sum_exp = None
             if teacher_topk_log_sum_exp_per_domain and domain in teacher_topk_log_sum_exp_per_domain:
-                if i < len(teacher_topk_log_sum_exp_per_domain[domain]) and teacher_topk_log_sum_exp_per_domain[domain][i] is not None:
+                if (
+                    i < len(teacher_topk_log_sum_exp_per_domain[domain])
+                    and teacher_topk_log_sum_exp_per_domain[domain][i] is not None
+                ):
                     t_topk_log_sum_exp = teacher_topk_log_sum_exp_per_domain[domain][i]  # [R_i]
 
             kl_i = vocab_parallel_topk_reverse_kl(
@@ -1410,7 +1410,9 @@ def apply_mopd_topk_to_loss(
 
     for domain in teacher_topk_logits_per_domain:
         if domain in per_domain_kls and len(per_domain_kls[domain]) > 0:
-            metrics[f"mopd_topk_kl/{domain}"] = sum_of_sample_mean(torch.cat(per_domain_kls[domain], dim=0)).clone().detach()
+            metrics[f"mopd_topk_kl/{domain}"] = (
+                sum_of_sample_mean(torch.cat(per_domain_kls[domain], dim=0)).clone().detach()
+            )
         else:
             # No samples contributed valid teacher data for this domain in this
             # microbatch.  Emit a zero metric so that every microbatch produces
@@ -1530,7 +1532,9 @@ def policy_loss_function(
     # Apply MOPD token_level: replace advantages with mopd_advantages and apply IS weights
     # L_MOPD(θ) = -E[1/|y| Σ_t w_t * Â_MOPD,t * log π_θ(y_t|x,y_<t)]
     # We recompute pg_loss with mopd_advantages and then multiply by IS weights.
-    mopd_distill_type = getattr(args, "mopd_distill_type", "token_level") if getattr(args, "use_mopd", False) else "none"
+    mopd_distill_type = (
+        getattr(args, "mopd_distill_type", "token_level") if getattr(args, "use_mopd", False) else "none"
+    )
     use_mopd_full_vocab = mopd_distill_type == "full_vocab"
     use_mopd_top_k = mopd_distill_type == "top_k"
     # token_level mode uses advantages + IS weights in the standard pg_loss
@@ -1588,7 +1592,9 @@ def policy_loss_function(
             # When alpha > 0: loss = fv_kl_loss + alpha * pg_loss
             batch["_mopd_fv_kl_loss"] = fv_kl_loss
         else:
-            logger.warning("MOPD full_vocab enabled but no teacher logits found in batch. Skipping full_vocab KL loss.")
+            logger.warning(
+                "MOPD full_vocab enabled but no teacher logits found in batch. Skipping full_vocab KL loss."
+            )
 
         # Ensure per-domain metric keys AND base MOPD metric keys exist for
         # ALL configured teacher domains, even when the batch contains no valid
@@ -1825,10 +1831,10 @@ def policy_loss_function(
             # keys present in this microbatch — so that every microbatch
             # produces the same set of metric keys (required for Megatron's
             # loss-reduction across microbatches).
-            _all_mopd_domains = [
-                t["domain"] for t in getattr(args, "_mopd_teachers_parsed", [])
-            ]
-            _mopd_reverse_kl_domains = _all_mopd_domains if _all_mopd_domains else list(batch["mopd_reverse_kl"].keys())
+            _all_mopd_domains = [t["domain"] for t in getattr(args, "_mopd_teachers_parsed", [])]
+            _mopd_reverse_kl_domains = (
+                _all_mopd_domains if _all_mopd_domains else list(batch["mopd_reverse_kl"].keys())
+            )
             for domain in _mopd_reverse_kl_domains:
                 if domain in batch["mopd_reverse_kl"]:
                     domain_kl_tensor = torch.cat(batch["mopd_reverse_kl"][domain], dim=0)
