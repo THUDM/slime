@@ -1273,6 +1273,63 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=["train_overall"],
                 nargs="+",
             )
+            # Rollout (sglang) side torch profiler. Triggered via sglang's
+            # /start_profile HTTP endpoint; trace is written under
+            # --rollout-profile-output-dir (falls back to SGLANG_TORCH_PROFILER_DIR
+            # env, default /tmp).
+            parser.add_argument(
+                "--rollout-profile-start-rollout-id",
+                type=int,
+                default=None,
+                help="If set, start the sglang torch profiler at this rollout_id. Disabled when None.",
+            )
+            parser.add_argument(
+                "--rollout-profile-num-steps",
+                type=int,
+                default=None,
+                help=(
+                    "Number of sglang forward steps to profile. "
+                    "If set, sglang auto-stops the profiler; otherwise it is stopped "
+                    "at the end of the starting rollout."
+                ),
+            )
+            parser.add_argument(
+                "--rollout-profile-start-step",
+                type=int,
+                default=None,
+                help="Skip this many sglang forward steps before recording.",
+            )
+            parser.add_argument(
+                "--rollout-profile-by-stage",
+                action="store_true",
+                default=False,
+                help="Split prefill / decode into separate trace files inside sglang.",
+            )
+            parser.add_argument(
+                "--rollout-profile-activities",
+                type=str,
+                nargs="+",
+                default=["CPU", "GPU"],
+                help="Activities forwarded to sglang /start_profile. Subset of CPU, GPU, MEM, CUDA_PROFILER, RPD.",
+            )
+            parser.add_argument(
+                "--rollout-profile-output-dir",
+                type=str,
+                default=None,
+                help="Trace output dir. If None, sglang uses SGLANG_TORCH_PROFILER_DIR env var (default /tmp).",
+            )
+            parser.add_argument(
+                "--rollout-profile-with-stack",
+                action="store_true",
+                default=False,
+                help="Record python stacks in the rollout trace.",
+            )
+            parser.add_argument(
+                "--rollout-profile-record-shapes",
+                action="store_true",
+                default=False,
+                help="Record tensor shapes in the rollout trace.",
+            )
             parser.add_argument(
                 "--memory-recorder",
                 type=str,
