@@ -188,6 +188,7 @@ sglang 的加载非常简单，只需要：
 - `--advantage-estimator`: 当前训练需要的 RL 算法，目前支持：
   - `grpo`（https://arxiv.org/abs/2402.03300）；
   - `gspo`（https://arxiv.org/abs/2507.18071）；
+  - `cispo`（https://arxiv.org/abs/2506.13585）；
   - `reinforce_plus_plus` 与 `reinforce_plus_plus_baseline`（https://arxiv.org/abs/2501.03262）；
   - `ppo`（https://arxiv.org/abs/1707.06347）。
 

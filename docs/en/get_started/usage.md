@@ -184,6 +184,7 @@ Additionally, we provide a `metadata_key`, which defaults to `"metadata"`. When 
 - `--advantage-estimator`: Specifies the RL algorithm for the training process. Currently supported algorithms include:
     - `grpo` ([https://arxiv.org/abs/2402.03300](https://arxiv.org/abs/2402.03300))
     - `gspo` ([https://arxiv.org/abs/2507.18071](https://arxiv.org/abs/2507.18071))
+    - `cispo` ([https://arxiv.org/abs/2506.13585](https://arxiv.org/abs/2506.13585))
     - `reinforce_plus_plus` and `reinforce_plus_plus_baseline` ([https://arxiv.org/abs/2501.03262](https://arxiv.org/abs/2501.03262))
     - `ppo` ([https://arxiv.org/abs/1707.06347](https://arxiv.org/abs/1707.06347))
 
