@@ -279,3 +279,23 @@ class E2BSandbox:
             )
         except Exception:
             return ""
+
+
+async def ensure_agent_user(sb: Sandbox, workdir: str) -> None:
+    """Create the unprivileged 'agent' user that owns workdir + can git diff.
+
+    Pure infra: an unprivileged user owning ``workdir`` plus a system-wide
+    ``safe.directory`` so the agent can ``git diff`` regardless of owner. Both
+    the agent run (via ``BaseHarness.run``) and the eval pass call this; neither
+    owns it, so eval needs no harness dependency. Any harness-specific config
+    (e.g. Claude Code's ``~/.claude`` settings) lives in that harness's
+    ``write_config``, not here.
+    """
+    await sb.exec(
+        f"id agent >/dev/null 2>&1 || useradd -m -s /bin/bash agent && "
+        f"chown -R agent:agent /home/agent {workdir} && "
+        f"git config --system --add safe.directory '*' && id agent",
+        user="root",
+        check=True,
+        timeout=60,
+    )

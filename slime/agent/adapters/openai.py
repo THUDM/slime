@@ -83,7 +83,7 @@ def _arguments_as_dict(arguments: Any) -> dict[str, Any]:
     """Coerce wire-shape ``tool_calls[].function.arguments`` into a dict.
 
     OpenAI sends ``arguments`` as a JSON-encoded string; the chat template and
-    ``trajectory_manager.node_match_key`` both expect a mapping. ``json.loads``
+    the trajectory manager's history matching both expect a mapping. ``json.loads``
     is tried first; malformed payloads fall back to ``{"_raw_arguments": s}``
     (mirrors :func:`slime.agent.parsing.parse_tool_uses`).
     """
@@ -107,14 +107,14 @@ def _translate_messages(messages: list[dict]) -> list[dict]:
     """OpenAI chat messages -> tokenizer chat-template messages.
 
     Mirrors :func:`slime.agent.adapters.anthropic._translate_messages` so that
-    a replayed assistant turn hashes identically (via
-    ``trajectory_manager.node_match_key``) to the leaf the manager appended on
-    the previous request. Two invariants must hold:
+    a replayed assistant turn compares equal (dict ``==``, via the manager's
+    ``_find_mount_point``) to the leaf the manager appended on the previous
+    request. Two invariants must hold:
 
       * ``tool_calls[i].function.arguments`` is a ``dict`` (NOT a JSON string).
         Qwen3-style chat templates call ``arguments | items`` which requires
-        a mapping; ``node_match_key`` uses ``json.dumps(sort_keys=True)`` so
-        equivalent dicts hash the same regardless of key order.
+        a mapping; the manager matches history by dict ``==`` so equivalent
+        dicts compare equal regardless of key order.
       * Wire-only correlation ids are DROPPED: ``tool_call_id`` on ``role:
         "tool"`` history messages and ``tool_calls[i].id`` on echoed assistant
         messages. The adapter mints fresh ids on each response, so keeping the
@@ -226,10 +226,10 @@ def _build_reply_parts(parsed: ParsedModelOutput, finish: str) -> tuple[dict[str
 
     ``manager_message`` is the shape fed to ``TrajectoryManager.record_turn``:
     ``tool_calls[].function.arguments`` is a **dict** so chat-template replay
-    (Qwen3 etc.) succeeds and ``node_match_key`` hashes match the echo on the
-    next turn. The wire-only ``id`` is omitted (the next turn's echo will not
-    include it; matching anthropic.py's tool_call_dict). The manager finish
-    reason is derived separately via
+    (Qwen3 etc.) succeeds and the manager's history match (dict ``==``) holds
+    against the echo on the next turn. The wire-only ``id`` is omitted (the next
+    turn's echo will not include it; matching anthropic.py's tool_call_dict).
+    The manager finish reason is derived separately via
     :func:`~slime.agent.adapters.common.manager_finish_reason`.
     """
     wire_tool_calls: list[dict[str, Any]] = []
@@ -266,13 +266,14 @@ def _build_reply_parts(parsed: ParsedModelOutput, finish: str) -> tuple[dict[str
         # Codex CLI 0.30.0 splits a single assistant turn containing both
         # text and tool_calls into TWO echoed messages on the next request
         # (a tool_calls-only one followed by a text-only one), which breaks
-        # node_match_key against our leaf -- so when we have tool_calls we
+        # the history match against our leaf -- so when we have tool_calls we
         # send content=null so the echo is a single tool_calls-only message.
         "content": None if wire_tool_calls else (parsed.text or None),
     }
     # ``manager_message`` must match what the OAI client will echo on the
-    # next request, otherwise ``node_match_key`` diverges and every turn
-    # forks. Three empirically necessary differences vs ``wire_message``:
+    # next request, otherwise the manager's history match (dict ``==``) diverges
+    # and every turn forks. Three empirically necessary differences vs
+    # ``wire_message``:
     #
     #   * NO ``reasoning_content`` -- the Codex CLI strips it on echo, so we
     #     must not store it in the leaf either. The reasoning token ids are
@@ -401,7 +402,7 @@ async def _render_stream(
     # parallel tool_calls to collapse into a single call with a concatenated
     # arguments string (``{"command": "..."}{"command": "..."}``) -- this then
     # fails Codex's own arguments parser and the tool result becomes a parse
-    # error, breaking node_match_key alignment on the next turn.
+    # error, breaking the history match (dict ``==``) alignment on the next turn.
     tool_calls = wire_message.get("tool_calls") or []
     if tool_calls:
         await emit({"tool_calls": [{**call, "index": idx} for idx, call in enumerate(tool_calls)]})

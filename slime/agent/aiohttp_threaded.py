@@ -30,10 +30,6 @@ class AppHandle:
     loop: asyncio.AbstractEventLoop
     runner: web.AppRunner
 
-    @property
-    def url(self) -> str:
-        return f"http://{self.host}:{self.port}"
-
     def stop(self) -> None:
         async def _shutdown() -> None:
             await self.runner.cleanup()
