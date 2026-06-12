@@ -18,7 +18,7 @@ There are four main parameters for cluster resource allocation:
 
   - `--actor-num-nodes`: The number of nodes required for RL actor training.
   - `--actor-num-gpus-per-node`: The number of GPUs per node for RL actor training.
-  - `--rollout-num-gpus`: The total number of GPUs required for rollout (inference).
+  - `--rollout-num-gpus`: The total number of GPUs required for rollout (inference). Set it to `0` to still parse SGLang arguments and launch the router without launching local SGLang servers.
   - `--rollout-num-gpus-per-engine`: The number of GPUs per inference engine. This parameter is similar to SGLang's `tp_size`. When performing multi-node serving, this value should be the total number of GPUs. For example, if serving one model with 2 nodes and 16 GPUs, this value should be 16.
     The reason for not using a parameter like `--sglang-tp-size` is that we might consider supporting SGLang's `dp_size` parameter in the future, which means an engine could contain multiple SGLang servers (currently, only `--sglang-dp-size` under the `--sglang-enable-dp-attention` condition is supported).
 
@@ -26,7 +26,7 @@ With the default configuration, we use these parameters to allocate `actor_num_n
 
 For co-located training and inference, you also need to configure:
 
-  - `--colocate`: Enables co-located training and inference. When enabled, it ignores `--rollout-num-gpus` and makes the number of GPUs for training and inference equal.
+  - `--colocate`: Enables co-located training and inference. By default, this makes the number of GPUs for training and inference equal. You can explicitly set a different positive `--rollout-num-gpus`, for example to use more rollout GPUs than actor GPUs; the extra GPUs are used as rollout-only resources. If `--rollout-num-gpus 0` is set explicitly, slime launches only the router and no local SGLang servers.
 
 Additionally, slime supports Prefill and Decode disaggregation (PD Disaggregation). You can set the number of servers used for Prefill by setting the `--prefill-num-servers` argument.
 

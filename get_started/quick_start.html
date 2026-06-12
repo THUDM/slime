@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Jun 11, 2026"/>
+    <meta name="docbuild:last-update" content="Jun 12, 2026"/>
   </head>
   
   
@@ -795,7 +795,7 @@ slime uses <code class="docutils literal notranslate"><span class="pre">sgl-rout
 <h2>Feature Introduction<a class="headerlink" href="#feature-introduction" title="Link to this heading">#</a></h2>
 <section id="colocated-actor-and-rollout">
 <h3>Colocated Actor and Rollout<a class="headerlink" href="#colocated-actor-and-rollout" title="Link to this heading">#</a></h3>
-<p>Under the default configuration, training (Actor) and inference (Rollout) resources are specified separately. Ray allocates <code class="docutils literal notranslate"><span class="pre">actor_num_nodes</span> <span class="pre">*</span> <span class="pre">actor_num_gpus_per_node</span></code> GPUs to the training part and <code class="docutils literal notranslate"><span class="pre">rollout_num_gpus</span></code> GPUs to inference, that is, training and inference are separated.</p>
+<p>Under the default configuration, training (Actor) and inference (Rollout) resources are specified separately. Ray allocates <code class="docutils literal notranslate"><span class="pre">actor_num_nodes</span> <span class="pre">*</span> <span class="pre">actor_num_gpus_per_node</span></code> GPUs to the training part and <code class="docutils literal notranslate"><span class="pre">rollout_num_gpus</span></code> GPUs to inference, that is, training and inference are separated. When <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code> is explicitly set to <code class="docutils literal notranslate"><span class="pre">0</span></code>, slime still parses SGLang arguments and launches the router, but does not launch local SGLang servers.</p>
 <p><strong>Standard (Disaggregated) Configuration</strong>:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>...<span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>--<span class="w"> </span>python3<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
@@ -807,7 +807,7 @@ slime uses <code class="docutils literal notranslate"><span class="pre">sgl-rout
 </div>
 <p>In the above configuration, Actor uses 4 cards, and Rollout also uses 4 cards, running in parallel.</p>
 <p><strong>Training-Inference Integration (Colocated) Configuration</strong>:
-To deploy training and inference on the same group of GPUs, please add the <code class="docutils literal notranslate"><span class="pre">--colocate</span></code> parameter. After enabling, <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code> will be ignored to make the number of cards for training and inference equal.</p>
+To deploy training and inference on the same group of GPUs, please add the <code class="docutils literal notranslate"><span class="pre">--colocate</span></code> parameter. By default, this makes the number of cards for training and inference equal. You can explicitly set a different positive <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code>, for example to use more rollout GPUs than actor GPUs; the extra GPUs are used as rollout-only resources. If <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span> <span class="pre">0</span></code> is set explicitly, slime launches only the router and no local SGLang servers.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>...<span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>--<span class="w"> </span>python3<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>--actor-num-nodes<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
@@ -1197,7 +1197,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jun 11, 2026.
+  Last updated on Jun 12, 2026.
   <br/>
 </p>
   </div>

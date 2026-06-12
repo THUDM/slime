@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 06 月 11 日"/>
+    <meta name="docbuild:last-update" content="2026 年 06 月 12 日"/>
   </head>
   
   
@@ -492,7 +492,7 @@
 <ul>
 <li><p><code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span></code>：RL 的 actor 训练需要多少节点；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--actor-num-gpus-per-node</span></code>：RL 的 actor 训练的每个节点有卡；</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code>：rollout （inference）一共需要多少卡；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code>：rollout （inference）一共需要多少卡。设置为 <code class="docutils literal notranslate"><span class="pre">0</span></code> 时，slime 仍会解析 SGLang 参数并启动 router，但不会启动本地 SGLang server；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus-per-engine</span></code>：每个 inference engine 有多少卡，这个参数会比较像 sglang 的 <code class="docutils literal notranslate"><span class="pre">tp_size</span></code>，也就是在进行多机 serving 的时候，这个数值应该是总卡数，例如 2 机 16 卡 serving 一个模型，这里的值应该是 16。</p>
 <p>这里不像其他的 sglang 参数那样引入 <code class="docutils literal notranslate"><span class="pre">--sglang-tp-size</span></code> 是因为未来也许会考虑支持 sglang 的 dp_size 参数，也就是一个 engine 里面其实是有多个 sglang server 的（目前只支持 <code class="docutils literal notranslate"><span class="pre">--sglang-enable-dp-attention</span></code> 情况下的 <code class="docutils literal notranslate"><span class="pre">--sglang-dp-size</span></code>）。</p>
 </li>
@@ -500,7 +500,7 @@
 <p>在默认的配置下，我们会根据这些参数，通过 ray 给训练部分分配 <code class="docutils literal notranslate"><span class="pre">actor_num_nodes</span> <span class="pre">*</span> <span class="pre">actor_num_gpus_per_node</span></code> 张 GPU，给推理分配 <code class="docutils literal notranslate"><span class="pre">rollout_num_gpus</span></code> 张 GPU，也就是实现了训推分离。</p>
 <p>当需要训推一体的时候，还需要配置上：</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--colocate</span></code>：开启训推一体。开启后会忽略 <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code> 让训练和推理的卡数相等。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--colocate</span></code>：开启训推一体。开启后默认会让训练和推理的卡数相等；也可以显式设置一个不同的正数，例如让 rollout 卡数多于 actor，多出的 GPU 会作为 rollout-only 资源使用。如果显式设置 <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span> <span class="pre">0</span></code>，则只启动 router，不启动本地 SGLang server。</p></li>
 </ul>
 <p>此外，slime 支持 Prefill 和 Decode 的分离部署 (PD Disaggregation)，可以通过设置 <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code> 参数来指定用于 Prefill 的服务器数量。</p>
 </section>
@@ -1015,7 +1015,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 06 月 11 日.
+  最后更新于 2026 年 06 月 12 日.
   <br/>
 </p>
   </div>

@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 06 月 11 日"/>
+    <meta name="docbuild:last-update" content="2026 年 06 月 12 日"/>
   </head>
   
   
@@ -790,7 +790,7 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
 <h2>特性介绍<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h2>
 <section id="colocated-actor-and-rollout">
 <h3>Colocated Actor and Rollout<a class="headerlink" href="#colocated-actor-and-rollout" title="链接到此标题。">#</a></h3>
-<p>在默认的配置下，训练（Actor）和推理（Rollout）的资源是分开指定的，通过 ray 给训练部分分配 <code class="docutils literal notranslate"><span class="pre">actor_num_nodes</span> <span class="pre">*</span> <span class="pre">actor_num_gpus_per_node</span></code> 张 GPU，给推理分配 <code class="docutils literal notranslate"><span class="pre">rollout_num_gpus</span></code> 张 GPU，也即训推分离。</p>
+<p>在默认的配置下，训练（Actor）和推理（Rollout）的资源是分开指定的，通过 ray 给训练部分分配 <code class="docutils literal notranslate"><span class="pre">actor_num_nodes</span> <span class="pre">*</span> <span class="pre">actor_num_gpus_per_node</span></code> 张 GPU，给推理分配 <code class="docutils literal notranslate"><span class="pre">rollout_num_gpus</span></code> 张 GPU，也即训推分离。将 <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code> 显式设置为 <code class="docutils literal notranslate"><span class="pre">0</span></code> 时，slime 仍会解析 SGLang 参数并启动 router，但不会启动本地 SGLang server。</p>
 <p><strong>标准（分离）配置</strong>：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>...<span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>--<span class="w"> </span>python3<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
@@ -802,7 +802,7 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
 </div>
 <p>上述配置中，Actor 使用 4 张卡，Rollout 也使用 4 张卡，两者并行运行。</p>
 <p><strong>训推一体化（Colocated）配置</strong>：
-要将训练和推理部署在同一组 GPU 上，请添加 <code class="docutils literal notranslate"><span class="pre">--colocate</span></code> 参数，开启后会忽略 <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code> 让训练和推理的卡数相等。</p>
+要将训练和推理部署在同一组 GPU 上，请添加 <code class="docutils literal notranslate"><span class="pre">--colocate</span></code> 参数，开启后默认会让训练和推理的卡数相等；也可以显式设置一个不同的正数，例如让 rollout 卡数多于 actor，多出的 GPU 会作为 rollout-only 资源使用。如果显式设置 <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span> <span class="pre">0</span></code>，则只启动 router，不启动本地 SGLang server。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>...<span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>--<span class="w"> </span>python3<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>--actor-num-nodes<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
@@ -1187,7 +1187,7 @@ ray<span class="w"> </span>start<span class="w"> </span>--address<span class="o"
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 06 月 11 日.
+  最后更新于 2026 年 06 月 12 日.
   <br/>
 </p>
   </div>

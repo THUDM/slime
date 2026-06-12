@@ -19,7 +19,7 @@
 
 - `--actor-num-gpus-per-node`：RL 的 actor 训练的每个节点有卡；
 
-- `--rollout-num-gpus`：rollout （inference）一共需要多少卡；
+- `--rollout-num-gpus`：rollout （inference）一共需要多少卡。设置为 `0` 时，slime 仍会解析 SGLang 参数并启动 router，但不会启动本地 SGLang server；
 
 - `--rollout-num-gpus-per-engine`：每个 inference engine 有多少卡，这个参数会比较像 sglang 的 `tp_size`，也就是在进行多机 serving 的时候，这个数值应该是总卡数，例如 2 机 16 卡 serving 一个模型，这里的值应该是 16。
 
@@ -29,7 +29,7 @@
 
 当需要训推一体的时候，还需要配置上：
 
-- `--colocate`：开启训推一体。开启后会忽略 `--rollout-num-gpus` 让训练和推理的卡数相等。
+- `--colocate`：开启训推一体。开启后默认会让训练和推理的卡数相等；也可以显式设置一个不同的正数，例如让 rollout 卡数多于 actor，多出的 GPU 会作为 rollout-only 资源使用。如果显式设置 `--rollout-num-gpus 0`，则只启动 router，不启动本地 SGLang server。
 
 此外，slime 支持 Prefill 和 Decode 的分离部署 (PD Disaggregation)，可以通过设置 `--prefill-num-servers` 参数来指定用于 Prefill 的服务器数量。
 

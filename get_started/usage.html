@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Jun 11, 2026"/>
+    <meta name="docbuild:last-update" content="Jun 12, 2026"/>
   </head>
   
   
@@ -496,14 +496,14 @@
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span></code>: The number of nodes required for RL actor training.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--actor-num-gpus-per-node</span></code>: The number of GPUs per node for RL actor training.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code>: The total number of GPUs required for rollout (inference).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code>: The total number of GPUs required for rollout (inference). Set it to <code class="docutils literal notranslate"><span class="pre">0</span></code> to still parse SGLang arguments and launch the router without launching local SGLang servers.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus-per-engine</span></code>: The number of GPUs per inference engine. This parameter is similar to SGLang’s <code class="docutils literal notranslate"><span class="pre">tp_size</span></code>. When performing multi-node serving, this value should be the total number of GPUs. For example, if serving one model with 2 nodes and 16 GPUs, this value should be 16.
 The reason for not using a parameter like <code class="docutils literal notranslate"><span class="pre">--sglang-tp-size</span></code> is that we might consider supporting SGLang’s <code class="docutils literal notranslate"><span class="pre">dp_size</span></code> parameter in the future, which means an engine could contain multiple SGLang servers (currently, only <code class="docutils literal notranslate"><span class="pre">--sglang-dp-size</span></code> under the <code class="docutils literal notranslate"><span class="pre">--sglang-enable-dp-attention</span></code> condition is supported).</p></li>
 </ul>
 <p>With the default configuration, we use these parameters to allocate <code class="docutils literal notranslate"><span class="pre">actor_num_nodes</span> <span class="pre">*</span> <span class="pre">actor_num_gpus_per_node</span></code> GPUs for training and <code class="docutils literal notranslate"><span class="pre">rollout_num_gpus</span></code> GPUs for inference via Ray, thus achieving a separation of training and inference resources.</p>
 <p>For co-located training and inference, you also need to configure:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--colocate</span></code>: Enables co-located training and inference. When enabled, it ignores <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code> and makes the number of GPUs for training and inference equal.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--colocate</span></code>: Enables co-located training and inference. By default, this makes the number of GPUs for training and inference equal. You can explicitly set a different positive <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code>, for example to use more rollout GPUs than actor GPUs; the extra GPUs are used as rollout-only resources. If <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span> <span class="pre">0</span></code> is set explicitly, slime launches only the router and no local SGLang servers.</p></li>
 </ul>
 <p>Additionally, slime supports Prefill and Decode disaggregation (PD Disaggregation). You can set the number of servers used for Prefill by setting the <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code> argument.</p>
 </section>
@@ -1018,7 +1018,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jun 11, 2026.
+  Last updated on Jun 12, 2026.
   <br/>
 </p>
   </div>
