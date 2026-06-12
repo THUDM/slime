@@ -114,7 +114,7 @@ async def custom_generate(args, sample: Sample, sampling_params: dict) -> list[S
     return samples
 ```
 
-If one full trajectory has a single total reward but is split into `K` training segments, a common pattern is to distribute that reward across the segments, for example by assigning `reward / K` to each segment, so the same rollout reward is not amplified.
+If one full trajectory has a single total reward but is split into `K` training segments, give every segment the same shared `rollout_id` (as above) and write the trajectory's **full reward** to each. The GRPO group-relative baseline keys on `rollout_id`, so it counts the trajectory once — it compares rollouts, not segments — and the loss reducer normalizes over the rollout's tokens. Dividing the reward across segments (e.g. `reward / K`) is a common but mistaken shortcut: it biases by segment length and does not change how the baseline groups; the shared `rollout_id` is what keeps the rollout counted once.
 
 **Example**: See [examples/search-r1/generate_with_search.py](../../../examples/search-r1/generate_with_search.py)
 

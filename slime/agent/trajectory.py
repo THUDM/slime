@@ -183,20 +183,23 @@ def fan_out_sample_segments(
     metadata: dict[str, Any] | None = None,
     rollout_id: int | None = None,
 ) -> list[Sample]:
-    """Emit one Sample per segment, splitting reward uniformly across them.
+    """Emit one Sample per segment, all carrying the trajectory's full reward.
 
-    Sibling samples share ``rollout_id`` so reducers that average by rollout do
-    not over-count trajectories split by compaction or sub-agent dispatch.
+    Each segment is a branch of ONE rollout (compaction / sub-agent / fork) --
+    one attempt, one outcome -- so every segment carries the FULL trajectory
+    ``reward``. Siblings share ``rollout_id`` so the group-relative baseline
+    (``group_relative_advantages``, which dedups by ``rollout_id``) counts the
+    trajectory once instead of over-counting it per segment. Dividing the reward
+    per segment would distort that cross-rollout comparison.
     """
     k = len(segments)
-    per_segment_reward = float(reward) / max(1, k)
     shared_rollout_id = getattr(sample, "index", None) if rollout_id is None else rollout_id
     base_metadata = {**(sample.metadata or {}), **(metadata or {})}
 
     out: list[Sample] = []
     for i, segment in enumerate(segments):
         sub = sample if i == 0 else copy.copy(sample)
-        write_segment_to_sample(sub, segment, per_segment_reward, tokenizer)
+        write_segment_to_sample(sub, segment, reward, tokenizer)
         sub.rollout_id = shared_rollout_id
         sub.metadata = {
             **base_metadata,

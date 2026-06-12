@@ -114,7 +114,7 @@ async def custom_generate(args, sample: Sample, sampling_params: dict) -> list[S
     return samples
 ```
 
-如果一个完整 trajectory 只有一个总奖励、但被拆成了 `K` 个训练片段，常见做法是在这些片段之间分配这个奖励（例如每个片段写入 `reward / K`），避免把同一次 rollout 的奖励重复放大。
+如果一个完整 trajectory 只有一个总奖励、但被拆成了 `K` 个训练片段，请给所有片段设置相同的 `rollout_id`（如上），并给每个片段写入该 trajectory 的**完整奖励**。GRPO 的组相对基线以 `rollout_id` 为键，因此会把整条 trajectory 只计一次——它比较的是 rollout 而非片段——损失归约则在该 rollout 的 token 上做归一化。把奖励在片段间平摊（例如 `reward / K`）是一个常见却错误的做法：它会按片段长度引入偏差，且并不改变基线的分组方式；真正让 rollout 只被计一次的是共享的 `rollout_id`。
 
 **示例**: 参见 [examples/search-r1/generate_with_search.py](../../../examples/search-r1/generate_with_search.py)
 

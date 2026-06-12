@@ -208,6 +208,79 @@ def get_grpo_returns(
     return returns
 
 
+def group_relative_advantages(
+    raw_rewards: list[float],
+    rollout_ids: list,
+    prompt_ids: list | None,
+    *,
+    n_samples_per_prompt: int,
+    rollout_batch_size: int,
+    std_normalization: bool,
+) -> list[float]:
+    """GRPO group-relative advantages with the *rollout* as the unit.
+
+    A rollout may be fanned into several training samples (segments) that share a
+    ``rollout_id`` -- the compaction / sub-agent / fork branches of one agent attempt. GRPO
+    compares attempts, so each rollout contributes its single outcome reward once: reduce to
+    one reward per ``rollout_id`` (preserving the prompt-major sample order), normalize per
+    prompt, and broadcast the advantage back to every sample of the rollout.
+
+    Two-level keying: ``rollout_ids`` dedup segments into rollouts; ``prompt_ids`` bucket
+    rollouts into the per-prompt baseline groups, so uneven rollout counts per prompt (fan-out,
+    dynamic sampling) still get true per-prompt baselines. When ``prompt_ids`` is ``None`` or
+    incomplete (custom rollout paths that do not set ``Sample.group_index``), grouping falls
+    back to the legacy positional reshape so metadata-less users see no change.
+
+    When every rollout is a single sample (the default path), each ``rollout_id`` is unique,
+    the reduction is the identity, and this matches the plain per-prompt group norm.
+    """
+    if any(rid is None for rid in rollout_ids):
+        raise ValueError(
+            "every sample must carry a rollout id (sample.rollout_id, or sample.index as fallback); got None. "
+            "Dedup keyed on rollout id would silently merge all None-id samples into one rollout, "
+            "collapsing unrelated samples onto a single advantage."
+        )
+
+    # dict preserves first-seen (prompt-major) order; one reward per rollout.
+    reward_of_rollout: dict = {}
+    for rid, reward in zip(rollout_ids, raw_rewards, strict=True):
+        reward_of_rollout.setdefault(rid, reward)
+
+    if prompt_ids is not None and all(pid is not None for pid in prompt_ids):
+        prompt_of_rollout: dict = {}
+        for rid, pid in zip(rollout_ids, prompt_ids, strict=True):
+            if prompt_of_rollout.setdefault(rid, pid) != pid:
+                raise ValueError(
+                    f"rollout id {rid!r} appears under prompt ids {prompt_of_rollout[rid]!r} and {pid!r}; "
+                    "all segments of one rollout must come from the same prompt"
+                )
+
+        rollouts_of_prompt: dict = {}
+        for rid in reward_of_rollout:
+            rollouts_of_prompt.setdefault(prompt_of_rollout[rid], []).append(rid)
+
+        advantage_of_rollout: dict = {}
+        for rids in rollouts_of_prompt.values():
+            rewards = torch.tensor([reward_of_rollout[rid] for rid in rids], dtype=torch.float)
+            rewards = rewards - rewards.mean()
+            if std_normalization:
+                rewards = rewards / (rewards.std() + 1e-6)
+            advantage_of_rollout.update(zip(rids, rewards.tolist(), strict=True))
+    else:
+        rollout_rewards = torch.tensor(list(reward_of_rollout.values()), dtype=torch.float)
+        if rollout_rewards.numel() == n_samples_per_prompt * rollout_batch_size:
+            grouped = rollout_rewards.reshape(-1, n_samples_per_prompt)
+        else:
+            # uneven rollout counts per prompt (e.g. dynamic sampling): one global group
+            grouped = rollout_rewards.view(-1, rollout_rewards.shape[-1])
+        grouped = grouped - grouped.mean(dim=-1, keepdim=True)
+        if std_normalization:
+            grouped = grouped / (grouped.std(dim=-1, keepdim=True) + 1e-6)
+        advantage_of_rollout = dict(zip(reward_of_rollout, grouped.flatten().tolist(), strict=True))
+
+    return [advantage_of_rollout[rid] for rid in rollout_ids]
+
+
 def get_reinforce_plus_plus_returns(
     rewards: torch.Tensor,
     kl: list[torch.Tensor],

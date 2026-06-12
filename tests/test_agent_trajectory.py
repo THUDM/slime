@@ -7,7 +7,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from slime.agent.trajectory import TurnRecord, TurnSegment, merge_turn_segments, merge_turns
+from slime.agent.trajectory import (
+    TokenSegment,
+    TurnRecord,
+    TurnSegment,
+    fan_out_sample_segments,
+    merge_turn_segments,
+    merge_turns,
+)
+from slime.utils.types import Sample
 
 
 NUM_GPUS = 0
@@ -137,6 +145,32 @@ def test_merge_turn_segments_keeps_oversized_segments():
     assert len(merged) == 1
     assert merged[0].prompt_ids == [10, 11, 12]
     assert merged[0].response_ids == [13, 14]
+
+
+class _FakeTokenizer:
+    def decode(self, ids: list[int], skip_special_tokens: bool = False) -> str:
+        return " ".join(str(i) for i in ids)
+
+
+@pytest.mark.unit
+def test_fan_out_writes_full_reward_and_shared_rollout_id():
+    # One trajectory fanned into k=2 segments. Each segment is a branch of the
+    # SAME rollout, so each must carry the FULL reward (3.0, not 3.0 / k == 1.5)
+    # and share one rollout_id, so group_relative_advantages (which dedups by
+    # rollout_id) counts this trajectory exactly once.
+    sample = Sample(index=7)
+    segments = [
+        TokenSegment(prompt_ids=[10], response_ids=[11, 12], loss_mask=[1, 1]),
+        TokenSegment(prompt_ids=[10], response_ids=[13, 14], loss_mask=[1, 1]),
+    ]
+
+    out = fan_out_sample_segments(sample, segments, 3.0, _FakeTokenizer())
+
+    assert len(out) == 2
+    # Load-bearing: full reward on every segment. FAILS under the old reward / k
+    # (each would be 1.5), which is what distorts the GRPO baseline.
+    assert [s.reward for s in out] == [3.0, 3.0]
+    assert {s.rollout_id for s in out} == {7}
 
 
 if __name__ == "__main__":
