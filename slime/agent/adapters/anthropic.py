@@ -160,11 +160,10 @@ def _build_reply_parts(
     """Return ``(anthropic blocks, wire stop_reason, manager_message)``.
 
     The tool_calls inside ``manager_message`` use canonical args (see
-    :func:`~slime.agent.adapters.common.tool_call_dict`) so the node_match_key
-    the manager computes for this assistant turn matches the same turn replayed
-    as history on the next /v1/messages request. The manager finish reason is
-    derived separately via
-    :func:`~slime.agent.adapters.common.manager_finish_reason`.
+    :func:`~slime.agent.adapters.common.tool_call_dict`) so this assistant turn
+    compares equal (dict ``==``) to the same turn replayed as history on the
+    next /v1/messages request. The manager finish reason is derived separately
+    via :func:`~slime.agent.adapters.common.manager_finish_reason`.
     """
     blocks: list[dict] = []
     if parsed.reasoning:

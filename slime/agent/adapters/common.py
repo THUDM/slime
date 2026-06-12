@@ -124,14 +124,15 @@ def flatten_content(c: Any) -> str:
 
 def tool_call_dict(name: str, arguments: dict | None) -> dict:
     """Canonical OpenAI-shape tool call for every adapter's ``manager_message``,
-    so ``TrajectoryManager.node_match_key`` hashes a sampled leaf and its
-    replayed echo identically.
+    so a sampled leaf and its replayed echo compare equal when
+    ``TrajectoryManager`` matches prompt history (``_find_mount_point`` uses
+    dict ``==``).
 
     ``arguments`` stays a dict (NOT a JSON string): the same list is fed to the
     chat template (Qwen3's ``arguments | items`` needs a mapping -- a string
-    raises "Can only get item pairs from a mapping"), and node_match_key's
-    ``json.dumps(sort_keys=True)`` hashes equivalent dicts identically. The
-    wire-only ``tool_use`` / ``call`` id is dropped so leaf and echo match.
+    raises "Can only get item pairs from a mapping"), and dict ``==`` already
+    compares equivalent dicts equal regardless of key order. The wire-only
+    ``tool_use`` / ``call`` id is dropped so leaf and echo match.
     """
     return {"type": "function", "function": {"name": name, "arguments": arguments or {}}}
 
