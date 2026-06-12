@@ -20,7 +20,7 @@ from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_fil
 from slime.utils.async_utils import run
 from slime.utils.data import Dataset
 from slime.utils.eval_config import EvalDatasetConfig
-from slime.utils.http_utils import get, get_rollout_num_engines, post
+from slime.utils.http_utils import bearer_auth_headers, get, get_rollout_num_engines, post
 from slime.utils.misc import SingletonMeta, load_function
 from slime.utils.processing_utils import (
     build_processor_kwargs,
@@ -340,14 +340,19 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
     assert not state.aborted
     state.aborted = True
 
+    router_headers = bearer_auth_headers(getattr(args, "router_api_key", None))
     if parse(sglang_router.__version__) <= parse("0.2.1"):
-        response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers")
+        response = await get(
+            f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers", headers=router_headers
+        )
         urls = response["urls"]
     else:
-        response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers")
+        response = await get(
+            f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers", headers=router_headers
+        )
         urls = [worker["url"] for worker in response["workers"]]
 
-    await abort_servers_until_idle(urls)
+    await abort_servers_until_idle(urls, api_key=getattr(args, "sglang_api_key", None))
 
     # make sure all the pending tasks are finished
     count = 0

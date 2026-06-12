@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 import requests
 
+from slime.utils.http_utils import bearer_auth_headers
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,11 +57,11 @@ def external_engine_init_kwargs(info: ExternalEngineInfo) -> dict:
     return init_kwargs
 
 
-def get_server_info(url: str, timeout: float = 30.0) -> dict:
+def get_server_info(url: str, timeout: float = 30.0, api_key: str | None = None) -> dict:
     errors = []
     for endpoint in ("/server_info", "/get_server_info"):
         try:
-            response = requests.get(f"{url}{endpoint}", timeout=timeout)
+            response = requests.get(f"{url}{endpoint}", timeout=timeout, headers=bearer_auth_headers(api_key))
             response.raise_for_status()
             return response.json()
         except Exception as exc:
@@ -76,13 +78,15 @@ def _infer_worker_type(server_info: dict) -> str:
     return "regular"
 
 
-def discover_external_engines(addrs: list[str], timeout: float = 30.0) -> list[ExternalEngineInfo]:
+def discover_external_engines(
+    addrs: list[str], timeout: float = 30.0, api_key: str | None = None
+) -> list[ExternalEngineInfo]:
     infos = []
     for addr in addrs:
         url = normalize_external_engine_addr(addr)
         parsed = urlparse(url)
         assert parsed.hostname is not None and parsed.port is not None
-        server_info = get_server_info(url, timeout=timeout)
+        server_info = get_server_info(url, timeout=timeout, api_key=api_key)
 
         pp_size = int(server_info.get("pp_size") or server_info.get("pipeline_parallel_size") or 1)
         tp_size = int(server_info.get("tp_size") or server_info.get("tensor_parallel_size") or 1)
@@ -110,7 +114,7 @@ def apply_external_engine_info_to_args(args, logger=None) -> None:
     if not addrs:
         raise ValueError("apply_external_engine_info_to_args requires --rollout-external-engine-addrs.")
 
-    infos = discover_external_engines(addrs)
+    infos = discover_external_engines(addrs, api_key=getattr(args, "sglang_api_key", None))
     if not infos:
         raise ValueError("--rollout-external-engine-addrs did not contain any engines.")
 
