@@ -8,6 +8,7 @@ This example shows how to run **on-policy distillation (OPD)** using slime. A sm
 - **Two teacher modes**:
   - **sglang**: Teacher runs on an external SGLang server, teacher log-probs are obtained during rollout.
   - **megatron**: Teacher is loaded directly into Megatron via `--opd-teacher-load`, teacher log-probs are computed during training forward pass.
+  - **top-k megatron**: Homogeneous Megatron teacher(s) are loaded during training and matched on the student's top-k logits plus tail mass via `topkopd_train.py`.
 
 ## Key Arguments
 
@@ -16,7 +17,10 @@ This example shows how to run **on-policy distillation (OPD)** using slime. A sm
 | `--use-opd` | Enable on-policy distillation. Required flag to use OPD. |
 | `--opd-type` | Type of OPD: `sglang` or `megatron`. Required when `--use-opd` is set. |
 | `--opd-kl-coef` | OPD KL penalty coefficient (default: 1.0). |
-| `--opd-teacher-load` | Path to teacher checkpoint. **Required** when `--opd-type=megatron`, **must not be set** when `--opd-type=sglang`. |
+| `--opd-teacher-load` | Path to a single teacher checkpoint. **Required** when `--opd-type=megatron` unless `--opd-teacher-loads` is set; **must not be set** when `--opd-type=sglang`. |
+| `--opd-teacher-loads` | One or more homogeneous Megatron teacher checkpoints for top-k OPD. |
+| `--topk-level-opd` | Enable top-k level Megatron OPD. Use the `examples/on_policy_distillation/topkopd_train.py` entry. |
+| `--opd-top-k` | Number of student top-k logits retained for top-k OPD. |
 | `--opd-teacher-ckpt-step` | Optional checkpoint step for teacher model. |
 
 ## Mode Comparison
@@ -33,6 +37,7 @@ This example shows how to run **on-policy distillation (OPD)** using slime. A sm
   - `post_process_rewards` trims the teacher logprobs to the generated response span and writes the tensors back to each `Sample` to compute advantages.
 - `run-qwen3-8B-opd.sh` launches an SGLang teacher server, then submits a Ray job that runs `train.py`.
 - `run-qwen3-8B-opd-megatron.sh` uses Megatron-loaded teacher model (no external server needed).
+- `run-qwen3-8B-topk-opd-megatron.sh` uses the explicit `topkopd_train.py` entry to train with top-k level OPD and optional multi-teacher checkpoints.
 
 ## Running the example
 
@@ -86,6 +91,28 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
 ```bash
 bash examples/on_policy_distillation/run-qwen3-8B-opd-megatron.sh
 ```
+
+### Using Top-k Megatron Teacher(s)
+
+Top-k level OPD uses a dedicated train entry so the top-k actor subclass is only used when explicitly requested:
+```bash
+bash examples/on_policy_distillation/run-qwen3-8B-topk-opd-megatron.sh
+```
+
+The example submits:
+```bash
+python3 examples/on_policy_distillation/topkopd_train.py \
+  --use-opd \
+  --opd-type megatron \
+  --topk-level-opd \
+  --loss-type topk_opd_loss \
+  --opd-top-k 100 \
+  --opd-teacher-loads /path/to/teacher_a /path/to/teacher_b
+```
+
+Teachers must be homogeneous with the student model. Multiple teacher checkpoints are averaged in probability space before computing the top-k OPD loss.
+
+The top-k example uses `examples.on_policy_distillation.topk_opd_helpers` to provide zero rewards and placeholder advantages. This keeps the rollout reward path runnable for pure top-k OPD; the actual training signal still comes from `topk_opd_loss`, which compares the current policy with the Megatron teacher distribution on the student's top-k tokens plus tail mass.
 
 
 # Preliminary Results

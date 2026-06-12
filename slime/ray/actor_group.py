@@ -7,6 +7,14 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
 
 
+_TRAIN_ACTOR_CLS = None
+
+
+def set_train_actor_cls(actor_cls):
+    global _TRAIN_ACTOR_CLS
+    _TRAIN_ACTOR_CLS = actor_cls
+
+
 class RayTrainGroup:
     """
     A group of ray actors
@@ -85,9 +93,12 @@ class RayTrainGroup:
         if self.args.use_routing_replay and self.role == "actor":
             env_vars["ENABLE_ROUTING_REPLAY"] = "1"
 
-        from slime.backends.megatron_utils.actor import MegatronTrainRayActor
+        if self.role == "actor" and _TRAIN_ACTOR_CLS is not None:
+            actor_impl = _TRAIN_ACTOR_CLS
+        else:
+            from slime.backends.megatron_utils.actor import MegatronTrainRayActor
 
-        actor_impl = MegatronTrainRayActor
+            actor_impl = MegatronTrainRayActor
 
         TrainRayActor = ray.remote(num_gpus=1, runtime_env={"env_vars": add_default_ray_env_vars(env_vars)})(
             actor_impl

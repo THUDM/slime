@@ -299,6 +299,11 @@ def log_rollout_data(
                 "rollout_ids",
                 "rollout_mask_sums",
                 "rollout_routed_experts",
+                "student_topk_indices",
+                "old_topk_log_probs",
+                "old_tail_log_probs",
+                "teacher_topk_log_probs",
+                "teacher_tail_log_probs",
                 "max_seq_lens",
                 "global_batch_sizes",
                 "num_microbatches",
@@ -322,6 +327,7 @@ def log_rollout_data(
                         "values",
                         "teacher_log_probs",
                         "opd_reverse_kl",
+                        "topk_opd_reverse_kl",
                     ]:
                         tensor = torch.cat(val).clone().detach()
                         sum_of_sample_mean = get_sum_of_sample_mean(
