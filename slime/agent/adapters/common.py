@@ -22,6 +22,8 @@ TOKENIZER_KEY = web.AppKey("tokenizer", object)
 SGLANG_URL_KEY = web.AppKey("sglang_url", object)
 TOOL_PARSER_KEY = web.AppKey("tool_parser", object)
 REASONING_PARSER_KEY = web.AppKey("reasoning_parser", object)
+# Pooled per-app SGLang client, registered by sglang_client_context and reused across turns.
+SGLANG_CLIENT_KEY = web.AppKey("sglang_client", aiohttp.ClientSession)
 
 
 @dataclasses.dataclass
@@ -51,6 +53,7 @@ class BaseAdapter:
         self.app[SGLANG_URL_KEY] = sglang_url.rstrip("/") if isinstance(sglang_url, str) else sglang_url
         self.app[TOOL_PARSER_KEY] = tool_parser
         self.app[REASONING_PARSER_KEY] = reasoning_parser
+        self.app.cleanup_ctx.append(sglang_client_context)
 
     def open_session(
         self,
@@ -174,6 +177,42 @@ def _sampling_params(session: Any, body: dict, *, max_token_keys: tuple[str, ...
     return sp
 
 
+async def sglang_client_context(app: web.Application):
+    # limit=0: connection concurrency is governed by the rollout scheduler, not the pool.
+    connector = aiohttp.TCPConnector(limit=0, ttl_dns_cache=300, keepalive_timeout=60)
+    timeout = aiohttp.ClientTimeout(total=None, sock_read=900)
+    app[SGLANG_CLIENT_KEY] = aiohttp.ClientSession(timeout=timeout, connector=connector)
+    try:
+        yield
+    finally:
+        await app[SGLANG_CLIENT_KEY].close()
+
+
+async def _post_sglang_generate(
+    client: aiohttp.ClientSession,
+    sglang_url: str,
+    *,
+    rid: str,
+    prompt_ids: list[int],
+    sampling_params: dict,
+    headers: dict[str, str] | None,
+) -> dict:
+    async with client.post(
+        f"{sglang_url}/generate",
+        json={
+            "rid": rid,
+            "input_ids": prompt_ids,
+            "sampling_params": sampling_params,
+            "return_logprob": True,
+        },
+        headers=headers,
+    ) as r:
+        if r.status >= 400:
+            text = await r.text()
+            raise RuntimeError(f"sglang upstream {r.status}: {text[:400]}")
+        return await r.json(content_type=None)
+
+
 async def call_sglang_generate(
     prompt_ids: list[int],
     session: Any,
@@ -201,24 +240,22 @@ async def call_sglang_generate(
         sp["max_new_tokens"] = min(int(sp.get("max_new_tokens", remaining_context)), remaining_context)
 
     sglang_url = app[SGLANG_URL_KEY]
+    client = app[SGLANG_CLIENT_KEY]
     rid = uuid.uuid4().hex
     headers = {"X-SMG-Routing-Key": session_id} if session_id and session_id != "default" else None
-    timeout = aiohttp.ClientTimeout(total=None, sock_read=900)
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as sess, sess.post(
-            f"{sglang_url}/generate",
-            json={
-                "rid": rid,
-                "input_ids": prompt_ids,
-                "sampling_params": sp,
-                "return_logprob": True,
-            },
-            headers=headers,
-        ) as r:
-            if r.status >= 400:
-                text = await r.text()
-                raise RuntimeError(f"sglang upstream {r.status}: {text[:400]}")
-            data = await r.json(content_type=None)
+        try:
+            data = await _post_sglang_generate(
+                client, sglang_url, rid=rid, prompt_ids=prompt_ids, sampling_params=sp, headers=headers
+            )
+        except aiohttp.ClientConnectorError:
+            # A connector error is raised before any request bytes reach SGLang, so retrying
+            # with the SAME rid cannot double-generate. Errors after the request may have
+            # reached the server are NOT retried and fall through to the abort path below.
+            logger.warning("[%s] retrying SGLang generate after connector failure", log_prefix)
+            data = await _post_sglang_generate(
+                client, sglang_url, rid=rid, prompt_ids=prompt_ids, sampling_params=sp, headers=headers
+            )
         meta = data.get("meta_info") or {}
         output_token_logprobs = meta.get("output_token_logprobs") or []
         output_ids = [x[1] for x in output_token_logprobs]
@@ -226,8 +263,10 @@ async def call_sglang_generate(
         finish = (meta.get("finish_reason") or {}).get("type", "stop") or "stop"
     except (asyncio.CancelledError, aiohttp.ClientError, asyncio.TimeoutError):
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as s2:
-                await s2.post(f"{sglang_url}/abort_request", json={"rid": rid})
+            async with client.post(
+                f"{sglang_url}/abort_request", json={"rid": rid}, timeout=aiohttp.ClientTimeout(total=5)
+            ):
+                pass
         except Exception:
             pass
         raise
