@@ -947,13 +947,24 @@ def policy_loss_function(
             max_seq_lens,
         )
 
-    # Determine pg_loss reducer: use custom if specified, otherwise default
+    # Determine pg_loss reducer: custom hook first, then --pg-loss-divisor, otherwise default
     if getattr(args, "custom_pg_loss_reducer_function_path", None) is not None:
         custom_pg_loss_reducer_func = load_function(args.custom_pg_loss_reducer_function_path)
         # Determine which loss_masks to use for pg_loss reducer
         pg_loss_masks = modified_response_masks if (args.get_mismatch_metrics or args.use_tis) else batch["loss_masks"]
         pg_loss_reducer = custom_pg_loss_reducer_func(
             total_lengths, response_lengths, pg_loss_masks, args.calculate_per_token_loss
+        )
+    elif getattr(args, "pg_loss_divisor", None) is not None:
+        pg_loss_masks = modified_response_masks if (args.get_mismatch_metrics or args.use_tis) else batch["loss_masks"]
+        pg_loss_reducer = get_sum_of_sample_mean(
+            total_lengths,
+            response_lengths,
+            pg_loss_masks,
+            calculate_per_token_loss=args.calculate_per_token_loss,
+            qkv_format=args.qkv_format,
+            max_seq_lens=max_seq_lens,
+            constant_divisor=args.pg_loss_divisor,
         )
     else:
         pg_loss_reducer = sum_of_sample_mean

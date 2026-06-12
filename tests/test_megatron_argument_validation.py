@@ -252,6 +252,7 @@ def make_slime_validate_args(**overrides):
         normalize_advantages=False,
         use_rollout_logprobs=False,
         use_tis=False,
+        pg_loss_divisor=None,
         get_mismatch_metrics=False,
         custom_tis_function_path=None,
         use_dynamic_batch_size=False,
@@ -308,6 +309,25 @@ def make_slime_validate_args(**overrides):
     )
     values.update(overrides)
     return types.SimpleNamespace(**values)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("bad_divisor", [0.0, -1.0, float("nan")])
+def test_slime_validate_args_rejects_non_positive_pg_loss_divisor(monkeypatch, bad_divisor):
+    module = load_slime_arguments_module(monkeypatch)
+
+    with pytest.raises(ValueError, match="--pg-loss-divisor"):
+        module.slime_validate_args(make_slime_validate_args(pg_loss_divisor=bad_divisor))
+
+
+@pytest.mark.unit
+def test_slime_validate_args_accepts_positive_pg_loss_divisor(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+
+    args = make_slime_validate_args(pg_loss_divisor=40960.0)
+    module.slime_validate_args(args)
+
+    assert args.pg_loss_divisor == 40960.0
 
 
 @pytest.mark.unit

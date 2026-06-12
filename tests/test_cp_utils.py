@@ -176,5 +176,88 @@ def test_cp_chunking_preserves_per_rollout_mean_report(monkeypatch):
     assert cp_total == pytest.approx(baseline)
 
 
+@pytest.mark.unit
+def test_constant_divisor_replaces_per_sample_means():
+    """``--pg-loss-divisor`` contract: masked token sum over a constant, NOT the
+    sum of per-sample active-token means. Masked-out tokens drop from the
+    numerator while the denominator stays the constant."""
+    total_lengths, response_lengths, loss_masks = _make_inputs([3, 3])
+    loss_masks[1] = torch.tensor([1.0, 0.0, 1.0])
+    x = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+
+    reducer = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks, constant_divisor=8.0)
+    # masked sum = (1+2+3) + (4+6) = 16; divided by the constant 8.
+    assert reducer(x).item() == pytest.approx(2.0)
+
+    # Default (divisor unset) keeps the per-sample means: 2 + 5 = 7.
+    default = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks)
+    assert default(x).item() == pytest.approx(7.0)
+
+
+@pytest.mark.unit
+def test_constant_divisor_not_applied_under_per_token_loss():
+    """With ``calculate_per_token_loss`` the reducer must return the raw masked
+    token sum — Megatron divides by the all-reduced token count itself, so
+    applying the constant here would double-normalize."""
+    total_lengths, response_lengths, loss_masks = _make_inputs([3])
+    x = torch.tensor([1.0, 2.0, 3.0])
+
+    reducer = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks, None, True, constant_divisor=4.0)
+    assert reducer(x).item() == pytest.approx(6.0)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("qkv_format", ["thd", "bshd"])
+def test_cp_chunking_preserves_constant_divisor_total(monkeypatch, qkv_format):
+    """Summing per-CP-rank reducer outputs reproduces the cp=1 value for both
+    layouts: the constant divisor is identical on every CP rank, so the
+    gradient sum-allreduce needs no denominator correction."""
+    from megatron.core import mpu as _mpu
+
+    total_lengths = [12, 12]
+    response_lengths = [8, 8]
+    max_seq_lens = [16, 16] if qkv_format == "bshd" else None
+    loss_masks = [torch.ones(r, dtype=torch.float32) for r in response_lengths]
+    divisor = 32.0
+    x_full = [
+        torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
+        torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]),
+    ]
+
+    monkeypatch.setattr(_mpu, "get_context_parallel_world_size", lambda: 1)
+    monkeypatch.setattr(_mpu, "get_context_parallel_rank", lambda: 0)
+    reducer_cp1 = get_sum_of_sample_mean(
+        total_lengths, response_lengths, loss_masks, None, False, qkv_format, max_seq_lens, constant_divisor=divisor
+    )
+    baseline = reducer_cp1(torch.cat(x_full)).item()
+    assert baseline == pytest.approx(sum(x.sum().item() for x in x_full) / divisor)
+
+    monkeypatch.setattr(_mpu, "get_context_parallel_world_size", lambda: 2)
+    cp_total = 0.0
+    for cp_rank in range(2):
+        monkeypatch.setattr(_mpu, "get_context_parallel_rank", lambda r=cp_rank: r)
+        x_chunks_per_sample = []
+        for i, (tl, rl, x) in enumerate(zip(total_lengths, response_lengths, x_full, strict=True)):
+            prompt_length = tl - rl
+            max_seq_len = max_seq_lens[i] if max_seq_lens is not None else None
+            _, _, _, tokens_offset = get_logits_and_tokens_offset_with_cp(tl, rl, qkv_format, max_seq_len)
+            chunk_0 = x[tokens_offset[0][0] - prompt_length : tokens_offset[0][1] - prompt_length]
+            chunk_1 = x[tokens_offset[1][0] - prompt_length : tokens_offset[1][1] - prompt_length]
+            x_chunks_per_sample.append(torch.cat([chunk_0, chunk_1]))
+        reducer_cp2 = get_sum_of_sample_mean(
+            total_lengths,
+            response_lengths,
+            loss_masks,
+            None,
+            False,
+            qkv_format,
+            max_seq_lens,
+            constant_divisor=divisor,
+        )
+        cp_total += reducer_cp2(torch.cat(x_chunks_per_sample)).item()
+
+    assert cp_total == pytest.approx(baseline)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
