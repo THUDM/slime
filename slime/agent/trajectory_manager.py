@@ -129,7 +129,7 @@ def _common_prefix_len(a: list[int], b: list[int], chunk: int = 4096) -> int:
 class DriftKind(enum.Enum):
     CLEAN = "clean"  # drift == 0: prompt_ids exactly extends held tokens; append the tail beyond them
     REALIGN = (
-        "realign"  # small drift inside the most-recent response span; replace that whole span from prompt_ids (loss=0)
+        "realign"  # drift inside the most-recent response span and short incoming response; replace that span (loss=0)
     )
     FORK = "fork"  # everything else: close this builder, open a fresh one as a fork
 
@@ -174,8 +174,9 @@ class _SampleBuilder:
         already holds as an exact prefix. When token drift has occurred -- the
         prompt diverges from the held tokens -- we decide whether to REALIGN
         (heal a short divergence inside the most-recent response span) or to FORK
-        (the divergence is too large or too early to absorb). With no drift the
-        turn is handled the CLEAN way -- a plain prefix extension.
+        (``len(turn.output_ids) >= fork_threshold``, or the divergence sits too
+        early to absorb). With no drift the turn is handled the CLEAN way -- a
+        plain prefix extension.
         """
         realign_at = _common_prefix_len(self.tokens, turn.prompt_ids)
         drift = len(self.tokens) - realign_at
@@ -186,7 +187,7 @@ class _SampleBuilder:
         # REALIGN only heals drift that falls inside the most-recent response span
         # (and is short); divergence anywhere earlier, or an empty builder, forks.
         start = self.last_response_start_idx
-        if start is not None and realign_at >= start and drift < self._fork_threshold:
+        if start is not None and realign_at >= start and len(turn.output_ids) < self._fork_threshold:
             return DriftKind.REALIGN
         return DriftKind.FORK
 

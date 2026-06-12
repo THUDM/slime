@@ -1206,14 +1206,17 @@ def test_4_5_mixed_logprobs_across_turns():
 
 
 def test_4_6_drift_B1_threshold_boundary():
-    """case-B1 threshold is exclusive: a drift tail of length d == threshold
-    forks, d == threshold-1 replaces. Verify both sides of the boundary."""
+    """case-B1 threshold compares the incoming turn's full ``output_ids`` length
+    to ``fork_threshold`` (mirroring ``_try_merge_assistant_rewrite``): the gate
+    is exclusive, so ``len(r2) == threshold`` forks and ``len(r2) < threshold``
+    replaces. Drift-tail length is not part of the gate -- only its position
+    (inside the most-recent response span) keeps REALIGN physically applicable."""
 
-    def run(threshold, drift_tail_len):
+    def run(threshold, new_resp_len):
         mgr = TrajectoryManager(fork_threshold_tokens=threshold)
-        sid = f"4.6-{threshold}-{drift_tail_len}"
+        sid = f"4.6-{threshold}-{new_resp_len}"
         s, u = sys_msg("S"), usr_msg("u")
-        # 4-token response so the divergence can sit d tokens before its end.
+        # 4-token response so the divergence can sit inside the response span.
         p1 = render_prompt([s, u])
         r1 = [9001, 9002, 9003, 9004]
         mgr.record_turn(
@@ -1226,10 +1229,10 @@ def test_4_6_drift_B1_threshold_boundary():
         tm = tool_msg("t")
         # honest turn-2 prompt echoes p1 + r1 then the tool block + gen marker.
         p2_honest = p1 + r1 + tm.render() + [_GEN]
-        # divergence d tokens before the end of r1's echo (inside its response span).
-        drift_idx = len(p1) + len(r1) - drift_tail_len
+        # divergence one token before the end of r1's echo (well inside the response span).
+        drift_idx = len(p1) + len(r1) - 1
         p2 = drift_replace(p2_honest, drift_idx)
-        r2 = [9101, 9102]
+        r2 = [9100 + i for i in range(new_resp_len)]
         mgr.record_turn(
             sid,
             turn=turn(p2, r2, finish_reason="stop"),
@@ -1239,16 +1242,16 @@ def test_4_6_drift_B1_threshold_boundary():
         samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
         return samples, p1, r1, p2, r2
 
-    # d == threshold -> fork: two single-turn segments, each trains its own resp.
-    forked, p1, r1, p2, r2 = run(threshold=2, drift_tail_len=2)
-    assert len(forked) == 2, f"d==threshold must fork, got {len(forked)}"
+    # len(r2) == threshold -> fork: two single-turn segments, each trains its own resp.
+    forked, p1, r1, p2, r2 = run(threshold=2, new_resp_len=2)
+    assert len(forked) == 2, f"len(r2)==threshold must fork, got {len(forked)}"
     assert forked[0].tokens == p1 + r1
     assert forked[0].loss_mask == [1] * len(r1)
     assert forked[1].tokens == p2 + r2
     assert forked[1].loss_mask == [1] * len(r2)
-    # d < threshold -> replace: one coherent segment realigned to p2.
-    replaced, p1b, r1b, p2b, r2b = run(threshold=2, drift_tail_len=1)
-    assert len(replaced) == 1, f"d<threshold must replace, got {len(replaced)}"
+    # len(r2) < threshold -> replace: one coherent segment realigned to p2.
+    replaced, p1b, r1b, p2b, r2b = run(threshold=3, new_resp_len=2)
+    assert len(replaced) == 1, f"len(r2)<threshold must replace, got {len(replaced)}"
     assert replaced[0].tokens == p2b + r2b
     # the drifted r1 echo is not a faithful response anymore -> the WHOLE r1 span is
     # masked (loss=0 prompt context), r2 trains.
