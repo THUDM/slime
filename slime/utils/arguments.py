@@ -12,6 +12,7 @@ from sglang_router.launch_router import RouterArgs
 from slime.backends.sglang_utils.arguments import sglang_parse_args
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 from slime.backends.sglang_utils.external import apply_external_engine_info_to_args
+from slime.backends.sglang_utils.http_endpoint import normalize_rollout_http_endpoint_url
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
 from slime.utils.logging_utils import configure_logger
 
@@ -204,6 +205,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--update-weight-delta-root",
+                type=str,
+                default=None,
+                help=(
+                    "Optional root directory for publish-based disk delta metadata. "
+                    "Defaults to the parent of --update-weight-delta-dir when omitted."
+                ),
+            )
+            parser.add_argument(
                 "--update-weight-delta-keep-files",
                 action="store_true",
                 default=False,
@@ -218,6 +228,30 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "trainer rank's files are durably on local disk, before rank 0 fires the engine "
                     "RPCs. Signature: ``def hook(args, version_dir: str, rollout_engines) -> None``. "
                     "Called from every trainer rank; the hook gates itself."
+                ),
+            )
+            parser.add_argument(
+                "--custom-delta-publish-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a custom rank-0 function called after disk delta filenames are gathered "
+                    "and the pre-push hook has completed. Signature: "
+                    "``def hook(args, version_dir: str, files: list[str], weight_version: str, "
+                    "rollout_engines) -> list | None``. Returned Ray ObjectRefs are awaited before "
+                    "the sync completes, except with --update-weight-delta-publish-only, where the "
+                    "publish overlaps the next training step and is awaited at the start of the "
+                    "next sync (failures surface one sync late)."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-delta-publish-only",
+                action="store_true",
+                default=False,
+                help=(
+                    "For disk delta transport, publish gathered delta files through "
+                    "--custom-delta-publish-path without issuing direct rollout-engine update RPCs. "
+                    "Useful for elastic HTTP rollout endpoints that consume published versions."
                 ),
             )
             parser.add_argument(
@@ -534,6 +568,49 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 nargs="+",
                 help="Address and ports of the external engines.",
+            )
+            parser.add_argument(
+                "--rollout-http-endpoint-url",
+                type=str,
+                default=None,
+                help=(
+                    "Opaque HTTP endpoint base URL for rollout generation. "
+                    "When set, slime sends /generate requests to this endpoint "
+                    "without launching or registering SGLang workers."
+                ),
+            )
+            parser.add_argument(
+                "--rollout-http-endpoint-abort-strategy",
+                type=str,
+                choices=["cancel-only", "router-workers"],
+                default=None,
+                help=(
+                    "Abort behavior for the default SGLang rollout. "
+                    "'cancel-only' cancels local pending tasks and does not call router /workers; "
+                    "'router-workers' uses the SGLang router worker list."
+                ),
+            )
+            parser.add_argument(
+                "--rollout-weight-version-policy",
+                type=str,
+                choices=["none", "exact-rollout-id"],
+                default="none",
+                help=(
+                    "Optional weight-version policy included in rollout generation payloads. "
+                    "'exact-rollout-id' sends {'weight_version': {'exact_version': rollout_id}}."
+                ),
+            )
+            parser.add_argument(
+                "--rollout-weight-version-retry-attempts",
+                type=int,
+                default=60,
+                help="Maximum HTTP POST attempts for version-pinned rollout generation requests.",
+            )
+            parser.add_argument(
+                "--rollout-weight-version-retry-sleep",
+                type=float,
+                default=1.0,
+                help="Sleep interval between HTTP POST retries for version-pinned rollout generation requests.",
             )
             return parser
 
@@ -1729,6 +1806,9 @@ def _resolve_update_weight_disk_dir(args) -> None:
 def _validate_update_weight_args(args) -> None:
     _resolve_update_weight_disk_dir(args)
 
+    if args.update_weight_delta_publish_only and args.update_weight_mode != "delta":
+        raise ValueError("--update-weight-delta-publish-only requires --update-weight-mode=delta.")
+
     if args.update_weight_mode == "delta":
         if args.update_weight_transport not in ("nccl", "disk"):
             raise ValueError(
@@ -1741,6 +1821,15 @@ def _validate_update_weight_args(args) -> None:
                 "weights via CUDA IPC (only a handle crosses processes), so the delta bookkeeping "
                 "(snapshot + diff + sparse encode) is pure overhead."
             )
+        if args.update_weight_transport == "disk" and args.update_weight_delta_root is None:
+            args.update_weight_delta_root = os.path.dirname(os.path.abspath(args.update_weight_disk_dir))
+        if args.update_weight_delta_publish_only:
+            if args.update_weight_transport != "disk":
+                raise ValueError("--update-weight-delta-publish-only requires --update-weight-transport=disk.")
+            if not args.custom_delta_publish_path:
+                raise ValueError("--update-weight-delta-publish-only requires --custom-delta-publish-path.")
+            if not args.update_weight_delta_keep_files:
+                raise ValueError("--update-weight-delta-publish-only requires --update-weight-delta-keep-files.")
 
 
 def slime_validate_args(args):
@@ -1874,6 +1963,18 @@ def slime_validate_args(args):
             "will not instantiate sglang servers and will only run the training process."
         )
         args.debug_train_only = True
+
+    if args.rollout_http_endpoint_url is not None:
+        args.rollout_http_endpoint_url = normalize_rollout_http_endpoint_url(args.rollout_http_endpoint_url)
+        if args.rollout_http_endpoint_abort_strategy is None:
+            args.rollout_http_endpoint_abort_strategy = "cancel-only"
+        if getattr(args, "rollout_num_engines", None) is None:
+            args.rollout_num_engines = 1
+    elif args.rollout_http_endpoint_abort_strategy is None:
+        args.rollout_http_endpoint_abort_strategy = "router-workers"
+
+    if args.rollout_http_endpoint_url is not None and args.rollout_external_engine_addrs is not None:
+        raise ValueError("--rollout-http-endpoint-url and --rollout-external-engine-addrs are mutually exclusive.")
 
     args.rollout_external = args.rollout_external_engine_addrs is not None
 

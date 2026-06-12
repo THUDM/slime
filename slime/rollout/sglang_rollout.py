@@ -14,6 +14,7 @@ import sglang_router
 from packaging.version import parse
 from tqdm import tqdm
 
+from slime.backends.sglang_utils.http_endpoint import rollout_http_endpoint_url, uses_rollout_http_endpoint
 from slime.backends.sglang_utils.server_control import abort_servers_until_idle
 from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter
@@ -38,6 +39,7 @@ __all__ = ["generate_rollout", "get_model_url"]
 logger = logging.getLogger(__name__)
 
 _PROCESSOR_PROMPT_KEYS = {"input_ids", "attention_mask"}
+_MISSING = object()
 
 
 def _prepare_prompt_ids(sample: Sample, tokenizer, processor: Any) -> list[int]:
@@ -63,7 +65,7 @@ def _prepare_prompt_ids(sample: Sample, tokenizer, processor: Any) -> list[int]:
 
 
 def get_model_url(args: Namespace, model_name: str, endpoint: str = "/generate") -> str:
-    """Return the router URL for a named model.
+    """Return the rollout URL for a named model.
 
     Use this in custom rollout functions to route requests to a specific
     model when multiple models are deployed via ``--sglang-config``::
@@ -71,14 +73,61 @@ def get_model_url(args: Namespace, model_name: str, endpoint: str = "/generate")
         url = get_model_url(args, "ref", "/generate")
         resp = await post(url, json=payload)
 
-    Falls back to the default router if *model_name* is not found or
-    ``sglang_model_routers`` is not set.
+    If ``--rollout-http-endpoint-url`` is set, returns that opaque endpoint
+    with *endpoint* appended and does not assume SGLang router APIs exist.
+    Otherwise, falls back to the default router if *model_name* is not found
+    or ``sglang_model_routers`` is not set.
     """
+    if uses_rollout_http_endpoint(args):
+        return rollout_http_endpoint_url(args, endpoint)
+
     routers = getattr(args, "sglang_model_routers", None)
     if routers and model_name in routers:
         ip, port = routers[model_name]
         return f"http://{ip}:{port}{endpoint}"
     return f"http://{args.sglang_router_ip}:{args.sglang_router_port}{endpoint}"
+
+
+@contextmanager
+def rollout_weight_version_context(args: Namespace, rollout_id: int):
+    old_value = getattr(args, "_rollout_weight_version", _MISSING)
+    policy = getattr(args, "rollout_weight_version_policy", "none")
+    if policy == "exact-rollout-id":
+        args._rollout_weight_version = int(rollout_id)
+    elif hasattr(args, "_rollout_weight_version"):
+        delattr(args, "_rollout_weight_version")
+
+    try:
+        yield
+    finally:
+        if old_value is _MISSING:
+            if hasattr(args, "_rollout_weight_version"):
+                delattr(args, "_rollout_weight_version")
+        else:
+            args._rollout_weight_version = old_value
+
+
+def _weight_version_payload(args: Namespace) -> dict[str, int] | None:
+    policy = getattr(args, "rollout_weight_version_policy", "none")
+    if policy == "none":
+        return None
+    if policy == "exact-rollout-id":
+        version = getattr(args, "_rollout_weight_version", None)
+        return {"exact_version": int(version)} if version is not None else None
+    raise ValueError(f"Unsupported rollout_weight_version_policy: {policy}")
+
+
+async def _post_generate(args: Namespace, url: str, payload: dict[str, Any], headers: dict | None):
+    if "weight_version" not in payload:
+        return await post(url, payload, headers=headers)
+
+    return await post(
+        url,
+        payload,
+        max_retries=getattr(args, "rollout_weight_version_retry_attempts", 60),
+        headers=headers,
+        retry_sleep=getattr(args, "rollout_weight_version_retry_sleep", 1.0),
+    )
 
 
 class GenerateState(metaclass=SingletonMeta):
@@ -154,7 +203,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         assert isinstance(sample.prompt, str)
 
     state = GenerateState(args)
-    url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
+    url = get_model_url(args, "default", "/generate")
 
     assert (
         sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
@@ -174,6 +223,8 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         "sampling_params": sampling_params,
         "return_logprob": True,
     }
+    if (weight_version := _weight_version_payload(args)) is not None:
+        payload["weight_version"] = weight_version
 
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
@@ -197,7 +248,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
             headers = {"X-SMG-Routing-Key": sample.session_id}
 
     with trace_span(sample, "sglang_generate", attrs={"max_new_tokens": sampling_params["max_new_tokens"]}) as span:
-        output = await post(url, payload, headers=headers)
+        output = await _post_generate(args, url, payload, headers=headers)
         span.update(build_sglang_meta_trace_attrs(output["meta_info"]))
 
     if "output_token_logprobs" in output["meta_info"]:
@@ -349,11 +400,12 @@ async def generate_and_rm_group(
 
 
 async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
-    aborted_samples = []
-
     state = GenerateState(args)
     assert not state.aborted
     state.aborted = True
+
+    if getattr(args, "rollout_http_endpoint_abort_strategy", None) == "cancel-only":
+        return await _cancel_pending_tasks(state)
 
     if parse(sglang_router.__version__) <= parse("0.2.1"):
         response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers")
@@ -363,6 +415,30 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
         urls = [worker["url"] for worker in response["workers"]]
 
     await abort_servers_until_idle(urls)
+
+    return await _drain_aborted_pending_tasks(args, rollout_id, state)
+
+
+async def _cancel_pending_tasks(state: GenerateState) -> list[list[Sample]]:
+    if not state.pendings:
+        return []
+    pending = list(state.pendings)
+    for task in pending:
+        task.cancel()
+    results = await asyncio.gather(*pending, return_exceptions=True)
+    for result in results:
+        if isinstance(result, Exception):
+            logger.warning("Pending rollout task ended during cancel-only abort: %s", result)
+    state.pendings.clear()
+    return []
+
+
+async def _drain_aborted_pending_tasks(
+    args: Namespace,
+    rollout_id: int,
+    state: GenerateState,
+) -> list[list[Sample]]:
+    aborted_samples = []
 
     # make sure all the pending tasks are finished
     count = 0
@@ -615,11 +691,12 @@ def generate_rollout(
         RolloutFnTrainOutput | RolloutFnEvalOutput: the output of the rollout
     """
     assert args.rollout_global_dataset
-    if evaluation:
-        output, _ = run(eval_rollout(args, rollout_id))
-        return output
+    with rollout_weight_version_context(args, rollout_id):
+        if evaluation:
+            output, _ = run(eval_rollout(args, rollout_id))
+            return output
 
-    output, aborted_samples = run(generate_rollout_async(args, rollout_id, data_source.get_samples))
-    if aborted_samples:
-        data_source.add_samples(aborted_samples)
-    return output
+        output, aborted_samples = run(generate_rollout_async(args, rollout_id, data_source.get_samples))
+        if aborted_samples:
+            data_source.add_samples(aborted_samples)
+        return output
