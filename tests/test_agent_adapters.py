@@ -12,7 +12,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from slime.agent.adapters import anthropic, openai
-from slime.agent.adapters.common import SGLANG_URL_KEY
+from slime.agent.adapters.common import SGLANG_URL_KEY, dict_arguments
 from slime.agent.trajectory import TurnRecord
 
 
@@ -168,6 +168,20 @@ def test_anthropic_translation_keeps_tool_results_and_tool_schema():
 
 
 @pytest.mark.unit
+def test_openai_render_tool_call_arguments_are_dicts():
+    # Echoed wire JSON string is decoded back to a mapping for chat-template rendering.
+    normalized = openai._normalize_tool_call({"function": {"name": "lookup", "arguments": '{"q": "slime"}'}})
+    assert normalized["function"]["arguments"] == {"q": "slime"}
+    # Valid-JSON-but-non-dict arguments are wrapped so ``arguments.items()`` stays safe.
+    wrapped = openai._normalize_tool_call({"function": {"name": "lookup", "arguments": "[1, 2]"}})
+    assert wrapped["function"]["arguments"] == {"_raw_arguments": [1, 2]}
+    # Falsy native non-dicts are still real argument values; only None means "no arguments".
+    assert dict_arguments(0) == {"_raw_arguments": 0}
+    assert dict_arguments([]) == {"_raw_arguments": []}
+    assert dict_arguments(None) == {}
+
+
+@pytest.mark.unit
 def test_openai_translation_and_responses_input_shapes():
     chat_messages = openai._translate_chat_messages(
         [
@@ -205,7 +219,7 @@ def test_openai_translation_and_responses_input_shapes():
                 {
                     "id": "call_1",
                     "type": "function",
-                    "function": {"name": "lookup", "arguments": '{"q": "slime"}'},
+                    "function": {"name": "lookup", "arguments": {"q": "slime"}},
                 }
             ],
         },
