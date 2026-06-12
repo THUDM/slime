@@ -112,9 +112,9 @@ See the [Customization Guide](docs/en/get_started/customization.md) for which in
 
 These are not just demos. They are independent systems that use slime as a reusable RL substrate for production-scale post-training, agentic RL, domain RL, and rollout-system research.
 
-### ⛵ Miles: Production-Focused Reinforcement Learning Framework Built on slime
+### ⛵ Miles: Enterprise-Grade Reinforcement Learning for Large-Scale Model Training
 
-[**Miles**](https://github.com/radixark/miles) builds on the foundation of slime to provide a production-focused reinforcement learning framework for large-scale model post-training. It stays closely aligned with slime's upstream development while extending it with enterprise-oriented features: deeper [SGLang](https://github.com/sgl-project/sglang) integration, operational tooling, deployment support, and optimizations for new [models](https://www.radixark.com/miles/docs/models) and [hardware](https://www.radixark.com/miles/docs/platforms). Miles also adds production features such as LoRA, TITO, and low-precision training.
+[Miles](https://github.com/radixark/miles) is an RL post-training framework for large-scale models, built on slime by [RadixArk](https://github.com/radixark). It stays closely aligned with slime's upstream development while extending it with enterprise-oriented features: deeper [SGLang](https://github.com/sgl-project/sglang) integration, operational tooling, deployment support, and optimizations for new [models](https://www.radixark.com/miles/docs/models) and [hardware](https://www.radixark.com/miles/docs/platforms). Miles also adds a growing set of production features, including LoRA, TITO, and low-precision training.
 
 ### 🔷 vime: vLLM-Native RL Post-Training Built on slime
 

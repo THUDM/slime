@@ -224,6 +224,135 @@ def test_update_weight_disk_dir_rejects_conflicting_alias(monkeypatch):
         module._resolve_update_weight_disk_dir(args)
 
 
+def make_slime_validate_args(**overrides):
+    values = dict(
+        eval_config=None,
+        eval_prompt_data=None,
+        use_slime_router=False,
+        kl_coef=0,
+        use_kl_loss=False,
+        ref_load=None,
+        use_opd=False,
+        opd_type=None,
+        opd_teacher_load=None,
+        megatron_to_hf_mode="raw",
+        load=None,
+        hf_checkpoint="/tmp/hf",
+        ref_ckpt_step=None,
+        ckpt_step=None,
+        no_load_optim=False,
+        no_load_rng=False,
+        finetune=False,
+        start_rollout_id=None,
+        eval_interval=None,
+        save_interval=None,
+        save=None,
+        kl_loss_coef=0,
+        advantage_estimator="grpo",
+        normalize_advantages=False,
+        use_rollout_logprobs=False,
+        use_tis=False,
+        get_mismatch_metrics=False,
+        custom_tis_function_path=None,
+        use_dynamic_batch_size=False,
+        max_tokens_per_gpu=None,
+        log_probs_max_tokens_per_gpu=None,
+        balance_by_flops=False,
+        balance_data=False,
+        eps_clip_high=None,
+        eps_clip=0.2,
+        eval_reward_key=None,
+        reward_key="reward",
+        dump_details=None,
+        save_debug_rollout_data=None,
+        save_debug_train_data=None,
+        load_debug_rollout_data=None,
+        rollout_external_engine_addrs=None,
+        debug_train_only=False,
+        actor_num_gpus_per_node=8,
+        actor_num_nodes=1,
+        offload=False,
+        offload_train=None,
+        offload_rollout=None,
+        debug_rollout_only=False,
+        colocate=False,
+        rollout_num_gpus=8,
+        train_memory_margin_bytes=0,
+        eval_function_path=None,
+        rollout_function_path="custom.rollout",
+        num_steps_per_rollout=None,
+        rollout_batch_size=1,
+        n_samples_per_prompt=1,
+        global_batch_size=None,
+        grpo_std_normalization=True,
+        over_sampling_batch_size=None,
+        num_epoch=None,
+        num_rollout=1,
+        rollout_global_dataset=False,
+        enable_mtp_training=False,
+        mtp_num_layers=None,
+        use_rollout_routing_replay=False,
+        use_routing_replay=False,
+        custom_config_path=None,
+        eval_max_context_len=None,
+        rollout_max_context_len=None,
+        rollout_max_prompt_len=None,
+        qkv_format="thd",
+        train_backend="megatron",
+        only_train_params_name_list=None,
+        freeze_params_name_list=None,
+        update_weight_transport="nccl",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        update_weight_mode="full",
+    )
+    values.update(overrides)
+    return types.SimpleNamespace(**values)
+
+
+@pytest.mark.unit
+def test_slime_validate_args_preserves_zero_rollout_gpus_under_colocate(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(colocate=True, rollout_num_gpus=0)
+
+    module.slime_validate_args(args)
+
+    assert args.rollout_num_gpus == 0
+    assert args.offload_train is True
+    assert args.offload_rollout is True
+
+
+@pytest.mark.unit
+def test_slime_validate_args_preserves_larger_rollout_gpus_under_colocate(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        colocate=True,
+        actor_num_gpus_per_node=8,
+        actor_num_nodes=1,
+        rollout_num_gpus=12,
+    )
+
+    module.slime_validate_args(args)
+
+    assert args.rollout_num_gpus == 12
+    assert args.offload_train is True
+    assert args.offload_rollout is True
+
+
+@pytest.mark.unit
+def test_slime_validate_args_preserves_zero_rollout_gpus_without_colocate(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(colocate=False, rollout_num_gpus=0)
+
+    module.slime_validate_args(args)
+
+    assert args.rollout_num_gpus == 0
+    assert args.actor_num_gpus_per_node == 8
+    assert args.actor_num_nodes == 1
+    assert args.offload_train is False
+    assert args.offload_rollout is False
+
+
 @pytest.mark.unit
 def test_update_weight_delta_rejects_colocate(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
