@@ -304,8 +304,8 @@ class TestGetModelUrl:
         assert get_model_url(args, "ref") == "http://10.0.0.1:3001/generate"
         assert get_model_url(args, "ref", "/v1/chat/completions") == "http://10.0.0.1:3001/v1/chat/completions"
 
-    def test_get_model_url_fallback(self):
-        """get_model_url should fall back to default router if model not found."""
+    def test_get_model_url_unknown_model_raises(self):
+        """get_model_url should fail closed when a router map exists."""
         from argparse import Namespace
 
         from slime.rollout.sglang_rollout import get_model_url
@@ -315,7 +315,8 @@ class TestGetModelUrl:
             sglang_router_port=3000,
             sglang_model_routers={"actor": ("10.0.0.1", 3000)},
         )
-        assert get_model_url(args, "unknown") == "http://10.0.0.1:3000/generate"
+        with pytest.raises(ValueError, match="Unknown SGLang model 'unknown'.*actor"):
+            get_model_url(args, "unknown")
 
     def test_get_model_url_no_routers(self):
         """get_model_url should work when sglang_model_routers is not set."""
