@@ -6,28 +6,23 @@ Wire-up:
 
 ``generate()`` is intentionally a small four-stage orchestrator:
 
-    1. ``sandbox.run_claude_code`` prepares the agent sandbox and runs claude-code.
-    2. ``sandbox.git_diff`` captures the model-produced patch.
-    3. ``sandbox.evaluate`` scores that patch in a second clean sandbox.
-    4. ``_merge_samples`` combines reward + adapter ``TokenSegment``s,
-       delegating segment-to-``Sample`` fan-out to ``slime.agent.trajectory``.
+    1. ``swe.prepare_workspace`` + ``CLAUDE_CODE.run`` prepare the agent sandbox
+       and run claude-code.
+    2. ``swe.git_diff`` captures the model-produced patch.
+    3. ``swe.evaluate`` scores that patch in a second clean sandbox.
+    4. ``adapter.finish_session`` drains the session tree into reward-weighted
+       ``Sample`` objects with ``.response`` already decoded; ``generate`` logs.
 
-All sandbox-side details live in ``sandbox.py``; the LLM plumbing
-(Anthropic <-> SGLang /generate, token capture, 3-kind segment split) uses
-``slime.agent.adapters.AnthropicAdapter``.
+Sandbox-side details split across three layers: the provider-agnostic sandbox
+contract (``slime.agent.sandbox``), the harness lifecycle
+(``slime.agent.harness`` -- swappable coding agent), and the SWE task layer
+(``examples.coding_agent_rl.swe`` -- dataset-row parsing, workspace prep, diff
+capture, eval). The LLM plumbing (Anthropic <-> SGLang /generate, token capture,
+3-kind segment split) uses ``slime.agent.adapters.AnthropicAdapter``.
 
-Dataset row ``metadata`` schema::
-
-    image:             str        # sandbox image
-    workdir:           str        # repo path inside the sandbox
-    problem_statement: str        # issue body (falls back to sample.prompt)
-    swepro:            dict|None  # SWE-bench Pro test harness (preferred)
-    eval_cmd:          str|None   # last-resort: shell command (exit 0 = solved)
-
-Also accepted (sweb-style rows): ``metadata.remote_env_info.f2p_script`` —
-a self-contained Python test file ending in ``sys.exit(pytest.main(...))``.
-When ``eval_cmd`` is absent, ``_metadata`` wraps this script into a base64
-materialize-and-run shell command so the existing eval path stays unchanged.
+The dataset row ``metadata`` schema (and the two accepted shapes: flat vs
+``remote_env_info``) is documented in ``swe.metadata``, which produces the ``md``
+dict the orchestration below consumes.
 
 Env knobs (set in run.sh):
 
@@ -43,23 +38,24 @@ Env knobs (set in run.sh):
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
 import os
 import secrets
 import time
 import traceback
-from dataclasses import dataclass
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from slime.agent.adapters import AnthropicAdapter
-from slime.agent.trajectory import TokenSegment, fan_out_sample_segments
+from slime.agent.aiohttp_threaded import FilteredAccessLogger, run_app_in_thread
+from slime.agent.harness import CLAUDE_CODE
+from slime.agent.sandbox import E2BSandbox
 from slime.utils.misc import SingletonMeta
 from slime.utils.processing_utils import load_tokenizer
 from slime.utils.types import Sample
 
-from . import sandbox
-from .aiohttp_threaded import run_app_in_thread
+from . import swe
 
 logger = logging.getLogger(__name__)
 
@@ -70,13 +66,62 @@ SWE_EVAL_TIMEOUT_SEC = int(os.environ.get("SWE_EVAL_TIMEOUT_SEC", "600"))
 # SWE_TIME_BUDGET_SEC + SWE_EVAL_TIMEOUT_SEC + 180 (buffer for sandbox boot,
 # diff capture, etc). When exceeded, the in-flight sample is aborted with
 # reason `wall_clock_timeout` and the rest of the rollout continues -- this
-# isolates a single hung trajectory (e.g. stuck in sandbox.evaluate) so it
+# isolates a single hung trajectory (e.g. stuck in swe.evaluate) so it
 # does not kill the whole training step.
 SWE_GENERATE_GUARD_SEC = int(os.environ.get("SWE_GENERATE_GUARD_SEC", "0") or 0) or (
     SWE_TIME_BUDGET_SEC + SWE_EVAL_TIMEOUT_SEC + 180
 )
 SHIM_BIND_HOST = os.environ.get("SHIM_BIND_HOST", "0.0.0.0")
 SHIM_PORT = int(os.environ.get("SHIM_PORT", "18001"))
+
+# Boot tuning. The Node 22 + CLI tarball host paths (SWE_HOST_NODE_TARBALL /
+# SWE_HOST_CC_TARBALL, REQUIRED env in run.sh) are read inside
+# CLAUDE_CODE.install_cli, not here.
+SWE_BOOT_CONCURRENCY = int(os.environ.get("SWE_BOOT_CONCURRENCY", "16"))
+SWE_BOOT_RETRIES = int(os.environ.get("SWE_BOOT_RETRIES", "2"))
+
+_BOOT_SEM = asyncio.Semaphore(SWE_BOOT_CONCURRENCY)
+
+
+@asynccontextmanager
+async def boot_agent_sandbox(image: str) -> AsyncIterator[E2BSandbox]:
+    """Boot a fresh E2B sandbox and install the Claude Code toolchain.
+
+    Create the sandbox from the dataset image, install Node 22 + the harness CLI
+    from host tarballs, retry transient boot/install failures, and close the
+    sandbox when the caller leaves the context.
+    """
+    sb = None
+    last_err: Exception | None = None
+    for attempt in range(SWE_BOOT_RETRIES):
+        cand = E2BSandbox(image)
+        try:
+            async with _BOOT_SEM:
+                await cand.__aenter__()
+                try:
+                    await CLAUDE_CODE.install_cli(cand)
+                except BaseException:
+                    await cand.__aexit__(None, None, None)
+                    raise
+            sb = cand
+            break
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                "[coding_agent_rl] provision attempt %d/%d failed: %s: %s",
+                attempt + 1,
+                SWE_BOOT_RETRIES,
+                type(e).__name__,
+                str(e)[:200],
+            )
+            await asyncio.sleep(1 + attempt)
+    if sb is None:
+        assert last_err is not None
+        raise last_err
+    try:
+        yield sb
+    finally:
+        await sb.__aexit__(None, None, None)
 
 
 # ---------------------------------------------------------------------------
@@ -97,11 +142,13 @@ class _State(metaclass=SingletonMeta):
                 "Without it the sandbox cannot dial back and the rollout will "
                 "silently abort."
             )
+        fork_merge_threshold = int(v) if (v := os.environ.get("SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS")) else None
         self.adapter = AnthropicAdapter(
             tokenizer=self.tokenizer,
             sglang_url=sglang_url,
             tool_parser=self.tool_parser,
             reasoning_parser=self.reasoning_parser,
+            fork_threshold_tokens=fork_merge_threshold,
         )
         # handler_cancellation=True so a client disconnect cancels the handler
         # coroutine, arming the fire-and-forget /abort_request inside the
@@ -113,7 +160,10 @@ class _State(metaclass=SingletonMeta):
             host=SHIM_BIND_HOST,
             port=SHIM_PORT,
             thread_name="anthropic-adapter",
-            runner_kwargs={"handler_cancellation": True},
+            runner_kwargs={
+                "handler_cancellation": True,
+                "access_log_class": FilteredAccessLogger,
+            },
         )
         self.adapter_url = f"http://{public_host}:{self.app_handle.port}"
         logger.info(
@@ -127,18 +177,8 @@ class _State(metaclass=SingletonMeta):
 
 
 # ---------------------------------------------------------------------------
-# Trajectory -> Sample conversion
-# adapter.finish_session() returns TokenSegments. One trajectory yields >=1
-# segments because the agent may compact + reset mid-run; trajectory.py handles
-# the mechanical segment -> Sample fan-out.
+# Session setup
 # ---------------------------------------------------------------------------
-@dataclass(frozen=True)
-class RewardResult:
-    reward: float
-    is_solved: bool
-    applied_cleanly: bool
-
-
 def _start_session(
     state: _State,
     sample: Sample,
@@ -164,61 +204,18 @@ def _start_session(
     return session_id
 
 
-def _merge_samples(
-    *,
-    sample: Sample,
-    state: _State,
-    segments: list[TokenSegment],
-    reward_result: RewardResult,
-    elapsed_sec: float,
-    instance_id: str,
-):
-    if not segments:
-        return _abort_result(sample, "adapter_session_empty")
-
-    trajectory_metadata = {
-        **(sample.metadata or {}),
-        "instance_id": instance_id,
-        "is_solved": reward_result.is_solved,
-        "applied_cleanly": reward_result.applied_cleanly,
-        "elapsed_sec": elapsed_sec,
-    }
-
-    # All K samples share rollout_id so the loss reducer counts this
-    # trajectory once.
-    fanned = fan_out_sample_segments(
-        sample,
-        segments,
-        reward_result.reward,
-        state.tokenizer,
-        metadata=trajectory_metadata,
-    )
-    if not fanned:
-        raise ValueError("fan-out produced no samples")
-
-    logger.info(
-        "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s elapsed=%.1fs segments=%d",
-        instance_id,
-        reward_result.reward,
-        reward_result.is_solved,
-        reward_result.applied_cleanly,
-        elapsed_sec,
-        len(fanned),
-    )
-    return fanned
-
-
 # ---------------------------------------------------------------------------
 # Main per-sample agent function
 #
 # The four calls inside the timeout are the high-level rollout recipe:
-# run_claude_code -> git_diff -> sandbox.evaluate -> merge_samples.
+# swe.prepare_workspace + CLAUDE_CODE.run -> swe.git_diff -> swe.evaluate
+# -> finish_session.
 # ---------------------------------------------------------------------------
 async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
     """Per-sample agent function with wall-clock guard. See
     SWE_GENERATE_GUARD_SEC docstring above."""
     state = _State(args)
-    md = _metadata(sample)
+    md = swe.metadata(sample)
     if not md["image"] or not md["workdir"]:
         return _abort_result(sample, "missing_image_or_workdir")
 
@@ -227,42 +224,54 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
     t0 = time.time()
     try:
         async with asyncio.timeout(SWE_GENERATE_GUARD_SEC):
-            async with sandbox.boot_agent_sandbox(md["image"]) as sb:
-                await sandbox.run_claude_code(
+            async with boot_agent_sandbox(md["image"]) as sb:
+                await swe.prepare_workspace(sb, md["workdir"], md)
+                agent_rc = await CLAUDE_CODE.run(
                     sb,
                     workdir=md["workdir"],
                     session_id=session_id,
                     adapter_url=state.adapter_url,
                     time_budget_sec=SWE_TIME_BUDGET_SEC,
-                    problem_statement=md["problem_statement"],
-                    swepro=md["swepro"],
-                    pre_commands=md["pre_commands"],
+                    prompt=swe.SWE_PROMPT,
                 )
-                diff_text = await sandbox.git_diff(sb, md["workdir"])
+                diff_text = await swe.git_diff(sb, md["workdir"])
 
-            reward, is_solved, applied_cleanly = await sandbox.evaluate(
+            reward, is_solved, applied_cleanly = await swe.evaluate(
                 image=md["image"],
                 workdir=md["workdir"],
                 diff_text=diff_text,
                 swepro=md["swepro"],
                 eval_cmd=md["eval_cmd"],
+                f2p_script=md["f2p_script"],
                 pre_commands=md["pre_commands"],
                 timeout_sec=SWE_EVAL_TIMEOUT_SEC,
             )
-            reward_result = RewardResult(
+            samples = await state.adapter.finish_session(
+                session_id,
+                base_sample=sample,
                 reward=float(reward),
-                is_solved=bool(is_solved),
-                applied_cleanly=bool(applied_cleanly),
             )
-            segments = await state.adapter.finish_session(session_id)
-            return _merge_samples(
-                sample=sample,
-                state=state,
-                segments=segments,
-                reward_result=reward_result,
-                elapsed_sec=time.time() - t0,
-                instance_id=instance_id,
+            if not samples:
+                return _abort_result(sample, "adapter_session_empty")
+
+            # finish_session already linearized, reward-weighted and decoded
+            # each segment's .response; here we only log a summary. agent_rc is
+            # the harness exit code (0=clean, -2=time budget exceeded, -1=marker
+            # parse fail, else CLI crash) -- kept on metadata so a reward=0 run
+            # can be triaged into "ran but unsolved" vs "timed out" vs "crashed".
+            for s in samples:
+                s.metadata = {**(s.metadata or {}), "agent_rc": agent_rc}
+            logger.info(
+                "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s agent_rc=%d elapsed=%.1fs segments=%d",
+                instance_id,
+                float(reward),
+                bool(is_solved),
+                bool(applied_cleanly),
+                agent_rc,
+                time.time() - t0,
+                len(samples),
             )
+            return samples
 
     except asyncio.TimeoutError:
         _log_timeout_diagnostic(t0)
@@ -303,51 +312,9 @@ def _log_timeout_diagnostic(t0: float) -> None:
         pass
 
 
-# ---------------------------------------------------------------------------
-# Metadata helpers
-# ---------------------------------------------------------------------------
-def _wrap_f2p_script(script: str | None) -> str | None:
-    # Materialize a self-contained pytest script (typical sweb f2p_script:
-    # ends with `sys.exit(pytest.main([...]))`) into the sandbox via base64
-    # so we sidestep all shell quoting; python's exit code carries the
-    # pytest pass/fail signal that `_run_eval_cmd` turns into reward.
-    if not script:
-        return None
-    b64 = base64.b64encode(script.encode("utf-8")).decode("ascii")
-    return f"echo {b64} | base64 -d > /tmp/slime_f2p.py && python /tmp/slime_f2p.py"
-
-
-def _metadata(sample: Sample) -> dict[str, Any]:
-    """Normalize the two dataset schemas (flat vs ``remote_env_info``)."""
-    m = sample.metadata or {}
-    rem = m.get("remote_env_info") or {}
-    label = sample.label if (isinstance(sample.label, str) and len(sample.label) < 256) else None
-    return {
-        "instance_id": m.get("instance_id") or rem.get("instance_id") or label or "unknown",
-        "image": m.get("image") or rem.get("image_url"),
-        "workdir": m.get("workdir") or rem.get("workdir"),
-        "problem_statement": m.get("problem_statement") or _coerce_prompt(sample.prompt),
-        "swepro": m.get("swepro"),
-        "eval_cmd": m.get("eval_cmd") or _wrap_f2p_script(rem.get("f2p_script")),
-        "pre_commands": m.get("pre_commands") or rem.get("pre_commands"),
-    }
-
-
-def _coerce_prompt(prompt) -> str:
-    if isinstance(prompt, str):
-        return prompt
-    if isinstance(prompt, list):
-        for m in prompt:
-            if isinstance(m, dict) and m.get("role") == "user":
-                c = m.get("content")
-                if isinstance(c, str):
-                    return c
-                if isinstance(c, list):
-                    return "\n".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
-    return ""
-
-
-def _abort(sample: Sample, reason: str) -> Sample:
+def _abort_result(sample: Sample, reason: str) -> list[Sample]:
+    """Mark ``sample`` aborted in place and return it in the list shape this
+    fan-out generate function always yields."""
     sample.tokens = [0, 0]
     sample.response = ""
     sample.response_length = 1
@@ -356,9 +323,4 @@ def _abort(sample: Sample, reason: str) -> Sample:
     sample.status = Sample.Status.ABORTED
     sample.metadata = {**(sample.metadata or {}), "abort_reason": reason}
     logger.warning("[coding_agent_rl] aborted: %s", reason)
-    return sample
-
-
-def _abort_result(sample: Sample, reason: str):
-    """Return a uniform list shape for this fan-out generate function."""
-    return [_abort(sample, reason)]
+    return [sample]

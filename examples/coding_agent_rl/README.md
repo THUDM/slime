@@ -2,11 +2,12 @@
 
 This directory provides an example of running end-to-end **SWE (Software-Engineering) coding-agent RL** with slime: a real coding agent (claude-code CLI) drives `Read/Edit/Grep/Bash/Agent` tools inside a fresh sandbox per sample, the model produces a `git diff`, and the diff is graded against the dataset's test harness in a second clean sandbox (no test-cheating).
 
-Two example files and one shared adapter implement the loop:
+Two example files, the shared harness package, and one shared adapter implement the loop:
 
-- `generate.py` — per-sample `generate()` registered via `--custom-generate-function-path`. Boots the sandbox, runs claude-code, captures the diff, scores it, and emits one or more `Sample`s back to slime.
-- `slime.agent.adapters.AnthropicAdapter` — the shared Anthropic Messages adapter. claude-code talks to it as if it were Anthropic; the adapter tokenizes the current message history each turn, records prompt/output token snapshots, preserves model-generated tokens (`loss_mask=1`) only while later prompts stitch onto them, masks template/observation tokens (`0`), and emits **three kinds of segments** per trajectory: `subagent` (completed `Task/Agent` dispatch), `wipe` (chain frozen by auto-compact), `final` (tail of the main chain).
-- `sandbox.py` — coding-agent/SWE helpers built on `slime.agent.sandbox`: install bootstraps, spawn claude-code, capture patches, and run the fresh-sandbox evaluator. The shared sandbox contract lives in `slime.agent.sandbox.Sandbox`.
+- `generate.py` — per-sample `generate()` registered via `--custom-generate-function-path`. Boots the sandbox, prepares the SWE workspace, runs the coding harness (claude-code), captures the diff, scores it, and emits one or more `Sample`s back to slime.
+- `slime.agent.adapters.AnthropicAdapter` — the shared Anthropic Messages adapter. claude-code talks to it as if it were Anthropic; the adapter tokenizes the current message history each turn, records prompt/output token snapshots, preserves model-generated tokens (`loss_mask=1`) only while later prompts stitch onto them, and masks template/observation tokens (`0`). Each turn is routed into a per-session message tree inside `slime.agent.trajectory_manager.TrajectoryManager`; any divergence in the prompt prefix forks a new branch, so sub-agent dispatches and auto-compaction are handled as separate root-to-leaf chains. `get_trajectory` linearizes each leaf chain into one `Sample`.
+- `slime.agent.harness` — harness-agnostic coding-agent lifecycle (install CLI, write config, spawn detached, poll done-marker). `BaseHarness` defines the contract; `CLAUDE_CODE` / `CODEX` are the shipped implementations. Adding a harness is one new file. The shared sandbox contract lives in `slime.agent.sandbox.Sandbox`.
+- `swe.py` — harness-agnostic SWE task layer built on `slime.agent.sandbox`: `prepare_workspace` (pre_commands + PROBLEM_STATEMENT.md), `git_diff` (patch capture), and `evaluate` (fresh-sandbox grading). `SWE_PROMPT` is the task instruction handed to whichever harness runs.
 
 `generate.py` owns one `AnthropicAdapter` instance. For each sample it calls
 `adapter.open_session(...)` before starting claude-code, serves `adapter.app` as
@@ -111,7 +112,7 @@ All set in the launcher; tune per cluster.
 | `SWE_HOST_CC_TARBALL` | — | Host path to the Claude Code CLI npm tarball. |
 | `SWE_TIME_BUDGET_SEC` | `1800` | Wallclock budget for one agent run. |
 | `SWE_EVAL_TIMEOUT_SEC` | `600` | Wallclock cap on the evaluator sandbox. |
-| `SWE_BOOT_CONCURRENCY` | `6` | Cap on simultaneous sandbox boots (eases h2/SSL long-tail). |
+| `SWE_BOOT_CONCURRENCY` | `16` | Cap on simultaneous sandbox boots (eases h2/SSL long-tail). |
 | `SWE_CLAUDE_EXTRA_ARGS` | (see launcher) | Extra flags appended to the `claude` CLI invocation — registers the read-only `investigator` sub-agent, disables `WebFetch`/`WebSearch`, disables slash commands. |
 | `SWE_CC_PROMPT` | unset | Optional override for the user-turn prompt. Setting this to require sub-agent dispatch is the most reliable way to maximize fan-out. |
 
@@ -145,8 +146,8 @@ The Anthropic adapter therefore follows a **string in, token out** contract:
 
 Multi-turn agents still force the adapter to tokenize later message
 histories, because tool observations and claude-code's own compacted messages
-arrive as strings. `slime.agent.trajectory.merge_turns` stitches those later
-prompts against the saved token stream:
+arrive as strings. `slime.agent.trajectory_manager.TrajectoryManager` routes
+those later prompts against the saved token stream:
 
 - New prompt suffixes that are tool/user/environment context are appended with
   `loss_mask=0`.
@@ -160,15 +161,15 @@ That last case is the important correctness guard. A re-tokenization mismatch
 can make a string-level conversation look continuous while token-level
 provenance is broken. slime keeps the context needed to continue the agent, but
 does not backprop through tokens whose sampled origin can no longer be proven.
-The unit tests in `tests/test_agent_trajectory.py` cover matched prefixes,
-skipped turns, split-output drift, changed token counts, and prompt-base
-restarts.
+The unit tests in `tests/test_agent/test_trajectory_manager.py` cover matched
+prefixes, skipped turns, split-output drift, changed token counts, and
+prompt-base restarts.
 
 ## Fan-out Semantics
 
-- `generate()` returns `list[Sample]` — one Sample per trajectory **segment** (`subagent` / `wipe` / `final`).
-- Per-trajectory reward is split as `reward / K` across segments; `rollout_id` is shared so the per-rollout-mean loss reducer still counts the trajectory once.
-- Sub-agent dispatch increases `K` (each completed `Agent` turn block becomes its own segment), so the effective batch after flatten can be much larger than `rollout_batch_size * n_samples_per_prompt`.
+- `generate()` returns `list[Sample]` — one Sample per root-to-leaf chain in the per-session message tree.
+- Per-trajectory reward is split as `reward / K` across chains; `rollout_id` is shared so the per-rollout-mean loss reducer still counts the trajectory once.
+- Sub-agent dispatch and auto-compaction increase `K` (each prompt-prefix divergence forks a new branch), so the effective batch after flatten can be much larger than `rollout_batch_size * n_samples_per_prompt`.
 
 ## Porting to a New Sandbox Backend
 

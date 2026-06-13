@@ -8,6 +8,18 @@ from dataclasses import dataclass
 from typing import Any
 
 from aiohttp import web
+from aiohttp.web_log import AccessLogger
+
+
+class FilteredAccessLogger(AccessLogger):
+    SLOW_THRESHOLD_SEC = 120.0
+
+    def log(self, request, response, time):
+        if request.method == "HEAD":
+            return
+        if response.status == 200 and time <= self.SLOW_THRESHOLD_SEC:
+            return
+        super().log(request, response, time)
 
 
 @dataclass
@@ -17,10 +29,6 @@ class AppHandle:
     thread: threading.Thread
     loop: asyncio.AbstractEventLoop
     runner: web.AppRunner
-
-    @property
-    def url(self) -> str:
-        return f"http://{self.host}:{self.port}"
 
     def stop(self) -> None:
         async def _shutdown() -> None:
