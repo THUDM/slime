@@ -1,11 +1,14 @@
 # Adapt from https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/models/utils.py
 # and https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/trainer/ppo_utils/experience_maker.py
 
+import logging
 from argparse import Namespace
 
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+
+logger = logging.getLogger(__name__)
 
 
 @torch.compile(dynamic=True)
@@ -196,6 +199,368 @@ class _VocabParallelEntropy(torch.autograd.Function):
 
 def compute_entropy_from_logits(logits: torch.Tensor, process_group) -> torch.Tensor:
     return _VocabParallelEntropy.apply(logits, process_group)
+
+
+class _VocabParallelReverseKL(torch.autograd.Function):
+    """Compute D_KL(π_student ∥ π_teacher) over a vocabulary-parallel partition.
+
+    Both *student_logits* and *teacher_logits* are partial tensors along the
+    vocab dimension (each TP rank holds V/tp_size entries).  The function
+    performs the necessary all-reduces to compute the exact reverse KL
+    divergence in a numerically stable manner:
+
+        D_KL(π_s ∥ π_t) = Σ_y π_s(y) [log π_s(y) - log π_t(y)]
+
+    Forward returns a tensor of shape [R] (one KL value per response token).
+    Backward propagates gradients w.r.t. *student_logits* only; teacher logits
+    are treated as constants (detached).
+
+    Gradient derivation:
+        KL = Σ_y π_s(y) [log π_s(y) - log π_t(y)]
+        ∂KL/∂z_j = π_s(j) [log π_s(j) - log π_t(j) + 1 - Σ_k π_s(k)(log π_s(k) - log π_t(k) + 1)]
+                  = π_s(j) [log π_s(j) - log π_t(j) - KL]     (since Σ_k π_s(k) = 1)
+    where z_j are the student logits and log π_s is log_softmax(z).
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        student_logits: torch.Tensor,
+        teacher_logits: torch.Tensor,
+        process_group: dist.ProcessGroup,
+    ) -> torch.Tensor:
+        # --- student softmax (numerically stable, TP-aware) ---
+        s_max = student_logits.max(dim=-1, keepdim=True).values
+        dist.all_reduce(s_max, op=dist.ReduceOp.MAX, group=process_group)
+        s_shifted = student_logits - s_max
+        s_exp = s_shifted.exp()
+        s_sum_exp = s_exp.sum(dim=-1, keepdim=True)
+        dist.all_reduce(s_sum_exp, op=dist.ReduceOp.SUM, group=process_group)
+        s_softmax = s_exp / s_sum_exp  # π_s(y)  [R, V_local]
+        s_log_sum_exp = s_sum_exp.log()  # [R, 1]
+
+        # --- teacher log-softmax (numerically stable, TP-aware) ---
+        t_max = teacher_logits.max(dim=-1, keepdim=True).values
+        dist.all_reduce(t_max, op=dist.ReduceOp.MAX, group=process_group)
+        t_shifted = teacher_logits - t_max
+        t_exp = t_shifted.exp()
+        t_sum_exp = t_exp.sum(dim=-1, keepdim=True)
+        dist.all_reduce(t_sum_exp, op=dist.ReduceOp.SUM, group=process_group)
+        t_log_sum_exp = t_sum_exp.log()  # [R, 1]
+
+        # --- KL = Σ_y π_s(y) [log π_s(y) - log π_t(y)] ---
+        # log π_s(y) = s_shifted - s_log_sum_exp  (local slice)
+        # log π_t(y) = t_shifted - t_log_sum_exp  (local slice)
+        local_s_log_prob = s_shifted - s_log_sum_exp
+        local_t_log_prob = t_shifted - t_log_sum_exp
+
+        local_kl_sum = (s_softmax * (local_s_log_prob - local_t_log_prob)).sum(dim=-1, keepdim=True)
+        dist.all_reduce(local_kl_sum, op=dist.ReduceOp.SUM, group=process_group)
+        kl = local_kl_sum.squeeze(dim=-1)  # [R]
+
+        # Save for backward
+        # We need: s_softmax, local_s_log_prob, local_t_log_prob, and kl (per-token)
+        ctx.save_for_backward(s_softmax, local_s_log_prob.detach(), local_t_log_prob.detach(), kl.detach())
+        ctx.process_group = process_group
+        return kl
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        s_softmax, local_s_log_prob, local_t_log_prob, kl = ctx.saved_tensors
+
+        # Gradient: ∂KL/∂z_j = π_s(j) * [log π_s(j) - log π_t(j) - KL]
+        # This is completely local per token — no all_reduce needed in backward.
+        grad_local = s_softmax * (local_s_log_prob - local_t_log_prob - kl.unsqueeze(-1))
+
+        grad_input = grad_output.unsqueeze(-1) * grad_local  # [R, V_local]
+        return grad_input, None, None
+
+
+def vocab_parallel_reverse_kl(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    process_group: dist.ProcessGroup,
+) -> torch.Tensor:
+    """Compute D_KL(π_student ∥ π_teacher) with TP-aware vocab parallelism.
+
+    Both inputs are partial logits along the vocab dimension (each TP rank
+    holds V/tp_size logits).  Returns per-token KL of shape [R].
+
+    Teacher logits are detached (no gradient flows to the teacher).
+
+    Args:
+        student_logits: [R, V_local] student logits (with grad).
+        teacher_logits: [R, V_local] teacher logits (detached).
+        process_group: TP process group for all-reduce.
+
+    Returns:
+        Per-token KL divergence tensor of shape [R].
+    """
+    # Detach teacher logits — we never backprop through the teacher
+    teacher_logits = teacher_logits.detach()
+
+    tp_size = dist.get_world_size(group=process_group) if process_group is not None else 1
+    if tp_size <= 1:
+        # No TP — simple local computation
+        student_log_probs = F.log_softmax(student_logits, dim=-1)
+        student_probs = student_log_probs.exp()
+        teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
+        kl = (student_probs * (student_log_probs - teacher_log_probs)).sum(dim=-1)
+        return kl
+
+    # TP mode — use custom autograd function with correct backward
+    return _VocabParallelReverseKL.apply(student_logits, teacher_logits, process_group)
+
+
+def vocab_parallel_topk_reverse_kl(
+    student_logits: torch.Tensor,
+    teacher_topk_logits: torch.Tensor,
+    teacher_topk_indices: torch.Tensor,
+    vocab_size: int,
+    process_group: dist.ProcessGroup,
+    valid_topk_mask: torch.Tensor | None = None,
+    is_log_probs: bool = False,
+    teacher_log_sum_exp: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Compute approximate D_KL(π_student ∥ π_teacher) using top-k teacher logits plus tail correction.
+
+    This is a memory-efficient alternative to full-vocab KL. The teacher provides only
+    its top-k logits and indices (pre-computed during the teacher forward pass), while
+    the student has full vocab logits.
+
+    The KL is decomposed into:
+        KL = KL_topk + KL_tail
+    where:
+        KL_topk = Σ_{y ∈ topk} π_s(y) [log π_s(y) - log π_t(y)]
+        KL_tail ≈ π_s_tail * log(π_s_tail / π_t_tail)
+
+    For TP: teacher_topk_indices are LOCAL indices within each TP shard. We gather
+    the student logits at those local positions directly (no cross-shard indexing needed).
+
+    Args:
+        student_logits: [R, V_local] student logits (with grad), vocab-sharded across TP.
+        teacher_topk_logits: [R, k] teacher top-k logits (detached), fp32.
+            When is_log_probs=False (Megatron mode): raw logits from teacher forward pass.
+            When is_log_probs=True (SGLang mode): log probabilities (log softmax) from
+            SGLang's input_top_logprobs. The function will skip the log_softmax step
+            and use them directly as teacher log-probs.
+        teacher_topk_indices: [R, k] teacher top-k LOCAL indices within each TP shard, int.
+        vocab_size: Full (unsharded) vocabulary size V.
+        process_group: TP process group for all-reduce.
+        valid_topk_mask: Optional [R, k] boolean mask. True = valid entry, False = padding.
+            When provided (e.g. for SGLang-sourced top-k with TP>1 where different shards
+            have different numbers of real entries), padding entries are zeroed out so they
+            don't contribute to the KL. When None, all k entries are assumed valid (Megatron
+            mode where each shard independently computes its top-k).
+        is_log_probs: If True, teacher_topk_logits contains log probabilities (already
+            softmax-normalized) rather than raw logits. This is the case for SGLang mode
+            where the server returns log-probs directly. When True, the function skips
+            the log_softmax computation and uses the values as-is for teacher log-probs.
+        teacher_log_sum_exp: Optional [R] tensor with the teacher's full-vocabulary
+            log_sum_exp per token position (computed from complete logits during the
+            Megatron teacher forward pass). When provided along with is_log_probs=False
+            (Megatron mode), enables exact teacher tail mass computation:
+            teacher_tail_mass = 1 - sum(exp(topk_logits - log_sum_exp)).
+            This replaces the inaccurate uniform assumption (V - V_eff) / V that
+            can over-estimate tail mass by orders of magnitude when k << V.
+
+    Returns:
+        Per-token KL divergence tensor of shape [R].
+    """
+    # Detach teacher inputs
+    teacher_topk_logits = teacher_topk_logits.detach()
+    teacher_topk_indices = teacher_topk_indices.detach()
+
+    # torch.gather requires LongTensor (int64) indices.
+    # Accept int32 from the data pipeline and cast defensively.
+    if teacher_topk_indices.dtype != torch.int64:
+        teacher_topk_indices = teacher_topk_indices.long()
+
+    tp_size = dist.get_world_size(group=process_group) if process_group is not None else 1
+
+    # Compute validity mask from teacher_topk_logits if not provided.
+    # Entries with -inf logits are padding (e.g., from SGLang TP sharding).
+    if valid_topk_mask is None:
+        # Auto-detect: any entry that is not -inf is valid.
+        # This is backward-compatible with Megatron mode where all entries are valid.
+        valid_topk_mask = ~torch.isinf(teacher_topk_logits)
+
+    # Zero out padding entries in teacher_topk_logits to prevent NaN in exp()
+    # This replaces -inf with a large negative value that won't affect the max but
+    # will become 0 after exp. The valid_topk_mask handles the rest.
+    teacher_topk_logits_safe = teacher_topk_logits.clone()
+    teacher_topk_logits_safe[~valid_topk_mask] = -1e9  # large negative, not -inf
+
+    # --- student softmax (numerically stable, TP-aware) ---
+    s_max = student_logits.max(dim=-1, keepdim=True).values
+    if tp_size > 1:
+        dist.all_reduce(s_max, op=dist.ReduceOp.MAX, group=process_group)
+    s_shifted = student_logits - s_max
+    s_exp = s_shifted.exp()
+    s_sum_exp = s_exp.sum(dim=-1, keepdim=True)
+    if tp_size > 1:
+        dist.all_reduce(s_sum_exp, op=dist.ReduceOp.SUM, group=process_group)
+    s_softmax = s_exp / s_sum_exp  # π_s(y)  [R, V_local]
+    s_log_sum_exp = s_sum_exp.log()  # [R, 1]
+
+    # Gather student probs and log-probs at teacher's top-k positions
+    # teacher_topk_indices are LOCAL to this TP shard
+    # Defensive: clamp indices to valid range in case of mismatch between
+    # the padded vocab size used for TP shard calculation and the model's
+    # actual output dimension (e.g., when padded_vocab_size > vocab_size).
+    _v_local = s_softmax.size(-1)
+    if teacher_topk_indices.max() >= _v_local or teacher_topk_indices.min() < 0:
+        logger.warning(
+            f"teacher_topk_indices out of range for s_softmax.size(-1)={_v_local}, "
+            f"clamping indices. This typically indicates a mismatch between "
+            f"padded_vocab_size and the model's actual vocab dimension."
+        )
+        teacher_topk_indices = teacher_topk_indices.clamp(min=0, max=_v_local - 1)
+    student_topk_probs = s_softmax.gather(-1, teacher_topk_indices)  # [R, k]
+    student_topk_shifted = s_shifted.gather(-1, teacher_topk_indices)  # [R, k]
+    student_topk_log_probs = student_topk_shifted - s_log_sum_exp  # [R, k]
+
+    # Zero out student contributions at padding positions
+    student_topk_probs = student_topk_probs * valid_topk_mask.float()
+    # student_topk_log_probs: we only use this in KL_topk where it's multiplied by
+    # student_topk_probs (which is zero at padding). So no separate masking needed.
+
+    # --- teacher distribution from top-k entries ---
+    if is_log_probs:
+        # SGLang mode: teacher_topk_logits already contains log probabilities.
+        # No need to compute log_softmax — use them directly.
+        # teacher_topk_log_probs_approx = teacher_topk_logits (with padding zeroed out)
+        # teacher_topk_probs = exp(teacher_topk_logits) (only for tail mass computation)
+        teacher_topk_log_probs_approx = teacher_topk_logits_safe * valid_topk_mask.float()
+        teacher_topk_probs = teacher_topk_log_probs_approx.exp() * valid_topk_mask.float()
+    else:
+        # Megatron mode: teacher_topk_logits contains raw logits. Apply log_softmax
+        # over the top-k entries to get teacher log-probs (TP-aware).
+        t_max = teacher_topk_logits_safe.max(dim=-1, keepdim=True).values
+        if tp_size > 1:
+            # teacher_topk_logits are per-shard, so we need global max across shards
+            # BUT: each shard's top-k is independent (local indices).
+            # To compute the correct global log_sum_exp, we need:
+            #   (a) the global max of ALL top-k logits across shards, and
+            #   (b) the sum of exp(logits - global_max) across all shards.
+            dist.all_reduce(t_max, op=dist.ReduceOp.MAX, group=process_group)
+        t_shifted = teacher_topk_logits_safe - t_max
+        t_exp = t_shifted.exp()
+        # Zero out padding contributions in exp sum
+        t_exp = t_exp * valid_topk_mask.float()
+        t_sum_exp = t_exp.sum(dim=-1, keepdim=True)
+        if tp_size > 1:
+            # Sum of exp across all shards (each shard contributes its valid top-k values)
+            dist.all_reduce(t_sum_exp, op=dist.ReduceOp.SUM, group=process_group)
+        t_log_sum_exp = t_sum_exp.log()  # [R, 1]
+
+        # Compute teacher log-probs from the safe (non-inf) logits
+        teacher_topk_log_probs_approx = t_shifted - t_log_sum_exp  # [R, k]
+        # Zero out padding entries
+        teacher_topk_log_probs_approx = teacher_topk_log_probs_approx * valid_topk_mask.float()
+        teacher_topk_probs = (t_shifted.exp() * valid_topk_mask.float()) / t_sum_exp  # [R, k]
+
+    # --- tail mass (TP-aware) ---
+    # Student tail mass: 1 - sum(π_s(y) for y in valid top-k of this shard)
+    student_topk_mass = student_topk_probs.sum(dim=-1)  # [R]
+    if tp_size > 1:
+        # Sum the top-k mass across all TP shards to get the total mass in all shards' top-k
+        dist.all_reduce(student_topk_mass, op=dist.ReduceOp.SUM, group=process_group)
+    student_tail_mass = (1.0 - student_topk_mass).clamp(min=0.0)  # [R]
+
+    # Teacher tail mass: 1 - sum(π_t(y) for y in top-k)
+    # Computed from the actual teacher probability mass in the top-k partition,
+    # NOT from the uniform assumption (V - V_eff) / V which is wildly inaccurate
+    # when k << V (e.g., k=128, V=152064 → uniform tail ≈ 0.999 → catastrophic
+    # rescaling of ~-7 nats).
+    if is_log_probs:
+        # SGLang mode: teacher_topk_probs already reflects the true probability mass
+        # because log_probs came from a full softmax over the entire vocabulary.
+        # Sum exp(log_prob) across all valid top-k entries to get the actual mass.
+        teacher_topk_mass = teacher_topk_probs.sum(dim=-1)  # [R]
+        if tp_size > 1:
+            # Sum across TP shards to get total mass from all shards' top-k entries
+            dist.all_reduce(teacher_topk_mass, op=dist.ReduceOp.SUM, group=process_group)
+        teacher_tail_mass = (1.0 - teacher_topk_mass).clamp(min=0.0)  # [R]
+    else:
+        # Megatron mode: teacher_topk_logits are raw logits and teacher_topk_probs
+        # are from softmax over top-k entries only (not the full vocabulary).
+        # The sum is ~1 within the top-k partition, so we need an external
+        # reference to compute the true tail mass.
+        if teacher_log_sum_exp is not None:
+            # Exact tail mass from the full-vocabulary log_sum_exp computed
+            # during the teacher forward pass. This is the preferred method:
+            # teacher_topk_mass = sum(exp(logits - log_sum_exp)) for valid entries
+            # teacher_tail_mass = 1 - teacher_topk_mass
+            # No TP all-reduce needed for teacher_log_sum_exp — it was already
+            # reduced when computed in actor.py.
+            # teacher_topk_logits_safe contains the safe (non-inf) logits
+            # with padding replaced by -1e9. Use valid_topk_mask to zero out
+            # padding contributions.
+            topk_shifted = teacher_topk_logits_safe - teacher_log_sum_exp.unsqueeze(-1)  # [R, k]
+            topk_probs_from_full = topk_shifted.exp() * valid_topk_mask.float()  # [R, k]
+            teacher_topk_mass = topk_probs_from_full.sum(dim=-1)  # [R]
+            if tp_size > 1:
+                dist.all_reduce(teacher_topk_mass, op=dist.ReduceOp.SUM, group=process_group)
+            teacher_tail_mass = (1.0 - teacher_topk_mass).clamp(min=0.0)  # [R]
+        else:
+            # Fallback: uniform tail assumption (V - V_eff) / V.
+            # This is inaccurate when k << V (e.g., k=128, V=152K → tail ≈ 0.999)
+            # and will over-estimate the KL by ~5-7 nats. Should only be used
+            # when teacher_log_sum_exp is not available (legacy fallback).
+            valid_count = valid_topk_mask.float().sum(dim=-1)  # [R]
+            if tp_size > 1:
+                dist.all_reduce(valid_count, op=dist.ReduceOp.SUM, group=process_group)
+            V_eff = valid_count  # [R]
+            teacher_tail_mass = torch.clamp((vocab_size - V_eff) / vocab_size, min=0.0)  # [R]
+
+    # Scale teacher log-probs to account for tail mass.
+    #
+    # Megatron mode (is_log_probs=False):
+    #   teacher_topk_log_probs_approx = log_softmax(topk_logits) — these are
+    #   normalized only within the top-k partition (sum to ~1 within top-k).
+    #   We need to rescale: log π_t(y) = log_softmax(topk) + log(1 - tail_mass)
+    #   so that the top-k probabilities sum to (1 - tail_mass) over the full vocab.
+    #
+    # SGLang mode (is_log_probs=True):
+    #   teacher_topk_log_probs_approx = log(π_t(y)) from SGLang's full-vocab softmax.
+    #   These are already normalized over the full vocabulary, so NO rescaling needed.
+    #   The top-k probabilities naturally sum to (1 - teacher_tail_mass) which we
+    #   computed above as 1 - sum(exp(log_prob)).
+    if is_log_probs:
+        teacher_topk_log_probs = teacher_topk_log_probs_approx
+    else:
+        safe_tail = (teacher_tail_mass > 0) & (teacher_tail_mass < 1.0)
+        teacher_topk_log_probs = teacher_topk_log_probs_approx.clone()
+        if safe_tail.any():
+            # log(1 - teacher_tail_mass) is per-token [R], need to broadcast to [R, 1]
+            scale = torch.log((1.0 - teacher_tail_mass).clamp(min=1e-10)).unsqueeze(-1)  # [R, 1]
+            teacher_topk_log_probs = torch.where(
+                safe_tail.unsqueeze(-1),
+                teacher_topk_log_probs_approx + scale,
+                teacher_topk_log_probs_approx,
+            )
+
+    # --- KL computation ---
+    # KL_topk = Σ_{y ∈ top-k (all shards)} π_s(y) [log π_s(y) - log π_t(y)]
+    local_kl_topk = (student_topk_probs * (student_topk_log_probs - teacher_topk_log_probs)).sum(dim=-1)  # [R]
+    if tp_size > 1:
+        dist.all_reduce(local_kl_topk, op=dist.ReduceOp.SUM, group=process_group)
+
+    # KL_tail ≈ π_s_tail * log(π_s_tail / π_t_tail)
+    # π_s_tail = student_tail_mass per token
+    # π_t_tail = teacher_tail_mass (estimated above)
+    kl_tail = torch.zeros_like(student_tail_mass)
+    tail_mask = (student_tail_mass > 1e-10) & (teacher_tail_mass > 1e-10)
+    kl_tail[tail_mask] = student_tail_mass[tail_mask] * (
+        torch.log(student_tail_mass[tail_mask]) - torch.log(teacher_tail_mass[tail_mask])
+    )
+    # If teacher_tail_mass ≈ 0 but student_tail_mass > 0, we have an unbounded KL.
+    # This shouldn't happen if k is large enough. We treat it as 0 for numerical safety.
+
+    kl = local_kl_topk + kl_tail  # [R]
+
+    return kl
 
 
 def get_grpo_returns(

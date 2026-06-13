@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import random
@@ -32,7 +33,7 @@ from .cp_utils import slice_log_prob_with_cp, slice_with_cp
 from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data
 from .hf_checkpoint_saver import save_hf_model_to_path
 from .initialize import init, is_megatron_main_rank
-from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
+from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_logits_for_distill, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight.common import named_params_and_buffers
 from .update_weight.update_weight_from_disk import UpdateWeightFromDisk
@@ -121,8 +122,28 @@ class MegatronTrainRayActor(TrainRayActor):
             self.load_other_checkpoint("ref", args.ref_load)
 
         # Load teacher model for Megatron-based on-policy distillation
-        if with_opd_teacher:
+        if with_opd_teacher and not getattr(args, "use_mopd", False):
             self.load_other_checkpoint("teacher", args.opd_teacher_load)
+
+        # Load multiple teacher models for Megatron-based MOPD
+        self._mopd_teacher_domains: list[str] = []
+        mopd_teacher_mode = getattr(args, "mopd_teacher_mode", "megatron")
+        if getattr(args, "use_mopd", False):
+            if mopd_teacher_mode == "megatron" and getattr(args, "mopd_teacher_loads", None):
+                mopd_teachers = (
+                    json.loads(args.mopd_teachers) if isinstance(args.mopd_teachers, str) else args.mopd_teachers
+                )
+                for i, teacher_cfg in enumerate(mopd_teachers):
+                    domain = teacher_cfg["domain"]
+                    tag = f"mopd_teacher_{domain}"
+                    self._mopd_teacher_domains.append(domain)
+                    self.load_other_checkpoint(tag, args.mopd_teacher_loads[i])
+                    logger.info(f"Loaded MOPD teacher model for domain '{domain}' from {args.mopd_teacher_loads[i]}")
+            elif mopd_teacher_mode == "sglang":
+                logger.info(
+                    "MOPD SGLang teacher mode: skipping Megatron teacher model loading. "
+                    "Teacher data will be collected from SGLang remote servers during rollout."
+                )
 
         if self.args.keep_old_actor:
             # Load old_actor checkpoint
@@ -166,12 +187,15 @@ class MegatronTrainRayActor(TrainRayActor):
             quantization_config=getattr(self.hf_config, "quantization_config", None),
         )
 
+        # Ensure actor weights are on GPU and _active_model_tag is correct
+        # after loading ref/teacher/mopd_teacher/old_actor checkpoints.
+        if self._active_model_tag != "actor":
+            self._switch_model("actor")
+
         # empty cache after initialization
         clear_memory()
 
         if self.args.offload_train:
-            # recover to actor in the end.
-            self._switch_model("actor")
             self.sleep()
 
         self.rollout_engines = None
@@ -293,6 +317,59 @@ class MegatronTrainRayActor(TrainRayActor):
                     )
                 )
             ]
+
+        # Process MOPD teacher log_probs (dict: domain -> list)
+        # When teacher data is unavailable (e.g., HTTP request failure), entries
+        # may be None. We replace None with -inf tensors so all DP ranks execute
+        # the same backward operations, preventing NCCL deadlocks from
+        # inconsistent collective calls.
+        if "mopd_teacher_log_probs" in rollout_data:
+            mopd_lp_dict = rollout_data["mopd_teacher_log_probs"]
+            processed = {}
+            for domain, lp_list in mopd_lp_dict.items():
+                domain_processed = []
+                for i, (log_prob, total_length, response_length) in enumerate(
+                    zip(
+                        lp_list,
+                        rollout_data["total_lengths"],
+                        rollout_data["response_lengths"],
+                        strict=False,
+                    )
+                ):
+                    if log_prob is None:
+                        # Create a -inf tensor of the correct size as fallback.
+                        # -inf log-probs produce zero KL contribution, so this
+                        # domain has no effect on the loss for this sample.
+                        sliced_len = len(
+                            slice_log_prob_with_cp(
+                                torch.zeros(response_length),
+                                total_length,
+                                response_length,
+                                self.args.qkv_format,
+                                rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
+                            )
+                        )
+                        domain_processed.append(
+                            torch.full(
+                                (sliced_len,), float("-inf"), device=torch.cuda.current_device(), dtype=torch.float32
+                            )
+                        )
+                    else:
+                        domain_processed.append(
+                            torch.tensor(
+                                slice_log_prob_with_cp(
+                                    log_prob,
+                                    total_length,
+                                    response_length,
+                                    self.args.qkv_format,
+                                    rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
+                                ),
+                                device=torch.cuda.current_device(),
+                                dtype=torch.float32,
+                            )
+                        )
+                processed[domain] = domain_processed
+            rollout_data["mopd_teacher_log_probs"] = processed
         if "rollout_routed_experts" in rollout_data:
             rollout_data["rollout_routed_experts"] = [
                 torch.from_numpy(r) for r in rollout_data["rollout_routed_experts"]
@@ -388,17 +465,19 @@ class MegatronTrainRayActor(TrainRayActor):
         data_iterator: list[DataIterator],
         num_microbatches: list[int],
         store_prefix: str = "",
+        return_logits: bool = False,
     ) -> dict[str, list[torch.Tensor]]:
 
         with timer(f"{store_prefix}log_probs"):
-            return forward_only(
-                get_log_probs_and_entropy,
+            result = forward_only(
+                get_logits_for_distill if return_logits else get_log_probs_and_entropy,
                 self.args,
                 self.model,
                 data_iterator,
                 num_microbatches,
                 store_prefix=store_prefix,
             )
+            return result
 
     def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):
         if self.args.debug_rollout_only:
@@ -486,6 +565,238 @@ class MegatronTrainRayActor(TrainRayActor):
                         )
                     )
 
+                # Forward each MOPD teacher model for Megatron-based MOPD
+                # Only applies when mopd_teacher_mode == "megatron". In SGLang mode,
+                # teacher data is collected during rollout and arrives in rollout_data.
+                mopd_teacher_mode = getattr(self.args, "mopd_teacher_mode", "megatron")
+                if (
+                    getattr(self.args, "use_mopd", False)
+                    and mopd_teacher_mode == "megatron"
+                    and hasattr(self, "_mopd_teacher_domains")
+                    and self._mopd_teacher_domains
+                ):
+                    mopd_teacher_log_probs = {}
+                    mopd_distill_type = getattr(self.args, "mopd_distill_type", "token_level")
+                    use_full_vocab = mopd_distill_type == "full_vocab"
+                    use_top_k = mopd_distill_type == "top_k"
+                    for domain in self._mopd_teacher_domains:
+                        tag = f"mopd_teacher_{domain}"
+                        if tag in self.weights_backuper.backup_tags:
+                            if self.args.use_routing_replay:
+                                os.environ["ROUTING_REPLAY_STAGE"] = "fallthrough"
+                            self._switch_model(tag)
+                            if use_full_vocab or use_top_k:
+                                # Full-vocab / top-k mode: get full logits from teacher
+                                teacher_result = self.compute_log_prob(
+                                    data_iterator,
+                                    num_microbatches,
+                                    store_prefix=f"mopd_teacher_{domain}_fv_",
+                                    return_logits=True,
+                                )
+                                if use_full_vocab:
+                                    # Full-vocab: store all logits [R_i, V_local]
+                                    logits_key = f"mopd_teacher_{domain}_fv_logits"
+                                    if logits_key in teacher_result:
+                                        rollout_data[logits_key] = teacher_result[logits_key]
+                                elif use_top_k:
+                                    # Top-k: store top-k logits + indices [R_i, k] per sample
+                                    topk_k = self.args.mopd_topk_k
+                                    logits_list = teacher_result.get(f"mopd_teacher_{domain}_fv_logits", [])
+                                    if logits_list:
+                                        topk_logits_key = f"mopd_teacher_{domain}_topk_logits"
+                                        topk_indices_key = f"mopd_teacher_{domain}_topk_indices"
+                                        topk_log_sum_exp_key = f"mopd_teacher_{domain}_topk_log_sum_exp"
+                                        topk_logits_list = []
+                                        topk_indices_list = []
+                                        topk_log_sum_exp_list = []
+                                        tp_group = mpu.get_tensor_model_parallel_group()
+                                        for sample_logits in logits_list:
+                                            # sample_logits: [R_i, V_local]
+                                            # Compute log_sum_exp for exact tail mass estimation.
+                                            # This avoids the inaccurate uniform tail assumption
+                                            # (V - V_eff) / V which over-estimates tail mass
+                                            # when k << V, causing KL inflation of ~5+ nats.
+                                            local_max = sample_logits.max(dim=-1).values
+                                            dist.all_reduce(local_max, op=dist.ReduceOp.MAX, group=tp_group)
+                                            # Numerically stable log_sum_exp
+                                            shifted = sample_logits - local_max.unsqueeze(-1)
+                                            local_sum_exp = shifted.exp().sum(dim=-1)
+                                            dist.all_reduce(local_sum_exp, op=dist.ReduceOp.SUM, group=tp_group)
+                                            log_sum_exp = (local_sum_exp + 1e-20).log() + local_max
+                                            topk_log_sum_exp_list.append(log_sum_exp.detach().float())
+
+                                            topk_vals, topk_idx = sample_logits.topk(topk_k, dim=-1)
+                                            topk_logits_list.append(topk_vals.detach().float())
+                                            topk_indices_list.append(topk_idx.detach().int())
+                                        rollout_data[topk_logits_key] = topk_logits_list
+                                        rollout_data[topk_indices_key] = topk_indices_list
+                                        rollout_data[topk_log_sum_exp_key] = topk_log_sum_exp_list
+                            else:
+                                # Token-level mode: only need log_probs
+                                teacher_result = self.compute_log_prob(
+                                    data_iterator,
+                                    num_microbatches,
+                                    store_prefix=f"mopd_teacher_{domain}_",
+                                )
+                                lp_key = f"mopd_teacher_{domain}_log_probs"
+                                if lp_key in teacher_result:
+                                    mopd_teacher_log_probs[domain] = teacher_result[lp_key]
+                    if mopd_teacher_log_probs:
+                        rollout_data["mopd_teacher_log_probs"] = mopd_teacher_log_probs
+
+                # SGLang MOPD mode: convert rollout-collected top-k data to per-domain batch format
+                if getattr(self.args, "use_mopd", False) and mopd_teacher_mode == "sglang":
+                    mopd_distill_type = getattr(self.args, "mopd_distill_type", "token_level")
+                    if mopd_distill_type == "top_k":
+                        # Convert SGLang-sourced top-k data (nested dict format from rollout)
+                        # to per-domain batch keys matching the Megatron loss function's expected format.
+                        sglang_topk_logits = rollout_data.pop("mopd_teacher_topk_logits", None)
+                        sglang_topk_indices = rollout_data.pop("mopd_teacher_topk_indices", None)
+                        if sglang_topk_logits and sglang_topk_indices:
+                            tp_rank = mpu.get_tensor_model_parallel_rank()
+                            tp_size = mpu.get_tensor_model_parallel_world_size()
+                            # Use the ORIGINAL vocab_size (not padded_vocab_size) for
+                            # TP shard calculations. Megatron's ColumnParallelLinear
+                            # output layer dimensions are based on the actual
+                            # vocab_size / tp_size (loaded from HF checkpoint),
+                            # NOT padded_vocab_size / tp_size. Using padded values
+                            # causes local indices to exceed the model's actual
+                            # vocab dimension, leading to gather-index-out-of-bounds
+                            # errors in the downstream KL computation.
+                            #   padded_vocab_size = 249856 → per-shard = 15616
+                            #   vocab_size          = 248320 → per-shard = 15520 (actual)
+                            #   Overflow range: [15520, 15615] (96 phantom indices)
+                            vocab_size = self.args.vocab_size
+                            padded_vocab_size = self.args.padded_vocab_size
+                            vocab_local_size = vocab_size // tp_size
+                            vocab_offset = tp_rank * vocab_local_size
+                            topk_k = self.args.mopd_topk_k
+
+                            # Check that SGLang teacher's vocab size is consistent
+                            # with the student's vocab_size. If teacher token IDs
+                            # exceed the student vocab range, the global→local TP
+                            # index conversion will produce silently incorrect results.
+                            _vocab_checked = False
+
+                            for domain in sglang_topk_logits:
+                                topk_logits_key = f"mopd_teacher_{domain}_topk_logits"
+                                topk_indices_key = f"mopd_teacher_{domain}_topk_indices"
+                                # Convert each sample's [seq_len][k] Python lists to tensors on GPU
+                                topk_logits_list = []
+                                topk_indices_list = []
+                                for i, (logits_per_sample, indices_per_sample) in enumerate(
+                                    zip(sglang_topk_logits[domain], sglang_topk_indices[domain], strict=False)
+                                ):
+                                    if logits_per_sample is None or indices_per_sample is None:
+                                        # Fallback: create zero-contribution tensors so all DP
+                                        # ranks execute the same backward operations, preventing
+                                        # NCCL deadlocks from inconsistent collective calls.
+                                        # Use -inf logits → zero KL divergence contribution.
+                                        seq_len = rollout_data["response_lengths"][i]
+                                        topk_logits_list.append(
+                                            torch.full(
+                                                (seq_len, topk_k),
+                                                float("-inf"),
+                                                device=torch.cuda.current_device(),
+                                                dtype=torch.float32,
+                                            )
+                                        )
+                                        topk_indices_list.append(
+                                            torch.zeros(
+                                                (seq_len, topk_k),
+                                                device=torch.cuda.current_device(),
+                                                dtype=torch.int64,
+                                            )
+                                        )
+                                    else:
+                                        # SGLang returns GLOBAL token IDs, but the Megatron loss
+                                        # function (vocab_parallel_topk_reverse_kl) expects LOCAL
+                                        # indices within each TP shard's vocab range, with each
+                                        # shard having exactly k entries per position.
+                                        #
+                                        # Strategy: For each position, scatter the global top-k
+                                        # entries to the appropriate shard. Each TP rank keeps
+                                        # entries whose global token ID falls in its range
+                                        # [vocab_offset, vocab_offset + vocab_local_size),
+                                        # converts to local index, and pads to k entries with
+                                        # local_idx=0, logit=-inf (contributing nothing to KL).
+                                        global_indices = torch.tensor(
+                                            indices_per_sample, device=torch.cuda.current_device(), dtype=torch.int64
+                                        )  # [seq_len, k_global]
+                                        global_logits = torch.tensor(
+                                            logits_per_sample, device=torch.cuda.current_device(), dtype=torch.float32
+                                        )  # [seq_len, k_global]
+
+                                        # Vocab consistency check (once per actor step)
+                                        if not _vocab_checked:
+                                            _vocab_checked = True
+                                            max_token_id = global_indices.max().item()
+                                            min_token_id = global_indices.min().item()
+                                            logger.info(
+                                                f"[MOPD] Vocab sharding: tp_rank={tp_rank}, "
+                                                f"tp_size={tp_size}, vocab_size={vocab_size}, "
+                                                f"padded_vocab_size={padded_vocab_size}, "
+                                                f"vocab_local_size={vocab_local_size}, "
+                                                f"vocab_offset={vocab_offset}, topk_k={topk_k}"
+                                            )
+                                            logger.info(
+                                                f"[MOPD] global_indices range=[{min_token_id}, "
+                                                f"{max_token_id}], shape={global_indices.shape}"
+                                            )
+                                            if max_token_id >= vocab_size:
+                                                logger.error(
+                                                    f"[MOPD] TOKEN ID OVERFLOW! "
+                                                    f"max_token_id={max_token_id} >= "
+                                                    f"vocab_size={vocab_size}"
+                                                )
+
+                                        seq_len = global_indices.size(0)
+                                        # Mask for which entries are in this shard
+                                        in_shard = (global_indices >= vocab_offset) & (
+                                            global_indices < vocab_offset + vocab_local_size
+                                        )
+                                        # Convert to local indices
+                                        local_indices = global_indices - vocab_offset
+                                        # Clamp out-of-range indices to 0 (will be overridden by -inf logits)
+                                        local_indices = local_indices.clamp(min=0, max=vocab_local_size - 1)
+
+                                        # Build per-shard top-k: assign in-shard entries, pad rest with -inf
+                                        # For each position, we need exactly k entries
+                                        local_topk_logits = torch.full(
+                                            (seq_len, topk_k),
+                                            float("-inf"),
+                                            device=torch.cuda.current_device(),
+                                            dtype=torch.float32,
+                                        )
+                                        local_topk_indices = torch.zeros(
+                                            (seq_len, topk_k), device=torch.cuda.current_device(), dtype=torch.int64
+                                        )
+
+                                        # Scatter: for each position, place the in-shard entries into
+                                        # the first available slots. We do this row-by-row for clarity.
+                                        for row in range(seq_len):
+                                            shard_mask = in_shard[row]  # [k_global]
+                                            shard_logits = global_logits[row][shard_mask]
+                                            shard_local_idx = local_indices[row][shard_mask]
+                                            n_in_shard = min(shard_logits.size(0), topk_k)
+                                            if n_in_shard > 0:
+                                                local_topk_logits[row, :n_in_shard] = shard_logits[:n_in_shard]
+                                                local_topk_indices[row, :n_in_shard] = shard_local_idx[:n_in_shard]
+
+                                        # [MOPD] Check local_topk_indices range after conversion
+                                        _local_max = local_topk_indices.max().item()
+                                        if _local_max >= vocab_local_size:
+                                            logger.error(
+                                                f"[MOPD] LOCAL INDEX OVERFLOW! sample={i} "
+                                                f"max_local={_local_max} >= "
+                                                f"vocab_local_size={vocab_local_size}"
+                                            )
+
+                                        topk_logits_list.append(local_topk_logits)
+                                        topk_indices_list.append(local_topk_indices)
+                                rollout_data[topk_logits_key] = topk_logits_list
+                                rollout_data[topk_indices_key] = topk_indices_list
+
                 self._switch_model("old_actor" if self.args.keep_old_actor else "actor")
                 can_reuse_log_probs_in_loss = (
                     len(num_microbatches) == 1
@@ -496,6 +807,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     and not self.args.use_critic
                     and not self.args.keep_old_actor
                     and not self.args.use_opd
+                    and not getattr(self.args, "use_mopd", False)
                     and not self.args.use_routing_replay
                     and self.args.advantage_estimator != "gspo"
                 )
@@ -682,6 +994,20 @@ class MegatronTrainRayActor(TrainRayActor):
         elif model_tag == "teacher" and self.args.opd_teacher_ckpt_step is not None:
             old_ckpt_step = self.args.ckpt_step
             self.args.ckpt_step = self.args.opd_teacher_ckpt_step
+        elif model_tag.startswith("mopd_teacher_"):
+            # MOPD teacher checkpoint step: look up from mopd_teacher_ckpt_steps by domain
+            domain = model_tag[len("mopd_teacher_") :]
+            if getattr(self.args, "mopd_teacher_ckpt_steps", None) is not None:
+                mopd_teachers = (
+                    json.loads(self.args.mopd_teachers)
+                    if isinstance(self.args.mopd_teachers, str)
+                    else self.args.mopd_teachers
+                )
+                for i, t in enumerate(mopd_teachers):
+                    if t["domain"] == domain and i < len(self.args.mopd_teacher_ckpt_steps):
+                        old_ckpt_step = self.args.ckpt_step
+                        self.args.ckpt_step = self.args.mopd_teacher_ckpt_steps[i]
+                        break
 
         _, _ = load_checkpoint(
             self.model,

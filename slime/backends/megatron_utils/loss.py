@@ -1,8 +1,11 @@
+import logging
 from argparse import Namespace
 from collections.abc import Callable, Iterator
 from typing import Any
 
 import torch
+
+logger = logging.getLogger(__name__)
 import torch.distributed as dist
 import torch.nn.functional as F
 from megatron.core import mpu
@@ -20,6 +23,8 @@ from slime.utils.ppo_utils import (
     get_grpo_returns,
     get_reinforce_plus_plus_baseline_advantages,
     get_reinforce_plus_plus_returns,
+    vocab_parallel_reverse_kl,
+    vocab_parallel_topk_reverse_kl,
 )
 from slime.utils.types import RolloutBatch
 
@@ -43,8 +48,8 @@ def get_responses(
 ) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
     """Yield response-aligned `(logits_chunk, tokens_chunk)` pairs per sample.
 
-    After squeezing batch dimension and optionally applying temperature scaling, this
-    function extracts the logits and tokens corresponding to response segments
+    After squeezing batch dimension and (optionally) applying temperature scaling,
+    this function extracts the logits and tokens corresponding to response segments
     for each sample. When context parallelism is disabled, it slices directly
     from the concatenated sequence. With context parallelism enabled, it
     handles split sequences across ranks.
@@ -56,7 +61,10 @@ def get_responses(
         unconcat_tokens: List of token tensors (prompt+response) per sample.
         total_lengths: Total sequence lengths (prompt+response) per sample.
         response_lengths: Response segment lengths per sample.
-        apply_temperature: Whether to divide outputs by `rollout_temperature`.
+        max_seq_lens: Optional padded max sequence lengths per sample (for bshd).
+        apply_temperature: If True (default), apply ``args.rollout_temperature``
+            scaling to logits. Set to False when raw logits are needed, e.g.
+            for full-vocabulary KL divergence computation.
 
     Yields:
         Tuple of `(logits_chunk, tokens_chunk)` where `logits_chunk` is shape
@@ -470,6 +478,89 @@ def get_log_probs_and_entropy(
     return torch.empty((0,), device=device), res
 
 
+def get_logits_for_distill(
+    logits: torch.Tensor,
+    *,
+    args: Namespace,
+    unconcat_tokens: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+    with_entropy: bool = False,
+    non_loss_data: bool = True,
+    max_seq_lens: list[int] | None = None,
+) -> dict[str, list[torch.Tensor]]:
+    """Extract per-sample response logits for full-vocab distillation (MOPD full_vocab mode).
+
+    Similar to ``get_log_probs_and_entropy``, but returns the full logits tensor
+    ``[R, V]`` per sample (where R is response length, V is vocab size) instead of
+    log-probabilities. This is needed for computing exact KL divergence over the
+    full vocabulary: D_KL(π_θ ∥ π_d) = Σ_y π_θ(y) [log π_θ(y) - log π_d(y)].
+
+    No temperature scaling is applied — the raw logits are returned so the caller
+    can apply the desired softmax/log_softmax independently.
+
+    Args:
+        logits: Model outputs with shape ``[1, T, V]``. Must be float32.
+        args: Configuration (needs ``qkv_format``, ``allgather_cp``).
+        unconcat_tokens: List of token tensors (prompt+response) per sample.
+        total_lengths: Total sequence lengths (prompt+response) per sample.
+        response_lengths: Response segment lengths per sample.
+        with_entropy: Unused; kept for signature compatibility.
+        non_loss_data: Unused; kept for signature compatibility.
+        max_seq_lens: Optional padded max sequence lengths per sample (for bshd).
+
+    Returns:
+        Dict with key ``"logits"`` mapping to a list of ``[R, V]`` tensors per sample.
+    """
+    assert logits.dtype == torch.float32, f"{logits.dtype}"
+    assert len(logits.shape) == 3, f"{logits.shape}"
+
+    device = logits.device
+
+    # Extract per-sample response logits chunks
+    # NOTE: apply_temperature=False — raw logits are needed for correct
+    # softmax/log_softmax in KL divergence computation.
+    # get_responses handles qkv_format reshaping internally.
+    logits_list = []
+    for logits_chunk, _ in get_responses(
+        logits,
+        args=args,
+        unconcat_tokens=unconcat_tokens,
+        total_lengths=total_lengths,
+        response_lengths=response_lengths,
+        max_seq_lens=max_seq_lens,
+        apply_temperature=False,
+    ):
+        logits_list.append(logits_chunk)
+
+    res = {"logits": logits_list}
+
+    # Handle allgather-CP redistribution
+    # NOTE: _allgather_cp_redistribute assumes 1D per-sample tensors (log_probs, entropy).
+    # Full-vocab logits are 2D [R_i, V], which is not supported by the current
+    # redistribution logic.  Raise an explicit error so users don't get silent
+    # shape mismatches.
+    if args.allgather_cp:
+        cp_size = getattr(mpu, "get_context_parallel_world_size", lambda: 1)()
+        if cp_size > 1:
+            raise NotImplementedError(
+                "MOPD full_vocab/top_k (get_logits_for_distill) does not support "
+                "allgather-CP with context_parallel_size > 1. The CP redistribution "
+                "logic assumes 1D tensors but logits are 2D [R, V]. Please disable "
+                "allgather_cp or set context_parallel_size=1 when using full_vocab/top_k mode."
+            )
+        _allgather_cp_redistribute(
+            res,
+            logits_local_len=logits_list[0].size(0) if logits_list else 0,
+            args=args,
+            total_lengths=total_lengths,
+            response_lengths=response_lengths,
+            max_seq_lens=max_seq_lens,
+        )
+
+    return torch.empty((0,), device=device), res
+
+
 def get_values(
     logits: torch.Tensor,
     *,
@@ -569,6 +660,157 @@ def apply_opd_kl_to_advantages(
 
     # Store reverse KL for logging
     rollout_data["opd_reverse_kl"] = reverse_kls
+
+
+def apply_mopd_to_advantages(
+    args: Namespace,
+    rollout_data: RolloutBatch,
+    advantages: list[torch.Tensor],
+    student_log_probs: list[torch.Tensor] | None,
+) -> None:
+    """Apply Multi-Teacher On-Policy Distillation (MOPD) to advantages.
+
+    MOPD computes per-teacher reverse KL advantages and importance sampling weights,
+    then applies a weighted proxy loss. The core formulas are:
+
+        Â_MOPD,t = sg[log(π_domain(y_t|x,y_<t) / π_θ(y_t|x,y_<t))]
+        w_t = sg[π_θ(y_t) / μ_θ(y_t)]  (clipped to [eps_low, eps_high], zeroed otherwise)
+        L_MOPD(θ) = -E[1/|y| Σ_t w_t * Â_MOPD,t * log π_θ(y_t|x,y_<t)]
+
+    When `mopd_alpha > 0`, the ORM advantage is combined:
+        Â_MOPD,t = sg[log(π_domain/π_θ)] + α * Â_ORM
+
+    Args:
+        args: Configuration containing `use_mopd`, `mopd_alpha`, `mopd_eps_low`, `mopd_eps_high`,
+              and `mopd_sampling_logprobs_key`.
+        rollout_data: Dict containing "mopd_teacher_log_probs" (dict: domain -> list[Tensor])
+                      and optionally the sampling log-probs key.
+        advantages: List of advantage tensors to modify in-place.
+        student_log_probs: List of student (training) log-probability tensors.
+    """
+
+    if student_log_probs is None:
+        return
+
+    mopd_teacher_log_probs: dict[str, list[torch.Tensor]] = rollout_data.get("mopd_teacher_log_probs")
+    if not mopd_teacher_log_probs:
+        raise ValueError(
+            "MOPD requires mopd_teacher_log_probs in rollout_data, but it is missing. "
+            "Ensure teacher log-probs are collected during rollout or training."
+        )
+
+    # Get sampling log-probs μ_θ for importance sampling weight
+    sampling_logprobs_key = args.mopd_sampling_logprobs_key
+    sampling_log_probs = rollout_data.get(sampling_logprobs_key)
+    if sampling_log_probs is None and sampling_logprobs_key == "rollout_log_probs":
+        # Fall back to old_log_probs (which may be rollout_log_probs depending on config)
+        sampling_log_probs = rollout_data.get("log_probs")
+    if sampling_log_probs is None:
+        raise ValueError(
+            f"MOPD requires '{sampling_logprobs_key}' in rollout_data for importance sampling, " f"but it is missing."
+        )
+
+    device = student_log_probs[0].device
+    sampling_log_probs = [s.to(device=device) for s in sampling_log_probs]
+
+    # Compute MOPD advantages from each teacher and aggregate
+    # For each teacher, compute reverse KL and IS weights, then sum weighted advantages
+    all_mopd_advantages = []
+    all_is_weights_list = []
+    all_reverse_kls = []
+
+    for _domain, teacher_lp_list in mopd_teacher_log_probs.items():
+        domain_advantages = []
+        domain_is_weights = []
+        domain_reverse_kls = []
+
+        for i in range(len(advantages)):
+            # If this sample has no teacher log-probs for this domain (per-sample routing),
+            # use zeros as placeholder — this domain contributes nothing to this sample.
+            # Also detect fallback sentinel tensors (all -inf) that were inserted when
+            # MOPD teacher requests failed, to avoid contaminating advantages with -inf.
+            if teacher_lp_list[i] is None:
+                domain_advantages.append(None)
+                domain_is_weights.append(None)
+                domain_reverse_kls.append(None)
+                continue
+
+            teacher_lp = teacher_lp_list[i].to(device=device)
+            if teacher_lp.isinf().all():
+                # All -inf: teacher data was unavailable (fallback sentinel).
+                # Treat same as None — this domain contributes nothing.
+                domain_advantages.append(None)
+                domain_is_weights.append(None)
+                domain_reverse_kls.append(None)
+                continue
+
+            # reverse_kl = log(π_domain(y_t)) - log(π_θ(y_t)), with stop-gradient
+            # student_log_probs here is π_θ (the training engine log-probs)
+            with torch.no_grad():
+                reverse_kl = teacher_lp - student_log_probs[i]
+
+                # Importance sampling weight: w_t = π_θ(y_t) / μ_θ(y_t)
+                # = exp(student_log_probs[i] - sampling_log_probs[i])
+                is_weight = torch.exp(student_log_probs[i] - sampling_log_probs[i])
+
+                # Zero out weights outside [eps_low, eps_high]
+                is_weight = torch.where(
+                    (is_weight >= args.mopd_eps_low) & (is_weight <= args.mopd_eps_high),
+                    is_weight,
+                    torch.zeros_like(is_weight),
+                )
+
+            # MOPD advantage: Â_MOPD,t = reverse_kl + α * Â_ORM
+            mopd_adv = reverse_kl
+            if args.mopd_alpha > 0:
+                mopd_adv = reverse_kl + args.mopd_alpha * advantages[i]
+
+            domain_advantages.append(mopd_adv)
+            domain_is_weights.append(is_weight)
+            domain_reverse_kls.append(reverse_kl)
+
+        all_mopd_advantages.append(domain_advantages)
+        all_is_weights_list.append(domain_is_weights)
+        all_reverse_kls.append(domain_reverse_kls)
+
+    # Aggregate across teachers: average the weighted advantages
+    # For each sample, only average over domains that have valid (non-None) entries.
+    # This supports per-sample domain routing where different samples may use different teachers.
+    aggregated_mopd_advantages = []
+    aggregated_is_weights = []
+
+    for i in range(len(advantages)):
+        # Collect valid (non-None) teacher contributions for this sample
+        valid_advs = [
+            all_mopd_advantages[t][i] for t in range(len(all_mopd_advantages)) if all_mopd_advantages[t][i] is not None
+        ]
+        valid_is = [
+            all_is_weights_list[t][i] for t in range(len(all_is_weights_list)) if all_is_weights_list[t][i] is not None
+        ]
+
+        if len(valid_advs) == 0:
+            # No valid teachers for this sample — use zero advantages and zero IS weights
+            aggregated_mopd_advantages.append(torch.zeros_like(advantages[i]))
+            aggregated_is_weights.append(torch.zeros_like(advantages[i]))
+        else:
+            avg_adv = sum(valid_advs) / len(valid_advs)
+            avg_is_weight = sum(valid_is) / len(valid_is)
+            aggregated_mopd_advantages.append(avg_adv)
+            aggregated_is_weights.append(avg_is_weight)
+
+    # Store MOPD data for use in policy_loss_function
+    rollout_data["mopd_advantages"] = aggregated_mopd_advantages
+    rollout_data["mopd_is_weights"] = aggregated_is_weights
+
+    # Also store per-teacher reverse KL for logging
+    # Use zeros for samples that don't have this domain (per-sample routing)
+    per_teacher_reverse_kl = {}
+    for t_idx, domain in enumerate(mopd_teacher_log_probs.keys()):
+        per_teacher_reverse_kl[domain] = [
+            all_reverse_kls[t_idx][i] if all_reverse_kls[t_idx][i] is not None else torch.zeros_like(advantages[i])
+            for i in range(len(advantages))
+        ]
+    rollout_data["mopd_reverse_kl"] = per_teacher_reverse_kl
 
 
 def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) -> None:
@@ -687,6 +929,17 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
             student_log_probs=log_probs,
         )
 
+    # Apply Multi-Teacher On-Policy Distillation (MOPD) to advantages
+    # Skip token-level MOPD when using full_vocab distillation type;
+    # in that mode, the KL is computed directly in the loss function.
+    if args.use_mopd and getattr(args, "mopd_distill_type", "token_level") == "token_level":
+        apply_mopd_to_advantages(
+            args=args,
+            rollout_data=rollout_data,
+            advantages=advantages,
+            student_log_probs=log_probs,
+        )
+
     # TODO: OpenRLHF always does advantages normalization but veRL doesn't seem to do it.
     if args.normalize_advantages:
         all_advs = torch.cat(advantages)
@@ -797,6 +1050,380 @@ def icepop_function(
     return pg_loss, loss_masks, metrics
 
 
+def apply_mopd_full_vocab_to_loss(
+    args: Namespace,
+    batch: RolloutBatch,
+    student_logits_per_sample: list[torch.Tensor],
+    teacher_logits_per_domain: dict[str, list[torch.Tensor | None]],
+    loss_masks: list[torch.Tensor],
+    sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
+    current_log_probs: list[torch.Tensor] | None = None,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Compute the full-vocabulary reverse KL divergence loss for MOPD.
+
+    Instead of approximating the reverse KL from sampled tokens (token_level mode),
+    this computes the exact KL divergence over the full vocabulary:
+
+        D_KL(π_θ ∥ π_d) = Σ_y π_θ(y) [log π_θ(y) - log π_d(y)]
+
+    For each teacher domain d, the per-token KL is computed and then averaged
+    across teachers. Per-token importance sampling weights are applied identically
+    to token_level mode.
+
+    When mopd_alpha > 0, the total loss is:
+        L = L_full_vocab_kl + alpha * L_pg_orm
+    where L_pg_orm is the standard policy gradient loss with ORM advantages.
+    When mopd_alpha == 0, L = L_full_vocab_kl (pure distillation).
+
+    Args:
+        args: Configuration containing MOPD parameters.
+        batch: Mini-batch containing IS weight data and loss_masks.
+        student_logits_per_sample: List of per-sample student logits [R_i, V].
+        teacher_logits_per_domain: Dict mapping domain to list of per-sample
+            teacher logits [R_i, V], with None for samples not routed to that domain.
+        loss_masks: List of per-sample loss masks.
+        sum_of_sample_mean: Reduction function for averaging.
+        current_log_probs: List of per-sample log-probs from the current training
+            forward pass. Used for importance sampling weight computation.
+            If None, falls back to batch["log_probs"] (pre-training forward pass).
+
+    Returns:
+        Tuple of (kl_loss, metrics) where kl_loss is a scalar tensor and
+        metrics is a dict with logging tensors.
+    """
+    # Get sampling log-probs μ_θ for importance sampling weight
+    sampling_logprobs_key = getattr(args, "mopd_sampling_logprobs_key", "rollout_log_probs")
+    sampling_log_probs = batch.get(sampling_logprobs_key)
+    if sampling_logprobs_key == "rollout_log_probs" and sampling_log_probs is None:
+        sampling_log_probs = batch.get("log_probs")
+    if sampling_log_probs is None:
+        raise ValueError(f"MOPD full_vocab requires '{sampling_logprobs_key}' in batch for importance sampling.")
+
+    num_samples = len(student_logits_per_sample)
+    if len(sampling_log_probs) != num_samples:
+        raise ValueError(
+            f"MOPD full_vocab: sampling_log_probs length ({len(sampling_log_probs)}) "
+            f"!= student_logits length ({num_samples})."
+        )
+    all_kl_per_token = []  # will hold per-token KL tensors for all samples
+    tp_group = mpu.get_tensor_model_parallel_group()
+    # Stash per-domain per-sample KL for logging (detached)
+    per_domain_kls: dict[str, list[torch.Tensor]] = {}
+
+    # Collect per-sample KL contributions across all teacher domains.
+    # For each sample, we average the KL across valid (non-None) teachers.
+    for i in range(num_samples):
+        R_i = student_logits_per_sample[i].size(0)
+        sample_kl_values = []  # collect KL contributions from each valid teacher
+        valid_teacher_count = 0
+
+        for domain, teacher_logits_list in teacher_logits_per_domain.items():
+            if i >= len(teacher_logits_list) or teacher_logits_list[i] is None:
+                continue  # skip this domain for this sample
+
+            teacher_logits_i = teacher_logits_list[i]  # [R_i, V_local]
+
+            # D_KL(π_θ ∥ π_d) = Σ_y π_θ(y) [log π_θ(y) - log π_d(y)]
+            # Uses TP-aware computation when vocab is sharded across TP ranks.
+            kl_i = vocab_parallel_reverse_kl(
+                student_logits_per_sample[i],
+                teacher_logits_i,
+                tp_group,
+            )  # [R_i]
+            sample_kl_values.append(kl_i)
+            valid_teacher_count += 1
+
+            # Save for per-domain logging
+            if domain not in per_domain_kls:
+                per_domain_kls[domain] = []
+            per_domain_kls[domain].append(kl_i.detach())
+
+        if valid_teacher_count > 0:
+            # Average KL across valid teachers
+            avg_kl_i = sum(sample_kl_values) / valid_teacher_count  # [R_i]
+        else:
+            avg_kl_i = torch.zeros(R_i, device=student_logits_per_sample[i].device)
+
+        all_kl_per_token.append(avg_kl_i)
+
+    # Compute IS weights
+    # w_t = π_θ(y_t) / μ_θ(y_t)  clipped to [eps_low, eps_high]
+    # We need the student's current log prob at the sampled token (π_θ(y_t)).
+    # This comes from the current training forward pass (not the stale pre-training
+    # pass in batch["log_probs"]). The caller passes these via current_log_probs.
+    # Fall back to batch["log_probs"] only if current_log_probs is not provided.
+    student_log_probs_at_sampled = current_log_probs if current_log_probs is not None else batch.get("log_probs")
+    if student_log_probs_at_sampled is not None and len(student_log_probs_at_sampled) != num_samples:
+        raise ValueError(
+            f"MOPD full_vocab: student_log_probs length ({len(student_log_probs_at_sampled)}) "
+            f"!= student_logits length ({num_samples})."
+        )
+
+    is_weight_per_sample = []
+    for i in range(num_samples):
+        with torch.no_grad():
+            if student_log_probs_at_sampled is not None:
+                # Use the per-token log probs from the current training forward pass
+                s_lp_i = student_log_probs_at_sampled[i].to(device=student_logits_per_sample[i].device)
+            else:
+                # Fallback: zero IS weights (effectively disabling IS correction)
+                s_lp_i = torch.zeros(
+                    student_logits_per_sample[i].size(0),
+                    device=student_logits_per_sample[i].device,
+                )
+            samp_lp_i = sampling_log_probs[i].to(device=s_lp_i.device)
+            is_w_i = torch.exp(s_lp_i - samp_lp_i)
+            # Zero out weights outside [eps_low, eps_high]
+            is_w_i = torch.where(
+                (is_w_i >= args.mopd_eps_low) & (is_w_i <= args.mopd_eps_high),
+                is_w_i,
+                torch.zeros_like(is_w_i),
+            )
+            is_weight_per_sample.append(is_w_i)
+
+    # Apply IS weights to KL: per-token KL * IS weight * loss_mask
+    weighted_kl_tokens = []
+    for i in range(num_samples):
+        mask_i = loss_masks[i].to(device=all_kl_per_token[i].device)
+        # Mask and weight the KL
+        weighted_kl_i = all_kl_per_token[i] * is_weight_per_sample[i] * mask_i  # [R_i]
+        # Sum over tokens in the response, divide by response length for mean
+        R_i = mask_i.sum().clamp(min=1)  # number of valid tokens
+        weighted_kl_tokens.append(weighted_kl_i.sum() / R_i)
+
+    # Average across samples
+    if len(weighted_kl_tokens) > 0:
+        kl_loss = torch.stack(weighted_kl_tokens).mean()
+    else:
+        kl_loss = torch.tensor(0.0, device=student_logits_per_sample[0].device)
+
+    # Logging metrics
+    all_kl_cat = torch.cat(all_kl_per_token, dim=0)
+    kl_mean = sum_of_sample_mean(all_kl_cat)
+
+    is_weights_cat = torch.cat(is_weight_per_sample, dim=0)
+    is_weight_mean = sum_of_sample_mean(is_weights_cat)
+    is_nonzero_frac = sum_of_sample_mean((is_weights_cat != 0).float())
+
+    metrics = {
+        "mopd_fv_kl": kl_mean.clone().detach(),
+        "mopd_is_weight_mean": is_weight_mean.clone().detach(),
+        "mopd_is_nonzero_frac": is_nonzero_frac.clone().detach(),
+    }
+
+    # Per-teacher KL for logging (re-use KL values computed in the main loop).
+    # Iterate over ALL configured teacher domains (not just per_domain_kls) so
+    # that every microbatch emits the same set of metric keys.  Without this
+    # Megatron's cross-microbatch loss reduction (model.py: values += x["values"])
+    # can crash with a tensor-size mismatch when different microbatches have
+    # different subsets of active domains.
+    for domain in teacher_logits_per_domain:
+        if domain in per_domain_kls and len(per_domain_kls[domain]) > 0:
+            metrics[f"mopd_fv_kl/{domain}"] = (
+                sum_of_sample_mean(torch.cat(per_domain_kls[domain], dim=0)).clone().detach()
+            )
+        else:
+            metrics[f"mopd_fv_kl/{domain}"] = torch.tensor(0.0, device=all_kl_cat.device)
+
+    return kl_loss, metrics
+
+
+def apply_mopd_topk_to_loss(
+    args: Namespace,
+    batch: RolloutBatch,
+    student_logits_per_sample: list[torch.Tensor],
+    teacher_topk_logits_per_domain: dict[str, list[torch.Tensor | None]],
+    teacher_topk_indices_per_domain: dict[str, list[torch.Tensor | None]],
+    loss_masks: list[torch.Tensor],
+    sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
+    current_log_probs: list[torch.Tensor] | None = None,
+    teacher_topk_log_sum_exp_per_domain: dict[str, list[torch.Tensor | None]] | None = None,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Compute the top-k approximate reverse KL divergence loss for MOPD.
+
+    Instead of computing the exact full-vocab KL (which stores [R, V] per sample),
+    this uses teacher's top-k logits plus a tail probability correction:
+
+        KL ≈ KL_topk + KL_tail
+
+    where:
+        KL_topk = Σ_{y ∈ top-k} π_s(y) [log π_s(y) - log π_t(y)]
+        KL_tail ≈ π_s_tail * log(π_s_tail / π_t_tail)
+
+    Teacher provides pre-computed top-k logits and indices, while student has
+    full logits. This reduces memory from O(R*V) to O(R*k) per sample per teacher.
+
+    Args:
+        args: Configuration containing MOPD parameters including mopd_topk_k.
+        batch: Mini-batch containing IS weight data and loss_masks.
+        student_logits_per_sample: List of per-sample student logits [R_i, V_local].
+        teacher_topk_logits_per_domain: Dict mapping domain to list of per-sample
+            teacher top-k logits [R_i, k], with None for samples not routed to that domain.
+        teacher_topk_indices_per_domain: Dict mapping domain to list of per-sample
+            teacher top-k LOCAL indices [R_i, k] (within TP shard), with None for
+            samples not routed to that domain.
+        loss_masks: List of per-sample loss masks.
+        sum_of_sample_mean: Reduction function for averaging.
+        current_log_probs: List of per-sample log-probs from the current training
+            forward pass. Used for importance sampling weight computation.
+            If None, falls back to batch["log_probs"].
+        teacher_topk_log_sum_exp_per_domain: Optional dict mapping domain to list of
+            per-sample teacher log_sum_exp tensors [R_i] (computed from full-vocab logits
+            during Megatron teacher forward pass). Used for exact tail mass estimation
+            in Megatron mode. When provided, teacher_tail_mass is computed exactly as
+            1 - sum(exp(topk_logits - log_sum_exp)) instead of the uniform assumption
+            (V - V_eff) / V.
+
+    Returns:
+        Tuple of (kl_loss, metrics) where kl_loss is a scalar tensor and
+        metrics is a dict with logging tensors.
+    """
+    # Get sampling log-probs μ_θ for importance sampling weight
+    sampling_logprobs_key = getattr(args, "mopd_sampling_logprobs_key", "rollout_log_probs")
+    sampling_log_probs = batch.get(sampling_logprobs_key)
+    if sampling_logprobs_key == "rollout_log_probs" and sampling_log_probs is None:
+        sampling_log_probs = batch.get("log_probs")
+    if sampling_log_probs is None:
+        raise ValueError(f"MOPD top_k requires '{sampling_logprobs_key}' in batch for importance sampling.")
+
+    vocab_size = args.vocab_size
+    num_samples = len(student_logits_per_sample)
+    if len(sampling_log_probs) != num_samples:
+        raise ValueError(
+            f"MOPD top_k: sampling_log_probs length ({len(sampling_log_probs)}) "
+            f"!= student_logits length ({num_samples})."
+        )
+
+    tp_group = mpu.get_tensor_model_parallel_group()
+    all_kl_per_token = []
+    per_domain_kls: dict[str, list[torch.Tensor]] = {}
+
+    for i in range(num_samples):
+        R_i = student_logits_per_sample[i].size(0)
+        sample_kl_values = []
+        valid_teacher_count = 0
+
+        for domain in teacher_topk_logits_per_domain:
+            if i >= len(teacher_topk_logits_per_domain[domain]) or teacher_topk_logits_per_domain[domain][i] is None:
+                continue
+
+            t_topk_logits = teacher_topk_logits_per_domain[domain][i]  # [R_i, k]
+
+            # IMPORTANT: Do NOT skip the vocab_parallel_topk_reverse_kl call even
+            # when all teacher logits are -inf.  Each TP rank independently shards
+            # the top-k tokens into its vocab range, so one rank may see all -inf
+            # (no tokens in its shard) while another rank has valid entries.
+            # Skipping on only some ranks creates an inconsistent TP collective call
+            # (all_reduce inside vocab_parallel_topk_reverse_kl), causing an
+            # irreversible NCCL deadlock.  When all entries are -inf,
+            # vocab_parallel_topk_reverse_kl correctly produces KL=0 (the
+            # valid_topk_mask is all-False), so the numerical result is identical
+            # -- but the collective operations remain consistent across TP ranks.
+
+            t_topk_indices = teacher_topk_indices_per_domain[domain][i]  # [R_i, k]
+
+            # Get teacher log_sum_exp for exact tail mass (Megatron mode only)
+            t_topk_log_sum_exp = None
+            if teacher_topk_log_sum_exp_per_domain and domain in teacher_topk_log_sum_exp_per_domain:
+                if (
+                    i < len(teacher_topk_log_sum_exp_per_domain[domain])
+                    and teacher_topk_log_sum_exp_per_domain[domain][i] is not None
+                ):
+                    t_topk_log_sum_exp = teacher_topk_log_sum_exp_per_domain[domain][i]  # [R_i]
+
+            kl_i = vocab_parallel_topk_reverse_kl(
+                student_logits_per_sample[i],
+                t_topk_logits,
+                t_topk_indices,
+                vocab_size,
+                tp_group,
+                is_log_probs=(getattr(args, "mopd_teacher_mode", "megatron") == "sglang"),
+                teacher_log_sum_exp=t_topk_log_sum_exp,
+            )  # [R_i]
+            sample_kl_values.append(kl_i)
+            valid_teacher_count += 1
+
+            if domain not in per_domain_kls:
+                per_domain_kls[domain] = []
+            per_domain_kls[domain].append(kl_i.detach())
+
+        if valid_teacher_count > 0:
+            avg_kl_i = sum(sample_kl_values) / valid_teacher_count
+        else:
+            avg_kl_i = torch.zeros(R_i, device=student_logits_per_sample[i].device)
+
+        all_kl_per_token.append(avg_kl_i)
+
+    # Compute IS weights (identical logic to full_vocab)
+    student_log_probs_at_sampled = current_log_probs if current_log_probs is not None else batch.get("log_probs")
+    if student_log_probs_at_sampled is not None and len(student_log_probs_at_sampled) != num_samples:
+        raise ValueError(
+            f"MOPD top_k: student_log_probs length ({len(student_log_probs_at_sampled)}) "
+            f"!= student_logits length ({num_samples})."
+        )
+
+    is_weight_per_sample = []
+    for i in range(num_samples):
+        with torch.no_grad():
+            if student_log_probs_at_sampled is not None:
+                s_lp_i = student_log_probs_at_sampled[i].to(device=student_logits_per_sample[i].device)
+            else:
+                s_lp_i = torch.zeros(
+                    student_logits_per_sample[i].size(0),
+                    device=student_logits_per_sample[i].device,
+                )
+            samp_lp_i = sampling_log_probs[i].to(device=s_lp_i.device)
+            is_w_i = torch.exp(s_lp_i - samp_lp_i)
+            is_w_i = torch.where(
+                (is_w_i >= args.mopd_eps_low) & (is_w_i <= args.mopd_eps_high),
+                is_w_i,
+                torch.zeros_like(is_w_i),
+            )
+            is_weight_per_sample.append(is_w_i)
+
+    # Apply IS weights to KL
+    weighted_kl_tokens = []
+    for i in range(num_samples):
+        mask_i = loss_masks[i].to(device=all_kl_per_token[i].device)
+        weighted_kl_i = all_kl_per_token[i] * is_weight_per_sample[i] * mask_i
+        R_i = mask_i.sum().clamp(min=1)
+        weighted_kl_tokens.append(weighted_kl_i.sum() / R_i)
+
+    if len(weighted_kl_tokens) > 0:
+        kl_loss = torch.stack(weighted_kl_tokens).mean()
+    else:
+        kl_loss = torch.tensor(0.0, device=student_logits_per_sample[0].device)
+
+    # Logging metrics
+    all_kl_cat = torch.cat(all_kl_per_token, dim=0)
+    kl_mean = sum_of_sample_mean(all_kl_cat)
+
+    is_weights_cat = torch.cat(is_weight_per_sample, dim=0)
+    is_weight_mean = sum_of_sample_mean(is_weights_cat)
+    is_nonzero_frac = sum_of_sample_mean((is_weights_cat != 0).float())
+
+    metrics = {
+        "mopd_topk_kl": kl_mean.clone().detach(),
+        "mopd_is_weight_mean": is_weight_mean.clone().detach(),
+        "mopd_is_nonzero_frac": is_nonzero_frac.clone().detach(),
+    }
+
+    for domain in teacher_topk_logits_per_domain:
+        if domain in per_domain_kls and len(per_domain_kls[domain]) > 0:
+            metrics[f"mopd_topk_kl/{domain}"] = (
+                sum_of_sample_mean(torch.cat(per_domain_kls[domain], dim=0)).clone().detach()
+            )
+        else:
+            # No samples contributed valid teacher data for this domain in this
+            # microbatch.  Emit a zero metric so that every microbatch produces
+            # the same set of metric keys — this is required for Megatron's
+            # loss-reduction across microbatches which uses tensor addition
+            # (model.py: values += x["values"]) and demands identical sizes.
+            metrics[f"mopd_topk_kl/{domain}"] = torch.tensor(0.0, device=all_kl_cat.device)
+
+    return kl_loss, metrics
+
+
 def policy_loss_function(
     args: Namespace,
     batch: RolloutBatch,
@@ -881,6 +1508,8 @@ def policy_loss_function(
         )
 
     # Compute KL divergence (GSPO uses sequence-level KL, others use per-token KL)
+    # Save list-form log_probs before concatenation for potential use in MOPD full_vocab IS weights
+    current_log_probs_list = log_probs
     if args.advantage_estimator == "gspo":
         ppo_kl = compute_gspo_kl(
             full_log_probs=full_log_probs,
@@ -899,6 +1528,157 @@ def policy_loss_function(
 
     if args.use_opsm:
         pg_loss = pg_loss * opsm_mask
+
+    # Apply MOPD token_level: replace advantages with mopd_advantages and apply IS weights
+    # L_MOPD(θ) = -E[1/|y| Σ_t w_t * Â_MOPD,t * log π_θ(y_t|x,y_<t)]
+    # We recompute pg_loss with mopd_advantages and then multiply by IS weights.
+    mopd_distill_type = (
+        getattr(args, "mopd_distill_type", "token_level") if getattr(args, "use_mopd", False) else "none"
+    )
+    use_mopd_full_vocab = mopd_distill_type == "full_vocab"
+    use_mopd_top_k = mopd_distill_type == "top_k"
+    # token_level mode uses advantages + IS weights in the standard pg_loss
+    use_mopd_logits_based = use_mopd_full_vocab or use_mopd_top_k
+    mopd_fv_metrics = {}
+    if getattr(args, "use_mopd", False) and not use_mopd_logits_based and "mopd_advantages" in batch:
+        mopd_advantages = torch.cat(batch["mopd_advantages"], dim=0).detach()
+        pg_loss_mopd, _ = compute_policy_loss(ppo_kl, mopd_advantages, args.eps_clip, args.eps_clip_high)
+        pg_loss = pg_loss_mopd
+
+    if getattr(args, "use_mopd", False) and not use_mopd_logits_based and "mopd_is_weights" in batch:
+        mopd_is_weights = torch.cat(batch["mopd_is_weights"], dim=0).detach()
+        pg_loss = pg_loss * mopd_is_weights
+
+    # MOPD full_vocab: compute full-vocabulary reverse KL divergence loss
+    # L = (1/D) Σ_d w_d · D_KL(π_θ ∥ π_d) + alpha * pg_loss
+    if use_mopd_full_vocab:
+        # Extract per-sample student logits from the forward pass.
+        # NOTE: apply_temperature=False — raw logits are needed for correct
+        # softmax/log_softmax in KL divergence computation.
+        student_logits_per_sample = []
+        for logits_chunk, _ in get_responses(
+            logits,
+            args=args,
+            unconcat_tokens=batch["unconcat_tokens"],
+            total_lengths=total_lengths,
+            response_lengths=response_lengths,
+            max_seq_lens=max_seq_lens,
+            apply_temperature=False,
+        ):
+            student_logits_per_sample.append(logits_chunk)
+
+        # Collect teacher logits per domain from the batch
+        mopd_teachers_parsed = getattr(args, "_mopd_teachers_parsed", [])
+        teacher_logits_per_domain = {}
+        for teacher_cfg in mopd_teachers_parsed:
+            domain = teacher_cfg["domain"]
+            logits_key = f"mopd_teacher_{domain}_fv_logits"
+            if logits_key in batch and batch[logits_key] is not None:
+                teacher_logits_per_domain[domain] = batch[logits_key]
+
+        if teacher_logits_per_domain:
+            fv_kl_loss, mopd_fv_metrics = apply_mopd_full_vocab_to_loss(
+                args=args,
+                batch=batch,
+                student_logits_per_sample=student_logits_per_sample,
+                teacher_logits_per_domain=teacher_logits_per_domain,
+                loss_masks=batch["loss_masks"],
+                sum_of_sample_mean=sum_of_sample_mean,
+                current_log_probs=current_log_probs_list,
+            )
+            # Store the fv_kl_loss for later combination with pg_loss.
+            # The actual combination happens after pg_loss is reduced.
+            # When alpha == 0 (pure distillation): loss = fv_kl_loss
+            # When alpha > 0: loss = fv_kl_loss + alpha * pg_loss
+            batch["_mopd_fv_kl_loss"] = fv_kl_loss
+        else:
+            logger.warning(
+                "MOPD full_vocab enabled but no teacher logits found in batch. Skipping full_vocab KL loss."
+            )
+
+        # Ensure per-domain metric keys AND base MOPD metric keys exist for
+        # ALL configured teacher domains, even when the batch contains no valid
+        # data for some (or all) domains.  Megatron's loss-reduction
+        # (model.py: values += x["values"]) requires every microbatch to emit
+        # the same set of metric keys; missing keys cause a tensor-size
+        # mismatch across microbatches.
+        _device = logits.device
+        for teacher_cfg in mopd_teachers_parsed:
+            domain = teacher_cfg["domain"]
+            _domain_key = f"mopd_fv_kl/{domain}"
+            if _domain_key not in mopd_fv_metrics:
+                mopd_fv_metrics[_domain_key] = torch.tensor(0.0, device=_device)
+        # Ensure base MOPD metrics are present even when no teacher data was
+        # available for the entire microbatch (apply_mopd_full_vocab_to_loss not called).
+        for _base_key in ("mopd_fv_kl", "mopd_is_weight_mean", "mopd_is_nonzero_frac"):
+            if _base_key not in mopd_fv_metrics:
+                mopd_fv_metrics[_base_key] = torch.tensor(0.0, device=_device)
+
+    # MOPD top_k: compute top-k approximate reverse KL divergence loss
+    # L = (1/D) Σ_d w_d · KL_topk+d(π_θ ∥ π_d) + alpha * pg_loss
+    if use_mopd_top_k:
+        student_logits_per_sample = []
+        for logits_chunk, _ in get_responses(
+            logits,
+            args=args,
+            unconcat_tokens=batch["unconcat_tokens"],
+            total_lengths=total_lengths,
+            response_lengths=response_lengths,
+            max_seq_lens=max_seq_lens,
+            apply_temperature=False,
+        ):
+            student_logits_per_sample.append(logits_chunk)
+
+        # Collect teacher top-k logits and indices per domain from the batch
+        mopd_teachers_parsed = getattr(args, "_mopd_teachers_parsed", [])
+        teacher_topk_logits_per_domain = {}
+        teacher_topk_indices_per_domain = {}
+        teacher_topk_log_sum_exp_per_domain = {}
+        for teacher_cfg in mopd_teachers_parsed:
+            domain = teacher_cfg["domain"]
+            topk_logits_key = f"mopd_teacher_{domain}_topk_logits"
+            topk_indices_key = f"mopd_teacher_{domain}_topk_indices"
+            topk_log_sum_exp_key = f"mopd_teacher_{domain}_topk_log_sum_exp"
+            if topk_logits_key in batch and batch[topk_logits_key] is not None:
+                teacher_topk_logits_per_domain[domain] = batch[topk_logits_key]
+                teacher_topk_indices_per_domain[domain] = batch[topk_indices_key]
+                # log_sum_exp is only available in Megatron mode (computed from full logits)
+                if topk_log_sum_exp_key in batch and batch[topk_log_sum_exp_key] is not None:
+                    teacher_topk_log_sum_exp_per_domain[domain] = batch[topk_log_sum_exp_key]
+
+        if teacher_topk_logits_per_domain:
+            topk_kl_loss, mopd_fv_metrics = apply_mopd_topk_to_loss(
+                args=args,
+                batch=batch,
+                student_logits_per_sample=student_logits_per_sample,
+                teacher_topk_logits_per_domain=teacher_topk_logits_per_domain,
+                teacher_topk_indices_per_domain=teacher_topk_indices_per_domain,
+                teacher_topk_log_sum_exp_per_domain=teacher_topk_log_sum_exp_per_domain,
+                loss_masks=batch["loss_masks"],
+                sum_of_sample_mean=sum_of_sample_mean,
+                current_log_probs=current_log_probs_list,
+            )
+            batch["_mopd_fv_kl_loss"] = topk_kl_loss
+        else:
+            logger.warning("MOPD top_k enabled but no teacher top-k data found in batch. Skipping top_k KL loss.")
+
+        # Ensure per-domain metric keys AND base MOPD metric keys exist for
+        # ALL configured teacher domains, even when the batch contains no valid
+        # data for some (or all) domains.  Megatron's loss-reduction
+        # (model.py: values += x["values"]) requires every microbatch to emit
+        # the same set of metric keys; missing keys cause a tensor-size
+        # mismatch across microbatches.
+        _device = logits.device
+        for teacher_cfg in mopd_teachers_parsed:
+            domain = teacher_cfg["domain"]
+            _domain_key = f"mopd_topk_kl/{domain}"
+            if _domain_key not in mopd_fv_metrics:
+                mopd_fv_metrics[_domain_key] = torch.tensor(0.0, device=_device)
+        # Ensure base MOPD metrics are present even when no teacher data was
+        # available for the entire microbatch (apply_mopd_topk_to_loss not called).
+        for _base_key in ("mopd_topk_kl", "mopd_is_weight_mean", "mopd_is_nonzero_frac"):
+            if _base_key not in mopd_fv_metrics:
+                mopd_fv_metrics[_base_key] = torch.tensor(0.0, device=_device)
 
     # Apply off-policy correction using importance sampling if enabled
     if args.get_mismatch_metrics or args.use_tis:
@@ -969,6 +1749,19 @@ def policy_loss_function(
 
     loss = pg_loss - args.entropy_coef * entropy_loss
 
+    # MOPD logits-based distillation (full_vocab / top_k): combine KL loss with pg loss
+    # L = L_kl + alpha * L_pg
+    # When alpha == 0 (pure distillation): L = L_kl (pg_loss is zeroed out)
+    # When alpha > 0: L = L_kl + alpha * L_pg (ORM policy gradient)
+    if use_mopd_logits_based and "_mopd_fv_kl_loss" in batch:
+        kl_distill_loss = batch.pop("_mopd_fv_kl_loss")
+        if args.mopd_alpha > 0:
+            # Combine: distillation KL + alpha * policy gradient loss
+            loss = kl_distill_loss + args.mopd_alpha * loss
+        else:
+            # Pure distillation: only use distillation KL loss
+            loss = kl_distill_loss
+
     if args.use_kl_loss:
         ref_log_probs = batch["ref_log_probs"]
         ref_log_probs = torch.cat(ref_log_probs, dim=0)
@@ -1024,6 +1817,42 @@ def policy_loss_function(
     if "opd_reverse_kl" in batch:
         opd_reverse_kl = torch.cat(batch["opd_reverse_kl"], dim=0)
         reported_loss["opd_reverse_kl"] = sum_of_sample_mean(opd_reverse_kl).clone().detach()
+
+    # Log MOPD metrics (IS weights and per-teacher reverse KL are already applied during
+    # advantage computation and pg_loss re-weighting in the MOPD section above)
+    if getattr(args, "use_mopd", False) and not use_mopd_full_vocab and "mopd_is_weights" in batch:
+        mopd_is_weights = torch.cat(batch["mopd_is_weights"], dim=0)
+        reported_loss["mopd_is_weight_mean"] = sum_of_sample_mean(mopd_is_weights).clone().detach()
+        mopd_is_nonzero = (mopd_is_weights != 0).float()
+        reported_loss["mopd_is_nonzero_frac"] = sum_of_sample_mean(mopd_is_nonzero).clone().detach()
+
+        if "mopd_reverse_kl" in batch:
+            # Iterate over ALL configured teacher domains — not just the
+            # keys present in this microbatch — so that every microbatch
+            # produces the same set of metric keys (required for Megatron's
+            # loss-reduction across microbatches).
+            _all_mopd_domains = [t["domain"] for t in getattr(args, "_mopd_teachers_parsed", [])]
+            _mopd_reverse_kl_domains = (
+                _all_mopd_domains if _all_mopd_domains else list(batch["mopd_reverse_kl"].keys())
+            )
+            for domain in _mopd_reverse_kl_domains:
+                if domain in batch["mopd_reverse_kl"]:
+                    domain_kl_tensor = torch.cat(batch["mopd_reverse_kl"][domain], dim=0)
+                    reported_loss[f"mopd_reverse_kl/{domain}"] = sum_of_sample_mean(domain_kl_tensor).clone().detach()
+                else:
+                    reported_loss[f"mopd_reverse_kl/{domain}"] = torch.tensor(0.0, device=mopd_is_weights.device)
+
+        if "mopd_advantages" in batch:
+            mopd_advantages = torch.cat(batch["mopd_advantages"], dim=0)
+            reported_loss["mopd_advantage_mean"] = sum_of_sample_mean(mopd_advantages).clone().detach()
+
+    # Log MOPD logits-based distillation metrics (full_vocab / top_k).
+    # mopd_fv_metrics already contains zero-valued entries for domains that
+    # had no valid teacher data in this microbatch (see apply_mopd_topk_to_loss
+    # and apply_mopd_full_vocab_to_loss), ensuring consistent key sets.
+    if use_mopd_logits_based:
+        for key, value in mopd_fv_metrics.items():
+            reported_loss[key] = value
 
     return loss, reported_loss
 

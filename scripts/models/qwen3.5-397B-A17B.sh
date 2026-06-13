@@ -1,4 +1,7 @@
-NLAYERS=40
+# Qwen3.5-397B-A17B (MoE, 512 experts, 10 active)
+# VLM model with linear_attention + full_attention hybrid layers
+
+NLAYERS=60
 FIRST_K_DENSE_REPLACE=0
 
 arr=()
@@ -19,12 +22,12 @@ MODEL_ARGS=(
    --disable-bias-linear
    --qk-layernorm
    --group-query-attention
-   --num-attention-heads 16
+   --num-attention-heads 32
    --num-query-groups 2
    --kv-channels 256
-   --num-layers 40
-   --hidden-size 2048
-   --ffn-hidden-size 512
+   --num-layers 60
+   --hidden-size 4096
+   --ffn-hidden-size 1024
    --use-gated-attention
 
    --normalization RMSNorm
@@ -39,13 +42,13 @@ MODEL_ARGS=(
    --rotary-base 10000000
 
    # moe
-   --moe-ffn-hidden-size 512
-   --moe-shared-expert-intermediate-size 512
+   --moe-ffn-hidden-size 1024
+   --moe-shared-expert-intermediate-size 1024
    --moe-router-score-function softmax
    --moe-token-dispatcher-type alltoall
-   --moe-router-topk 8
+   --moe-router-topk 10
    --moe-layer-freq "$MOE_LAYER_FREQ"
-   --num-experts 256
+   --num-experts 512
    --moe-grouped-gemm
    --moe-token-drop-policy probs
    --moe-router-dtype fp32

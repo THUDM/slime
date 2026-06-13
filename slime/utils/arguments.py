@@ -1109,6 +1109,164 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--opd-teacher-ckpt-step", type=int, default=None, help="The checkpoint step for OPD teacher model."
             )
+
+            # --- MOPD (Multi-Teacher On-Policy Distillation) arguments ---
+            parser.add_argument(
+                "--use-mopd",
+                action="store_true",
+                default=False,
+                help=(
+                    "Enable Multi-Teacher On-Policy Distillation (MOPD). "
+                    "MOPD extends OPD by distilling from multiple domain-specific teachers with "
+                    "importance sampling correction. Mutually exclusive with --use-opd."
+                ),
+            )
+            parser.add_argument(
+                "--mopd-teachers",
+                type=str,
+                default=None,
+                help=(
+                    "JSON configuration for multiple MOPD teacher models. "
+                    'Format: [{"name": "math_teacher", "domain": "math"}, ...]. '
+                    "Each entry defines a teacher with a unique domain identifier. "
+                    "For sglang mode, teacher log-probs are fetched from --rm-url; "
+                    "for megatron mode, --mopd-teacher-loads provides checkpoint paths."
+                ),
+            )
+            parser.add_argument(
+                "--mopd-teacher-loads",
+                type=str,
+                nargs="+",
+                default=None,
+                help=(
+                    "List of Megatron checkpoint paths for MOPD teacher models. "
+                    "Must match the number of teachers in --mopd-teachers. "
+                    "Required when --use-mopd is enabled with megatron-based teachers."
+                ),
+            )
+            parser.add_argument(
+                "--mopd-teacher-ckpt-steps",
+                type=int,
+                nargs="+",
+                default=None,
+                help=(
+                    "List of checkpoint steps for MOPD teacher models. "
+                    "Must match the number of teachers in --mopd-teachers. "
+                    "If not specified, the latest checkpoint is used for each teacher."
+                ),
+            )
+            parser.add_argument(
+                "--mopd-alpha",
+                type=float,
+                default=0.0,
+                help=(
+                    "Coefficient alpha for combining MOPD advantage with ORM advantage. "
+                    "Â_MOPD,t = sg[log(π_domain/π_θ)] + α * Â_ORM. "
+                    "Default is 0.0 (no ORM combination)."
+                ),
+            )
+            parser.add_argument(
+                "--mopd-eps-low",
+                type=float,
+                default=0.2,
+                help=(
+                    "Lower bound for importance sampling weight clipping in MOPD. "
+                    "Tokens with w_t = π_θ(y_t)/μ_θ(y_t) below this threshold are zeroed out. "
+                    "Default is 0.2."
+                ),
+            )
+            parser.add_argument(
+                "--mopd-eps-high",
+                type=float,
+                default=5.0,
+                help=(
+                    "Upper bound for importance sampling weight clipping in MOPD. "
+                    "Tokens with w_t = π_θ(y_t)/μ_θ(y_t) above this threshold are zeroed out. "
+                    "Default is 5.0."
+                ),
+            )
+            parser.add_argument(
+                "--mopd-sampling-logprobs-key",
+                type=str,
+                default="rollout_log_probs",
+                choices=["rollout_log_probs", "log_probs"],
+                help=(
+                    "Which log-probs to use as the sampling policy μ_θ for MOPD importance sampling. "
+                    "'rollout_log_probs': use the inference engine log-probs (default). "
+                    "'log_probs': use the training engine log-probs."
+                ),
+            )
+            parser.add_argument(
+                "--mopd-distill-type",
+                type=str,
+                choices=["token_level", "full_vocab", "top_k"],
+                default="token_level",
+                help=(
+                    "MOPD distillation type. "
+                    "'token_level' (default): use the sampled token log-prob difference as a reverse KL approximation, "
+                    "applied at the advantage level. Works with both megatron and sglang teacher modes. "
+                    "'full_vocab': compute the exact full-vocabulary reverse KL divergence D_KL(π_θ ∥ π_d) "
+                    "using complete logits from both student and teacher models. Only supported with "
+                    "megatron teacher mode (--mopd-teacher-mode=megatron with --mopd-teacher-loads), "
+                    "as it requires access to teacher logits during training. "
+                    "'top_k': compute an approximate reverse KL divergence using the top-k teacher logits "
+                    "plus tail probability correction. Stores only [R, k] logits+indices per sample "
+                    "(k controlled by --mopd-topk-k, default 1024), greatly reducing memory compared to "
+                    "full_vocab while being more accurate than token_level. Works with both megatron and "
+                    "sglang teacher modes. For sglang mode, top-k data is collected from SGLang servers "
+                    "via the top_logprobs_num API parameter."
+                ),
+            )
+            parser.add_argument(
+                "--mopd-topk-k",
+                type=int,
+                default=1024,
+                help=(
+                    "Number of top-k tokens to keep per position for MOPD top_k distillation. "
+                    "Only used when --mopd-distill-type=top_k. Higher k gives more accurate KL "
+                    "approximation at the cost of more memory. Default: 1024."
+                ),
+            )
+            parser.add_argument(
+                "--mopd-teacher-mode",
+                type=str,
+                choices=["megatron", "sglang"],
+                default="megatron",
+                help=(
+                    "How to run MOPD teacher models. "
+                    "'megatron' (default): load teacher checkpoints into the training process "
+                    "via Megatron and compute teacher logits/log-probs during training. "
+                    "Requires --mopd-teacher-loads. "
+                    "'sglang': use remote SGLang inference servers as teachers. Teacher log-probs "
+                    "(and optionally logits/top-k data) are collected during rollout via HTTP, "
+                    "eliminating the need to load teacher weights into the training process. "
+                    "This dramatically reduces CPU host memory usage by avoiding pin_memory backups "
+                    "of teacher model weights. Must also set --custom-rm-path to "
+                    "slime.rollout.mopd.reward_func and --custom-reward-post-process-path to "
+                    "slime.rollout.mopd.post_process_rewards (or use the defaults when --use-mopd)."
+                ),
+            )
+            parser.add_argument(
+                "--mopd-teacher-max-retries",
+                type=int,
+                default=3,
+                help=(
+                    "Maximum number of retry attempts for each MOPD teacher HTTP request "
+                    "in SGLang mode. Retries are applied on transient errors such as "
+                    "connection resets, partial reads (ContentLengthError), and server "
+                    "errors (5xx). Client errors (4xx) are not retried. Default: 3."
+                ),
+            )
+            parser.add_argument(
+                "--mopd-teacher-retry-delay",
+                type=float,
+                default=5.0,
+                help=(
+                    "Base delay in seconds between MOPD teacher request retries. "
+                    "The actual delay is retry_delay * (attempt_number + 1) with "
+                    "random jitter. Default: 5.0."
+                ),
+            )
             return parser
 
         def add_router_arguments(parser):
@@ -1593,6 +1751,7 @@ def _apply_megatron_role_overrides(base_args, overrides, role):
         # Critic-specific: disable features that only apply to actors.
         role_args.kl_coef = 0
         role_args.use_opd = False
+        role_args.use_mopd = False
         role_args.custom_advantage_function_path = None
         role_args.untie_embeddings_and_output_weights = True
         if "disable_param_buffers_cpu_backup" not in overrides:
@@ -1794,6 +1953,220 @@ def slime_validate_args(args):
         # If OPD is not enabled, opd_teacher_load should not be set
         if args.opd_teacher_load is not None:
             raise ValueError("--opd-teacher-load is set but --use-opd is not enabled. Please add --use-opd flag.")
+
+    # Validate Multi-Teacher On-Policy Distillation (MOPD) arguments
+    if getattr(args, "use_mopd", False):
+        # MOPD and OPD are mutually exclusive
+        if args.use_opd:
+            raise ValueError("--use-mopd and --use-opd are mutually exclusive. Please use only one distillation mode.")
+
+        # --mopd-teachers is required (can also be set via MOPD_TEACHERS_JSON env var)
+        if args.mopd_teachers is None:
+            env_mopd_teachers = os.environ.get("MOPD_TEACHERS_JSON")
+            if env_mopd_teachers:
+                args.mopd_teachers = env_mopd_teachers
+            else:
+                raise ValueError(
+                    "--mopd-teachers is required when --use-mopd is enabled. "
+                    "You can also set the MOPD_TEACHERS_JSON environment variable."
+                )
+
+        # Parse and validate MOPD teachers config
+        try:
+            if isinstance(args.mopd_teachers, str):
+                mopd_teachers = json.loads(args.mopd_teachers)
+            else:
+                mopd_teachers = args.mopd_teachers
+        except (json.JSONDecodeError, TypeError) as e:
+            raise ValueError(f"--mopd-teachers must be valid JSON: {e}") from e
+
+        if not isinstance(mopd_teachers, list) or len(mopd_teachers) == 0:
+            raise ValueError("--mopd-teachers must be a non-empty JSON list of teacher configs.")
+
+        domains = set()
+        for i, teacher_cfg in enumerate(mopd_teachers):
+            if not isinstance(teacher_cfg, dict):
+                raise ValueError(f"--mopd-teachers[{i}] must be a dict, got {type(teacher_cfg)}.")
+            if "domain" not in teacher_cfg:
+                raise ValueError(f"--mopd-teachers[{i}] must contain a 'domain' key.")
+            domain = teacher_cfg["domain"]
+            if domain in domains:
+                raise ValueError(f"--mopd-teachers has duplicate domain '{domain}'. Each domain must be unique.")
+            domains.add(domain)
+
+        # Validate MOPD teacher loads for megatron mode
+        if args.mopd_teacher_loads is not None:
+            if len(args.mopd_teacher_loads) != len(mopd_teachers):
+                raise ValueError(
+                    f"--mopd-teacher-loads has {len(args.mopd_teacher_loads)} paths, "
+                    f"but --mopd-teachers has {len(mopd_teachers)} teachers. They must match."
+                )
+            for i, path in enumerate(args.mopd_teacher_loads):
+                if not os.path.exists(path):
+                    raise FileNotFoundError(f"mopd_teacher_loads[{i}] path {path} does not exist.")
+                if not os.path.exists(os.path.join(path, "latest_checkpointed_iteration.txt")):
+                    logger.info(
+                        f"mopd_teacher_loads[{i}] path {path} does not have "
+                        "latest_checkpointed_iteration.txt, please make sure it is a valid megatron checkpoint."
+                    )
+
+        # Validate MOPD teacher checkpoint steps
+        if args.mopd_teacher_ckpt_steps is not None:
+            if args.mopd_teacher_loads is None:
+                raise ValueError("--mopd-teacher-ckpt-steps requires --mopd-teacher-loads to be set.")
+            if len(args.mopd_teacher_ckpt_steps) != len(mopd_teachers):
+                raise ValueError(
+                    f"--mopd-teacher-ckpt-steps has {len(args.mopd_teacher_ckpt_steps)} values, "
+                    f"but --mopd-teachers has {len(mopd_teachers)} teachers. They must match."
+                )
+
+        # Validate importance sampling bounds
+        if args.mopd_eps_low < 0:
+            raise ValueError(f"--mopd-eps-low must be >= 0, got {args.mopd_eps_low}.")
+        if args.mopd_eps_high <= args.mopd_eps_low:
+            raise ValueError(f"--mopd-eps-high ({args.mopd_eps_high}) must be > --mopd-eps-low ({args.mopd_eps_low}).")
+
+        # Set default teacher mode based on whether mopd_teacher_loads is provided
+        if not hasattr(args, "mopd_teacher_mode") or args.mopd_teacher_mode is None:
+            args.mopd_teacher_mode = "sglang" if args.mopd_teacher_loads is None else "megatron"
+
+        # Validate mopd_distill_type compatibility with teacher mode
+        if args.mopd_teacher_mode == "megatron":
+            if args.mopd_distill_type in ("full_vocab", "top_k"):
+                if args.mopd_teacher_loads is None:
+                    raise ValueError(
+                        f"--mopd-distill-type={args.mopd_distill_type} with --mopd-teacher-mode=megatron "
+                        "requires --mopd-teacher-loads. Please provide teacher checkpoints via --mopd-teacher-loads."
+                    )
+
+        # SGLang mode does not support full_vocab (cannot return full vocab logits efficiently)
+        if args.mopd_teacher_mode == "sglang" and args.mopd_distill_type == "full_vocab":
+            raise ValueError(
+                "--mopd-distill-type=full_vocab is not supported with --mopd-teacher-mode=sglang. "
+                "SGLang remote inference servers cannot efficiently return full-vocabulary logits. "
+                "Use --mopd-teacher-mode=megatron for full_vocab, or switch to "
+                "--mopd-distill-type=top_k for an accurate approximation with much lower "
+                "memory and network usage."
+            )
+
+        # Validate mopd_topk_k
+        if args.mopd_distill_type == "top_k" and args.mopd_topk_k <= 0:
+            raise ValueError(f"--mopd-topk-k must be > 0, got {args.mopd_topk_k}.")
+
+        # SGLang mode: validate that custom_rm_path / reward_func is properly configured
+        if args.mopd_teacher_mode == "sglang":
+            # SGLang mode does not load Megatron teacher weights, so weights_backuper is not needed
+            # for teacher backups. If no other feature requires it, we can skip it.
+            if args.mopd_teacher_loads is not None:
+                raise ValueError(
+                    "--mopd-teacher-mode=sglang is incompatible with --mopd-teacher-loads. "
+                    "SGLang mode uses remote inference servers as teachers and does not load "
+                    "Megatron teacher checkpoints. Remove --mopd-teacher-loads or use "
+                    "--mopd-teacher-mode=megatron."
+                )
+
+            # Auto-configure reward function paths if not explicitly set.
+            # Two scenarios:
+            #   1. Pure distillation (alpha=0, no rm_type): Use standalone MOPD reward functions.
+            #   2. Combined (alpha>0 or rm_type set): Use combined wrappers that collect MOPD
+            #      teacher data AND task rewards from the standard reward model.
+            has_task_reward = args.mopd_alpha > 0
+
+            if args.custom_rm_path is None and args.custom_reward_post_process_path is None:
+                # No explicit reward config — auto-configure based on whether task rewards are needed
+                if has_task_reward:
+                    combined_rm_path = "slime.rollout.mopd.combined_reward_func"
+                    combined_pp_path = "slime.rollout.mopd.combined_post_process_rewards"
+                    args.custom_rm_path = combined_rm_path
+                    args.custom_reward_post_process_path = combined_pp_path
+                    logger.info(
+                        f"MOPD SGLang mode with task rewards: auto-setting --custom-rm-path to "
+                        f"'{combined_rm_path}' and --custom-reward-post-process-path to "
+                        f"'{combined_pp_path}'. These combined functions collect MOPD teacher data "
+                        f"from SGLang AND task rewards from --rm-type={args.rm_type}."
+                    )
+                else:
+                    standalone_rm_path = "slime.rollout.mopd.reward_func"
+                    standalone_pp_path = "slime.rollout.mopd.post_process_rewards"
+                    args.custom_rm_path = standalone_rm_path
+                    args.custom_reward_post_process_path = standalone_pp_path
+                    logger.info(
+                        f"MOPD SGLang mode (pure distillation): auto-setting --custom-rm-path to "
+                        f"'{standalone_rm_path}' and --custom-reward-post-process-path to "
+                        f"'{standalone_pp_path}'."
+                    )
+            elif args.custom_rm_path is not None and args.custom_reward_post_process_path is None:
+                # Only custom_rm_path is set — set a matching post_process
+                if "slime.rollout.mopd.combined_reward_func" in args.custom_rm_path:
+                    args.custom_reward_post_process_path = "slime.rollout.mopd.combined_post_process_rewards"
+                elif "slime.rollout.mopd.reward_func" in args.custom_rm_path:
+                    args.custom_reward_post_process_path = "slime.rollout.mopd.post_process_rewards"
+                else:
+                    # User has a custom reward function — they need to handle MOPD extraction themselves
+                    logger.warning(
+                        "MOPD SGLang mode: --custom-rm-path is set to a non-MOPD function. "
+                        "You must ensure teacher data extraction is handled in your "
+                        "--custom-reward-post-process-path function."
+                    )
+            elif args.custom_rm_path is None and args.custom_reward_post_process_path is not None:
+                # Only post_process is set — auto-configure reward function
+                if has_task_reward:
+                    args.custom_rm_path = "slime.rollout.mopd.combined_reward_func"
+                else:
+                    args.custom_rm_path = "slime.rollout.mopd.reward_func"
+                logger.info(
+                    f"MOPD SGLang mode: auto-setting --custom-rm-path to '{args.custom_rm_path}' "
+                    f"(--custom-reward-post-process-path already set)."
+                )
+
+        # MOPD with megatron-based teachers requires weights_backuper (to backup multiple models)
+        if args.mopd_teacher_loads is not None and not args.enable_weights_backuper:
+            raise ValueError(
+                "--disable-weights-backuper is not compatible with MOPD megatron mode "
+                "(--mopd-teacher-loads). MOPD needs to backup multiple teacher model weights."
+            )
+
+        # Validate rm_type requirement based on mopd_alpha
+        # When mopd_alpha > 0, ORM advantages are combined with distillation advantages,
+        # so a reward model is required.
+        # When mopd_alpha == 0, pure distillation doesn't need task rewards; if no rm_type
+        # or custom_rm_path is set, default to "zero" reward.
+        # Note: After SGLang auto-config, custom_rm_path may be set to a MOPD function,
+        # so we check the combination of mopd_alpha and whether there's a real task reward source.
+        _mopd_uses_combined_rm = args.custom_rm_path is not None and "slime.rollout.mopd.combined_reward_func" in str(
+            args.custom_rm_path
+        )
+        if args.mopd_alpha > 0 and args.rm_type is None and not _mopd_uses_combined_rm and args.custom_rm_path is None:
+            raise ValueError(
+                "--mopd-alpha > 0 requires a reward model (--rm-type or --custom-rm-path) "
+                "because ORM advantages are combined with distillation advantages. "
+                "Either set --rm-type, --custom-rm-path, or use --mopd-alpha 0 for pure distillation."
+            )
+        if _mopd_uses_combined_rm and args.rm_type is None:
+            raise ValueError(
+                "MOPD combined reward mode (--mopd-alpha > 0 with SGLang teacher mode) requires "
+                "--rm-type to be set for task rewards. The combined reward function collects both "
+                "MOPD teacher data and task rewards. Without --rm-type, there is no task reward source. "
+                "Either set --rm-type, or use --mopd-alpha 0 for pure distillation."
+            )
+        if args.mopd_alpha == 0 and args.rm_type is None and args.custom_rm_path is None:
+            logger.info(
+                "MOPD with alpha=0 (pure distillation): no --rm-type or --custom-rm-path set, "
+                "defaulting to 'zero' reward (always 0.0). The learning signal comes entirely "
+                "from the distillation KL advantages."
+            )
+            args.rm_type = "zero"
+
+        # Store parsed teachers for later use
+        args._mopd_teachers_parsed = mopd_teachers
+    else:
+        # If MOPD is not enabled, MOPD-specific args should not be set
+        if getattr(args, "mopd_teacher_loads", None) is not None:
+            raise ValueError("--mopd-teacher-loads is set but --use-mopd is not enabled. Please add --use-mopd flag.")
+        if getattr(args, "mopd_teacher_ckpt_steps", None) is not None:
+            raise ValueError(
+                "--mopd-teacher-ckpt-steps is set but --use-mopd is not enabled. Please add --use-mopd flag."
+            )
 
     if args.megatron_to_hf_mode == "bridge":
         if (
