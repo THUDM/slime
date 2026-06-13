@@ -1134,6 +1134,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--opsd-temperature",
+                type=float,
+                default=1.0,
+                help="Softmax temperature applied to both student and teacher logits in the OPSD JSD. Default 1.0.",
+            )
+            parser.add_argument(
                 "--opsd-privileged-info-key",
                 type=str,
                 default=None,

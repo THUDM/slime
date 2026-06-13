@@ -1098,19 +1098,23 @@ def opsd_loss_function(
 
     tp_group = mpu.get_tensor_model_parallel_group()
 
+    student_response_logits = [chunk for chunk, _ in get_responses(
+        logits.float(),
+        args=args,
+        unconcat_tokens=batch["unconcat_tokens"],
+        total_lengths=batch["total_lengths"],
+        response_lengths=batch["response_lengths"],
+        max_seq_lens=batch.get("max_seq_lens", None),
+        apply_temperature=False,
+    )]
+    assert len(student_response_logits) == len(teacher_response_logits), (
+        f"OPSD sample count mismatch: {len(student_response_logits)} student vs "
+        f"{len(teacher_response_logits)} teacher"
+    )
+
     jsd_list = []
-    for (student_logits_chunk, _), teacher_logits_chunk in zip(
-        get_responses(
-            logits.float(),
-            args=args,
-            unconcat_tokens=batch["unconcat_tokens"],
-            total_lengths=batch["total_lengths"],
-            response_lengths=batch["response_lengths"],
-            max_seq_lens=batch.get("max_seq_lens", None),
-            apply_temperature=False,
-        ),
-        teacher_response_logits,
-        strict=False,
+    for student_logits_chunk, teacher_logits_chunk in zip(
+        student_response_logits, teacher_response_logits, strict=True
     ):
         assert student_logits_chunk.shape == teacher_logits_chunk.shape, (
             f"OPSD student/teacher logits shape mismatch: "
@@ -1121,6 +1125,7 @@ def opsd_loss_function(
             teacher_logits_chunk.float(),
             beta=args.opsd_beta,
             process_group=tp_group,
+            temperature=args.opsd_temperature,
         )
         jsd = jsd.clamp(max=args.opsd_jsd_clip)
         jsd_list.append(jsd)

@@ -303,6 +303,11 @@ def log_rollout_data(
                 "global_batch_sizes",
                 "num_microbatches",
                 "micro_batch_indices",
+                # OPSD: privileged teacher token sequence and its per-token response logits
+                # are not scalar/token-level metrics and must not be reduced here.
+                "teacher_tokens",
+                "teacher_total_lengths",
+                "teacher_response_logits",
             ]:
                 continue
             # Emit (sum, count) so gather_log_data can do a weighted average across

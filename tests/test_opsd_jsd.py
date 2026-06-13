@@ -57,6 +57,16 @@ def test_jsd_gradient_only_through_student(beta):
     assert torch.allclose(student.grad, student_ref.grad, atol=1e-9)
 
 
+@pytest.mark.parametrize("temperature", [0.5, 2.0])
+def test_jsd_temperature_matches_reference(temperature):
+    torch.manual_seed(3)
+    student = torch.randn(6, 19, dtype=torch.float64)
+    teacher = torch.randn(6, 19, dtype=torch.float64)
+    got = compute_vocab_parallel_jsd(student, teacher, 0.5, process_group=None, temperature=temperature)
+    expected = _reference_jsd(student / temperature, teacher / temperature, 0.5)
+    assert torch.allclose(got, expected, atol=1e-9)
+
+
 @pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
 def test_jsd_non_negative_and_zero_for_identical(beta):
     torch.manual_seed(2)

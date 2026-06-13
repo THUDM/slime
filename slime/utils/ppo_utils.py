@@ -1,6 +1,7 @@
 # Adapt from https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/models/utils.py
 # and https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/trainer/ppo_utils/experience_maker.py
 
+import math
 from argparse import Namespace
 
 import torch
@@ -242,6 +243,7 @@ def compute_vocab_parallel_jsd(
     teacher_logits: torch.Tensor,
     beta: float,
     process_group: dist.ProcessGroup | None,
+    temperature: float = 1.0,
 ) -> torch.Tensor:
     """Per-token generalized Jensen-Shannon divergence over a vocab-parallel logits shard.
 
@@ -264,7 +266,13 @@ def compute_vocab_parallel_jsd(
         teacher_logits: Frozen teacher logits for the local vocab shard.
         beta: Interpolation weight in [0, 1].
         process_group: Tensor/vocab-parallel group, or None for single-rank.
+        temperature: Softmax temperature applied to both logits before the JSD
+            (matches OPSD; default 1.0 is a no-op).
     """
+    if temperature != 1.0:
+        student_logits = student_logits / temperature
+        teacher_logits = teacher_logits / temperature
+
     student_log_probs = _vocab_parallel_log_softmax(student_logits, process_group)
     teacher_log_probs = _vocab_parallel_log_softmax(teacher_logits.detach(), process_group).detach()
 
@@ -275,9 +283,7 @@ def compute_vocab_parallel_jsd(
         # KL(student || teacher) = sum_v P_student * (log P_student - log P_teacher)
         per_shard = student_log_probs.exp() * (student_log_probs - teacher_log_probs)
     else:
-        # Mixture log-probs computed stably in log space: log(beta*q + (1-beta)*p).
-        import math
-
+        # Mixture log-probs computed stably in log space: log((1-beta)*q + beta*p).
         mixture_log_probs = torch.logsumexp(
             torch.stack(
                 [
