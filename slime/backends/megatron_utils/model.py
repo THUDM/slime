@@ -657,17 +657,17 @@ def train(
     config.grad_scale_func = optimizer.scale_loss
     config.timers = None
     if isinstance(model[0], DDP) and args.overlap_grad_reduce:
-        assert config.no_sync_func is None, (
-            "When overlap_grad_reduce is True, config.no_sync_func must be None; "
-            "a custom no_sync_func is not supported when overlapping grad-reduce"
-        )
-        config.no_sync_func = [model_chunk.no_sync for model_chunk in model]
-        if len(model) == 1:
-            config.no_sync_func = config.no_sync_func[0]
-        if args.align_grad_reduce:
-            config.grad_sync_func = [model_chunk.start_grad_sync for model_chunk in model]
+        # `config` is the model config and persists across steps, so set the sync
+        # funcs only once — re-running trips `config.no_sync_func is None` on the
+        # second step (#1779). The funcs are constant, so skipping later is a no-op.
+        if config.no_sync_func is None:
+            config.no_sync_func = [model_chunk.no_sync for model_chunk in model]
             if len(model) == 1:
-                config.grad_sync_func = config.grad_sync_func[0]
+                config.no_sync_func = config.no_sync_func[0]
+            if args.align_grad_reduce:
+                config.grad_sync_func = [model_chunk.start_grad_sync for model_chunk in model]
+                if len(model) == 1:
+                    config.grad_sync_func = config.grad_sync_func[0]
     if args.overlap_param_gather and args.align_param_gather:
         config.param_sync_func = [model_chunk.start_param_sync for model_chunk in model]
         if len(model) == 1:
