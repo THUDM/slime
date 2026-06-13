@@ -95,6 +95,28 @@ def json_arguments(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def dict_arguments(value: Any) -> dict:
+    """Tool-call arguments for chat-template rendering.
+
+    OpenAI wire responses carry ``function.arguments`` as a JSON string; Qwen-family
+    chat templates expect a mapping and iterate ``arguments.items()``. Decode echoed
+    wire strings back to dicts at the render boundary.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value or "{}")
+        except json.JSONDecodeError:
+            decoded = value
+        if isinstance(decoded, dict):
+            return decoded
+        return {"_raw_arguments": decoded}
+    if value is None:
+        return {}
+    return {"_raw_arguments": value}
+
+
 def render_token_ids(chain: AdapterChain, tokenizer) -> list[int]:
     enc = tokenizer.apply_chat_template(
         chain.chat_messages,

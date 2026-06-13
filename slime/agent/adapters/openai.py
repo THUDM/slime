@@ -23,6 +23,7 @@ from aiohttp import web
 from slime.agent.adapters.common import ADAPTER_KEY, REASONING_PARSER_KEY, TOKENIZER_KEY, TOOL_PARSER_KEY
 from slime.agent.adapters.common import AdapterChain as Chain
 from slime.agent.adapters.common import BaseAdapter, call_sglang_generate
+from slime.agent.adapters.common import dict_arguments as _dict_arguments
 from slime.agent.adapters.common import json_arguments as _json_arguments
 from slime.agent.adapters.common import ok_response, render_token_ids, request_session_id
 from slime.agent.adapters.common import stable_hash as _hash
@@ -105,7 +106,7 @@ def _normalize_tool_call(call: dict[str, Any]) -> dict[str, Any]:
         "type": "function",
         "function": {
             "name": name,
-            "arguments": _json_arguments(arguments),
+            "arguments": _dict_arguments(arguments),
         },
     }
     if call.get("id"):
