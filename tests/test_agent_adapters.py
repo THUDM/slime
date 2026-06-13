@@ -3,6 +3,7 @@ import json
 import sys
 from pathlib import Path
 
+import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
@@ -12,7 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from slime.agent.adapters import anthropic, openai
-from slime.agent.adapters.common import SGLANG_URL_KEY
+from slime.agent.adapters.common import SGLANG_CLIENT_KEY, SGLANG_URL_KEY
 from slime.agent.trajectory import TurnRecord
 
 
@@ -819,12 +820,16 @@ def test_openai_generate_posts_input_ids_and_extracts_logprobs():
         await server.start_server()
         try:
             session = openai.Session(sampling_defaults={"max_new_tokens": 9})
-            turn = await openai._generate(
-                [11, 12],
-                session,
-                {"max_tokens": 3, "temperature": 0.25, "stop": ["</s>"]},
-                {SGLANG_URL_KEY: str(server.make_url("")).rstrip("/")},
-            )
+            async with aiohttp.ClientSession() as client:
+                turn = await openai._generate(
+                    [11, 12],
+                    session,
+                    {"max_tokens": 3, "temperature": 0.25, "stop": ["</s>"]},
+                    {
+                        SGLANG_URL_KEY: str(server.make_url("")).rstrip("/"),
+                        SGLANG_CLIENT_KEY: client,
+                    },
+                )
         finally:
             await server.close()
 
@@ -837,6 +842,132 @@ def test_openai_generate_posts_input_ids_and_extracts_logprobs():
         assert turn.prompt_ids == [11, 12]
         assert turn.output_ids == [701, 702]
         assert turn.output_log_probs == [-0.7, -0.8]
+
+    asyncio.run(run_case())
+
+
+class FakeConnectionKey:
+    host = "10.0.1.4"
+    port = 4049
+    ssl = True
+
+
+class FakeSGLangResponse:
+    status = 200
+
+    def __init__(self, token_id: int) -> None:
+        self.token_id = token_id
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def json(self, content_type=None):
+        return {
+            "meta_info": {
+                "output_token_logprobs": [[-0.1, self.token_id]],
+                "finish_reason": {"type": "stop"},
+            }
+        }
+
+
+class FakeSGLangClient:
+    # Stands in for the app-owned pooled client: each /generate post consumes one scripted
+    # outcome (a token id to return or an exception to raise); /abort_request always succeeds.
+    def __init__(self, generate_outcomes: list[int | Exception]) -> None:
+        self.generate_outcomes = list(generate_outcomes)
+        self.posts: list[dict] = []
+
+    def post(self, url, *, json=None, headers=None, timeout=None):
+        self.posts.append({"url": url, "json": json})
+        if url.endswith("/abort_request"):
+            return FakeSGLangResponse(0)
+        outcome = self.generate_outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return FakeSGLangResponse(outcome)
+
+
+@pytest.mark.unit
+def test_openai_generate_reuses_app_owned_sglang_client():
+    # Both turns post through the same app-owned pooled client instead of a fresh session each.
+    async def run_case():
+        client = FakeSGLangClient([800, 801])
+        session = openai.Session(sampling_defaults={"max_new_tokens": 9})
+        app = {SGLANG_URL_KEY: "http://router", SGLANG_CLIENT_KEY: client}
+
+        first = await openai._generate([11], session, {"max_tokens": 3}, app)
+        second = await openai._generate([12], session, {"max_tokens": 4}, app)
+
+        assert first.output_ids == [800]
+        assert second.output_ids == [801]
+        assert [p["url"] for p in client.posts] == ["http://router/generate", "http://router/generate"]
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.unit
+def test_openai_generate_retries_connector_error_once_with_same_rid():
+    # A pre-connect connector error is retried exactly once with the SAME rid: no request
+    # bytes reached SGLang, so the retry cannot double-generate.
+    async def run_case():
+        client = FakeSGLangClient([aiohttp.ClientConnectorError(FakeConnectionKey(), OSError("bad fd")), 901])
+        session = openai.Session(sampling_defaults={"max_new_tokens": 9})
+        app = {SGLANG_URL_KEY: "http://router", SGLANG_CLIENT_KEY: client}
+
+        turn = await openai._generate([11], session, {"max_tokens": 3}, app)
+
+        assert turn.output_ids == [901]
+        assert [p["url"] for p in client.posts] == ["http://router/generate", "http://router/generate"]
+        assert client.posts[0]["json"]["rid"] == client.posts[1]["json"]["rid"]
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.unit
+def test_openai_generate_does_not_retry_after_request_reaches_server():
+    # Once the request may have reached SGLang, a failure must abort by rid, never re-issue;
+    # the scripted success after the disconnect makes a wrongly-retried request fail loudly.
+    async def run_case():
+        client = FakeSGLangClient([aiohttp.ServerDisconnectedError(), 999])
+        session = openai.Session(sampling_defaults={"max_new_tokens": 9})
+        app = {SGLANG_URL_KEY: "http://router", SGLANG_CLIENT_KEY: client}
+
+        with pytest.raises(aiohttp.ServerDisconnectedError):
+            await openai._generate([11], session, {"max_tokens": 3}, app)
+
+        assert [p["url"] for p in client.posts] == ["http://router/generate", "http://router/abort_request"]
+        assert client.posts[1]["json"]["rid"] == client.posts[0]["json"]["rid"]
+
+    asyncio.run(run_case())
+
+
+@pytest.mark.unit
+def test_openai_generate_retries_connector_error_only_once():
+    # A second consecutive connector error propagates and aborts by rid; a third attempt
+    # would hit the scripted success, so an unbounded retry fails loudly.
+    async def run_case():
+        client = FakeSGLangClient(
+            [
+                aiohttp.ClientConnectorError(FakeConnectionKey(), OSError("bad fd")),
+                aiohttp.ClientConnectorError(FakeConnectionKey(), OSError("bad fd")),
+                999,
+            ]
+        )
+        session = openai.Session(sampling_defaults={"max_new_tokens": 9})
+        app = {SGLANG_URL_KEY: "http://router", SGLANG_CLIENT_KEY: client}
+
+        with pytest.raises(aiohttp.ClientConnectorError):
+            await openai._generate([11], session, {"max_tokens": 3}, app)
+
+        assert [p["url"] for p in client.posts] == [
+            "http://router/generate",
+            "http://router/generate",
+            "http://router/abort_request",
+        ]
+        assert client.posts[0]["json"]["rid"] == client.posts[1]["json"]["rid"]
 
     asyncio.run(run_case())
 
