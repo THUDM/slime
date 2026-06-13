@@ -18,7 +18,7 @@ Below is a summary of all available customization interfaces and their purposes.
 | [`--rollout-data-postprocess-path`](#8-rollout-data-postprocess---rollout-data-postprocess-path) | Post-process rollout data after log probs are computed. |
 | [`--custom-loss-function-path`](#9-custom-loss-function---custom-loss-function-path) | Implement custom training loss computation. |
 | [`--custom-tis-function-path`](#10-custom-tisrs-function---custom-tis-function-path) | Implement custom importance sampling for off-policy correction. |
-| [`--custom-pg-loss-reducer-function-path`](#11-custom-pg-loss-reducer---custom-pg-loss-reducer-function-path) | Customize pg_loss reduction (e.g., for Dr.GRPO). |
+| [`--custom-pg-loss-reducer-function-path`](#11-custom-pg-loss-reducer---custom-pg-loss-reducer-function-path) | Customize pg_loss reduction. |
 | [`--custom-reward-post-process-path`](#12-reward-post-processing---custom-reward-post-process-path) | Custom post-processing of rewards before advantage computation. |
 | [`--custom-convert-samples-to-train-data-path`](#13-samples-to-train-data-conversion---custom-convert-samples-to-train-data-path) | Override the conversion of samples to training data format. |
 | [`--custom-rollout-log-function-path`](#14-logging-functions) | Custom logging for training rollouts. |
@@ -295,10 +295,15 @@ def get_pg_loss_reducer(
 ```
 
 **Use Cases**:
-- Dr.GRPO: Divide by a constant instead of effective token count
 - Custom loss normalization strategies
 
-**Example**: `examples/DrGRPO/custom_reducer.py:get_pg_loss_reducer`
+**Note**: For the Dr.GRPO normalization — divide pg_loss by a constant instead of the
+data-dependent active-token count (arXiv:2503.20783, Eq. 2; also used by DeepSWE) — no
+custom reducer is needed. It is built in:
+
+```bash
+--pg-loss-divisor 40960   # a constant, e.g. the max context length
+```
 
 ---
 

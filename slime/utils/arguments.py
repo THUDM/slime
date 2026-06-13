@@ -1039,7 +1039,19 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--custom-pg-loss-reducer-function-path",
                 type=str,
                 default=None,
-                help="Path to a custom reducer function for pg_loss only. When set, pg_loss will use this custom reducer while other metrics (pg_clipfrac, ppo_kl, entropy_loss, etc.) still use the default sum_of_sample_mean. (e.g., examples/Dr.GRPO/custom_reducer.py:get_pg_loss_reducer).",
+                help="Path to a custom reducer function for pg_loss only. When set, pg_loss will use this custom reducer while other metrics (pg_clipfrac, ppo_kl, entropy_loss, etc.) still use the default sum_of_sample_mean. See the Custom pg_loss Reducer section of docs/en/get_started/customization.md for the expected signature.",
+            )
+            parser.add_argument(
+                "--pg-loss-divisor",
+                type=float,
+                default=None,
+                help="Constant divisor for pg_loss aggregation. When set, pg_loss is the masked "
+                "token-loss sum divided by this constant (e.g. the max context length) instead of "
+                "the default sum of per-sample active-token means, removing the length bias of "
+                "per-sample normalization (Dr.GRPO, arXiv:2503.20783, Eq. 2; also used by DeepSWE). "
+                "Other metrics keep the default reducer. Ignored when "
+                "--custom-pg-loss-reducer-function-path is set, and under "
+                "--calculate-per-token-loss (Megatron already divides by the token count there).",
             )
 
             parser.add_argument(
@@ -1838,6 +1850,9 @@ def slime_validate_args(args):
 
     if args.use_rollout_logprobs:
         assert not args.use_tis, "use_rollout_logprobs and use_tis cannot be set at the same time."
+
+    if args.pg_loss_divisor is not None and not args.pg_loss_divisor > 0:
+        raise ValueError(f"--pg-loss-divisor must be a positive number, got {args.pg_loss_divisor}.")
 
     if args.get_mismatch_metrics:
         assert (

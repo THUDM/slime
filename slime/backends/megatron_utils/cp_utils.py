@@ -58,6 +58,7 @@ def get_sum_of_sample_mean(
     calculate_per_token_loss: bool = False,
     qkv_format: str = "thd",
     max_seq_lens: list[int] | None = None,
+    constant_divisor: float | None = None,
 ) -> Callable[[torch.Tensor], torch.Tensor]:
     """
     Calculate correct sample mean for CP.
@@ -71,6 +72,14 @@ def get_sum_of_sample_mean(
     step level rather than per-mb is required — otherwise a rollout whose
     samples land in different micro-batches would get a partial denominator
     on each side.
+
+    ``constant_divisor`` switches to the Dr.GRPO normalization (see
+    ``--pg-loss-divisor``): the masked token-loss sum is divided by this
+    constant instead of per-sample active-token means. The constant is
+    identical on every CP rank, so the gradient sum-allreduce across CP ranks
+    needs no denominator correction. Intentionally not applied under
+    ``calculate_per_token_loss`` — Megatron already divides by the
+    all-reduced token count there.
     """
     if sample_denoms is None:
         sample_denoms = [m.sum() for m in loss_masks]
@@ -133,7 +142,17 @@ def get_sum_of_sample_mean(
                 ]
             )
 
-    return sum_of_sample_mean if not calculate_per_token_loss else sum_of_token
+    if calculate_per_token_loss:
+        return sum_of_token
+
+    if constant_divisor is not None:
+
+        def sum_of_token_over_constant(x: torch.Tensor) -> torch.Tensor:
+            return sum_of_token(x) / constant_divisor
+
+        return sum_of_token_over_constant
+
+    return sum_of_sample_mean
 
 
 def reduce_train_step_metrics(
