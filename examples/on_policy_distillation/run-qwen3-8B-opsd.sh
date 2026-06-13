@@ -38,9 +38,14 @@ CKPT_ARGS=(
    --save-interval 20
 )
 
+# Data: the OPSD release uses siyanzhao/Openthoughts_math_30k_opsd, with fields
+#   "problem"  -> the question (student + teacher context)
+#   "solution" -> the ground-truth solution (privileged info, teacher-only)
+# Download and convert to jsonl, e.g.:
+#   hf download --repo-type dataset siyanzhao/Openthoughts_math_30k_opsd --local-dir /root/opsd-math-30k
 ROLLOUT_ARGS=(
-   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
-   --input-key prompt
+   --prompt-data /root/opsd-math-30k/train.jsonl
+   --input-key problem
    --apply-chat-template
    --rollout-shuffle
    --num-rollout 300
@@ -90,7 +95,7 @@ OPSD_ARGS=(
    --opd-teacher-load /root/Qwen3-8B_torch_dist        # Frozen teacher = initial-policy checkpoint
    --opsd-beta 0.5                                      # JSD interpolation (0=fwd KL, 1=rev KL, 0.5=symmetric)
    --opsd-jsd-clip 0.05                                # Per-token JSD clamp (stops style tokens dominating)
-   --opsd-privileged-info-key solution                 # Dataset field with the ground-truth solution
+   --opsd-privileged-info-key solution                 # Dataset field with the ground-truth solution (teacher-only)
 )
 
 OPTIMIZER_ARGS=(

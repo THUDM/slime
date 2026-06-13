@@ -71,7 +71,7 @@ The teacher model is loaded directly into Megatron via `--opd-teacher-load`. Tea
 
 ### Self Mode (`--opd-type self`) — On-Policy Self-Distillation (OPSD)
 
-This mode implements **On-Policy Self-Distillation** ("Self-Distilled Reasoner"). A single model acts as both student and teacher, differing only by *context*:
+This mode implements **On-Policy Self-Distillation** ([Self-Distilled Reasoner](https://github.com/siyan-zhao/OPSD)). A single model acts as both student and teacher, differing only by *context*:
 
 - **Student**: conditioned on the problem only; generates the on-policy rollout (the trainable current policy).
 - **Teacher**: the **same model, frozen at the initial-policy checkpoint** (`--opd-teacher-load`), conditioned on the problem **plus privileged information** (the ground-truth solution). The teacher does not generate — it scores the student's response tokens in a single forward pass.
@@ -91,6 +91,8 @@ where $x$ is the problem, $s$ the privileged solution, $\beta$ the JSD interpola
 | `--opsd-beta` | JSD interpolation weight (default 0.5). |
 | `--opsd-jsd-clip` | Per-token JSD clamp (default 0.05). |
 | `--opsd-privileged-info-key` | Dataset field with the privileged information (ground-truth solution) shown only to the teacher. **Required**. |
+
+**Data format**: the reference release uses [`siyanzhao/Openthoughts_math_30k_opsd`](https://huggingface.co/datasets/siyanzhao/Openthoughts_math_30k_opsd) with `problem` (the question, `--input-key problem`) and `solution` (the ground-truth solution, `--opsd-privileged-info-key solution`).
 
 **How it works**:
 1. The teacher (frozen init checkpoint) is loaded as an additional Megatron model.

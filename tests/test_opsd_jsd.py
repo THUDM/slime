@@ -14,15 +14,23 @@ from slime.utils.ppo_utils import compute_vocab_parallel_jsd
 
 
 def _reference_jsd(student_logits: torch.Tensor, teacher_logits: torch.Tensor, beta: float) -> torch.Tensor:
-    """Dense reference following TRL's GOLD/GKD generalized JSD."""
+    """Independent dense reference using F.kl_div, mirroring OPSD's GOLD trainer.
+
+    M = (1 - beta) * student + beta * teacher
+    JSD = beta * KL(teacher || M) + (1 - beta) * KL(student || M)
+    Endpoints: beta=0 -> KL(teacher || student); beta=1 -> KL(student || teacher).
+    """
     s = F.log_softmax(student_logits, dim=-1)
     t = F.log_softmax(teacher_logits, dim=-1)
     if beta == 0.0:
-        return (t.exp() * (t - s)).sum(-1)
+        # F.kl_div(input, target, log_target) = sum target * (log target - input) = KL(target || exp(input))
+        return F.kl_div(s, t, reduction="none", log_target=True).sum(-1)
     if beta == 1.0:
-        return (s.exp() * (s - t)).sum(-1)
-    m = torch.logsumexp(torch.stack([s + math.log(beta), t + math.log(1 - beta)]), dim=0)
-    return (beta * (t.exp() * (t - m)) + (1 - beta) * (s.exp() * (s - m))).sum(-1)
+        return F.kl_div(t, s, reduction="none", log_target=True).sum(-1)
+    m = torch.logsumexp(torch.stack([s + math.log(1 - beta), t + math.log(beta)]), dim=0)
+    kl_teacher = F.kl_div(m, t, reduction="none", log_target=True)
+    kl_student = F.kl_div(m, s, reduction="none", log_target=True)
+    return (beta * kl_teacher + (1 - beta) * kl_student).sum(-1)
 
 
 @pytest.mark.parametrize("beta", [0.0, 0.3, 0.5, 1.0])

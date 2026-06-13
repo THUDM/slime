@@ -245,13 +245,15 @@ def compute_vocab_parallel_jsd(
 ) -> torch.Tensor:
     """Per-token generalized Jensen-Shannon divergence over a vocab-parallel logits shard.
 
-    Follows the generalized JSD used by GKD / TRL's GOLD trainer:
+    Follows the generalized JSD used by OPSD ("Self-Distilled Reasoner") / TRL's
+    GOLD trainer:
 
-        M = beta * P_student + (1 - beta) * P_teacher
+        M = (1 - beta) * P_student + beta * P_teacher
         JSD_beta = beta * KL(P_teacher || M) + (1 - beta) * KL(P_student || M)
 
     with the limiting cases ``beta == 0`` -> ``KL(P_teacher || P_student)`` (forward KL)
-    and ``beta == 1`` -> ``KL(P_student || P_teacher)`` (reverse KL).
+    and ``beta == 1`` -> ``KL(P_student || P_teacher)`` (reverse KL). At ``beta == 0.5``
+    this is the symmetric Jensen-Shannon divergence.
 
     Gradients flow only through ``student_logits``; the teacher is treated as a
     constant target (detached). `student_logits` / `teacher_logits` have shape
@@ -279,8 +281,8 @@ def compute_vocab_parallel_jsd(
         mixture_log_probs = torch.logsumexp(
             torch.stack(
                 [
-                    student_log_probs + math.log(beta),
-                    teacher_log_probs + math.log(1.0 - beta),
+                    student_log_probs + math.log(1.0 - beta),
+                    teacher_log_probs + math.log(beta),
                 ],
                 dim=0,
             ),
