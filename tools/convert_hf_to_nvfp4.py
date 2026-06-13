@@ -346,7 +346,7 @@ def _update_quantization_config(cfg: dict, ignore_list: list[str]) -> None:
     quant_cfg["quant_method"] = "modelopt"
     quant_cfg["group_size"] = NVFP4_GROUP_SIZE
     quant_cfg["ignore"] = ignore_list
-    quant_cfg.setdefault("kv_cache_scheme", DEFAULT_KV_CACHE_SCHEME)
+    # quant_cfg.setdefault("kv_cache_scheme", DEFAULT_KV_CACHE_SCHEME)
 
     config_groups = quant_cfg.get("config_groups")
     if isinstance(config_groups, dict):
