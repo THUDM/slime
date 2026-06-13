@@ -183,7 +183,7 @@ index e9efdcdd9ee..70265a424f5 100644
              return
  
 diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
-index b21aee9f7c2..3fbffd678dc 100644
+index b21aee9f7c2..87f0a6fa668 100644
 --- a/python/sglang/srt/disaggregation/mooncake/conn.py
 +++ b/python/sglang/srt/disaggregation/mooncake/conn.py
 @@ -39,7 +39,10 @@ from sglang.srt.disaggregation.common.utils import (
@@ -198,31 +198,27 @@ index b21aee9f7c2..3fbffd678dc 100644
  from sglang.srt.distributed.parallel_state import get_mooncake_transfer_engine
  from sglang.srt.environ import envs
  from sglang.srt.observability.mooncake_trace import (
-@@ -257,6 +260,23 @@ class MooncakeKVManager(CommonKVManager):
+@@ -257,6 +260,19 @@ class MooncakeKVManager(CommonKVManager):
              if ptrs and lens:
                  self.engine.batch_register(ptrs, lens)
  
 +    def deregister_buffer_to_engine(self):
 +        if self.kv_args.kv_data_ptrs and self.kv_args.kv_data_lens:
-+            self.engine.batch_deregister(
-+                self.kv_args.kv_data_ptrs, self.kv_args.kv_data_lens
-+            )
++            self.engine.batch_deregister(self.kv_args.kv_data_ptrs)
 +
 +        if self.kv_args.aux_data_ptrs and self.kv_args.aux_data_lens:
-+            self.engine.batch_deregister(
-+                self.kv_args.aux_data_ptrs, self.kv_args.aux_data_lens
-+            )
++            self.engine.batch_deregister(self.kv_args.aux_data_ptrs)
 +
 +        for ptrs, lens in zip(
 +            self.kv_args.state_data_ptrs, self.kv_args.state_data_lens
 +        ):
 +            if ptrs and lens:
-+                self.engine.batch_deregister(ptrs, lens)
++                self.engine.batch_deregister(ptrs)
 +
      # ------------------------------------------------------------------
      # Staging buffer methods (all delegate to staging_handler.py)
      # ------------------------------------------------------------------
-@@ -827,10 +847,14 @@ class MooncakeKVManager(CommonKVManager):
+@@ -827,10 +843,14 @@ class MooncakeKVManager(CommonKVManager):
          prefill_aux_ptrs = self.kv_args.aux_data_ptrs
          prefill_aux_item_lens = self.kv_args.aux_item_lens
  
@@ -241,7 +237,7 @@ index b21aee9f7c2..3fbffd678dc 100644
              transfer_blocks.append((src_addr, dst_addr, length))
  
          return self._transfer_data(req.mooncake_session_id, transfer_blocks)
-@@ -844,9 +868,14 @@ class MooncakeKVManager(CommonKVManager):
+@@ -844,9 +864,14 @@ class MooncakeKVManager(CommonKVManager):
          prefill_aux_ptrs = self.kv_args.aux_data_ptrs
          prefill_aux_item_lens = self.kv_args.aux_item_lens
  
@@ -259,7 +255,7 @@ index b21aee9f7c2..3fbffd678dc 100644
              data = AuxDataCodec.serialize_data_from_buffer(src_addr, length)
  
              self.send_aux_data_to_endpoint(
-@@ -994,15 +1023,17 @@ class MooncakeKVManager(CommonKVManager):
+@@ -994,15 +1019,17 @@ class MooncakeKVManager(CommonKVManager):
                  src_indices = list(indices)
                  dst_indices_local = list(dst_indices)
                  if len(src_indices) > len(dst_indices_local):
@@ -283,7 +279,7 @@ index b21aee9f7c2..3fbffd678dc 100644
                  rc = (
                      self._send_kvcache_generic(
                          mooncake_session_id=req.mooncake_session_id,
-@@ -1279,12 +1310,6 @@ class MooncakeKVManager(CommonKVManager):
+@@ -1279,12 +1306,6 @@ class MooncakeKVManager(CommonKVManager):
                          if ret != 0:
                              with self.session_lock:
                                  self.session_failures[req.mooncake_session_id] += 1
@@ -296,7 +292,7 @@ index b21aee9f7c2..3fbffd678dc 100644
                              self.record_failure(
                                  kv_chunk.room,
                                  f"Failed to send kv chunk of {kv_chunk.room} to "
-@@ -1302,12 +1327,27 @@ class MooncakeKVManager(CommonKVManager):
+@@ -1302,12 +1323,27 @@ class MooncakeKVManager(CommonKVManager):
  
                          if kv_chunk.is_last_chunk:
                              if kv_chunk.state_indices:
