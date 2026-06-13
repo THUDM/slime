@@ -76,6 +76,7 @@ class RolloutDataSource(DataSource):
                 prompt_key=args.input_key,
                 multimodal_keys=args.multimodal_keys,
                 label_key=args.label_key,
+                privileged_info_key=args.opsd_privileged_info_key,
                 metadata_key=args.metadata_key,
                 tool_key=args.tool_key,
                 apply_chat_template=args.apply_chat_template,

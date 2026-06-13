@@ -399,6 +399,12 @@ class RolloutManager:
             self.custom_convert_samples_to_train_data_func = load_function(
                 self.args.custom_convert_samples_to_train_data_path
             )
+        # Tokenizer for OPSD: used to tokenize the teacher's privileged information.
+        self.tokenizer = None
+        if self.args.use_opd and self.args.opd_type == "self":
+            from slime.utils.processing_utils import load_tokenizer
+
+            self.tokenizer = load_tokenizer(self.args.hf_checkpoint, trust_remote_code=True)
         logger.info(f"import {self.args.rollout_function_path} as generate_rollout function.")
         logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
@@ -776,6 +782,20 @@ class RolloutManager:
         if samples[0].teacher_log_probs is not None:
             train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
 
+        # OPSD: build the teacher's privileged token sequence [prompt + privileged_info + response].
+        # The response segment is a verbatim copy of the student's response, so its R teacher
+        # response positions align 1:1 with the student's response positions during training.
+        if self.args.use_opd and self.args.opd_type == "self":
+            teacher_tokens = []
+            for sample in samples:
+                prompt_length = len(sample.tokens) - sample.response_length
+                prompt_tokens = list(sample.tokens[:prompt_length])
+                response_tokens = list(sample.tokens[prompt_length:])
+                privileged_info = sample.privileged_info or ""
+                privileged_tokens = self.tokenizer.encode(privileged_info, add_special_tokens=False)
+                teacher_tokens.append(prompt_tokens + privileged_tokens + response_tokens)
+            train_data["teacher_tokens"] = teacher_tokens
+
         return train_data
 
     def set_train_parallel_config(self, config: dict):
@@ -825,6 +845,7 @@ class RolloutManager:
                 "rollout_routed_experts",
                 "prompt",
                 "teacher_log_probs",
+                "teacher_tokens",
             ]:
                 if key not in data:
                     continue

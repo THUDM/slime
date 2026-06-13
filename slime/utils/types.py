@@ -35,6 +35,9 @@ class Sample:
     rollout_routed_experts: list[list[int]] | None = None  # Routed experts from rollout engine
     remove_sample: bool = False
     teacher_log_probs: list[float] | None = None  # Log probabilities from teacher model for OPD
+    # Privileged information (e.g. the ground-truth solution) shown only to the OPSD teacher,
+    # used to build the teacher's privileged context for on-policy self-distillation.
+    privileged_info: str | None = None
 
     class Status(Enum):
         PENDING = "pending"

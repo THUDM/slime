@@ -198,6 +198,103 @@ def compute_entropy_from_logits(logits: torch.Tensor, process_group) -> torch.Te
     return _VocabParallelEntropy.apply(logits, process_group)
 
 
+class _VocabParallelAllReduceSum(torch.autograd.Function):
+    """Differentiable all-reduce (SUM) across the vocab-parallel (TP) group.
+
+    Forward sums the per-shard partial values into the replicated total; backward
+    is the identity. This is the correct autograd pair when the all-reduced value
+    is consumed identically on every rank to form a replicated loss term (each
+    rank's local contribution has gradient 1 w.r.t. the sum). See the "reduce"
+    op in Megatron's tensor-parallel mappings.
+    """
+
+    @staticmethod
+    def forward(ctx, x: torch.Tensor, process_group: dist.ProcessGroup | None) -> torch.Tensor:
+        if process_group is not None and dist.get_world_size(group=process_group) > 1:
+            x = x.clone()
+            dist.all_reduce(x, group=process_group)
+        return x
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        return grad_output, None
+
+
+def _vocab_parallel_log_softmax(logits: torch.Tensor, process_group: dist.ProcessGroup | None) -> torch.Tensor:
+    """Numerically-stable log-softmax over a vocab dimension sharded across `process_group`.
+
+    `logits` has shape `[N, V_local]`; the returned tensor has the same shape and
+    holds the log-probabilities of the local vocab shard, normalized over the
+    *global* vocabulary. Differentiable w.r.t. `logits`.
+    """
+    # The max is a constant shift for softmax; detach so no gradient flows through it.
+    logits_max = logits.detach().max(dim=-1, keepdim=True).values
+    if process_group is not None and dist.get_world_size(group=process_group) > 1:
+        dist.all_reduce(logits_max, op=dist.ReduceOp.MAX, group=process_group)
+    shifted = logits - logits_max
+    sum_exp = shifted.exp().sum(dim=-1, keepdim=True)
+    sum_exp = _VocabParallelAllReduceSum.apply(sum_exp, process_group)
+    return shifted - sum_exp.log()
+
+
+def compute_vocab_parallel_jsd(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    beta: float,
+    process_group: dist.ProcessGroup | None,
+) -> torch.Tensor:
+    """Per-token generalized Jensen-Shannon divergence over a vocab-parallel logits shard.
+
+    Follows the generalized JSD used by GKD / TRL's GOLD trainer:
+
+        M = beta * P_student + (1 - beta) * P_teacher
+        JSD_beta = beta * KL(P_teacher || M) + (1 - beta) * KL(P_student || M)
+
+    with the limiting cases ``beta == 0`` -> ``KL(P_teacher || P_student)`` (forward KL)
+    and ``beta == 1`` -> ``KL(P_student || P_teacher)`` (reverse KL).
+
+    Gradients flow only through ``student_logits``; the teacher is treated as a
+    constant target (detached). `student_logits` / `teacher_logits` have shape
+    `[N, V_local]` (the local vocab shard); the returned tensor has shape `[N]`.
+
+    Args:
+        student_logits: Trainable student logits for the local vocab shard.
+        teacher_logits: Frozen teacher logits for the local vocab shard.
+        beta: Interpolation weight in [0, 1].
+        process_group: Tensor/vocab-parallel group, or None for single-rank.
+    """
+    student_log_probs = _vocab_parallel_log_softmax(student_logits, process_group)
+    teacher_log_probs = _vocab_parallel_log_softmax(teacher_logits.detach(), process_group).detach()
+
+    if beta == 0.0:
+        # KL(teacher || student) = sum_v P_teacher * (log P_teacher - log P_student)
+        per_shard = teacher_log_probs.exp() * (teacher_log_probs - student_log_probs)
+    elif beta == 1.0:
+        # KL(student || teacher) = sum_v P_student * (log P_student - log P_teacher)
+        per_shard = student_log_probs.exp() * (student_log_probs - teacher_log_probs)
+    else:
+        # Mixture log-probs computed stably in log space: log(beta*q + (1-beta)*p).
+        import math
+
+        mixture_log_probs = torch.logsumexp(
+            torch.stack(
+                [
+                    student_log_probs + math.log(beta),
+                    teacher_log_probs + math.log(1.0 - beta),
+                ],
+                dim=0,
+            ),
+            dim=0,
+        )
+        kl_teacher = teacher_log_probs.exp() * (teacher_log_probs - mixture_log_probs)
+        kl_student = student_log_probs.exp() * (student_log_probs - mixture_log_probs)
+        per_shard = beta * kl_teacher + (1.0 - beta) * kl_student
+
+    jsd = per_shard.sum(dim=-1)
+    jsd = _VocabParallelAllReduceSum.apply(jsd, process_group)
+    return jsd
+
+
 def get_grpo_returns(
     rewards: torch.Tensor,
     kl: list[torch.Tensor],

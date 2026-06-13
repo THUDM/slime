@@ -69,6 +69,47 @@ The teacher model is loaded directly into Megatron via `--opd-teacher-load`. Tea
 
 > **Note**: The teacher checkpoint must be in Megatron format (`torch_dist` or `torch`). You can convert from HuggingFace format using `tools/convert_hf_to_torch_dist.py`.
 
+### Self Mode (`--opd-type self`) — On-Policy Self-Distillation (OPSD)
+
+This mode implements **On-Policy Self-Distillation** ("Self-Distilled Reasoner"). A single model acts as both student and teacher, differing only by *context*:
+
+- **Student**: conditioned on the problem only; generates the on-policy rollout (the trainable current policy).
+- **Teacher**: the **same model, frozen at the initial-policy checkpoint** (`--opd-teacher-load`), conditioned on the problem **plus privileged information** (the ground-truth solution). The teacher does not generate — it scores the student's response tokens in a single forward pass.
+
+Unlike the other modes (which fold a sampled-token reverse-KL into the advantage), OPSD uses a **direct, full-vocab token-level Jensen-Shannon divergence (JSD)** as the loss, with **no task reward** (pure distillation):
+
+$$
+\mathcal{L}_{\text{OPSD}} = \mathbb{E}_{t}\Big[\min\big(\text{JSD}_\beta\big(P_{\text{teacher}}(\cdot|x, s, y_{<t})\,\|\,P_{\text{student}}(\cdot|x, y_{<t})\big),\ c\big)\Big]
+$$
+
+where $x$ is the problem, $s$ the privileged solution, $\beta$ the JSD interpolation weight (`--opsd-beta`: 0 → forward KL, 1 → reverse KL, 0.5 → symmetric), and $c$ the per-token clip (`--opsd-jsd-clip`, default 0.05) that prevents high-divergence style tokens (e.g. "wait", "think") from dominating the gradient.
+
+**Key arguments**:
+
+| Argument | Description |
+|----------|-------------|
+| `--opsd-beta` | JSD interpolation weight (default 0.5). |
+| `--opsd-jsd-clip` | Per-token JSD clamp (default 0.05). |
+| `--opsd-privileged-info-key` | Dataset field with the privileged information (ground-truth solution) shown only to the teacher. **Required**. |
+
+**How it works**:
+1. The teacher (frozen init checkpoint) is loaded as an additional Megatron model.
+2. During rollout conversion, the privileged teacher sequence `[prompt + privileged_info + response]` is built (the response is a verbatim copy of the student's rollout).
+3. Before training, the teacher is forwarded on that privileged sequence to obtain response-position logits.
+4. During the student training forward, the per-token full-vocab JSD between student and teacher logits is computed, clamped, and reduced into the loss.
+
+**Configuration**:
+```bash
+--use-opd
+--opd-type self
+--opd-teacher-load /path/to/init_torch_dist   # frozen teacher = initial policy
+--opsd-beta 0.5
+--opsd-jsd-clip 0.05
+--opsd-privileged-info-key solution           # dataset field with the ground-truth solution
+```
+
+> **Limitations (current MVP)**: OPSD requires `--context-parallel-size 1`. The teacher response logits are held over the full vocabulary between the teacher and student forwards, so memory scales with `response_length × vocab_size`; prefer it for smaller models / shorter responses for now. The example script is `examples/on_policy_distillation/run-qwen3-8B-opsd.sh`.
+
 ## Running the Examples
 
 Complete example scripts are provided in `examples/on_policy_distillation/`:

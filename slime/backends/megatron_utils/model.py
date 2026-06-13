@@ -501,6 +501,7 @@ def train_one_step(
                 "rollout_log_probs",
                 "max_seq_lens",
                 "teacher_log_probs",
+                "teacher_response_logits",
                 "rollout_mask_sums",
             ],
             args.data_pad_size_multiplier,

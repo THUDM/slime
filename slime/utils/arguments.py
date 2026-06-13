@@ -1083,12 +1083,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--opd-type",
                 type=str,
-                choices=["sglang", "megatron"],
+                choices=["sglang", "megatron", "self"],
                 default=None,
                 help=(
                     "Type of on-policy distillation. "
                     "'sglang': Teacher log-probs are obtained from external SGLang server during rollout. "
-                    "'megatron': Teacher model is loaded via --opd-teacher-load and forwarded during training."
+                    "'megatron': Teacher model is loaded via --opd-teacher-load and forwarded during training. "
+                    "'self': On-policy self-distillation (OPSD). A single model is both student and teacher; "
+                    "the teacher (frozen at the init checkpoint, loaded via --opd-teacher-load) is conditioned "
+                    "on privileged information (the ground-truth solution) and the loss is a token-level "
+                    "full-vocab JSD over the student's on-policy tokens."
                 ),
             )
             parser.add_argument(
@@ -1102,12 +1106,41 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
                 help=(
-                    "The checkpoint for OPD teacher model. Required when --opd-type=megatron. "
-                    "The teacher model should have the same architecture as policy/ref model."
+                    "The checkpoint for OPD teacher model. Required when --opd-type=megatron or --opd-type=self. "
+                    "The teacher model should have the same architecture as policy/ref model. For OPSD "
+                    "(--opd-type=self) this should point at the initial-policy checkpoint."
                 ),
             )
             parser.add_argument(
                 "--opd-teacher-ckpt-step", type=int, default=None, help="The checkpoint step for OPD teacher model."
+            )
+            # --- On-policy self-distillation (OPSD, --opd-type=self) ---
+            parser.add_argument(
+                "--opsd-beta",
+                type=float,
+                default=0.5,
+                help=(
+                    "Generalized JSD interpolation weight for OPSD. beta=0 -> forward KL (teacher||student), "
+                    "beta=1 -> reverse KL (student||teacher), 0.5 -> symmetric JSD. Default 0.5."
+                ),
+            )
+            parser.add_argument(
+                "--opsd-jsd-clip",
+                type=float,
+                default=0.05,
+                help=(
+                    "Per-token JSD clamp (max) for OPSD. Caps each token's divergence so high-divergence "
+                    "style tokens do not dominate the gradient. Default 0.05. Set to a large value to disable."
+                ),
+            )
+            parser.add_argument(
+                "--opsd-privileged-info-key",
+                type=str,
+                default=None,
+                help=(
+                    "JSON dataset key holding the privileged information (e.g. the ground-truth solution) "
+                    "shown only to the OPSD teacher. Required when --opd-type=self."
+                ),
             )
             return parser
 
@@ -1766,12 +1799,14 @@ def slime_validate_args(args):
     # Validate on-policy distillation (OPD) arguments
     if args.use_opd:
         if args.opd_type is None:
-            raise ValueError("--opd-type must be specified when --use-opd is enabled. Choose 'sglang' or 'megatron'.")
+            raise ValueError(
+                "--opd-type must be specified when --use-opd is enabled. Choose 'sglang', 'megatron' or 'self'."
+            )
 
-        if args.opd_type == "megatron":
+        if args.opd_type in ("megatron", "self"):
             if args.opd_teacher_load is None:
                 raise ValueError(
-                    "--opd-teacher-load is required when --opd-type=megatron. "
+                    f"--opd-teacher-load is required when --opd-type={args.opd_type}. "
                     "Please provide the path to the teacher model checkpoint."
                 )
             if not os.path.exists(args.opd_teacher_load):
@@ -1783,6 +1818,22 @@ def slime_validate_args(args):
                     f"opd_teacher_load {args.opd_teacher_load} does not have latest_checkpointed_iteration.txt, "
                     "please make sure it is a valid megatron checkpoint directory."
                 )
+
+        if args.opd_type == "self":
+            # OPSD is a pure-distillation, full-vocab JSD loss computed during the training
+            # forward pass; it requires the JSD loss type and the privileged-info data key.
+            if args.opsd_privileged_info_key is None:
+                raise ValueError(
+                    "--opsd-privileged-info-key is required when --opd-type=self. It names the dataset "
+                    "field holding the privileged information (ground-truth solution) shown to the teacher."
+                )
+            if args.loss_type not in ("policy_loss", "opsd"):
+                raise ValueError(
+                    f"--opd-type=self (OPSD) requires --loss-type=opsd (got {args.loss_type!r})."
+                )
+            args.loss_type = "opsd"
+            if not (0.0 <= args.opsd_beta <= 1.0):
+                raise ValueError(f"--opsd-beta must be in [0, 1], got {args.opsd_beta}.")
 
         elif args.opd_type == "sglang":
             if args.opd_teacher_load is not None:

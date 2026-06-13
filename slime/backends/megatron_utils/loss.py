@@ -16,6 +16,7 @@ from slime.utils.ppo_utils import (
     compute_gspo_kl,
     compute_opsm_mask,
     compute_policy_loss,
+    compute_vocab_parallel_jsd,
     get_advantages_and_returns_batch,
     get_grpo_returns,
     get_reinforce_plus_plus_baseline_advantages,
@@ -530,6 +531,44 @@ def get_values(
     return torch.empty((0,), device=logits.device), res
 
 
+def get_response_logits(
+    logits: torch.Tensor,
+    *,
+    args: Namespace,
+    unconcat_tokens: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+    with_entropy: bool = False,
+    non_loss_data: bool = True,
+    max_seq_lens: list[int] | None = None,
+) -> tuple[torch.Tensor, dict[str, list[torch.Tensor]]]:
+    """Extract per-sample response-aligned logits (full local vocab shard).
+
+    Used by OPSD to capture the teacher's response-position logits during a
+    privileged forward pass. Each returned tensor has shape `[R, V_local]` where
+    `V_local` is this rank's vocab shard. The response tokens scored by the
+    teacher are a verbatim copy of the student's response, so position `r` of the
+    returned chunk aligns 1:1 with response position `r` of the student forward.
+
+    Returns a dict with key "response_logits" so the caller (forward_only) stores
+    it under the chosen prefix (e.g. "teacher_response_logits").
+    """
+    logits_list = []
+    for logits_chunk, _ in get_responses(
+        logits.float(),
+        args=args,
+        unconcat_tokens=unconcat_tokens,
+        total_lengths=total_lengths,
+        response_lengths=response_lengths,
+        max_seq_lens=max_seq_lens,
+        apply_temperature=False,
+    ):
+        # Detach: the teacher is frozen and its logits are a constant target.
+        logits_list.append(logits_chunk.detach())
+
+    return torch.empty((0,), device=logits.device), {"response_logits": logits_list}
+
+
 def apply_opd_kl_to_advantages(
     args: Namespace,
     rollout_data: RolloutBatch,
@@ -1028,6 +1067,78 @@ def policy_loss_function(
     return loss, reported_loss
 
 
+def opsd_loss_function(
+    args: Namespace,
+    batch: RolloutBatch,
+    logits: torch.Tensor,
+    sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Compute the on-policy self-distillation (OPSD) loss.
+
+    For each sample, computes the per-token full-vocab generalized JSD between the
+    student's next-token distribution (from `logits`) and the teacher's
+    distribution (precomputed during the privileged teacher forward and stored in
+    `batch["teacher_response_logits"]`). The per-token JSD is clamped to
+    `args.opsd_jsd_clip` and reduced with the standard per-sample mean reducer.
+
+    Args:
+        args: Configuration containing `opsd_beta` and `opsd_jsd_clip`.
+        batch: Mini-batch with "teacher_response_logits" (per-sample `[R, V_local]`),
+            "unconcat_tokens", "total_lengths", "response_lengths", "loss_masks".
+        logits: Student policy logits with shape `[1, T, V]` (float32).
+        sum_of_sample_mean: Reduction function that averages per-sample values.
+
+    Returns:
+        Tuple of `(loss, metrics)` where `metrics` contains detached "loss" and
+        "opsd_jsd" scalars.
+    """
+    teacher_response_logits = batch.get("teacher_response_logits")
+    if teacher_response_logits is None:
+        raise ValueError("OPSD requires 'teacher_response_logits' in the batch, but it is missing.")
+
+    tp_group = mpu.get_tensor_model_parallel_group()
+
+    jsd_list = []
+    for (student_logits_chunk, _), teacher_logits_chunk in zip(
+        get_responses(
+            logits.float(),
+            args=args,
+            unconcat_tokens=batch["unconcat_tokens"],
+            total_lengths=batch["total_lengths"],
+            response_lengths=batch["response_lengths"],
+            max_seq_lens=batch.get("max_seq_lens", None),
+            apply_temperature=False,
+        ),
+        teacher_response_logits,
+        strict=False,
+    ):
+        assert student_logits_chunk.shape == teacher_logits_chunk.shape, (
+            f"OPSD student/teacher logits shape mismatch: "
+            f"{student_logits_chunk.shape} vs {teacher_logits_chunk.shape}"
+        )
+        jsd = compute_vocab_parallel_jsd(
+            student_logits_chunk.float(),
+            teacher_logits_chunk.float(),
+            beta=args.opsd_beta,
+            process_group=tp_group,
+        )
+        jsd = jsd.clamp(max=args.opsd_jsd_clip)
+        jsd_list.append(jsd)
+
+    jsd_cat = torch.cat(jsd_list, dim=0)
+    loss = sum_of_sample_mean(jsd_cat)
+
+    # make sure the gradient could backprop correctly when this rank has no tokens.
+    if jsd_cat.numel() == 0:
+        loss = loss + 0 * logits.sum()
+
+    reported_loss = {
+        "loss": loss.clone().detach(),
+        "opsd_jsd": loss.clone().detach(),
+    }
+    return loss, reported_loss
+
+
 def value_loss_function(
     args: Namespace,
     batch: RolloutBatch,
@@ -1190,6 +1301,8 @@ def loss_function(
             func = value_loss_function
         case "sft_loss":
             func = sft_loss_function
+        case "opsd":
+            func = opsd_loss_function
         case "custom_loss":
             func = load_function(args.custom_loss_function_path)
         case _:

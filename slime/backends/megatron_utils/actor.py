@@ -32,7 +32,7 @@ from .cp_utils import slice_log_prob_with_cp, slice_with_cp
 from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data
 from .hf_checkpoint_saver import save_hf_model_to_path
 from .initialize import init, is_megatron_main_rank
-from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
+from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_response_logits, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight.common import named_params_and_buffers
 from .update_weight.update_weight_from_disk import UpdateWeightFromDisk
@@ -235,6 +235,13 @@ class MegatronTrainRayActor(TrainRayActor):
         rollout_data["loss_masks"] = [
             torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in rollout_data["loss_masks"]
         ]
+        # OPSD: move the teacher's privileged token sequence to GPU and record its lengths.
+        if "teacher_tokens" in rollout_data:
+            rollout_data["teacher_tokens"] = [
+                torch.tensor(t, dtype=torch.long, device=torch.cuda.current_device())
+                for t in rollout_data["teacher_tokens"]
+            ]
+            rollout_data["teacher_total_lengths"] = [t.numel() for t in rollout_data["teacher_tokens"]]
         if "rollout_mask_sums" in rollout_data:
             # Promote precomputed per-rollout mask totals to GPU tensors here
             # (matching loss_masks) so the loss reducer can just divide.
@@ -400,6 +407,43 @@ class MegatronTrainRayActor(TrainRayActor):
                 store_prefix=store_prefix,
             )
 
+    def compute_teacher_response_logits(
+        self,
+        rollout_data: RolloutBatch,
+        num_microbatches: list[int],
+    ) -> dict[str, list[torch.Tensor]]:
+        """Run the OPSD privileged teacher forward and return response-position logits.
+
+        The currently-active model must be the teacher. The teacher is forwarded on
+        the privileged token sequence ``[prompt + privileged_info + response]`` (stored
+        in ``rollout_data["teacher_tokens"]``); per-sample response logits ``[R, V_local]``
+        are returned under the key ``teacher_response_logits``, aligned 1:1 with the
+        student's response positions (response tokens are identical).
+        """
+        assert mpu.get_context_parallel_world_size() == 1, "OPSD currently supports only context-parallel-size 1."
+        # Build a rollout_data view whose token stream is the privileged teacher sequence,
+        # reusing the same per-sample order and micro-batch schedule as the student pass.
+        teacher_view = dict(rollout_data)
+        teacher_view["tokens"] = rollout_data["teacher_tokens"]
+        teacher_view["total_lengths"] = rollout_data["teacher_total_lengths"]
+        if self.args.qkv_format == "bshd":
+            pad_size = mpu.get_tensor_model_parallel_world_size() * self.args.data_pad_size_multiplier
+            max_seq_len = max(teacher_view["total_lengths"])
+            max_seq_len = (max_seq_len + pad_size - 1) // pad_size * pad_size
+            teacher_view["max_seq_lens"] = [max_seq_len] * len(teacher_view["tokens"])
+
+        data_iterator = get_data_iterator(teacher_view)
+        with timer("opsd_teacher_response_logits"):
+            res = forward_only(
+                get_response_logits,
+                self.args,
+                self.model,
+                data_iterator,
+                num_microbatches,
+                store_prefix="teacher_",
+            )
+        return res
+
     def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):
         if self.args.debug_rollout_only:
             return None
@@ -461,75 +505,87 @@ class MegatronTrainRayActor(TrainRayActor):
 
         with inverse_timer("train_wait"), timer("train"):
             if self.args.compute_advantages_and_returns:
-                if "ref" in self.weights_backuper.backup_tags:
-                    if self.args.use_routing_replay:
-                        os.environ["ROUTING_REPLAY_STAGE"] = "fallthrough"
-                    self._switch_model("ref")
-                    rollout_data.update(
-                        self.compute_log_prob(
-                            data_iterator,
-                            num_microbatches,
-                            store_prefix="ref_",
-                        )
-                    )
-
-                # Forward teacher model to get teacher_log_probs for Megatron-based OPD
-                if "teacher" in self.weights_backuper.backup_tags:
-                    if self.args.use_routing_replay:
-                        os.environ["ROUTING_REPLAY_STAGE"] = "fallthrough"
+                opsd = self.args.use_opd and self.args.opd_type == "self"
+                if opsd:
+                    # OPSD: only the privileged teacher forward is needed. The JSD loss is
+                    # computed during the student training forward (loss_type="opsd"), so no
+                    # ref / old-logprob / advantage passes are required (pure distillation).
+                    assert (
+                        "teacher" in self.weights_backuper.backup_tags
+                    ), "OPSD requires the teacher model to be loaded (--opd-teacher-load)."
                     self._switch_model("teacher")
-                    rollout_data.update(
-                        self.compute_log_prob(
-                            data_iterator,
-                            num_microbatches,
-                            store_prefix="teacher_",
-                        )
-                    )
-
-                self._switch_model("old_actor" if self.args.keep_old_actor else "actor")
-                can_reuse_log_probs_in_loss = (
-                    len(num_microbatches) == 1
-                    and self.args.loss_type == "policy_loss"
-                    and self.args.kl_coef == 0
-                    and not self.args.use_rollout_logprobs
-                    and not self.args.get_mismatch_metrics
-                    and not self.args.use_critic
-                    and not self.args.keep_old_actor
-                    and not self.args.use_opd
-                    and not self.args.use_routing_replay
-                    and self.args.advantage_estimator != "gspo"
-                )
-                if (
-                    not self.args.use_rollout_logprobs or self.args.get_mismatch_metrics
-                ) and not can_reuse_log_probs_in_loss:
-                    if self.args.use_routing_replay:
-                        if self.args.use_rollout_routing_replay:
-                            os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
-                        else:
-                            os.environ["ROUTING_REPLAY_STAGE"] = "record"
-                    rollout_data.update(
-                        self.compute_log_prob(
-                            data_iterator,
-                            num_microbatches,
-                            store_prefix="",
-                        )
-                    )
-                    if self.args.use_rollout_routing_replay:
-                        RoutingReplay.clear_all_forward()
-
-                if self.args.use_critic:
-                    if external_data is not None and mpu.is_pipeline_last_stage():
-                        values = external_data.get("values")
-                        if values is not None:
-                            from slime.backends.megatron_utils.data import tensors_to_gpu
-
-                            rollout_data["values"] = tensors_to_gpu(values)
-                if self._active_model_tag != "actor":
+                    rollout_data.update(self.compute_teacher_response_logits(rollout_data, num_microbatches))
                     self._switch_model("actor")
+                else:
+                    if "ref" in self.weights_backuper.backup_tags:
+                        if self.args.use_routing_replay:
+                            os.environ["ROUTING_REPLAY_STAGE"] = "fallthrough"
+                        self._switch_model("ref")
+                        rollout_data.update(
+                            self.compute_log_prob(
+                                data_iterator,
+                                num_microbatches,
+                                store_prefix="ref_",
+                            )
+                        )
 
-                # Calculate adv and returns. Need to performed before training (instead of on the fly),
-                # because we may need normalize the whole rollout.
-                compute_advantages_and_returns(self.args, rollout_data)
+                    # Forward teacher model to get teacher_log_probs for Megatron-based OPD
+                    if "teacher" in self.weights_backuper.backup_tags:
+                        if self.args.use_routing_replay:
+                            os.environ["ROUTING_REPLAY_STAGE"] = "fallthrough"
+                        self._switch_model("teacher")
+                        rollout_data.update(
+                            self.compute_log_prob(
+                                data_iterator,
+                                num_microbatches,
+                                store_prefix="teacher_",
+                            )
+                        )
+
+                    self._switch_model("old_actor" if self.args.keep_old_actor else "actor")
+                    can_reuse_log_probs_in_loss = (
+                        len(num_microbatches) == 1
+                        and self.args.loss_type == "policy_loss"
+                        and self.args.kl_coef == 0
+                        and not self.args.use_rollout_logprobs
+                        and not self.args.get_mismatch_metrics
+                        and not self.args.use_critic
+                        and not self.args.keep_old_actor
+                        and not self.args.use_opd
+                        and not self.args.use_routing_replay
+                        and self.args.advantage_estimator != "gspo"
+                    )
+                    if (
+                        not self.args.use_rollout_logprobs or self.args.get_mismatch_metrics
+                    ) and not can_reuse_log_probs_in_loss:
+                        if self.args.use_routing_replay:
+                            if self.args.use_rollout_routing_replay:
+                                os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
+                            else:
+                                os.environ["ROUTING_REPLAY_STAGE"] = "record"
+                        rollout_data.update(
+                            self.compute_log_prob(
+                                data_iterator,
+                                num_microbatches,
+                                store_prefix="",
+                            )
+                        )
+                        if self.args.use_rollout_routing_replay:
+                            RoutingReplay.clear_all_forward()
+
+                    if self.args.use_critic:
+                        if external_data is not None and mpu.is_pipeline_last_stage():
+                            values = external_data.get("values")
+                            if values is not None:
+                                from slime.backends.megatron_utils.data import tensors_to_gpu
+
+                                rollout_data["values"] = tensors_to_gpu(values)
+                    if self._active_model_tag != "actor":
+                        self._switch_model("actor")
+
+                    # Calculate adv and returns. Need to performed before training (instead of on the fly),
+                    # because we may need normalize the whole rollout.
+                    compute_advantages_and_returns(self.args, rollout_data)
 
             if self.rollout_data_postprocess is not None:
                 self.rollout_data_postprocess(self.args, rollout_id, rollout_data)
