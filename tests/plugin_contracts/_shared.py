@@ -19,18 +19,62 @@ def install_paths() -> None:
     sys.path.insert(0, str(current.parents[2]))
 
 
-def install_stubs(*, with_sglang_router: bool = False, with_transformers: bool = False) -> None:
+def install_stubs(
+    *,
+    with_sglang_router: bool = False,
+    with_transformers: bool = False,
+    with_sglang: bool = False,
+    with_wandb: bool = False,
+) -> None:
     if "ray" not in sys.modules:
         ray_mod = types.ModuleType("ray")
         ray_mod._private = types.SimpleNamespace(
             services=types.SimpleNamespace(get_node_ip_address=lambda: "127.0.0.1")
         )
+        # identity decorator keeps @ray.remote classes plain so tests can call
+        # their methods directly with a stand-in self
+        ray_mod.remote = lambda obj: obj
+        scheduling_strategies = types.ModuleType("ray.util.scheduling_strategies")
+        scheduling_strategies.PlacementGroupSchedulingStrategy = type("PlacementGroupSchedulingStrategy", (), {})
+        ray_util = types.ModuleType("ray.util")
+        ray_util.scheduling_strategies = scheduling_strategies
+        ray_mod.util = ray_util
         sys.modules["ray"] = ray_mod
+        sys.modules["ray.util"] = ray_util
+        sys.modules["ray.util.scheduling_strategies"] = scheduling_strategies
 
     if with_sglang_router and "sglang_router" not in sys.modules:
         mod = types.ModuleType("sglang_router")
         mod.__version__ = "0.2.3"
         sys.modules["sglang_router"] = mod
+
+    if with_sglang and "sglang" not in sys.modules:
+        constants = types.ModuleType("sglang.srt.constants")
+        constants.GPU_MEMORY_TYPE_CUDA_GRAPH = "cuda_graph"
+        constants.GPU_MEMORY_TYPE_KV_CACHE = "kv_cache"
+        constants.GPU_MEMORY_TYPE_WEIGHTS = "weights"
+        server_args = types.ModuleType("sglang.srt.server_args")
+        server_args.ServerArgs = type("ServerArgs", (), {})
+        srt_utils = types.ModuleType("sglang.srt.utils")
+        srt_utils.kill_process_tree = lambda *args, **kwargs: None
+        srt = types.ModuleType("sglang.srt")
+        srt.constants = constants
+        srt.server_args = server_args
+        srt.utils = srt_utils
+        sglang = types.ModuleType("sglang")
+        sglang.srt = srt
+        sys.modules.update(
+            {
+                "sglang": sglang,
+                "sglang.srt": srt,
+                "sglang.srt.constants": constants,
+                "sglang.srt.server_args": server_args,
+                "sglang.srt.utils": srt_utils,
+            }
+        )
+
+    if with_wandb and "wandb" not in sys.modules:
+        sys.modules["wandb"] = types.ModuleType("wandb")
 
     if with_transformers and "transformers" not in sys.modules:
         mod = types.ModuleType("transformers")
