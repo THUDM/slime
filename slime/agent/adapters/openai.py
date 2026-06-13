@@ -302,6 +302,7 @@ def _parse_turn(target: Chain, turn: TurnRecord, app) -> ParsedModelOutput:
         tools_schema=target.tools_schema,
         tool_parser_name=app[TOOL_PARSER_KEY],
         reasoning_parser_name=app[REASONING_PARSER_KEY],
+        tokenizer=tok,
     )
 
 
