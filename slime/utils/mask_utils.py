@@ -195,6 +195,104 @@ class MultiTurnLossMaskGenerator:
 
         return token_ids, loss_mask
 
+    def gen_multi_turn_loss_mask_gemma4(
+        self, messages: list[dict], tools: list[dict] = None
+    ) -> tuple[list[int], list[int]]:
+        """Loss mask for Gemma4's chat template.
+
+        Gemma4 marks turns with ``<|turn>{role}\\n`` ... ``<turn|>\\n`` and
+        renders the assistant role as ``model``. We mark every assistant
+        ("model") turn's content — plus its trailing ``<turn|>\\n`` so the
+        model learns to terminate the turn — and leave system/user/tool
+        spans at 0.
+
+        We use the same render-then-offset-map strategy as the Qwen3.5
+        generator: build a per-character mask over the rendered string,
+        then project it onto tokens via the fast tokenizer's
+        offset_mapping. This is robust to tokenizer merges across the
+        content/marker boundary.
+        """
+        rendered_text = self.tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, return_dict=False)
+        tokenized = self.tokenizer(rendered_text, add_special_tokens=False, return_offsets_mapping=True)
+        token_ids = tokenized["input_ids"]
+        offset_mapping = tokenized.get("offset_mapping")
+
+        if offset_mapping is None:
+            raise ValueError(
+                "Gemma4 loss mask generation requires a fast tokenizer with `return_offsets_mapping` support."
+            )
+
+        expected_token_ids = self.tokenizer.apply_chat_template(
+            messages, tokenize=True, tools=tools, return_dict=False
+        )
+        if token_ids != expected_token_ids:
+            raise ValueError(
+                "Gemma4 rendered text tokenization does not match "
+                "`apply_chat_template(..., tokenize=True)` output."
+            )
+
+        # Assistant turns render with the role literal "model" (see template:
+        # `role = 'model' if message['role'] == 'assistant'`).
+        assistant_header = "<|turn>model\n"
+        # Thinking is emitted inside <|channel>thought ... <channel|>. For
+        # standard SFT (content-only assistant messages) no thinking channel
+        # is rendered, but guard for it so reasoning traces aren't trained on.
+        think_open = "<|channel>thought\n"
+        think_close = "<channel|>"
+        end_marker = "<turn|>"
+
+        char_mask = [0] * len(rendered_text)
+        cursor = 0
+
+        for message in messages:
+            if message["role"] != "assistant":
+                continue
+
+            header_pos = rendered_text.find(assistant_header, cursor)
+            if header_pos < 0:
+                raise ValueError("Failed to locate assistant (model) turn in rendered Gemma4 chat template output.")
+
+            content_start = header_pos + len(assistant_header)
+            end_pos = rendered_text.find(end_marker, content_start)
+            if end_pos < 0:
+                raise ValueError("Failed to locate <turn|> for assistant message in rendered Gemma4 text.")
+
+            # Include the <turn|> terminator (and its trailing newline) in the
+            # loss so the model learns to end its turn.
+            span_end = end_pos + len(end_marker)
+            if span_end < len(rendered_text) and rendered_text[span_end] == "\n":
+                span_end += 1
+            cursor = span_end
+
+            if message.get("step_loss_mask", 1) != 1:
+                continue
+
+            mask_start = content_start
+            # If a thinking channel is present, drop it from the loss span:
+            # mask only the post-thinking answer (mirrors how Qwen3.5 skips the
+            # <think> prefix). The closing <channel|> is also excluded.
+            if rendered_text[content_start : content_start + len(think_open)] == think_open:
+                close_pos = rendered_text.find(think_close, content_start)
+                if close_pos < 0:
+                    raise ValueError("Found <|channel>thought open without matching <channel|> close.")
+                mask_start = close_pos + len(think_close)
+
+            for pos in range(mask_start, span_end):
+                char_mask[pos] = 1
+
+        char_mask_prefix_sum = [0]
+        for value in char_mask:
+            char_mask_prefix_sum.append(char_mask_prefix_sum[-1] + value)
+
+        loss_mask = []
+        for start, end in offset_mapping:
+            if end <= start:
+                loss_mask.append(0)
+            else:
+                loss_mask.append(1 if char_mask_prefix_sum[end] - char_mask_prefix_sum[start] > 0 else 0)
+
+        return token_ids, loss_mask
+
     def gen_multi_turn_loss_mask_distill_qwen(
         self, messages: list[dict], tools: list[dict] = None
     ) -> tuple[list[int], list[int]]:
@@ -223,6 +321,8 @@ class MultiTurnLossMaskGenerator:
             return self.gen_multi_turn_loss_mask_qwen3(messages, tools)
         elif self.tokenizer_type == "qwen3_5":
             return self.gen_multi_turn_loss_mask_qwen3_5(messages, tools)
+        elif self.tokenizer_type == "gemma4":
+            return self.gen_multi_turn_loss_mask_gemma4(messages, tools)
         elif self.tokenizer_type == "distill_qwen":
             return self.gen_multi_turn_loss_mask_distill_qwen(messages, tools)
         else:
