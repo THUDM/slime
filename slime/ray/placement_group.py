@@ -187,7 +187,9 @@ def create_training_models(args, pgs, rollout_manager):
         actor_model.async_init(
             actor_args,
             role="actor",
-            with_ref=actor_args.kl_coef != 0 or actor_args.use_kl_loss,
+            # OPSD (opd_type=self) never forwards the ref model, so skip loading it.
+            with_ref=(actor_args.kl_coef != 0 or actor_args.use_kl_loss)
+            and not (actor_args.use_opd and actor_args.opd_type == "self"),
             with_opd_teacher=actor_args.use_opd and actor_args.opd_type in ("megatron", "self"),
         )
     )

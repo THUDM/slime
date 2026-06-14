@@ -787,14 +787,24 @@ class RolloutManager:
         # response positions align 1:1 with the student's response positions during training.
         if self.args.use_opd and self.args.opd_type == "self":
             teacher_tokens = []
+            num_missing_privileged_info = 0
             for sample in samples:
                 prompt_length = len(sample.tokens) - sample.response_length
                 prompt_tokens = list(sample.tokens[:prompt_length])
                 response_tokens = list(sample.tokens[prompt_length:])
                 privileged_info = sample.privileged_info or ""
+                if not privileged_info:
+                    num_missing_privileged_info += 1
                 privileged_tokens = self.tokenizer.encode(privileged_info, add_special_tokens=False)
                 teacher_tokens.append(prompt_tokens + privileged_tokens + response_tokens)
             train_data["teacher_tokens"] = teacher_tokens
+            if num_missing_privileged_info:
+                logger.warning(
+                    f"OPSD: {num_missing_privileged_info}/{len(samples)} samples have empty/None "
+                    f"privileged_info (key '{self.args.opsd_privileged_info_key}'). For those samples the "
+                    f"teacher context equals the student's, yielding ~0 distillation signal. Check the dataset "
+                    f"field name and that rows are populated."
+                )
 
         return train_data
 

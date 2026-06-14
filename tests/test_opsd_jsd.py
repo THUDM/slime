@@ -10,7 +10,37 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from slime.utils.dp_schedule import repack_micro_batches_by_length
 from slime.utils.ppo_utils import compute_vocab_parallel_jsd
+
+
+def test_repack_micro_batches_preserves_coverage_and_respects_budget():
+    # One rank, two steps. Student schedule (packed by student lengths) below;
+    # teacher lengths are larger so the teacher must use more, smaller micro-batches.
+    micro_batch_indices = [[0, 1], [2, 3]]  # step 0: 1 mb (samples 0,1); step 1: 1 mb (2,3)
+    num_microbatches = [1, 1]
+    teacher_lengths = [600, 600, 600, 600]
+    new_mbs, new_num_mb = repack_micro_batches_by_length(
+        micro_batch_indices, num_microbatches, teacher_lengths, max_tokens_per_bin=1000
+    )
+    # Each step's samples must be covered exactly once, step boundaries preserved.
+    assert sum(new_num_mb) == len(new_mbs)
+    assert len(new_num_mb) == 2
+    assert sorted(i for mb in new_mbs for i in mb) == [0, 1, 2, 3]
+    # 600+600 > 1000 -> each sample lands in its own bin: 2 mbs per step.
+    assert new_num_mb == [2, 2]
+    # Every micro-batch respects the token budget.
+    for mb in new_mbs:
+        assert sum(teacher_lengths[i] for i in mb) <= 1000
+
+
+def test_repack_micro_batches_oversized_sample_alone():
+    new_mbs, new_num_mb = repack_micro_batches_by_length(
+        [[0, 1, 2]], [1], lengths=[100, 5000, 100], max_tokens_per_bin=1000
+    )
+    assert sorted(i for mb in new_mbs for i in mb) == [0, 1, 2]
+    # The 5000-token sample must occupy its own bin.
+    assert any(mb == [1] for mb in new_mbs)
 
 
 def _reference_jsd(student_logits: torch.Tensor, teacher_logits: torch.Tensor, beta: float) -> torch.Tensor:

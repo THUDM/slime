@@ -79,6 +79,51 @@ def _pack_step_into_mbs(
     return [list(range(i, min(i + micro_batch_size, n))) for i in range(0, n, micro_batch_size)]
 
 
+def repack_micro_batches_by_length(
+    micro_batch_indices: list[list[int]],
+    num_microbatches: list[int],
+    lengths: list[int],
+    max_tokens_per_bin: int,
+) -> tuple[list[list[int]], list[int]]:
+    """Re-pack one DP rank's micro-batches for a different per-sample length budget.
+
+    Used by OPSD: the teacher is forwarded on the longer ``[prompt + privileged_info
+    + response]`` sequences, so its micro-batches must be packed by the teacher token
+    lengths even though the **sample-to-rank assignment is unchanged** (so teacher and
+    student response positions stay aligned). This re-groups *only within each training
+    step* (preserving which samples belong to which step), so every local sample is
+    still covered exactly once and the per-step structure matches the student schedule.
+
+    Because the OPSD teacher pass is forward-only and per-rank independent (no
+    cross-DP collective), ranks may end up with different ``num_microbatches`` here.
+
+    Args:
+        micro_batch_indices: this rank's mbs (flat across steps); each mb is a list of
+            local sample indices. (i.e. ``build_dp_schedule(...)[1][rank]``)
+        num_microbatches: number of mbs per step for this rank (same layout as the
+            value returned by ``build_dp_schedule``).
+        lengths: per-local-sample token length to pack by (teacher lengths).
+        max_tokens_per_bin: token cap per micro-batch (``max_tokens_per_gpu * cp_size``).
+
+    Returns:
+        ``(new_micro_batch_indices, new_num_microbatches)`` with the same per-sample
+        coverage and step boundaries, re-binned by ``lengths``.
+    """
+    new_micro_batch_indices: list[list[int]] = []
+    new_num_microbatches: list[int] = []
+    mb_cursor = 0
+    for step_num_mb in num_microbatches:
+        step_mbs = micro_batch_indices[mb_cursor : mb_cursor + step_num_mb]
+        mb_cursor += step_num_mb
+        step_local_indices = [idx for mb in step_mbs for idx in mb]
+        step_lengths = [lengths[idx] for idx in step_local_indices]
+        bins = first_fit_pack(step_lengths, max_tokens_per_bin)
+        step_new_mbs = [[step_local_indices[p] for p in bin_] for bin_ in bins]
+        new_micro_batch_indices.extend(step_new_mbs)
+        new_num_microbatches.append(len(step_new_mbs))
+    return new_micro_batch_indices, new_num_microbatches
+
+
 def build_dp_schedule(
     args: Any,
     train_parallel_config: dict,

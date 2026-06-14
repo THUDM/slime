@@ -1140,6 +1140,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Softmax temperature applied to both student and teacher logits in the OPSD JSD. Default 1.0.",
             )
             parser.add_argument(
+                "--opsd-offload-teacher-logits",
+                action="store_true",
+                default=False,
+                help=(
+                    "Offload the teacher response logits to CPU between the teacher and student forwards "
+                    "to reduce peak GPU memory (moved back per micro-batch during the loss). Trades GPU "
+                    "memory for host<->device transfer. Future work: chunked JSD to avoid storing them."
+                ),
+            )
+            parser.add_argument(
                 "--opsd-privileged-info-key",
                 type=str,
                 default=None,
@@ -1840,6 +1850,12 @@ def slime_validate_args(args):
             args.loss_type = "opsd"
             if not (0.0 <= args.opsd_beta <= 1.0):
                 raise ValueError(f"--opsd-beta must be in [0, 1], got {args.opsd_beta}.")
+            if not args.compute_advantages_and_returns:
+                raise ValueError(
+                    "--opd-type=self (OPSD) requires compute_advantages_and_returns to be enabled "
+                    "(do not pass --disable-compute-advantages-and-returns): the privileged teacher "
+                    "forward runs in that phase."
+                )
 
         elif args.opd_type == "sglang":
             if args.opd_teacher_load is not None:

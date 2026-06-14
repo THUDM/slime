@@ -110,7 +110,7 @@ where $x$ is the problem, $s$ the privileged solution, $\beta$ the JSD interpola
 --opsd-privileged-info-key solution           # dataset field with the ground-truth solution
 ```
 
-> **Limitations (current MVP)**: OPSD requires `--context-parallel-size 1`. The teacher response logits are held over the full vocabulary between the teacher and student forwards, so memory scales with `response_length × vocab_size`; prefer it for smaller models / shorter responses for now. The example script is `examples/on_policy_distillation/run-qwen3-8B-opsd.sh`.
+> **Limitations (current MVP)**: OPSD requires `--context-parallel-size 1`. The teacher response logits are held over the full vocabulary between the teacher and student forwards, so memory scales with `response_length × vocab_size`; pass `--opsd-offload-teacher-logits` to offload them to CPU (trading GPU memory for host↔device transfer), and prefer smaller models / shorter responses for now. A future chunked JSD would avoid materializing them. The teacher's micro-batches are re-packed by the (longer) privileged sequence lengths so the teacher forward respects `--max-tokens-per-gpu`. The example script is `examples/on_policy_distillation/run-qwen3-8B-opsd.sh`.
 
 ## Running the Examples
 

@@ -255,6 +255,11 @@ class Dataset:
             else:
                 multimodal_inputs = None
 
+            if privileged_info_key is not None and privileged_info_key not in data:
+                raise KeyError(
+                    f"Dataset row is missing the privileged-info field {privileged_info_key!r} "
+                    f"required by --opsd-privileged-info-key. Available keys: {sorted(data.keys())}."
+                )
             origin_samples.append(
                 Sample(
                     prompt=output_prompt,

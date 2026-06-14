@@ -17,6 +17,7 @@ from slime.ray.train_actor import TrainRayActor
 from slime.utils import train_dump_utils
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
+from slime.utils.dp_schedule import repack_micro_batches_by_length
 from slime.utils.logging_utils import init_tracking
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.misc import Box
@@ -421,11 +422,23 @@ class MegatronTrainRayActor(TrainRayActor):
         student's response positions (response tokens are identical).
         """
         assert mpu.get_context_parallel_world_size() == 1, "OPSD currently supports only context-parallel-size 1."
-        # Build a rollout_data view whose token stream is the privileged teacher sequence,
-        # reusing the same per-sample order and micro-batch schedule as the student pass.
+        # Build a rollout_data view whose token stream is the privileged teacher sequence.
+        # The sample-to-rank assignment is unchanged (so teacher and student response
+        # positions stay aligned); only the micro-batch *groupings* are re-packed by the
+        # teacher (longer) lengths so the teacher forward respects max_tokens_per_gpu.
         teacher_view = dict(rollout_data)
         teacher_view["tokens"] = rollout_data["teacher_tokens"]
         teacher_view["total_lengths"] = rollout_data["teacher_total_lengths"]
+        teacher_num_microbatches = num_microbatches
+        if self.args.use_dynamic_batch_size:
+            max_tokens_per_bin = self.args.max_tokens_per_gpu * mpu.get_context_parallel_world_size()
+            teacher_micro_batch_indices, teacher_num_microbatches = repack_micro_batches_by_length(
+                rollout_data["micro_batch_indices"],
+                num_microbatches,
+                teacher_view["total_lengths"],
+                max_tokens_per_bin,
+            )
+            teacher_view["micro_batch_indices"] = teacher_micro_batch_indices
         if self.args.qkv_format == "bshd":
             pad_size = mpu.get_tensor_model_parallel_world_size() * self.args.data_pad_size_multiplier
             max_seq_len = max(teacher_view["total_lengths"])
@@ -439,9 +452,16 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.args,
                 self.model,
                 data_iterator,
-                num_microbatches,
+                teacher_num_microbatches,
                 store_prefix="teacher_",
             )
+
+        # Optionally offload the full-vocab teacher logits to CPU to cut peak GPU memory
+        # (moved back to the device per micro-batch in opsd_loss_function).
+        if self.args.opsd_offload_teacher_logits and "teacher_response_logits" in res:
+            res["teacher_response_logits"] = [
+                t.cpu() if t is not None else None for t in res["teacher_response_logits"]
+            ]
         return res
 
     def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):

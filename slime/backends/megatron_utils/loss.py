@@ -1122,7 +1122,8 @@ def opsd_loss_function(
         )
         jsd = compute_vocab_parallel_jsd(
             student_logits_chunk.float(),
-            teacher_logits_chunk.float(),
+            # teacher logits may be offloaded to CPU (--opsd-offload-teacher-logits).
+            teacher_logits_chunk.to(student_logits_chunk.device).float(),
             beta=args.opsd_beta,
             process_group=tp_group,
             temperature=args.opsd_temperature,
