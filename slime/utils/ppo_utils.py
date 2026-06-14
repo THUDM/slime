@@ -200,13 +200,15 @@ def compute_entropy_from_logits(logits: torch.Tensor, process_group) -> torch.Te
 
 
 class _VocabParallelAllReduceSum(torch.autograd.Function):
-    """Differentiable all-reduce (SUM) across the vocab-parallel (TP) group.
+    """All-reduce (SUM) across the vocab-parallel (TP) group with **identity** backward.
 
-    Forward sums the per-shard partial values into the replicated total; backward
-    is the identity. This is the correct autograd pair when the all-reduced value
-    is consumed identically on every rank to form a replicated loss term (each
-    rank's local contribution has gradient 1 w.r.t. the sum). See the "reduce"
-    op in Megatron's tensor-parallel mappings.
+    Correct only when the all-reduced value feeds a *replicated* downstream (same on
+    every rank), so the cotangent ``dL/dy`` computed locally already equals the global
+    one. Used for the final per-token JSD reduction (its downstream — clamp + loss
+    reduction — is replicated across TP ranks). This is Megatron's "g" (reduce) op.
+
+    Do NOT use this for an all-reduced value consumed with a *rank-local* shard (e.g.
+    a softmax normalizer); that needs :class:`_VocabParallelAllReduceSumGradAllReduce`.
     """
 
     @staticmethod
@@ -221,12 +223,41 @@ class _VocabParallelAllReduceSum(torch.autograd.Function):
         return grad_output, None
 
 
+class _VocabParallelAllReduceSumGradAllReduce(torch.autograd.Function):
+    """All-reduce (SUM) across the vocab-parallel (TP) group with **all-reduce** backward.
+
+    Correct when the all-reduced value ``y = sum_r x_r`` is replicated but then consumed
+    with a *rank-local* shard (so ``dL/dy`` differs per rank and only sums to the true
+    global cotangent across ranks). Used for the softmax normalizer ``sum_exp`` in
+    vocab-parallel log-softmax: every rank's log-probs depend on the same global
+    normalizer, so its gradient must be all-reduced before flowing back to the local
+    ``x_r``. Without this, the normalization gradient is under-counted by ~1/TP.
+    """
+
+    @staticmethod
+    def forward(ctx, x: torch.Tensor, process_group: dist.ProcessGroup | None) -> torch.Tensor:
+        ctx.process_group = process_group
+        if process_group is not None and dist.get_world_size(group=process_group) > 1:
+            x = x.clone()
+            dist.all_reduce(x, group=process_group)
+        return x
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        process_group = ctx.process_group
+        if process_group is not None and dist.get_world_size(group=process_group) > 1:
+            grad_output = grad_output.clone()
+            dist.all_reduce(grad_output, group=process_group)
+        return grad_output, None
+
+
 def _vocab_parallel_log_softmax(logits: torch.Tensor, process_group: dist.ProcessGroup | None) -> torch.Tensor:
     """Numerically-stable log-softmax over a vocab dimension sharded across `process_group`.
 
     `logits` has shape `[N, V_local]`; the returned tensor has the same shape and
     holds the log-probabilities of the local vocab shard, normalized over the
-    *global* vocabulary. Differentiable w.r.t. `logits`.
+    *global* vocabulary. Differentiable w.r.t. `logits` (including the cross-rank
+    coupling through the global normalizer).
     """
     # The max is a constant shift for softmax; detach so no gradient flows through it.
     logits_max = logits.detach().max(dim=-1, keepdim=True).values
@@ -234,7 +265,8 @@ def _vocab_parallel_log_softmax(logits: torch.Tensor, process_group: dist.Proces
         dist.all_reduce(logits_max, op=dist.ReduceOp.MAX, group=process_group)
     shifted = logits - logits_max
     sum_exp = shifted.exp().sum(dim=-1, keepdim=True)
-    sum_exp = _VocabParallelAllReduceSum.apply(sum_exp, process_group)
+    # The normalizer couples all ranks' log-probs -> its gradient must be all-reduced.
+    sum_exp = _VocabParallelAllReduceSumGradAllReduce.apply(sum_exp, process_group)
     return shifted - sum_exp.log()
 
 

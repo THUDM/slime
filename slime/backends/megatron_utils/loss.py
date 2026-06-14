@@ -563,8 +563,13 @@ def get_response_logits(
         max_seq_lens=max_seq_lens,
         apply_temperature=False,
     ):
-        # Detach: the teacher is frozen and its logits are a constant target.
-        logits_list.append(logits_chunk.detach())
+        # .detach().clone() the response slice: ``logits_chunk`` is a view into the full
+        # ``[1, T_padded, V_local]`` microbatch tensor, so keeping the view would pin the
+        # entire padded backing buffer in GPU memory for every microbatch until the student
+        # forward runs. Cloning retains only the ``[R, V_local]`` response data. (Teacher is
+        # frozen -> detach.) For further savings, --opsd-offload-teacher-logits moves these
+        # to CPU.
+        logits_list.append(logits_chunk.detach().clone())
 
     return torch.empty((0,), device=logits.device), {"response_logits": logits_list}
 

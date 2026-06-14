@@ -1847,9 +1847,17 @@ def slime_validate_args(args):
                 raise ValueError(
                     f"--opd-type=self (OPSD) requires --loss-type=opsd (got {args.loss_type!r})."
                 )
-            args.loss_type = "opsd"
+            if args.loss_type != "opsd":
+                logger.info("OPSD: setting --loss-type=opsd (was %r).", args.loss_type)
+                args.loss_type = "opsd"
             if not (0.0 <= args.opsd_beta <= 1.0):
                 raise ValueError(f"--opsd-beta must be in [0, 1], got {args.opsd_beta}.")
+            if args.kl_coef != 0 or args.use_kl_loss:
+                raise ValueError(
+                    "--opd-type=self (OPSD) is pure distillation and does not use a reference-model KL. "
+                    "Set --kl-coef 0 and do not pass --use-kl-loss (the ref model is intentionally not "
+                    "loaded under OPSD)."
+                )
             if not args.compute_advantages_and_returns:
                 raise ValueError(
                     "--opd-type=self (OPSD) requires compute_advantages_and_returns to be enabled "

@@ -534,8 +534,13 @@ class MegatronTrainRayActor(TrainRayActor):
                         "teacher" in self.weights_backuper.backup_tags
                     ), "OPSD requires the teacher model to be loaded (--opd-teacher-load)."
                     self._switch_model("teacher")
-                    rollout_data.update(self.compute_teacher_response_logits(rollout_data, num_microbatches))
-                    self._switch_model("actor")
+                    try:
+                        rollout_data.update(self.compute_teacher_response_logits(rollout_data, num_microbatches))
+                    finally:
+                        # Always restore the actor as the live model, even if the teacher
+                        # forward raises (e.g. OOM), so the post-train backup("actor") never
+                        # snapshots teacher weights.
+                        self._switch_model("actor")
                 else:
                     if "ref" in self.weights_backuper.backup_tags:
                         if self.args.use_routing_replay:
