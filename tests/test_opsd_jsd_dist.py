@@ -18,7 +18,7 @@ import torch.multiprocessing as mp
 
 from slime.utils.ppo_utils import compute_vocab_parallel_jsd
 
-N, V, BETA = 4, 8, 0.5
+N, V = 4, 8
 
 
 def _free_port() -> int:
@@ -36,7 +36,7 @@ def _full_logits():
     return student, teacher
 
 
-def _worker(rank: int, world_size: int, master_port: int, result_dir: str) -> None:
+def _worker(rank: int, world_size: int, master_port: int, beta: float, result_dir: str) -> None:
     import torch.distributed as dist
 
     os.environ["MASTER_ADDR"] = "127.0.0.1"
@@ -50,7 +50,7 @@ def _worker(rank: int, world_size: int, master_port: int, result_dir: str) -> No
     s = student[:, sl].clone().requires_grad_(True)
     t = teacher[:, sl].clone()
 
-    jsd = compute_vocab_parallel_jsd(s, t, BETA, group)  # [N], replicated across ranks
+    jsd = compute_vocab_parallel_jsd(s, t, beta, group)  # [N], replicated across ranks
     jsd.sum().backward()
 
     torch.save({"jsd": jsd.detach(), "grad": s.grad}, os.path.join(result_dir, f"rank{rank}.pt"))
@@ -58,10 +58,11 @@ def _worker(rank: int, world_size: int, master_port: int, result_dir: str) -> No
     dist.destroy_process_group()
 
 
-def test_vocab_parallel_jsd_matches_dense_under_tp(tmp_path):
+@pytest.mark.parametrize("beta", [0.0, 0.5, 1.0])
+def test_vocab_parallel_jsd_matches_dense_under_tp(beta, tmp_path):
     world_size = 2
     port = _free_port()
-    mp.spawn(_worker, args=(world_size, port, str(tmp_path)), nprocs=world_size, join=True)
+    mp.spawn(_worker, args=(world_size, port, beta, str(tmp_path)), nprocs=world_size, join=True)
 
     # Distributed results: jsd is replicated; reassemble the grad from vocab shards.
     rank_outs = [torch.load(os.path.join(str(tmp_path), f"rank{r}.pt")) for r in range(world_size)]
@@ -71,8 +72,10 @@ def test_vocab_parallel_jsd_matches_dense_under_tp(tmp_path):
     # Dense single-process reference (group=None) on the full vocab.
     student, teacher = _full_logits()
     s_full = student.clone().requires_grad_(True)
-    jsd_dense = compute_vocab_parallel_jsd(s_full, teacher.clone(), BETA, None)
+    jsd_dense = compute_vocab_parallel_jsd(s_full, teacher.clone(), beta, None)
     jsd_dense.sum().backward()
 
     assert torch.allclose(jsd_dist, jsd_dense, atol=1e-9), (jsd_dist - jsd_dense).abs().max()
+    # The student-logit gradient is the key check: a wrong (identity) normalizer
+    # backward under TP would corrupt this even though the forward value is correct.
     assert torch.allclose(grad_dist, s_full.grad, atol=1e-9), (grad_dist - s_full.grad).abs().max()

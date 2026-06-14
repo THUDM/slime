@@ -431,6 +431,11 @@ class MegatronTrainRayActor(TrainRayActor):
         teacher_view["total_lengths"] = rollout_data["teacher_total_lengths"]
         teacher_num_microbatches = num_microbatches
         if self.args.use_dynamic_batch_size:
+            # Re-packing changes the per-step micro-batch count, which is not aligned to the
+            # VPP micro-batch group; OPSD with dynamic batching therefore requires no VPP.
+            assert (mpu.get_virtual_pipeline_model_parallel_world_size() or 1) == 1, (
+                "OPSD with --use-dynamic-batch-size does not support virtual pipeline parallelism."
+            )
             max_tokens_per_bin = self.args.max_tokens_per_gpu * mpu.get_context_parallel_world_size()
             teacher_micro_batch_indices, teacher_num_microbatches = repack_micro_batches_by_length(
                 rollout_data["micro_batch_indices"],
