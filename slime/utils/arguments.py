@@ -241,6 +241,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--log-probs-chunk-size", type=int, default=-1, help="Chunk size to compute log probs to save memory"
             )
             parser.add_argument(
+                "--log-probs-response-only",
+                action="store_true",
+                help="Gather only the response-window rows before the log-prob/entropy cross-entropy, "
+                "shrinking the [T, V] logits tensor to [T', V] (T' = response tokens). Results are identical.",
+            )
+            parser.add_argument(
+                "--log-probs-loss-mask-only",
+                action="store_true",
+                help="Further restrict the log-prob/entropy cross-entropy to loss_mask==1 rows. Requires "
+                "--log-probs-response-only; only valid on the policy-loss path (masked positions return 0).",
+            )
+            parser.add_argument(
                 "--only-train-params-name-list",
                 type=str,
                 nargs="*",
@@ -1857,6 +1869,9 @@ def slime_validate_args(args):
     if getattr(args, "balance_by_flops", False):
         assert args.use_dynamic_batch_size, "--balance-by-flops requires --use-dynamic-batch-size"
         args.balance_data = True
+
+    if getattr(args, "log_probs_loss_mask_only", False):
+        assert args.log_probs_response_only, "--log-probs-loss-mask-only requires --log-probs-response-only"
 
     if args.eps_clip_high is None:
         args.eps_clip_high = args.eps_clip

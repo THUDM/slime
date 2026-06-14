@@ -291,6 +291,81 @@ def _build_shifted_tokens(
     return full_tokens
 
 
+def _response_keep_index(
+    total_lengths: list[int],
+    response_lengths: list[int],
+    qkv_format: str,
+    max_seq_lens: list[int] | None,
+    allgather_cp: bool,
+    device: torch.device,
+    T: int,
+) -> torch.Tensor:
+    """Positions that ``_extract_per_sample`` reads, as a flat 1-D LongTensor.
+
+    The cross-entropy in ``get_log_probs_and_entropy`` is only consumed on these
+    response-window positions; everything else in ``[T, V]`` is computed and then
+    discarded. Gathering ``logits`` down to these rows shrinks the dominant tensor
+    before CE; scattering the results back to full ``T`` leaves
+    ``_extract_per_sample`` untouched.
+
+    The ranges below mirror ``_extract_per_sample`` branch-for-branch and in the
+    same order, so the two stay in lock-step (single source of truth for which
+    positions survive).
+    """
+    cp_size = mpu.get_context_parallel_world_size()
+    ranges: list[tuple[int, int]] = []
+
+    if cp_size > 1 and not allgather_cp:
+        # zigzag CP: two windows per sample
+        pos = 0
+        for i, (total_length, response_length) in enumerate(zip(total_lengths, response_lengths, strict=False)):
+            max_seq_len = max_seq_lens[i] if max_seq_lens is not None else None
+            chunk_size_cp, chunks_offset, logits_offset, _tokens_offset = get_logits_and_tokens_offset_with_cp(
+                total_length, response_length, qkv_format, max_seq_len
+            )
+            lo0 = logits_offset[0][0] - chunks_offset[0][0]
+            hi0 = logits_offset[0][1] - chunks_offset[0][0]
+            lo1 = logits_offset[1][0] - chunks_offset[1][0]
+            hi1 = logits_offset[1][1] - chunks_offset[1][0]
+            ranges.append((pos + lo0, pos + hi0))
+            ranges.append((pos + chunk_size_cp + lo1, pos + chunk_size_cp + hi1))
+            pos += 2 * chunk_size_cp
+
+    elif allgather_cp:
+        cp_rank = mpu.get_context_parallel_rank()
+        chunk_start = cp_rank * T
+        chunk_end = chunk_start + T
+        seq_start = 0
+        for total_length, response_length in zip(total_lengths, response_lengths, strict=False):
+            prompt_length = total_length - response_length
+            logit_global_start = seq_start + prompt_length - 1
+            logit_global_end = seq_start + total_length - 1
+            s = max(logit_global_start, chunk_start)
+            e = min(logit_global_end, chunk_end)
+            if e > s:
+                ranges.append((s - chunk_start, e - chunk_start))
+            seq_start += total_length
+
+    else:
+        # cp1
+        if qkv_format == "thd":
+            offset = 0
+            for total_length, response_length in zip(total_lengths, response_lengths, strict=False):
+                end = offset + total_length
+                start = end - response_length
+                ranges.append((start - 1, end - 1))
+                offset += total_length
+        else:  # bshd
+            for i, (total_length, response_length) in enumerate(zip(total_lengths, response_lengths, strict=False)):
+                end = max_seq_lens[i] * i + total_length
+                start = end - response_length
+                ranges.append((start - 1, end - 1))
+
+    if not ranges:
+        return torch.zeros((0,), dtype=torch.long, device=device)
+    return torch.cat([torch.arange(s, e, device=device, dtype=torch.long) for s, e in ranges])
+
+
 def _extract_per_sample(
     log_prob_full: torch.Tensor,
     entropy_full: torch.Tensor | None,
@@ -393,12 +468,21 @@ def get_log_probs_and_entropy(
     with_entropy: bool = False,
     non_loss_data: bool = True,
     max_seq_lens: list[int] | None = None,
+    full_loss_mask: torch.Tensor | None = None,
 ) -> dict[str, list[torch.Tensor]]:
     """Compute per-token log-probabilities (and optionally entropy) on responses.
 
     Computes on the **full** logits ``[T, V]`` tensor at once (instead of
     per-sample slicing) so backward traverses ``[T, V]`` only once, then
     extracts per-sample response portions.
+
+    With ``--log-probs-response-only`` the CE runs only on the response-window
+    rows (gathered out of ``[T, V]`` before CE and scattered back after), so the
+    dominant tensor shrinks from ``T`` to the number of response tokens ``T'``.
+    With ``--log-probs-loss-mask-only`` (and a ``full_loss_mask`` aligned to the
+    logits layout) it shrinks further to the ``loss_mask == 1`` rows; positions
+    dropped this way return a log-prob/entropy of 0 and so are only valid where
+    the downstream loss masks them out (policy-loss path).
 
     When ``entropy_coef == 0``, entropy is computed under ``torch.no_grad()``
     to avoid retaining the computation graph and to skip cloning.
@@ -431,15 +515,44 @@ def get_log_probs_and_entropy(
         T, device, unconcat_tokens, total_lengths, response_lengths, qkv_format, max_seq_lens, args.allgather_cp
     )
 
-    # --- compute on full [T,V] logits at once via calculate_log_probs_and_entropy ---
-    log_prob_full, entropy_full = calculate_log_probs_and_entropy(
-        logits,
-        full_tokens,
-        tp_group,
-        with_entropy=with_entropy,
-        chunk_size=chunk_size,
-    )
-    log_prob_full = log_prob_full.squeeze(-1)  # [T, 1] -> [T]
+    # --- compute CE, optionally on a gathered subset of rows ---
+    if getattr(args, "log_probs_response_only", False):
+        # Only the response windows survive _extract_per_sample; gather them so CE
+        # runs on [T', V] instead of [T, V] (autograd's index_select backward
+        # scatters grads back to the dropped rows as zeros, which is exactly right).
+        keep_index = _response_keep_index(
+            total_lengths, response_lengths, qkv_format, max_seq_lens, args.allgather_cp, device, T
+        )
+        if getattr(args, "log_probs_loss_mask_only", False) and full_loss_mask is not None:
+            mask_kept = full_loss_mask.reshape(-1).index_select(0, keep_index).to(torch.bool)
+            keep_index = keep_index[mask_kept]
+
+        logits_kept = logits.index_select(0, keep_index)
+        tokens_kept = full_tokens.index_select(0, keep_index)
+        lp_kept, ent_kept = calculate_log_probs_and_entropy(
+            logits_kept,
+            tokens_kept,
+            tp_group,
+            with_entropy=with_entropy,
+            chunk_size=chunk_size,
+        )
+        lp_kept = lp_kept.squeeze(-1)  # [T', 1] -> [T']
+
+        # scatter back to full length so _extract_per_sample is unchanged
+        log_prob_full = lp_kept.new_zeros(T).index_copy(0, keep_index, lp_kept)
+        entropy_full = None
+        if with_entropy:
+            entropy_full = ent_kept.new_zeros(T).index_copy(0, keep_index, ent_kept)
+    else:
+        # --- compute on full [T,V] logits at once via calculate_log_probs_and_entropy ---
+        log_prob_full, entropy_full = calculate_log_probs_and_entropy(
+            logits,
+            full_tokens,
+            tp_group,
+            with_entropy=with_entropy,
+            chunk_size=chunk_size,
+        )
+        log_prob_full = log_prob_full.squeeze(-1)  # [T, 1] -> [T]
 
     # --- extract per-sample response portions ---
     log_probs_list, entropy_list = _extract_per_sample(
@@ -480,6 +593,7 @@ def get_values(
     with_entropy: bool = False,
     non_loss_data: bool = True,
     max_seq_lens: list[int] | None = None,
+    full_loss_mask: torch.Tensor | None = None,  # unused; accepted so the shared forward_only partial fits
 ) -> dict[str, list[torch.Tensor]]:
     """Extract per-token value predictions over response tokens.
 
