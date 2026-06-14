@@ -511,7 +511,8 @@ async def eval_rollout_single_dataset(
 
     global EVAL_PROMPT_DATASET
 
-    cache_key = dataset_cfg.cache_key + (args.hf_checkpoint, args.apply_chat_template)
+    opd_prompt_messages_key = getattr(args, "opd_prompt_messages_key", None)
+    cache_key = dataset_cfg.cache_key + (args.hf_checkpoint, args.apply_chat_template, opd_prompt_messages_key)
     if cache_key not in EVAL_PROMPT_DATASET:
         tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
         processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
@@ -527,6 +528,7 @@ async def eval_rollout_single_dataset(
             tool_key=dataset_cfg.tool_key,
             apply_chat_template=args.apply_chat_template,
             apply_chat_template_kwargs=args.apply_chat_template_kwargs,
+            prompt_messages_key=opd_prompt_messages_key,
         )
     dataset = EVAL_PROMPT_DATASET[cache_key]
 

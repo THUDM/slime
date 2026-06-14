@@ -18,6 +18,8 @@ This example shows how to run **on-policy distillation (OPD)** using slime. A sm
 | `--opd-kl-coef` | OPD KL penalty coefficient (default: 1.0). |
 | `--opd-teacher-load` | Path to teacher checkpoint. **Required** when `--opd-type=megatron`, **must not be set** when `--opd-type=sglang`. |
 | `--opd-teacher-ckpt-step` | Optional checkpoint step for teacher model. |
+| `--teacher-tokenizer-path` | Teacher tokenizer path for cross-vocabulary SGLang OPD. |
+| `--opd-prompt-messages-key` | Metadata key used to preserve raw chat messages so the teacher can render them with its own chat template. |
 
 ## Mode Comparison
 
@@ -31,7 +33,9 @@ This example shows how to run **on-policy distillation (OPD)** using slime. A sm
 - `slime/rollout/on_policy_distillation.py` implements (for SGLang mode):
   - `reward_func` calls the teacher server (via `args.rm_url`) with every sample to obtain token-level logprobs.
   - `post_process_rewards` trims the teacher logprobs to the generated response span and writes the tensors back to each `Sample` to compute advantages.
+  - `reward_func_cross_vocab` / `post_process_rewards_cross_vocab` support teachers with a different tokenizer by rendering the original chat messages with the teacher chat template and applying OPD only on exactly aligned response tokens.
 - `run-qwen3-8B-opd.sh` launches an SGLang teacher server, then submits a Ray job that runs `train.py`.
+- `run-qwen3-8B-qwen3.5-35B-A3B-cross-vocab-opd.sh` shows cross-vocabulary SGLang OPD with a Qwen3-8B student and a Qwen3.5-35B-A3B teacher.
 - `run-qwen3-8B-opd-megatron.sh` uses Megatron-loaded teacher model (no external server needed).
 
 ## Running the example
@@ -60,6 +64,16 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
 ```bash
 bash examples/on_policy_distillation/run-qwen3-8B-opd.sh
 ```
+
+For a teacher with a different tokenizer, keep `--opd-type sglang` and switch the hooks:
+```bash
+--custom-rm-path slime.rollout.on_policy_distillation.reward_func_cross_vocab
+--custom-reward-post-process-path slime.rollout.on_policy_distillation.post_process_rewards_cross_vocab
+--teacher-tokenizer-path /path/to/teacher_hf_checkpoint
+--opd-prompt-messages-key opd_messages
+```
+
+When `--opd-prompt-messages-key` is set and the dataset prompt is chat messages, slime stores the raw messages in `sample.metadata[opd_messages]` before applying the student chat template. The cross-vocabulary hook then renders those messages with the teacher tokenizer. If raw messages are unavailable, it falls back to the already-rendered string prompt.
 
 ### Using Megatron Teacher (No External Server)
 
