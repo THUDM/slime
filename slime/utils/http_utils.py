@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 SLIME_HOST_IP_ENV = "SLIME_HOST_IP"
 
 
+def bearer_auth_headers(api_key: str | None) -> dict | None:
+    """None when no key is configured, so requests stay byte-identical to unauthenticated ones."""
+    return {"Authorization": f"Bearer {api_key}"} if api_key else None
+
+
 def find_available_port(base_port: int):
     port = base_port + random.randint(100, 1000)
     while True:
@@ -309,8 +314,8 @@ async def post(url, payload, max_retries=60, headers=None):
     return await _post(_http_client, url, payload, max_retries, headers=headers)
 
 
-async def get(url):
-    response = await _http_client.get(url)
+async def get(url, headers=None):
+    response = await _http_client.get(url, headers=headers)
     response.raise_for_status()
     content = await response.aread()
     output = json.loads(content)
