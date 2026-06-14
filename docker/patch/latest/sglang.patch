@@ -2604,10 +2604,43 @@ index 96c7286af76..9e3e2bd7142 100644
              buffers.hidden_states is not None
              and forward_batch.spec_info.hidden_states is not None
 diff --git a/python/sglang/srt/speculative/eagle_worker_v2.py b/python/sglang/srt/speculative/eagle_worker_v2.py
-index 6bf5d6182af..6991b663636 100644
+index 6bf5d6182af..70de75f20be 100644
 --- a/python/sglang/srt/speculative/eagle_worker_v2.py
 +++ b/python/sglang/srt/speculative/eagle_worker_v2.py
-@@ -1480,6 +1480,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
+@@ -530,6 +530,21 @@ class EagleDraftWorker(BaseDraftWorker):
+ 
+         # Forward multiple steps
+         scores = None
++        # Reuse NSA/DSA topk_indices from the first draft forward step for
++        # subsequent steps, analogous to skip_topk in deepseek_v2.py layers.
++        # Only safe with topk == 1: select_top_k_tokens reorders candidate rows
++        # each step, which would desync the cached indices from their rows.
++        index_share_for_mtp_iteration = (
++            getattr(
++                self.draft_runner.model_config.hf_config,
++                "index_share_for_mtp_iteration",
++                False,
++            )
++            and self.topk == 1
++        )
++        if index_share_for_mtp_iteration:
++            forward_batch.reuse_mtp_topk_indices = True
++            forward_batch.topk_indices = None
+         for i in range(self.speculative_num_steps):
+             input_ids, hidden_states, scores, tree_info = select_top_k_tokens(
+                 i, topk_p, topk_index, hidden_states, scores, self.topk
+@@ -597,6 +612,10 @@ class EagleDraftWorker(BaseDraftWorker):
+             hidden_states = logits_output.hidden_states
+             forward_batch.positions.add_(1)
+ 
++        if index_share_for_mtp_iteration:
++            forward_batch.topk_indices = None
++            forward_batch.reuse_mtp_topk_indices = False
++
+         # Organize the results
+         if (
+             self.topk == 1
+@@ -1480,6 +1499,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
              recv_req.model_path,
              recv_req.load_format,
              recapture_cuda_graph=recv_req.recapture_cuda_graph,
