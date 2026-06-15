@@ -20,10 +20,10 @@ The slime training stack itself follows the standard setup. On top of that you n
 
 1. **An E2B-compatible sandbox cluster** (or any provider that speaks the E2B SDK). Configure via `E2B_API_KEY` (e.g. the standard `e2b_xxx` key from https://e2b.dev, or any internal endpoint that accepts the same SDK). The official SDK validates this value locally, so internal gateways that ignore auth still need a syntactically valid `e2b_` + 40 hex-character placeholder.
 2. **Host-side tarballs** that get uploaded into each sandbox at boot:
-   - Node 22 (`node-v22.x-linux-x64.tar.xz`) — exported as `SWE_HOST_NODE_TARBALL`.
-   - Claude Code CLI npm tarball (`anthropic-ai-claude-code-local-linux-x64.tgz`) — exported as `SWE_HOST_CC_TARBALL`.
-3. **A sandbox metadata file** (`SWE_SANDBOX_METADATA_FILE`, or the generic `SLIME_AGENT_SANDBOX_METADATA_FILE`) — JSON dict whose keys are passed as routing tags when booting an E2B sandbox. Must contain the image key referenced by `SWE_SANDBOX_IMAGE_METADATA_KEY` / `SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY` (e.g. `image`).
-4. **Network reachability**: each sandbox dials back to the slime head node's Anthropic adapter over `http://${SLIME_HEAD_HOST}:${SHIM_PORT}`. The head host must be reachable from inside the sandboxes (set `SLIME_HEAD_HOST` to a routable IP, not `127.0.0.1`).
+   - Node 22 (`node-v22.x-linux-x64.tar.xz`) — exported as `SLIME_AGENT_NODE_TARBALL`.
+   - Claude Code CLI npm tarball (`anthropic-ai-claude-code-local-linux-x64.tgz`) — exported as `SLIME_AGENT_CC_TARBALL`.
+3. **A sandbox metadata file** (`SLIME_AGENT_SANDBOX_METADATA_FILE`, legacy `SWE_SANDBOX_METADATA_FILE` still accepted) — JSON dict whose keys are passed as routing tags when booting an E2B sandbox. Must contain the image key referenced by `SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY` (legacy `SWE_SANDBOX_IMAGE_METADATA_KEY`, e.g. `image`).
+4. **Network reachability**: each sandbox dials back to the host's Anthropic adapter over `http://${ADAPTER_PUBLIC_HOST}:${ADAPTER_PORT}`. The adapter host must be reachable from inside the sandboxes (set `ADAPTER_PUBLIC_HOST` to a routable IP, not `127.0.0.1`).
 
 ## Dataset Format
 
@@ -59,8 +59,8 @@ export HF_CHECKPOINT=/path/to/Qwen3.6-35B-A3B
 export REF_MODEL_PATH=/path/to/Qwen3.6-35B-A3B_torch_dist
 export PROMPT_DATA=/path/to/swe_train.jsonl
 export SANDBOX_METADATA_FILE=/path/to/sandbox_metadata.json
-export SWE_HOST_NODE_TARBALL=/path/to/node-v22.20.0-linux-x64.tar.xz
-export SWE_HOST_CC_TARBALL=/path/to/anthropic-ai-claude-code-local-linux-x64.tgz
+export SLIME_AGENT_NODE_TARBALL=/path/to/node-v22.20.0-linux-x64.tar.xz
+export SLIME_AGENT_CC_TARBALL=/path/to/anthropic-ai-claude-code-local-linux-x64.tgz
 
 bash examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nodes.sh
 ```
@@ -101,19 +101,25 @@ SGLANG_ARGS=(
 
 All set in the launcher; tune per cluster.
 
+Env vars split by layer. `SLIME_AGENT_*` are the reusable agent library's
+contract (read inside `slime/agent/`); `SWE_*` are this SWE example's task knobs;
+`ADAPTER_*` are host-side deployment/reply-path addresses read only by
+`generate.py`. Keep new vars on the prefix that matches the layer that reads them.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `SLIME_HEAD_HOST` | `${MASTER_ADDR}` | Public IP the sandbox uses to reach the Anthropic adapter. **Must be routable from inside the sandbox.** |
-| `SHIM_BIND_HOST` / `SHIM_PORT` | `0.0.0.0` / `18001` | Bind address of the adapter shim on the head node. |
+| `ADAPTER_PUBLIC_HOST` | `${MASTER_ADDR}` | Public IP the sandbox uses to reach the Anthropic adapter. **Must be routable from inside the sandbox.** |
+| `ADAPTER_BIND_HOST` / `ADAPTER_PORT` | `0.0.0.0` / `18001` | Bind address of the Anthropic adapter on the host. |
 | `E2B_API_KEY` | — | E2B (or compatible) API key. |
-| `SWE_SANDBOX_METADATA_FILE` / `SLIME_AGENT_SANDBOX_METADATA_FILE` | — | JSON dict of routing metadata passed at sandbox boot. |
-| `SWE_SANDBOX_IMAGE_METADATA_KEY` / `SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY` | — | Which key in the metadata file holds the image reference (e.g. `image`). |
-| `SWE_HOST_NODE_TARBALL` | — | Host path to Node 22 tarball uploaded into each sandbox. |
-| `SWE_HOST_CC_TARBALL` | — | Host path to the Claude Code CLI npm tarball. |
+| `SLIME_AGENT_SANDBOX_METADATA_FILE` | — | JSON dict of routing metadata passed at sandbox boot. (Legacy `SWE_SANDBOX_METADATA_FILE` still accepted.) |
+| `SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY` | — | Which key in the metadata file holds the image reference (e.g. `image`). (Legacy `SWE_SANDBOX_IMAGE_METADATA_KEY` still accepted.) |
+| `SLIME_AGENT_NODE_TARBALL` | — | Host path to Node 22 tarball uploaded into each sandbox. |
+| `SLIME_AGENT_CC_TARBALL` | — | Host path to the Claude Code CLI npm tarball. |
+| `SLIME_AGENT_CC_EXTRA_ARGS` | (see launcher) | Extra flags appended to the `claude` CLI invocation — registers the read-only `investigator` sub-agent, disables `WebFetch`/`WebSearch`, disables slash commands. |
+| `SLIME_AGENT_CC_EXTRA_ENVS` | unset | JSON object of extra env vars exported into the `claude` process — escape hatch for env-only knobs (`MAX_THINKING_TOKENS`, `BASH_MAX_TIMEOUT_MS`, ...). Merged last, so it can also override the built-in defaults. |
 | `SWE_TIME_BUDGET_SEC` | `1800` | Wallclock budget for one agent run. |
 | `SWE_EVAL_TIMEOUT_SEC` | `600` | Wallclock cap on the evaluator sandbox. |
 | `SWE_BOOT_CONCURRENCY` | `16` | Cap on simultaneous sandbox boots (eases h2/SSL long-tail). |
-| `SWE_CLAUDE_EXTRA_ARGS` | (see launcher) | Extra flags appended to the `claude` CLI invocation — registers the read-only `investigator` sub-agent, disables `WebFetch`/`WebSearch`, disables slash commands. |
 | `SWE_CC_PROMPT` | unset | Optional override for the user-turn prompt. Setting this to require sub-agent dispatch is the most reliable way to maximize fan-out. |
 
 `--rollout-max-response-len` is the per-turn generation cap passed to each

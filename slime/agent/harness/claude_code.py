@@ -9,17 +9,35 @@ from pathlib import Path
 
 from slime.agent.sandbox import Sandbox
 
-from .common import BaseHarness, HarnessContext, install_npm_cli, spawn_detached
+from .common import BaseHarness, HarnessContext, install_npm_cli, run_command
 
 
 class ClaudeCodeHarness(BaseHarness):
     name = "claude_code"
 
+    # Host paths + CLI knobs, all under the agent-layer SLIME_AGENT_* prefix.
+    node_tarball_env = "SLIME_AGENT_NODE_TARBALL"
+    cli_tarball_env = "SLIME_AGENT_CC_TARBALL"
+    extra_args_env = "SLIME_AGENT_CC_EXTRA_ARGS"
+    extra_envs_env = "SLIME_AGENT_CC_EXTRA_ENVS"
+
+    launch_flags = (
+        "--permission-mode bypassPermissions "
+        "--output-format stream-json --include-partial-messages "
+        "--include-hook-events --verbose"
+    )
+
+    static_env = {
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
+        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+    }
+
     async def install_cli(self, sb: Sandbox) -> None:
         await install_npm_cli(
             sb,
-            node_runtime=Path(os.environ["SWE_HOST_NODE_TARBALL"]),
-            npm_package=Path(os.environ["SWE_HOST_CC_TARBALL"]),
+            node_runtime=Path(os.environ[self.node_tarball_env]),
+            npm_package=Path(os.environ[self.cli_tarball_env]),
             check_cmd="ls -la /usr/local/bin/claude && /usr/local/bin/claude --version",
         )
 
@@ -37,24 +55,20 @@ class ClaudeCodeHarness(BaseHarness):
         )
 
     async def launch_and_wait(self, sb: Sandbox, ctx: HarnessContext, prompt: str, time_budget_sec: int) -> int:
-        extra = os.environ.get("SWE_CLAUDE_EXTRA_ARGS", "").strip()
-        cmd = (
-            f"/usr/local/bin/claude -p {shlex.quote(prompt)} "
-            "--permission-mode bypassPermissions "
-            "--output-format stream-json --include-partial-messages "
-            "--include-hook-events --verbose"
-        )
+        cmd = f"/usr/local/bin/claude -p {shlex.quote(prompt)} {self.launch_flags}"
+        extra = os.environ.get(self.extra_args_env, "").strip()
         if extra:
             cmd = f"{cmd} {extra}"
         env = {
             "ANTHROPIC_BASE_URL": ctx.adapter_url,
             "ANTHROPIC_AUTH_TOKEN": ctx.session_id,
             "ANTHROPIC_MODEL": ctx.model_label,
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-            "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
-            "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+            **self.static_env,
         }
-        return await spawn_detached(sb, workdir=ctx.workdir, start_cmd=cmd, env=env, time_budget_sec=time_budget_sec)
+        extra_envs = os.environ.get(self.extra_envs_env, "").strip()
+        if extra_envs:
+            env.update(json.loads(extra_envs))
+        return await run_command(sb, workdir=ctx.workdir, start_cmd=cmd, env=env, time_budget_sec=time_budget_sec)
 
 
 CLAUDE_CODE = ClaudeCodeHarness()

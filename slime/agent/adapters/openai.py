@@ -29,7 +29,14 @@ from typing import Any
 
 from aiohttp import web
 
-from slime.agent.adapters.common import BaseAdapter, Reply, flatten_content, manager_finish_reason, request_session_id
+from slime.agent.adapters.common import (
+    BaseAdapter,
+    Reply,
+    flatten_content,
+    manager_finish_reason,
+    sid_from_bearer,
+    sid_from_body,
+)
 from slime.agent.parsing import ParsedModelOutput
 
 logger = logging.getLogger(__name__)
@@ -317,7 +324,7 @@ def _request_session_id(request: web.Request, body: dict) -> str:
     header; Codex CLI propagates ``OPENAI_API_KEY`` here), then falls back
     to body-level hints (``metadata.session_id`` / ``user``).
     """
-    return request_session_id(request, body=body)
+    return sid_from_bearer(request) or sid_from_body(body) or "default"
 
 
 def _usage(in_tok: int, out_tok: int) -> dict[str, int]:

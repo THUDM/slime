@@ -230,7 +230,7 @@ MISC_ARGS=(
 )
 
 # ============ ray cluster network ============
-# Set MASTER_ADDR before the SWE block: SLIME_HEAD_HOST below falls back to it.
+# Set MASTER_ADDR before the SWE block: ADAPTER_PUBLIC_HOST below falls back to it.
 export MASTER_ADDR="${MASTER_ADDR:-${MLP_WORKER_0_HOST:-$(hostname -I | awk '{print $1}')}}"
 export MASTER_PORT="${MASTER_PORT:-${MLP_WORKER_0_PORT:-6379}}"
 export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-${MLP_SOCKET_IFNAME:-eth0}}"
@@ -249,16 +249,16 @@ if [[ ! "${E2B_API_KEY}" =~ ^e2b_[0-9a-fA-F]{40}$ ]]; then
   E2B_API_KEY="${E2B_DUMMY_API_KEY}"
 fi
 export E2B_API_KEY
-export SWE_SANDBOX_METADATA_FILE="${SANDBOX_METADATA_FILE}"
-export SWE_SANDBOX_IMAGE_METADATA_KEY="${SWE_SANDBOX_IMAGE_METADATA_KEY:-glm-platform/image}"
+export SLIME_AGENT_SANDBOX_METADATA_FILE="${SANDBOX_METADATA_FILE}"
+export SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY="${SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY:-glm-platform/image}"
 # Host-side tarballs injected into each sandbox at boot.
-export SWE_HOST_NODE_TARBALL="${SWE_HOST_NODE_TARBALL:-/path/to/node-v22.x-linux-x64.tar.xz}"
-export SWE_HOST_CC_TARBALL="${SWE_HOST_CC_TARBALL:-/path/to/anthropic-ai-claude-code-local-linux-x64.tgz}"
+export SLIME_AGENT_NODE_TARBALL="${SLIME_AGENT_NODE_TARBALL:-/path/to/node-v22.x-linux-x64.tar.xz}"
+export SLIME_AGENT_CC_TARBALL="${SLIME_AGENT_CC_TARBALL:-/path/to/anthropic-ai-claude-code-local-linux-x64.tgz}"
 
-# --- reply path (sandbox -> host shim) ---
-export SLIME_HEAD_HOST="${SLIME_HEAD_HOST:-${MASTER_ADDR:-${MLP_WORKER_0_HOST:-127.0.0.1}}}"
-export SHIM_BIND_HOST="${SHIM_BIND_HOST:-0.0.0.0}"
-export SHIM_PORT="${SHIM_PORT:-18001}"
+# --- reply path (sandbox -> host adapter) ---
+export ADAPTER_PUBLIC_HOST="${ADAPTER_PUBLIC_HOST:-${MASTER_ADDR:-${MLP_WORKER_0_HOST:-127.0.0.1}}}"
+export ADAPTER_BIND_HOST="${ADAPTER_BIND_HOST:-0.0.0.0}"
+export ADAPTER_PORT="${ADAPTER_PORT:-18001}"
 
 # --- per-trajectory time / concurrency budgets ---
 # Time budget 1800s (vs baseline 1200): sub-agent dispatch on large repos blows
@@ -281,12 +281,12 @@ export SWE_BOOT_CONCURRENCY="${SWE_BOOT_CONCURRENCY:-6}"
 #   compacts before any segment crosses the training-side cap.
 # AGENTS_JSON: register a read-only `investigator` sub-agent (Grep/Read/Glob)
 #   as a concrete, narrowly-scoped dispatch target.
-# SWE_CLAUDE_EXTRA_ARGS: WebFetch/WebSearch are off (sandbox has no outbound
+# SLIME_AGENT_CC_EXTRA_ARGS: WebFetch/WebSearch are off (sandbox has no outbound
 #   internet); --disable-slash-commands keeps the model from emitting /compact
 #   as a competing branching pathway.
 SETTINGS_JSON='{"permissions":{"defaultMode":"bypassPermissions"},"autoCompactEnabled":true,"autoCompactWindow":80000}'
 AGENTS_JSON='{"investigator":{"description":"Searches the repo for relevant files before any edit","prompt":"You are an investigator sub-agent. Use Grep/Read/Glob to find every file relevant to the user task, then return a short bulleted summary. Do NOT edit anything.","tools":["Grep","Read","Glob"]}}'
-export SWE_CLAUDE_EXTRA_ARGS="--settings '${SETTINGS_JSON}' --disable-slash-commands --agents '${AGENTS_JSON}' --disallowedTools WebFetch WebSearch"
+export SLIME_AGENT_CC_EXTRA_ARGS="--settings '${SETTINGS_JSON}' --disable-slash-commands --agents '${AGENTS_JSON}' --disallowedTools WebFetch WebSearch"
 
 # Optional: bias the model to dispatch the investigator before any edit.
 # Uncomment to maximize sub-agent dispatch — naming the exact call form
@@ -294,7 +294,7 @@ export SWE_CLAUDE_EXTRA_ARGS="--settings '${SETTINGS_JSON}' --disable-slash-comm
 # export SWE_CC_PROMPT="Read PROBLEM_STATEMENT.md. BEFORE editing any file, dispatch the 'investigator' sub-agent (via the Agent tool with subagent_type=investigator) to locate every file relevant to the issue. Then fix the issue and run the tests."
 
 # ============ proxy bypass for in-cluster traffic ============
-export no_proxy="127.0.0.1,${MASTER_ADDR},${SLIME_HEAD_HOST}"
+export no_proxy="127.0.0.1,${MASTER_ADDR},${ADAPTER_PUBLIC_HOST}"
 export NO_PROXY="${no_proxy}"
 
 cd "${SLIME_DIR}"
@@ -330,13 +330,14 @@ RUNTIME_ENV_JSON=$(python3 - <<PY
 import json, os
 keys = (
     "no_proxy", "NO_PROXY",
-    "E2B_API_KEY", "SLIME_HEAD_HOST",
-    "SWE_HOST_NODE_TARBALL", "SWE_HOST_CC_TARBALL",
+    "E2B_API_KEY", "ADAPTER_PUBLIC_HOST",
+    "SLIME_AGENT_NODE_TARBALL", "SLIME_AGENT_CC_TARBALL",
     "SWE_TIME_BUDGET_SEC", "SWE_EVAL_TIMEOUT_SEC", "SWE_BOOT_CONCURRENCY",
-    "SHIM_BIND_HOST", "SHIM_PORT",
-    "SWE_CLAUDE_EXTRA_ARGS",
+    "ADAPTER_BIND_HOST", "ADAPTER_PORT",
+    "SLIME_AGENT_CC_EXTRA_ARGS",
+    "SLIME_AGENT_CC_EXTRA_ENVS",
     "SWE_CC_PROMPT",
-    "SWE_SANDBOX_METADATA_FILE", "SWE_SANDBOX_IMAGE_METADATA_KEY",
+    "SLIME_AGENT_SANDBOX_METADATA_FILE", "SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY",
 )
 env = {k: os.environ[k] for k in keys if k in os.environ}
 env["MASTER_ADDR"] = os.environ["MASTER_ADDR"]

@@ -31,7 +31,7 @@ from slime.agent.adapters.common import (
     Reply,
     flatten_content,
     manager_finish_reason,
-    request_session_id,
+    sid_from_bearer,
     tool_call_dict,
 )
 from slime.agent.parsing import ParsedModelOutput
@@ -204,7 +204,9 @@ def _build_reply_parts(
 
 
 def _request_session_id(request: web.Request) -> str:
-    return request_session_id(request, include_x_api_key=True)
+    # Anthropic SDK auth lands in Authorization: Bearer or X-Api-Key; the
+    # Messages body carries no sid hint. Bearer wins when both are present.
+    return sid_from_bearer(request) or (request.headers.get("X-Api-Key") or "").strip() or "default"
 
 
 def _render_response(body: dict, blocks: list[dict], stop_reason: str, in_tok: int, out_tok: int) -> dict:

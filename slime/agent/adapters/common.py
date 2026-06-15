@@ -307,6 +307,7 @@ class BaseAdapter:
             return None
         prior = self._sid_turn_count.get(sid, 0)
         if prior >= cap:
+            self.logger.warning("[%s] sid=%s exceeded max_turns_per_sid=%d; killing run", self.log_prefix, sid, cap)
             return web.json_response(
                 {
                     "error": {
@@ -342,6 +343,7 @@ class BaseAdapter:
         self._preprocess_body(body)
         sid = self._session_id(request, body)
         if sid in self.closed:  # session drained; refuse stragglers
+            self.logger.debug("[%s] sid=%s request after session closed", self.log_prefix, sid)
             return web.Response(status=503, text="session closed")
         capped = self._check_turn_cap(sid)
         if capped is not None:
@@ -359,12 +361,18 @@ class BaseAdapter:
                 turn = await call_sglang_generate(prompt_ids, s, body, adapter=self, session_id=sid)
 
                 raw_output = tok.decode(turn.output_ids, skip_special_tokens=False) if turn.output_ids else ""
-                parsed = parse_model_output(
-                    raw_output,
-                    tools_schema=tools_schema,
-                    tool_parser_name=self.tool_parser,
-                    reasoning_parser_name=self.reasoning_parser,
-                )
+                try:
+                    parsed = parse_model_output(
+                        raw_output,
+                        tools_schema=tools_schema,
+                        tool_parser_name=self.tool_parser,
+                        reasoning_parser_name=self.reasoning_parser,
+                    )
+                except Exception as e:
+                    self.logger.warning(
+                        "[%s] sid=%s parse failed: %s: %.200s", self.log_prefix, sid, type(e).__name__, raw_output
+                    )
+                    raise
                 reply = self._build(parsed, turn.finish_reason, translated, tools_schema)
                 turn = dataclasses.replace(turn, finish_reason=reply.finish_reason)
 
@@ -402,31 +410,28 @@ class BaseAdapter:
             self.inflight.get(sid, set()).discard(task)
 
 
-def request_session_id(
-    request: web.Request,
-    *,
-    body: dict | None = None,
-    include_x_api_key: bool = False,
-) -> str:
+def sid_from_bearer(request: web.Request) -> str | None:
+    """sid carried in ``Authorization: Bearer <sid>`` (both protocols use this),
+    or None if absent. Each adapter decides where this sits in its priority chain.
+    """
     auth = request.headers.get("Authorization", "")
     if auth.lower().startswith("bearer "):
-        sid = auth[7:].strip()
-        if sid:
-            return sid
+        return auth[7:].strip() or None
+    return None
 
-    if body is not None:
-        metadata = body.get("metadata")
-        if isinstance(metadata, dict) and metadata.get("session_id"):
-            return str(metadata["session_id"])
-        if body.get("user"):
-            return str(body["user"])
 
-    if include_x_api_key:
-        api_key = request.headers.get("X-Api-Key")
-        if api_key:
-            return api_key.strip()
-
-    return "default"
+def sid_from_body(body: dict | None) -> str | None:
+    """sid carried in the OpenAI-shape body (``metadata.session_id`` / ``user``),
+    or None if absent. Anthropic requests don't carry a body sid hint.
+    """
+    if not body:
+        return None
+    metadata = body.get("metadata")
+    if isinstance(metadata, dict) and metadata.get("session_id"):
+        return str(metadata["session_id"])
+    if body.get("user"):
+        return str(body["user"])
+    return None
 
 
 def _sampling_params(session: Any, body: dict, *, max_token_keys: tuple[str, ...], stop_keys: tuple[str, ...]) -> dict:
@@ -475,8 +480,9 @@ async def call_sglang_generate(
         remaining_context = session.max_context_tokens - len(prompt_ids)
         if remaining_context <= 0:
             logger.warning(
-                "[%s] prompt exceeds max_context_tokens (%d >= %d)",
+                "[%s] sid=%s prompt exceeds max_context_tokens (%d >= %d)",
                 adapter.log_prefix,
+                session_id,
                 len(prompt_ids),
                 session.max_context_tokens,
             )
@@ -500,6 +506,14 @@ async def call_sglang_generate(
         ) as r:
             if r.status >= 400:
                 text = await r.text()
+                logger.warning(
+                    "[%s] sid=%s rid=%s sglang upstream %d: %.200s",
+                    adapter.log_prefix,
+                    session_id,
+                    rid,
+                    r.status,
+                    text,
+                )
                 raise RuntimeError(f"sglang upstream {r.status}: {text[:400]}")
             data = await r.json(content_type=None)
         meta = data.get("meta_info") or {}
@@ -507,9 +521,12 @@ async def call_sglang_generate(
         output_ids = [x[1] for x in output_token_logprobs]
         output_log_probs = [float(x[0]) for x in output_token_logprobs]
         finish = (meta.get("finish_reason") or {}).get("type", "stop") or "stop"
-    except (asyncio.CancelledError, aiohttp.ClientError, asyncio.TimeoutError):
+    except (asyncio.CancelledError, aiohttp.ClientError, asyncio.TimeoutError) as e:
         # Free the sglang slot eagerly on client cancel/timeout; otherwise the
         # orphaned generation keeps occupying KV until it hits its own length cap.
+        # DEBUG not WARNING: this is the normal shape of a drained/aborted agent
+        # disconnecting, not a fault.
+        logger.debug("[%s] sid=%s rid=%s turn aborted: %s", adapter.log_prefix, session_id, rid, type(e).__name__)
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as s2:
                 await s2.post(f"{sglang_url}/abort_request", json={"rid": rid})

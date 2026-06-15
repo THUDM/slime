@@ -7,10 +7,10 @@ launch-detached-and-poll transport) live here. Adding a CLI-style harness means
 subclassing ``BaseHarness`` and implementing the three differing steps
 (``install_cli`` + ``write_config`` + ``launch_and_wait``) -- no edits to this
 file. Two module-level helpers absorb the common cases: ``install_npm_cli`` for
-npm-packaged CLIs, and ``spawn_detached`` for the batch execution model (run one
-command detached, poll a done-marker). A harness with a different install path
-(pip, curl, pre-baked image) or execution model (interactive / a long-running
-server fed turn by turn) just writes those two methods directly.
+npm-packaged CLIs, and ``run_command`` for the run-one-command-to-completion
+case (run one command detached, poll a done-marker). A harness with a different
+install path (pip, curl, pre-baked image) or execution model (interactive / a
+long-running server fed turn by turn) just writes those two methods directly.
 
 The base does NOT know anything about SWE: ``run()`` takes only generic fields
 (workdir / session_id / adapter_url / prompt). Task-specific workspace prep and
@@ -20,7 +20,6 @@ scoring live in the example layer (``examples/coding_agent_rl/swe.py``).
 from __future__ import annotations
 
 import asyncio
-import logging
 import lzma
 import os
 import shlex
@@ -34,7 +33,11 @@ from pathlib import Path
 from slime.agent import sandbox as _sandbox
 from slime.agent.sandbox import Sandbox
 
-logger = logging.getLogger(__name__)
+# Sentinel for run_command's int return: the time budget expired before the
+# command finished, so there is no real exit code. Process exit codes are POSIX
+# 0-255, so a negative value never collides; anything >=0 is the command's real
+# PIPESTATUS[0] and carries diagnostic value (1=error, 137=OOM-killed, etc.).
+EXIT_TIME_BUDGET_EXCEEDED = -1
 
 
 @dataclass(frozen=True)
@@ -59,8 +62,8 @@ class BaseHarness(ABC):
     Subclasses set ``name`` and implement the three differing steps
     (``install_cli`` / ``write_config`` / ``launch_and_wait``); everything else
     (agent user, the ``run`` skeleton) is shared. npm-packaged CLIs implement
-    ``install_cli`` by delegating to ``install_npm_cli``; batch CLIs implement
-    ``launch_and_wait`` by delegating to ``spawn_detached``.
+    ``install_cli`` by delegating to ``install_npm_cli``; non-interactive CLIs
+    implement ``launch_and_wait`` by delegating to ``run_command``.
     """
 
     #: Short identifier; also names the launcher metadata dir owner.
@@ -79,11 +82,11 @@ class BaseHarness(ABC):
     async def launch_and_wait(self, sb: Sandbox, ctx: HarnessContext, prompt: str, time_budget_sec: int) -> int:
         """Run the agent to completion and return its exit code (harness-specific).
 
-        This is the execution-model step. A batch CLI builds one shell command and
-        hands it to ``spawn_detached`` (which provides the E2B transport: run
-        detached, poll a done-marker) -- see the existing harnesses. An
-        interactive or long-running harness drives its own loop here instead, and
-        may still reuse ``spawn_detached`` for individual commands.
+        This is the execution-model step. A non-interactive CLI builds one shell
+        command and hands it to ``run_command`` (which provides the E2B
+        transport: run detached, poll a done-marker) -- see the existing
+        harnesses. An interactive or long-running harness drives its own loop
+        here instead, and may still reuse ``run_command`` for individual commands.
         """
 
     async def run(
@@ -112,9 +115,7 @@ class BaseHarness(ABC):
         return await self.launch_and_wait(sb, ctx, prompt, time_budget_sec)
 
 
-async def spawn_detached(
-    sb: Sandbox, *, workdir: str, start_cmd: str, env: dict[str, str], time_budget_sec: int
-) -> int:
+async def run_command(sb: Sandbox, *, workdir: str, start_cmd: str, env: dict[str, str], time_budget_sec: int) -> int:
     """Run ``start_cmd`` to completion in ``sb`` and return its exit code.
 
     The E2B transport mechanism, independent of any harness: its gateway resets
@@ -123,8 +124,9 @@ async def spawn_detached(
     writing the *command's* exit code (``PIPESTATUS[0]``, not tee's) into a marker
     file; we poll that marker every 5s via short RPCs (which also keeps the
     sandbox alive against idle GC). All metadata goes under ``{workdir}/.harness/``
-    so diff capture only has to exclude one directory. Returns ``-2`` if the time
-    budget is exceeded before the command finishes.
+    so diff capture only has to exclude one directory. Returns
+    ``EXIT_TIME_BUDGET_EXCEEDED`` if the time budget is exceeded before the
+    command finishes.
     """
     meta_dir = f"{workdir}/.harness"
     done = f"{meta_dir}/done"
@@ -153,7 +155,7 @@ async def spawn_detached(
     )
 
     deadline = time.time() + time_budget_sec
-    exit_code = -2  # convention: -2 = budget exceeded
+    exit_code = EXIT_TIME_BUDGET_EXCEEDED  # until the marker yields a real code
     while time.time() < deadline:
         await asyncio.sleep(5)
         ec, out, _ = await sb.exec(
@@ -163,10 +165,7 @@ async def spawn_detached(
             check=False,
         )
         if ec == 0:
-            try:
-                exit_code = int((out or "").strip() or "-1")
-            except ValueError:
-                exit_code = -1
+            exit_code = int((out or "").strip())
             break
     return exit_code
 

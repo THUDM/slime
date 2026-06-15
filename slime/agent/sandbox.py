@@ -53,6 +53,10 @@ class Sandbox(Protocol):
 
 
 def _getenv(*names: str, default: str = "") -> str:
+    """First non-empty environment value among ``names`` (else ``default``).
+
+    Lets a setting carry a primary name plus legacy aliases: list the canonical
+    ``SLIME_AGENT_*`` name first, older names after."""
     for name in names:
         value = os.environ.get(name)
         if value is not None and value.strip():
