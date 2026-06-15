@@ -386,6 +386,13 @@ class RolloutManager:
         self.pg = pg
         self.args = args
 
+        rollout_init_handles: list[Any] = []
+        if self.args.debug_train_only:
+            self.servers: dict[str, Any] = {}
+        else:
+            init_http_client(args)
+            self.servers, rollout_init_handles = start_rollout_servers(args, pg)
+
         data_source_cls = load_function(self.args.data_source_path)
         self.data_source = data_source_cls(args)
 
@@ -402,11 +409,8 @@ class RolloutManager:
         logger.info(f"import {self.args.rollout_function_path} as generate_rollout function.")
         logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
-        if self.args.debug_train_only:
-            self.servers: dict[str, Any] = {}
-        else:
-            init_http_client(args)
-            self.servers = start_rollout_servers(args, pg)
+        if rollout_init_handles:
+            ray.get(rollout_init_handles)
 
         init_tracking(args, primary=False)
         self.rollout_engine_lock = Lock.options(
@@ -424,23 +428,6 @@ class RolloutManager:
                     monitor.start()
                     self._health_monitors.append(monitor)
             self._ci_fault_injection_pending = self.args.ci_test  # Flag for CI fault injection
-
-    def _get_metrics_router_addr(self) -> str | None:
-        """Return the router address for scraping SGLang engine metrics.
-
-        The sglang_router gateway exposes ``/engine_metrics`` on its main port,
-        which aggregates Prometheus metrics from all backend sglang servers.
-        Returns ``http://{ip}:{port}`` for the first server, or ``None`` when
-        metrics are disabled or no servers are running.
-        """
-        srv = self.server
-        if srv is None or srv.router_ip is None:
-            return None
-        return f"http://{srv.router_ip}:{srv.router_port}"
-
-    def get_metrics_router_addr(self) -> str | None:
-        """Public wrapper for remote calls from the driver process."""
-        return self._get_metrics_router_addr()
 
     def _try_ci_fault_injection(self):
         """Try to inject fault during generate (when health monitor is running)."""
@@ -660,7 +647,7 @@ class RolloutManager:
 
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
         if (
-            self.args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]
+            self.args.advantage_estimator in ["grpo", "gspo", "cispo", "reinforce_plus_plus_baseline"]
             and self.args.rewards_normalization
         ):
             # group norm
@@ -673,7 +660,7 @@ class RolloutManager:
             mean = rewards.mean(dim=-1, keepdim=True)
             rewards = rewards - mean
 
-            if self.args.advantage_estimator in ["grpo", "gspo"] and self.args.grpo_std_normalization:
+            if self.args.advantage_estimator in ["grpo", "gspo", "cispo"] and self.args.grpo_std_normalization:
                 std = rewards.std(dim=-1, keepdim=True)
                 rewards = rewards / (std + 1e-6)
 
@@ -1032,15 +1019,16 @@ def _compute_megatron_num_gpus(args) -> int:
     return num
 
 
-def start_rollout_servers(args, pg) -> dict[str, Any]:
-    """Start rollout servers: one per model, each with its own router.
+def start_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
+    """Start rollout servers without waiting for final engine initialization.
 
     Each model defined in the sglang config gets its own router and set
     of server groups.  Server groups within a model may have different
     ``num_gpus_per_engine`` (e.g. for PD disaggregation where prefill
     and decode use different TP sizes).
 
-    Returns a dict mapping model name → ``RolloutServer``.
+    Returns ``(servers, init_handles)`` where servers maps model name to
+    ``RolloutServer`` and init_handles contains pending ``engine.init`` refs.
 
     Note: ``init_http_client`` should be called separately before this,
     as the HTTP client is shared across all servers.
@@ -1051,6 +1039,7 @@ def start_rollout_servers(args, pg) -> dict[str, Any]:
     config = _resolve_sglang_config(args)
 
     servers: dict[str, RolloutServer] = {}
+    pending_init_handles: list[Any] = []
     gpu_offset = 0
     engine_offset = 0
 
@@ -1114,6 +1103,8 @@ def start_rollout_servers(args, pg) -> dict[str, Any]:
 
         if has_epd:
             # --- Phase 1: start encoder groups, wait, collect URLs ---
+            # Encoder URLs are injected into the non-encoder workers' server args,
+            # so this phase must stay synchronous even though final LLM init is deferred.
             encoder_urls: list[str] = []
             for group_cfg in model_cfg.server_groups:
                 if group_cfg.worker_type != "encoder":
@@ -1144,8 +1135,7 @@ def start_rollout_servers(args, pg) -> dict[str, Any]:
                 non_encoder_handles.extend(handles)
                 server_groups.append(group)
 
-            if non_encoder_handles:
-                ray.get(non_encoder_handles)
+            pending_init_handles.extend(non_encoder_handles)
         else:
             # No EPD — start all groups in one pass (original path).
             all_init_handles: list = []
@@ -1155,8 +1145,7 @@ def start_rollout_servers(args, pg) -> dict[str, Any]:
                 all_init_handles.extend(handles)
                 server_groups.append(group)
 
-            if all_init_handles:
-                ray.get(all_init_handles)
+            pending_init_handles.extend(all_init_handles)
 
         servers[model_cfg.name] = RolloutServer(
             server_groups=server_groups,
@@ -1169,7 +1158,7 @@ def start_rollout_servers(args, pg) -> dict[str, Any]:
     # Expose per-model router info for custom rollout functions.
     args.sglang_model_routers = {name: (srv.router_ip, srv.router_port) for name, srv in servers.items()}
 
-    return servers
+    return servers, pending_init_handles
 
 
 def _resolve_sglang_config(args) -> SglangConfig:

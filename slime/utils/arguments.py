@@ -7,7 +7,6 @@ import warnings
 from typing import Any
 
 import yaml
-from sglang_router.launch_router import RouterArgs
 
 from slime.backends.sglang_utils.arguments import sglang_parse_args
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
@@ -907,6 +906,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 choices=[
                     "grpo",
                     "gspo",
+                    "cispo",
                     "reinforce_plus_plus",
                     "reinforce_plus_plus_baseline",
                     "ppo",
@@ -1109,16 +1109,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--opd-teacher-ckpt-step", type=int, default=None, help="The checkpoint step for OPD teacher model."
             )
-            return parser
-
-        def add_router_arguments(parser):
-            parser.add_argument(
-                "--use-slime-router",
-                action="store_true",
-                default=False,
-                help="Whether to use SlimeRouter for text-based routing instead of SGLang token-based routing",
-            )
-            RouterArgs.add_cli_args(parser, use_router_prefix=True, exclude_host_port=True)
             return parser
 
         # wandb
@@ -1482,7 +1472,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_on_policy_distillation_arguments(parser)
         parser = add_wandb_arguments(parser)
         parser = add_tensorboard_arguments(parser)
-        parser = add_router_arguments(parser)
         parser = add_debug_arguments(parser)
         parser = add_network_arguments(parser)
         parser = add_reward_model_arguments(parser)
@@ -1746,13 +1735,6 @@ def _validate_update_weight_args(args) -> None:
 def slime_validate_args(args):
     args.eval_datasets = _resolve_eval_datasets(args)
 
-    if args.use_slime_router:
-        logger.warning(
-            "--use-slime-router is deprecated and ignored. slime now always uses sglang_router "
-            "built from https://github.com/zhuzilin/sgl-router."
-        )
-        args.use_slime_router = False
-
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):
             raise FileNotFoundError(f"ref_load {args.ref_load} does not exist, please check the path.")
@@ -1860,6 +1842,14 @@ def slime_validate_args(args):
 
     if args.eps_clip_high is None:
         args.eps_clip_high = args.eps_clip
+
+    if args.advantage_estimator == "cispo" and args.eps_clip < 1.0:
+        logger.warning(
+            "CISPO is canonically single-sided, but --eps-clip=%s keeps the lower clip bound %s active. "
+            "Set --eps-clip 1.0 (and tune --eps-clip-high, e.g. 4.0) for the canonical wide setting.",
+            args.eps_clip,
+            1.0 - args.eps_clip,
+        )
 
     if args.eval_reward_key is None:
         args.eval_reward_key = args.reward_key

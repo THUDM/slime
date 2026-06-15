@@ -175,7 +175,7 @@ def external_engine_infos_from_args(args) -> list[ExternalEngineInfo]:
     return [ExternalEngineInfo(**info) if isinstance(info, dict) else info for info in raw_infos]
 
 
-def start_external_rollout_servers(args, *, start_router) -> dict[str, ExternalRolloutServer]:
+def start_external_rollout_servers(args, *, start_router) -> tuple[dict[str, ExternalRolloutServer], list]:
     import ray
 
     from slime.backends.sglang_utils.sglang_engine import SGLangEngine
@@ -216,11 +216,8 @@ def start_external_rollout_servers(args, *, start_router) -> dict[str, ExternalR
             )
         )
 
-    if init_handles:
-        ray.get(init_handles)
-
     args.sglang_model_routers = {"default": (router_ip, router_port)}
-    return {
+    servers = {
         "default": ExternalRolloutServer(
             engines=engines,
             engine_gpu_counts=engine_gpu_counts,
@@ -232,3 +229,4 @@ def start_external_rollout_servers(args, *, start_router) -> dict[str, ExternalR
             num_new_engines=len(engines),
         )
     }
+    return servers, init_handles

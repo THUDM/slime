@@ -24,6 +24,7 @@ class Sample:
     tokens: list[int] = field(default_factory=list)
     multimodal_inputs: dict[str, Any] | None = None  # raw multimodal data, e.g. images, videos, etc.
     multimodal_train_inputs: dict[str, Any] | None = None  # processed multimodal data, e.g. pixel_values, etc.
+    apply_chat_template_kwargs: dict = field(default_factory=dict)
     # response
     response: str = ""
     response_length: int = 0
@@ -50,6 +51,7 @@ class Sample:
 
     metadata: dict = field(default_factory=dict)
     generate_function_path: str | None = None
+    custom_rm_path: str | None = None
     # metadata used during training, e.g., what loss to use for this sample.
     train_metadata: dict | None = None
 
