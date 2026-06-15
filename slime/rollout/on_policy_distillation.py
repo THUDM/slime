@@ -10,7 +10,11 @@ async def reward_func(args, sample, **kwargs):
         # "text": sample.prompt + sample.response,
         "input_ids": sample.tokens,
         "sampling_params": {
-            "temperature": 0,
+            # Score teacher log-probs at rollout_temperature: SGLang scales
+            # input_token_logprobs by the sampling temperature, and the student
+            # log-probs are temperature-scaled too (get_responses), so the OPD KL is
+            # only consistent when both are at the same temperature.
+            "temperature": getattr(args, "rollout_temperature", 1.0),
             "max_new_tokens": 0,
             "skip_special_tokens": False,
         },
