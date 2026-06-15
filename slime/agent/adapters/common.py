@@ -8,7 +8,7 @@ A protocol adapter (Anthropic / OpenAI) is a thin subclass of
 plus four class attributes (``logger``, ``log_prefix``, ``max_token_keys``,
 ``stop_keys``). Everything else -- session lifecycle, the per-sid turn cap, the
 inflight-task bookkeeping, the one-turn :meth:`~BaseAdapter._run_turn` pipeline,
-the ``on_turn_appended`` hook -- is inherited, so the adapters stay in lockstep.
+the ``debug_callback`` hook -- is inherited, so the adapters stay in lockstep.
 
 :mod:`slime.agent.adapters.anthropic` is the canonical template to copy when
 adding a harness; :func:`flatten_content`, :func:`tool_call_dict` and
@@ -52,10 +52,10 @@ class Reply:
     """Output of an adapter's ``_build``, consumed by ``_run_turn``.
 
     ``manager_message`` / ``finish_reason`` feed ``record_turn`` + the
-    ``on_turn_appended`` hook (protocol-neutral). ``wire`` is opaque to the
+    ``debug_callback`` hook (protocol-neutral). ``wire`` is opaque to the
     pipeline -- only the adapter's own ``_respond`` understands it.
     ``skip_append`` drops a turn from the trajectory (e.g. cc title-generation
-    meta requests) while still firing the hook.
+    meta requests) while still firing the debug callback.
     """
 
     manager_message: dict
@@ -168,7 +168,7 @@ class BaseAdapter:
         reasoning_parser=None,
         max_turns_per_sid: int | None = None,
         fork_threshold_tokens: int | None = None,
-        on_turn_appended: Callable[..., None] | None = None,
+        debug_callback: Callable[..., None] | None = None,
     ) -> None:
         self.tokenizer = tokenizer
         self.sglang_url = sglang_url.rstrip("/") if isinstance(sglang_url, str) else sglang_url
@@ -187,11 +187,12 @@ class BaseAdapter:
             mgr_kwargs["fork_threshold_tokens"] = fork_threshold_tokens
         self.manager = TrajectoryManager(**mgr_kwargs)
 
-        # Optional debug hook invoked after each turn (appended or skipped).
-        # Signature: (sid, prompt_messages, tools, response_message,
-        #             prompt_ids, response_ids, finish_reason) -> None.
-        # Exceptions are swallowed; never block the HTTP response.
-        self.on_turn_appended: Callable[..., None] | None = on_turn_appended
+        # Optional debug callback invoked after each turn (appended or skipped).
+        # Signature: (sid, prompt_messages, tools, response_message, turn) -> None,
+        # where ``turn`` is the TurnRecord carrying prompt_ids / output_ids /
+        # finish_reason. Read-only side channel for per-turn dumps; exceptions
+        # are swallowed so it can never block the HTTP response.
+        self.debug_callback: Callable[..., None] | None = debug_callback
         # Per-sid turn cap; None disables. When set, the turn handler returns
         # 429 once a sid has made this many turns, so a runaway agent exits
         # cleanly instead of burning the whole token budget.
@@ -320,16 +321,15 @@ class BaseAdapter:
         self._sid_turn_count[sid] = prior + 1
         return None
 
-    def _fire_hook(
-        self, sid, translated, tools_schema, manager_message, prompt_ids, output_ids, finish_reason
-    ) -> None:
-        hook = self.on_turn_appended
-        if hook is None:
+    def _run_debug_callback(self, sid, translated, tools_schema, manager_message, turn) -> None:
+        """Run the optional debug-only data dump callback; unset in production."""
+        callback = self.debug_callback
+        if callback is None:
             return
         try:
-            hook(sid, translated, tools_schema, manager_message, prompt_ids, output_ids, finish_reason)
+            callback(sid, translated, tools_schema, manager_message, turn)
         except Exception:
-            self.logger.exception("on_turn_appended hook failed (sid=%s)", sid)
+            self.logger.exception("debug_callback failed (sid=%s)", sid)
 
     async def _run_turn(self, request: web.Request) -> web.StreamResponse:
         """One full agent turn: translate -> sglang -> parse -> append -> respond.
@@ -378,8 +378,8 @@ class BaseAdapter:
 
                 if reply.skip_append:
                     # Meta request (e.g. cc title-generation): keep it out of
-                    # the tree / RL samples, but still fire the hook below so
-                    # per-turn debug dumps keep landing on disk.
+                    # the tree / RL samples, but still run the debug callback
+                    # below so per-turn debug dumps keep landing on disk.
                     self.logger.info("skipping record_turn (sid=%s)", sid)
                 else:
                     try:
@@ -393,14 +393,12 @@ class BaseAdapter:
                     except Exception:
                         self.logger.exception("record_turn(sid=%s) failed", sid)
 
-                self._fire_hook(
+                self._run_debug_callback(
                     sid,
                     translated,
                     tools_schema,
                     reply.manager_message,
-                    prompt_ids,
-                    turn.output_ids,
-                    reply.finish_reason,
+                    turn,
                 )
                 in_tok, out_tok = len(prompt_ids), len(turn.output_ids)
 
