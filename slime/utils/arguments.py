@@ -49,8 +49,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "Number of GPUs for inference. Note that when using --colocate, "
-                    "i.e. the training and the inference engines are on the same gpus, this param will be ignored and will be set as "
-                    "actor_num_gpus_per_node * actor_num_nodes."
+                    "i.e. the training and the inference engines are on the same gpus, this param will be set as "
+                    "actor_num_gpus_per_node * actor_num_nodes unless it is explicitly set. "
+                    "Set it to 0 to launch routers without local SGLang engines."
                 ),
             )
             parser.add_argument(
@@ -1890,8 +1891,11 @@ def slime_validate_args(args):
     del args.offload
 
     if args.debug_rollout_only:
-        if args.colocate and (not args.rollout_num_gpus):
+        if args.colocate and args.rollout_num_gpus is None:
             args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
+        elif args.rollout_num_gpus == 0:
+            args.actor_num_gpus_per_node = 0
+            args.actor_num_nodes = 0
         else:
             args.actor_num_gpus_per_node = min(8, args.rollout_num_gpus)
             args.actor_num_nodes = args.rollout_num_gpus // args.actor_num_gpus_per_node
@@ -1911,12 +1915,10 @@ def slime_validate_args(args):
             args.offload_train = True
         if args.offload_rollout is None:
             args.offload_rollout = True
-        if args.rollout_num_gpus != args.actor_num_gpus_per_node * args.actor_num_nodes:
-            logger.info(
-                f"rollout_num_gpus {args.rollout_num_gpus} != actor_num_gpus_per_node {args.actor_num_gpus_per_node} "
-                f"* actor_num_nodes {args.actor_num_nodes}, overriding rollout_num_gpus to match actor_num_gpus_per_node * actor_num_nodes."
-            )
+        if args.rollout_num_gpus is None:
             args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
+        elif args.rollout_num_gpus == 0:
+            logger.info("rollout_num_gpus is 0 under colocate; no local SGLang engines will be launched.")
 
     if args.offload_train is None:
         args.offload_train = False

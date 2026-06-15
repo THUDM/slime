@@ -244,6 +244,8 @@ def _init_ray_distributed_post(args):
     import ray
     from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
+    from slime.ray.utils import add_default_ray_env_vars
+
     # Discover alive nodes
     nodes = [n for n in ray.nodes() if n.get("Alive")]
     if not nodes:
@@ -275,6 +277,7 @@ def _init_ray_distributed_post(args):
             actor = _HttpPosterActor.options(
                 name=None,
                 lifetime="detached",
+                runtime_env={"env_vars": add_default_ray_env_vars()},
                 scheduling_strategy=scheduling,
                 max_concurrency=per_actor_conc,
                 # Use tiny CPU to schedule

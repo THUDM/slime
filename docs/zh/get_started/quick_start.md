@@ -305,7 +305,7 @@ SGLANG_ARGS=(
 
 ### Colocated Actor and Rollout
 
-在默认的配置下，训练（Actor）和推理（Rollout）的资源是分开指定的，通过 ray 给训练部分分配 `actor_num_nodes * actor_num_gpus_per_node` 张 GPU，给推理分配 `rollout_num_gpus` 张 GPU，也即训推分离。
+在默认的配置下，训练（Actor）和推理（Rollout）的资源是分开指定的，通过 ray 给训练部分分配 `actor_num_nodes * actor_num_gpus_per_node` 张 GPU，给推理分配 `rollout_num_gpus` 张 GPU，也即训推分离。将 `--rollout-num-gpus` 显式设置为 `0` 时，slime 仍会解析 SGLang 参数并启动 router，但不会启动本地 SGLang server。
 
 **标准（分离）配置**：
 ```bash
@@ -319,7 +319,7 @@ ray job submit ... \
 上述配置中，Actor 使用 4 张卡，Rollout 也使用 4 张卡，两者并行运行。
 
 **训推一体化（Colocated）配置**：
-要将训练和推理部署在同一组 GPU 上，请添加 `--colocate` 参数，开启后会忽略 `--rollout-num-gpus` 让训练和推理的卡数相等。
+要将训练和推理部署在同一组 GPU 上，请添加 `--colocate` 参数，开启后默认会让训练和推理的卡数相等；也可以显式设置一个不同的正数，例如让 rollout 卡数多于 actor，多出的 GPU 会作为 rollout-only 资源使用。如果显式设置 `--rollout-num-gpus 0`，则只启动 router，不启动本地 SGLang server。
 
 
 ```bash

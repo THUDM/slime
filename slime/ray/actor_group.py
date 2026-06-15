@@ -4,7 +4,7 @@ import ray
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
+from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
 
 
 class RayTrainGroup:
@@ -89,7 +89,9 @@ class RayTrainGroup:
 
         actor_impl = MegatronTrainRayActor
 
-        TrainRayActor = ray.remote(num_gpus=1, runtime_env={"env_vars": env_vars})(actor_impl)
+        TrainRayActor = ray.remote(num_gpus=1, runtime_env={"env_vars": add_default_ray_env_vars(env_vars)})(
+            actor_impl
+        )
 
         # Create worker actors
         self._actor_handlers = []
