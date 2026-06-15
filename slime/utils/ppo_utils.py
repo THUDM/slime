@@ -148,6 +148,29 @@ def compute_policy_loss(
     return pg_losses, clipfrac
 
 
+@torch.compile(dynamic=True)
+def compute_cispo_loss(
+    ppo_kl: torch.Tensor,
+    log_probs: torch.Tensor,
+    advantages: torch.Tensor,
+    eps_clip: float,
+    eps_clip_high: float,
+):
+    """CISPO loss from MiniMax-M1 (https://arxiv.org/abs/2506.13585, Eq. 4-5):
+    ``-sg(clip(ratio, 1 - eps_clip, 1 + eps_clip_high)) * advantages * log_probs``.
+
+    Unlike PPO, the IS ratio is clipped under stop-gradient and the gradient flows
+    through ``log_probs``, so clipped tokens still contribute gradient. The bounds
+    reuse the delta-from-1 convention of ``compute_policy_loss``; canonical CISPO
+    disables the lower bound (``eps_clip >= 1.0``).
+    """
+    ratio = (-ppo_kl).exp()
+    ratio_truncated = torch.clamp(ratio, min=1.0 - eps_clip, max=1.0 + eps_clip_high)
+    pg_losses = -ratio_truncated.detach() * advantages * log_probs
+    clipfrac = (ratio_truncated != ratio).float()
+    return pg_losses, clipfrac
+
+
 def compute_log_probs(logits: torch.Tensor, tokens: torch.Tensor, process_group: dist.ProcessGroup | None):
     # TODO: when megatron is not installed, fall back to naive implementation
     from megatron.core.fusions.fused_cross_entropy import fused_vocab_parallel_cross_entropy

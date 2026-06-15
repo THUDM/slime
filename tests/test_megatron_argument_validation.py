@@ -228,7 +228,6 @@ def make_slime_validate_args(**overrides):
     values = dict(
         eval_config=None,
         eval_prompt_data=None,
-        use_slime_router=False,
         kl_coef=0,
         use_kl_loss=False,
         ref_load=None,
