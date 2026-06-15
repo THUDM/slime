@@ -7,7 +7,6 @@ import warnings
 from typing import Any
 
 import yaml
-from sglang_router.launch_router import RouterArgs
 
 from slime.backends.sglang_utils.arguments import sglang_parse_args
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
@@ -1111,16 +1110,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             return parser
 
-        def add_router_arguments(parser):
-            parser.add_argument(
-                "--use-slime-router",
-                action="store_true",
-                default=False,
-                help="Whether to use SlimeRouter for text-based routing instead of SGLang token-based routing",
-            )
-            RouterArgs.add_cli_args(parser, use_router_prefix=True, exclude_host_port=True)
-            return parser
-
         # wandb
         def add_wandb_arguments(parser):
             # wandb parameters
@@ -1482,7 +1471,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_on_policy_distillation_arguments(parser)
         parser = add_wandb_arguments(parser)
         parser = add_tensorboard_arguments(parser)
-        parser = add_router_arguments(parser)
         parser = add_debug_arguments(parser)
         parser = add_network_arguments(parser)
         parser = add_reward_model_arguments(parser)
@@ -1745,13 +1733,6 @@ def _validate_update_weight_args(args) -> None:
 
 def slime_validate_args(args):
     args.eval_datasets = _resolve_eval_datasets(args)
-
-    if args.use_slime_router:
-        logger.warning(
-            "--use-slime-router is deprecated and ignored. slime now always uses sglang_router "
-            "built from https://github.com/zhuzilin/sgl-router."
-        )
-        args.use_slime_router = False
 
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):
