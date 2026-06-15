@@ -425,23 +425,6 @@ class RolloutManager:
                     self._health_monitors.append(monitor)
             self._ci_fault_injection_pending = self.args.ci_test  # Flag for CI fault injection
 
-    def _get_metrics_router_addr(self) -> str | None:
-        """Return the router address for scraping SGLang engine metrics.
-
-        The sglang_router gateway exposes ``/engine_metrics`` on its main port,
-        which aggregates Prometheus metrics from all backend sglang servers.
-        Returns ``http://{ip}:{port}`` for the first server, or ``None`` when
-        metrics are disabled or no servers are running.
-        """
-        srv = self.server
-        if srv is None or srv.router_ip is None:
-            return None
-        return f"http://{srv.router_ip}:{srv.router_port}"
-
-    def get_metrics_router_addr(self) -> str | None:
-        """Public wrapper for remote calls from the driver process."""
-        return self._get_metrics_router_addr()
-
     def _try_ci_fault_injection(self):
         """Try to inject fault during generate (when health monitor is running)."""
         if not self._ci_fault_injection_pending:
