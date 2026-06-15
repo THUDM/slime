@@ -911,14 +911,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "grpo",
                     "gspo",
                     "cispo",
+                    "reinforce",
                     "reinforce_plus_plus",
                     "reinforce_plus_plus_baseline",
                     "ppo",
                 ],
                 default="grpo",
                 help=(
-                    "Advantage estimator to use. Note: on-policy distillation (OPD) is now orthogonal "
-                    "to the advantage estimator. Use --opd-kl-coef > 0 to enable OPD on top of any estimator."
+                    "Advantage estimator to use. 'reinforce' uses GRPO-style group-normalized "
+                    "advantages with the plain additive surrogate (no PPO/IS ratio, no clipping). "
+                    "Note: on-policy distillation (OPD) is now orthogonal to the advantage estimator. "
+                    "Use --opd-kl-coef > 0 to enable OPD on top of any estimator."
                 ),
             )
             parser.add_argument(

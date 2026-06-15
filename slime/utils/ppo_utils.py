@@ -171,6 +171,20 @@ def compute_cispo_loss(
     return pg_losses, clipfrac
 
 
+@torch.compile(dynamic=True)
+def compute_reinforce_loss(
+    advantages: torch.Tensor,
+    log_probs: torch.Tensor,
+):
+    """REINFORCE surrogate ``-A * log pi_theta`` (no IS ratio, no clipping); gradient
+    flows only through ``log_probs``. Same ``(per_token_loss, clipfrac)`` contract as
+    :func:`compute_policy_loss`, with ``clipfrac`` identically zero (nothing is clipped).
+    """
+    pg_losses = -advantages * log_probs
+    clipfrac = torch.zeros_like(pg_losses)
+    return pg_losses, clipfrac
+
+
 def _maybe_all_reduce(tensor: torch.Tensor, op: dist.ReduceOp, process_group) -> None:
     if dist.is_available() and dist.is_initialized():
         dist.all_reduce(tensor, op=op, group=process_group)
