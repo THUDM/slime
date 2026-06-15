@@ -21,7 +21,7 @@ class HfWeightIteratorBase(ABC):
         self.quantization_config = quantization_config
 
     @abstractmethod
-    def get_hf_weight_chunks(self, megatron_local_weights):
+    def get_hf_weight_chunks(self, megatron_local_weights, progress_desc: str = "Update weights"):
         """
         Mental model of the API:
         megatron_model.to_hf_magically().named_parameters()

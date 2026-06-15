@@ -159,12 +159,12 @@ def validate_args(args):
 
     # Mutual-exclusion checks for PD disaggregation / sglang-config.
     assert not (
-        getattr(args, "prefill_num_servers", None) is not None and args.rollout_external
-    ), "prefill_num_servers cannot be set when rollout_external is set."
+        getattr(args, "prefill_num_servers", None) is not None and getattr(args, "rollout_external", False)
+    ), "prefill_num_servers cannot be set with --rollout-external-engine-addrs."
 
     assert not (
-        getattr(args, "sglang_config", None) is not None and args.rollout_external
-    ), "sglang_config cannot be set when rollout_external is set."
+        getattr(args, "sglang_config", None) is not None and getattr(args, "rollout_external", False)
+    ), "sglang_config cannot be set with --rollout-external-engine-addrs."
 
     assert not (
         getattr(args, "sglang_config", None) is not None and getattr(args, "prefill_num_servers", None) is not None

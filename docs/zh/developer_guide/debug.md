@@ -107,3 +107,48 @@ slime 支持将训练部分和推理部分分开进行调试，从而实现：
 4. 尝试 CUDA Core Dump 确定报错 kernel
 
    这里推荐 vllm 团队的这一文档：[CUDA Core Dump: An Effective Tool to Debug Memory Access Issues and Beyond](https://blog.vllm.ai/2025/08/11/cuda-debugging.html)
+
+## 使用 Ray Distributed Debugger 单步调试
+
+Ray 提供了基于 debugpy 的[分布式调试器](https://docs.ray.io/en/latest/ray-observability/ray-distributed-debugger.html)，可以在 driver 进程中设置断点并单步执行代码。
+
+1. 安装 debugpy：
+
+   ```bash
+   pip install debugpy==1.8.0
+   ```
+
+2. 在启动脚本中启用 `RAY_DEBUG_POSTMORTEM`：
+
+   ```bash
+   export RAY_DEBUG_POSTMORTEM=1
+
+   RUNTIME_ENV_JSON="{
+     \"env_vars\": {
+       ...
+       \"RAY_DEBUG_POSTMORTEM\": \"${RAY_DEBUG_POSTMORTEM:-0}\"
+     }
+   }"
+
+   ray job submit --address="http://127.0.0.1:8265" \
+      --runtime-env-json="${RUNTIME_ENV_JSON}" \
+      -- python3 train.py [args...]
+   ```
+
+3. 在 `train.py` 中的 `breakpoint()` 前添加 `ray.init()`：
+
+   ```python
+   if __name__ == "__main__":
+       ray.init()
+       breakpoint()
+       args = parse_args()
+       train(args)
+   ```
+
+   必须先调用 `ray.init()`，因为分布式调试器依赖 `core_worker`，只有 Ray 初始化后才可用。否则 `breakpoint()` 会报错 `AttributeError: 'Worker' object has no attribute 'core_worker'`。
+
+4. 通过 VS Code 连接调试器：
+
+   在 VS Code 中安装 [Ray Distributed Debugger](https://marketplace.visualstudio.com/items?itemName=ray-project.ray-distributed-debugger) 扩展。运行启动脚本提交 job 后，当 job 执行到 `breakpoint()` 暂停后，在 VS Code 的 Ray Dashboard 面板中点击活跃的断点即可 attach 调试器，之后可以直接在编辑器中单步执行、查看变量、设置新断点。
+
+> **注意**：调试完成后务必移除 `ray.init()` 和 `breakpoint()`。不带参数的 `ray.init()` 在多节点训练中可能导致问题，因为 `ray job submit` 会注入特定的 namespace 和 runtime environment 配置。

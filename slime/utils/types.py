@@ -11,11 +11,20 @@ class Sample:
 
     group_index: int | None = None
     index: int | None = None
+    # Id of the rollout this sample came from. Defaults to ``None`` and the
+    # downstream pipeline falls back to ``index`` (so the default rollout
+    # path, where one execution = one training sample, sees rollout_id ==
+    # index). Compact / subagent paths that split one rollout execution into
+    # multiple training samples should set the same ``rollout_id`` on every
+    # sibling, so loss aggregation averages within the rollout instead of
+    # over-counting it.
+    rollout_id: int | None = None
     # prompt
     prompt: str | list[dict[str, str]] = ""
     tokens: list[int] = field(default_factory=list)
     multimodal_inputs: dict[str, Any] | None = None  # raw multimodal data, e.g. images, videos, etc.
     multimodal_train_inputs: dict[str, Any] | None = None  # processed multimodal data, e.g. pixel_values, etc.
+    apply_chat_template_kwargs: dict = field(default_factory=dict)
     # response
     response: str = ""
     response_length: int = 0
@@ -42,6 +51,7 @@ class Sample:
 
     metadata: dict = field(default_factory=dict)
     generate_function_path: str | None = None
+    custom_rm_path: str | None = None
     # metadata used during training, e.g., what loss to use for this sample.
     train_metadata: dict | None = None
 

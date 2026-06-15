@@ -1,12 +1,32 @@
+<% set megatron_tests = [
+    {'test_file': 'test_full_disk_weight_update.py', 'num_gpus': 4},
+    {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8, 'enable_eval': '0'},
+    {'test_file': 'test_glm4.7_30B_A3B_pd_mooncake.py', 'num_gpus': 8},
+    {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1', 'enable_eval': '0'},
+    {'test_file': 'test_qwen3.6_35B_A3B_pd_mooncake.py', 'num_gpus': 8, 'use_deepep': '1'},
+    {'test_file': 'test_qwen3_30B_A3B_r3.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1', 'enable_eval': '0'},
+    {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8, 'enable_eval': '0'},
+    {'test_file': 'test_qwen3_4B_ppo_disaggregate.py', 'num_gpus': 8, 'enable_eval': '0'},
+    {'test_file': 'test_qwen3_4B_ppo_train_critic_only.py', 'num_gpus': 8, 'enable_eval': '0'},
+    {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8, 'enable_eval': '0'},
+    {'test_file': 'test_moonlight_16B_A3B_r3.py', 'num_gpus': 8, 'enable_eval': '0'},
+    {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
+    {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
+    {'test_file': 'test_qwen2.5_0.5B_debug_rollout_then_train.py', 'num_gpus': 8},
+    {'test_file': 'test_qwen2.5_0.5B_opd_sglang.py', 'num_gpus': 8},
+    {'test_file': 'test_qwen3_4B_external_pd.py', 'num_gpus': 6},
+    {'test_file': 'test_qwen2.5_0.5B_fully_async_short.py', 'num_gpus': 4},
+    {'test_file': 'test_qwen2.5_0.5B_fanout_short.py', 'num_gpus': 4},
+    {'test_file': 'test_qwen3_4B_streaming_partial_rollout.py', 'num_gpus': 8},
+    {'test_file': 'test_qwen3.5_0.8B_gsm8k_short.py', 'num_gpus': 4},
+    {'test_file': 'test_qwen3.5_0.8B_gsm8k_async_short.py', 'num_gpus': 4},
+    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer gpu', 'num_gpus': 8},
+    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer cpu', 'num_gpus': 8},
+    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer cpu', 'num_gpus': 8},
+    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer gpu', 'num_gpus': 8},
+    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--async-save', 'num_gpus': 8},
+] %>
 <% set jobs = {
-    'e2e-test-short': {
-      'label': 'run-ci-short',
-      'tests': [
-        {'test_file': 'test_qwen3.5_0.8B_gsm8k_async_short.py', 'num_gpus': 4},
-        {'test_file': 'test_qwen3.5_0.8B_gsm8k_short.py', 'num_gpus': 4},
-        {'test_file': 'test_qwen2.5_0.5B_ppo_critic_only_short.py', 'num_gpus': 4},
-      ],
-    },
     'e2e-test-sglang-config': {
       'label': 'run-ci-sglang-config',
       'tests': [
@@ -18,22 +38,7 @@
     },
     'e2e-test-megatron': {
       'label': 'run-ci-megatron',
-      'tests': [
-        {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8},
-        {'test_file': 'test_glm4.7_30B_A3B_pd_mooncake.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1'},
-        {'test_file': 'test_qwen3.6_35B_A3B_pd_mooncake.py', 'num_gpus': 8, 'use_deepep': '1'},
-        {'test_file': 'test_qwen3_30B_A3B_r3.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1', 'enable_eval': '0'},
-        {'test_file': 'test_qwen3_30B_A3B_r3.py', 'num_gpus': 8, 'enable_eval': '0'},
-        {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_ppo_disaggregate.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_ppo_train_critic_only.py', 'num_gpus': 8},
-        {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8},
-        {'test_file': 'test_moonlight_16B_A3B_r3.py', 'num_gpus': 8, 'enable_eval': '0'},
-        {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen2.5_0.5B_debug_rollout_then_train.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen2.5_0.5B_opd_sglang.py', 'num_gpus': 8},
-      ],
+      'tests': megatron_tests,
     },
     'e2e-test-precision': {
       'label': 'run-ci-precision',
@@ -44,17 +49,38 @@
     'e2e-test-ckpt': {
       'label': 'run-ci-ckpt',
       'tests': [
-        {'test_file': 'test_qwen3_4B_ckpt.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer gpu', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer cpu', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer cpu', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer gpu', 'num_gpus': 8},
         {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--async-save', 'num_gpus': 8},
       ],
     },
 
-    'e2e-test-plugin-contracts': {
-      'label': 'run-ci-plugin-contracts',
+    'cpu-unittest': {
+      'label': 'run-ci-cpu-unittest',
       'always': True,
       'cpu': True,
       'tests': [
         {'test_file': 'test_megatron_argument_validation.py', 'num_gpus': 0},
+        {'test_file': 'test_dp_schedule.py', 'num_gpus': 0},
+        {'test_file': 'test_cp_utils.py', 'num_gpus': 0},
+        {'test_file': 'test_metric_report.py', 'num_gpus': 0},
+        {'test_file': 'test_metric_report_dist.py', 'num_gpus': 0},
+        {'test_file': 'test_loss_cp_invariance.py', 'num_gpus': 0},
+        {'test_file': 'test_value_temperature.py', 'num_gpus': 0},
+        {'test_file': 'test_cispo_loss.py', 'num_gpus': 0},
+        {'test_file': 'test_rm_f1.py', 'num_gpus': 0},
+        {'test_file': 'test_rm_gpqa.py', 'num_gpus': 0},
+        {'test_file': 'test_rm_math.py', 'num_gpus': 0},
+        {'test_file': 'test_rm_math_dapo.py', 'num_gpus': 0},
+        {'test_file': 'test_rm_deepscaler.py', 'num_gpus': 0},
+        {'test_file': 'test_sample.py', 'num_gpus': 0},
+        {'test_file': 'test_agent_trajectory.py', 'num_gpus': 0},
+        {'test_file': 'test_rollout_validation.py', 'num_gpus': 0},
+        {'test_file': 'test_placement_group.py', 'num_gpus': 0},
+        {'test_file': 'test_external_sglang_engines.py', 'num_gpus': 0},
+        {'test_file': 'utils/test_hf_checkpoint_saver.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_rollout_contracts.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_runtime_hook_contracts.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_path_loading_contracts.py', 'num_gpus': 0},
@@ -62,36 +88,36 @@
       ],
     },
 
+    'agent-adapter-test': {
+      'label': 'run-ci-agent-adapter',
+      'always': True,
+      'cpu': True,
+      'extra_pip_deps': 'openai openai-agents anthropic',
+      'tests': [
+        {'test_file': 'test_agent_adapters.py', 'num_gpus': 0},
+        {'test_file': 'test_agent_sdk_adapters.py', 'num_gpus': 0},
+      ],
+    },
+
     'e2e-test-image': {
       'label': 'run-ci-image',
       'image': 'slimerl/slime-test:latest',
-      'tests': [
-        {'test_file': 'test_qwen3.5_0.8B_gsm8k_async_short.py', 'num_gpus': 4},
-        {'test_file': 'test_qwen3.5_0.8B_gsm8k_short.py', 'num_gpus': 4},
-        {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8},
-        {'test_file': 'test_glm4.7_30B_A3B_pd_mooncake.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3.6_35B_A3B_pd_mooncake.py', 'num_gpus': 8, 'use_deepep': '1'},
-        {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8},
-        {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8},
-        {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_ckpt.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--async-save', 'num_gpus': 8},
-        {'test_file': 'test_qwen2.5_0.5B_debug_rollout_then_train.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen2.5_0.5B_opd_sglang.py', 'num_gpus': 8},
-      ],
+      'tests': megatron_tests,
     },
 } %>
 name: PR Test
 
 on:
-  # Do not run CI on push to reduce CI time
-  # push:
-  #   branches: [main]
+  # Push to main triggers the default GitHub-hosted jobs (cheap CPU/unit and
+  # agent adapter checks), catching PR-pair regressions where two PRs pass
+  # individually but main is broken after both land. GPU jobs stay label-gated
+  # — see each job's `if:` below — so push events never burn the self-hosted
+  # fleet.
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
-    types: [synchronize, labeled]
+    types: [opened, reopened, synchronize, labeled]
   workflow_dispatch:
     inputs:
       infinite_run:
@@ -108,7 +134,7 @@ jobs:
 <% for job_name, config in jobs.items() %>
   << job_name >>:
 <% if config.get('always') %>
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
 <% else %>
     if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, '<< config.label >>'))
 <% endif %>
@@ -147,7 +173,10 @@ jobs:
         shell: bash
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx pybase64 pylatexenc sympy aiohttp pillow
+          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors
+<% if config.get('extra_pip_deps') %>
+          pip install << config.extra_pip_deps >>
+<% endif %>
 
       - name: Install
         shell: bash
@@ -175,7 +204,7 @@ jobs:
             python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 <% else %>
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -291,7 +320,7 @@ jobs:
       - name: Execute
         shell: bash
         run: |
-          docker run --rm \
+          docker run --pull=always --rm \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \

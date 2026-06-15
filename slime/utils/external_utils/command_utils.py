@@ -127,7 +127,7 @@ def execute_train(
     if not external_ray:
         exec_command(
             # will prevent ray from buffering stdout/stderr
-            f"export PYTHONBUFFERED=16 && "
+            f"export PYTHONUNBUFFERED=1 && "
             f"ray start --head --node-ip-address {master_addr} --num-gpus {num_gpus_per_node} --disable-usage-stats"
         )
 
@@ -138,6 +138,7 @@ def execute_train(
         {
             "env_vars": {
                 "PYTHONPATH": "/root/Megatron-LM/",
+                "RAY_USE_UVLOOP": "0",
                 "CUDA_DEVICE_MAX_CONNECTIONS": "1",
                 "NCCL_NVLS_ENABLE": str(int(check_has_nvlink())),
                 "no_proxy": f"127.0.0.1,{master_addr}",
@@ -166,7 +167,7 @@ def execute_train(
             else ""
         )
         exec_command(
-            f"export no_proxy=127.0.0.1 && export PYTHONBUFFERED=16 && "
+            f"export no_proxy=127.0.0.1 && export PYTHONUNBUFFERED=1 && "
             f"{cmd_megatron_model_source}"
             f'ray job submit --address="http://127.0.0.1:8265" '
             f"--runtime-env-json='{runtime_env_json}' "

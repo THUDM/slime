@@ -1,9 +1,17 @@
+"""CI smoke test for the fully-async rollout path.
+
+Mirrors ``test_qwen2.5_0.5B_async_short`` (Qwen2.5-0.5B + dapo-math-17k +
+3 rollouts of GRPO) but flips the rollout function over to
+``slime.rollout.fully_async_rollout.generate_rollout_fully_async`` so the
+fully-async worker path gets exercised end-to-end.
+
+Kept intentionally minimal so it runs in the same time budget as the
+existing 0.5B short tests.
+"""
+
 import os
-import tempfile
 
 import slime.utils.external_utils.command_utils as U
-
-TIGHT_DEVICE_MEMORY = U.get_bool_env_var("SLIME_TEST_TIGHT_DEVICE_MEMORY", "1")
 
 MODEL_NAME = "Qwen2.5-0.5B-Instruct"
 MODEL_TYPE = "qwen2.5-0.5B"
@@ -17,37 +25,24 @@ def prepare():
 
 
 def execute():
-    megatron_config = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
-    megatron_config.write(
-        """
-megatron:
-  - name: default
-    role: critic
-    overrides:
-      lr: 1e-5
-  - name: default
-    role: actor
-    overrides:
-      lr: 1e-6
-"""
-    )
-    megatron_config.close()
-
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ "
+    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
 
     rollout_args = (
+        # The only line that differs from test_qwen2.5_0.5B_async_short.py:
+        # use the public fully-async rollout function.
+        "--rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async "
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
         "--input-key prompt "
         "--label-key label "
         "--apply-chat-template "
         "--rollout-shuffle "
         "--rm-type deepscaler "
-        "--num-rollout 3 "
-        "--rollout-batch-size 8 "
+        "--num-rollout 2 "
+        "--rollout-batch-size 4 "
         "--n-samples-per-prompt 4 "
-        "--rollout-max-response-len 1024 "
+        "--rollout-max-response-len 8192 "
         "--rollout-temperature 0.8 "
-        "--global-batch-size 32 "
+        "--global-batch-size 16 "
         "--balance-data "
     )
 
@@ -59,18 +54,17 @@ megatron:
         "--expert-model-parallel-size 1 "
         "--expert-tensor-parallel-size 1 "
         "--use-dynamic-batch-size "
-        "--max-tokens-per-gpu 9216 "
+        "--max-tokens-per-gpu 4096 "
     )
 
-    ppo_args = (
-        "--advantage-estimator ppo "
+    grpo_args = (
+        "--advantage-estimator grpo "
+        "--use-kl-loss "
         "--kl-loss-coef 0.00 "
-        "--kl-loss-type k1 "
-        "--kl-coef 0.00 "
+        "--kl-loss-type low_var_kl "
         "--entropy-coef 0.00 "
-        "--eps-clip 4e-4 "
-        "--num-critic-only-steps 3 "
-        "--normalize-advantages "
+        "--eps-clip 0.2 "
+        "--eps-clip-high 0.28 "
     )
 
     optimizer_args = (
@@ -84,9 +78,8 @@ megatron:
 
     sglang_args = (
         "--rollout-num-gpus-per-engine 1 "
-        "--rollout-num-gpus 2 "
-        f"--sglang-mem-fraction-static {0.6 if TIGHT_DEVICE_MEMORY else 0.7} "
-        "--sglang-cuda-graph-max-bs 32 "
+        "--sglang-mem-fraction-static 0.65 "
+        "--sglang-cuda-graph-max-bs 16 "
         "--sglang-enable-metrics "
     )
 
@@ -99,17 +92,16 @@ megatron:
         "--attention-softmax-in-fp32 "
         "--attention-backend flash "
         "--actor-num-nodes 1 "
-        "--actor-num-gpus-per-node 4 "
+        "--actor-num-gpus-per-node 1 "
+        "--rollout-num-gpus 3 "
         "--megatron-to-hf-mode bridge "
-        "--colocate "
     )
 
     train_args = (
-        f"--megatron-config-path {megatron_config.name} "
         f"{ckpt_args} "
         f"{rollout_args} "
         f"{optimizer_args} "
-        f"{ppo_args} "
+        f"{grpo_args} "
         f"{U.get_default_wandb_args(__file__)} "
         f"{perf_args} "
         f"{sglang_args} "
@@ -121,11 +113,14 @@ megatron:
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=MODEL_TYPE,
+        train_script="train_async.py",
     )
 
 
 if __name__ == "__main__":
     prepare()
-    for proxy_var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
-        os.environ.pop(proxy_var, None)
+    os.environ.pop("http_proxy", None)
+    os.environ.pop("https_proxy", None)
+    os.environ.pop("HTTP_PROXY", None)
+    os.environ.pop("HTTPS_PROXY", None)
     execute()

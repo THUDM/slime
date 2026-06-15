@@ -13,6 +13,7 @@ from slime.utils.misc import load_function
 from slime.utils.ppo_utils import (
     calculate_log_probs_and_entropy,
     compute_approx_kl,
+    compute_cispo_loss,
     compute_gspo_kl,
     compute_opsm_mask,
     compute_policy_loss,
@@ -39,10 +40,11 @@ def get_responses(
     total_lengths: list[int],
     response_lengths: list[int],
     max_seq_lens: list[int] | None = None,
+    apply_temperature: bool = True,
 ) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
     """Yield response-aligned `(logits_chunk, tokens_chunk)` pairs per sample.
 
-    After squeezing batch dimension and applying temperature scaling, this
+    After squeezing batch dimension and optionally applying temperature scaling, this
     function extracts the logits and tokens corresponding to response segments
     for each sample. When context parallelism is disabled, it slices directly
     from the concatenated sequence. With context parallelism enabled, it
@@ -51,10 +53,11 @@ def get_responses(
     Args:
         logits: Model outputs with shape `[1, T, V]` (policy) or `[1, T, 1]`
             (value). Must be float32.
-        args: Configuration containing `rollout_temperature` for scaling.
+        args: Configuration containing `rollout_temperature` for optional scaling.
         unconcat_tokens: List of token tensors (prompt+response) per sample.
         total_lengths: Total sequence lengths (prompt+response) per sample.
         response_lengths: Response segment lengths per sample.
+        apply_temperature: Whether to divide outputs by `rollout_temperature`.
 
     Yields:
         Tuple of `(logits_chunk, tokens_chunk)` where `logits_chunk` is shape
@@ -73,7 +76,7 @@ def get_responses(
         assert max_seq_lens is not None
         logits = logits.view(-1, logits.size(-1))
 
-    if args.rollout_temperature != 1.0:
+    if apply_temperature and args.rollout_temperature != 1.0:
         logits = logits.div(args.rollout_temperature)
 
     cp_size = mpu.get_context_parallel_world_size()
@@ -486,8 +489,8 @@ def get_values(
 
     Args:
         logits: Value head output with shape `[1, T, 1]`.
-        args: Configuration (passed to `get_responses` which uses
-            `rollout_temperature` even though values don't need temperature).
+        args: Configuration passed to `get_responses`; temperature scaling is
+            disabled for value outputs.
         unconcat_tokens: List of token tensors per sample.
         total_lengths: Total sequence lengths per sample.
         response_lengths: Response segment lengths per sample.
@@ -506,6 +509,7 @@ def get_values(
         total_lengths=total_lengths,
         response_lengths=response_lengths,
         max_seq_lens=max_seq_lens,
+        apply_temperature=False,
     ):
         assert logits_chunk.size(-1) == 1, f"{logits_chunk.shape}"
         value_list.append(logits_chunk.squeeze(-1))
@@ -573,10 +577,10 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
 
     This function extracts rewards, log-probs, values, and masks from
     `rollout_data`, computes KL divergences, then applies the chosen advantage
-    estimator. Supported methods: "grpo", "gspo", "ppo", "reinforce_plus_plus",
-    and "reinforce_plus_plus_baseline". When `args.normalize_advantages` is
-    True, advantages are whitened across the data-parallel group using masked
-    statistics.
+    estimator. Supported methods: "grpo", "gspo", "cispo", "ppo",
+    "reinforce_plus_plus", and "reinforce_plus_plus_baseline". When
+    `args.normalize_advantages` is True, advantages are whitened across the
+    data-parallel group using masked statistics.
 
     Early returns if both `log_probs` and `values` are None (intermediate
     pipeline stages).
@@ -629,7 +633,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         custom_adv_fn(args, rollout_data)
         advantages, returns = rollout_data["advantages"], rollout_data["returns"]
 
-    elif args.advantage_estimator in ["grpo", "gspo"]:
+    elif args.advantage_estimator in ["grpo", "gspo", "cispo"]:
         rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
         returns = get_grpo_returns(rewards, kl)
         # TODO: is the copy necessary?
@@ -892,7 +896,10 @@ def policy_loss_function(
         log_probs = torch.cat(log_probs, dim=0)
         ppo_kl = old_log_probs - log_probs
 
-    pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
+    if args.advantage_estimator == "cispo":
+        pg_loss, pg_clipfrac = compute_cispo_loss(ppo_kl, log_probs, advantages, args.eps_clip, args.eps_clip_high)
+    else:
+        pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
 
     if args.use_opsm:
         pg_loss = pg_loss * opsm_mask
@@ -928,12 +935,17 @@ def policy_loss_function(
             tis_func = vanilla_tis_function
         pg_loss, modified_response_masks, tis_metrics = tis_func(**tis_kwargs)
 
-        # [decouple IS and rejection] Rebuild sum_of_sample_mean with modified_response_masks for denominator correction
-        # modified_response_masks will be sliced with cp in get_sum_of_sample_mean
+        # [decouple IS and rejection] Rebuild sum_of_sample_mean with
+        # modified_response_masks for numerator correction (rejected tokens
+        # zeroed in pg_loss). Denominators stay the precomputed per-rollout
+        # totals from ``rollout_mask_sums`` (based on original loss_masks) —
+        # same normalizer as the outer reducer, so pg_loss and the rest of the
+        # reported metrics live in the same per-rollout-mean space.
         sum_of_sample_mean = get_sum_of_sample_mean(
             total_lengths,
             response_lengths,
             modified_response_masks,
+            batch["rollout_mask_sums"],
             args.calculate_per_token_loss,
             args.qkv_format,
             max_seq_lens,
@@ -1133,6 +1145,7 @@ def loss_function(
     args: Namespace,
     batch: RolloutBatch,
     num_microbatches: int,
+    step_global_batch_size: int,
     logits: torch.Tensor,
 ) -> tuple[torch.Tensor, int | torch.Tensor, dict[str, list[str] | torch.Tensor]]:
     """Dispatch to the configured loss and rescale for Megatron integration.
@@ -1144,10 +1157,14 @@ def loss_function(
 
     Args:
         args: Configuration specifying `loss_type`, `calculate_per_token_loss`,
-            `global_batch_size`, and optionally `custom_loss_function_path`.
+            and optionally `custom_loss_function_path`.
         batch: Mini-batch with "loss_masks", "response_lengths", and other
             keys required by the selected loss function.
         num_microbatches: Number of gradient accumulation steps.
+        step_global_batch_size: Sample count for the current training step
+            (total across DP). Replaces the legacy ``args.global_batch_size``
+            fallback so the train side stops depending on "every DP rank holds
+            the same N samples".
         logits: Model outputs (policy or value head).
 
     Returns:
@@ -1159,12 +1176,12 @@ def loss_function(
           "values" (1D tensor: [count, metric1, metric2, ...]).
     """
     num_tokens = sum([torch.clamp_min(loss_mask.sum(), 1) for loss_mask in batch["loss_masks"]])
-    num_samples = len(batch["response_lengths"])
 
     sum_of_sample_mean = get_sum_of_sample_mean(
         batch["total_lengths"],
         batch["response_lengths"],
         batch["loss_masks"],
+        batch["rollout_mask_sums"],
         args.calculate_per_token_loss,
         args.qkv_format,
         batch.get("max_seq_lens", None),
@@ -1196,10 +1213,12 @@ def loss_function(
         loss = loss + 0 * logits.sum()
 
     # Here we need to divide by cp_size because to cancel the multiply in Megatron.
-    global_batch_size = batch.get("dynamic_global_batch_size", args.global_batch_size)
     if not args.calculate_per_token_loss:
         loss = (
-            loss * num_microbatches / global_batch_size * mpu.get_data_parallel_world_size(with_context_parallel=True)
+            loss
+            * num_microbatches
+            / step_global_batch_size
+            * mpu.get_data_parallel_world_size(with_context_parallel=True)
         )
     else:
         loss = loss * mpu.get_context_parallel_world_size()
@@ -1209,9 +1228,16 @@ def loss_function(
         (num_tokens if args.calculate_per_token_loss else torch.tensor(1, device=logits.device)),
         {
             "keys": list(log.keys()),
+            # values[0] is the consumer's reporting denominator after
+            # all-reduce. For per-token-loss it must equal step total tokens
+            # (only known by summing per-mb num_tokens across mbs / DP). For
+            # per-rollout-mean it is a constant — ``step_global_batch_size`` —
+            # so we leave a 0 placeholder here and let ``train_one_step``
+            # substitute the constant directly, instead of routing it through
+            # per-mb fractions.
             "values": torch.tensor(
                 [
-                    num_samples if not args.calculate_per_token_loss else num_tokens,
+                    num_tokens if args.calculate_per_token_loss else 0,
                 ]
                 + list(log.values()),
                 device=logits.device,
