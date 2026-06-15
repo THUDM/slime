@@ -400,41 +400,15 @@ async def _run_swepro(ev: Sandbox, workdir: str, swepro: dict, timeout: int) -> 
 
 
 async def _run_swebench_eval(ev: Sandbox, workdir: str, metadata: dict, timeout: int) -> tuple[float, bool]:
-    """SWE-bench harness grading — reuses uni_agent.reward.swe_bench for script gen."""
+    """SWE-bench harness grading — delegates to uni_agent.reward.swe_bench."""
     import re as _re
-    from swebench.harness.constants import (
-        END_TEST_OUTPUT, FAIL_ONLY_REPOS, MAP_REPO_VERSION_TO_SPECS,
-        START_TEST_OUTPUT, EvalType, ResolvedStatus,
-    )
-    from swebench.harness.grading import get_eval_tests_report, get_resolution_status
-    from swebench.harness.log_parsers import MAP_REPO_TO_PARSER
-    from uni_agent.reward.swe_bench import _make_eval_script_list
+    from uni_agent.reward.swe_bench import make_eval_script, parse_eval_output
 
-    repo, version = metadata["repo"], metadata["version"]
-    specs = MAP_REPO_VERSION_TO_SPECS[repo][version]
-    eval_script_list = _make_eval_script_list(
-        instance=metadata, specs=specs, env_name="testbed",
-        repo_directory=workdir, base_commit=metadata.get("base_commit", ""),
-        test_patch=metadata["test_patch"],
-    )
-    eval_script = "\n".join(["#!/bin/bash", "set -uxo pipefail"] + eval_script_list) + "\n"
-
+    eval_script = make_eval_script(metadata, workdir)
     await ev.write_file("/tmp/_swebench_eval.sh", eval_script, user="root")
     _, stdout, _ = await ev.exec("bash /tmp/_swebench_eval.sh 2>&1", user="root", check=False, timeout=timeout)
     output = _re.sub(r"\x1b\[[0-9;]*m|\r", "", stdout or "")
-
-    if START_TEST_OUTPUT not in output or END_TEST_OUTPUT not in output:
-        return 0.0, False
-    test_content = output.split(START_TEST_OUTPUT)[1].split(END_TEST_OUTPUT)[0]
-    status_map = MAP_REPO_TO_PARSER[repo](test_content, None)
-    eval_ref = {
-        "instance_id": metadata["instance_id"],
-        "FAIL_TO_PASS": json.loads(metadata.get("FAIL_TO_PASS", "[]")),
-        "PASS_TO_PASS": json.loads(metadata.get("PASS_TO_PASS", "[]")),
-    }
-    eval_type = EvalType.FAIL_ONLY if repo in FAIL_ONLY_REPOS else EvalType.PASS_AND_FAIL
-    report = get_eval_tests_report(status_map, eval_ref, eval_type=eval_type)
-    solved = get_resolution_status(report) == ResolvedStatus.FULL.value
+    solved, _ = parse_eval_output(metadata, output)
     return (1.0 if solved else 0.0), solved
 
 
