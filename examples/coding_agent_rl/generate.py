@@ -2,7 +2,7 @@
 
     --custom-generate-function-path examples.coding_agent_rl.generate.generate
 
-generate() is a four-stage orchestrator: swe.prepare_workspace + CLAUDE_CODE.run
+generate() is a four-stage orchestrator: swe.prepare_workspace + ClaudeCodeHarness.run
 -> swe.git_diff -> swe.evaluate -> adapter.finish_session. Sandbox-side work is
 split across three layers: the provider-agnostic sandbox contract
 (slime.agent.sandbox), the swappable harness lifecycle (slime.agent.harness), and
@@ -27,7 +27,7 @@ from typing import Any
 
 from slime.agent.adapters import AnthropicAdapter
 from slime.agent.aiohttp_threaded import FilteredAccessLogger, run_app_in_thread
-from slime.agent.harness import CLAUDE_CODE
+from slime.agent.harness import ClaudeCodeHarness
 from slime.agent.sandbox import E2BSandbox
 from slime.utils.misc import SingletonMeta
 from slime.utils.processing_utils import load_tokenizer
@@ -71,8 +71,6 @@ class SweConfig:
 
 CONFIG = SweConfig.from_env()
 
-# Host tarball paths (SLIME_AGENT_NODE_TARBALL / SLIME_AGENT_CC_TARBALL) are read
-# in CLAUDE_CODE.install_cli, not here.
 _BOOT_SEM = asyncio.Semaphore(CONFIG.boot_concurrency)
 
 
@@ -92,7 +90,7 @@ async def boot_agent_sandbox(image: str, instance_id: str) -> AsyncIterator[E2BS
             async with _BOOT_SEM:
                 await cand.__aenter__()
                 try:
-                    await CLAUDE_CODE.install_cli(cand)
+                    await ClaudeCodeHarness().install_cli(cand)
                 except BaseException:
                     await cand.__aexit__(None, None, None)
                     raise
@@ -182,7 +180,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
         async with asyncio.timeout(CONFIG.generate_guard_sec):
             async with boot_agent_sandbox(md["image"], instance_id) as sb:
                 await swe.prepare_workspace(sb, md["workdir"], md)
-                agent_exit_code = await CLAUDE_CODE.run(
+                agent_exit_code = await ClaudeCodeHarness().run(
                     sb,
                     workdir=md["workdir"],
                     session_id=session_id,

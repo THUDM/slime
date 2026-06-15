@@ -26,12 +26,18 @@ import shlex
 import shutil
 import tempfile
 import time
-from abc import ABC, abstractmethod
+from abc import ABC, ABCMeta, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
 from slime.agent import sandbox as _sandbox
 from slime.agent.sandbox import Sandbox
+from slime.utils.misc import SingletonMeta
+
+
+class SingletonABCMeta(ABCMeta, SingletonMeta):
+    pass
+
 
 # Sentinel for run_command's int return: the time budget expired before the
 # command finished, so there is no real exit code. Process exit codes are POSIX
@@ -56,7 +62,7 @@ class HarnessContext:
     model_label: str = "slime-actor"
 
 
-class BaseHarness(ABC):
+class BaseHarness(ABC, metaclass=SingletonABCMeta):
     """Base lifecycle for a sandbox-resident coding agent.
 
     Subclasses set ``name`` and implement the three differing steps

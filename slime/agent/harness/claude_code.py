@@ -69,6 +69,3 @@ class ClaudeCodeHarness(BaseHarness):
         if extra_envs:
             env.update(json.loads(extra_envs))
         return await run_command(sb, workdir=ctx.workdir, start_cmd=cmd, env=env, time_budget_sec=time_budget_sec)
-
-
-CLAUDE_CODE = ClaudeCodeHarness()
