@@ -358,15 +358,6 @@ def cast_to_fp4x2(x: torch.Tensor) -> torch.Tensor:
     return result[:, ::2] + result[:, 1::2] * 16
 
 
-def _unswizzle_scale_to_rowmajor(scale_flat, rows_padded, cols):
-    """Convert tcgen05 swizzled flat scale → row-major [rows_padded, cols//16]."""
-    n_row_tiles = rows_padded // 128
-    n_col_tiles = (cols // 16) // 4
-    s = scale_flat.reshape(n_row_tiles * n_col_tiles, 32, 4, 4)
-    s = s.permute(0, 2, 1, 3).reshape(n_row_tiles, n_col_tiles, 128, 4)
-    return s.permute(0, 2, 1, 3).reshape(rows_padded, n_col_tiles * 4)
-
-
 def _quantize_nvfp4_miniTE(
     x: torch.Tensor,
     global_amax: torch.Tensor | None,
@@ -401,9 +392,10 @@ def _quantize_nvfp4_miniTE(
     fp4_gemm.rtn_fp4_group_tensor_global(
         data, scale_flat, gs_out, x,
         row_offsets, scale_offsets, amax, 1.0,
+        swizzle=False,
     )
 
-    block_scale = _unswizzle_scale_to_rowmajor(scale_flat, n_padded, cols)[:rows]
+    block_scale = scale_flat.view(n_padded, cols // 16)[:rows]
     return data, block_scale, gs_out.squeeze()
 
 
