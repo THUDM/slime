@@ -313,6 +313,7 @@ def _build_reply(target: Chain, output_ids: list[int], finish: str, app) -> tupl
         tools_schema=target.tools_schema,
         tool_parser_name=app[TOOL_PARSER_KEY],
         reasoning_parser_name=app[REASONING_PARSER_KEY],
+        tokenizer=tok,
     )
     blocks, dispatch_id = _anthropic_blocks(parsed.reasoning, parsed.text, parsed.tool_uses)
     return blocks, _stop_reason(parsed.tool_uses, finish), dispatch_id

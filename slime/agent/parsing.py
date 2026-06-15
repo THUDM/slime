@@ -11,6 +11,26 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_EOS_TOKEN = "<|im_end|>"
+
+
+def _resolve_eos_token(tokenizer: Any | None) -> str:
+    """Resolve a single EOS token from tokenizer, with fallback."""
+    if tokenizer is not None:
+        eos_token = getattr(tokenizer, "eos_token", None)
+        if isinstance(eos_token, str) and eos_token:
+            return eos_token
+    return _DEFAULT_EOS_TOKEN
+
+
+def _strip_trailing_eos(text: str, eos_token: str) -> str:
+    """Remove exactly one trailing EOS token from text."""
+    if not text or not eos_token:
+        return text or ""
+    if text.endswith(eos_token):
+        return text[: -len(eos_token)]
+    return text
+
 
 @dataclasses.dataclass(frozen=True)
 class ParsedModelOutput:
@@ -27,6 +47,7 @@ def parse_model_output(
     tools_schema: list[dict] | None,
     tool_parser_name: str | None,
     reasoning_parser_name: str | None,
+    tokenizer: Any | None = None,
 ) -> ParsedModelOutput:
     """Parse raw model text into reasoning, visible text, and tool uses.
 
@@ -47,6 +68,7 @@ def parse_model_output(
             reasoning, body_text = body_text.split("</think>", 1)
 
     body_text, tool_uses = parse_tool_uses(body_text, tools_schema, tool_parser_name)
+    body_text = _strip_trailing_eos(body_text or "", _resolve_eos_token(tokenizer))
     return ParsedModelOutput(
         reasoning=reasoning,
         text=(body_text or "").strip(),
