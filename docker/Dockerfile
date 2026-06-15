@@ -125,3 +125,12 @@ RUN git clone https://github.com/THUDM/slime.git /root/slime && \
 
 RUN cd /root/slime/slime/backends/megatron_utils/kernels/int4_qat && \
     pip install . --no-build-isolation
+
+# ====================================== Agentic rollout dependencies ================================
+
+# uni-agent: agent loop + reward specs (swe_bench.py) used by coding_agent_rl
+ARG UNIAGENT_COMMIT=main
+RUN pip install --no-deps "git+https://github.com/verl-project/uni-agent.git@${UNIAGENT_COMMIT}"
+
+# swebench: harness constants, log parsers, grading (used by _run_swebench_eval)
+RUN pip install swebench
