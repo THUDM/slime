@@ -5,7 +5,6 @@ import logging
 import os
 import queue
 import shutil
-import time
 from argparse import Namespace
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
@@ -92,11 +91,9 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
-        t0 = time.perf_counter()
         self._publish()
-        publish_s = time.perf_counter() - t0
         self._reload_engines()
-        self._record_metrics(publish_s, time.perf_counter() - t0)
+        self._record_metrics()
 
     def _capture_baseline(self) -> None:
         """Capture the baseline snapshot the first delta diffs against (no publish), and clear any
@@ -271,9 +268,9 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
         finally:
             pool.shutdown()
 
-    def _record_metrics(self, publish_s: float, total_s: float) -> None:
-        """All-reduce the byte counts and record changed-fraction / wire size / sync time; the
-        actor drains update_weight_metrics onto the step log."""
+    def _record_metrics(self) -> None:
+        """All-reduce the byte counts and record changed-fraction / wire size; the actor drains
+        update_weight_metrics onto the step log."""
         counts = torch.tensor(
             [self.changed_bytes, self.total_bytes, self.wire_bytes],
             dtype=torch.int64,
@@ -284,14 +281,10 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
         m = self.update_weight_metrics
         m["perf/update_weights_density"] = changed / max(total, 1)
         m["perf/update_weights_wire_bytes"] = wire
-        m["perf/update_weights_total_s"] = total_s
         if dist.get_rank() == 0:
             logger.info(
-                "[disk delta v=%s] update %.1fs (publish %.1fs reload %.1fs) | density=%.2f%% wire=%.2f GB",
+                "[disk delta v=%s] density=%.2f%% wire=%.2f GB",
                 self.weight_version,
-                total_s,
-                publish_s,
-                total_s - publish_s,
                 100.0 * changed / max(total, 1),
                 wire / 1e9,
             )
