@@ -5,8 +5,8 @@ set -ex
 # create conda
 yes '' | "${SHELL}" <(curl -L micro.mamba.pm/install.sh)
 export PS1=tmp
-mkdir -p /root/.cargo/
-touch /root/.cargo/env
+#mkdir -p /root/.cargo/
+#touch /root/.cargo/env
 source ~/.bashrc
 
 # The micromamba installer writes `nodefaults` into ~/.condarc as a channel
@@ -29,7 +29,7 @@ export SGLANG_COMMIT="5a15cde858ea09b77116212a39356f2fc51b8584"
 export MEGATRON_COMMIT="1dcf0dafa884ad52ffb243625717a3471643e087"
 export PATCH_VERSION="latest"
 
-export BASE_DIR=${BASE_DIR:-"/root"}
+export BASE_DIR=${BASE_DIR:-"$HOME"}
 cd $BASE_DIR
 
 # install cuda 12.9 as it's the default cuda version for torch
@@ -46,6 +46,11 @@ micromamba install -n slime -c conda-forge cudnn -y
 # sglang's editable install builds a Rust extension (sglang-grpc via
 # setuptools-rust), so the conda env needs a working rustc + cargo.
 micromamba install -n slime -c conda-forge rust -y
+# sglang-grpc's build.rs uses prost-build, which shells out to `protoc` to
+# compile sglang.proto. The Dockerfile's base image already has it; a
+# from-scratch conda build does not. Note: conda-forge's `protobuf` package is
+# the Python bindings only -- the `protoc` binary lives in `libprotobuf`.
+micromamba install -n slime -c conda-forge libprotobuf -y
 
 pip install cuda-python==12.9
 
@@ -112,7 +117,9 @@ pip install cmake ninja
 
 # flash attn 2 (matches Dockerfile)
 # the newest version megatron supports is v2.7.4.post1
-MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1 --no-build-isolation
+# MAX_JOBS controls parallel nvcc procs; each peaks at several GB, so 64 blows
+# past this Slurm job's 160G cgroup and gets OOM-killed ("Killed"). Keep it low.
+MAX_JOBS=16 pip -v install flash-attn==2.7.4.post1 --no-build-isolation
 
 pip install git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c --no-deps
 pip install flash-linear-attention==0.4.1
