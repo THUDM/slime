@@ -24,6 +24,7 @@ Two protocol chains are covered:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import sys
 import types
@@ -47,6 +48,18 @@ if "transformers" not in sys.modules:
     for _name in ("AutoProcessor", "AutoTokenizer", "PreTrainedTokenizerBase", "ProcessorMixin"):
         setattr(_tf_stub, _name, type(_name, (), {}))
     sys.modules["transformers"] = _tf_stub
+
+# generate.generate() uses asyncio.timeout(), a 3.11+ API. CI runs the agent
+# tests on 3.10, so shim it onto wait_for. The wall-clock guard never fires in
+# these tests (every case finishes well under the guard), so a thin pass-through
+# context manager is enough.
+if not hasattr(asyncio, "timeout"):
+
+    @contextlib.asynccontextmanager
+    async def _timeout_shim(_delay):
+        yield
+
+    asyncio.timeout = _timeout_shim
 
 import examples.coding_agent_rl.generate as gen  # noqa: E402
 import examples.coding_agent_rl.swe as swe  # noqa: E402
