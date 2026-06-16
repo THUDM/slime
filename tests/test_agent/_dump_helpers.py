@@ -3,7 +3,7 @@
 Renders ``TrajectoryManager._trees[sid]`` as ASCII text so a human can read the
 routing tree next to the linearized Samples. Adapted to the refactored
 ``MessageNode`` API (``.message`` / ``.turn`` / ``.turn_index``); see
-``slime/agent/trajectory_manager.py``.
+``slime/agent/trajectory.py``.
 
 Pulled out of the historic ``tests/test_coding_agent/_dump_helpers.py`` (which
 also carried JSON dumpers + an aiohttp debug middleware) down to just the one

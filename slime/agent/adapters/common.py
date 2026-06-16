@@ -23,7 +23,7 @@ import aiohttp
 from aiohttp import web
 
 from slime.agent.parsing import parse_model_output
-from slime.agent.trajectory_manager import TrajectoryManager, TurnRecord
+from slime.agent.trajectory import TrajectoryManager, TurnRecord
 
 
 __all__ = ["TurnRecord"]

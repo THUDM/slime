@@ -2,7 +2,7 @@
 
 These stand in for the four real external boundaries of an agent rollout so the
 whole pipeline (generate -> sandbox -> harness -> adapter HTTP -> sglang ->
-trajectory_manager) can run deterministically on CPU, no GPU / E2B / sglang /
+trajectory) can run deterministically on CPU, no GPU / E2B / sglang /
 checkpoint required. The code under test stays real; only these edges are faked:
 
   * :class:`FakeTokenizer`     -- word-level chat-template render + decode that

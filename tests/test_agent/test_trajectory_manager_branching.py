@@ -1,7 +1,7 @@
 """Branching-matrix tests for TrajectoryManager via record_turn / get_trajectory.
 
 This script drives the two public interfaces of
-``slime.agent.trajectory_manager.TrajectoryManager`` and exhaustively covers the
+``slime.agent.trajectory.TrajectoryManager`` and exhaustively covers the
 ways a trajectory can branch, organized as a two-axis matrix:
 
   * LAYER 1 — routing tree (record_turn). DFS merges on (role, message-equality)
@@ -48,7 +48,7 @@ if str(_REPO_ROOT) not in sys.path:
 from tests.test_agent._dump_helpers import dump_tree_txt  # noqa: E402
 
 from slime.agent.adapters.common import TurnRecord  # noqa: E402
-from slime.agent.trajectory_manager import TrajectoryManager, _common_prefix_len  # noqa: E402
+from slime.agent.trajectory import TrajectoryManager, _common_prefix_len  # noqa: E402
 from slime.utils.types import Sample  # noqa: E402
 
 # ===========================================================================
