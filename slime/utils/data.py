@@ -108,7 +108,12 @@ def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_l
             from slime.utils.processing_utils import process_vision_info
 
             for sample in multimodal:
-                multimodal_inputs = process_vision_info(sample.prompt, processor)
+                # When apply_chat_template=True, sample.prompt is a templated
+                # string while process_vision_info needs the original message
+                # list to extract images.  processor(text=…) expects the
+                # templated string (sample.prompt).
+                messages = sample.messages if sample.messages is not None else sample.prompt
+                multimodal_inputs = process_vision_info(messages, processor)
                 processor_output = processor(text=sample.prompt, **multimodal_inputs)
                 input_ids = processor_output["input_ids"][0]
                 if len(input_ids) <= max_length:
@@ -257,6 +262,9 @@ class Dataset:
             origin_samples.append(
                 Sample(
                     prompt=output_prompt,
+                    # Preserve raw message list for multimodal processing when
+                    # apply_chat_template has converted prompt to a string.
+                    messages=prompt if isinstance(prompt, list) else None,
                     label=data[label_key] if label_key is not None else None,
                     metadata=metadata,
                     multimodal_inputs=multimodal_inputs,

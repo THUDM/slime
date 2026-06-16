@@ -90,6 +90,11 @@ async def async_rm(args, sample: Sample, **kwargs):
         return compute_ifbench_reward(response, label, metadata=metadata)
     elif rm_type == "random":
         return random.randint(0, 1)
+    elif rm_type == "zero":
+        # Always return 0.0 — useful for pure distillation (e.g., MOPD with alpha=0)
+        # where no task reward is needed and the learning signal comes entirely from
+        # the distillation KL advantages.
+        return 0.0
     elif rm_type:
         raise NotImplementedError(f"Rule-based RM for {rm_type} is not implemented.")
     else:

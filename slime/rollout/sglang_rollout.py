@@ -433,8 +433,13 @@ async def generate_rollout_async(
 
             if do_print:
                 sample = group[0][0] if isinstance(group[0], list) else group[0]
+                # Truncate reward repr to avoid flooding logs when reward contains
+                # large dicts (e.g., MOPD SGLang teacher responses with top-k logprobs).
+                reward_repr = repr(sample.reward)
+                if len(reward_repr) > 200:
+                    reward_repr = reward_repr[:200] + "..."
                 logger.info(
-                    f"First rollout sample: {[str(sample.prompt) + sample.response]}, label: {str(sample.label)[:100]}, reward: {sample.reward}",
+                    f"First rollout sample: {[str(sample.prompt) + sample.response]}, label: {str(sample.label)[:100]}, reward: {reward_repr}",
                 )
                 do_print = False
 
@@ -454,8 +459,13 @@ async def generate_rollout_async(
 
     pbar.close()
     sample = data[-1][0][0] if isinstance(data[-1][0], list) else data[-1][0]
+    # Truncate reward repr to avoid flooding logs when reward contains
+    # large dicts (e.g., MOPD SGLang teacher responses with top-k logprobs).
+    reward_repr = repr(sample.reward)
+    if len(reward_repr) > 200:
+        reward_repr = reward_repr[:200] + "..."
     logger.info(
-        f"Finish rollout: {[str(sample.prompt) + sample.response]}, label: {str(sample.label)[:100]}, reward: {sample.reward}",
+        f"Finish rollout: {[str(sample.prompt) + sample.response]}, label: {str(sample.label)[:100]}, reward: {reward_repr}",
     )
 
     # there are still some unfinished requests, abort them
@@ -575,10 +585,15 @@ async def eval_rollout_single_dataset(
         sample = await coro
         if do_print:
             logged_sample = sample[0] if isinstance(sample, list) else sample
+            # Truncate reward repr to avoid flooding logs when reward contains
+            # large dicts (e.g., MOPD SGLang teacher responses with top-k logprobs).
+            reward_repr = repr(logged_sample.reward)
+            if len(reward_repr) > 200:
+                reward_repr = reward_repr[:200] + "..."
             logger.info(
                 "eval_rollout_single_dataset example data: "
                 f"{[str(logged_sample.prompt) + logged_sample.response]} "
-                f"reward={logged_sample.reward}"
+                f"reward={reward_repr}"
             )
             do_print = False
         if isinstance(sample, list):

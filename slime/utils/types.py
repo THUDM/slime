@@ -19,8 +19,11 @@ class Sample:
     # sibling, so loss aggregation averages within the rollout instead of
     # over-counting it.
     rollout_id: int | None = None
-    # prompt
+    # prompt (after chat template — always a str when apply_chat_template=True)
     prompt: str | list[dict[str, str]] = ""
+    # Raw message list before chat template application; needed for multimodal
+    # processing in filter_long_prompt when prompt has already been templated.
+    messages: list[dict] | None = None
     tokens: list[int] = field(default_factory=list)
     multimodal_inputs: dict[str, Any] | None = None  # raw multimodal data, e.g. images, videos, etc.
     multimodal_train_inputs: dict[str, Any] | None = None  # processed multimodal data, e.g. pixel_values, etc.
@@ -36,6 +39,18 @@ class Sample:
     rollout_routed_experts: list[list[int]] | None = None  # Routed experts from rollout engine
     remove_sample: bool = False
     teacher_log_probs: list[float] | None = None  # Log probabilities from teacher model for OPD
+    mopd_teacher_log_probs: dict[str, list[float]] | None = (
+        None  # Log probabilities from multiple MOPD teachers (domain -> log_probs)
+    )
+    # Full-vocab teacher logits per domain (SGLang MOPD full_vocab mode).
+    # Format: {domain: list[list[float]]} — domain -> [seq_len][vocab_size]
+    mopd_teacher_fv_logits: dict[str, list[list[float]]] | None = None
+    # Top-k teacher logits per domain (SGLang MOPD top_k mode).
+    # Format: {domain: list[list[float]]} — domain -> [seq_len][k]
+    mopd_teacher_topk_logits: dict[str, list[list[float]]] | None = None
+    # Top-k teacher token indices per domain (SGLang MOPD top_k mode).
+    # Format: {domain: list[list[int]]} — domain -> [seq_len][k]
+    mopd_teacher_topk_indices: dict[str, list[list[int]]] | None = None
 
     class Status(Enum):
         PENDING = "pending"

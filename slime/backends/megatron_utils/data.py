@@ -300,10 +300,26 @@ def log_rollout_data(
                 "rollout_mask_sums",
                 "rollout_routed_experts",
                 "max_seq_lens",
+                "dynamic_global_batch_size",
+                # Dict-typed keys that cannot be averaged directly
+                "mopd_teacher_log_probs",
+                "mopd_teacher_logits",
+                "mopd_reverse_kl",
+                # SGLang-sourced top-k data (dict format, converted to per-domain keys in actor.py)
+                "mopd_teacher_topk_logits",
+                "mopd_teacher_topk_indices",
                 "global_batch_sizes",
                 "num_microbatches",
                 "micro_batch_indices",
             ]:
+                continue
+            # Skip per-domain full-vocab teacher logits (too large for averaging)
+            if key.startswith("mopd_teacher_") and key.endswith("_fv_logits"):
+                continue
+            # Skip per-domain top-k teacher logits/indices (too large for averaging)
+            if key.startswith("mopd_teacher_") and (
+                key.endswith("_topk_logits") or key.endswith("_topk_indices") or key.endswith("_topk_log_sum_exp")
+            ):
                 continue
             # Emit (sum, count) so gather_log_data can do a weighted average across
             # DP ranks. This stops the legacy "every rank has the same N samples"
@@ -322,6 +338,8 @@ def log_rollout_data(
                         "values",
                         "teacher_log_probs",
                         "opd_reverse_kl",
+                        "mopd_advantages",
+                        "mopd_is_weights",
                     ]:
                         tensor = torch.cat(val).clone().detach()
                         sum_of_sample_mean = get_sum_of_sample_mean(

@@ -39,6 +39,21 @@ try:
 except ImportError:
     pass
 
+try:
+    # Patch Qwen3VLModel.forward to accept loss_mask kwarg, which slime
+    # passes through multimodal_train_inputs.  The Megatron-LM version
+    # does not declare loss_mask, so we intercept and strip it.
+    from megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model import Qwen3VLModel
+
+    _qwen3vl_orig_forward = Qwen3VLModel.forward
+
+    def _qwen3vl_patched_forward(self, *args, loss_mask=None, **kwargs):
+        return _qwen3vl_orig_forward(self, *args, **kwargs)
+
+    Qwen3VLModel.forward = _qwen3vl_patched_forward
+except ImportError:
+    pass
+
 logging.getLogger("megatron").setLevel(logging.WARNING)
 
 from . import megatron_patch  # noqa: F401, E402
