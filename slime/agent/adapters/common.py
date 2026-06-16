@@ -3,7 +3,7 @@
 A protocol adapter (Anthropic / OpenAI) is a thin subclass of
 :class:`BaseAdapter`: it fills in the wire-specific hooks
 (:meth:`~BaseAdapter._register_routes`, :meth:`~BaseAdapter._session_id`,
-:meth:`~BaseAdapter._translate`, :meth:`~BaseAdapter._build`,
+:meth:`~BaseAdapter._translate`, :meth:`~BaseAdapter._build_reply`,
 :meth:`~BaseAdapter._respond`, optionally :meth:`~BaseAdapter._preprocess_body`)
 plus four class attributes (``logger``, ``log_prefix``, ``max_token_keys``,
 ``stop_keys``). Everything else -- session lifecycle, the per-sid turn cap, the
@@ -36,7 +36,7 @@ __all__ = ["TurnRecord"]
 
 @dataclasses.dataclass
 class Session:
-    """Per-sid adapter state: sampling defaults, context budget, request lock.
+    """Per-sid adapter state: sampling defaults and context budget.
 
     Trajectory state lives in ``BaseAdapter.manager`` (one shared
     TrajectoryManager keyed by sid across all sessions), not here.
@@ -44,12 +44,11 @@ class Session:
 
     sampling_defaults: dict = dataclasses.field(default_factory=dict)
     max_context_tokens: int = 0
-    lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
 
 
 @dataclasses.dataclass
 class Reply:
-    """Output of an adapter's ``_build``, consumed by ``_run_turn``.
+    """Output of an adapter's ``_build_reply``, consumed by ``_run_turn``.
 
     ``manager_message`` / ``finish_reason`` feed ``record_turn`` + the
     ``debug_callback`` hook (protocol-neutral). ``wire`` is opaque to the
@@ -150,7 +149,6 @@ class BaseAdapter:
     subclass must supply; everything else is inherited.
     """
 
-    session_cls: type = Session
     logger: logging.Logger = logging.getLogger(__name__)
     log_prefix: str = "adapter"
     # sglang sampling-param extraction: which body keys cap max_new_tokens and
@@ -187,15 +185,10 @@ class BaseAdapter:
             mgr_kwargs["fork_threshold_tokens"] = fork_threshold_tokens
         self.manager = TrajectoryManager(**mgr_kwargs)
 
-        # Optional debug callback invoked after each turn (appended or skipped).
-        # Signature: (sid, prompt_messages, tools, response_message, turn) -> None,
-        # where ``turn`` is the TurnRecord carrying prompt_ids / output_ids /
-        # finish_reason. Read-only side channel for per-turn dumps; exceptions
-        # are swallowed so it can never block the HTTP response.
+        # Dumps per-turn data in debug mode; None disables.
         self.debug_callback: Callable[..., None] | None = debug_callback
-        # Per-sid turn cap; None disables. When set, the turn handler returns
-        # 429 once a sid has made this many turns, so a runaway agent exits
-        # cleanly instead of burning the whole token budget.
+        # Per-sid turn cap: return 429 to kill the run once exceeded. Only set
+        # in tests to bound trajectory size; left None in real training.
         self.max_turns_per_sid: int | None = max_turns_per_sid
         self._sid_turn_count: dict[str, int] = {}
 
@@ -219,7 +212,7 @@ class BaseAdapter:
         """Return ``(chat_messages, tools_schema)`` from the wire body."""
         raise NotImplementedError
 
-    def _build(self, parsed, raw_finish: str, translated: list[dict], tools_schema: list[dict] | None) -> Reply:
+    def _build_reply(self, parsed, raw_finish: str, translated: list[dict], tools_schema: list[dict] | None) -> Reply:
         """Pack parsed model output into a :class:`Reply`."""
         raise NotImplementedError
 
@@ -246,7 +239,7 @@ class BaseAdapter:
         """Register a fresh per-sid :class:`Session`; sids must be unique."""
         if sid in self.store:
             raise ValueError(f"session_id {sid!r} already exists; sids must be unique per agent run")
-        session = self.store[sid] = self.session_cls()
+        session = self.store[sid] = Session()
         session.sampling_defaults = dict(sampling_defaults or {})
         session.max_context_tokens = int(max_context_tokens or 0)
 
@@ -335,9 +328,8 @@ class BaseAdapter:
         """One full agent turn: translate -> sglang -> parse -> append -> respond.
 
         The wire-specific steps are delegated to the subclass hooks; everything
-        else (sid resolution, closed/cap guards, the per-sid serialisation
-        lock, inflight tracking, record_turn, the hook) is identical across
-        protocols and lives here.
+        else (sid resolution, closed/cap guards, inflight tracking, record_turn,
+        the hook) is identical across protocols and lives here.
         """
         body = await request.json()
         self._preprocess_body(body)
@@ -350,57 +342,46 @@ class BaseAdapter:
             return capped
 
         tok = self.tokenizer
-        s = self.store.setdefault(sid, self.session_cls())
+        s = self.store.setdefault(sid, Session())
         task = asyncio.current_task()
         self.inflight.setdefault(sid, set()).add(task)
         try:
-            async with s.lock:  # same sid -> serialized
-                translated, tools_schema = self._translate(body)
-                prompt_ids = _render_token_ids(translated, tok, tools=tools_schema, add_generation_prompt=True)
+            translated, tools_schema = self._translate(body)
+            prompt_ids = _render_token_ids(translated, tok, tools=tools_schema, add_generation_prompt=True)
 
-                turn = await call_sglang_generate(prompt_ids, s, body, adapter=self, session_id=sid)
+            turn = await call_sglang_generate(prompt_ids, s, body, adapter=self, session_id=sid)
 
-                raw_output = tok.decode(turn.output_ids, skip_special_tokens=False) if turn.output_ids else ""
-                try:
-                    parsed = parse_model_output(
-                        raw_output,
-                        tools_schema=tools_schema,
-                        tool_parser_name=self.tool_parser,
-                        reasoning_parser_name=self.reasoning_parser,
-                    )
-                except Exception as e:
-                    self.logger.warning(
-                        "[%s] sid=%s parse failed: %s: %.200s", self.log_prefix, sid, type(e).__name__, raw_output
-                    )
-                    raise
-                reply = self._build(parsed, turn.finish_reason, translated, tools_schema)
-                turn = dataclasses.replace(turn, finish_reason=reply.finish_reason)
+            raw_output = tok.decode(turn.output_ids, skip_special_tokens=False) if turn.output_ids else ""
+            parsed = parse_model_output(
+                raw_output,
+                tools_schema=tools_schema,
+                tool_parser_name=self.tool_parser,
+                reasoning_parser_name=self.reasoning_parser,
+            )
+            reply = self._build_reply(parsed, turn.finish_reason, translated, tools_schema)
+            turn = dataclasses.replace(turn, finish_reason=reply.finish_reason)
 
-                if reply.skip_append:
-                    # Meta request (e.g. cc title-generation): keep it out of
-                    # the tree / RL samples, but still run the debug callback
-                    # below so per-turn debug dumps keep landing on disk.
-                    self.logger.info("skipping record_turn (sid=%s)", sid)
-                else:
-                    try:
-                        self.manager.record_turn(
-                            sid,
-                            turn=turn,
-                            prompt_messages=translated,
-                            response_message=reply.manager_message,
-                            metadata={"sid": sid},
-                        )
-                    except Exception:
-                        self.logger.exception("record_turn(sid=%s) failed", sid)
+            self._run_debug_callback(
+                sid,
+                translated,
+                tools_schema,
+                reply.manager_message,
+                turn,
+            )
 
-                self._run_debug_callback(
+            if reply.skip_append:
+                # Meta request (e.g. cc title-generation): keep it out of the
+                # tree / RL samples.
+                self.logger.info("skipping record_turn (sid=%s)", sid)
+            else:
+                self.manager.record_turn(
                     sid,
-                    translated,
-                    tools_schema,
-                    reply.manager_message,
-                    turn,
+                    turn=turn,
+                    prompt_messages=translated,
+                    response_message=reply.manager_message,
+                    metadata={"sid": sid},
                 )
-                in_tok, out_tok = len(prompt_ids), len(turn.output_ids)
+            in_tok, out_tok = len(prompt_ids), len(turn.output_ids)
 
             stream = body.get("stream") is True or "text/event-stream" in request.headers.get("Accept", "")
             return await self._respond(request, body, reply, in_tok, out_tok, stream)

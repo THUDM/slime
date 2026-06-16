@@ -77,7 +77,7 @@ class MessageNode:
         self.turn: TurnRecord | None = None  # the generated TurnRecord, else None (routing-only)
         self.turn_index: int | None = None
         # Shared by sibling leaf paths; the first to reach it trains on it, the rest
-        # re-emit it as loss=0 context -- so each response is trained exactly once.
+        # re-emit it as loss_mask=0 context -- so each response is trained exactly once.
         self.response_trained: bool = False
 
     @property
@@ -128,9 +128,7 @@ def _common_prefix_len(a: list[int], b: list[int], chunk: int = 4096) -> int:
 
 class DriftKind(enum.Enum):
     CLEAN = "clean"  # drift == 0: prompt_ids exactly extends held tokens; append the tail beyond them
-    REALIGN = (
-        "realign"  # drift inside the most-recent response span and short incoming response; replace that span (loss=0)
-    )
+    REALIGN = "realign"  # drift inside the most-recent response span and short incoming response; replace that span (loss_mask=0)
     FORK = "fork"  # everything else: close this builder, open a fresh one as a fork
 
 
@@ -151,7 +149,7 @@ class _SampleBuilder:
 
     * **CLEAN** -- no drift; append the prompt tail beyond what we hold.
     * **REALIGN** -- a short divergence inside the most-recent response span;
-      overwrite that span from the prompt as loss=0 and keep accumulating.
+      overwrite that span from the prompt as loss_mask=0 and keep accumulating.
     * **FORK** -- divergence too large or too early to absorb; this builder is
       rejected and the caller closes it and opens a fresh one. That boundary is
       the "fork".
@@ -199,22 +197,24 @@ class _SampleBuilder:
 
         is_first_turn = self.last_response_start_idx is None
 
-        # --- append this turn's prompt tail (loss=0) ---
+        # --- append this turn's prompt tail (loss_mask=0) ---
         if kind is DriftKind.REALIGN:
             self._align_to_prompt(turn.prompt_ids)  # drop the drifted tail, re-append from prompt
         else:  # CLEAN: held tokens are an exact prefix of prompt_ids; append the tail beyond them
-            self._append_tokens(turn.prompt_ids[len(self.tokens) :], loss=0)
+            self._append_tokens(turn.prompt_ids[len(self.tokens) :], loss_mask=0)
 
-        # --- append this turn's generated response (loss=1 unless re-emitted as context) ---
+        # --- append this turn's generated response (loss_mask=1 unless re-emitted as context) ---
         self.last_response_start_idx = len(self.tokens)
-        self._append_tokens(turn.output_ids, loss=int(trained), logprobs=turn.output_log_probs if trained else None)
+        self._append_tokens(
+            turn.output_ids, loss_mask=int(trained), logprobs=turn.output_log_probs if trained else None
+        )
 
         if is_first_turn:
             self.leading_prompt_len = len(turn.prompt_ids)
 
     def _align_to_prompt(self, prompt_ids: list[int]) -> None:
         """Heal REALIGN drift by overwriting the most-recent response span with
-        ``prompt_ids`` as loss=0: the drifted tokens carry no signal, and re-appending
+        ``prompt_ids`` as loss_mask=0: the drifted tokens carry no signal, and re-appending
         from the prompt keeps the builder contiguous. Earlier turns are untouched."""
         response_start = self.last_response_start_idx
         tail = prompt_ids[response_start:]
@@ -222,9 +222,9 @@ class _SampleBuilder:
         self.loss_mask[response_start:] = [0] * len(tail)
         self.logprobs[response_start:] = [0.0] * len(tail)
 
-    def _append_tokens(self, ids: list[int], *, loss: int, logprobs: list[float] | None = None) -> None:
+    def _append_tokens(self, ids: list[int], *, loss_mask: int, logprobs: list[float] | None = None) -> None:
         self.tokens.extend(ids)
-        self.loss_mask.extend([loss] * len(ids))
+        self.loss_mask.extend([loss_mask] * len(ids))
         self.logprobs.extend(logprobs if logprobs else [0.0] * len(ids))
 
     def has_trained_response(self) -> bool:
@@ -281,11 +281,10 @@ class TrajectoryManager:
         if not prompt_messages:
             logger.warning("record_turn(sid=%s): empty prompt_messages; skipping", sid)
             return
-        if turn.output_log_probs and len(turn.output_log_probs) != len(turn.output_ids):
-            raise ValueError(
-                f"turn.output_log_probs length {len(turn.output_log_probs)} != "
-                f"turn.output_ids length {len(turn.output_ids)}"
-            )
+        assert not turn.output_log_probs or len(turn.output_log_probs) == len(turn.output_ids), (
+            f"turn.output_log_probs length {len(turn.output_log_probs)} != "
+            f"turn.output_ids length {len(turn.output_ids)}"
+        )
 
         root = self._trees.setdefault(sid, MessageNode())
 
@@ -442,7 +441,7 @@ class TrajectoryManager:
         exact prefix (re-tokenization drift past what we can drop); that turn
         opens a new builder -- a fork. A generated turn shared by sibling leaves
         is trained only on the first leaf to claim it; later leaves re-emit it
-        as loss=0 context so the shared prefix isn't double-counted.
+        as loss_mask=0 context so the shared prefix isn't double-counted.
         """
         asst_nodes = [n for n in chain if n.role == "assistant" and n.turn is not None]
 

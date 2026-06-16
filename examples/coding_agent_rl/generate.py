@@ -36,34 +36,35 @@ from slime.utils.types import Sample
 from . import swe
 
 logger = logging.getLogger(__name__)
+logging.getLogger("e2b").setLevel(logging.WARNING)
 
 
 @dataclass(frozen=True)
 class SweConfig:
-    adapter_public_host: str | None  # validated at session start, not here
+    adapter_public_host: str | None
     adapter_bind_host: str
     adapter_port: int
     fork_merge_threshold: int | None
-    time_budget_sec: int
+    agent_time_budget_sec: int
     eval_timeout_sec: int
-    generate_guard_sec: int
+    rollout_guard_sec: int
     boot_concurrency: int
     boot_retries: int
 
     @classmethod
     def from_env(cls) -> SweConfig:
-        time_budget = int(os.environ.get("SWE_TIME_BUDGET_SEC", "1800"))
+        agent_time_budget = int(os.environ.get("SWE_AGENT_TIME_BUDGET_SEC", "1800"))
         eval_timeout = int(os.environ.get("SWE_EVAL_TIMEOUT_SEC", "600"))
-        guard = int(os.environ.get("SWE_GENERATE_GUARD_SEC", "0") or 0) or (time_budget + eval_timeout + 180)
+        guard = int(os.environ.get("SWE_ROLLOUT_GUARD_SEC", "0") or 0) or (agent_time_budget + eval_timeout + 180)
         fork = int(v) if (v := os.environ.get("SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS")) else None
         return cls(
             adapter_public_host=os.environ.get("ADAPTER_PUBLIC_HOST"),
             adapter_bind_host=os.environ.get("ADAPTER_BIND_HOST", "0.0.0.0"),
             adapter_port=int(os.environ.get("ADAPTER_PORT", "18001")),
             fork_merge_threshold=fork,
-            time_budget_sec=time_budget,
+            agent_time_budget_sec=agent_time_budget,
             eval_timeout_sec=eval_timeout,
-            generate_guard_sec=guard,
+            rollout_guard_sec=guard,
             boot_concurrency=int(os.environ.get("SWE_BOOT_CONCURRENCY", "16")),
             boot_retries=int(os.environ.get("SWE_BOOT_RETRIES", "2")),
         )
@@ -161,15 +162,15 @@ class _AdapterService(metaclass=SingletonMeta):
         )
 
 
-async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
-    """Per-sample agent function with wall-clock guard (see generate_guard_sec)."""
+async def generate(args, base_sample: Sample, sampling_params: dict[str, Any]):
+    """Per-sample agent function with wall-clock guard (see rollout_guard_sec)."""
     state = _AdapterService(args)
-    md = swe.metadata(sample)
+    md = swe.metadata(base_sample)
     instance_id = md["instance_id"]
     if not md["image"] or not md["workdir"]:
-        return _abort_result(sample, "missing_image_or_workdir", instance_id)
+        return _abort_result(base_sample, "missing_image_or_workdir", instance_id)
 
-    session_id = sample.session_id = _session_id(sample, instance_id)
+    session_id = base_sample.session_id = _session_id(base_sample, instance_id)
     state.adapter.open_session(
         session_id,
         sampling_defaults=sampling_params,
@@ -177,7 +178,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
     )
     t0 = time.time()
     try:
-        async with asyncio.timeout(CONFIG.generate_guard_sec):
+        async with asyncio.timeout(CONFIG.rollout_guard_sec):
             async with boot_agent_sandbox(md["image"], instance_id) as sb:
                 await swe.prepare_workspace(sb, md["workdir"], md)
                 agent_exit_code = await ClaudeCodeHarness().run(
@@ -185,12 +186,12 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
                     workdir=md["workdir"],
                     session_id=session_id,
                     adapter_url=state.adapter_url,
-                    time_budget_sec=CONFIG.time_budget_sec,
+                    time_budget_sec=CONFIG.agent_time_budget_sec,
                     prompt=swe.SWE_PROMPT,
                 )
                 diff_text = await swe.git_diff(sb, md["workdir"])
 
-            reward, is_solved, applied_cleanly = await swe.evaluate(
+            reward, applied_cleanly = await swe.evaluate(
                 image=md["image"],
                 workdir=md["workdir"],
                 diff_text=diff_text,
@@ -202,11 +203,11 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
             )
             samples = await state.adapter.finish_session(
                 session_id,
-                base_sample=sample,
+                base_sample=base_sample,
                 reward=float(reward),
             )
             if not samples:
-                return _abort_result(sample, "adapter_session_empty", instance_id)
+                return _abort_result(base_sample, "adapter_session_empty", instance_id)
 
             for s in samples:
                 s.metadata = {**(s.metadata or {}), "agent_exit_code": agent_exit_code}
@@ -219,10 +220,9 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
                     reason,
                 )
             logger.info(
-                "[coding_agent_rl] %s: reward=%.2f solved=%s applied=%s agent_exit_code=%d elapsed=%.1fs segments=%d",
+                "[coding_agent_rl] %s: reward=%.2f applied=%s agent_exit_code=%d elapsed=%.1fs segments=%d",
                 instance_id,
                 float(reward),
-                bool(is_solved),
                 bool(applied_cleanly),
                 agent_exit_code,
                 time.time() - t0,
@@ -232,7 +232,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
 
     except asyncio.TimeoutError:
         _log_timeout_diagnostic(t0, instance_id)
-        return _abort_result(sample, "wall_clock_timeout", instance_id)
+        return _abort_result(base_sample, "wall_clock_timeout", instance_id)
     except Exception as e:
         logger.warning(
             "[coding_agent_rl] %s: rollout failed: %s\n%s",
@@ -240,7 +240,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
             e,
             traceback.format_exc(),
         )
-        return _abort_result(sample, f"exception:{type(e).__name__}", instance_id)
+        return _abort_result(base_sample, f"exception:{type(e).__name__}", instance_id)
     finally:
         await state.adapter.finish_session(session_id)  # idempotent
 
@@ -259,7 +259,7 @@ def _log_timeout_diagnostic(t0: float, instance_id: str) -> None:
             "(guard=%ds); %d tasks pending; sample of stuck: %s",
             instance_id,
             elapsed,
-            CONFIG.generate_guard_sec,
+            CONFIG.rollout_guard_sec,
             len(pending),
             stuck,
         )

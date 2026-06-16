@@ -520,7 +520,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        info: [{"num_gpus": 0, "test_file": "test_agent_adapters.py"}, {"num_gpus": 0, "test_file": "test_agent_sdk_adapters.py"}]
+        info: [{"num_gpus": 0, "test_file": "test_agent_adapters.py"}, {"num_gpus": 0, "test_file": "test_agent_sdk_adapters.py"}, {"num_gpus": 0, "test_file": "test_agent/test_trajectory_manager_branching.py"}]
     defaults:
       run:
         working-directory: ${{ github.workspace }}

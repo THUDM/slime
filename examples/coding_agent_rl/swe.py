@@ -140,7 +140,7 @@ async def apply_pre_commands(sb: Sandbox, workdir: str, pre: list[str] | str) ->
 # Diff capture (agent sandbox, after harness.run)
 # ---------------------------------------------------------------------------
 async def git_diff(sb: Sandbox, workdir: str) -> str:
-    cmd = f"cd {workdir} && git add -N . && " f"git diff -- . ':(exclude)PROBLEM_STATEMENT.md' ':(exclude).harness/'"
+    cmd = f"cd {workdir} && git add -N . && git diff -- . ':(exclude)PROBLEM_STATEMENT.md' ':(exclude).harness/'"
     _, out, _ = await sb.exec(cmd, user="agent", timeout=120)
     return out
 
@@ -158,18 +158,18 @@ async def evaluate(
     f2p_script: str | None = None,
     pre_commands: list[str] | str | None = None,
     timeout_sec: int = 600,
-) -> tuple[float, bool, bool]:
-    """Returns (reward, solved, applied_cleanly).
+) -> tuple[float, bool]:
+    """Returns (reward, applied_cleanly).
 
     Three mutually-exclusive grading paths, in priority order: swepro test
     harness, a shell ``eval_cmd``, or a self-contained ``f2p_script`` pytest
-    file. All resolve to "exit 0 == solved".
+    file. All resolve to "exit 0 == solved", and reward is 1.0 iff solved.
 
     No-test-cheating guarantee: the eval sandbox is built from the same image
     but starts CLEAN, so only the model-produced diff affects reward."""
     if not (swepro or eval_cmd or f2p_script):
         logger.warning("[e2b.evaluate] no swepro/eval_cmd/f2p_script; reward=0")
-        return 0.0, False, True
+        return 0.0, True
 
     async with E2BSandbox(image) as ev:
         await agent_sandbox.ensure_agent_user(ev, workdir)
@@ -181,15 +181,15 @@ async def evaluate(
 
         applied = await _apply_diff(ev, workdir, diff_text)
         if not applied:
-            return 0.0, False, False
+            return 0.0, False
 
         if swepro:
-            r, s = await _run_swepro(ev, workdir, swepro, timeout_sec)
+            r, _ = await _run_swepro(ev, workdir, swepro, timeout_sec)
         elif eval_cmd:
-            r, s = await _run_eval_cmd(ev, workdir, eval_cmd, timeout_sec)
+            r, _ = await _run_eval_cmd(ev, workdir, eval_cmd, timeout_sec)
         else:
-            r, s = await _run_f2p_script(ev, workdir, f2p_script, timeout_sec)
-        return r, s, True
+            r, _ = await _run_f2p_script(ev, workdir, f2p_script, timeout_sec)
+        return r, True
 
 
 async def _setup_swepro_assets(ev: Sandbox, swepro: dict) -> None:

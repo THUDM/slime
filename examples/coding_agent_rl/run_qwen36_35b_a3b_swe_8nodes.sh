@@ -263,11 +263,13 @@ export ADAPTER_PORT="${ADAPTER_PORT:-18001}"
 # --- per-trajectory time / concurrency budgets ---
 # Time budget 1800s (vs baseline 1200): sub-agent dispatch on large repos blows
 # past a tighter budget — investigator passes are the long tail.
-# Boot concurrency 6 (vs baseline 8) eases h2/SSL long-tail stalls under
-# heavier sub-agent dispatch.
-export SWE_TIME_BUDGET_SEC="${SWE_TIME_BUDGET_SEC:-1800}"
+# Boot concurrency 16: bench_boot_concurrency measured 100% boot success up to
+# 64/process with create flat at ~2s; the cost is install latency (tarball +
+# npm), which only starts climbing past 32. 16 is well inside the safe envd
+# range per process — raise per-gateway only after accounting for process count.
+export SWE_AGENT_TIME_BUDGET_SEC="${SWE_AGENT_TIME_BUDGET_SEC:-1800}"
 export SWE_EVAL_TIMEOUT_SEC="${SWE_EVAL_TIMEOUT_SEC:-600}"
-export SWE_BOOT_CONCURRENCY="${SWE_BOOT_CONCURRENCY:-6}"
+export SWE_BOOT_CONCURRENCY="${SWE_BOOT_CONCURRENCY:-16}"
 
 # --- trajectory fan-out ---
 # generate() emits one Sample per segment (reducer splits reward/K);
@@ -332,7 +334,7 @@ keys = (
     "no_proxy", "NO_PROXY",
     "E2B_API_KEY", "ADAPTER_PUBLIC_HOST",
     "SLIME_AGENT_NODE_TARBALL", "SLIME_AGENT_CC_TARBALL",
-    "SWE_TIME_BUDGET_SEC", "SWE_EVAL_TIMEOUT_SEC", "SWE_BOOT_CONCURRENCY",
+    "SWE_AGENT_TIME_BUDGET_SEC", "SWE_EVAL_TIMEOUT_SEC", "SWE_BOOT_CONCURRENCY",
     "ADAPTER_BIND_HOST", "ADAPTER_PORT",
     "SLIME_AGENT_CC_EXTRA_ARGS",
     "SLIME_AGENT_CC_EXTRA_ENVS",

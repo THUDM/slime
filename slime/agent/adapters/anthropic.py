@@ -63,7 +63,7 @@ class AnthropicAdapter(BaseAdapter):
         tools_schema = _tools_to_chat_tools(body.get("tools"))
         return translated, tools_schema
 
-    def _build(self, parsed, raw_finish, translated, tools_schema) -> Reply:
+    def _build_reply(self, parsed, raw_finish, translated, tools_schema) -> Reply:
         blocks, stop_reason, manager_message = _build_reply_parts(parsed, raw_finish)
         return Reply(
             manager_message=manager_message,

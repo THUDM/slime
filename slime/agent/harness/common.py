@@ -39,18 +39,12 @@ class SingletonABCMeta(ABCMeta, SingletonMeta):
     pass
 
 
-# Sentinel for run_command's int return: the time budget expired before the
-# command finished, so there is no real exit code. Process exit codes are POSIX
-# 0-255, so a negative value never collides; anything >=0 is the command's real
-# PIPESTATUS[0] and carries diagnostic value (1=error, 137=OOM-killed, etc.).
 EXIT_TIME_BUDGET_EXCEEDED = -1
 
 
 @dataclass(frozen=True)
 class HarnessContext:
-    """Generic inputs a harness needs to write config + build a launch command.
-
-    Deliberately free of any task (SWE) fields. ``model_label`` is a fixed
+    """Deliberately free of any task (SWE) fields. ``model_label`` is a fixed
     constant: the model name the harness advertises to its CLI. The slime
     adapter ignores it and serves whatever upstream sglang has loaded, so it is
     not a ``run()`` parameter -- no caller ever needs to vary it.
@@ -63,16 +57,9 @@ class HarnessContext:
 
 
 class BaseHarness(ABC, metaclass=SingletonABCMeta):
-    """Base lifecycle for a sandbox-resident coding agent.
+    """Base lifecycle for a sandbox-resident coding agent."""
 
-    Subclasses set ``name`` and implement the three differing steps
-    (``install_cli`` / ``write_config`` / ``launch_and_wait``); everything else
-    (agent user, the ``run`` skeleton) is shared. npm-packaged CLIs implement
-    ``install_cli`` by delegating to ``install_npm_cli``; non-interactive CLIs
-    implement ``launch_and_wait`` by delegating to ``run_command``.
-    """
-
-    #: Short identifier; also names the launcher metadata dir owner.
+    #: Short identifier set by each subclass (claude_code / codex).
     name: str = ""
 
     @abstractmethod
