@@ -53,6 +53,11 @@ async def remote_rm(args, sample: Sample, max_retries: int = 10):
 
 
 async def async_rm(args, sample: Sample, **kwargs):
+    # Per-sample custom_rm_path (from eval dataset config) takes priority
+    if sample.custom_rm_path:
+        rm_function = load_function(sample.custom_rm_path)
+        return await rm_function(args, sample, **kwargs)
+
     if args.custom_rm_path is not None:
         rm_function = load_function(args.custom_rm_path)
         return await rm_function(args, sample, **kwargs)

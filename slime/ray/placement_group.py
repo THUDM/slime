@@ -7,6 +7,7 @@ from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from .actor_group import RayTrainGroup
+from .utils import add_default_ray_env_vars
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ def _create_placement_group(num_gpus):
                 scheduling_strategy=PlacementGroupSchedulingStrategy(
                     placement_group=pg,
                     placement_group_bundle_index=i,
-                )
+                ),
             ).remote()
         )
     gpu_ids = ray.get([actor.get_ip_and_gpu_id.remote() for actor in info_actors])
@@ -111,7 +112,7 @@ def _get_placement_group_layout(args) -> tuple[int, int]:
         return args.rollout_num_gpus, 0
 
     if args.colocate:
-        return actor_num_gpus, 0
+        return max(actor_num_gpus, args.rollout_num_gpus), 0
 
     return actor_num_gpus + args.rollout_num_gpus, actor_num_gpus
 
@@ -214,10 +215,14 @@ def create_training_models(args, pgs, rollout_manager):
 def create_rollout_manager(args, pg):
     from .rollout import RolloutManager
 
-    rollout_manager = RolloutManager.options(
-        num_cpus=1,
-        num_gpus=0,
-    ).remote(args, pg)
+    rollout_manager_options = {
+        "num_cpus": 1,
+        "num_gpus": 0,
+        "runtime_env": {"env_vars": add_default_ray_env_vars()},
+    }
+    if getattr(args, "rollout_data_transport", "object-store") == "nixl":
+        rollout_manager_options["enable_tensor_transport"] = True
+    rollout_manager = RolloutManager.options(**rollout_manager_options).remote(args, pg)
 
     # calculate num_rollout from num_epoch
     num_rollout_per_epoch = None

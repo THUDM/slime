@@ -306,7 +306,7 @@ SGLANG_ARGS=(
 
 ### Colocated Actor and Rollout
 
-Under the default configuration, training (Actor) and inference (Rollout) resources are specified separately. Ray allocates `actor_num_nodes * actor_num_gpus_per_node` GPUs to the training part and `rollout_num_gpus` GPUs to inference, that is, training and inference are separated.
+Under the default configuration, training (Actor) and inference (Rollout) resources are specified separately. Ray allocates `actor_num_nodes * actor_num_gpus_per_node` GPUs to the training part and `rollout_num_gpus` GPUs to inference, that is, training and inference are separated. When `--rollout-num-gpus` is explicitly set to `0`, slime still parses SGLang arguments and launches the router, but does not launch local SGLang servers.
 
 **Standard (Disaggregated) Configuration**:
 ```bash
@@ -320,7 +320,7 @@ ray job submit ... \
 In the above configuration, Actor uses 4 cards, and Rollout also uses 4 cards, running in parallel.
 
 **Training-Inference Integration (Colocated) Configuration**:
-To deploy training and inference on the same group of GPUs, please add the `--colocate` parameter. After enabling, `--rollout-num-gpus` will be ignored to make the number of cards for training and inference equal.
+To deploy training and inference on the same group of GPUs, please add the `--colocate` parameter. By default, this makes the number of cards for training and inference equal. You can explicitly set a different positive `--rollout-num-gpus`, for example to use more rollout GPUs than actor GPUs; the extra GPUs are used as rollout-only resources. If `--rollout-num-gpus 0` is set explicitly, slime launches only the router and no local SGLang servers.
 
 ```bash
 ray job submit ... \

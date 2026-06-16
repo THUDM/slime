@@ -175,10 +175,11 @@ def external_engine_infos_from_args(args) -> list[ExternalEngineInfo]:
     return [ExternalEngineInfo(**info) if isinstance(info, dict) else info for info in raw_infos]
 
 
-def start_external_rollout_servers(args, *, start_router) -> dict[str, ExternalRolloutServer]:
+def start_external_rollout_servers(args, *, start_router) -> tuple[dict[str, ExternalRolloutServer], list]:
     import ray
 
     from slime.backends.sglang_utils.sglang_engine import SGLangEngine
+    from slime.ray.utils import add_default_ray_env_vars
 
     infos = external_engine_infos_from_args(args)
     router_ip, router_port = start_router(args, has_pd_disaggregation=any(info.is_pd_worker for info in infos))
@@ -192,7 +193,11 @@ def start_external_rollout_servers(args, *, start_router) -> dict[str, ExternalR
     RolloutRayActor = ray.remote(SGLangEngine)
     gpu_offset = 0
     for rank, info in enumerate(infos):
-        rollout_engine = RolloutRayActor.options(num_cpus=0.2, num_gpus=0).remote(
+        rollout_engine = RolloutRayActor.options(
+            num_cpus=0.2,
+            num_gpus=0,
+            runtime_env={"env_vars": add_default_ray_env_vars()},
+        ).remote(
             args=args,
             rank=rank,
             worker_type=info.worker_type,
@@ -211,11 +216,8 @@ def start_external_rollout_servers(args, *, start_router) -> dict[str, ExternalR
             )
         )
 
-    if init_handles:
-        ray.get(init_handles)
-
     args.sglang_model_routers = {"default": (router_ip, router_port)}
-    return {
+    servers = {
         "default": ExternalRolloutServer(
             engines=engines,
             engine_gpu_counts=engine_gpu_counts,
@@ -227,3 +229,4 @@ def start_external_rollout_servers(args, *, start_router) -> dict[str, ExternalR
             num_new_engines=len(engines),
         )
     }
+    return servers, init_handles
