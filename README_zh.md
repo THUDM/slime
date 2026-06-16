@@ -3,6 +3,7 @@
 [English](./README.md)
 
 [![Documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg?style=flat)](https://thudm.github.io/slime/)
+[![CI](https://img.shields.io/github/check-runs/THUDM/slime/zilin%2Fci-dont-merge?label=CI&logo=github)](https://github.com/THUDM/slime/pull/2053/checks)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/THUDM/slime)
 
 **slime** 是为 RL scaling 设计的 LLM post‑training 框架，提供两大核心能力：
