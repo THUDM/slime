@@ -179,12 +179,14 @@ class AsyncRolloutWorker:
                     type(result).__name__,
                 )
                 return
-            # Aborted group → requeue, don't ship to training.
+            # Aborted group → requeue only if partial_rollout is enabled,
+            # matching the semantics of sglang_rollout.py::abort().
             if any(getattr(s, "status", None) == Sample.Status.ABORTED for s in result):
-                try:
-                    self.data_buffer.add_samples([result])
-                except Exception:  # noqa: BLE001
-                    logger.exception("fully-async: failed to requeue aborted group")
+                if self.args.partial_rollout:
+                    try:
+                        self.data_buffer.add_samples([result])
+                    except Exception:  # noqa: BLE001
+                        logger.exception("fully-async: failed to requeue aborted group")
                 return
             self.output_queue.put((gid, result))
 
