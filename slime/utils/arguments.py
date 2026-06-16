@@ -1713,18 +1713,13 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
     return eval_datasets
 
 
-def _resolve_update_weight_disk_dir(args) -> None:
-    """Disk-backed sync (full or delta) needs a directory the trainer writes and the rollout
-    engines read — a filesystem shared between them."""
+def _validate_update_weight_args(args) -> None:
+    # disk-backed sync (full or delta) writes on the trainer and reads on the engines: needs a shared dir
     if args.update_weight_transport == "disk" and not args.update_weight_disk_dir:
         raise ValueError(
             "--update-weight-transport=disk requires --update-weight-disk-dir to point at "
             "a filesystem shared between the trainer and the rollout engines."
         )
-
-
-def _validate_update_weight_args(args) -> None:
-    _resolve_update_weight_disk_dir(args)
 
     if args.update_weight_mode == "delta":
         if args.update_weight_transport != "disk":

@@ -171,12 +171,13 @@ def test_allgather_cp_ignores_cp_size_one(monkeypatch):
 def test_update_weight_disk_dir_required_for_disk_transport(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     args = types.SimpleNamespace(
+        update_weight_mode="full",
         update_weight_transport="disk",
         update_weight_disk_dir=None,
     )
 
     with pytest.raises(ValueError, match="update-weight-disk-dir"):
-        module._resolve_update_weight_disk_dir(args)
+        module._validate_update_weight_args(args)
 
 
 def make_slime_validate_args(**overrides):
