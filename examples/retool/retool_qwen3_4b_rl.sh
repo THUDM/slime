@@ -30,19 +30,19 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "./scripts/models/qwen3-4B.sh"
+source "slime/scripts/models/qwen3-4B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint ./font-info/qwen3-4b-sft
-   --ref-load ./font-info/qwen3-4b-sft_torch_dist
-   # --load ./Qwen3-4B_slime/
-   --save ./font-info/qwen3-4b-sft/qwen3-4b-sft-multi-turn/
+   --hf-checkpoint $HOME/font-info/qwen3-4b-sft
+   --ref-load $HOME/font-info/qwen3-4b-sft_torch_dist
+   # --load $HOME/Qwen3-4B_slime/
+   --save $HOME/font-info/qwen3-4b-sft/qwen3-4b-sft-multi-turn/
    --save-interval 20
    --rotary-base 5000000
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data ./dapo-math-17k/dapo-math-17k.jsonl
+   --prompt-data $HOME/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
    --apply-chat-template
@@ -60,7 +60,7 @@ ROLLOUT_ARGS=(
 
 EVAL_ARGS=(
    --eval-interval 20
-   --eval-prompt-data aime  ./aime-2024/aime-2024.jsonl
+   --eval-prompt-data aime  $HOME/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 16
    --eval-max-response-len 16384
    --eval-top-p 1
@@ -106,7 +106,7 @@ WANDB_ARGS=(
    --use-wandb
    --wandb-project slime-dapo
    --wandb-group qwen3-4B-test-multi-turn
-   --wandb-key ${WANDB_KEY}
+   #--wandb-key ${WANDB_KEY}
 )
 
 SGLANG_ARGS=(
@@ -137,7 +137,7 @@ ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 2 --disable-usage-s
 # Build the runtime environment JSON with proper variable substitution
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
-    \"PYTHONPATH\": \"../Megatron-LM/:${SCRIPT_DIR}:./\",
+    \"PYTHONPATH\": \"./Megatron-LM/:${SCRIPT_DIR}:./slime\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
     \"LIBRARY_PATH\": \"${LIBRARY_PATH}\",
@@ -147,7 +147,7 @@ RUNTIME_ENV_JSON="{
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
-   -- python3 train.py \
+   -- python3 slime/train.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 2 \
    --colocate \

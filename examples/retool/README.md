@@ -22,14 +22,14 @@ The retool example provides:
 ```bash
 pip install -e ./slime --no-deps
 # For SFT part, you can use later model to RL directly and skip SFT. 
-hf download --repo-type dataset JoeYing/ReTool-SFT  --local-dir ./JoeYing/ReTool-SFT
-hf download Qwen/Qwen3-4B-Instruct-2507 --local-dir ./Qwen/Qwen3-4B-Instruct-2507
+hf download --repo-type dataset JoeYing/ReTool-SFT  --local-dir $HOME/JoeYing/ReTool-SFT
+hf download Qwen/Qwen3-4B-Instruct-2507 --local-dir $HOME/Qwen/Qwen3-4B-Instruct-2507
 
 # For RL part
-hf download --repo-type dataset zhuzilin/dapo-math-17k --local-dir ./dapo-math-17k
-hf download --repo-type dataset zhuzilin/aime-2024  --local-dir ./aime-2024
+hf download --repo-type dataset zhuzilin/dapo-math-17k --local-dir $HOME/dapo-math-17k
+hf download --repo-type dataset zhuzilin/aime-2024  --local-dir $HOME/aime-2024
 # download our SFT model if you want to skip SFT
-hf download font-info/qwen3-4b-sft-SGLang-RL --local-dir ./font-info/qwen3-4b-sft
+hf download font-info/qwen3-4b-sft-SGLang-RL --local-dir $HOME/font-info/qwen3-4b-sft
 ```
 
 2. Create torch dist
@@ -38,19 +38,19 @@ For SFT
 source ./slime/scripts/models/qwen3-4B.sh
 PYTHONPATH=./Megatron-LM python ./slime/tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
-    --hf-checkpoint ./Qwen/Qwen3-4B-Instruct-2507 \
+    --hf-checkpoint $HOME/Qwen/Qwen3-4B-Instruct-2507 \
     --rotary-base 5000000 \
-    --save ./Qwen/Qwen3-4B-Instruct-2507_torch_dist
+    --save $HOME/Qwen/Qwen3-4B-Instruct-2507_torch_dist
 ```
 
 Or RL only
 ```bash
-source ./scripts/models/qwen3-4B.sh
-PYTHONPATH=../Megatron-LM python ./tools/convert_hf_to_torch_dist.py \
+source ./slime/scripts/models/qwen3-4B.sh
+PYTHONPATH=./Megatron-LM python ./slime/tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
-    --hf-checkpoint ./font-info/qwen3-4b-sft \
+    --hf-checkpoint $HOME/font-info/qwen3-4b-sft \
     --rotary-base 5000000 \
-    --save ./font-info/qwen3-4b-sft_torch_dist
+    --save $HOME/font-info/qwen3-4b-sft_torch_dist
 
 ```
 
