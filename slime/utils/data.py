@@ -161,7 +161,14 @@ def _build_messages(data: dict, prompt_key: str, as_conversation: bool, multimod
                             f"Not enough {mt.name} data: more '{mt.placeholder}' placeholders in prompt "
                             f"than {mt.name}s provided in data"
                         )
-                        content_list.append({"type": mt.name, mt.name: content.pop(0)})
+                        item = content.pop(0)
+                        # Support rich image config from https://github.com/QwenLM/Qwen3-VL/blob/main/README.md
+                        # "images": [{"type": "image", "image": "path/to/img/01.jpeg", "max_pixels": 50176, "min_pixels": 50176}, {...}]
+                        if isinstance(item, dict):
+                            content_list.append(item)
+                        # "images": ["path/to/img/01.jpeg", "url", "base64enc"]
+                        else:
+                            content_list.append({"type": mt.name, mt.name: item})
                     else:
                         content_list.append({"type": "text", "text": segment})
                 message["content"] = content_list
