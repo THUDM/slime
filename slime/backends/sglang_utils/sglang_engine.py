@@ -1,10 +1,8 @@
 import dataclasses
-import glob
 import ipaddress
 import logging
 import multiprocessing
 import os
-import threading
 import time
 from urllib.parse import quote
 
@@ -168,15 +166,6 @@ class SGLangEngine(RayActor):
             self._init_external(server_args_dict, external_engine_need_check_fields=external_engine_need_check_fields)
         else:
             self._init_normal(server_args_dict)
-
-        # Disk-delta sync: each per-host actor materializes its local checkpoint in the background
-        # while the engine launches and serves; the first sync joins this thread.
-        self._base_init_thread = None
-        if self.args.update_weight_mode == "delta" and self.args.update_weight_transport == "disk":
-            self._base_init_thread = threading.Thread(
-                target=self._init_local_checkpoint, name="delta-base-init", daemon=True
-            )
-            self._base_init_thread.start()
 
     def _init_external(self, expect_server_args, external_engine_need_check_fields):
         logger.info(f"Use external SGLang engine (rank={self.rank}, expect_server_args={expect_server_args})")
@@ -390,38 +379,15 @@ class SGLangEngine(RayActor):
     def check_weights(self, action: str):
         return self._make_request("weights_checker", {"action": action})
 
-    def _init_local_checkpoint(self):
-        """Background thread: copy the base into the host-local checkpoint, then drop the source."""
-        from slime.utils.disk_delta import init_local_checkpoint
+    def sync_local_checkpoint(self, target_version: int):
+        """Apply the published deltas into this host's local checkpoint up to target_version; the
+        engine reloads it afterwards. Assumes this actor shares the checkpoint filesystem with the
+        sglang it drives (true for slime-launched engines)."""
+        from slime.utils.disk_delta import apply_deltas, init_local_checkpoint
 
-        init_local_checkpoint(self.args.update_weight_local_checkpoint_dir, self.args.hf_checkpoint)
-        self._drop_hf_cache()
-
-    def _drop_hf_cache(self):
-        # sglang loads the HF checkpoint once at init and never re-reads it (weight updates read the
-        # local base), so dropping it from the page cache keeps the local base resident instead.
-        from slime.utils.disk_delta import drop_page_cache
-
-        for path in glob.glob(os.path.join(self.args.hf_checkpoint, "*")):
-            if os.path.isfile(path):
-                drop_page_cache(path)
-
-    def _ensure_base_ready(self):
-        """Join the one-time base-materialization thread on the first sync, then re-drop the HF
-        source (sglang's init-load may have re-cached it after the thread dropped it)."""
-        if self._base_init_thread is None:
-            return
-        self._base_init_thread.join()
-        self._base_init_thread = None
-        self._drop_hf_cache()
-
-    def sync_weights(self, target_version: int):
-        """Bring this host's local checkpoint to ``target_version`` by applying the published
-        deltas (raises on any error). Plain file work; the sglang server is untouched until the
-        subsequent reload."""
-        from slime.utils.disk_delta import apply_deltas
-
-        self._ensure_base_ready()
+        init_local_checkpoint(self.args.update_weight_local_checkpoint_dir, self.args.hf_checkpoint)  # idempotent
+        # non-POSIX filesystems lack cross-host read-after-write consistency, so the trainer's
+        # just-written delta isn't visible on this mount until the hook refreshes it.
         if self.args.custom_delta_pre_read_path:
             from slime.utils.misc import load_function
 

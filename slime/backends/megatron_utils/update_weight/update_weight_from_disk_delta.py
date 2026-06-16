@@ -5,6 +5,7 @@ import logging
 import os
 import queue
 import shutil
+import time
 from argparse import Namespace
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
@@ -91,9 +92,11 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
+        t0 = time.perf_counter()
         self._publish()
+        publish_s = time.perf_counter() - t0
         self._reload_engines()
-        self._record_metrics()
+        self._record_metrics(publish_s, time.perf_counter() - t0)
 
     def _capture_baseline(self) -> None:
         """Capture the baseline snapshot the first delta diffs against (no publish), and clear any
@@ -172,7 +175,7 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
             self._commit_hook(self.args, self._version_dir, list(self.rollout_engines))
         dist.barrier(group=get_gloo_group())
         if dist.get_rank() == 0:
-            ray.get([actor.sync_weights.remote(self.weight_version) for actor in self.all_engine_actors])
+            ray.get([actor.sync_local_checkpoint.remote(self.weight_version) for actor in self.all_engine_actors])
             ray.get(
                 [
                     engine.update_weights_from_disk.remote(
@@ -268,9 +271,9 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
         finally:
             pool.shutdown()
 
-    def _record_metrics(self) -> None:
-        """All-reduce the byte counts and record changed-fraction + wire size; the actor drains
-        update_weight_metrics onto the step log."""
+    def _record_metrics(self, publish_s: float, total_s: float) -> None:
+        """All-reduce the byte counts and record changed-fraction / wire size / sync time; the
+        actor drains update_weight_metrics onto the step log."""
         counts = torch.tensor(
             [self.changed_bytes, self.total_bytes, self.wire_bytes],
             dtype=torch.int64,
@@ -278,8 +281,20 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
         )
         dist.all_reduce(counts)
         changed, total, wire = counts.tolist()
-        self.update_weight_metrics["perf/update_weights_density"] = changed / max(total, 1)
-        self.update_weight_metrics["perf/update_weights_wire_bytes"] = wire
+        m = self.update_weight_metrics
+        m["perf/update_weights_density"] = changed / max(total, 1)
+        m["perf/update_weights_wire_bytes"] = wire
+        m["perf/update_weights_total_s"] = total_s
+        if dist.get_rank() == 0:
+            logger.info(
+                "[disk delta v=%s] update %.1fs (publish %.1fs reload %.1fs) | density=%.2f%% wire=%.2f GB",
+                self.weight_version,
+                total_s,
+                publish_s,
+                total_s - publish_s,
+                100.0 * changed / max(total, 1),
+                wire / 1e9,
+            )
 
 
 def _atomic_write(path: str, data: bytes) -> None:

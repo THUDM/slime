@@ -211,10 +211,10 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
                 help=(
-                    "Path to a custom function called by --update-weight-transport=disk after each "
-                    "trainer rank's files are durably on local disk, before rank 0 fires the engine "
-                    "RPCs. Signature: ``def hook(args, version_dir: str, rollout_engines) -> None``. "
-                    "Called from every trainer rank; the hook gates itself."
+                    "Path to a custom function called on each trainer rank after its delta files "
+                    "are written, before the engines read them — to publish the writes on a "
+                    "non-POSIX filesystem (no cross-host visibility without an explicit sync). "
+                    "Signature: ``def hook(args, version_dir: str, rollout_engines) -> None``; the hook gates itself."
                 ),
             )
             parser.add_argument(
@@ -223,7 +223,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "Path to a custom function called on each rollout host before it reads the "
-                    "published delta directory (shared-FS visibility, e.g. a volume reload). "
+                    "published delta directory — refreshes the mount so the just-published version "
+                    "is visible on a non-POSIX filesystem (no cross-host read-after-write consistency). "
                     "Signature: ``def hook(delta_dir: str, target_version: int) -> None``."
                 ),
             )
