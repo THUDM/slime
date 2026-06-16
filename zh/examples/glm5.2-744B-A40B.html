@@ -1,0 +1,738 @@
+
+<!DOCTYPE html>
+
+
+<html lang="zh" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>256xH100 训练 GLM-5.2 744B-A40B &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=3c74b3bc" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../_static/documentation_options.js?v=30c3115b"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'examples/glm5.2-744B-A40B';</script>
+    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="next" title="64xH100 训练 GLM-4.7" href="glm4.7-355B-A32B.html" />
+    <link rel="prev" title="8xH100 训练 Qwen3-30B-A3B" href="qwen3-30B-A3B.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="zh"/>
+  <meta name="docsearch:version" content="0.0.1" />
+    <meta name="docbuild:last-update" content="2026 年 06 月 16 日"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">跳转至主要内容</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>回到顶部</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="版本警告"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <img src="../_static/logo.jpg" class="logo__image only-dark pst-js-only" alt="slime - Home"/>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">搜索</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">快速使用</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">使用文档</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">自定义指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/agent.html">Agentic RL 训练路线图</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">常见 Q&amp;A</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
+<li class="toctree-l1"><a class="reference internal" href="qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">256xH100 训练 GLM-5.2 744B-A40B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
+<li class="toctree-l1"><a class="reference internal" href="deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../advanced/on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">投机采样</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/low-precision.html">低精度训练与 Rollout</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/reproducibility.html">Reproducibility</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/fault-tolerance.html">容灾</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/observability.html">观测</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD 分离</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/delta-weight-sync.html">Delta 权重同步</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/sglang-config.html">SGLang Config：高级引擎部署</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI（持续集成）</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace 可视化</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="源码库"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/examples/glm5.2-744B-A40B.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/examples/glm5.2-744B-A40B.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fexamples/glm5.2-744B-A40B.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="创建议题"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="下载此页面">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/examples/glm5.2-744B-A40B.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="下载源文件"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="列印成 PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button pst-navbar-icon"
+  title="全屏模式"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="亮色"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="暗色"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button>
+
+
+<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+</button>
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>256xH100 训练 GLM-5.2 744B-A40B</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> 目录 </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">环境准备</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">下载模型</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#checkpoint">转换 Checkpoint</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">执行训练</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">参数简介</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">模型配置</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">训练并行</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#bf16-fp8-rollout">BF16 训练 + FP8 Rollout</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang">SGLang 配置</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">网络</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="xh100-glm-5-2-744b-a40b">
+<h1>256xH100 训练 GLM-5.2 744B-A40B<a class="headerlink" href="#xh100-glm-5-2-744b-a40b" title="链接到此标题。">#</a></h1>
+<p>这里是使用 32 节点、256 张 H100 训练 <a class="reference external" href="https://z.ai/blog/glm-5.2">GLM-5.2</a> 的推荐配置示例。</p>
+<p>这个配置使用 GLM-5.2 的 BF16 checkpoint 做 Megatron 训练，使用 FP8 checkpoint 做 SGLang rollout。下面假设 Hugging Face 上会提供两个地址：</p>
+<ul class="simple">
+<li><p>BF16: <code class="docutils literal notranslate"><span class="pre">zai-org/GLM-5.2</span></code></p></li>
+<li><p>FP8: <code class="docutils literal notranslate"><span class="pre">zai-org/GLM-5.2-FP8</span></code></p></li>
+</ul>
+<section id="id1">
+<h2>环境准备<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
+<p>搭建环境与下载数据的方法可以参考 <a class="reference internal" href="qwen3-4B.html"><span class="std std-doc">示例：Qwen3-4B</span></a>。多机启动前，请确保所有节点都能访问同一个 <code class="docutils literal notranslate"><span class="pre">$BASE_DIR</span></code> 路径。</p>
+<section id="id2">
+<h3>下载模型<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>zai-org/GLM-5.2<span class="w"> </span>--local-dir<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-5.2
+hf<span class="w"> </span>download<span class="w"> </span>zai-org/GLM-5.2-FP8<span class="w"> </span>--local-dir<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-5.2-FP8
+</pre></div>
+</div>
+<p>开源 GLM-5.2 的 config 使用 <code class="docutils literal notranslate"><span class="pre">model_type:</span> <span class="pre">glm_moe_dsa</span></code>，slime 将其映射到 DeepSeek-V3.2 的 bridge（<code class="docutils literal notranslate"><span class="pre">slime_plugins.mbridge.deepseek_v32</span></code>），因为两者共享相同的 DSA 权重布局。</p>
+</section>
+<section id="checkpoint">
+<h3>转换 Checkpoint<a class="headerlink" href="#checkpoint" title="链接到此标题。">#</a></h3>
+<p>训练侧需要把 BF16 Hugging Face checkpoint 转换为 Megatron 可加载的 torch_dist 格式。torch_dist 格式支持重新切分，所以转换时的并行布局<strong>不需要</strong>与训练一致；我们使用一个能满足 Megatron expert group 约束（在转换的节点数下成立）的布局即可。</p>
+<p>可以在 4 台机器 / 32 卡上分别执行：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps
+<span class="nb">source</span><span class="w"> </span>scripts/models/glm5.2-744B-A40B.sh
+<span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM/<span class="w"> </span>torchrun<span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--nproc-per-node<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--master-addr<span class="w"> </span><span class="si">${</span><span class="nv">MASTER_ADDR</span><span class="si">}</span><span class="w"> </span>--master-port<span class="w"> </span><span class="m">12345</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--nnodes<span class="o">=</span><span class="m">4</span><span class="w"> </span>--node-rank<span class="w"> </span><span class="si">${</span><span class="nv">NODE_RANK</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
+<span class="w">   </span><span class="si">${</span><span class="nv">MODEL_ARGS</span><span class="p">[@]</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--tensor-model-parallel-size<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--pipeline-model-parallel-size<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--decoder-last-pipeline-num-layers<span class="w"> </span><span class="m">40</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--expert-model-parallel-size<span class="w"> </span><span class="m">16</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--expert-tensor-parallel-size<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--hf-checkpoint<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-5.2/<span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--save<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-5.2_torch_dist/
+</pre></div>
+</div>
+<p>其中 <code class="docutils literal notranslate"><span class="pre">MASTER_ADDR</span></code> 是 node0 的 IP，<code class="docutils literal notranslate"><span class="pre">NODE_RANK</span></code> 表示当前机器编号。</p>
+<p><code class="docutils literal notranslate"><span class="pre">MODEL_ARGS</span></code> 里包含 <code class="docutils literal notranslate"><span class="pre">--allgather-cp</span></code> 这个 slime 自定义参数，所以 <code class="docutils literal notranslate"><span class="pre">tools/convert_hf_to_torch_dist.py</span></code> 也注册了它（转换时是 no-op）。在 32 卡上，Megatron 要求 <code class="docutils literal notranslate"><span class="pre">expert_tp(1)</span> <span class="pre">*</span> <span class="pre">expert_model_parallel</span> <span class="pre">*</span> <span class="pre">pp</span></code> 能整除 world size，因此转换时使用 <code class="docutils literal notranslate"><span class="pre">EP=16</span></code>（<code class="docutils literal notranslate"><span class="pre">1*16*2=32</span></code>）。由于 torch_dist 支持重新切分，转换出的 checkpoint 仍然可以在训练时以 <code class="docutils literal notranslate"><span class="pre">EP=32</span></code> 加载。</p>
+</section>
+</section>
+<section id="id3">
+<h2>执行训练<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
+<p>从 node0 执行：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
+<span class="nb">export</span><span class="w"> </span><span class="nv">BASE_DIR</span><span class="o">=</span>/shared/path
+<span class="nb">export</span><span class="w"> </span><span class="nv">MASTER_ADDR</span><span class="o">=</span>&lt;node0-ip&gt;
+<span class="nb">export</span><span class="w"> </span><span class="nv">HOSTFILE</span><span class="o">=</span><span class="nv">$BASE_DIR</span>/hostfile<span class="w">  </span><span class="c1"># 每行一个 worker IP，共 32 个节点</span>
+bash<span class="w"> </span>scripts/run-glm5.2-744B-A40B.sh
+</pre></div>
+</div>
+<p>如果不设置 <code class="docutils literal notranslate"><span class="pre">HOSTFILE</span></code>，需要手动在其他节点加入 Ray 集群。</p>
+<section id="id4">
+<h3>参数简介<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h3>
+<section id="id5">
+<h4>模型配置<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h4>
+<p><code class="docutils literal notranslate"><span class="pre">scripts/models/glm5.2-744B-A40B.sh</span></code> 使用 GLM-5.2 的 DSA + cross-layer index sharing 配置：256 个 routed experts、top-8 激活、1 个 shared expert，模型共 78 层（3 层 dense + 75 层 MoE）。</p>
+<p>DSA index sharing 的 schedule（例如 <code class="docutils literal notranslate"><span class="pre">index_topk_freq=4</span></code>、<code class="docutils literal notranslate"><span class="pre">index_skip_topk_offset=3</span></code>）从 Hugging Face config 中读取。Megatron 侧使用共享的 <code class="docutils literal notranslate"><span class="pre">slime_plugins.models.glm5.glm5:get_glm5_spec</span></code> provider，并开启：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--allgather-cp
+</pre></div>
+</div>
+<p>这会让 DSA + context parallel 使用 allgather-CP layout，并在 index-share provider 中对 index K/V 做 CP group gather。</p>
+</section>
+<section id="id6">
+<h4>训练并行<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h4>
+<p>默认脚本按 32 节点 256 卡配置：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">PERF_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>--tensor-model-parallel-size<span class="w"> </span><span class="m">4</span>
+<span class="w">   </span>--pipeline-model-parallel-size<span class="w"> </span><span class="m">8</span>
+<span class="w">   </span>--decoder-first-pipeline-num-layers<span class="w"> </span><span class="m">14</span>
+<span class="w">   </span>--decoder-last-pipeline-num-layers<span class="w"> </span><span class="m">16</span>
+<span class="w">   </span>--context-parallel-size<span class="w"> </span><span class="m">8</span>
+<span class="w">   </span>--expert-model-parallel-size<span class="w"> </span><span class="m">32</span>
+<span class="w">   </span>--expert-tensor-parallel-size<span class="w"> </span><span class="m">1</span>
+<span class="w">   </span>...
+<span class="o">)</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">TP=4</span> <span class="pre">*</span> <span class="pre">PP=8</span> <span class="pre">*</span> <span class="pre">CP=8</span> <span class="pre">=</span> <span class="pre">256</span></code> 卡构成一个训练组（<code class="docutils literal notranslate"><span class="pre">DP=1</span></code>）。expert group 约束 <code class="docutils literal notranslate"><span class="pre">expert_tp(1)</span> <span class="pre">*</span> <span class="pre">EP(32)</span> <span class="pre">*</span> <span class="pre">PP(8)</span> <span class="pre">=</span> <span class="pre">256</span></code> 正好整除 world size（<code class="docutils literal notranslate"><span class="pre">expert_dp=1</span></code>）。</p>
+<p>DSA cross-layer index sharing 要求每个 pipeline stage 都必须<strong>从 computing layer 开始</strong>。在 <code class="docutils literal notranslate"><span class="pre">index_topk_freq=4</span></code> / <code class="docutils literal notranslate"><span class="pre">index_skip_topk_offset=3</span></code> 下，computing layer 是第 1、2、3、7、11、...、75 层。如果直接 <code class="docutils literal notranslate"><span class="pre">78/8</span></code> 均分，stage 会从 skip layer 开始，触发 <code class="docutils literal notranslate"><span class="pre">get_glm5_spec</span></code> 里的 index-share 断言。因此我们使用 <code class="docutils literal notranslate"><span class="pre">--decoder-first-pipeline-num-layers</span> <span class="pre">14</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--decoder-last-pipeline-num-layers</span> <span class="pre">16</span></code>，中间 6 个 stage 各 <code class="docutils literal notranslate"><span class="pre">(78-14-16)/6</span> <span class="pre">=</span> <span class="pre">8</span></code> 层。各 stage 的起始全局层为 1、15、23、31、39、47、55、63，全部是 computing layer。</p>
+</section>
+<section id="bf16-fp8-rollout">
+<h4>BF16 训练 + FP8 Rollout<a class="headerlink" href="#bf16-fp8-rollout" title="链接到此标题。">#</a></h4>
+<p>训练脚本直接在 <code class="docutils literal notranslate"><span class="pre">CKPT_ARGS</span></code> 和 <code class="docutils literal notranslate"><span class="pre">ROLLOUT_ARGS</span></code> 中写入默认路径，风格与其他示例脚本保持一致：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CKPT_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>--hf-checkpoint<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-5.2-FP8
+<span class="w">   </span>--ref-load<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-5.2_torch_dist
+<span class="w">   </span>--load<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-5.2_slime
+<span class="w">   </span>--save<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-5.2_slime
+<span class="w">   </span>--save-interval<span class="w"> </span><span class="m">20</span>
+<span class="o">)</span>
+
+<span class="nv">ROLLOUT_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>--prompt-data<span class="w"> </span><span class="nv">$BASE_DIR</span>/dapo-math-17k/dapo-math-17k.jsonl
+<span class="w">   </span>...
+<span class="o">)</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 提供 SGLang rollout 所需的 FP8 权重和 tokenizer；<code class="docutils literal notranslate"><span class="pre">--ref-load</span></code> 是从 BF16 checkpoint 转换出的 Megatron torch_dist 权重。需要调试 BF16 rollout 时，可以直接把脚本里的 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 改成 <code class="docutils literal notranslate"><span class="pre">$BASE_DIR/GLM-5.2</span></code>。</p>
+</section>
+<section id="sglang">
+<h4>SGLang 配置<a class="headerlink" href="#sglang" title="链接到此标题。">#</a></h4>
+<p>rollout 侧采用 <strong>prefill/decode (PD) 分离</strong>:1 个 prefill engine(64 卡)+ 3 个 decode engine(192 卡)= 256 卡(必须等于 colocate 的 <code class="docutils literal notranslate"><span class="pre">rollout_num_gpus</span></code>)。每个 engine 64 卡,开 DP attention、<code class="docutils literal notranslate"><span class="pre">EP=64</span></code>(DeepEP 的 dispatch config map 只支持到 160 个 EP rank,所以单个 256 卡 engine 非法)。prefill 用 <code class="docutils literal notranslate"><span class="pre">auto</span></code> DeepEP 路径,decode 用 <code class="docutils literal notranslate"><span class="pre">low_latency</span></code> + <code class="docutils literal notranslate"><span class="pre">deep_gemm</span></code>。切分通过 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> YAML 配置:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prefill</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">64</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">64</span>
+<span class="w">        </span><span class="nt">overrides</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> deepep_mode</span><span class="p">:</span><span class="w"> </span><span class="nv">auto</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">...</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">decode</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">192</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">64</span>
+<span class="w">        </span><span class="nt">overrides</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> deepep_mode</span><span class="p">:</span><span class="w"> </span><span class="nv">low_latency</span><span class="p p-Indicator">,</span><span class="nt"> moe_runner_backend</span><span class="p">:</span><span class="w"> </span><span class="nv">deep_gemm</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">...</span><span class="w"> </span><span class="p p-Indicator">}</span>
+</pre></div>
+</div>
+<p>PD 传输走 RDMA/IB,使用 mooncake backend:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-disaggregation-transfer-backend<span class="w"> </span>mooncake
+--sglang-disaggregation-ib-device<span class="w"> </span>mlx5_100,...,mlx5_107
+</pre></div>
+</div>
+<p>其余 rollout 配置使用 FP8 KV cache 和 NSA + DeepEP backend:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SGLANG_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>--sglang-enable-dp-attention
+<span class="w">   </span>--sglang-ep-size<span class="w"> </span><span class="m">64</span>
+<span class="w">   </span>--sglang-dp-size<span class="w"> </span><span class="m">64</span>
+<span class="w">   </span>--sglang-kv-cache-dtype<span class="w"> </span>fp8_e4m3
+<span class="w">   </span>--sglang-nsa-decode-backend<span class="w"> </span>flashmla_kv
+<span class="w">   </span>--sglang-nsa-prefill-backend<span class="w"> </span>flashmla_sparse
+<span class="w">   </span>--sglang-attention-backend<span class="w"> </span>nsa
+<span class="w">   </span>...
+<span class="o">)</span>
+</pre></div>
+</div>
+<p>MTP / EAGLE speculative decoding 直接使用模型自带的 next-token-prediction 层（GLM-5.2 checkpoint 自带 MTP 层），因此不需要单独的 draft model：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-speculative-algorithm<span class="w"> </span>EAGLE
+--sglang-speculative-num-steps<span class="w"> </span><span class="m">4</span>
+--sglang-speculative-eagle-topk<span class="w"> </span><span class="m">1</span>
+--sglang-speculative-num-draft-tokens<span class="w"> </span><span class="m">5</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK</span></code> 需要覆盖最大的 decode batch:<code class="docutils literal notranslate"><span class="pre">max</span> <span class="pre">cuda_graph_max_bs</span> <span class="pre">(decode</span> <span class="pre">组</span> <span class="pre">=</span> <span class="pre">12)</span> <span class="pre">*</span> <span class="pre">speculative_num_draft_tokens</span> <span class="pre">(5)</span> <span class="pre">=</span> <span class="pre">60</span></code>,向上取整到 <code class="docutils literal notranslate"><span class="pre">64</span></code>。低于该值会在 decode 组 CUDA graph capture 时触发 DeepEP low-latency dispatch buffer 的断言。</p>
+</section>
+<section id="id7">
+<h4>网络<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h4>
+<p>DeepEP/NVSHMEM 的跨节点通信需要在 Ray runtime env 中配置 IB 相关的 NCCL 参数（<code class="docutils literal notranslate"><span class="pre">NCCL_SOCKET_IFNAME</span></code>、<code class="docutils literal notranslate"><span class="pre">NCCL_IB_*</span></code>、<code class="docutils literal notranslate"><span class="pre">NCCL_NET_GDR_LEVEL</span></code>、<code class="docutils literal notranslate"><span class="pre">NCCL_P2P_LEVEL=NVL</span></code>、<code class="docutils literal notranslate"><span class="pre">NCCL_NVLS_ENABLE=0</span></code>、<code class="docutils literal notranslate"><span class="pre">MC_IB_PCI_RELAXED_ORDERING</span></code> 等）。脚本默认使用 <code class="docutils literal notranslate"><span class="pre">SOCKET_IFNAME=eth0</span></code>，如环境不同可在启动前设置 <code class="docutils literal notranslate"><span class="pre">SOCKET_IFNAME</span></code>，它会同时写入 <code class="docutils literal notranslate"><span class="pre">GLOO_SOCKET_IFNAME</span></code>、<code class="docutils literal notranslate"><span class="pre">TP_SOCKET_IFNAME</span></code> 和 <code class="docutils literal notranslate"><span class="pre">NCCL_SOCKET_IFNAME</span></code>。DeepEP 还要求设置 <code class="docutils literal notranslate"><span class="pre">NVSHMEM_DISABLE_NCCL=1</span></code>。</p>
+</section>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="qwen3-30B-A3B.html"
+       title="上一页">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">上一页</p>
+        <p class="prev-next-title">8xH100 训练 Qwen3-30B-A3B</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="glm4.7-355B-A32B.html"
+       title="下一页">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">下一页</p>
+        <p class="prev-next-title">64xH100 训练 GLM-4.7</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> 目录
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">环境准备</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">下载模型</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#checkpoint">转换 Checkpoint</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">执行训练</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">参数简介</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">模型配置</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">训练并行</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#bf16-fp8-rollout">BF16 训练 + FP8 Rollout</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang">SGLang 配置</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">网络</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+作者： slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  最后更新于 2026 年 06 月 16 日.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

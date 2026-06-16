@@ -57,7 +57,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Jun 15, 2026"/>
+    <meta name="docbuild:last-update" content="Jun 16, 2026"/>
   </head>
   
   
@@ -169,6 +169,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="examples/glm4.7-30B-A3B.html">GLM-4.7-Flash with 8×H100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="examples/glm5.2-744B-A40B.html">GLM-5.2 744B-A40B with 256xH100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="examples/glm4.7-355B-A32B.html">GLM-4.7 with 64xH100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
 </ul>
@@ -465,7 +466,7 @@
 <section id="why-this-design-matters">
 <h2>Why This Design Matters<a class="headerlink" href="#why-this-design-matters" title="Link to this heading">#</a></h2>
 <ul class="simple">
-<li><p><strong>Battle-tested by frontier model training</strong>: slime is the RL framework behind <a class="reference external" href="https://z.ai/blog/glm-5.1">GLM-5.1</a>, <a class="reference external" href="https://z.ai/blog/glm-5">GLM-5</a>, <a class="reference external" href="https://z.ai/blog/glm-4.7">GLM-4.7</a>, <a class="reference external" href="https://z.ai/blog/glm-4.6">GLM-4.6</a>, and <a class="reference external" href="https://z.ai/blog/glm-4.5">GLM-4.5</a>.</p></li>
+<li><p><strong>Battle-tested by frontier model training</strong>: slime is the RL framework behind <a class="reference external" href="https://z.ai/blog/glm-5.2">GLM-5.2</a>, <a class="reference external" href="https://z.ai/blog/glm-5.1">GLM-5.1</a>, <a class="reference external" href="https://z.ai/blog/glm-5">GLM-5</a>, <a class="reference external" href="https://z.ai/blog/glm-4.7">GLM-4.7</a>, <a class="reference external" href="https://z.ai/blog/glm-4.6">GLM-4.6</a>, and <a class="reference external" href="https://z.ai/blog/glm-4.5">GLM-4.5</a>.</p></li>
 <li><p><strong>Native by design</strong>: slime passes Megatron arguments through directly and exposes installed SGLang arguments with a <code class="docutils literal notranslate"><span class="pre">--sglang-</span></code> prefix, so upstream training and serving optimizations remain available without adding another wrapper layer.</p></li>
 <li><p><strong>SGLang-focused rollout</strong>: slime chooses one rollout backend intentionally. This avoids flattening multiple inference engines into a lowest-common-denominator abstraction and lets RL workloads use SGLang-specific serving, routing, caching, disaggregation, and weight-sync behavior directly.</p></li>
 <li><p><strong>Agentic workflows as data generation</strong>: tool use, sandbox interaction, verifier rewards, environment feedback, multi-agent loops, and long-horizon agentic workflows plug into the same training / rollout / Data Buffer path instead of forking the training kernel.</p></li>
@@ -519,6 +520,7 @@
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="examples/glm4.7-30B-A3B.html">GLM-4.7-Flash with 8×H100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="examples/glm5.2-744B-A40B.html">GLM-5.2 744B-A40B with 256xH100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="examples/glm4.7-355B-A32B.html">GLM-4.7 with 64xH100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
 </ul>
@@ -652,7 +654,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jun 15, 2026.
+  Last updated on Jun 16, 2026.
   <br/>
 </p>
   </div>
