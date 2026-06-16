@@ -30,13 +30,20 @@ from slime.agent.aiohttp_threaded import FilteredAccessLogger, run_app_in_thread
 from slime.agent.harness import ClaudeCodeHarness
 from slime.agent.sandbox import E2BSandbox
 from slime.utils.misc import SingletonMeta
-from slime.utils.processing_utils import load_tokenizer
 from slime.utils.types import Sample
 
 from . import swe
 
 logger = logging.getLogger(__name__)
 logging.getLogger("e2b").setLevel(logging.WARNING)
+
+
+def load_tokenizer(name_or_path: str, **kwargs):
+    # Lazy import: transformers is a heavy dep absent from the CPU-only agent
+    # test env, which patches this symbol with a fake tokenizer instead.
+    from slime.utils.processing_utils import load_tokenizer as _load_tokenizer
+
+    return _load_tokenizer(name_or_path, **kwargs)
 
 
 @dataclass(frozen=True)
