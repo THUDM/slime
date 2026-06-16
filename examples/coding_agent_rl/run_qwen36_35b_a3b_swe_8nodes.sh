@@ -1,30 +1,8 @@
 #!/usr/bin/env bash
-# End-to-end SWE coding-agent RL on 8 nodes.
-#
-# Standard model and training loop, with three extra layers that actively
-# encourage the rollout to dispatch sub-agents.
-# Trajectory trees produced by this script show real `sibling` branches:
-#
-#   (1) An `investigator` sub-agent is registered via claude-code's --agents
-#       flag (Grep/Read/Glob only, no edits) — a concrete, narrowly-scoped
-#       dispatch target.
-#   (2) SWE_CC_PROMPT requires the model to dispatch the investigator before
-#       any edit, naming the exact call form (Agent tool with
-#       subagent_type=investigator).
-#   (3) Agent/Task tools stay in the allowed set; WebFetch/WebSearch are
-#       disabled (sandbox has no outbound internet); --disable-slash-commands
-#       removes /compact as a competing branching pathway.
-#
-# Fan-out semantics:
-#   * generate() returns list[Sample] (one Sample per trajectory segment);
-#     the per-trajectory reward is split as reward/K across segments.
-#   * Sub-agent dispatch increases K (each sub-agent turn block becomes its
-#     own segment), so the effective batch after flatten can be much larger
-#     than rollout_batch_size * n_samples_per_prompt. If pinned-memory or
-#     GPU wake_up OOM appears, lower rollout_batch_size or n_samples_per_prompt
-#     first — not max-tokens-per-gpu.
-# Run from a long-lived shell / tmux session on the Ray head node; do not wrap
-# in a short-lived nohup launcher or Ray child processes get cleaned up with it.
+# End-to-end SWE coding-agent RL on 8 nodes. See README.md for the dataset
+# schema, env vars, and fan-out semantics. Run from a long-lived shell / tmux
+# session on the Ray head node (a short-lived nohup launcher gets its Ray child
+# processes cleaned up with it).
 
 # Best-effort cleanup so a rerun does not collide with stale workers.
 pkill -9 sglang || true
@@ -40,8 +18,6 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 SLIME_DIR="${SLIME_DIR:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
 
 # ============ model parallelism ============
-# CP=8 (higher than the baseline script's CP=2) gives more rank-local context
-# room for the longer per-segment payloads typical under sub-agent dispatch.
 export TP_SIZE="${TP_SIZE:-2}"
 export PP_SIZE="${PP_SIZE:-1}"
 export CP_SIZE="${CP_SIZE:-8}"
@@ -73,7 +49,6 @@ MAX_CONTEXT_LEN="${MAX_CONTEXT_LEN:-96000}"
 MAX_GEN_LEN="${MAX_GEN_LEN:-32768}"
 
 # ============ paths — override before launching ============
-# Point these at your own checkpoints / dataset.
 HF_CHECKPOINT="${HF_CHECKPOINT:-/path/to/Qwen3.6-35B-A3B}"
 REF_MODEL_PATH="${REF_MODEL_PATH:-/path/to/Qwen3.6-35B-A3B_torch_dist}"
 PROMPT_DATA="${PROMPT_DATA:-/path/to/swe_train.jsonl}"
@@ -169,8 +144,8 @@ PERF_ARGS=(
    --recompute-granularity full
    --recompute-method uniform
    --recompute-num-layers 1
-   # one CP rank's slice of MAX_CONTEXT_LEN; log-probs chunked along T to
-   # avoid OOM on long single trajectories.
+   # max-tokens-per-gpu is one CP rank's slice of MAX_CONTEXT_LEN; log-probs are
+   # chunked along T to avoid OOM on long single trajectories.
    --max-tokens-per-gpu $((MAX_CONTEXT_LEN / CP_SIZE))
    --log-probs-chunk-size 1024
    --use-dynamic-batch-size
@@ -209,12 +184,6 @@ SGLANG_ARGS=(
    --sglang-moe-dense-tp-size 1
    --sglang-tool-call-parser qwen3_coder
    --sglang-reasoning-parser qwen3
-   --sglang-speculative-algorithm EAGLE
-   --sglang-speculative-num-steps 3
-   --sglang-speculative-eagle-topk 1
-   --sglang-speculative-num-draft-tokens 4
-   --sglang-mamba-scheduler-strategy extra_buffer
-   --prefill-num-servers 1
 )
 
 MISC_ARGS=(
@@ -237,60 +206,29 @@ export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-${MLP_SOCKET_IFNAME:-eth0}}"
 
 # ============ SWE / claude-code rollout knobs ============
 
-# --- sandbox provisioning (E2B) ---
-# The E2B SDK validates the API key format locally before it reaches
-# E2B-compatible gateways. If your internal gateway ignores auth, use any
-# syntactically valid e2b_... hex placeholder.
-E2B_DUMMY_API_KEY="e2b_0000000000000000000000000000000000000000"
-E2B_API_KEY="${E2B_API_KEY:-${E2B_DUMMY_API_KEY}}"
-if [[ ! "${E2B_API_KEY}" =~ ^e2b_[0-9a-fA-F]{40}$ ]]; then
-  echo "WARN: E2B_API_KEY does not pass local E2B SDK format validation; using dummy key." >&2
-  E2B_API_KEY="${E2B_DUMMY_API_KEY}"
-fi
-export E2B_API_KEY
-export SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY="${SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY:-glm-platform/image}"
-# Host-side tarballs injected into each sandbox at boot.
+export E2B_API_KEY="${E2B_API_KEY:-e2b_0000000000000000000000000000000000000000}"
+# Metadata key your gateway routes images by; `image` is the neutral default.
+export SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY="${SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY:-image}"
 export SLIME_AGENT_NODE_TARBALL="${SLIME_AGENT_NODE_TARBALL:-/path/to/node-v22.x-linux-x64.tar.xz}"
 export SLIME_AGENT_CC_TARBALL="${SLIME_AGENT_CC_TARBALL:-/path/to/anthropic-ai-claude-code-local-linux-x64.tgz}"
 
-# --- reply path (sandbox -> host adapter) ---
+# ADAPTER_PUBLIC_HOST must be routable from inside the sandbox (not 127.0.0.1).
 export ADAPTER_PUBLIC_HOST="${ADAPTER_PUBLIC_HOST:-${MASTER_ADDR:-${MLP_WORKER_0_HOST:-127.0.0.1}}}"
 export ADAPTER_BIND_HOST="${ADAPTER_BIND_HOST:-0.0.0.0}"
 export ADAPTER_PORT="${ADAPTER_PORT:-18001}"
 
-# --- per-trajectory time / concurrency budgets ---
-# Time budget 1800s (vs baseline 1200): sub-agent dispatch on large repos blows
-# past a tighter budget — investigator passes are the long tail.
-# Boot concurrency 16: bench_boot_concurrency measured 100% boot success up to
-# 64/process with create flat at ~2s; the cost is install latency (tarball +
-# npm), which only starts climbing past 32. 16 is well inside the safe envd
-# range per process — raise per-gateway only after accounting for process count.
 export SWE_AGENT_TIME_BUDGET_SEC="${SWE_AGENT_TIME_BUDGET_SEC:-1800}"
 export SWE_EVAL_TIMEOUT_SEC="${SWE_EVAL_TIMEOUT_SEC:-600}"
 export SWE_BOOT_CONCURRENCY="${SWE_BOOT_CONCURRENCY:-16}"
 
-# --- trajectory fan-out ---
-# generate() emits one Sample per segment (reducer splits reward/K);
-# rollout_id is shared so the per-rollout-mean loss reducer still counts
-# the trajectory once.
-# --rollout-max-response-len caps one model turn. The custom generate function
-# uses --rollout-max-context-len as the multi-turn prompt+response budget.
-
-# --- claude-code CLI extras ---
-# SETTINGS_JSON: autoCompactWindow (80k) < MAX_CONTEXT_LEN (96k) so the CLI
-#   compacts before any segment crosses the training-side cap.
-# AGENTS_JSON: register a read-only `investigator` sub-agent (Grep/Read/Glob)
-#   as a concrete, narrowly-scoped dispatch target.
-# SLIME_AGENT_CC_EXTRA_ARGS: WebFetch/WebSearch are off (sandbox has no outbound
-#   internet); --disable-slash-commands keeps the model from emitting /compact
-#   as a competing branching pathway.
+# autoCompactWindow (80k) < MAX_CONTEXT_LEN (96k) so the CLI compacts before any
+# segment crosses the training-side cap. `investigator` is a read-only sub-agent
+# (a concrete dispatch target). WebFetch/WebSearch off (no outbound internet).
 SETTINGS_JSON='{"permissions":{"defaultMode":"bypassPermissions"},"autoCompactEnabled":true,"autoCompactWindow":80000}'
 AGENTS_JSON='{"investigator":{"description":"Searches the repo for relevant files before any edit","prompt":"You are an investigator sub-agent. Use Grep/Read/Glob to find every file relevant to the user task, then return a short bulleted summary. Do NOT edit anything.","tools":["Grep","Read","Glob"]}}'
 export SLIME_AGENT_CC_EXTRA_ARGS="--settings '${SETTINGS_JSON}' --disable-slash-commands --agents '${AGENTS_JSON}' --disallowedTools WebFetch WebSearch"
 
-# Optional: bias the model to dispatch the investigator before any edit.
-# Uncomment to maximize sub-agent dispatch — naming the exact call form
-# (Agent tool with subagent_type=investigator) is what reliably triggers it.
+# Optional: require dispatching the investigator before any edit, to maximize sub-agent fan-out.
 # export SWE_CC_PROMPT="Read PROBLEM_STATEMENT.md. BEFORE editing any file, dispatch the 'investigator' sub-agent (via the Agent tool with subagent_type=investigator) to locate every file relevant to the issue. Then fix the issue and run the tests."
 
 # ============ proxy bypass for in-cluster traffic ============

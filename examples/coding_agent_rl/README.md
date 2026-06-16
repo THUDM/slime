@@ -61,10 +61,19 @@ export PROMPT_DATA=/path/to/swe_train.jsonl
 export SLIME_AGENT_NODE_TARBALL=/path/to/node-v22.20.0-linux-x64.tar.xz
 export SLIME_AGENT_CC_TARBALL=/path/to/anthropic-ai-claude-code-local-linux-x64.tgz
 
+# Sandbox provider:
+export E2B_API_KEY=e2b_xxx                       # real key for e2b.dev; a syntactically
+                                                 # valid placeholder if your gateway ignores auth
+export SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY=image   # metadata key your gateway routes images by
+
 bash examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nodes.sh
 ```
 
-The launcher brings up Ray across all hosts listed in the hostfile (`$HOSTFILE`), dumps every rollout to `runs/${EXP_TAG}_${STAMP}/rollout_dumps/`, and tees stdout into `runs/${EXP_TAG}_${STAMP}/run.log`.
+The launcher fans Ray out to every worker listed in `$HOSTFILE` (default
+`/root/mpi_rack_hostfile`, one worker IP per line, reachable over passwordless
+SSH as `root`) — create that file (or point `HOSTFILE` at your own) before
+launching. It then dumps every rollout to `runs/${EXP_TAG}_${STAMP}/rollout_dumps/`
+and tees stdout into `runs/${EXP_TAG}_${STAMP}/run.log`.
 
 ## New Arguments
 
