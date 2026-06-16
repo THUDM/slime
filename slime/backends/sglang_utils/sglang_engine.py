@@ -3,6 +3,7 @@ import ipaddress
 import logging
 import multiprocessing
 import os
+import threading
 import time
 from urllib.parse import quote
 
@@ -166,6 +167,19 @@ class SGLangEngine(RayActor):
             self._init_external(server_args_dict, external_engine_need_check_fields=external_engine_need_check_fields)
         else:
             self._init_normal(server_args_dict)
+
+        # Warm the host-local base off the actor's main thread: sglang serves the first rollout from
+        # its init-loaded weights, so the materialize (a full base copy) only has to finish before
+        # the first delta reload. init_local_checkpoint is idempotent and flock-guarded, so the first
+        # sync_local_checkpoint either finds it done or blocks on the same lock — no join needed.
+        if self.args.update_weight_mode == "delta" and self.args.update_weight_transport == "disk":
+            from slime.utils.disk_delta import init_local_checkpoint
+
+            threading.Thread(
+                target=init_local_checkpoint,
+                args=(self.args.update_weight_local_checkpoint_dir, self.args.hf_checkpoint),
+                daemon=True,
+            ).start()
 
     def _init_external(self, expect_server_args, external_engine_need_check_fields):
         logger.info(f"Use external SGLang engine (rank={self.rank}, expect_server_args={expect_server_args})")
