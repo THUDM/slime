@@ -3,7 +3,7 @@
 [中文版](./README_zh.md)
 
 [![Documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg?style=flat)](https://thudm.github.io/slime/)
-[![CI](https://img.shields.io/github/check-runs/THUDM/slime/zilin%2Fci-dont-merge?label=CI&logo=github)](https://github.com/THUDM/slime/pull/2053/checks)
+[![CI](https://img.shields.io/github/actions/workflow/status/THUDM/slime/pr-test.yml?branch=zilin%2Fci-dont-merge&event=pull_request&label=CI&logo=github)](https://github.com/THUDM/slime/pull/2053/checks)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/THUDM/slime)
 
 **slime** is an LLM post-training framework for RL scaling, providing two core capabilities:
