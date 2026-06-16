@@ -5,7 +5,6 @@ from argparse import Namespace
 from contextlib import nullcontext
 from pathlib import Path
 
-import numpy as np
 import ray
 import torch
 import torch.distributed as dist
@@ -229,29 +228,26 @@ class MegatronTrainRayActor(TrainRayActor):
         )
         # TODO: this is ugly, move to somewhere else?
         # move tokens to GPU in advance
+        device = torch.cuda.current_device()
         rollout_data["tokens"] = [
-            torch.tensor(t, dtype=torch.long, device=torch.cuda.current_device()) for t in rollout_data["tokens"]
+            t.to(device=device, dtype=torch.long, non_blocking=True) for t in rollout_data["tokens"]
         ]
         rollout_data["loss_masks"] = [
-            torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in rollout_data["loss_masks"]
+            t.to(device=device, dtype=torch.int, non_blocking=True) for t in rollout_data["loss_masks"]
         ]
         if "rollout_mask_sums" in rollout_data:
             # Promote precomputed per-rollout mask totals to GPU tensors here
             # (matching loss_masks) so the loss reducer can just divide.
-            rollout_data["rollout_mask_sums"] = torch.tensor(
-                rollout_data["rollout_mask_sums"], dtype=torch.float32, device=torch.cuda.current_device()
+            rollout_data["rollout_mask_sums"] = rollout_data["rollout_mask_sums"].to(
+                device=device, dtype=torch.float32, non_blocking=True
             )
         if "multimodal_train_inputs" in rollout_data:
             # Move multimodal training tensors to GPU in advance
             rollout_data["multimodal_train_inputs"] = [
                 (
                     {
-                        key: (
-                            torch.from_numpy(v.copy()).to(device=torch.cuda.current_device())
-                            if isinstance(v, np.ndarray)
-                            else v.to(device=torch.cuda.current_device())
-                        )
-                        for key, v in mm_dict.items()
+                        key: value.to(device=device, non_blocking=True) if isinstance(value, torch.Tensor) else value
+                        for key, value in mm_dict.items()
                     }
                     if mm_dict is not None
                     else None
@@ -273,16 +269,16 @@ class MegatronTrainRayActor(TrainRayActor):
             if key not in rollout_data:
                 continue
             rollout_data[key] = [
-                torch.tensor(
-                    slice_log_prob_with_cp(
-                        log_prob,
-                        total_length,
-                        response_length,
-                        self.args.qkv_format,
-                        rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
-                    ),
-                    device=torch.cuda.current_device(),
+                slice_log_prob_with_cp(
+                    log_prob,
+                    total_length,
+                    response_length,
+                    self.args.qkv_format,
+                    rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
+                ).to(
+                    device=device,
                     dtype=torch.float32,
+                    non_blocking=True,
                 )
                 for i, (log_prob, total_length, response_length) in enumerate(
                     zip(
@@ -292,10 +288,6 @@ class MegatronTrainRayActor(TrainRayActor):
                         strict=False,
                     )
                 )
-            ]
-        if "rollout_routed_experts" in rollout_data:
-            rollout_data["rollout_routed_experts"] = [
-                torch.from_numpy(r) for r in rollout_data["rollout_routed_experts"]
             ]
         return rollout_data
 

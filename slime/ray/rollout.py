@@ -36,6 +36,14 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
+_ROLLOUT_DATA_TENSOR_DTYPES = {
+    "tokens": torch.long,
+    "loss_masks": torch.int,
+    "rollout_log_probs": torch.float32,
+    "teacher_log_probs": torch.float32,
+    "rollout_routed_experts": None,
+}
+
 _SGLANG_REQUEST_PERF_FIELDS = (
     ("request/e2e_latency", "e2e_latency"),
     ("request/queue_time", "queue_time"),
@@ -58,6 +66,38 @@ _SGLANG_DECODE_PERF_FIELDS = (
     ("decode/transfer_duration", "pd_decode_transfer_duration"),
     ("decode/forward_duration", "pd_decode_forward_duration"),
 )
+
+
+def _cpu_tensor(value, dtype: torch.dtype | None = None) -> torch.Tensor:
+    if isinstance(value, np.ndarray) and not value.flags.writeable:
+        value = value.copy()
+    tensor = torch.as_tensor(value, dtype=dtype) if dtype is not None else torch.as_tensor(value)
+    return tensor.detach().cpu().contiguous()
+
+
+def _tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:
+    for key, dtype in _ROLLOUT_DATA_TENSOR_DTYPES.items():
+        if key in rollout_data:
+            rollout_data[key] = [_cpu_tensor(value, dtype=dtype) for value in rollout_data[key]]
+
+    if "multimodal_train_inputs" in rollout_data:
+        rollout_data["multimodal_train_inputs"] = [
+            (
+                {
+                    key: _cpu_tensor(value) if isinstance(value, (np.ndarray, torch.Tensor)) else value
+                    for key, value in mm_dict.items()
+                }
+                if mm_dict is not None
+                else None
+            )
+            for mm_dict in rollout_data["multimodal_train_inputs"]
+        ]
+
+    if "rollout_mask_sums" in rollout_data:
+        rollout_data["rollout_mask_sums"] = _cpu_tensor(
+            rollout_data["rollout_mask_sums"],
+            dtype=torch.float32,
+        )
 
 
 @dataclasses.dataclass
@@ -824,7 +864,14 @@ class RolloutManager:
             rollout_data["global_batch_sizes"] = global_batch_sizes
             rollout_data["num_microbatches"] = num_microbatches
             rollout_data["micro_batch_indices"] = micro_batch_indices[r]
-            rollout_data_refs.append(Box(ray.put(rollout_data)))
+            _tensorize_rollout_data_for_training(rollout_data)
+            transport = getattr(self.args, "rollout_data_transport", "object-store")
+            if transport == "nixl":
+                rollout_data_refs.append(Box(ray.put(rollout_data, _tensor_transport="nixl")))
+            elif transport == "object-store":
+                rollout_data_refs.append(Box(ray.put(rollout_data)))
+            else:
+                raise ValueError(f"Unsupported rollout data transport: {transport!r}")
         return rollout_data_refs
 
 
