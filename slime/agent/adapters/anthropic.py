@@ -1,20 +1,17 @@
 """Anthropic Messages adapter for agent rollouts.
 
-The adapter exposes ``/v1/messages`` and ``/v1/messages/count_tokens``. It
-renders each Anthropic message history with the served model's chat template,
-calls SGLang ``/generate`` with ``input_ids``, and feeds the turn into a
-shared :class:`~slime.agent.trajectory_manager.TrajectoryManager` keyed by
-session id. ``finish_session(sid)`` drains a session's trajectory into a list
-of :class:`~slime.utils.types.Sample`.
+Exposes /v1/messages and /v1/messages/count_tokens. Each Anthropic message
+history is rendered with the served model's chat template, sent to sglang
+/generate as input_ids, and fed into a shared TrajectoryManager keyed by session
+id. finish_session(sid) drains a session's trajectory into a list of Sample.
 
 The per-sid tree inside TrajectoryManager handles sub-agent and compaction
-patterns automatically (any divergence in the prompt prefix forks into a new
-leaf), so we no longer track ``main`` / ``active_sub`` chains here.
+patterns automatically: any divergence in the prompt prefix forks into a new
+leaf, so we do not track explicit chains here.
 
-This module is the canonical adapter template: the section layout below
-(Adapter class -> translation -> reply building -> request framing) mirrors
-:mod:`slime.agent.adapters.openai`. See
-:class:`~slime.agent.adapters.common.BaseAdapter` for the hooks to fill.
+This module mirrors slime.agent.adapters.openai; the section layout (adapter
+class -> translation -> reply building -> request framing) is shared between
+them. See BaseAdapter for the hooks to fill.
 """
 
 from __future__ import annotations
@@ -40,8 +37,8 @@ logger = logging.getLogger(__name__)
 
 
 class AnthropicAdapter(BaseAdapter):
-    """Anthropic Messages-compatible HTTP adapter: wire translation + reply
-    framing only; the turn machinery is inherited from :class:`BaseAdapter`."""
+    """Anthropic Messages-compatible HTTP adapter: wire translation and reply
+    framing only; the turn machinery is inherited from BaseAdapter."""
 
     logger = logger
     log_prefix = "anthropic_adapter"
@@ -69,7 +66,6 @@ class AnthropicAdapter(BaseAdapter):
             manager_message=manager_message,
             finish_reason=manager_finish_reason(parsed.tool_uses, raw_finish),
             wire=(blocks, stop_reason),
-            skip_append=_is_cc_title_generation_request(translated, tools_schema),
         )
 
     async def _respond(self, request, body, reply, in_tok, out_tok, stream) -> web.StreamResponse:
@@ -79,9 +75,7 @@ class AnthropicAdapter(BaseAdapter):
         return web.json_response(_render_response(body, blocks, stop_reason, in_tok, out_tok))
 
 
-# =============================================================================
-# Translation (Anthropic wire -> chat-template messages)
-# =============================================================================
+# --- Translation (Anthropic wire -> chat-template messages) ---
 
 
 def _translate_messages(msgs: list[dict], system: Any) -> list[dict]:
@@ -113,8 +107,7 @@ def _translate_messages(msgs: list[dict], system: Any) -> list[dict]:
                 elif b.get("type") == "thinking":
                     thinkings.append(b.get("thinking", ""))
                 elif b.get("type") == "tool_use":
-                    # Drop the wire-only "id"; see tool_call_dict for why
-                    # arguments stays a dict and ids are dropped.
+                    # drop the wire-only id; tool_call_dict keeps arguments a dict
                     tcs.append(tool_call_dict(b.get("name", "tool"), b.get("input")))
             mo: dict[str, Any] = {"role": "assistant", "content": "".join(texts)}
             if thinkings:
@@ -148,22 +141,18 @@ def _tools_to_chat_tools(anth_tools: list[dict] | None) -> list[dict] | None:
     return ts or None
 
 
-# =============================================================================
-# Reply building: parsed output -> Anthropic blocks + manager_message
-# =============================================================================
+# --- Reply building: parsed output -> Anthropic blocks + manager_message ---
 
 
 def _build_reply_parts(
     parsed: ParsedModelOutput,
     finish: str,
 ) -> tuple[list[dict], str, dict[str, Any]]:
-    """Return ``(anthropic blocks, wire stop_reason, manager_message)``.
+    """Return (anthropic blocks, wire stop_reason, manager_message).
 
-    The tool_calls inside ``manager_message`` use canonical args (see
-    :func:`~slime.agent.adapters.common.tool_call_dict`) so this assistant turn
-    compares equal (dict ``==``) to the same turn replayed as history on the
-    next /v1/messages request. The manager finish reason is derived separately
-    via :func:`~slime.agent.adapters.common.manager_finish_reason`.
+    The tool_calls inside manager_message use canonical args (tool_call_dict) so
+    this assistant turn compares equal (dict equality) to the same turn replayed
+    as history on the next request.
     """
     blocks: list[dict] = []
     if parsed.reasoning:
@@ -175,8 +164,7 @@ def _build_reply_parts(
     for tu in parsed.tool_uses:
         tu_id = f"toolu_{secrets.token_hex(8)}"
         blocks.append({"type": "tool_use", "id": tu_id, "name": tu["name"], "input": tu["input"]})
-        # The id above is wire-only; tool_call_dict drops it (and keeps
-        # arguments a dict) so the leaf matches its replayed echo.
+        # tu_id is wire-only; tool_call_dict drops it so the leaf matches its echo
         manager_tcs.append(tool_call_dict(tu["name"], tu.get("input")))
 
     if not blocks:
@@ -198,14 +186,12 @@ def _build_reply_parts(
     return blocks, stop_reason, manager_message
 
 
-# =============================================================================
-# Request framing: session id + wire response/stream rendering
-# =============================================================================
+# --- Request framing: session id + wire response/stream rendering ---
 
 
 def _request_session_id(request: web.Request) -> str:
-    # Anthropic SDK auth lands in Authorization: Bearer or X-Api-Key; the
-    # Messages body carries no sid hint. Bearer wins when both are present.
+    # Anthropic auth lands in Authorization: Bearer or X-Api-Key; the Messages
+    # body carries no sid hint. Bearer wins when both are present.
     return sid_from_bearer(request) or (request.headers.get("X-Api-Key") or "").strip() or "default"
 
 
@@ -223,9 +209,9 @@ def _render_response(body: dict, blocks: list[dict], stop_reason: str, in_tok: i
 
 
 async def _render_stream(request, blocks, stop_reason, in_tok, out_tok) -> web.StreamResponse:
-    """Stream blocks back to claude-code as an Anthropic Messages SSE
-    response: message_start, (content_block_start, content_block_delta,
-    content_block_stop)*N, message_delta, message_stop."""
+    """Stream blocks back as an Anthropic Messages SSE response: message_start,
+    (content_block_start, content_block_delta, content_block_stop)*N,
+    message_delta, message_stop."""
     out = web.StreamResponse(
         status=200,
         headers={
@@ -288,17 +274,14 @@ async def _render_stream(request, blocks, stop_reason, in_tok, out_tok) -> web.S
     return out
 
 
-# count_tokens runs every turn; claude-code uses it as a hint, not a hard
-# budget, so returning 0 is fine. (healthz / v1/models readiness probes are
-# served by BaseAdapter via common._health.)
+# count_tokens runs every turn but the client uses it only as a hint, not a
+# hard budget, so returning 0 is fine.
 async def _count_tokens(request: web.Request) -> web.Response:
     await request.read()
     return web.json_response({"input_tokens": 0})
 
 
-# =============================================================================
-# Anthropic-specific quirks: mid-list system folding + cc title-gen detection
-# =============================================================================
+# --- Anthropic-specific quirks: mid-list system folding ---
 
 
 _MID_SYSTEM_WRAP_PREFIX = "<system-reminder>\n"
@@ -306,16 +289,14 @@ _MID_SYSTEM_WRAP_SUFFIX = "\n</system-reminder>\n"
 
 
 def _fold_mid_list_system_into_user(body_obj: dict) -> bool:
-    """Fold non-leading ``role: system`` messages into a neighbouring user
-    message as a ``<system-reminder>`` text block. Mutates ``body_obj`` in
-    place; returns True iff any fold happened.
+    """Fold non-leading role:system messages into a neighbouring user message as
+    a <system-reminder> text block. Mutates body_obj in place; returns True iff
+    any fold happened.
 
-    Claude Code CLI >= 2.1.161 inserts ``{"role":"system","content":"<skills
-    list>"}`` in the middle of ``messages``. Qwen3-style chat templates reject
-    any system message past index 0 with ``System message must be at the
-    beginning.`` This wrap mirrors the older claude-code (<= 2.1.143)
-    behaviour by attaching the wrapped reminder to the preceding user message
-    (or the next one if no prior user message exists).
+    Some clients insert a system message in the middle of the message list, but
+    many chat templates reject any system message past index 0. Attaching the
+    wrapped reminder to the preceding user message (or the next one, if there is
+    no prior user message) keeps the history acceptable to the template.
     """
     msgs = body_obj.get("messages")
     if not isinstance(msgs, list) or not msgs:
@@ -367,45 +348,3 @@ def _fold_mid_list_system_into_user(body_obj: dict) -> bool:
     if changed:
         body_obj["messages"] = [m for m in msgs if m is not TOMBSTONE]
     return changed
-
-
-# Marker string Claude Code embeds in the system prompt of its per-session
-# title-generation request (a meta request that asks the LLM to produce a
-# short conversation title). Title-gen requests should NOT enter the RL
-# trajectory — they aren't agent work. See spec
-# docs/superpowers/specs/2026-06-04-skip-cc-title-gen-from-trajectory-design.md.
-_CC_TITLE_GEN_MARKER = "Generate a concise, sentence-case title"
-
-
-def _is_cc_title_generation_request(
-    translated: list[dict],
-    tools_schema: list[dict] | None,
-) -> bool:
-    """Return True iff this is a Claude Code per-session title-generation request.
-
-    Detection is AND-conjunction:
-      (1) ``tools_schema`` is falsy (cc sends tools=[]; converter returns None).
-      (2) one of the leading ``role=system`` messages' content contains
-          ``_CC_TITLE_GEN_MARKER``.
-
-    Scanning stops at the first non-system message — title-gen system blocks
-    always sit at the head of the request.
-    """
-    if tools_schema:
-        return False
-    for msg in translated:
-        if msg.get("role") != "system":
-            break
-        content = msg.get("content")
-        if isinstance(content, str):
-            if _CC_TITLE_GEN_MARKER in content:
-                return True
-        elif isinstance(content, list):
-            for block in content:
-                if (
-                    isinstance(block, dict)
-                    and isinstance(block.get("text"), str)
-                    and _CC_TITLE_GEN_MARKER in block["text"]
-                ):
-                    return True
-    return False

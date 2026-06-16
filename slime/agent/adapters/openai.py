@@ -1,22 +1,15 @@
 """OpenAI Chat-Completions adapter for agent rollouts.
 
-Mirrors :mod:`slime.agent.adapters.anthropic` but speaks the OpenAI
-``/v1/chat/completions`` wire protocol so that the Codex CLI (and any other
-OpenAI-compatible client) can drive the slime SGLang server. Each incoming
-request is rendered with the served model's chat template, sent to SGLang
-``/generate`` as ``input_ids``, parsed, and folded into a shared
-:class:`~slime.agent.trajectory_manager.TrajectoryManager` keyed by session id.
-``finish_session(sid)`` drains a session's trajectory into a list of
-:class:`~slime.utils.types.Sample`.
+Mirrors slime.agent.adapters.anthropic but speaks the OpenAI
+/v1/chat/completions protocol, so an OpenAI-compatible client (e.g. the Codex
+CLI) can drive the slime sglang server. Each request is rendered with the served
+model's chat template, sent to sglang /generate as input_ids, parsed, and folded
+into a shared TrajectoryManager keyed by session id. finish_session(sid) drains
+a session's trajectory into a list of Sample.
 
-The per-sid tree inside TrajectoryManager handles sub-agent and compaction
-patterns automatically (any divergence in the prompt prefix forks into a new
-leaf), so we do not track explicit chains here.
-
-Only ``/v1/chat/completions`` is implemented; the older Responses API
-(``/v1/responses``) is intentionally out of scope -- Codex 0.30.0 uses
-``wire_api = "chat"``. The section layout (Adapter class -> translation ->
-reply building -> request framing) mirrors :mod:`slime.agent.adapters.anthropic`.
+Only /v1/chat/completions is implemented; the Responses API (/v1/responses) is
+out of scope. The section layout (adapter class -> translation -> reply building
+-> request framing) mirrors slime.agent.adapters.anthropic.
 """
 
 from __future__ import annotations
@@ -43,9 +36,8 @@ logger = logging.getLogger(__name__)
 
 
 class OpenAIAdapter(BaseAdapter):
-    """OpenAI Chat-Completions-compatible HTTP adapter: wire translation +
-    reply framing only; the turn machinery is inherited from
-    :class:`BaseAdapter`."""
+    """OpenAI Chat-Completions-compatible HTTP adapter: wire translation and
+    reply framing only; the turn machinery is inherited from BaseAdapter."""
 
     logger = logger
     log_prefix = "openai_adapter"
@@ -81,18 +73,15 @@ class OpenAIAdapter(BaseAdapter):
         return web.json_response(_render_response(body, wire_message, wire_finish, in_tok, out_tok))
 
 
-# =============================================================================
-# Translation (OpenAI wire -> chat-template messages)
-# =============================================================================
+# --- Translation (OpenAI wire -> chat-template messages) ---
 
 
 def _arguments_as_dict(arguments: Any) -> dict[str, Any]:
-    """Coerce wire-shape ``tool_calls[].function.arguments`` into a dict.
+    """Coerce wire-shape tool_calls[].function.arguments into a dict.
 
-    OpenAI sends ``arguments`` as a JSON-encoded string; the chat template and
-    the trajectory manager's history matching both expect a mapping. ``json.loads``
-    is tried first; malformed payloads fall back to ``{"_raw_arguments": s}``
-    (mirrors :func:`slime.agent.parsing.parse_tool_uses`).
+    OpenAI sends arguments as a JSON-encoded string; the chat template and the
+    trajectory manager's history matching both expect a mapping. Malformed
+    payloads fall back to {"_raw_arguments": s}.
     """
     if isinstance(arguments, dict):
         return arguments
@@ -113,19 +102,16 @@ def _arguments_as_dict(arguments: Any) -> dict[str, Any]:
 def _translate_messages(messages: list[dict]) -> list[dict]:
     """OpenAI chat messages -> tokenizer chat-template messages.
 
-    Mirrors :func:`slime.agent.adapters.anthropic._translate_messages` so that
-    a replayed assistant turn compares equal (dict ``==``, via the manager's
-    ``_find_mount_point``) to the leaf the manager appended on the previous
+    Mirrors anthropic._translate_messages so a replayed assistant turn compares
+    equal (dict equality) to the leaf the manager appended on the previous
     request. Two invariants must hold:
 
-      * ``tool_calls[i].function.arguments`` is a ``dict`` (NOT a JSON string).
-        Qwen3-style chat templates call ``arguments | items`` which requires
-        a mapping; the manager matches history by dict ``==`` so equivalent
-        dicts compare equal regardless of key order.
-      * Wire-only correlation ids are DROPPED: ``tool_call_id`` on ``role:
-        "tool"`` history messages and ``tool_calls[i].id`` on echoed assistant
-        messages. The adapter mints fresh ids on each response, so keeping the
-        wire ids would diverge the replay hash from the original leaf.
+      * tool_calls[i].function.arguments is a dict (not a JSON string): the chat
+        template needs a mapping, and the manager matches history by dict
+        equality regardless of key order.
+      * Wire-only correlation ids are dropped (tool_call_id on tool messages,
+        tool_calls[i].id on echoed assistant messages). Fresh ids are minted on
+        each response, so keeping the wire ids would diverge the replay match.
     """
     translated: list[dict] = []
     for msg in messages:
@@ -139,7 +125,7 @@ def _translate_messages(messages: list[dict]) -> list[dict]:
         if role in {"system", "user"}:
             translated.append({"role": role, "content": flatten_content(content)})
         elif role == "tool":
-            # DROP tool_call_id -- wire-only correlation field; see docstring.
+            # drop tool_call_id -- wire-only correlation field; see docstring
             translated.append({"role": "tool", "content": flatten_content(content)})
         elif role == "assistant":
             assistant: dict[str, Any] = {
@@ -159,8 +145,8 @@ def _translate_messages(messages: list[dict]) -> list[dict]:
                 arguments = function.get("arguments")
                 if arguments is None:
                     arguments = call.get("arguments", {})
-                # NB: arguments stays a dict (NOT a JSON string), and we DROP
-                # the wire-only ``id``. See docstring above.
+                # NB: arguments stays a dict (not a JSON string), and the
+                # wire-only id is dropped. See docstring above.
                 normalized.append(
                     {
                         "type": "function",
@@ -173,7 +159,7 @@ def _translate_messages(messages: list[dict]) -> list[dict]:
             if normalized:
                 assistant["tool_calls"] = normalized
             translated.append(assistant)
-        # Unknown roles are silently dropped.
+        # unknown roles are silently dropped
     return translated
 
 
@@ -219,25 +205,19 @@ def _tools_to_chat_tools(tools: list[dict] | None) -> list[dict] | None:
     return normalized or None
 
 
-# =============================================================================
-# Reply building: parsed output -> OpenAI wire message + manager_message
-# =============================================================================
+# --- Reply building: parsed output -> OpenAI wire message + manager_message ---
 
 
 def _build_reply_parts(parsed: ParsedModelOutput, finish: str) -> tuple[dict[str, Any], dict[str, Any], str]:
-    """Return ``(wire_message, manager_message, wire_finish)``.
+    """Return (wire_message, manager_message, wire_finish).
 
-    ``wire_message`` follows OpenAI Chat-Completions spec: ``tool_calls[].id``
-    is a unique correlation id, and ``tool_calls[].function.arguments`` is a
-    JSON-encoded **string** (clients depend on this).
+    wire_message follows the OpenAI Chat-Completions spec: tool_calls[].id is a
+    unique correlation id and tool_calls[].function.arguments is a JSON-encoded
+    string (clients depend on this).
 
-    ``manager_message`` is the shape fed to ``TrajectoryManager.record_turn``:
-    ``tool_calls[].function.arguments`` is a **dict** so chat-template replay
-    (Qwen3 etc.) succeeds and the manager's history match (dict ``==``) holds
-    against the echo on the next turn. The wire-only ``id`` is omitted (the next
-    turn's echo will not include it; matching anthropic.py's tool_call_dict).
-    The manager finish reason is derived separately via
-    :func:`~slime.agent.adapters.common.manager_finish_reason`.
+    manager_message is the shape fed to record_turn: arguments is a dict so
+    chat-template replay succeeds and the manager's history match (dict equality)
+    holds against the echo on the next turn, and the wire-only id is omitted.
     """
     wire_tool_calls: list[dict[str, Any]] = []
     manager_tool_calls: list[dict[str, Any]] = []
@@ -269,29 +249,18 @@ def _build_reply_parts(parsed: ParsedModelOutput, finish: str) -> tuple[dict[str
 
     wire_message: dict[str, Any] = {
         "role": "assistant",
-        # OpenAI spec allows null content when tool_calls are present. The
-        # Codex CLI 0.30.0 splits a single assistant turn containing both
-        # text and tool_calls into TWO echoed messages on the next request
-        # (a tool_calls-only one followed by a text-only one), which breaks
-        # the history match against our leaf -- so when we have tool_calls we
-        # send content=null so the echo is a single tool_calls-only message.
+        # send content=null when there are tool_calls: some OpenAI clients split
+        # a mixed text+tool_calls turn into two echoed messages otherwise, which
+        # diverges the history match against our leaf
         "content": None if wire_tool_calls else (parsed.text or None),
     }
-    # ``manager_message`` must match what the OAI client will echo on the
-    # next request, otherwise the manager's history match (dict ``==``) diverges
-    # and every turn forks. Three empirically necessary differences vs
-    # ``wire_message``:
-    #
-    #   * NO ``reasoning_content`` -- the Codex CLI strips it on echo, so we
-    #     must not store it in the leaf either. The reasoning token ids are
-    #     preserved in ``response_ids`` (used for loss), only the rendered
-    #     text is dropped.
-    #   * Only the FIRST ``tool_call`` -- the Codex CLI silently drops any
-    #     additional parallel tool_calls on echo (validates them serially and
-    #     aborts after the first response), so the leaf can only hold one.
-    #   * When ``tool_calls`` is present, ``content`` is empty -- the wire
-    #     side also sends ``content=null`` (see above) so the echo stays
-    #     a single tool_calls-only message that matches the leaf.
+    # manager_message must match what the client echoes on the next request, or
+    # the manager's history match (dict equality) diverges and every turn forks.
+    # Differences from wire_message, each needed to match the echo:
+    #   * no reasoning_content -- some clients strip it on echo (the reasoning
+    #     token ids are still kept in the trained tokens, only the text drops)
+    #   * only the first tool_call -- some clients drop extra parallel tool_calls
+    #   * empty content when tool_calls are present -- mirrors content=null above
     manager_message: dict[str, Any] = {
         "role": "assistant",
         "content": "" if wire_tool_calls else (parsed.text or ""),
@@ -312,18 +281,12 @@ def _build_reply_parts(parsed: ParsedModelOutput, finish: str) -> tuple[dict[str
     return wire_message, manager_message, wire_finish
 
 
-# =============================================================================
-# Request framing: session id + wire response/stream rendering
-# =============================================================================
+# --- Request framing: session id + wire response/stream rendering ---
 
 
 def _request_session_id(request: web.Request, body: dict) -> str:
-    """Resolve sid from request.
-
-    Tries ``Authorization: Bearer <sid>`` first (the canonical OpenAI auth
-    header; Codex CLI propagates ``OPENAI_API_KEY`` here), then falls back
-    to body-level hints (``metadata.session_id`` / ``user``).
-    """
+    """Resolve sid: Authorization: Bearer <sid> first (where an OpenAI client
+    propagates its API key), then body-level hints (metadata.session_id / user)."""
     return sid_from_bearer(request) or sid_from_body(body) or "default"
 
 
@@ -368,10 +331,10 @@ async def _render_stream(
 ) -> web.StreamResponse:
     """Emit the OpenAI Chat-Completions SSE stream.
 
-    Each chunk shape: ``data: {chatcmpl ...}\n\n`` ending with ``data: [DONE]``.
-    The whole turn is fully realised on the server before we start streaming
-    (we don't have token-level deltas from SGLang here), so we emit one role
-    chunk, then content / reasoning / tool_calls in single delta chunks each.
+    Each chunk has the shape `data: {chatcmpl ...}\n\n`, ending with
+    `data: [DONE]`. The whole turn is realised on the server before streaming
+    (we have no token-level deltas from sglang here), so we emit one role chunk,
+    then content / reasoning / tool_calls in single delta chunks each.
     """
     out = web.StreamResponse(
         status=200,
@@ -404,12 +367,9 @@ async def _render_stream(
     content = wire_message.get("content")
     if content:
         await emit({"content": content})
-    # NB: emit ALL tool_calls in a single chunk. Codex CLI 0.30.0 incorrectly
-    # accumulates per-index ``arguments`` fragments across chunks, causing N
-    # parallel tool_calls to collapse into a single call with a concatenated
-    # arguments string (``{"command": "..."}{"command": "..."}``) -- this then
-    # fails Codex's own arguments parser and the tool result becomes a parse
-    # error, breaking the history match (dict ``==``) alignment on the next turn.
+    # emit all tool_calls in a single chunk: some clients accumulate per-index
+    # arguments fragments across chunks, collapsing N parallel tool_calls into
+    # one call with a concatenated (and unparseable) arguments string
     tool_calls = wire_message.get("tool_calls") or []
     if tool_calls:
         await emit({"tool_calls": [{**call, "index": idx} for idx, call in enumerate(tool_calls)]})

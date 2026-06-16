@@ -376,7 +376,7 @@ def test_anthropic_multiturn_wire_roundtrip_and_token_capture():
 
 
 # ===========================================================================
-# §6 adapter behaviour: turn cap, cc title-gen skip, mid-list system fold
+# §6 adapter behaviour: turn cap, mid-list system fold
 # ===========================================================================
 
 
@@ -398,38 +398,6 @@ def test_max_turns_per_sid_returns_429():
             await _drain(adapter, "sid-cap")
         assert first.status == 200
         assert second.status == 429
-
-    asyncio.run(run_case())
-
-
-def test_cc_title_generation_request_skips_trajectory():
-    """A cc title-gen request (no tools + the title marker in system) responds
-    normally but never enters the trajectory -> finish_session yields nothing."""
-
-    async def run_case():
-        async with FakeSGLangServer([[(-0.1, 601)]]) as sglang:
-            tok = FakeTokenizer()
-            adapter = anthropic.AnthropicAdapter(tokenizer=tok, sglang_url=sglang.url)
-            adapter.open_session("sid-title")
-            client = TestClient(TestServer(adapter.app))
-            await client.start_server()
-            try:
-                resp = await client.post(
-                    "/v1/messages",
-                    headers={"Authorization": "Bearer sid-title"},
-                    json={
-                        "model": "m",
-                        "max_tokens": 4,
-                        "system": anthropic._CC_TITLE_GEN_MARKER + " for this chat",
-                        "messages": [{"role": "user", "content": "blah"}],
-                    },
-                )
-                await resp.json()
-            finally:
-                await client.close()
-            samples = await _drain(adapter, "sid-title")
-        assert resp.status == 200
-        assert samples == []  # skip_append kept it out of the tree
 
     asyncio.run(run_case())
 

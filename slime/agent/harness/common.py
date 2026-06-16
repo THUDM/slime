@@ -1,20 +1,16 @@
 """Harness-agnostic coding-agent lifecycle in a sandbox.
 
-A *harness* is a swappable coding agent (Claude Code, Codex, ...). Each one
-installs a CLI, drops its own config, and runs the agent against a prompt; the
-shared parts (create the agent user, the ``run`` skeleton, the E2B
-launch-detached-and-poll transport) live here. Adding a CLI-style harness means
-subclassing ``BaseHarness`` and implementing the three differing steps
-(``install_cli`` + ``write_config`` + ``launch_and_wait``) -- no edits to this
-file. Two module-level helpers absorb the common cases: ``install_npm_cli`` for
-npm-packaged CLIs, and ``run_command`` for the run-one-command-to-completion
-case (run one command detached, poll a done-marker). A harness with a different
-install path (pip, curl, pre-baked image) or execution model (interactive / a
-long-running server fed turn by turn) just writes those two methods directly.
+A harness is a swappable coding agent (Claude Code, Codex, ...). Each one
+installs a CLI, writes its own config, and runs the agent against a prompt. The
+shared parts (create the agent user, the run skeleton, the launch-detached-and-
+poll transport) live here; adding a CLI-style harness means subclassing
+BaseHarness and implementing install_cli, write_config and launch_and_wait.
+Two module-level helpers cover the common cases: install_npm_cli for
+npm-packaged CLIs, and run_command for the run-one-command-to-completion case.
 
-The base does NOT know anything about SWE: ``run()`` takes only generic fields
+The base knows nothing about the task: run() takes only generic fields
 (workdir / session_id / adapter_url / prompt). Task-specific workspace prep and
-scoring live in the example layer (``examples/coding_agent_rl/swe.py``).
+scoring live in the example layer.
 """
 
 from __future__ import annotations
@@ -44,10 +40,11 @@ EXIT_TIME_BUDGET_EXCEEDED = -1
 
 @dataclass(frozen=True)
 class HarnessContext:
-    """Deliberately free of any task (SWE) fields. ``model_label`` is a fixed
-    constant: the model name the harness advertises to its CLI. The slime
+    """Generic run context, free of any task fields.
+
+    model_label is the model name the harness advertises to its CLI. The slime
     adapter ignores it and serves whatever upstream sglang has loaded, so it is
-    not a ``run()`` parameter -- no caller ever needs to vary it.
+    not a run() parameter.
     """
 
     workdir: str
@@ -59,27 +56,25 @@ class HarnessContext:
 class BaseHarness(ABC, metaclass=SingletonABCMeta):
     """Base lifecycle for a sandbox-resident coding agent."""
 
-    #: Short identifier set by each subclass (claude_code / codex).
+    # short identifier set by each subclass (claude_code / codex)
     name: str = ""
 
     @abstractmethod
     async def install_cli(self, sb: Sandbox) -> None:
-        """Install the harness CLI into the sandbox (harness-specific).
-        npm-packaged harnesses delegate to ``install_npm_cli``."""
+        """Install the harness CLI into the sandbox.
+        npm-packaged harnesses delegate to install_npm_cli."""
 
     @abstractmethod
     async def write_config(self, sb: Sandbox, ctx: HarnessContext) -> None:
-        """Write any CLI config files into the sandbox (harness-specific)."""
+        """Write any CLI config files into the sandbox."""
 
     @abstractmethod
     async def launch_and_wait(self, sb: Sandbox, ctx: HarnessContext, prompt: str, time_budget_sec: int) -> int:
-        """Run the agent to completion and return its exit code (harness-specific).
+        """Run the agent to completion and return its exit code.
 
-        This is the execution-model step. A non-interactive CLI builds one shell
-        command and hands it to ``run_command`` (which provides the E2B
-        transport: run detached, poll a done-marker) -- see the existing
-        harnesses. An interactive or long-running harness drives its own loop
-        here instead, and may still reuse ``run_command`` for individual commands.
+        A non-interactive CLI builds one shell command and hands it to
+        run_command. An interactive or long-running harness drives its own loop
+        here instead.
         """
 
     async def run(
@@ -92,11 +87,11 @@ class BaseHarness(ABC, metaclass=SingletonABCMeta):
         time_budget_sec: int,
         prompt: str,
     ) -> int:
-        """Run the harness in ``sb`` and return its exit code.
+        """Run the harness in the sandbox and return its exit code.
 
-        Steps: ensure the agent user (sandbox infra) -> write config (subclass)
-        -> launch and wait for completion (subclass). Workspace prep (writing
-        PROBLEM_STATEMENT.md etc.) is the caller's job and must run before this.
+        Steps: ensure the agent user -> write config -> launch and wait.
+        Workspace prep (writing the problem statement etc.) is the caller's job
+        and must run before this.
         """
         await _sandbox.ensure_agent_user(sb, workdir)
         ctx = HarnessContext(
@@ -109,17 +104,15 @@ class BaseHarness(ABC, metaclass=SingletonABCMeta):
 
 
 async def run_command(sb: Sandbox, *, workdir: str, start_cmd: str, env: dict[str, str], time_budget_sec: int) -> int:
-    """Run ``start_cmd`` to completion in ``sb`` and return its exit code.
+    """Run start_cmd to completion in the sandbox and return its exit code.
 
-    The E2B transport mechanism, independent of any harness: its gateway resets
-    HTTP/2 around 6.5 min, so we can't keep a long-lived foreground exec. Instead
-    the command runs detached (``setsid``), piping output to a trajectory log and
-    writing the *command's* exit code (``PIPESTATUS[0]``, not tee's) into a marker
-    file; we poll that marker every 5s via short RPCs (which also keeps the
-    sandbox alive against idle GC). All metadata goes under ``{workdir}/.harness/``
-    so diff capture only has to exclude one directory. Returns
-    ``EXIT_TIME_BUDGET_EXCEEDED`` if the time budget is exceeded before the
-    command finishes.
+    Runs the command detached (setsid) rather than as a long-lived foreground
+    exec, so it survives sandbox gateways that cap connection lifetime. Output
+    is piped to a trajectory log and the command's exit code (PIPESTATUS[0], not
+    tee's) is written to a marker file, which we poll every 5s (the short RPCs
+    also keep the sandbox alive against idle GC). All metadata goes under
+    {workdir}/.harness/ so diff capture only has to exclude one directory.
+    Returns EXIT_TIME_BUDGET_EXCEEDED if the budget runs out first.
     """
     meta_dir = f"{workdir}/.harness"
     done = f"{meta_dir}/done"
@@ -164,10 +157,9 @@ async def run_command(sb: Sandbox, *, workdir: str, start_cmd: str, env: dict[st
 
 
 async def install_npm_cli(sb: Sandbox, *, node_runtime: Path, npm_package: Path, check_cmd: str) -> None:
-    """Install an npm-packaged CLI into the sandbox: the Node 22 runtime (from
-    ``node_runtime``) as a prerequisite, then the CLI's npm package (from
-    ``npm_package``, global install + self-check via ``check_cmd``). Shared by
-    npm-based harnesses; non-npm harnesses write their own ``install_cli``."""
+    """Install an npm-packaged CLI into the sandbox: the Node 22 runtime first,
+    then the CLI's npm package (global install, then self-check via check_cmd).
+    Non-npm harnesses write their own install_cli."""
     await install_node22(sb, node_runtime)
     await sb.write_file("/tmp/harness-cli.tgz", npm_package)
     await sb.exec(
@@ -179,9 +171,9 @@ async def install_npm_cli(sb: Sandbox, *, node_runtime: Path, npm_package: Path,
 
 
 async def install_node22(sb: Sandbox, host_tarball: Path) -> None:
-    """Node 22 over the base image (Debian 12 ships 16; cli.js needs >= 20).
-    Decompresses .xz on the host (cached) so sandboxes without xz-utils can
-    still run plain `tar xf`. npm prefix=/usr/local required for sweap-images."""
+    """Install Node 22 over the base image (some base images ship a version too
+    old for the CLI). A .xz tarball is decompressed on the host (cached) so
+    sandboxes without xz-utils can still run a plain `tar xf`."""
     host_tarball = Path(host_tarball)
     if host_tarball.suffix == ".xz":
         plain = Path(tempfile.gettempdir()) / f"coding_agent_rl.{host_tarball.stem}.tar"

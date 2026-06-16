@@ -15,7 +15,7 @@ from .common import BaseHarness, HarnessContext, install_npm_cli, run_command
 class ClaudeCodeHarness(BaseHarness):
     name = "claude_code"
 
-    # Host paths + CLI knobs, all under the agent-layer SLIME_AGENT_* prefix.
+    # host paths + CLI knobs, all under the agent-layer SLIME_AGENT_* prefix
     node_tarball_env = "SLIME_AGENT_NODE_TARBALL"
     cli_tarball_env = "SLIME_AGENT_CC_TARBALL"
     extra_args_env = "SLIME_AGENT_CC_EXTRA_ARGS"
