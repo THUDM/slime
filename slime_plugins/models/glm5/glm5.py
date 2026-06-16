@@ -709,8 +709,8 @@ def get_glm5_spec(args, config, vp_stage):
     config.index_num_attention_heads = hf_config.index_n_heads
     config.index_head_dim = hf_config.index_head_dim
     # Optional cross-layer index-sharing schedule. Present on DSA checkpoints that
-    # only store indexer weights on a subset of "computing" layers (e.g. GLM5.2 /
-    # DeepSeek-V3.2 750B). When absent, every layer computes its own top-k (plain
+    # only store indexer weights on a subset of "computing" layers (e.g. GLM-5.2
+    # 744B-A40B). When absent, every layer computes its own top-k (plain
     # DSA) and ``DSAMLASelfAttention`` runs the non-shared path.
     config.index_topk_freq = getattr(hf_config, "index_topk_freq", 1) or 1
     config.index_skip_topk_offset = getattr(hf_config, "index_skip_topk_offset", 0) or 0
