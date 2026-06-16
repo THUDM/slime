@@ -22,7 +22,7 @@ The slime training stack itself follows the standard setup. On top of that you n
 2. **Host-side tarballs** that get uploaded into each sandbox at boot:
    - Node 22 (`node-v22.x-linux-x64.tar.xz`) — exported as `SLIME_AGENT_NODE_TARBALL`.
    - Claude Code CLI npm tarball (`anthropic-ai-claude-code-local-linux-x64.tgz`) — exported as `SLIME_AGENT_CC_TARBALL`.
-3. **A sandbox metadata file** (`SLIME_AGENT_SANDBOX_METADATA_FILE`, legacy `SWE_SANDBOX_METADATA_FILE` still accepted) — JSON dict whose keys are passed as routing tags when booting an E2B sandbox. Must contain the image key referenced by `SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY` (legacy `SWE_SANDBOX_IMAGE_METADATA_KEY`, e.g. `image`).
+3. **An image routing key** (`SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY`, legacy `SWE_SANDBOX_IMAGE_METADATA_KEY` still accepted) — the metadata key your E2B gateway uses to route a boot to a specific image (e.g. `image`). Each sample's `metadata.image` is passed under this key when booting the sandbox.
 4. **Network reachability**: each sandbox dials back to the host's Anthropic adapter over `http://${ADAPTER_PUBLIC_HOST}:${ADAPTER_PORT}`. The adapter host must be reachable from inside the sandboxes (set `ADAPTER_PUBLIC_HOST` to a routable IP, not `127.0.0.1`).
 
 ## Dataset Format
@@ -34,7 +34,7 @@ Standard slime JSONL with three keys:
   "prompt": "<falls back here if metadata.problem_statement is missing>",
   "label": "<instance_id or grader label>",
   "metadata": {
-    "image": "swedev/scaleswe.oh.34:<tag>",   // sandbox image reference
+    "image": "your-registry/swe-image:<tag>",  // sandbox image reference
     "workdir": "/workspace/<repo>",            // repo path inside the sandbox
     "problem_statement": "<issue body>",
     // exactly one of the following two graders:
@@ -58,14 +58,13 @@ cd slime/
 export HF_CHECKPOINT=/path/to/Qwen3.6-35B-A3B
 export REF_MODEL_PATH=/path/to/Qwen3.6-35B-A3B_torch_dist
 export PROMPT_DATA=/path/to/swe_train.jsonl
-export SANDBOX_METADATA_FILE=/path/to/sandbox_metadata.json
 export SLIME_AGENT_NODE_TARBALL=/path/to/node-v22.20.0-linux-x64.tar.xz
 export SLIME_AGENT_CC_TARBALL=/path/to/anthropic-ai-claude-code-local-linux-x64.tgz
 
 bash examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nodes.sh
 ```
 
-The launcher brings up Ray across all hosts in `/root/mpi_rack_hostfile`, dumps every rollout to `runs/${EXP_TAG}_${STAMP}/rollout_dumps/`, and tees stdout into `runs/${EXP_TAG}_${STAMP}/run.log`.
+The launcher brings up Ray across all hosts listed in the hostfile (`$HOSTFILE`), dumps every rollout to `runs/${EXP_TAG}_${STAMP}/rollout_dumps/`, and tees stdout into `runs/${EXP_TAG}_${STAMP}/run.log`.
 
 ## New Arguments
 
@@ -111,8 +110,7 @@ contract (read inside `slime/agent/`); `SWE_*` are this SWE example's task knobs
 | `ADAPTER_PUBLIC_HOST` | `${MASTER_ADDR}` | Public IP the sandbox uses to reach the Anthropic adapter. **Must be routable from inside the sandbox.** |
 | `ADAPTER_BIND_HOST` / `ADAPTER_PORT` | `0.0.0.0` / `18001` | Bind address of the Anthropic adapter on the host. |
 | `E2B_API_KEY` | — | E2B (or compatible) API key. |
-| `SLIME_AGENT_SANDBOX_METADATA_FILE` | — | JSON dict of routing metadata passed at sandbox boot. (Legacy `SWE_SANDBOX_METADATA_FILE` still accepted.) |
-| `SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY` | — | Which key in the metadata file holds the image reference (e.g. `image`). (Legacy `SWE_SANDBOX_IMAGE_METADATA_KEY` still accepted.) |
+| `SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY` | — | **Required.** Which metadata key the E2B gateway routes images by (e.g. `image`); each sample's `metadata.image` is passed under it. (Legacy `SWE_SANDBOX_IMAGE_METADATA_KEY` still accepted.) |
 | `SLIME_AGENT_NODE_TARBALL` | — | Host path to Node 22 tarball uploaded into each sandbox. |
 | `SLIME_AGENT_CC_TARBALL` | — | Host path to the Claude Code CLI npm tarball. |
 | `SLIME_AGENT_CC_EXTRA_ARGS` | (see launcher) | Extra flags appended to the `claude` CLI invocation — registers the read-only `investigator` sub-agent, disables `WebFetch`/`WebSearch`, disables slash commands. |

@@ -73,11 +73,10 @@ MAX_CONTEXT_LEN="${MAX_CONTEXT_LEN:-96000}"
 MAX_GEN_LEN="${MAX_GEN_LEN:-32768}"
 
 # ============ paths — override before launching ============
-# Point these at your own checkpoints / dataset / sandbox metadata.
+# Point these at your own checkpoints / dataset.
 HF_CHECKPOINT="${HF_CHECKPOINT:-/path/to/Qwen3.6-35B-A3B}"
 REF_MODEL_PATH="${REF_MODEL_PATH:-/path/to/Qwen3.6-35B-A3B_torch_dist}"
 PROMPT_DATA="${PROMPT_DATA:-/path/to/swe_train.jsonl}"
-SANDBOX_METADATA_FILE="${SANDBOX_METADATA_FILE:-/path/to/sandbox_metadata.json}"
 
 EXP_TAG="${EXP_TAG:-agent_only}"
 STAMP="$(date +%Y%m%d_%H%M%S)"
@@ -249,7 +248,6 @@ if [[ ! "${E2B_API_KEY}" =~ ^e2b_[0-9a-fA-F]{40}$ ]]; then
   E2B_API_KEY="${E2B_DUMMY_API_KEY}"
 fi
 export E2B_API_KEY
-export SLIME_AGENT_SANDBOX_METADATA_FILE="${SANDBOX_METADATA_FILE}"
 export SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY="${SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY:-glm-platform/image}"
 # Host-side tarballs injected into each sandbox at boot.
 export SLIME_AGENT_NODE_TARBALL="${SLIME_AGENT_NODE_TARBALL:-/path/to/node-v22.x-linux-x64.tar.xz}"
@@ -339,7 +337,7 @@ keys = (
     "SLIME_AGENT_CC_EXTRA_ARGS",
     "SLIME_AGENT_CC_EXTRA_ENVS",
     "SWE_CC_PROMPT",
-    "SLIME_AGENT_SANDBOX_METADATA_FILE", "SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY",
+    "SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY",
 )
 env = {k: os.environ[k] for k in keys if k in os.environ}
 env["MASTER_ADDR"] = os.environ["MASTER_ADDR"]
