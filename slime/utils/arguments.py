@@ -1713,33 +1713,6 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
     return eval_datasets
 
 
-def _validate_update_weight_args(args) -> None:
-    # disk-backed sync (full or delta) writes on the trainer and reads on the engines: needs a shared dir
-    if args.update_weight_transport == "disk" and not args.update_weight_disk_dir:
-        raise ValueError(
-            "--update-weight-transport=disk requires --update-weight-disk-dir to point at "
-            "a filesystem shared between the trainer and the rollout engines."
-        )
-
-    if args.update_weight_mode == "delta":
-        if args.update_weight_transport != "disk":
-            raise ValueError(
-                "--update-weight-mode=delta requires --update-weight-transport=disk, "
-                f"got {args.update_weight_transport!r}."
-            )
-        if args.colocate:
-            raise ValueError(
-                "--update-weight-mode=delta is not supported with --colocate. Colocate transfers "
-                "weights via CUDA IPC (only a handle crosses processes), so the delta bookkeeping "
-                "(snapshot + diff + encode) is pure overhead."
-            )
-        if not args.update_weight_local_checkpoint_dir:
-            raise ValueError(
-                "--update-weight-mode=delta requires --update-weight-local-checkpoint-dir "
-                "(a rollout-host-local NVMe directory)."
-            )
-
-
 def slime_validate_args(args):
     args.eval_datasets = _resolve_eval_datasets(args)
 
@@ -2008,4 +1981,26 @@ def slime_validate_args(args):
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")
 
-    _validate_update_weight_args(args)
+    # disk-backed sync (full or delta) writes on the trainer and reads on the engines: needs a shared dir
+    if args.update_weight_transport == "disk" and not args.update_weight_disk_dir:
+        raise ValueError(
+            "--update-weight-transport=disk requires --update-weight-disk-dir to point at "
+            "a filesystem shared between the trainer and the rollout engines."
+        )
+    if args.update_weight_mode == "delta":
+        if args.update_weight_transport != "disk":
+            raise ValueError(
+                "--update-weight-mode=delta requires --update-weight-transport=disk, "
+                f"got {args.update_weight_transport!r}."
+            )
+        if args.colocate:
+            raise ValueError(
+                "--update-weight-mode=delta is not supported with --colocate. Colocate transfers "
+                "weights via CUDA IPC (only a handle crosses processes), so the delta bookkeeping "
+                "(snapshot + diff + encode) is pure overhead."
+            )
+        if not args.update_weight_local_checkpoint_dir:
+            raise ValueError(
+                "--update-weight-mode=delta requires --update-weight-local-checkpoint-dir "
+                "(a rollout-host-local NVMe directory)."
+            )

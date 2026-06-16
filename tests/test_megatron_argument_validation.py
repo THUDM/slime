@@ -170,14 +170,10 @@ def test_allgather_cp_ignores_cp_size_one(monkeypatch):
 @pytest.mark.unit
 def test_update_weight_disk_dir_required_for_disk_transport(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
-    args = types.SimpleNamespace(
-        update_weight_mode="full",
-        update_weight_transport="disk",
-        update_weight_disk_dir=None,
-    )
+    args = make_slime_validate_args(update_weight_transport="disk", update_weight_disk_dir=None)
 
     with pytest.raises(ValueError, match="update-weight-disk-dir"):
-        module._validate_update_weight_args(args)
+        module.slime_validate_args(args)
 
 
 def make_slime_validate_args(**overrides):
@@ -258,7 +254,7 @@ def make_slime_validate_args(**overrides):
         freeze_params_name_list=None,
         update_weight_transport="nccl",
         update_weight_disk_dir=None,
-        update_weight_delta_dir=None,
+        update_weight_local_checkpoint_dir=None,
         update_weight_mode="full",
     )
     values.update(overrides)
@@ -311,22 +307,20 @@ def test_slime_validate_args_preserves_zero_rollout_gpus_without_colocate(monkey
 @pytest.mark.unit
 def test_update_weight_delta_requires_disk_transport(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
-    args = types.SimpleNamespace(
+    args = make_slime_validate_args(
         update_weight_mode="delta",
         update_weight_transport="nccl",
-        update_weight_disk_dir=None,
         update_weight_local_checkpoint_dir="/local/ckpt",
-        colocate=False,
     )
 
     with pytest.raises(ValueError, match="requires --update-weight-transport=disk"):
-        module._validate_update_weight_args(args)
+        module.slime_validate_args(args)
 
 
 @pytest.mark.unit
 def test_update_weight_delta_rejects_colocate(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
-    args = types.SimpleNamespace(
+    args = make_slime_validate_args(
         update_weight_mode="delta",
         update_weight_transport="disk",
         update_weight_disk_dir="/shared/delta",
@@ -335,22 +329,21 @@ def test_update_weight_delta_rejects_colocate(monkeypatch):
     )
 
     with pytest.raises(ValueError, match="not supported with --colocate"):
-        module._validate_update_weight_args(args)
+        module.slime_validate_args(args)
 
 
 @pytest.mark.unit
 def test_update_weight_delta_requires_local_checkpoint_dir(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
-    args = types.SimpleNamespace(
+    args = make_slime_validate_args(
         update_weight_mode="delta",
         update_weight_transport="disk",
         update_weight_disk_dir="/shared/delta",
         update_weight_local_checkpoint_dir=None,
-        colocate=False,
     )
 
     with pytest.raises(ValueError, match="requires --update-weight-local-checkpoint-dir"):
-        module._validate_update_weight_args(args)
+        module.slime_validate_args(args)
 
 
 if __name__ == "__main__":
