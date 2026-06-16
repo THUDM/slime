@@ -89,9 +89,13 @@ class RayTrainGroup:
 
         actor_impl = MegatronTrainRayActor
 
-        TrainRayActor = ray.remote(num_gpus=1, runtime_env={"env_vars": add_default_ray_env_vars(env_vars)})(
-            actor_impl
-        )
+        actor_options = {
+            "num_gpus": 1,
+            "runtime_env": {"env_vars": add_default_ray_env_vars(env_vars)},
+        }
+        if getattr(self.args, "rollout_data_transport", "object-store") == "nixl":
+            actor_options["enable_tensor_transport"] = True
+        TrainRayActor = ray.remote(**actor_options)(actor_impl)
 
         # Create worker actors
         self._actor_handlers = []
