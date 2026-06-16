@@ -87,8 +87,8 @@
       ],
     },
 
-    'agent-adapter-test': {
-      'label': 'run-ci-agent-adapter',
+    'agent-test': {
+      'label': 'run-ci-agent',
       'always': True,
       'cpu': True,
       'tests': [
@@ -109,7 +109,7 @@ name: PR Test
 
 on:
   # Push to main triggers the default GitHub-hosted jobs (cheap CPU/unit and
-  # agent adapter checks), catching PR-pair regressions where two PRs pass
+  # agent checks), catching PR-pair regressions where two PRs pass
   # individually but main is broken after both land. GPU jobs stay label-gated
   # — see each job's `if:` below — so push events never burn the self-hosted
   # fleet.
