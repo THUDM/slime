@@ -79,28 +79,16 @@ full checkpoint update from disk 是 external 场景最简单的兜底路径：
 
 ## Update With Delta
 
-delta update 面向大模型、跨集群或跨数据中心训推解耦。它不写完整 checkpoint，而是在训练端保留上一次同步后的 pinned CPU snapshot，逐字节检测变化，只发送变化位置和值。
-
-跨集群 / 共享文件系统推荐：
+delta update 面向大模型、跨集群或跨数据中心训推解耦。它不每次都写完整 checkpoint，而是在训练端保留上一次同步的 CPU snapshot，逐参数比对，只发布变化的字节；每个 rollout host 把 delta apply 进自己的本地 checkpoint，再通过原生 `update_weights_from_disk` 端点 reload。
 
 ```bash
 --update-weight-mode delta
 --update-weight-transport disk
---update-weight-encoding deltas_zstd
 --update-weight-disk-dir /shared/fs/delta-updates
+--update-weight-local-checkpoint-dir /local/nvme/rollout-ckpt
 ```
 
-在 disk transport 下，每次同步会写一组稀疏 safetensors 到 `weight_v{N:06d}/`，然后调用 `update_weights_from_disk(load_format="delta")`。SGLang 侧只把变化位置覆写到当前权重上，不变位置保持原值。
-
-在同一数据中心内做实现验证或带宽不紧张时，也可以用 NCCL transport：
-
-```bash
---update-weight-mode delta
---update-weight-transport nccl
---update-weight-encoding indices
-```
-
-编码如何选择、delta wire layout、接收端 selective overwrite 以及调优参数见 [Delta 权重同步](delta-weight-sync.md)。
+机制、编码、完整性校验以及共享文件系统可见性 hook 详见 [Delta 权重同步](delta-weight-sync.md)。
 
 ## 部署检查清单
 

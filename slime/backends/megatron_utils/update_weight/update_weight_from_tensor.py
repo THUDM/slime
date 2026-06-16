@@ -65,6 +65,7 @@ class UpdateWeightFromTensor:
         rollout_engine_lock: ActorHandle,
         engine_gpu_counts: Sequence[int] | None = None,
         engine_gpu_offsets: Sequence[int] | None = None,
+        all_engine_actors: Sequence[ActorHandle] | None = None,
     ) -> None:
         """
         Split colocated/distributed engines. Global source rank (DP=TP=PP=0) creates NCCL

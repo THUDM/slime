@@ -46,6 +46,7 @@ class UpdateWeightFromDisk:
         rollout_engine_lock: ActorHandle,
         engine_gpu_counts: Sequence[int] | None = None,
         engine_gpu_offsets: Sequence[int] | None = None,
+        all_engine_actors: Sequence[ActorHandle] | None = None,
     ) -> None:
         self.rollout_engines = rollout_engines
         self.rollout_engine_lock = rollout_engine_lock
