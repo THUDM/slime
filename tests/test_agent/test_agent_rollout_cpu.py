@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import sys
+import types
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -35,6 +36,17 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+# Importing generate pulls slime.utils.processing_utils at module load, which
+# eagerly imports transformers -- a heavy dep deliberately absent from the
+# CPU-only CI env for this test. We never touch a real tokenizer (load_tokenizer
+# is patched with FakeTokenizer below), so stub transformers before the import
+# so the chain resolves without it.
+if "transformers" not in sys.modules:
+    _tf_stub = types.ModuleType("transformers")
+    for _name in ("AutoProcessor", "AutoTokenizer", "PreTrainedTokenizerBase", "ProcessorMixin"):
+        setattr(_tf_stub, _name, type(_name, (), {}))
+    sys.modules["transformers"] = _tf_stub
 
 import examples.coding_agent_rl.generate as gen  # noqa: E402
 import examples.coding_agent_rl.swe as swe  # noqa: E402
