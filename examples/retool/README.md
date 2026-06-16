@@ -18,52 +18,51 @@ The retool example provides:
 
 ## Usage
 
-1. Setup and download datasets:
+1. Setup and download datasets (run all commands from the directory that contains `slime/`):
 ```bash
-cd slime
-pip install -e . --no-deps
+pip install -e ./slime --no-deps
 # For SFT part, you can use later model to RL directly and skip SFT. 
-hf download --repo-type dataset JoeYing/ReTool-SFT  --local-dir /root/JoeYing/ReTool-SFT
-hf download Qwen/Qwen3-4B-Instruct-2507 --local-dir /root/Qwen/Qwen3-4B-Instruct-2507
+hf download --repo-type dataset JoeYing/ReTool-SFT  --local-dir ./JoeYing/ReTool-SFT
+hf download Qwen/Qwen3-4B-Instruct-2507 --local-dir ./Qwen/Qwen3-4B-Instruct-2507
 
 # For RL part
-hf download --repo-type dataset zhuzilin/dapo-math-17k --local-dir /root/dapo-math-17k
-hf download --repo-type dataset zhuzilin/aime-2024  --local-dir /root/aime-2024
+hf download --repo-type dataset zhuzilin/dapo-math-17k --local-dir ./dapo-math-17k
+hf download --repo-type dataset zhuzilin/aime-2024  --local-dir ./aime-2024
 # download our SFT model if you want to skip SFT
-hf download font-info/qwen3-4b-sft-SGLang-RL --local-dir /root/font-info/qwen3-4b-sft
+hf download font-info/qwen3-4b-sft-SGLang-RL --local-dir ./font-info/qwen3-4b-sft
 ```
 
 2. Create torch dist
 For SFT 
 ```bash
-source scripts/models/qwen3-4B.sh
-PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
+source ./slime/scripts/models/qwen3-4B.sh
+PYTHONPATH=./Megatron-LM python ./slime/tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
-    --hf-checkpoint /root/Qwen/Qwen3-4B-Instruct-2507 \
+    --hf-checkpoint ./Qwen/Qwen3-4B-Instruct-2507 \
     --rotary-base 5000000 \
-    --save /root/Qwen/Qwen3-4B-Instruct-2507_torch_dist
+    --save ./Qwen/Qwen3-4B-Instruct-2507_torch_dist
 ```
 
 Or RL only
 ```bash
-source scripts/models/qwen3-4B.sh
-PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
+source ./scripts/models/qwen3-4B.sh
+PYTHONPATH=../Megatron-LM python ./tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
-    --hf-checkpoint /root/font-info/qwen3-4b-sft \
+    --hf-checkpoint ./font-info/qwen3-4b-sft \
     --rotary-base 5000000 \
-    --save /root/font-info/qwen3-4b-sft_torch_dist
+    --save ./font-info/qwen3-4b-sft_torch_dist
 
 ```
 
 3. SFT:
 ```bash
-python examples/retool/sft_data_processing.py
-bash examples/retool/retool_qwen3_4b_sft.sh
+python ./slime/examples/retool/sft_data_processing.py
+bash ./slime/examples/retool/retool_qwen3_4b_sft.sh
 ```
 
 4. RL:
 ```bash
-bash examples/retool/retool_qwen3_4b_rl.sh
+bash ./slime/examples/retool/retool_qwen3_4b_rl.sh
 ```
 
 5. Use in your training scripts by importing the generate function:
