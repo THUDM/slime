@@ -1,12 +1,12 @@
-"""End-to-end tests for TrajectoryManager via record_turn / get_trajectory.
+"""Branching-matrix tests for TrajectoryManager via record_turn / get_trajectory.
 
 This script drives the two public interfaces of
 ``slime.agent.trajectory_manager.TrajectoryManager`` and exhaustively covers the
 ways a trajectory can branch, organized as a two-axis matrix:
 
   * LAYER 1 — routing tree (record_turn). DFS merges on (role, message-equality)
-    only, so MESSAGE IDENTITY决定 tree shape; token ids are irrelevant here.
-  * LAYER 2 — linearization (get_trajectory). TOKEN-ID prefix决定 how each leaf
+    only, so MESSAGE IDENTITY determines tree shape; token ids are irrelevant here.
+  * LAYER 2 — linearization (get_trajectory). TOKEN-ID prefix determines how each leaf
     chain becomes Samples (clean continuation / drift case A·B1·B2 / cross-leaf
     dedup / reward split).
   * COMBINED — both layers interacting (rewrite-merge, tree-fork + token-drift
@@ -20,21 +20,32 @@ Readability:
   magic numbers.
 
 Dual mode:
-  Every case is a ``test_*`` function doing strict assertions. ``main()`` runs
-  them all and, after each, prints the routing tree (token ids decoded to names)
-  and every linearized Sample with token / loss_mask aligned, so a human can read
-  exactly where each branch happened. Run with::
+  Every case is a ``test_*`` function doing strict assertions, run under pytest
+  by default. Setting ``TRAJ_DUMP=1`` instead runs them via ``main()``, which
+  after each case prints the routing tree (token ids decoded to names) and every
+  linearized Sample with token / loss_mask aligned, so a human can read exactly
+  where each branch happened::
 
-      python -m tests.test_agent.test_trajectory_manager_e2e
+      python tests/test_agent/test_trajectory_manager_branching.py            # pytest
+      TRAJ_DUMP=1 python tests/test_agent/test_trajectory_manager_branching.py  # human-readable dump
 """
 
 from __future__ import annotations
 
 import dataclasses  # noqa: E402
+import os  # noqa: E402
+import sys  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 import pytest  # noqa: E402
 
-from tests.test_agent.test_claude_code_agent._dump_helpers import dump_tree_txt  # noqa: E402
+# Run as a plain script (CI does `python <file>`): make the repo root importable
+# so `from tests.test_agent...` resolves without an installed `tests` package.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from tests.test_agent._dump_helpers import dump_tree_txt  # noqa: E402
 
 from slime.agent.adapters.common import TurnRecord  # noqa: E402
 from slime.agent.trajectory_manager import TrajectoryManager, _common_prefix_len  # noqa: E402
@@ -1144,10 +1155,10 @@ def test_4_2_logprobs_length_mismatch_raises():
             prompt_messages=messages([s, u]),
             response_message={"role": "assistant", "content": "x"},
         )
-    except ValueError as e:
+    except AssertionError as e:
         raised = True
         assert "output_log_probs" in str(e)
-    assert raised, "expected ValueError on logprobs/ids length mismatch"
+    assert raised, "expected AssertionError on logprobs/ids length mismatch"
     print("PASS 4.2")
 
 
@@ -1375,8 +1386,11 @@ def main() -> None:
     print("=" * 70)
     for title, mgr, sid, samples in _PRINT_LOG:
         _print_case(title, mgr, sid, samples)
-    print(f"\nALL E2E CASES PASSED ({len(_CASES)} cases)")
+    print(f"\nALL CASES PASSED ({len(_CASES)} cases)")
 
 
 if __name__ == "__main__":
-    main()
+    if os.environ.get("TRAJ_DUMP"):
+        main()  # human-readable tree / sample dumps
+    else:
+        raise SystemExit(pytest.main([__file__, "-v"]))

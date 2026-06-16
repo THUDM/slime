@@ -8,7 +8,7 @@ split across three layers: the provider-agnostic sandbox contract
 (slime.agent.sandbox), the swappable harness lifecycle (slime.agent.harness), and
 the SWE task layer (examples.coding_agent_rl.swe -- dataset parsing, workspace
 prep, diff, eval). LLM plumbing (Anthropic <-> SGLang /generate, token capture,
-segment split) is slime.agent.adapters.AnthropicAdapter. swe.metadata documents
+segment split) is slime.agent.adapters.AnthropicAdapter. swe.get_metadata documents
 the dataset row schema and produces the md dict consumed below.
 """
 
@@ -165,7 +165,7 @@ class _AdapterService(metaclass=SingletonMeta):
 async def generate(args, base_sample: Sample, sampling_params: dict[str, Any]):
     """Per-sample agent function with wall-clock guard (see rollout_guard_sec)."""
     state = _AdapterService(args)
-    md = swe.metadata(base_sample)
+    md = swe.get_metadata(base_sample)
     instance_id = md["instance_id"]
     if not md["image"] or not md["workdir"]:
         return _abort_result(base_sample, "missing_image_or_workdir", instance_id)

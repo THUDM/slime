@@ -292,6 +292,7 @@ async def _render_stream(request, blocks, stop_reason, in_tok, out_tok) -> web.S
 # budget, so returning 0 is fine. (healthz / v1/models readiness probes are
 # served by BaseAdapter via common._health.)
 async def _count_tokens(request: web.Request) -> web.Response:
+    await request.read()
     return web.json_response({"input_tokens": 0})
 
 

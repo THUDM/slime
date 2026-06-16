@@ -38,7 +38,7 @@ SWE_PROMPT = os.environ.get(
 # ---------------------------------------------------------------------------
 # Dataset row -> SWE metadata
 #
-# ``metadata(sample)`` defines the ``md`` dict schema consumed by
+# ``get_metadata(sample)`` defines the ``md`` dict schema consumed by
 # ``prepare_workspace`` / ``evaluate``. Two dataset shapes are normalized:
 #
 #     image:             str        # sandbox image
@@ -54,7 +54,7 @@ SWE_PROMPT = os.environ.get(
 # ``sys.exit(pytest.main(...))``) is carried verbatim; ``evaluate`` materializes
 # and runs it via ``write_file`` so no shell-quoting workaround is needed here.
 # ---------------------------------------------------------------------------
-def metadata(sample: Sample) -> dict[str, Any]:
+def get_metadata(sample: Sample) -> dict[str, Any]:
     """Normalize the two dataset schemas (flat vs ``remote_env_info``)."""
     m = sample.metadata or {}
     rem = m.get("remote_env_info") or {}
