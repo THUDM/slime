@@ -4,7 +4,7 @@ from mbridge.core import register_model
 from mbridge.models import DeepseekV3Bridge
 
 
-@register_model("deepseek_v32")
+@register_model(["deepseek_v32", "glm_moe_dsa"])
 class DeepseekV32Bridge(DeepseekV3Bridge):
 
     def __init__(self, hf_config, **kwargs):
