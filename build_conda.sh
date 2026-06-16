@@ -29,7 +29,8 @@ export SGLANG_COMMIT="5a15cde858ea09b77116212a39356f2fc51b8584"
 export MEGATRON_COMMIT="1dcf0dafa884ad52ffb243625717a3471643e087"
 export PATCH_VERSION="latest"
 
-export BASE_DIR=${BASE_DIR:-"$HOME"}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export BASE_DIR=${BASE_DIR:-"$(dirname "$SCRIPT_DIR")"}
 cd $BASE_DIR
 
 # install cuda 12.9 as it's the default cuda version for torch
@@ -62,12 +63,15 @@ pip install cuda-python==12.9
 #   2. uninstall the cu13 nvidia-* runtime libs sglang dragged in, then
 #      reinstall the cu12 equivalents to repair the `site-packages/nvidia/*`
 #      shared dirs (pip uninstall stomps libs co-owned across cu12/cu13).
-if [ ! -d "$BASE_DIR/sglang" ]; then
-  cd $BASE_DIR
-  git clone https://github.com/sgl-project/sglang.git
-fi
+
+# if [ ! -d "$BASE_DIR/sglang" ]; then
+#   cd $BASE_DIR
+#   git clone https://github.com/sgl-project/sglang.git
+# fi
+
 cd $BASE_DIR/sglang
-git checkout ${SGLANG_COMMIT}
+#git checkout ${SGLANG_COMMIT}
+
 pip install -e "python[all]" --extra-index-url https://download.pytorch.org/whl/cu129
 pip install --force-reinstall --no-deps \
   torch==2.11.0 torchvision torchaudio==2.11.0 \
@@ -152,16 +156,20 @@ python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
 
 # megatron
 cd $BASE_DIR
-if [ ! -d "$BASE_DIR/Megatron-LM" ]; then
-  git clone https://github.com/NVIDIA/Megatron-LM.git --recursive
-fi
+
+# if [ ! -d "$BASE_DIR/Megatron-LM" ]; then
+#   git clone https://github.com/NVIDIA/Megatron-LM.git --recursive
+# fi
+
 # pre-install Megatron's build deps explicitly since we use --no-build-isolation
 pip install "setuptools<80.0.0" pybind11 "packaging>=24.2"
 # --no-build-isolation: setup.py builds a C++ extension (megatron.core.datasets.helpers_cpp)
 # that subprocess-shells `python3 -m pybind11`; without isolation pip uses the
 # current env's python which already has pybind11 installed. Otherwise the ext
 # is marked optional and silently skipped, which breaks GPT dataset loading.
-cd $BASE_DIR/Megatron-LM && git checkout ${MEGATRON_COMMIT} && pip install -e . --no-build-isolation
+
+# cd $BASE_DIR/Megatron-LM && git checkout ${MEGATRON_COMMIT} && pip install -e . --no-build-isolation
+cd $BASE_DIR/Megatron-LM && pip install -e . --no-build-isolation # skip commit change
 
 # install slime and apply patches
 
