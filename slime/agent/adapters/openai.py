@@ -1,17 +1,19 @@
-"""OpenAI-compatible adapters for agent rollouts.
+"""OpenAI Chat-Completions adapter for agent rollouts.
 
-The adapter exposes ``/v1/chat/completions`` and ``/v1/responses``. Both
-endpoints render incoming messages with the served model's chat template, call
-SGLang ``/generate`` with ``input_ids``, and record the exact sampled token
-ids/logprobs as ``TurnRecord`` objects. New code should use ``OpenAIAdapter``
-and call ``finish_session()`` at trajectory end to drain trainable
-``TokenSegment`` objects.
+Mirrors slime.agent.adapters.anthropic but speaks the OpenAI
+/v1/chat/completions protocol, so an OpenAI-compatible client (e.g. the Codex
+CLI) can drive the slime sglang server. Each request is rendered with the served
+model's chat template, sent to sglang /generate as input_ids, parsed, and folded
+into a shared TrajectoryManager keyed by session id. finish_session(sid) drains
+a session's trajectory into a list of Sample.
+
+Only /v1/chat/completions is implemented; the Responses API (/v1/responses) is
+out of scope. The section layout (adapter class -> translation -> reply building
+-> request framing) mirrors slime.agent.adapters.anthropic.
 """
 
 from __future__ import annotations
 
-import asyncio
-import dataclasses
 import json
 import logging
 import secrets
@@ -20,327 +22,272 @@ from typing import Any
 
 from aiohttp import web
 
-from slime.agent.adapters.common import ADAPTER_KEY, REASONING_PARSER_KEY, TOKENIZER_KEY, TOOL_PARSER_KEY
-from slime.agent.adapters.common import AdapterChain as Chain
-from slime.agent.adapters.common import BaseAdapter, call_sglang_generate
-from slime.agent.adapters.common import json_arguments as _json_arguments
-from slime.agent.adapters.common import ok_response, render_token_ids, request_session_id
-from slime.agent.adapters.common import stable_hash as _hash
-from slime.agent.parsing import ParsedModelOutput, parse_model_output
-from slime.agent.trajectory import TokenSegment, TurnRecord, TurnSegment, make_turn_segment, merge_turn_segments
+from slime.agent.adapters.common import (
+    BaseAdapter,
+    Reply,
+    flatten_content,
+    manager_finish_reason,
+    sid_from_bearer,
+    sid_from_body,
+)
+from slime.agent.parsing import ParsedModelOutput
 
 logger = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass
-class Session:
-    main: Chain = dataclasses.field(default_factory=Chain)
-    sampling_defaults: dict = dataclasses.field(default_factory=dict)
-    max_context_tokens: int = 0
-    lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
-    segments: list[TurnSegment] = dataclasses.field(default_factory=list)
-
-
 class OpenAIAdapter(BaseAdapter):
-    """OpenAI-compatible HTTP adapter with session lifecycle helpers."""
+    """OpenAI Chat-Completions-compatible HTTP adapter: wire translation and
+    reply framing only; the turn machinery is inherited from BaseAdapter."""
 
-    session_cls = Session
+    logger = logger
+    log_prefix = "openai_adapter"
+    max_token_keys = ("max_completion_tokens", "max_tokens", "max_output_tokens")
+    stop_keys = ("stop",)
 
-    def __init__(self, *, tokenizer, sglang_url, tool_parser=None, reasoning_parser=None) -> None:
-        super().__init__(
-            tokenizer=tokenizer,
-            sglang_url=sglang_url,
-            tool_parser=tool_parser,
-            reasoning_parser=reasoning_parser,
+    def _register_routes(self, app: web.Application) -> None:
+        app.router.add_post("/v1/chat/completions", self._run_turn)
+
+    def _session_id(self, request: web.Request, body: dict) -> str:
+        return _request_session_id(request, body)
+
+    def _translate(self, body: dict) -> tuple[list[dict], list[dict] | None]:
+        messages = body.get("messages") or []
+        if not isinstance(messages, list):
+            raise web.HTTPBadRequest(text="messages must be a list")
+        translated = _translate_messages(messages)
+        tools_schema = _tools_to_chat_tools(body.get("tools"))
+        return translated, tools_schema
+
+    def _build_reply(self, parsed, raw_finish, translated, tools_schema) -> Reply:
+        wire_message, manager_message, wire_finish = _build_reply_parts(parsed, raw_finish)
+        return Reply(
+            manager_message=manager_message,
+            finish_reason=manager_finish_reason(parsed.tool_uses, raw_finish),
+            wire=(wire_message, wire_finish),
         )
-        self.app.router.add_post("/v1/chat/completions", _handle_chat_completions)
-        self.app.router.add_post("/v1/responses", _handle_responses)
-        self.app.router.add_get("/healthz", _ok)
-        self.app.router.add_get("/v1/models", _ok)
 
-    async def finish_session(self, sid: str, *, wait_timeout: float = 5.0) -> list[TokenSegment]:
-        await self.shutdown_session(sid, wait_timeout=wait_timeout)
-        s = self.store.pop(sid, None)
-        if s is None:
-            return []
-        if s.main.turns:
-            s.segments.append(make_turn_segment(s.main.turns, kind="final"))
-        return merge_turn_segments(s.segments)
+    async def _respond(self, request, body, reply, in_tok, out_tok, stream) -> web.StreamResponse:
+        wire_message, wire_finish = reply.wire
+        if stream:
+            return await _render_stream(request, body, wire_message, wire_finish, in_tok, out_tok)
+        return web.json_response(_render_response(body, wire_message, wire_finish, in_tok, out_tok))
 
 
-def _flatten_content(content: Any) -> str:
-    """Flatten OpenAI text/content parts into a chat-template string."""
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return str(content)
-
-    parts: list[str] = []
-    for item in content:
-        if isinstance(item, str):
-            parts.append(item)
-            continue
-        if not isinstance(item, dict):
-            parts.append(str(item))
-            continue
-        typ = item.get("type")
-        if typ in {"text", "input_text", "output_text"}:
-            parts.append(item.get("text", ""))
-        elif typ in {"image_url", "input_image"}:
-            parts.append("[image omitted]")
-        elif "content" in item:
-            parts.append(_flatten_content(item.get("content")))
-        elif "text" in item:
-            parts.append(str(item.get("text") or ""))
-    return "\n".join(p for p in parts if p)
+# --- Translation (OpenAI wire -> chat-template messages) ---
 
 
-def _normalize_tool_call(call: dict[str, Any]) -> dict[str, Any]:
-    function = call.get("function") or {}
-    name = function.get("name") or call.get("name") or "tool"
-    arguments = function.get("arguments", call.get("arguments", {}))
-    out = {
-        "type": "function",
-        "function": {
-            "name": name,
-            "arguments": _json_arguments(arguments),
-        },
-    }
-    if call.get("id"):
-        out["id"] = call["id"]
-    return out
+def _arguments_as_dict(arguments: Any) -> dict[str, Any]:
+    """Coerce wire-shape tool_calls[].function.arguments into a dict.
+
+    OpenAI sends arguments as a JSON-encoded string; the chat template and the
+    trajectory manager's history matching both expect a mapping. Malformed
+    payloads fall back to {"_raw_arguments": s}.
+    """
+    if isinstance(arguments, dict):
+        return arguments
+    if arguments is None:
+        return {}
+    if isinstance(arguments, str):
+        s = arguments.strip()
+        if not s:
+            return {}
+        try:
+            parsed = json.loads(s)
+        except json.JSONDecodeError:
+            return {"_raw_arguments": arguments}
+        return parsed if isinstance(parsed, dict) else {"_raw_arguments": arguments}
+    return {"_raw_arguments": str(arguments)}
 
 
-def _translate_chat_messages(messages: list[dict]) -> list[dict]:
-    """OpenAI chat messages -> tokenizer chat-template messages."""
+def _translate_messages(messages: list[dict]) -> list[dict]:
+    """OpenAI chat messages -> tokenizer chat-template messages.
+
+    Mirrors anthropic._translate_messages so a replayed assistant turn compares
+    equal (dict equality) to the leaf the manager appended on the previous
+    request. Two invariants must hold:
+
+      * tool_calls[i].function.arguments is a dict (not a JSON string): the chat
+        template needs a mapping, and the manager matches history by dict
+        equality regardless of key order.
+      * Wire-only correlation ids are dropped (tool_call_id on tool messages,
+        tool_calls[i].id on echoed assistant messages). Fresh ids are minted on
+        each response, so keeping the wire ids would diverge the replay match.
+    """
     translated: list[dict] = []
     for msg in messages:
         if not isinstance(msg, dict):
             continue
         role = msg.get("role")
         content = msg.get("content")
-        if role == "developer":
+        if role == "developer":  # OpenAI Responses API alias
             role = "system"
 
         if role in {"system", "user"}:
-            translated.append({"role": role, "content": _flatten_content(content)})
+            translated.append({"role": role, "content": flatten_content(content)})
         elif role == "tool":
-            tool_msg = {"role": "tool", "content": _flatten_content(content)}
-            if msg.get("tool_call_id"):
-                tool_msg["tool_call_id"] = msg["tool_call_id"]
-            translated.append(tool_msg)
+            # drop tool_call_id -- wire-only correlation field; see docstring
+            translated.append({"role": "tool", "content": flatten_content(content)})
         elif role == "assistant":
-            assistant: dict[str, Any] = {"role": "assistant", "content": _flatten_content(content)}
-            if msg.get("reasoning_content"):
-                assistant["reasoning_content"] = msg["reasoning_content"]
+            assistant: dict[str, Any] = {
+                "role": "assistant",
+                "content": flatten_content(content),
+            }
+            reasoning = msg.get("reasoning_content")
+            if reasoning:
+                assistant["reasoning_content"] = reasoning
             tool_calls = msg.get("tool_calls") or []
-            if tool_calls:
-                assistant["tool_calls"] = [_normalize_tool_call(c) for c in tool_calls if isinstance(c, dict)]
+            normalized: list[dict[str, Any]] = []
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function") or {}
+                name = function.get("name") or call.get("name") or "tool"
+                arguments = function.get("arguments")
+                if arguments is None:
+                    arguments = call.get("arguments", {})
+                # NB: arguments stays a dict (not a JSON string), and the
+                # wire-only id is dropped. See docstring above.
+                normalized.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": _arguments_as_dict(arguments),
+                        },
+                    }
+                )
+            if normalized:
+                assistant["tool_calls"] = normalized
             translated.append(assistant)
+        # unknown roles are silently dropped
     return translated
 
 
-def _normalize_tool(tool: dict[str, Any]) -> dict[str, Any] | None:
-    if not isinstance(tool, dict):
+def _tools_to_chat_tools(tools: list[dict] | None) -> list[dict] | None:
+    """Convert OpenAI tools list to tokenizer chat-template tool schema."""
+    if not tools:
         return None
-    if tool.get("type") != "function":
-        return None
-    if isinstance(tool.get("function"), dict):
-        function = tool["function"]
-        name = function.get("name")
-        if not name:
-            return None
-        return {
-            "type": "function",
-            "function": {
-                "name": name,
-                "description": function.get("description", ""),
-                "parameters": function.get("parameters") or {"type": "object", "properties": {}},
-            },
-        }
-    name = tool.get("name")
-    if not name:
-        return None
-    return {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": tool.get("description", ""),
-            "parameters": tool.get("parameters") or {"type": "object", "properties": {}},
-        },
-    }
+    normalized: list[dict] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("type") and tool.get("type") != "function":
+            continue
+        function = tool.get("function") if isinstance(tool.get("function"), dict) else None
+        if function is not None:
+            name = function.get("name")
+            if not name:
+                continue
+            normalized.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": function.get("description", ""),
+                        "parameters": function.get("parameters") or {"type": "object", "properties": {}},
+                    },
+                }
+            )
+        else:
+            name = tool.get("name")
+            if not name:
+                continue
+            normalized.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": tool.get("description", ""),
+                        "parameters": tool.get("parameters") or {"type": "object", "properties": {}},
+                    },
+                }
+            )
+    return normalized or None
 
 
-def _normalize_tools(tools: list[dict] | None) -> list[dict] | None:
-    normalized = [_normalize_tool(t) for t in tools or []]
-    return [t for t in normalized if t is not None] or None
+# --- Reply building: parsed output -> OpenAI wire message + manager_message ---
 
 
-def _responses_input_to_messages(input_value: Any, instructions: Any = None) -> list[dict]:
-    """Responses API input -> OpenAI chat message list.
+def _build_reply_parts(parsed: ParsedModelOutput, finish: str) -> tuple[dict[str, Any], dict[str, Any], str]:
+    """Return (wire_message, manager_message, wire_finish).
 
-    This intentionally covers the common message/function-call shapes used by
-    agent SDKs. Unknown input items are preserved as user text where possible.
+    wire_message follows the OpenAI Chat-Completions spec: tool_calls[].id is a
+    unique correlation id and tool_calls[].function.arguments is a JSON-encoded
+    string (clients depend on this).
+
+    manager_message is the shape fed to record_turn: arguments is a dict so
+    chat-template replay succeeds and the manager's history match (dict equality)
+    holds against the echo on the next turn, and the wire-only id is omitted.
     """
-    messages: list[dict] = []
-    if instructions:
-        messages.append({"role": "system", "content": _flatten_content(instructions)})
-
-    if isinstance(input_value, str):
-        messages.append({"role": "user", "content": input_value})
-        return messages
-
-    if not isinstance(input_value, list):
-        messages.append({"role": "user", "content": _flatten_content(input_value)})
-        return messages
-
-    for item in input_value:
-        if isinstance(item, str):
-            messages.append({"role": "user", "content": item})
-            continue
-        if not isinstance(item, dict):
-            messages.append({"role": "user", "content": str(item)})
-            continue
-
-        typ = item.get("type")
-        if typ == "function_call_output":
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": item.get("call_id") or item.get("id") or "",
-                    "content": item.get("output", ""),
-                }
-            )
-        elif typ == "function_call":
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": item.get("call_id") or item.get("id") or f"call_{secrets.token_hex(8)}",
-                            "type": "function",
-                            "function": {
-                                "name": item.get("name", "tool"),
-                                "arguments": item.get("arguments", "{}"),
-                            },
-                        }
-                    ],
-                }
-            )
-        elif item.get("role"):
-            messages.append({"role": item.get("role"), "content": item.get("content", "")})
-        elif typ == "message":
-            messages.append({"role": item.get("role", "user"), "content": item.get("content", "")})
-        else:
-            messages.append({"role": "user", "content": _flatten_content(item)})
-    return messages
-
-
-def _select_kind(s: Session, messages: list[dict]) -> str:
-    target = s.main
-    msg_hashes = [_hash(m) for m in messages]
-    if target.seen_msgs == 0:
-        kind = "new"
-    else:
-        is_append = len(msg_hashes) >= target.seen_msgs and msg_hashes[: target.seen_msgs] == target.msg_hashes
-        if is_append:
-            kind = "append"
-        else:
-            if target.turns:
-                s.segments.append(make_turn_segment(target.turns, kind="wipe"))
-            kind = "wipe"
-    return kind
-
-
-def _replace_chat_messages(target: Chain, messages: list[dict], tools_schema: list[dict] | None) -> None:
-    target.chat_messages = _translate_chat_messages(messages)
-    target.turns.clear()
-    target.seen_msgs = len(messages)
-    target.msg_hashes = [_hash(m) for m in messages]
-    if tools_schema is not None:
-        target.tools_schema = tools_schema
-
-
-def _extend_chat_messages(target: Chain, messages: list[dict], tools_schema: list[dict] | None) -> None:
-    translated = _translate_chat_messages(messages[target.seen_msgs :])
-    target.chat_messages.extend(translated)
-    target.seen_msgs = len(messages)
-    target.msg_hashes = [_hash(m) for m in messages]
-    if tools_schema is not None:
-        target.tools_schema = tools_schema
-
-
-def _build_prompt(target: Chain, messages: list[dict], tools_schema: list[dict] | None, kind: str, tok) -> list[int]:
-    (_extend_chat_messages if kind == "append" else _replace_chat_messages)(target, messages, tools_schema)
-    return render_token_ids(target, tok)
-
-
-async def _generate(
-    prompt_ids: list[int], s: Session, body: dict, app, *, session_id: str | None = None
-) -> TurnRecord:
-    return await call_sglang_generate(
-        prompt_ids,
-        s,
-        body,
-        app,
-        max_token_keys=("max_output_tokens", "max_completion_tokens", "max_tokens"),
-        stop_keys=("stop",),
-        log_prefix="openai_adapter",
-        logger=logger,
-        session_id=session_id,
-    )
-
-
-def _parse_turn(target: Chain, turn: TurnRecord, app) -> ParsedModelOutput:
-    tok = app[TOKENIZER_KEY]
-    raw_output = tok.decode(turn.output_ids, skip_special_tokens=False) if turn.output_ids else ""
-    return parse_model_output(
-        raw_output,
-        tools_schema=target.tools_schema,
-        tool_parser_name=app[TOOL_PARSER_KEY],
-        reasoning_parser_name=app[REASONING_PARSER_KEY],
-    )
-
-
-def _openai_tool_calls(tool_uses: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    calls: list[dict[str, Any]] = []
-    for tool_use in tool_uses:
+    wire_tool_calls: list[dict[str, Any]] = []
+    manager_tool_calls: list[dict[str, Any]] = []
+    for tu in parsed.tool_uses:
+        name = tu.get("name", "tool")
+        args_dict = tu.get("input") or {}
+        if not isinstance(args_dict, dict):
+            args_dict = {"_raw_arguments": str(args_dict)}
         call_id = f"call_{secrets.token_hex(12)}"
-        calls.append(
+        wire_tool_calls.append(
             {
                 "id": call_id,
                 "type": "function",
                 "function": {
-                    "name": tool_use.get("name", "tool"),
-                    "arguments": _json_arguments(tool_use.get("input") or {}),
+                    "name": name,
+                    "arguments": json.dumps(args_dict, ensure_ascii=False, sort_keys=True),
                 },
             }
         )
-    return calls
+        manager_tool_calls.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": args_dict,
+                },
+            }
+        )
 
-
-def _finish_reason(parsed: ParsedModelOutput, finish: str) -> str:
-    if parsed.tool_uses:
-        return "tool_calls"
-    if finish == "length":
-        return "length"
-    return "stop"
-
-
-def _chat_message(parsed: ParsedModelOutput) -> dict[str, Any]:
-    tool_calls = _openai_tool_calls(parsed.tool_uses)
-    message: dict[str, Any] = {
+    wire_message: dict[str, Any] = {
         "role": "assistant",
-        "content": parsed.text if parsed.text else None,
+        # send content=null when there are tool_calls: some OpenAI clients split
+        # a mixed text+tool_calls turn into two echoed messages otherwise, which
+        # diverges the history match against our leaf
+        "content": None if wire_tool_calls else (parsed.text or None),
+    }
+    # manager_message must match what the client echoes on the next request, or
+    # the manager's history match (dict equality) diverges and every turn forks.
+    # Differences from wire_message, each needed to match the echo:
+    #   * no reasoning_content -- some clients strip it on echo (the reasoning
+    #     token ids are still kept in the trained tokens, only the text drops)
+    #   * only the first tool_call -- some clients drop extra parallel tool_calls
+    #   * empty content when tool_calls are present -- mirrors content=null above
+    manager_message: dict[str, Any] = {
+        "role": "assistant",
+        "content": "" if wire_tool_calls else (parsed.text or ""),
     }
     if parsed.reasoning:
-        message["reasoning_content"] = parsed.reasoning
-    if tool_calls:
-        message["tool_calls"] = tool_calls
-    return message
+        wire_message["reasoning_content"] = parsed.reasoning
+    if wire_tool_calls:
+        wire_message["tool_calls"] = wire_tool_calls[:1]
+        manager_message["tool_calls"] = manager_tool_calls[:1]
+
+    if parsed.tool_uses:
+        wire_finish = "tool_calls"
+    elif finish == "length":
+        wire_finish = "length"
+    else:
+        wire_finish = "stop"
+
+    return wire_message, manager_message, wire_finish
+
+
+# --- Request framing: session id + wire response/stream rendering ---
+
+
+def _request_session_id(request: web.Request, body: dict) -> str:
+    """Resolve sid: Authorization: Bearer <sid> first (where an OpenAI client
+    propagates its API key), then body-level hints (metadata.session_id / user)."""
+    return sid_from_bearer(request) or sid_from_body(body) or "default"
 
 
 def _usage(in_tok: int, out_tok: int) -> dict[str, int]:
@@ -351,58 +298,10 @@ def _usage(in_tok: int, out_tok: int) -> dict[str, int]:
     }
 
 
-def _responses_usage(in_tok: int, out_tok: int) -> dict[str, int]:
-    return {
-        "input_tokens": in_tok,
-        "output_tokens": out_tok,
-        "total_tokens": in_tok + out_tok,
-    }
-
-
-def _request_session_id(request: web.Request, body: dict) -> str:
-    return request_session_id(request, body=body)
-
-
-async def _run_turn(
-    request: web.Request, body: dict, messages: list[dict]
-) -> tuple[TurnRecord, ParsedModelOutput, int, int]:
-    sid = _request_session_id(request, body)
-    adapter = request.app[ADAPTER_KEY]
-    if sid in adapter.closed:
-        raise web.HTTPServiceUnavailable(text="session closed")
-    app = request.app
-    s = adapter.store.setdefault(sid, Session())
-    task = asyncio.current_task()
-    adapter.inflight.setdefault(sid, set()).add(task)
-    try:
-        async with s.lock:
-            target = s.main
-            tools_schema = _normalize_tools(body.get("tools"))
-            kind = _select_kind(s, messages)
-            prompt_ids = _build_prompt(target, messages, tools_schema, kind, app[TOKENIZER_KEY])
-            turn = await _generate(prompt_ids, s, body, app, session_id=sid)
-            parsed = _parse_turn(target, turn, app)
-            target.turns.append(turn)
-            return turn, parsed, len(prompt_ids), len(turn.output_ids)
-    finally:
-        adapter.inflight.get(sid, set()).discard(task)
-
-
-async def _handle_chat_completions(request: web.Request) -> web.StreamResponse:
-    body = await request.json()
-    messages = body.get("messages") or []
-    if not isinstance(messages, list):
-        raise web.HTTPBadRequest(text="messages must be a list")
-    turn, parsed, in_tok, out_tok = await _run_turn(request, body, messages)
-    if body.get("stream"):
-        return await _stream_chat_completion(request, body, parsed, turn.finish_reason, in_tok, out_tok)
-    return web.json_response(_chat_completion_response(body, parsed, turn.finish_reason, in_tok, out_tok))
-
-
-def _chat_completion_response(
+def _render_response(
     body: dict,
-    parsed: ParsedModelOutput,
-    finish: str,
+    wire_message: dict[str, Any],
+    wire_finish: str,
     in_tok: int,
     out_tok: int,
 ) -> dict[str, Any]:
@@ -414,22 +313,29 @@ def _chat_completion_response(
         "choices": [
             {
                 "index": 0,
-                "message": _chat_message(parsed),
-                "finish_reason": _finish_reason(parsed, finish),
+                "message": wire_message,
+                "finish_reason": wire_finish,
             }
         ],
         "usage": _usage(in_tok, out_tok),
     }
 
 
-async def _stream_chat_completion(
+async def _render_stream(
     request: web.Request,
     body: dict,
-    parsed: ParsedModelOutput,
-    finish: str,
+    wire_message: dict[str, Any],
+    wire_finish: str,
     in_tok: int,
     out_tok: int,
 ) -> web.StreamResponse:
+    """Emit the OpenAI Chat-Completions SSE stream.
+
+    Each chunk has the shape `data: {chatcmpl ...}\n\n`, ending with
+    `data: [DONE]`. The whole turn is realised on the server before streaming
+    (we have no token-level deltas from sglang here), so we emit one role chunk,
+    then content / reasoning / tool_calls in single delta chunks each.
+    """
     out = web.StreamResponse(
         status=200,
         headers={
@@ -442,131 +348,31 @@ async def _stream_chat_completion(
     completion_id = f"chatcmpl_{secrets.token_hex(12)}"
     created = int(time.time())
 
-    async def emit(choice_delta: dict[str, Any], finish_reason: str | None = None, usage: dict | None = None) -> None:
+    async def emit(delta: dict[str, Any], finish_reason: str | None = None, usage: dict | None = None) -> None:
         chunk = {
             "id": completion_id,
             "object": "chat.completion.chunk",
             "created": created,
             "model": body.get("model", "slime-actor"),
-            "choices": [{"index": 0, "delta": choice_delta, "finish_reason": finish_reason}],
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
         }
         if usage is not None:
             chunk["usage"] = usage
         await out.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode())
 
     await emit({"role": "assistant"})
-    if parsed.reasoning:
-        await emit({"reasoning_content": parsed.reasoning})
-    if parsed.text:
-        await emit({"content": parsed.text})
-    for idx, call in enumerate(_openai_tool_calls(parsed.tool_uses)):
-        await emit({"tool_calls": [{**call, "index": idx}]})
-    await emit({}, finish_reason=_finish_reason(parsed, finish), usage=_usage(in_tok, out_tok))
+    reasoning = wire_message.get("reasoning_content")
+    if reasoning:
+        await emit({"reasoning_content": reasoning})
+    content = wire_message.get("content")
+    if content:
+        await emit({"content": content})
+    # emit all tool_calls in a single chunk: some clients accumulate per-index
+    # arguments fragments across chunks, collapsing N parallel tool_calls into
+    # one call with a concatenated (and unparseable) arguments string
+    tool_calls = wire_message.get("tool_calls") or []
+    if tool_calls:
+        await emit({"tool_calls": [{**call, "index": idx} for idx, call in enumerate(tool_calls)]})
+    await emit({}, finish_reason=wire_finish, usage=_usage(in_tok, out_tok))
     await out.write(b"data: [DONE]\n\n")
     return out
-
-
-async def _handle_responses(request: web.Request) -> web.StreamResponse:
-    body = await request.json()
-    messages = _responses_input_to_messages(body.get("input", ""), body.get("instructions"))
-    turn, parsed, in_tok, out_tok = await _run_turn(request, body, messages)
-    if body.get("stream"):
-        return await _stream_response(request, body, parsed, turn.finish_reason, in_tok, out_tok)
-    return web.json_response(_response_response(body, parsed, turn.finish_reason, in_tok, out_tok))
-
-
-def _response_output(parsed: ParsedModelOutput) -> list[dict[str, Any]]:
-    output: list[dict[str, Any]] = []
-    if parsed.reasoning:
-        output.append(
-            {
-                "id": f"rs_{secrets.token_hex(12)}",
-                "type": "reasoning",
-                "summary": [{"type": "summary_text", "text": parsed.reasoning}],
-            }
-        )
-    if parsed.text:
-        output.append(
-            {
-                "id": f"msg_{secrets.token_hex(12)}",
-                "type": "message",
-                "role": "assistant",
-                "status": "completed",
-                "content": [{"type": "output_text", "text": parsed.text, "annotations": []}],
-            }
-        )
-    for call in _openai_tool_calls(parsed.tool_uses):
-        output.append(
-            {
-                "id": f"fc_{secrets.token_hex(12)}",
-                "type": "function_call",
-                "status": "completed",
-                "call_id": call["id"],
-                "name": call["function"]["name"],
-                "arguments": call["function"]["arguments"],
-            }
-        )
-    if not output:
-        output.append(
-            {
-                "id": f"msg_{secrets.token_hex(12)}",
-                "type": "message",
-                "role": "assistant",
-                "status": "completed",
-                "content": [{"type": "output_text", "text": "", "annotations": []}],
-            }
-        )
-    return output
-
-
-def _response_response(
-    body: dict,
-    parsed: ParsedModelOutput,
-    finish: str,
-    in_tok: int,
-    out_tok: int,
-) -> dict[str, Any]:
-    status = "incomplete" if finish == "length" else "completed"
-    return {
-        "id": f"resp_{secrets.token_hex(12)}",
-        "object": "response",
-        "created_at": int(time.time()),
-        "status": status,
-        "model": body.get("model", "slime-actor"),
-        "output": _response_output(parsed),
-        "usage": _responses_usage(in_tok, out_tok),
-    }
-
-
-async def _stream_response(
-    request: web.Request,
-    body: dict,
-    parsed: ParsedModelOutput,
-    finish: str,
-    in_tok: int,
-    out_tok: int,
-) -> web.StreamResponse:
-    out = web.StreamResponse(
-        status=200,
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        },
-    )
-    await out.prepare(request)
-    response = _response_response(body, parsed, finish, in_tok, out_tok)
-    created = {"type": "response.created", "response": response}
-    await out.write(f"event: response.created\ndata: {json.dumps(created, ensure_ascii=False)}\n\n".encode())
-    if parsed.text:
-        delta = {"type": "response.output_text.delta", "delta": parsed.text}
-        await out.write(
-            f"event: response.output_text.delta\ndata: {json.dumps(delta, ensure_ascii=False)}\n\n".encode()
-        )
-    completed = {"type": "response.completed", "response": response}
-    await out.write(f"event: response.completed\ndata: {json.dumps(completed, ensure_ascii=False)}\n\n".encode())
-    return out
-
-
-async def _ok(request: web.Request) -> web.Response:
-    return await ok_response(request)

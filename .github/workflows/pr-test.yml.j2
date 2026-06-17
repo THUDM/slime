@@ -76,7 +76,6 @@
         {'test_file': 'test_rm_math_dapo.py', 'num_gpus': 0},
         {'test_file': 'test_rm_deepscaler.py', 'num_gpus': 0},
         {'test_file': 'test_sample.py', 'num_gpus': 0},
-        {'test_file': 'test_agent_trajectory.py', 'num_gpus': 0},
         {'test_file': 'test_rollout_validation.py', 'num_gpus': 0},
         {'test_file': 'test_placement_group.py', 'num_gpus': 0},
         {'test_file': 'test_external_sglang_engines.py', 'num_gpus': 0},
@@ -88,14 +87,15 @@
       ],
     },
 
-    'agent-adapter-test': {
-      'label': 'run-ci-agent-adapter',
+    'agent-test': {
+      'label': 'run-ci-agent',
       'always': True,
       'cpu': True,
-      'extra_pip_deps': 'openai openai-agents anthropic',
       'tests': [
-        {'test_file': 'test_agent_adapters.py', 'num_gpus': 0},
-        {'test_file': 'test_agent_sdk_adapters.py', 'num_gpus': 0},
+        {'test_file': 'test_agent/test_trajectory_manager_branching.py', 'num_gpus': 0},
+        {'test_file': 'test_agent/test_adapters.py', 'num_gpus': 0},
+        {'test_file': 'test_agent/test_harness.py', 'num_gpus': 0},
+        {'test_file': 'test_agent/test_agent_rollout_cpu.py', 'num_gpus': 0},
       ],
     },
 
@@ -109,7 +109,7 @@ name: PR Test
 
 on:
   # Push to main triggers the default GitHub-hosted jobs (cheap CPU/unit and
-  # agent adapter checks), catching PR-pair regressions where two PRs pass
+  # agent checks), catching PR-pair regressions where two PRs pass
   # individually but main is broken after both land. GPU jobs stay label-gated
   # — see each job's `if:` below — so push events never burn the self-hosted
   # fleet.
