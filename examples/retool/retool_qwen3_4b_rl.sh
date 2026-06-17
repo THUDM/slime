@@ -130,6 +130,11 @@ CUSTOM_ARGS=(
    --custom-rm-path generate_with_retool.reward_func
 )
 
+# Cap the open-file limit: the default (1048576) triggers a raylet SIGABRT crash
+# ("Too many open files") in gRPC/boost-asio, which kills the dashboard job agent
+# and makes `ray job submit` fail with a 500 / ServerDisconnectedError.
+ulimit -n 65535
+
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 2 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
@@ -158,7 +163,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${GRPO_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
-   ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
    ${MISC_ARGS[@]} \
    ${CUSTOM_ARGS[@]}
