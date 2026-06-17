@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 06 月 16 日"/>
+    <meta name="docbuild:last-update" content="2026 年 06 月 17 日"/>
   </head>
   
   
@@ -455,11 +455,12 @@
   <section class="tex2jax_ignore mathjax_ignore" id="coding-agent-rl">
 <h1>Coding-Agent RL<a class="headerlink" href="#coding-agent-rl" title="链接到此标题。">#</a></h1>
 <p>This directory provides an example of running end-to-end <strong>SWE (Software-Engineering) coding-agent RL</strong> with slime: a real coding agent (claude-code CLI) drives <code class="docutils literal notranslate"><span class="pre">Read/Edit/Grep/Bash/Agent</span></code> tools inside a fresh sandbox per sample, the model produces a <code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">diff</span></code>, and the diff is graded against the dataset's test harness in a second clean sandbox (no test-cheating).</p>
-<p>Two example files and one shared adapter implement the loop:</p>
+<p>Two example files, the shared harness package, and one shared adapter implement the loop:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">generate.py</span></code> — per-sample <code class="docutils literal notranslate"><span class="pre">generate()</span></code> registered via <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>. Boots the sandbox, runs claude-code, captures the diff, scores it, and emits one or more <code class="docutils literal notranslate"><span class="pre">Sample</span></code>s back to slime.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.adapters.AnthropicAdapter</span></code> — the shared Anthropic Messages adapter. claude-code talks to it as if it were Anthropic; the adapter tokenizes the current message history each turn, records prompt/output token snapshots, preserves model-generated tokens (<code class="docutils literal notranslate"><span class="pre">loss_mask=1</span></code>) only while later prompts stitch onto them, masks template/observation tokens (<code class="docutils literal notranslate"><span class="pre">0</span></code>), and emits <strong>three kinds of segments</strong> per trajectory: <code class="docutils literal notranslate"><span class="pre">subagent</span></code> (completed <code class="docutils literal notranslate"><span class="pre">Task/Agent</span></code> dispatch), <code class="docutils literal notranslate"><span class="pre">wipe</span></code> (chain frozen by auto-compact), <code class="docutils literal notranslate"><span class="pre">final</span></code> (tail of the main chain).</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">sandbox.py</span></code> — coding-agent/SWE helpers built on <code class="docutils literal notranslate"><span class="pre">slime.agent.sandbox</span></code>: install bootstraps, spawn claude-code, capture patches, and run the fresh-sandbox evaluator. The shared sandbox contract lives in <code class="docutils literal notranslate"><span class="pre">slime.agent.sandbox.Sandbox</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">generate.py</span></code> — per-sample <code class="docutils literal notranslate"><span class="pre">generate()</span></code> registered via <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>. Boots the sandbox, prepares the SWE workspace, runs the coding harness (claude-code), captures the diff, scores it, and emits one or more <code class="docutils literal notranslate"><span class="pre">Sample</span></code>s back to slime.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.adapters.AnthropicAdapter</span></code> — the shared Anthropic Messages adapter. claude-code talks to it as if it were Anthropic; the adapter tokenizes the current message history each turn, records prompt/output token snapshots, preserves model-generated tokens (<code class="docutils literal notranslate"><span class="pre">loss_mask=1</span></code>) only while later prompts stitch onto them, and masks template/observation tokens (<code class="docutils literal notranslate"><span class="pre">0</span></code>). Each turn is routed into a per-session message tree inside <code class="docutils literal notranslate"><span class="pre">slime.agent.trajectory.TrajectoryManager</span></code>; any divergence in the prompt prefix forks a new branch, so sub-agent dispatches and auto-compaction are handled as separate root-to-leaf chains. <code class="docutils literal notranslate"><span class="pre">get_trajectory</span></code> linearizes each leaf chain into one <code class="docutils literal notranslate"><span class="pre">Sample</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.harness</span></code> — harness-agnostic coding-agent lifecycle (install CLI, write config, spawn detached, poll done-marker). <code class="docutils literal notranslate"><span class="pre">BaseHarness</span></code> defines the contract; <code class="docutils literal notranslate"><span class="pre">CLAUDE_CODE</span></code> / <code class="docutils literal notranslate"><span class="pre">CODEX</span></code> are the shipped implementations. Adding a harness is one new file. The shared sandbox contract lives in <code class="docutils literal notranslate"><span class="pre">slime.agent.sandbox.Sandbox</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">swe.py</span></code> — harness-agnostic SWE task layer built on <code class="docutils literal notranslate"><span class="pre">slime.agent.sandbox</span></code>: <code class="docutils literal notranslate"><span class="pre">prepare_workspace</span></code> (pre_commands + PROBLEM_STATEMENT.md), <code class="docutils literal notranslate"><span class="pre">git_diff</span></code> (patch capture), and <code class="docutils literal notranslate"><span class="pre">evaluate</span></code> (fresh-sandbox grading). <code class="docutils literal notranslate"><span class="pre">SWE_PROMPT</span></code> is the task instruction handed to whichever harness runs.</p></li>
 </ul>
 <p><code class="docutils literal notranslate"><span class="pre">generate.py</span></code> owns one <code class="docutils literal notranslate"><span class="pre">AnthropicAdapter</span></code> instance. For each sample it calls
 <code class="docutils literal notranslate"><span class="pre">adapter.open_session(...)</span></code> before starting claude-code, serves <code class="docutils literal notranslate"><span class="pre">adapter.app</span></code> as
@@ -472,12 +473,12 @@ the Anthropic-compatible endpoint, and drains trainable <code class="docutils li
 <li><p><strong>An E2B-compatible sandbox cluster</strong> (or any provider that speaks the E2B SDK). Configure via <code class="docutils literal notranslate"><span class="pre">E2B_API_KEY</span></code> (e.g. the standard <code class="docutils literal notranslate"><span class="pre">e2b_xxx</span></code> key from https://e2b.dev, or any internal endpoint that accepts the same SDK). The official SDK validates this value locally, so internal gateways that ignore auth still need a syntactically valid <code class="docutils literal notranslate"><span class="pre">e2b_</span></code> + 40 hex-character placeholder.</p></li>
 <li><p><strong>Host-side tarballs</strong> that get uploaded into each sandbox at boot:</p>
 <ul class="simple">
-<li><p>Node 22 (<code class="docutils literal notranslate"><span class="pre">node-v22.x-linux-x64.tar.xz</span></code>) — exported as <code class="docutils literal notranslate"><span class="pre">SWE_HOST_NODE_TARBALL</span></code>.</p></li>
-<li><p>Claude Code CLI npm tarball (<code class="docutils literal notranslate"><span class="pre">anthropic-ai-claude-code-local-linux-x64.tgz</span></code>) — exported as <code class="docutils literal notranslate"><span class="pre">SWE_HOST_CC_TARBALL</span></code>.</p></li>
+<li><p>Node 22 (<code class="docutils literal notranslate"><span class="pre">node-v22.x-linux-x64.tar.xz</span></code>) — exported as <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_NODE_TARBALL</span></code>.</p></li>
+<li><p>Claude Code CLI npm tarball (<code class="docutils literal notranslate"><span class="pre">anthropic-ai-claude-code-local-linux-x64.tgz</span></code>) — exported as <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CC_TARBALL</span></code>.</p></li>
 </ul>
 </li>
-<li><p><strong>A sandbox metadata file</strong> (<code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_METADATA_FILE</span></code>, or the generic <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_SANDBOX_METADATA_FILE</span></code>) — JSON dict whose keys are passed as routing tags when booting an E2B sandbox. Must contain the image key referenced by <code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_IMAGE_METADATA_KEY</span></code> / <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY</span></code> (e.g. <code class="docutils literal notranslate"><span class="pre">image</span></code>).</p></li>
-<li><p><strong>Network reachability</strong>: each sandbox dials back to the slime head node's Anthropic adapter over <code class="docutils literal notranslate"><span class="pre">http://${SLIME_HEAD_HOST}:${SHIM_PORT}</span></code>. The head host must be reachable from inside the sandboxes (set <code class="docutils literal notranslate"><span class="pre">SLIME_HEAD_HOST</span></code> to a routable IP, not <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code>).</p></li>
+<li><p><strong>An image routing key</strong> (<code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY</span></code>, legacy <code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_IMAGE_METADATA_KEY</span></code> still accepted) — the metadata key your E2B gateway uses to route a boot to a specific image (e.g. <code class="docutils literal notranslate"><span class="pre">image</span></code>). Each sample's <code class="docutils literal notranslate"><span class="pre">metadata.image</span></code> is passed under this key when booting the sandbox.</p></li>
+<li><p><strong>Network reachability</strong>: each sandbox dials back to the host's Anthropic adapter over <code class="docutils literal notranslate"><span class="pre">http://${ADAPTER_PUBLIC_HOST}:${ADAPTER_PORT}</span></code>. The adapter host must be reachable from inside the sandboxes (set <code class="docutils literal notranslate"><span class="pre">ADAPTER_PUBLIC_HOST</span></code> to a routable IP, not <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code>).</p></li>
 </ol>
 </section>
 <section id="dataset-format">
@@ -487,7 +488,7 @@ the Anthropic-compatible endpoint, and drains trainable <code class="docutils li
   &quot;prompt&quot;: &quot;&lt;falls back here if metadata.problem_statement is missing&gt;&quot;,
   &quot;label&quot;: &quot;&lt;instance_id or grader label&gt;&quot;,
   &quot;metadata&quot;: {
-    &quot;image&quot;: &quot;swedev/scaleswe.oh.34:&lt;tag&gt;&quot;,   // sandbox image reference
+    &quot;image&quot;: &quot;your-registry/swe-image:&lt;tag&gt;&quot;,  // sandbox image reference
     &quot;workdir&quot;: &quot;/workspace/&lt;repo&gt;&quot;,            // repo path inside the sandbox
     &quot;problem_statement&quot;: &quot;&lt;issue body&gt;&quot;,
     // exactly one of the following two graders:
@@ -509,14 +510,22 @@ the Anthropic-compatible endpoint, and drains trainable <code class="docutils li
 <span class="nb">export</span><span class="w"> </span><span class="nv">HF_CHECKPOINT</span><span class="o">=</span>/path/to/Qwen3.6-35B-A3B
 <span class="nb">export</span><span class="w"> </span><span class="nv">REF_MODEL_PATH</span><span class="o">=</span>/path/to/Qwen3.6-35B-A3B_torch_dist
 <span class="nb">export</span><span class="w"> </span><span class="nv">PROMPT_DATA</span><span class="o">=</span>/path/to/swe_train.jsonl
-<span class="nb">export</span><span class="w"> </span><span class="nv">SANDBOX_METADATA_FILE</span><span class="o">=</span>/path/to/sandbox_metadata.json
-<span class="nb">export</span><span class="w"> </span><span class="nv">SWE_HOST_NODE_TARBALL</span><span class="o">=</span>/path/to/node-v22.20.0-linux-x64.tar.xz
-<span class="nb">export</span><span class="w"> </span><span class="nv">SWE_HOST_CC_TARBALL</span><span class="o">=</span>/path/to/anthropic-ai-claude-code-local-linux-x64.tgz
+<span class="nb">export</span><span class="w"> </span><span class="nv">SLIME_AGENT_NODE_TARBALL</span><span class="o">=</span>/path/to/node-v22.20.0-linux-x64.tar.xz
+<span class="nb">export</span><span class="w"> </span><span class="nv">SLIME_AGENT_CC_TARBALL</span><span class="o">=</span>/path/to/anthropic-ai-claude-code-local-linux-x64.tgz
+
+<span class="c1"># Sandbox provider:</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">E2B_API_KEY</span><span class="o">=</span>e2b_xxx<span class="w">                       </span><span class="c1"># real key for e2b.dev; a syntactically</span>
+<span class="w">                                                 </span><span class="c1"># valid placeholder if your gateway ignores auth</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY</span><span class="o">=</span>image<span class="w">   </span><span class="c1"># metadata key your gateway routes images by</span>
 
 bash<span class="w"> </span>examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nodes.sh
 </pre></div>
 </div>
-<p>The launcher brings up Ray across all hosts in <code class="docutils literal notranslate"><span class="pre">/root/mpi_rack_hostfile</span></code>, dumps every rollout to <code class="docutils literal notranslate"><span class="pre">runs/${EXP_TAG}_${STAMP}/rollout_dumps/</span></code>, and tees stdout into <code class="docutils literal notranslate"><span class="pre">runs/${EXP_TAG}_${STAMP}/run.log</span></code>.</p>
+<p>The launcher fans Ray out to every worker listed in <code class="docutils literal notranslate"><span class="pre">$HOSTFILE</span></code> (default
+<code class="docutils literal notranslate"><span class="pre">/root/mpi_rack_hostfile</span></code>, one worker IP per line, reachable over passwordless
+SSH as <code class="docutils literal notranslate"><span class="pre">root</span></code>) — create that file (or point <code class="docutils literal notranslate"><span class="pre">HOSTFILE</span></code> at your own) before
+launching. It then dumps every rollout to <code class="docutils literal notranslate"><span class="pre">runs/${EXP_TAG}_${STAMP}/rollout_dumps/</span></code>
+and tees stdout into <code class="docutils literal notranslate"><span class="pre">runs/${EXP_TAG}_${STAMP}/run.log</span></code>.</p>
 </section>
 <section id="new-arguments">
 <h2>New Arguments<a class="headerlink" href="#new-arguments" title="链接到此标题。">#</a></h2>
@@ -548,6 +557,10 @@ bash<span class="w"> </span>examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nod
 <section id="swe-specific-environment-knobs">
 <h2>SWE-specific Environment Knobs<a class="headerlink" href="#swe-specific-environment-knobs" title="链接到此标题。">#</a></h2>
 <p>All set in the launcher; tune per cluster.</p>
+<p>Env vars split by layer. <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_*</span></code> are the reusable agent library's
+contract (read inside <code class="docutils literal notranslate"><span class="pre">slime/agent/</span></code>); <code class="docutils literal notranslate"><span class="pre">SWE_*</span></code> are this SWE example's task knobs;
+<code class="docutils literal notranslate"><span class="pre">ADAPTER_*</span></code> are host-side deployment/reply-path addresses read only by
+<code class="docutils literal notranslate"><span class="pre">generate.py</span></code>. Keep new vars on the prefix that matches the layer that reads them.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Variable</p></th>
@@ -556,51 +569,55 @@ bash<span class="w"> </span>examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nod
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_HEAD_HOST</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ADAPTER_PUBLIC_HOST</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">${MASTER_ADDR}</span></code></p></td>
 <td><p>Public IP the sandbox uses to reach the Anthropic adapter. <strong>Must be routable from inside the sandbox.</strong></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SHIM_BIND_HOST</span></code> / <code class="docutils literal notranslate"><span class="pre">SHIM_PORT</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ADAPTER_BIND_HOST</span></code> / <code class="docutils literal notranslate"><span class="pre">ADAPTER_PORT</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0.0.0.0</span></code> / <code class="docutils literal notranslate"><span class="pre">18001</span></code></p></td>
-<td><p>Bind address of the adapter shim on the head node.</p></td>
+<td><p>Bind address of the Anthropic adapter on the host.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">E2B_API_KEY</span></code></p></td>
 <td><p>—</p></td>
 <td><p>E2B (or compatible) API key.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_METADATA_FILE</span></code> / <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_SANDBOX_METADATA_FILE</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY</span></code></p></td>
 <td><p>—</p></td>
-<td><p>JSON dict of routing metadata passed at sandbox boot.</p></td>
+<td><p><strong>Required.</strong> Which metadata key the E2B gateway routes images by (e.g. <code class="docutils literal notranslate"><span class="pre">image</span></code>); each sample's <code class="docutils literal notranslate"><span class="pre">metadata.image</span></code> is passed under it. (Legacy <code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_IMAGE_METADATA_KEY</span></code> still accepted.)</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_IMAGE_METADATA_KEY</span></code> / <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY</span></code></p></td>
-<td><p>—</p></td>
-<td><p>Which key in the metadata file holds the image reference (e.g. <code class="docutils literal notranslate"><span class="pre">image</span></code>).</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_HOST_NODE_TARBALL</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_NODE_TARBALL</span></code></p></td>
 <td><p>—</p></td>
 <td><p>Host path to Node 22 tarball uploaded into each sandbox.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_HOST_CC_TARBALL</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CC_TARBALL</span></code></p></td>
 <td><p>—</p></td>
 <td><p>Host path to the Claude Code CLI npm tarball.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_TIME_BUDGET_SEC</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">1800</span></code></p></td>
-<td><p>Wallclock budget for one agent run.</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_EVAL_TIMEOUT_SEC</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">600</span></code></p></td>
-<td><p>Wallclock cap on the evaluator sandbox.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_BOOT_CONCURRENCY</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">6</span></code></p></td>
-<td><p>Cap on simultaneous sandbox boots (eases h2/SSL long-tail).</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_CLAUDE_EXTRA_ARGS</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CC_EXTRA_ARGS</span></code></p></td>
 <td><p>(see launcher)</p></td>
 <td><p>Extra flags appended to the <code class="docutils literal notranslate"><span class="pre">claude</span></code> CLI invocation — registers the read-only <code class="docutils literal notranslate"><span class="pre">investigator</span></code> sub-agent, disables <code class="docutils literal notranslate"><span class="pre">WebFetch</span></code>/<code class="docutils literal notranslate"><span class="pre">WebSearch</span></code>, disables slash commands.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_CC_PROMPT</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CC_EXTRA_ENVS</span></code></p></td>
+<td><p>unset</p></td>
+<td><p>JSON object of extra env vars exported into the <code class="docutils literal notranslate"><span class="pre">claude</span></code> process — escape hatch for env-only knobs (<code class="docutils literal notranslate"><span class="pre">MAX_THINKING_TOKENS</span></code>, <code class="docutils literal notranslate"><span class="pre">BASH_MAX_TIMEOUT_MS</span></code>, ...). Merged last, so it can also override the built-in defaults.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_AGENT_TIME_BUDGET_SEC</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1800</span></code></p></td>
+<td><p>Wallclock budget for the in-sandbox agent CLI itself (think/edit/run).</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_EVAL_TIMEOUT_SEC</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">600</span></code></p></td>
+<td><p>Wallclock cap on the evaluator sandbox.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_ROLLOUT_GUARD_SEC</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">agent+eval+180</span></code></p></td>
+<td><p>Outer safety net wrapping the whole rollout (boot + workspace + agent + diff + eval). Auto-derived if unset.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_BOOT_CONCURRENCY</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">16</span></code></p></td>
+<td><p>Cap on simultaneous sandbox boots (eases h2/SSL long-tail).</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_CC_PROMPT</span></code></p></td>
 <td><p>unset</p></td>
 <td><p>Optional override for the user-turn prompt. Setting this to require sub-agent dispatch is the most reliable way to maximize fan-out.</p></td>
 </tr>
@@ -636,8 +653,8 @@ re-tokenized to recover the training sequence.</p></li>
 </ul>
 <p>Multi-turn agents still force the adapter to tokenize later message
 histories, because tool observations and claude-code's own compacted messages
-arrive as strings. <code class="docutils literal notranslate"><span class="pre">slime.agent.trajectory.merge_turns</span></code> stitches those later
-prompts against the saved token stream:</p>
+arrive as strings. <code class="docutils literal notranslate"><span class="pre">slime.agent.trajectory.TrajectoryManager</span></code> routes
+those later prompts against the saved token stream:</p>
 <ul class="simple">
 <li><p>New prompt suffixes that are tool/user/environment context are appended with
 <code class="docutils literal notranslate"><span class="pre">loss_mask=0</span></code>.</p></li>
@@ -651,16 +668,16 @@ assigned <code class="docutils literal notranslate"><span class="pre">loss_mask=
 can make a string-level conversation look continuous while token-level
 provenance is broken. slime keeps the context needed to continue the agent, but
 does not backprop through tokens whose sampled origin can no longer be proven.
-The unit tests in <code class="docutils literal notranslate"><span class="pre">tests/test_agent_trajectory.py</span></code> cover matched prefixes,
-skipped turns, split-output drift, changed token counts, and prompt-base
-restarts.</p>
+The unit tests in <code class="docutils literal notranslate"><span class="pre">tests/test_agent/test_trajectory_manager_branching.py</span></code> cover matched
+prefixes, skipped turns, split-output drift, changed token counts, and
+prompt-base restarts.</p>
 </section>
 <section id="fan-out-semantics">
 <h2>Fan-out Semantics<a class="headerlink" href="#fan-out-semantics" title="链接到此标题。">#</a></h2>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">generate()</span></code> returns <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code> — one Sample per trajectory <strong>segment</strong> (<code class="docutils literal notranslate"><span class="pre">subagent</span></code> / <code class="docutils literal notranslate"><span class="pre">wipe</span></code> / <code class="docutils literal notranslate"><span class="pre">final</span></code>).</p></li>
-<li><p>Per-trajectory reward is split as <code class="docutils literal notranslate"><span class="pre">reward</span> <span class="pre">/</span> <span class="pre">K</span></code> across segments; <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code> is shared so the per-rollout-mean loss reducer still counts the trajectory once.</p></li>
-<li><p>Sub-agent dispatch increases <code class="docutils literal notranslate"><span class="pre">K</span></code> (each completed <code class="docutils literal notranslate"><span class="pre">Agent</span></code> turn block becomes its own segment), so the effective batch after flatten can be much larger than <code class="docutils literal notranslate"><span class="pre">rollout_batch_size</span> <span class="pre">*</span> <span class="pre">n_samples_per_prompt</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">generate()</span></code> returns <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code> — one Sample per root-to-leaf chain in the per-session message tree.</p></li>
+<li><p>Per-trajectory reward is split as <code class="docutils literal notranslate"><span class="pre">reward</span> <span class="pre">/</span> <span class="pre">K</span></code> across chains; <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code> is shared so the per-rollout-mean loss reducer still counts the trajectory once.</p></li>
+<li><p>Sub-agent dispatch and auto-compaction increase <code class="docutils literal notranslate"><span class="pre">K</span></code> (each prompt-prefix divergence forks a new branch), so the effective batch after flatten can be much larger than <code class="docutils literal notranslate"><span class="pre">rollout_batch_size</span> <span class="pre">*</span> <span class="pre">n_samples_per_prompt</span></code>.</p></li>
 </ul>
 </section>
 <section id="porting-to-a-new-sandbox-backend">
@@ -765,7 +782,7 @@ restarts.</p>
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 06 月 16 日.
+  最后更新于 2026 年 06 月 17 日.
   <br/>
 </p>
   </div>
