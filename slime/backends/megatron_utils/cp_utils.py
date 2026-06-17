@@ -136,6 +136,27 @@ def get_sum_of_sample_mean(
     return sum_of_sample_mean if not calculate_per_token_loss else sum_of_token
 
 
+def get_local_response_mask_with_cp(
+    loss_mask: torch.Tensor,
+    total_length: int,
+    response_length: int,
+    qkv_format: str = "thd",
+    max_seq_len: int | None = None,
+) -> torch.Tensor:
+    """Return the response loss-mask chunk owned by the current CP rank."""
+    cp_size = mpu.get_context_parallel_world_size()
+    if cp_size == 1:
+        return loss_mask
+
+    prompt_length = total_length - response_length
+    _, _, _, tokens_offset = get_logits_and_tokens_offset_with_cp(
+        total_length, response_length, qkv_format, max_seq_len
+    )
+    loss_mask_0 = loss_mask[tokens_offset[0][0] - prompt_length : tokens_offset[0][1] - prompt_length]
+    loss_mask_1 = loss_mask[tokens_offset[1][0] - prompt_length : tokens_offset[1][1] - prompt_length]
+    return torch.cat([loss_mask_0, loss_mask_1], dim=0)
+
+
 def reduce_train_step_metrics(
     losses_reduced: list[dict],
     *,
