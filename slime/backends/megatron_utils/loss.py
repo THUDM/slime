@@ -1032,6 +1032,389 @@ def policy_loss_function(
     return loss, reported_loss
 
 
+class TPLogSumExp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, logits_chunk: torch.Tensor, tp_group):
+        logits_max_chunks = []
+        r_local = logits_chunk.size(0)
+        for r_start in range(0, r_local, 2048):
+            r_end = min(r_start + 2048, r_local)
+            logits_max_chunks.append(logits_chunk[r_start:r_end].detach().max(dim=-1, keepdim=True).values)
+        logits_max = torch.cat(logits_max_chunks, dim=0) if r_local > 0 else logits_chunk.new_empty((0, 1))
+
+        tp_size = dist.get_world_size(tp_group) if tp_group is not None else 1
+        if tp_size > 1:
+            dist.all_reduce(logits_max, op=dist.ReduceOp.MAX, group=tp_group)
+
+        sum_exp_chunks = []
+        for r_start in range(0, r_local, 2048):
+            r_end = min(r_start + 2048, r_local)
+            chunk_norm = logits_chunk[r_start:r_end].detach() - logits_max[r_start:r_end]
+            sum_exp_chunks.append(chunk_norm.exp().sum(dim=-1, keepdim=True))
+        sum_exp = torch.cat(sum_exp_chunks, dim=0) if r_local > 0 else logits_chunk.new_empty((0, 1))
+        if tp_size > 1:
+            dist.all_reduce(sum_exp, op=dist.ReduceOp.SUM, group=tp_group)
+
+        log_sum_exp = sum_exp.log()
+        ctx.save_for_backward(logits_chunk, logits_max, sum_exp)
+        return log_sum_exp, logits_max
+
+    @staticmethod
+    def backward(ctx, grad_log_sum_exp: torch.Tensor, grad_logits_max: torch.Tensor):
+        logits_chunk, logits_max, sum_exp = ctx.saved_tensors
+        grad_logits = None
+        if ctx.needs_input_grad[0]:
+            grad_logits = torch.empty_like(logits_chunk)
+            r_local = logits_chunk.size(0)
+            for r_start in range(0, r_local, 2048):
+                r_end = min(r_start + 2048, r_local)
+                chunk_norm = logits_chunk[r_start:r_end].detach() - logits_max[r_start:r_end]
+                chunk_prob = chunk_norm.exp() / sum_exp[r_start:r_end]
+                grad_logits[r_start:r_end] = chunk_prob * grad_log_sum_exp[r_start:r_end]
+        return grad_logits, None
+
+
+class TPTopKLogProbs(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, logits_chunk, log_sum_exp, logits_max, vocab_offset, local_vocab_size, tp_group, top_k):
+        with torch.no_grad():
+            r_local = logits_chunk.size(0)
+            tp_size = dist.get_world_size(tp_group) if tp_group is not None else 1
+            topk_vals_list = []
+            topk_idx_list = []
+            for r_start in range(0, r_local, 2048):
+                r_end = min(r_start + 2048, r_local)
+                normalized = logits_chunk[r_start:r_end] - logits_max[r_start:r_end] - log_sum_exp[r_start:r_end]
+                if tp_size > 1:
+                    gathered = [torch.zeros_like(normalized) for _ in range(tp_size)]
+                    dist.all_gather(gathered, normalized, group=tp_group)
+                    full_vocab_log_probs = torch.cat(gathered, dim=-1)
+                    vals, idx = full_vocab_log_probs.topk(top_k, dim=-1)
+                else:
+                    vals, idx = normalized.topk(top_k, dim=-1)
+                topk_vals_list.append(vals)
+                topk_idx_list.append(idx)
+            topk_log_probs = (
+                torch.cat(topk_vals_list, dim=0)
+                if r_local > 0
+                else torch.empty(0, top_k, dtype=logits_chunk.dtype, device=logits_chunk.device)
+            )
+            topk_indices = (
+                torch.cat(topk_idx_list, dim=0)
+                if r_local > 0
+                else torch.empty(0, top_k, dtype=torch.long, device=logits_chunk.device)
+            )
+
+        ctx.save_for_backward(topk_indices)
+        ctx.vocab_offset = vocab_offset
+        ctx.local_vocab_size = local_vocab_size
+        return topk_log_probs, topk_indices
+
+    @staticmethod
+    def backward(ctx, grad_topk_log_probs, grad_topk_indices):
+        (topk_indices,) = ctx.saved_tensors
+        vocab_offset = ctx.vocab_offset
+        local_vocab_size = ctx.local_vocab_size
+        grad_logits_chunk = torch.zeros(
+            topk_indices.size(0),
+            local_vocab_size,
+            dtype=grad_topk_log_probs.dtype,
+            device=grad_topk_log_probs.device,
+        )
+        in_local_mask = (topk_indices >= vocab_offset) & (topk_indices < vocab_offset + local_vocab_size)
+        local_indices = (topk_indices - vocab_offset).clamp(0, local_vocab_size - 1)
+        grad_logits_chunk.scatter_add_(
+            -1, local_indices, grad_topk_log_probs * in_local_mask.to(grad_topk_log_probs.dtype)
+        )
+        grad_log_sum_exp = -grad_topk_log_probs.sum(dim=-1, keepdim=True)
+        grad_logits_max = torch.zeros_like(grad_log_sum_exp)
+        return grad_logits_chunk, grad_log_sum_exp, grad_logits_max, None, None, None, None
+
+
+def _compute_log_probs_at_indices(
+    indices: torch.Tensor,
+    logits_chunk: torch.Tensor,
+    logits_max: torch.Tensor,
+    log_sum_exp: torch.Tensor,
+    vocab_offset: int,
+    local_vocab_size: int,
+    tp_group,
+) -> torch.Tensor:
+    in_local_vocab = (indices >= vocab_offset) & (indices < vocab_offset + local_vocab_size)
+    local_indices = (indices - vocab_offset).clamp(0, local_vocab_size - 1)
+    local_log_probs_list = []
+    for r_start in range(0, logits_chunk.size(0), 2048):
+        r_end = min(r_start + 2048, logits_chunk.size(0))
+        chunk_local_logits = logits_chunk[r_start:r_end].gather(-1, local_indices[r_start:r_end])
+        chunk_log_probs = chunk_local_logits - logits_max[r_start:r_end] - log_sum_exp[r_start:r_end]
+        chunk_log_probs = chunk_log_probs * in_local_vocab[r_start:r_end].to(chunk_log_probs.dtype)
+        local_log_probs_list.append(chunk_log_probs)
+    if logits_chunk.size(0) > 0:
+        local_log_probs_at_idx = torch.cat(local_log_probs_list, dim=0)
+    else:
+        local_log_probs_at_idx = torch.empty(0, indices.size(-1), dtype=logits_chunk.dtype, device=logits_chunk.device)
+    if tp_group is not None and dist.get_world_size(tp_group) > 1:
+        dist.all_reduce(local_log_probs_at_idx, group=tp_group)
+    return local_log_probs_at_idx
+
+
+def get_topk_log_probs(
+    logits: torch.Tensor,
+    *,
+    args: Namespace,
+    unconcat_tokens: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+    top_k: int = 100,
+    max_seq_lens: list[int] | None = None,
+    target_indices: list[torch.Tensor] | None = None,
+    **kwargs: Any,
+) -> tuple[torch.Tensor, dict[str, list[torch.Tensor]]]:
+    tp_group = mpu.get_tensor_model_parallel_group()
+    tp_rank = mpu.get_tensor_model_parallel_rank()
+    cp_size = mpu.get_context_parallel_world_size()
+    cp_group = mpu.get_context_parallel_group() if cp_size > 1 else None
+    qkv_format = args.qkv_format
+
+    topk_log_probs_list = []
+    topk_indices_list = []
+    tail_log_probs_list = []
+    entropy_list = []
+
+    for i, (logits_chunk, tokens_chunk) in enumerate(
+        get_responses(
+            logits,
+            args=args,
+            unconcat_tokens=unconcat_tokens,
+            total_lengths=total_lengths,
+            response_lengths=response_lengths,
+            max_seq_lens=max_seq_lens,
+        )
+    ):
+        r_local = logits_chunk.size(0)
+        assert tokens_chunk.size(0) == r_local
+        local_vocab_size = logits_chunk.size(-1)
+        vocab_offset = tp_rank * local_vocab_size
+        total_length = total_lengths[i]
+        response_length = response_lengths[i]
+        prompt_length = total_length - response_length
+
+        if r_local == 0:
+            top_k_i = top_k if target_indices is None or i >= len(target_indices) else target_indices[i].size(-1)
+            device = logits.device
+            if cp_size > 1 and target_indices is not None and i < len(target_indices):
+                full_log_probs = torch.zeros(response_length, top_k_i, dtype=logits.dtype, device=device)
+                dist.all_reduce(full_log_probs, group=cp_group)
+                topk_log_probs_list.append(full_log_probs)
+                topk_indices_list.append(target_indices[i])
+                tail_log_probs_list.append((1.0 - full_log_probs.exp().sum(dim=-1)).clamp(min=1e-10).log())
+            elif cp_size > 1:
+                full_indices = torch.zeros(response_length, top_k_i, dtype=torch.long, device=device)
+                dist.all_reduce(full_indices, group=cp_group)
+                topk_log_probs_list.append(torch.empty(0, top_k_i, dtype=logits.dtype, device=device))
+                topk_indices_list.append(full_indices)
+                tail_log_probs_list.append(torch.empty(0, dtype=logits.dtype, device=device))
+            else:
+                topk_log_probs_list.append(torch.empty(0, top_k_i, dtype=logits.dtype, device=device))
+                topk_indices_list.append(torch.empty(0, top_k_i, dtype=torch.long, device=device))
+                tail_log_probs_list.append(torch.empty(0, dtype=logits.dtype, device=device))
+            entropy_list.append(torch.empty(0, dtype=logits.dtype, device=device))
+            continue
+
+        log_sum_exp, logits_max = TPLogSumExp.apply(logits_chunk, tp_group)
+
+        if target_indices is not None and i < len(target_indices):
+            full_target_idx = target_indices[i]
+            k_i = full_target_idx.size(-1)
+            if cp_size > 1:
+                max_seq_len = max_seq_lens[i] if max_seq_lens is not None else None
+                _, _, logits_offset, tokens_offset = get_logits_and_tokens_offset_with_cp(
+                    total_length, response_length, qkv_format, max_seq_len
+                )
+                start_0 = tokens_offset[0][0] - prompt_length
+                end_0 = tokens_offset[0][1] - prompt_length
+                start_1 = tokens_offset[1][0] - prompt_length
+                end_1 = tokens_offset[1][1] - prompt_length
+                local_idx_0 = (
+                    full_target_idx[start_0:end_0]
+                    if end_0 > start_0
+                    else torch.empty(0, k_i, dtype=full_target_idx.dtype, device=full_target_idx.device)
+                )
+                local_idx_1 = (
+                    full_target_idx[start_1:end_1]
+                    if end_1 > start_1
+                    else torch.empty(0, k_i, dtype=full_target_idx.dtype, device=full_target_idx.device)
+                )
+                local_target_idx = torch.cat([local_idx_0, local_idx_1], dim=0)
+                local_log_probs = _compute_log_probs_at_indices(
+                    local_target_idx, logits_chunk, logits_max, log_sum_exp, vocab_offset, local_vocab_size, tp_group
+                )
+                full_log_probs = torch.zeros(
+                    response_length, k_i, dtype=local_log_probs.dtype, device=local_log_probs.device
+                )
+                r0 = logits_offset[0][1] - logits_offset[0][0]
+                if r0 > 0:
+                    pos0 = logits_offset[0][0] + 1 - prompt_length
+                    full_log_probs[pos0 : pos0 + r0] = local_log_probs[:r0]
+                r1 = logits_offset[1][1] - logits_offset[1][0]
+                if r1 > 0:
+                    pos1 = logits_offset[1][0] + 1 - prompt_length
+                    full_log_probs[pos1 : pos1 + r1] = local_log_probs[r0 : r0 + r1]
+                dist.all_reduce(full_log_probs, group=cp_group)
+                topk_log_probs = full_log_probs
+                topk_indices = full_target_idx
+            else:
+                topk_log_probs = _compute_log_probs_at_indices(
+                    full_target_idx, logits_chunk, logits_max, log_sum_exp, vocab_offset, local_vocab_size, tp_group
+                )
+                topk_indices = full_target_idx
+        else:
+            topk_log_probs, topk_indices_local = TPTopKLogProbs.apply(
+                logits_chunk, log_sum_exp, logits_max, vocab_offset, local_vocab_size, tp_group, top_k
+            )
+            if cp_size > 1:
+                _, _, logits_offset, _ = get_logits_and_tokens_offset_with_cp(
+                    total_length,
+                    response_length,
+                    qkv_format,
+                    max_seq_lens[i] if max_seq_lens is not None else None,
+                )
+                full_indices = torch.zeros(
+                    response_length, top_k, dtype=topk_indices_local.dtype, device=topk_indices_local.device
+                )
+                r0 = logits_offset[0][1] - logits_offset[0][0]
+                if r0 > 0:
+                    start0 = logits_offset[0][0] + 1 - prompt_length
+                    full_indices[start0 : start0 + r0] = topk_indices_local[:r0]
+                r1 = logits_offset[1][1] - logits_offset[1][0]
+                if r1 > 0:
+                    start1 = logits_offset[1][0] + 1 - prompt_length
+                    full_indices[start1 : start1 + r1] = topk_indices_local[r0 : r0 + r1]
+                dist.all_reduce(full_indices, group=cp_group)
+                topk_indices = full_indices
+            else:
+                topk_indices = topk_indices_local
+
+        topk_probs = topk_log_probs.exp()
+        tail_prob = (1.0 - topk_probs.sum(dim=-1)).clamp(min=1e-10)
+        tail_log_prob = tail_prob.log()
+        entropy = -(topk_probs * topk_log_probs).sum(dim=-1) - tail_prob * tail_log_prob
+        topk_log_probs_list.append(topk_log_probs)
+        topk_indices_list.append(topk_indices)
+        tail_log_probs_list.append(tail_log_prob)
+        entropy_list.append(entropy)
+
+    return torch.empty((0,), device=logits.device), {
+        "topk_log_probs": topk_log_probs_list,
+        "topk_indices": topk_indices_list,
+        "tail_log_probs": tail_log_probs_list,
+        "entropy": entropy_list,
+    }
+
+
+def _slice_full_response_data_by_cp(
+    values: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+    qkv_format: str,
+    max_seq_lens: list[int] | None,
+) -> list[torch.Tensor]:
+    if mpu.get_context_parallel_world_size() == 1:
+        return values
+    sliced = []
+    for i, (value, total_length, response_length) in enumerate(
+        zip(values, total_lengths, response_lengths, strict=False)
+    ):
+        if value.size(0) != response_length:
+            sliced.append(value)
+            continue
+        prompt_length = total_length - response_length
+        max_seq_len = max_seq_lens[i] if max_seq_lens is not None else None
+        _, _, _, tokens_offset = get_logits_and_tokens_offset_with_cp(
+            total_length, response_length, qkv_format, max_seq_len
+        )
+        part0 = value[tokens_offset[0][0] - prompt_length : tokens_offset[0][1] - prompt_length]
+        part1 = value[tokens_offset[1][0] - prompt_length : tokens_offset[1][1] - prompt_length]
+        sliced.append(torch.cat([part0, part1], dim=0))
+    return sliced
+
+
+def topk_opd_loss_function(
+    args: Namespace,
+    batch: RolloutBatch,
+    logits: torch.Tensor,
+    sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    if batch.get("student_topk_indices") is None:
+        raise ValueError("topk_opd_loss requires student_topk_indices in the batch.")
+    for key in ["old_topk_log_probs", "old_tail_log_probs", "teacher_topk_log_probs", "teacher_tail_log_probs"]:
+        if batch.get(key) is None:
+            raise ValueError(f"topk_opd_loss requires {key} in the batch.")
+
+    _, current_topk_data = get_topk_log_probs(
+        logits,
+        args=args,
+        unconcat_tokens=batch["unconcat_tokens"],
+        total_lengths=batch["total_lengths"],
+        response_lengths=batch["response_lengths"],
+        top_k=args.opd_top_k,
+        max_seq_lens=batch.get("max_seq_lens", None),
+        target_indices=batch["student_topk_indices"],
+    )
+
+    total_lengths = batch["total_lengths"]
+    response_lengths = batch["response_lengths"]
+    max_seq_lens = batch.get("max_seq_lens", None)
+    current_topk_log_probs = _slice_full_response_data_by_cp(
+        current_topk_data["topk_log_probs"], total_lengths, response_lengths, args.qkv_format, max_seq_lens
+    )
+    current_tail_log_probs = _slice_full_response_data_by_cp(
+        current_topk_data["tail_log_probs"], total_lengths, response_lengths, args.qkv_format, max_seq_lens
+    )
+    teacher_topk_log_probs = _slice_full_response_data_by_cp(
+        batch["teacher_topk_log_probs"], total_lengths, response_lengths, args.qkv_format, max_seq_lens
+    )
+    teacher_tail_log_probs = _slice_full_response_data_by_cp(
+        batch["teacher_tail_log_probs"], total_lengths, response_lengths, args.qkv_format, max_seq_lens
+    )
+    old_topk_log_probs = batch["old_topk_log_probs"]
+    old_tail_log_probs = batch["old_tail_log_probs"]
+
+    current_topk = torch.cat(current_topk_log_probs, dim=0)
+    current_tail = torch.cat(current_tail_log_probs, dim=0)
+    old_topk = torch.cat(old_topk_log_probs, dim=0)
+    old_tail = torch.cat(old_tail_log_probs, dim=0)
+    teacher_topk = torch.cat(teacher_topk_log_probs, dim=0)
+    teacher_tail = torch.cat(teacher_tail_log_probs, dim=0)
+
+    old_probs = old_topk.exp()
+    old_tail_probs = old_tail.exp()
+    topk_ratio = torch.exp(current_topk - old_topk)
+    tail_ratio = torch.exp(current_tail - old_tail)
+    topk_advantages = teacher_topk - old_topk
+    tail_advantages = teacher_tail - old_tail
+
+    per_token_loss = -(
+        (old_probs * topk_ratio * topk_advantages).sum(dim=-1) + old_tail_probs * tail_ratio * tail_advantages
+    )
+    opd_loss = args.opd_kl_coef * sum_of_sample_mean(per_token_loss)
+
+    reverse_kl = (old_probs * (old_topk - teacher_topk)).sum(dim=-1) + old_tail_probs * (old_tail - teacher_tail)
+    topk_ratio_abs = (topk_ratio - 1).abs().mean(dim=-1)
+    tail_ratio_abs = (tail_ratio - 1).abs()
+    avg_ratio_abs = 0.5 * (topk_ratio_abs + tail_ratio_abs)
+
+    if current_topk.numel() == 0:
+        opd_loss = opd_loss + 0 * logits.sum()
+
+    return opd_loss, {
+        "loss": opd_loss.clone().detach(),
+        "topk_opd_loss": opd_loss.clone().detach(),
+        "topk_opd_reverse_kl": sum_of_sample_mean(reverse_kl).clone().detach(),
+        "topk_opd_ratio_abs": sum_of_sample_mean(avg_ratio_abs).clone().detach(),
+    }
+
+
 def value_loss_function(
     args: Namespace,
     batch: RolloutBatch,
@@ -1194,6 +1577,8 @@ def loss_function(
             func = value_loss_function
         case "sft_loss":
             func = sft_loss_function
+        case "topk_opd_loss":
+            func = topk_opd_loss_function
         case "custom_loss":
             func = load_function(args.custom_loss_function_path)
         case _:
