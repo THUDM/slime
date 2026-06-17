@@ -1082,7 +1082,11 @@ def start_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
     as the HTTP client is shared across all servers.
     """
     if uses_rollout_http_endpoint(args):
-        return start_http_endpoint_rollout_servers(args)
+        # HTTP endpoints have no local engines to initialize, so there are no
+        # pending init handles. Return the (servers, init_handles) tuple the
+        # caller (RolloutManager.__init__) and this function's annotation expect,
+        # matching the other branches below.
+        return start_http_endpoint_rollout_servers(args), []
 
     if args.rollout_external:
         return start_external_rollout_servers(args, start_router=_start_router)
