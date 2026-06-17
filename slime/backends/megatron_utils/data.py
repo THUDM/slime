@@ -286,6 +286,7 @@ def log_rollout_data(
                 "rollout_mask_sums",
                 "rollout_top_p_token_ids",
                 "rollout_top_p_token_offsets",
+                "prompt_mask_sums",
                 "rollout_routed_experts",
                 "global_batch_sizes",
                 "num_microbatches",

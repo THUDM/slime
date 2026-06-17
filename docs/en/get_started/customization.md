@@ -295,8 +295,54 @@ def get_pg_loss_reducer(
 ```
 
 **Use Cases**:
-- Dr.GRPO: Divide by a constant instead of effective token count
-- Custom loss normalization strategies
+- Custom loss normalization strategies not covered by `--loss-aggregation`
+
+> The four standard loss-aggregation modes (GRPO sample average, DAPO prompt
+> average, token average, Dr.GRPO constant divisor) are available first-class via
+> `--loss-aggregation` (see below) — no custom reducer needed. Reach for this
+> hook only for a normalization those modes do not express. When set, it takes
+> precedence over `--loss-aggregation`.
+
+**Built-in modes — `--loss-aggregation`**
+
+`--loss-aggregation {sample_mean,prompt_mean,token_mean,constant}` selects how
+pg_loss is aggregated across a training step (pg_loss only; every other metric
+keeps the default sample-mean reducer — same scope as the custom hook above).
+Modes follow the ScaleRL taxonomy ([arXiv:2510.13786](https://arxiv.org/abs/2510.13786) §3.2):
+
+| Mode | Paper | pg_loss denominator |
+| :--- | :--- | :--- |
+| `sample_mean` (default) | GRPO sample average | Per-rollout token-weighted mean — each rollout contributes equally regardless of fan-out. Byte-identical to slime's prior default. |
+| `prompt_mean` | DAPO prompt average | Per-prompt-group token-weighted mean (all rollouts sharing a prompt share one denominator). |
+| `token_mean` | token average | Global per-token mean. The legacy `--calculate-per-token-loss` flag is exactly this mode (see below); prefer `--loss-aggregation=token_mean`. |
+| `constant` | Dr.GRPO ([arXiv:2503.20783](https://arxiv.org/abs/2503.20783)) | `sum(token_loss * loss_mask) / L`, where `L = --loss-aggregation-divisor` (e.g. the max context length). |
+
+`--loss-aggregation-divisor L` is required (validated `> 0` at startup) only for
+`constant`; it is ignored for the other modes (passing it with any other mode
+fails at startup). The default (`sample_mean`) leaves behavior unchanged.
+
+The `constant` denominator `L` is *per-token*, not per-step: each mode's reducer
+returns a step sum that is then averaged by the usual `/ step_global_batch_size`
+(identical structure across all four modes). So the effective per-step
+normalization for `constant` is `/ (L * step_global_batch_size)` — `L` only sets
+the data-independent per-token scale; the `/ step_global_batch_size` step average
+is applied on top exactly as for the other modes.
+
+`prompt_mean` weights every prompt group equally (each group's token-weighted
+mean enters the step sum once, all under the same `/ step_global_batch_size`
+divisor). Its absolute scale differs from a strict `1/P` DAPO average by a
+constant factor (`P / N`, prompts over rollouts), which the learning rate
+absorbs; the relative per-prompt weighting is uniform.
+
+**Legacy `--calculate-per-token-loss`.** `--calculate-per-token-loss` is not a
+separate axis: it *is* the `token_mean` point on `--loss-aggregation`. The two
+spellings are reconciled at startup so the reported objective is honest and there
+is one knob: `--loss-aggregation=token_mean` sets `--calculate-per-token-loss`,
+and `--calculate-per-token-loss` (on the default `sample_mean`) is relabeled to
+`token_mean` with no behavior change. Existing `--calculate-per-token-loss`
+recipes keep working unchanged; prefer `--loss-aggregation=token_mean` in new
+recipes. Combining `--calculate-per-token-loss` with `prompt_mean` or `constant`
+(distinct objectives) fails loud at startup.
 
 ---
 

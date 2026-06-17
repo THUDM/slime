@@ -593,6 +593,7 @@ def train_one_step(
                     "rollout_log_probs",
                     "teacher_log_probs",
                     "rollout_mask_sums",
+                    "prompt_mask_sums",
                 ],
             ),
             args.data_pad_size_multiplier,
