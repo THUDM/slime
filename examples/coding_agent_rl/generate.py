@@ -246,6 +246,7 @@ async def generate(args, sample: Sample, sampling_params: dict[str, Any]):
                 diff_text=diff_text,
                 swepro=md["swepro"],
                 eval_cmd=md["eval_cmd"],
+                swebench_metadata=md.get("swebench_metadata"),
                 pre_commands=md["pre_commands"],
                 timeout_sec=SWE_EVAL_TIMEOUT_SEC,
             )
@@ -329,6 +330,7 @@ def _metadata(sample: Sample) -> dict[str, Any]:
         "problem_statement": m.get("problem_statement") or _coerce_prompt(sample.prompt),
         "swepro": m.get("swepro"),
         "eval_cmd": m.get("eval_cmd") or _wrap_f2p_script(rem.get("f2p_script")),
+        "swebench_metadata": m.get("swebench_metadata"),
         "pre_commands": m.get("pre_commands") or rem.get("pre_commands"),
     }
 
