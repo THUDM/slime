@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -459,6 +460,107 @@ def test_parse_xml_tool_uses_ignores_unknown_tool():
     cleaned, uses = parse_xml_tool_uses(raw, [{"function": {"name": "lookup"}}])
     assert uses == []
     assert "<tool_call>" in cleaned  # left untouched
+
+
+def test_parse_model_output_recovers_gemma_native_call_tail():
+    raw = 'checking\ncall:bash{command:grep -n "func (c *context) RealIP()" /testbed/context.go}'
+    parsed = parse_model_output(
+        raw,
+        tools_schema=[{"function": {"name": "bash"}}],
+        tool_parser_name=None,
+        reasoning_parser_name=None,
+    )
+    assert parsed.text == "checking"
+    assert parsed.tool_uses == [
+        {"name": "bash", "input": {"command": 'grep -n "func (c *context) RealIP()" /testbed/context.go'}}
+    ]
+
+
+def test_parse_model_output_keeps_commas_inside_native_command_quotes():
+    raw = 'call:bash{command:printf "a,b: c"}'
+    parsed = parse_model_output(
+        raw,
+        tools_schema=[{"function": {"name": "bash"}}],
+        tool_parser_name=None,
+        reasoning_parser_name=None,
+    )
+    assert parsed.text == ""
+    assert parsed.tool_uses == [{"name": "bash", "input": {"command": 'printf "a,b: c"'}}]
+
+
+def test_parse_model_output_recovers_gemma_native_call_from_reasoning(monkeypatch):
+    reasoning = 'plan\ncall:bash{command:<|"grep -n \\"func\\" /testbed/context.go"|>}'
+
+    class FakeReasoningParser:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def parse_non_stream(self, raw: str) -> tuple[str, str]:
+            return reasoning, ""
+
+    sglang_mod = types.ModuleType("sglang")
+    srt_mod = types.ModuleType("sglang.srt")
+    parser_pkg = types.ModuleType("sglang.srt.parser")
+    reasoning_mod = types.ModuleType("sglang.srt.parser.reasoning_parser")
+    reasoning_mod.ReasoningParser = FakeReasoningParser
+    sglang_mod.srt = srt_mod
+    srt_mod.parser = parser_pkg
+    parser_pkg.reasoning_parser = reasoning_mod
+    monkeypatch.setitem(sys.modules, "sglang", sglang_mod)
+    monkeypatch.setitem(sys.modules, "sglang.srt", srt_mod)
+    monkeypatch.setitem(sys.modules, "sglang.srt.parser", parser_pkg)
+    monkeypatch.setitem(sys.modules, "sglang.srt.parser.reasoning_parser", reasoning_mod)
+
+    parsed = parse_model_output(
+        "ignored raw text",
+        tools_schema=[{"function": {"name": "bash"}}],
+        tool_parser_name=None,
+        reasoning_parser_name="gemma",
+    )
+    assert parsed.reasoning == "plan"
+    assert parsed.text == ""
+    assert parsed.tool_uses == [{"name": "bash", "input": {"command": 'grep -n "func" /testbed/context.go'}}]
+
+
+def test_parse_model_output_recovers_gemma_native_json_object_subset():
+    raw = 'call:bash{"command":"echo hi","options":{"cwd":"/tmp"},"timeout":5,"safe":true}'
+    parsed = parse_model_output(
+        raw,
+        tools_schema=[{"function": {"name": "bash"}}],
+        tool_parser_name=None,
+        reasoning_parser_name=None,
+    )
+    assert parsed.text == ""
+    assert parsed.tool_uses == [
+        {
+            "name": "bash",
+            "input": {"command": "echo hi", "options": {"cwd": "/tmp"}, "timeout": 5, "safe": True},
+        }
+    ]
+
+
+def test_parse_model_output_leaves_unknown_gemma_native_call_untouched():
+    raw = "lead call:unknown{command:ls}"
+    parsed = parse_model_output(
+        raw,
+        tools_schema=[{"function": {"name": "bash"}}],
+        tool_parser_name=None,
+        reasoning_parser_name=None,
+    )
+    assert parsed.text == raw
+    assert parsed.tool_uses == []
+
+
+def test_parse_model_output_leaves_unknown_then_known_gemma_native_suffix_untouched():
+    raw = "lead call:unknown{command:ls} call:bash{command:pwd}"
+    parsed = parse_model_output(
+        raw,
+        tools_schema=[{"function": {"name": "bash"}}],
+        tool_parser_name=None,
+        reasoning_parser_name=None,
+    )
+    assert parsed.text == raw
+    assert parsed.tool_uses == []
 
 
 if __name__ == "__main__":
