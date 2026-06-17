@@ -400,9 +400,6 @@ def get_log_probs_and_entropy(
     Computes on the **full** logits ``[T, V]`` tensor at once (instead of
     per-sample slicing) so backward traverses ``[T, V]`` only once, then
     extracts per-sample response portions.
-
-    When ``entropy_coef == 0``, entropy is computed under ``torch.no_grad()``
-    to avoid retaining the computation graph and to skip cloning.
     """
     assert non_loss_data
     qkv_format = args.qkv_format
@@ -806,11 +803,12 @@ def policy_loss_function(
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute policy loss (PPO/GSPO) and metrics.
 
-    Computes current log-probabilities and entropy from model logits, then
-    calculates PPO-style clipped policy gradient loss. For GSPO, gathers
+    Computes current log-probabilities from model logits, then calculates
+    PPO-style clipped policy gradient loss. For GSPO, gathers
     full sequences via context-parallel all-gather before computing per-sample
-    KL. Optionally applies TIS (Truncated Importance Sampling) correction and
-    adds KL loss term if configured.
+    KL. Entropy is computed only when its coefficient can affect the loss.
+    Optionally applies TIS (Truncated Importance Sampling) correction and adds
+    KL loss term if configured.
 
     Args:
         args: Configuration controlling advantage estimator, clipping thresholds,
@@ -834,6 +832,7 @@ def policy_loss_function(
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
     max_seq_lens = batch.get("max_seq_lens", None)
+    compute_entropy = args.entropy_coef != 0
 
     _, log_probs_and_entropy = get_log_probs_and_entropy(
         logits,
@@ -841,7 +840,7 @@ def policy_loss_function(
         unconcat_tokens=batch["unconcat_tokens"],
         total_lengths=total_lengths,
         response_lengths=response_lengths,
-        with_entropy=True,
+        with_entropy=compute_entropy,
         max_seq_lens=max_seq_lens,
     )
 
@@ -966,10 +965,12 @@ def policy_loss_function(
     pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
     ppo_kl = sum_of_sample_mean(ppo_kl)
 
-    # entropy loss
-    entropy = log_probs_and_entropy["entropy"]
-    entropy = torch.cat(entropy, dim=0)
-    entropy_loss = sum_of_sample_mean(entropy)
+    if compute_entropy:
+        entropy = log_probs_and_entropy["entropy"]
+        entropy = torch.cat(entropy, dim=0)
+        entropy_loss = sum_of_sample_mean(entropy)
+    else:
+        entropy_loss = logits.new_zeros(())
 
     loss = pg_loss - args.entropy_coef * entropy_loss
 
