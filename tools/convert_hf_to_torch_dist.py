@@ -27,6 +27,7 @@ def add_convertion_args(parser):
         default="raw",
         help="The method to convert megatron weights to hugging face weights for SGLang.",
     )
+    parser.add_argument("--allgather-cp", action="store_true", default=False)
     try:
         parser.add_argument("--padded-vocab-size", type=int, default=None)
     except Exception:

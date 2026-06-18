@@ -215,11 +215,14 @@ def create_training_models(args, pgs, rollout_manager):
 def create_rollout_manager(args, pg):
     from .rollout import RolloutManager
 
-    rollout_manager = RolloutManager.options(
-        num_cpus=1,
-        num_gpus=0,
-        runtime_env={"env_vars": add_default_ray_env_vars()},
-    ).remote(args, pg)
+    rollout_manager_options = {
+        "num_cpus": 1,
+        "num_gpus": 0,
+        "runtime_env": {"env_vars": add_default_ray_env_vars()},
+    }
+    if getattr(args, "rollout_data_transport", "object-store") == "nixl":
+        rollout_manager_options["enable_tensor_transport"] = True
+    rollout_manager = RolloutManager.options(**rollout_manager_options).remote(args, pg)
 
     # calculate num_rollout from num_epoch
     num_rollout_per_epoch = None

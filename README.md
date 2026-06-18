@@ -3,6 +3,7 @@
 [中文版](./README_zh.md)
 
 [![Documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg?style=flat)](https://thudm.github.io/slime/)
+[![CI](https://img.shields.io/github/actions/workflow/status/THUDM/slime/pr-test.yml?branch=zilin%2Fci-dont-merge&event=pull_request&label=CI&logo=github)](https://github.com/THUDM/slime/pull/2053/checks)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/THUDM/slime)
 
 **slime** is an LLM post-training framework for RL scaling, providing two core capabilities:
@@ -16,7 +17,7 @@ This makes slime one of the most battle-tested open RL post-training frameworks:
 
 ## Why This Design Matters
 
-- **Battle-tested by frontier model training**: slime is the RL framework behind [GLM-5.1](https://z.ai/blog/glm-5.1), [GLM-5](https://z.ai/blog/glm-5), [GLM-4.7](https://z.ai/blog/glm-4.7), [GLM-4.6](https://z.ai/blog/glm-4.6), and [GLM-4.5](https://z.ai/blog/glm-4.5). This validates the full post-training loop, not only isolated examples.
+- **Battle-tested by frontier model training**: slime is the RL framework behind [GLM-5.2](https://z.ai/blog/glm-5.2), [GLM-5.1](https://z.ai/blog/glm-5.1), [GLM-5](https://z.ai/blog/glm-5), [GLM-4.7](https://z.ai/blog/glm-4.7), [GLM-4.6](https://z.ai/blog/glm-4.6), and [GLM-4.5](https://z.ai/blog/glm-4.5). This validates the full post-training loop, not only isolated examples.
 - **Correctness-first infrastructure**: RL bugs are often silent. slime keeps the dataflow explicit, supports separate rollout-only and train-only debugging paths, and documents reproducibility, fault tolerance, tracing, profiling, and CI as first-class engineering concerns.
 - **Native by design**: slime passes Megatron arguments through directly and exposes installed SGLang arguments with a `--sglang-` prefix. New upstream training and serving optimizations can be used without adding another abstraction layer inside slime.
 - **Maximum data-generation freedom**: math, code, search, tools, sandboxes, verifiers, environments, multi-agent systems, and long-horizon agentic workflows plug in as data generation or reward workflows. They do not fork the training kernel.

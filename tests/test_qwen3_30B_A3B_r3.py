@@ -40,6 +40,7 @@ def execute():
         "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 8192 "
         "--rollout-temperature 1 "
+        "--rollout-data-transport nixl "
         "--global-batch-size 16 "
         "--balance-data "
     )
@@ -93,7 +94,7 @@ def execute():
     sglang_args = (
         "--rollout-num-gpus-per-engine 8 "
         "--sglang-mem-fraction-static 0.8 "
-        "--sglang-cuda-graph-max-bs 16 "
+        "--sglang-cuda-graph-max-bs 32 "
         "--sglang-max-running-requests 512 "
         "--sglang-enable-metrics "
     )

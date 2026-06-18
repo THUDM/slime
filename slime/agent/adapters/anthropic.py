@@ -1,20 +1,21 @@
 """Anthropic Messages adapter for agent rollouts.
 
-The adapter exposes ``/v1/messages`` and ``/v1/messages/count_tokens``. It
-renders each Anthropic message history with the served model's chat template,
-calls SGLang ``/generate`` with ``input_ids``, and records the exact sampled
-token ids/logprobs as ``TurnRecord`` objects. New code should use
-``AnthropicAdapter`` and call ``finish_session()`` at trajectory end to drain
-trainable ``TokenSegment`` objects.
+Exposes /v1/messages and /v1/messages/count_tokens. Each Anthropic message
+history is rendered with the served model's chat template, sent to sglang
+/generate as input_ids, and fed into a shared TrajectoryManager keyed by session
+id. finish_session(sid) drains a session's trajectory into a list of Sample.
 
-It also handles Claude Code sub-agent and compaction patterns by splitting one
-session into ``subagent``, ``wipe``, and ``final`` segments.
+The per-sid tree inside TrajectoryManager handles sub-agent and compaction
+patterns automatically: any divergence in the prompt prefix forks into a new
+leaf, so we do not track explicit chains here.
+
+This module mirrors slime.agent.adapters.openai; the section layout (adapter
+class -> translation -> reply building -> request framing) is shared between
+them. See BaseAdapter for the hooks to fill.
 """
 
 from __future__ import annotations
 
-import asyncio
-import dataclasses
 import json
 import logging
 import secrets
@@ -22,184 +23,82 @@ from typing import Any
 
 from aiohttp import web
 
-from slime.agent.adapters.common import ADAPTER_KEY, REASONING_PARSER_KEY, TOKENIZER_KEY, TOOL_PARSER_KEY
-from slime.agent.adapters.common import AdapterChain as Chain
 from slime.agent.adapters.common import (
     BaseAdapter,
-    call_sglang_generate,
-    ok_response,
-    render_token_ids,
-    request_session_id,
+    Reply,
+    flatten_content,
+    manager_finish_reason,
+    sid_from_bearer,
+    tool_call_dict,
 )
-from slime.agent.adapters.common import stable_hash as _hash
-from slime.agent.parsing import parse_model_output
-from slime.agent.trajectory import TokenSegment, TurnRecord, TurnSegment, make_turn_segment, merge_turn_segments
+from slime.agent.parsing import ParsedModelOutput
 
 logger = logging.getLogger(__name__)
 
 
-# Tool names claude-code uses to dispatch a sub-agent.
-_SUBAGENT_TOOLS = {"Task", "Agent"}
-
-
-@dataclasses.dataclass
-class Session:
-    main: Chain = dataclasses.field(default_factory=Chain)
-    active_sub: Chain | None = None  # at most one sub-agent at a time
-    pending_dispatch_id: str = ""  # tool_use_id we're waiting to close
-    sampling_defaults: dict = dataclasses.field(default_factory=dict)
-    max_context_tokens: int = 0
-    lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
-    segments: list[TurnSegment] = dataclasses.field(default_factory=list)  # frozen output
-
-
 class AnthropicAdapter(BaseAdapter):
-    """Anthropic Messages-compatible HTTP adapter with session lifecycle helpers."""
+    """Anthropic Messages-compatible HTTP adapter: wire translation and reply
+    framing only; the turn machinery is inherited from BaseAdapter."""
 
-    session_cls = Session
+    logger = logger
+    log_prefix = "anthropic_adapter"
+    max_token_keys = ("max_tokens",)
+    stop_keys = ("stop_sequences",)
 
-    def __init__(self, *, tokenizer, sglang_url, tool_parser=None, reasoning_parser=None) -> None:
-        super().__init__(
-            tokenizer=tokenizer,
-            sglang_url=sglang_url,
-            tool_parser=tool_parser,
-            reasoning_parser=reasoning_parser,
+    def _register_routes(self, app: web.Application) -> None:
+        app.router.add_post("/v1/messages", self._run_turn)
+        app.router.add_post("/v1/messages/count_tokens", _count_tokens)
+
+    def _session_id(self, request: web.Request, body: dict) -> str:
+        return _request_session_id(request)
+
+    def _preprocess_body(self, body: dict) -> None:
+        _fold_mid_list_system_into_user(body)
+
+    def _translate(self, body: dict) -> tuple[list[dict], list[dict] | None]:
+        translated = _translate_messages(body.get("messages") or [], body.get("system"))
+        tools_schema = _tools_to_chat_tools(body.get("tools"))
+        return translated, tools_schema
+
+    def _build_reply(self, parsed, raw_finish, translated, tools_schema) -> Reply:
+        blocks, stop_reason, manager_message = _build_reply_parts(parsed, raw_finish)
+        return Reply(
+            manager_message=manager_message,
+            finish_reason=manager_finish_reason(parsed.tool_uses, raw_finish),
+            wire=(blocks, stop_reason),
         )
-        self.app.router.add_post("/v1/messages", _handle_request)
-        self.app.router.add_post("/v1/messages/count_tokens", _count_tokens)
-        self.app.router.add_get("/healthz", _ok)
-        self.app.router.add_get("/v1/models", _ok)
 
-    async def finish_session(self, sid: str, *, wait_timeout: float = 5.0) -> list[TokenSegment]:
-        await self.shutdown_session(sid, wait_timeout=wait_timeout)
-        s = self.store.pop(sid, None)
-        if s is None:
-            return []
-        if s.active_sub is not None and s.active_sub.turns:
-            s.segments.append(make_turn_segment(s.active_sub.turns, kind="subagent"))
-        if s.main.turns:
-            s.segments.append(make_turn_segment(s.main.turns, kind="final"))
-
-        return merge_turn_segments(s.segments)
+    async def _respond(self, request, body, reply, in_tok, out_tok, stream) -> web.StreamResponse:
+        blocks, stop_reason = reply.wire
+        if stream:
+            return await _render_stream(request, blocks, stop_reason, in_tok, out_tok)
+        return web.json_response(_render_response(body, blocks, stop_reason, in_tok, out_tok))
 
 
-# =============================================================================
-# 2. Per-turn stages
-# =============================================================================
+# --- Translation (Anthropic wire -> chat-template messages) ---
 
 
-def _select_chain(s: Session, body: dict) -> tuple[Chain, bool, str]:
-    """Decide which chain this turn operates on.
-
-    1. fingerprint body.messages and body.system into hashes
-    2. if main now contains the tool_result for a pending sub dispatch,
-       snapshot the sub chain into s.segments and clear s.active_sub
-    3. pick main vs s.active_sub based on whether request continues main's prefix
-    4. classify as 'new' | 'append' | 'wipe' against the chosen target;
-       a wipe also snapshots the target's current state into s.segments
-
-    Returns (target_chain, is_sub, kind).
-    """
-    all_msgs = body.get("messages") or []
-    msg_hashes = [_hash(m) for m in all_msgs]
-    req_system_hash = _hash(body.get("system")) if "system" in body else s.main.system_hash
-
-    # Close active sub-agent if its dispatch tool_result has landed on main.
-    if s.pending_dispatch_id and s.active_sub is not None:
-        tu_id = s.pending_dispatch_id
-        for m in all_msgs:
-            if not isinstance(m, dict) or m.get("role") != "user":
-                continue
-            content = m.get("content")
-            if not isinstance(content, list):
-                continue
-            done = any(
-                isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") == tu_id
-                for b in content
-            )
-            if done:
-                if s.active_sub.turns:
-                    s.segments.append(make_turn_segment(s.active_sub.turns, kind="subagent"))
-                s.active_sub = None
-                s.pending_dispatch_id = ""
-                break
-
-    # Route: main iff request continues main's prefix. Sub system_hash can be
-    # "" (armed before sub dialled in), so never route by sub equality alone.
-    if s.active_sub is None:
-        target, is_sub = s.main, False
-    else:
-        main_continues = (
-            req_system_hash == s.main.system_hash
-            and len(msg_hashes) >= s.main.seen_msgs
-            and msg_hashes[: s.main.seen_msgs] == s.main.msg_hashes[: s.main.seen_msgs]
-        )
-        target, is_sub = (s.main, False) if main_continues else (s.active_sub, True)
-
-    # Classify; snapshot a "wipe" segment first if we're discarding work.
-    if target.seen_msgs == 0:
-        kind = "new"
-    else:
-        is_append = (
-            req_system_hash == target.system_hash
-            and len(msg_hashes) >= target.seen_msgs
-            and msg_hashes[: target.seen_msgs] == target.msg_hashes[: target.seen_msgs]
-        )
-        if is_append:
-            kind = "append"
-        else:
-            if target.turns:
-                s.segments.append(make_turn_segment(target.turns, kind="wipe"))
-            kind = "wipe"
-
-    return target, is_sub, kind
-
-
-def _flatten(c: Any) -> str:
-    """Recursive Anthropic content flattener: text/tool_result(content) joined
-    by newline, images replaced with a placeholder."""
-    if c is None:
-        return ""
-    if isinstance(c, str):
-        return c
-    if not isinstance(c, list):
-        return str(c)
-    parts: list[str] = []
-    for b in c:
-        if isinstance(b, dict):
-            t = b.get("type")
-            if t == "text":
-                parts.append(b.get("text", ""))
-            elif t == "tool_result":
-                parts.append(_flatten(b.get("content")))
-            elif t == "image":
-                parts.append("[image omitted]")
-        elif isinstance(b, str):
-            parts.append(b)
-    return "\n".join(p for p in parts if p)
-
-
-def _translate_anthropic(msgs: list[dict], system: Any) -> list[dict]:
+def _translate_messages(msgs: list[dict], system: Any) -> list[dict]:
     """Anthropic messages + system -> chat-template messages. Pure function."""
     translated: list[dict] = []
     if system:
-        translated.append({"role": "system", "content": _flatten(system)})
+        translated.append({"role": "system", "content": flatten_content(system)})
     for m in msgs:
         if not isinstance(m, dict):
             continue
         role, content = m.get("role"), m.get("content")
         if role == "user":
-            blocks = content if isinstance(content, list) else [{"type": "text", "text": _flatten(content)}]
+            blocks = content if isinstance(content, list) else [{"type": "text", "text": flatten_content(content)}]
             for b in blocks:
                 if isinstance(b, dict) and b.get("type") == "tool_result":
-                    translated.append({"role": "tool", "content": _flatten(b.get("content"))})
+                    translated.append({"role": "tool", "content": flatten_content(b.get("content"))})
                 elif isinstance(b, dict) and b.get("type") == "text":
                     translated.append({"role": "user", "content": b.get("text", "")})
                 else:
-                    translated.append({"role": "user", "content": _flatten(b)})
+                    translated.append({"role": "user", "content": flatten_content(b)})
         elif role == "assistant":
             texts, thinkings, tcs = [], [], []
-            blocks = content if isinstance(content, list) else [{"type": "text", "text": _flatten(content)}]
+            blocks = content if isinstance(content, list) else [{"type": "text", "text": flatten_content(content)}]
             for b in blocks:
                 if not isinstance(b, dict):
                     continue
@@ -208,7 +107,8 @@ def _translate_anthropic(msgs: list[dict], system: Any) -> list[dict]:
                 elif b.get("type") == "thinking":
                     thinkings.append(b.get("thinking", ""))
                 elif b.get("type") == "tool_use":
-                    tcs.append({"function": {"name": b.get("name", "tool"), "arguments": b.get("input") or {}}})
+                    # drop the wire-only id; tool_call_dict keeps arguments a dict
+                    tcs.append(tool_call_dict(b.get("name", "tool"), b.get("input")))
             mo: dict[str, Any] = {"role": "assistant", "content": "".join(texts)}
             if thinkings:
                 mo["reasoning_content"] = "".join(thinkings)
@@ -216,11 +116,11 @@ def _translate_anthropic(msgs: list[dict], system: Any) -> list[dict]:
                 mo["tool_calls"] = tcs
             translated.append(mo)
         elif role == "system":
-            translated.append({"role": "system", "content": _flatten(content)})
+            translated.append({"role": "system", "content": flatten_content(content)})
     return translated
 
 
-def _anthropic_tools_to_chat_tools(anth_tools: list[dict] | None) -> list[dict] | None:
+def _tools_to_chat_tools(anth_tools: list[dict] | None) -> list[dict] | None:
     """Convert Anthropic tools to tokenizer chat-template tool schema."""
     if not anth_tools:
         return None
@@ -241,155 +141,61 @@ def _anthropic_tools_to_chat_tools(anth_tools: list[dict] | None) -> list[dict] 
     return ts or None
 
 
-def _replace_chat_messages(target: Chain, body: dict) -> None:
-    """new/wipe: full reset of chat state and turn log."""
-    all_msgs = body.get("messages") or []
-    target.chat_messages = _translate_anthropic(all_msgs, body.get("system"))
-    if "system" in body:
-        target.system_hash = _hash(body.get("system"))
-    target.turns.clear()
-    target.seen_msgs = len(all_msgs)
-    target.msg_hashes = [_hash(m) for m in all_msgs]
-    if target.tools_schema is None:
-        target.tools_schema = _anthropic_tools_to_chat_tools(body.get("tools"))
+# --- Reply building: parsed output -> Anthropic blocks + manager_message ---
 
 
-def _extend_chat_messages(target: Chain, body: dict) -> None:
-    """append: translate only the new tail."""
-    all_msgs = body.get("messages") or []
-    translated = _translate_anthropic(all_msgs[target.seen_msgs :], None)
-    target.chat_messages.extend(translated)
+def _build_reply_parts(
+    parsed: ParsedModelOutput,
+    finish: str,
+) -> tuple[list[dict], str, dict[str, Any]]:
+    """Return (anthropic blocks, wire stop_reason, manager_message).
 
-    target.seen_msgs = len(all_msgs)
-    target.msg_hashes = [_hash(m) for m in all_msgs]
-    if target.tools_schema is None:
-        target.tools_schema = _anthropic_tools_to_chat_tools(body.get("tools"))
-
-
-def _build_prompt(target: Chain, body: dict, kind: str, tok) -> list[int]:
-    """Replace/extend chat_messages and render input ids for sglang."""
-    (_extend_chat_messages if kind == "append" else _replace_chat_messages)(target, body)
-    return render_token_ids(target, tok)
-
-
-async def _generate(
-    prompt_ids: list[int], s: Session, body: dict, app, *, session_id: str | None = None
-) -> TurnRecord:
-    """Call sglang and return a TurnRecord.
-
-    1. build sampling_params (session defaults overlaid with body overrides)
-    2. POST sglang /generate; on cancel/error fire /abort_request
-    3. keep the exact prompt/output token ids; trajectory merge later compares
-       later prompt tokens with earlier outputs to build the loss mask
+    The tool_calls inside manager_message use canonical args (tool_call_dict) so
+    this assistant turn compares equal (dict equality) to the same turn replayed
+    as history on the next request.
     """
-    return await call_sglang_generate(
-        prompt_ids,
-        s,
-        body,
-        app,
-        max_token_keys=("max_tokens",),
-        stop_keys=("stop_sequences",),
-        log_prefix="anthropic_adapter",
-        logger=logger,
-        session_id=session_id,
-    )
-
-
-def _build_reply(target: Chain, output_ids: list[int], finish: str, app) -> tuple[list[dict], str, str]:
-    """Turn the model's raw output ids into the reply we send back to claude-code.
-
-    1. parse decoded text -> (thinking, visible, tool_uses) via sglang parsers
-    2. pack into Anthropic content blocks; tag dispatch_id when a tool_use
-       names Task/Agent (sub-agent trigger)
-    3. derive stop_reason: 'tool_use' | 'max_tokens' | 'end_turn'
-
-    Returns (blocks, stop_reason, dispatch_id).
-    """
-    tok = app[TOKENIZER_KEY]
-
-    raw_output = tok.decode(output_ids, skip_special_tokens=False) if output_ids else ""
-    parsed = parse_model_output(
-        raw_output,
-        tools_schema=target.tools_schema,
-        tool_parser_name=app[TOOL_PARSER_KEY],
-        reasoning_parser_name=app[REASONING_PARSER_KEY],
-    )
-    blocks, dispatch_id = _anthropic_blocks(parsed.reasoning, parsed.text, parsed.tool_uses)
-    return blocks, _stop_reason(parsed.tool_uses, finish), dispatch_id
-
-
-def _anthropic_blocks(thinking: str, visible: str, tool_uses: list[dict]) -> tuple[list[dict], str]:
-    """Pack parsed model output into Anthropic content blocks."""
     blocks: list[dict] = []
-    if thinking:
-        blocks.append({"type": "thinking", "thinking": thinking})
-    if visible:
-        blocks.append({"type": "text", "text": visible})
-    dispatch_id = ""
-    for tu in tool_uses:
+    if parsed.reasoning:
+        blocks.append({"type": "thinking", "thinking": parsed.reasoning})
+    if parsed.text:
+        blocks.append({"type": "text", "text": parsed.text})
+
+    manager_tcs: list[dict] = []
+    for tu in parsed.tool_uses:
         tu_id = f"toolu_{secrets.token_hex(8)}"
         blocks.append({"type": "tool_use", "id": tu_id, "name": tu["name"], "input": tu["input"]})
-        if tu["name"] in _SUBAGENT_TOOLS:
-            dispatch_id = tu_id
+        # tu_id is wire-only; tool_call_dict drops it so the leaf matches its echo
+        manager_tcs.append(tool_call_dict(tu["name"], tu.get("input")))
+
     if not blocks:
         blocks.append({"type": "text", "text": ""})
-    return blocks, dispatch_id
+
+    if parsed.tool_uses:
+        stop_reason = "tool_use"
+    elif finish == "length":
+        stop_reason = "max_tokens"
+    else:
+        stop_reason = "end_turn"
+
+    manager_message: dict[str, Any] = {"role": "assistant", "content": parsed.text or ""}
+    if parsed.reasoning:
+        manager_message["reasoning_content"] = parsed.reasoning
+    if manager_tcs:
+        manager_message["tool_calls"] = manager_tcs
+
+    return blocks, stop_reason, manager_message
 
 
-def _stop_reason(tool_uses: list[dict], finish: str) -> str:
-    if tool_uses:
-        return "tool_use"
-    if finish == "length":
-        return "max_tokens"
-    return "end_turn"
-
-
-def _start_sub_chain(s: Session, dispatch_id: str) -> None:
-    """Start a fresh sub chain on this session and remember the tool_use_id
-    we'll watch for on main to know when this sub is done. The matching
-    'sub done' step lives inside _select_chain."""
-    s.pending_dispatch_id = dispatch_id
-    if s.active_sub is None:
-        s.active_sub = Chain()
-
-
-# =============================================================================
-# 3. Request handling -- one full turn + SSE wrap
-# =============================================================================
+# --- Request framing: session id + wire response/stream rendering ---
 
 
 def _request_session_id(request: web.Request) -> str:
-    return request_session_id(request, include_x_api_key=True)
+    # Anthropic auth lands in Authorization: Bearer or X-Api-Key; the Messages
+    # body carries no sid hint. Bearer wins when both are present.
+    return sid_from_bearer(request) or (request.headers.get("X-Api-Key") or "").strip() or "default"
 
 
-async def _handle_request(request: web.Request) -> web.StreamResponse:
-    body = await request.json()
-    sid = _request_session_id(request)
-    adapter = request.app[ADAPTER_KEY]
-    if sid in adapter.closed:  # session drained; refuse stragglers
-        return web.Response(status=503, text="session closed")
-    app = request.app
-    s = adapter.store.setdefault(sid, Session())
-    task = asyncio.current_task()
-    adapter.inflight.setdefault(sid, set()).add(task)
-    try:
-        async with s.lock:  # same sid -> serialized
-            target, is_sub, kind = _select_chain(s, body)
-            ideal_ids = _build_prompt(target, body, kind, app[TOKENIZER_KEY])
-            turn = await _generate(ideal_ids, s, body, app, session_id=sid)
-            blocks, stop, did = _build_reply(target, turn.output_ids, turn.finish_reason, app)
-            target.turns.append(turn)
-            if did and not is_sub:  # sub doesn't nest
-                _start_sub_chain(s, did)
-            in_tok, out_tok = len(ideal_ids), len(turn.output_ids)
-        if body.get("stream") is True or "text/event-stream" in request.headers.get("Accept", ""):
-            return await _stream_response(request, blocks, stop, in_tok, out_tok)
-        return web.json_response(_message_response(body, blocks, stop, in_tok, out_tok))
-    finally:
-        adapter.inflight.get(sid, set()).discard(task)
-
-
-def _message_response(body: dict, blocks: list[dict], stop_reason: str, in_tok: int, out_tok: int) -> dict:
+def _render_response(body: dict, blocks: list[dict], stop_reason: str, in_tok: int, out_tok: int) -> dict:
     return {
         "id": f"msg_{secrets.token_hex(12)}",
         "type": "message",
@@ -402,10 +208,10 @@ def _message_response(body: dict, blocks: list[dict], stop_reason: str, in_tok: 
     }
 
 
-async def _stream_response(request, blocks, stop_reason, in_tok, out_tok) -> web.StreamResponse:
-    """Stream blocks back to claude-code as an Anthropic Messages SSE
-    response: message_start, (content_block_start, content_block_delta,
-    content_block_stop)*N, message_delta, message_stop."""
+async def _render_stream(request, blocks, stop_reason, in_tok, out_tok) -> web.StreamResponse:
+    """Stream blocks back as an Anthropic Messages SSE response: message_start,
+    (content_block_start, content_block_delta, content_block_stop)*N,
+    message_delta, message_stop."""
     out = web.StreamResponse(
         status=200,
         headers={
@@ -416,7 +222,6 @@ async def _stream_response(request, blocks, stop_reason, in_tok, out_tok) -> web
     )
     await out.prepare(request)
 
-    # message_start
     ms_data = {
         "type": "message_start",
         "message": {
@@ -469,12 +274,77 @@ async def _stream_response(request, blocks, stop_reason, in_tok, out_tok) -> web
     return out
 
 
-# Trivial endpoints claude-code probes during a session: count_tokens runs
-# every turn (return 0 -- client uses it as a hint, not a hard budget),
-# healthz/v1/models are startup readiness checks.
+# count_tokens runs every turn but the client uses it only as a hint, not a
+# hard budget, so returning 0 is fine.
 async def _count_tokens(request: web.Request) -> web.Response:
+    await request.read()
     return web.json_response({"input_tokens": 0})
 
 
-async def _ok(request: web.Request) -> web.Response:
-    return await ok_response(request)
+# --- Anthropic-specific quirks: mid-list system folding ---
+
+
+_MID_SYSTEM_WRAP_PREFIX = "<system-reminder>\n"
+_MID_SYSTEM_WRAP_SUFFIX = "\n</system-reminder>\n"
+
+
+def _fold_mid_list_system_into_user(body_obj: dict) -> bool:
+    """Fold non-leading role:system messages into a neighbouring user message as
+    a <system-reminder> text block. Mutates body_obj in place; returns True iff
+    any fold happened.
+
+    Some clients insert a system message in the middle of the message list, but
+    many chat templates reject any system message past index 0. Attaching the
+    wrapped reminder to the preceding user message (or the next one, if there is
+    no prior user message) keeps the history acceptable to the template.
+    """
+    msgs = body_obj.get("messages")
+    if not isinstance(msgs, list) or not msgs:
+        return False
+
+    system_idx = [i for i, m in enumerate(msgs) if isinstance(m, dict) and m.get("role") == "system" and i > 0]
+    if not system_idx:
+        return False
+
+    def _promote_to_list(msg: dict) -> list:
+        c = msg.get("content")
+        if isinstance(c, list):
+            return c
+        msg["content"] = [{"type": "text", "text": c if isinstance(c, str) else ""}]
+        return msg["content"]
+
+    def _wrap(text: str) -> dict:
+        return {
+            "type": "text",
+            "text": _MID_SYSTEM_WRAP_PREFIX + text + _MID_SYSTEM_WRAP_SUFFIX,
+        }
+
+    changed = False
+    TOMBSTONE: dict = {"__folded__": True}
+    for i in system_idx:
+        sys_msg = msgs[i]
+        wrapped = _wrap(flatten_content(sys_msg.get("content")))
+        target = None
+        for j in range(i - 1, -1, -1):
+            cand = msgs[j]
+            if isinstance(cand, dict) and cand.get("role") == "user":
+                target = cand
+                _promote_to_list(target).append(wrapped)
+                break
+        if target is None:
+            for j in range(i + 1, len(msgs)):
+                cand = msgs[j]
+                if isinstance(cand, dict) and cand.get("role") == "user":
+                    target = cand
+                    _promote_to_list(target).insert(0, wrapped)
+                    break
+        if target is None:
+            msgs[i] = {"role": "user", "content": [wrapped]}
+            changed = True
+            continue
+        msgs[i] = TOMBSTONE
+        changed = True
+
+    if changed:
+        body_obj["messages"] = [m for m in msgs if m is not TOMBSTONE]
+    return changed
