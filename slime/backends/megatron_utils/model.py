@@ -39,6 +39,23 @@ from .model_provider import get_model_provider_func
 logger = logging.getLogger(__name__)
 
 
+def _mem_probe_enabled() -> bool:
+    return os.environ.get("SLIME_MEM_PROBE", "0") == "1" and torch.cuda.is_available()
+
+
+def _log_train_step_mem_probe(rollout_id: int, step_id: int, start_allocated: int) -> None:
+    max_allocated = torch.cuda.max_memory_allocated()
+    logger.info(
+        "SLIME_MEM_PROBE train_one_step rollout_id=%s step_id=%s "
+        "allocated_start=%s allocated_peak=%s allocated_peak_delta=%s",
+        rollout_id,
+        step_id,
+        start_allocated,
+        max_allocated,
+        max_allocated - start_allocated,
+    )
+
+
 def _disable_tqdm_for_non_main_rank() -> bool:
     return not (
         mpu.get_data_parallel_rank(with_context_parallel=True) == 0
@@ -352,6 +369,7 @@ def forward_only(
             response_lengths=response_lengths,
             with_entropy=args.use_rollout_entropy,
             max_seq_lens=batch.get("max_seq_lens", None),
+            full_loss_mask=batch["full_loss_masks"],
         )
 
     # Turn on evaluation mode which disables dropout.
@@ -455,6 +473,11 @@ def train_one_step(
         and gradient norm for logging.
     """
     args = get_args()
+    mem_probe = _mem_probe_enabled()
+    mem_probe_start_allocated = 0
+    if mem_probe:
+        torch.cuda.reset_peak_memory_stats()
+        mem_probe_start_allocated = torch.cuda.memory_allocated()
 
     # Set grad to zero.
     for model_chunk in model:
@@ -601,7 +624,11 @@ def train_one_step(
             cp_size=mpu.get_context_parallel_world_size(),
             dp_with_cp_group=mpu.get_data_parallel_group(with_context_parallel=True),
         )
+        if mem_probe:
+            _log_train_step_mem_probe(rollout_id, step_id, mem_probe_start_allocated)
         return loss_reduced, grad_norm
+    if mem_probe:
+        _log_train_step_mem_probe(rollout_id, step_id, mem_probe_start_allocated)
     return {}, grad_norm
 
 

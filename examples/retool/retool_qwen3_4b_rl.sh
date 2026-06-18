@@ -75,6 +75,11 @@ PERF_ARGS=(
    # --micro-batch-size 1
    --use-dynamic-batch-size
    --max-tokens-per-gpu 9216
+   # Bound the fused cross-entropy [tokens, vocab] transient that can OOM on long retool traces.
+   --log-probs-chunk-size 1024
+   # Gather only response tokens before the cross-entropy: retool traces have long prompts, so this
+   # shrinks the [T, vocab] tensor to [T_response, vocab] and stacks with the chunking above.
+   --log-probs-response-only
 )
 
 GRPO_ARGS=(
