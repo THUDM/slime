@@ -255,38 +255,20 @@ class MegatronTrainRayActor(TrainRayActor):
                 for mm_dict in rollout_data["multimodal_train_inputs"]
             ]
 
-        if self.args.qkv_format == "bshd":
-            # TODO: micro-batch wise dynamic, possibly move to @data.py:get_data_iterator
-            max_seq_len = max(rollout_data["total_lengths"])
-
-            # pad to reduce memory fragmentation and maybe make the computation faster
-            pad_size = mpu.get_tensor_model_parallel_world_size() * self.args.data_pad_size_multiplier
-            max_seq_len = (max_seq_len + pad_size - 1) // pad_size * pad_size
-
-            rollout_data["max_seq_lens"] = [max_seq_len] * len(rollout_data["tokens"])
-
         for key in ["rollout_log_probs", "teacher_log_probs"]:
             if key not in rollout_data:
                 continue
             rollout_data[key] = [
-                slice_log_prob_with_cp(
-                    log_prob,
-                    total_length,
-                    response_length,
-                    self.args.qkv_format,
-                    rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
-                ).to(
+                slice_log_prob_with_cp(log_prob, total_length, response_length).to(
                     device=device,
                     dtype=torch.float32,
                     non_blocking=True,
                 )
-                for i, (log_prob, total_length, response_length) in enumerate(
-                    zip(
-                        rollout_data[key],
-                        rollout_data["total_lengths"],
-                        rollout_data["response_lengths"],
-                        strict=False,
-                    )
+                for log_prob, total_length, response_length in zip(
+                    rollout_data[key],
+                    rollout_data["total_lengths"],
+                    rollout_data["response_lengths"],
+                    strict=False,
                 )
             ]
         return rollout_data

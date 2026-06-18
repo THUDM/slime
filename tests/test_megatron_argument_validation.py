@@ -296,7 +296,6 @@ def make_slime_validate_args(**overrides):
         eval_max_context_len=None,
         rollout_max_context_len=None,
         rollout_max_prompt_len=None,
-        qkv_format="thd",
         train_backend="megatron",
         only_train_params_name_list=None,
         freeze_params_name_list=None,

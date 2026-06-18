@@ -108,13 +108,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         def add_train_arguments(parser):
             # --train-backend is parsed early in _pre_parse_mode() and merged later.
             parser.add_argument(
-                "--qkv-format",
-                type=str,
-                choices=["thd", "bshd"],
-                default="thd",
-                help="The qkv layout for Megatron backend.",
-            )
-            parser.add_argument(
                 "--qwen-gdn-backend",
                 type=str,
                 choices=["fla", "flashqla"],
@@ -2001,12 +1994,6 @@ def slime_validate_args(args):
         assert (
             args.rollout_max_prompt_len <= args.rollout_max_context_len - 1
         ), f"args.rollout_max_prompt_len ({args.rollout_max_prompt_len}) must be smaller than args.rollout_max_context_len ({args.rollout_max_context_len}) so that there is at least one generated token to compute loss."
-
-    if args.qkv_format == "bshd":
-        assert args.train_backend == "megatron", "bshd format is only supported for megatron backend."
-        assert (
-            args.use_dynamic_batch_size is False
-        ), "Dynamic batch size is not supported for bshd format. Please specify --micro-batch-size instead."
 
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")

@@ -321,10 +321,8 @@ def forward_only(
                 "multimodal_train_inputs",
                 "total_lengths",
                 "response_lengths",
-                "max_seq_lens",
             ],
             args.data_pad_size_multiplier,
-            args.qkv_format,
             args.allgather_cp,
         )
         unconcat_tokens = batch["unconcat_tokens"]
@@ -351,7 +349,6 @@ def forward_only(
             total_lengths=total_lengths,
             response_lengths=response_lengths,
             with_entropy=args.use_rollout_entropy,
-            max_seq_lens=batch.get("max_seq_lens", None),
         )
 
     # Turn on evaluation mode which disables dropout.
@@ -499,12 +496,10 @@ def train_one_step(
                 "advantages",
                 "returns",
                 "rollout_log_probs",
-                "max_seq_lens",
                 "teacher_log_probs",
                 "rollout_mask_sums",
             ],
             args.data_pad_size_multiplier,
-            args.qkv_format,
             args.allgather_cp,
         )
 
