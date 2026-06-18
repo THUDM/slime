@@ -1043,7 +1043,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--custom-pg-loss-reducer-function-path",
                 type=str,
                 default=None,
-                help="Path to a custom reducer function for pg_loss only. When set, pg_loss will use this custom reducer while other metrics (pg_clipfrac, ppo_kl, entropy_loss, etc.) still use the default sum_of_sample_mean. (e.g., examples/Dr.GRPO/custom_reducer.py:get_pg_loss_reducer).",
+                help="Path to a custom reducer function for pg_loss only. When set, pg_loss will use this custom reducer while other metrics (pg_clipfrac, ppo_kl, entropy_loss, etc.) still use the default sum_of_sample_mean.",
             )
 
             parser.add_argument(
