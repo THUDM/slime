@@ -496,6 +496,8 @@ def train_one_step(
                 "advantages",
                 "returns",
                 "rollout_log_probs",
+                "rollout_top_p_token_ids",
+                "rollout_top_p_token_offsets",
                 "teacher_log_probs",
                 "rollout_mask_sums",
             ],

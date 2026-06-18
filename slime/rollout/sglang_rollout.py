@@ -38,6 +38,8 @@ __all__ = ["generate_rollout", "get_model_url"]
 logger = logging.getLogger(__name__)
 
 _PROCESSOR_PROMPT_KEYS = {"input_ids", "attention_mask"}
+_TOP_P_TOKEN_ID_META_KEYS = ("top_p_token_ids", "top_p_kept_token_ids")
+_TOP_P_TOKEN_OFFSET_META_KEYS = ("top_p_token_offsets", "top_p_kept_token_offsets")
 
 
 def _prepare_prompt_ids(sample: Sample, tokenizer, processor: Any) -> list[int]:
@@ -60,6 +62,78 @@ def _prepare_prompt_ids(sample: Sample, tokenizer, processor: Any) -> list[int]:
         return sample.tokens
 
     return tokenizer.encode(sample.prompt, add_special_tokens=False)
+
+
+def _decode_int32_meta_array(meta_info: dict[str, Any], keys: tuple[str, ...]) -> list[int] | None:
+    for key in keys:
+        if key in meta_info:
+            value = meta_info[key]
+            break
+    else:
+        return None
+
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = pybase64.b64decode(value.encode("ascii"))
+    if isinstance(value, bytes):
+        return np.frombuffer(value, dtype=np.int32).tolist()
+    if isinstance(value, np.ndarray):
+        return value.astype(np.int32, copy=False).tolist()
+    return [int(x) for x in value]
+
+
+def _extract_rollout_top_p_token_data(
+    meta_info: dict[str, Any],
+    *,
+    expected_num_tokens: int | None = None,
+) -> tuple[list[int], list[int]] | None:
+    token_ids = _decode_int32_meta_array(meta_info, _TOP_P_TOKEN_ID_META_KEYS)
+    offsets = _decode_int32_meta_array(meta_info, _TOP_P_TOKEN_OFFSET_META_KEYS)
+    if token_ids is None and offsets is None:
+        return None
+    if token_ids is None or offsets is None:
+        raise ValueError("SGLang top-p token replay must include both token ids and offsets.")
+    if not offsets or offsets[0] != 0:
+        raise ValueError(f"SGLang top-p token offsets must start with 0, got {offsets[:1]}.")
+    if offsets[-1] != len(token_ids):
+        raise ValueError(
+            f"SGLang top-p token ids/offsets mismatch: offsets[-1]={offsets[-1]}, len(token_ids)={len(token_ids)}."
+        )
+    if expected_num_tokens is not None and len(offsets) != expected_num_tokens + 1:
+        raise ValueError(
+            "SGLang top-p token offsets length must equal generated token count + 1: "
+            f"len(offsets)={len(offsets)}, generated={expected_num_tokens}."
+        )
+    return token_ids, offsets
+
+
+def _merge_rollout_top_p_token_data(
+    base_token_ids: list[int] | None,
+    base_offsets: list[int] | None,
+    token_ids: list[int],
+    offsets: list[int],
+) -> tuple[list[int], list[int]]:
+    base_token_ids = list(base_token_ids or [])
+    base_offsets = list(base_offsets or [0])
+    base_offset = base_offsets[-1]
+    return base_token_ids + token_ids, base_offsets + [base_offset + offset for offset in offsets[1:]]
+
+
+def _append_rollout_top_p_token_data(
+    sample: Sample,
+    meta_info: dict[str, Any],
+    *,
+    expected_num_tokens: int | None = None,
+) -> None:
+    top_p_data = _extract_rollout_top_p_token_data(meta_info, expected_num_tokens=expected_num_tokens)
+    if top_p_data is None:
+        return
+    sample.rollout_top_p_token_ids, sample.rollout_top_p_token_offsets = _merge_rollout_top_p_token_data(
+        sample.rollout_top_p_token_ids,
+        sample.rollout_top_p_token_offsets,
+        *top_p_data,
+    )
 
 
 def get_model_url(args: Namespace, model_name: str, endpoint: str = "/generate") -> str:
@@ -104,6 +178,8 @@ class GenerateState(metaclass=SingletonMeta):
             no_stop_trim=True,
             spaces_between_special_tokens=False,
         )
+        if args.rollout_top_p != 1.0:
+            self.sampling_params["custom_params"] = {"return_top_p_token_ids": True}
 
         if getattr(args, "sglang_enable_deterministic_inference", False):
             sampling_seed_base = args.rollout_seed
@@ -219,6 +295,11 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if sample.rollout_log_probs is None:
         sample.rollout_log_probs = []
     sample.rollout_log_probs += new_response_log_probs
+    _append_rollout_top_p_token_data(
+        sample,
+        output["meta_info"],
+        expected_num_tokens=len(new_response_tokens),
+    )
 
     if "routed_experts" in output["meta_info"]:
         sample.rollout_routed_experts = np.frombuffer(

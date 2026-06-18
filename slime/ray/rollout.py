@@ -40,6 +40,8 @@ _ROLLOUT_DATA_TENSOR_DTYPES = {
     "tokens": torch.long,
     "loss_masks": torch.int,
     "rollout_log_probs": torch.float32,
+    "rollout_top_p_token_ids": torch.int32,
+    "rollout_top_p_token_offsets": torch.int32,
     "teacher_log_probs": torch.float32,
     "rollout_routed_experts": None,
 }
@@ -791,6 +793,21 @@ class RolloutManager:
         if samples[0].rollout_log_probs is not None:
             train_data["rollout_log_probs"] = [sample.rollout_log_probs for sample in samples]
 
+        if samples[0].rollout_top_p_token_ids is not None:
+            for sample in samples:
+                assert sample.rollout_top_p_token_ids is not None
+                assert sample.rollout_top_p_token_offsets is not None
+                assert len(sample.rollout_top_p_token_offsets) == sample.response_length + 1, (
+                    f"top-p token offsets length {len(sample.rollout_top_p_token_offsets)} "
+                    f"!= response length + 1 {sample.response_length + 1}"
+                )
+                assert sample.rollout_top_p_token_offsets[-1] == len(sample.rollout_top_p_token_ids), (
+                    f"top-p token offsets[-1] {sample.rollout_top_p_token_offsets[-1]} "
+                    f"!= token ids length {len(sample.rollout_top_p_token_ids)}"
+                )
+            train_data["rollout_top_p_token_ids"] = [sample.rollout_top_p_token_ids for sample in samples]
+            train_data["rollout_top_p_token_offsets"] = [sample.rollout_top_p_token_offsets for sample in samples]
+
         if samples[0].rollout_routed_experts is not None:
             train_data["rollout_routed_experts"] = [sample.rollout_routed_experts for sample in samples]
 
@@ -849,6 +866,8 @@ class RolloutManager:
                 "rollout_ids",
                 "rollout_mask_sums",
                 "rollout_log_probs",
+                "rollout_top_p_token_ids",
+                "rollout_top_p_token_offsets",
                 "rollout_routed_experts",
                 "prompt",
                 "teacher_log_probs",
@@ -1295,6 +1314,7 @@ def compute_metrics_from_samples(args, samples):
     log_dict |= _compute_spec_metrics(args, samples)
     log_dict |= _compute_prefix_cache_metrics(args, samples)
     log_dict |= _compute_reward_cat_metrics(args, samples)
+    log_dict |= _compute_top_p_kept_vocab_metrics(args, samples)
     log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
     log_dict["truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()
     return log_dict
@@ -1401,6 +1421,20 @@ def _compute_zero_std_metrics(args, all_samples: list[Sample]):
     interesting_rewards = [str(round(g[0].get_reward_value(args), 1)) for g in interesting_sample_groups]
 
     return {f"zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
+
+
+def _compute_top_p_kept_vocab_metrics(args, all_samples: list[Sample]):
+    total_kept = 0
+    total_tokens = 0
+    for sample in all_samples:
+        offsets = sample.rollout_top_p_token_offsets
+        if not offsets or sample.response_length == 0:
+            continue
+        total_kept += offsets[-1] - offsets[0]
+        total_tokens += sample.response_length
+    if total_tokens == 0:
+        return {}
+    return {"top_p_kept_vocab_per_token": total_kept / total_tokens}
 
 
 def _compute_spec_metrics(args, all_samples: list[Sample]):

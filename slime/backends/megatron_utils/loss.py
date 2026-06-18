@@ -261,6 +261,112 @@ def _build_shifted_tokens(
     return full_tokens
 
 
+def _fill_topp_mask_rows(
+    keep: torch.Tensor,
+    ids: list[int],
+    offsets: list[int],
+    response_start: int,
+    local_start: int,
+    length: int,
+    vocab_start: int,
+    vocab_end: int,
+) -> None:
+    end = min(response_start + length, max(len(offsets) - 1, 0))
+    for response_idx in range(response_start, end):
+        local_ids = [
+            token_id - vocab_start
+            for token_id in ids[offsets[response_idx] : offsets[response_idx + 1]]
+            if vocab_start <= token_id < vocab_end
+        ]
+        row = local_start + response_idx - response_start
+        keep[row].fill_(False)
+        if local_ids:
+            keep[row, torch.tensor(local_ids, device=keep.device, dtype=torch.long)] = True
+
+
+def _build_topp_keep_mask(
+    T: int,
+    vocab_local: int,
+    device: torch.device,
+    top_p_token_ids: list[list[int]],
+    top_p_token_offsets: list[list[int]],
+    total_lengths: list[int],
+    response_lengths: list[int],
+    allgather_cp: bool,
+) -> torch.Tensor:
+    """Build a ``[T, vocab_local]`` boolean keep-mask aligned to local logits.
+
+    For response token ``r`` of a sample, the rollout top-p nucleus is
+    ``ids[offsets[r]:offsets[r + 1]]``. Rows without a recorded nucleus stay
+    all-True, so only response rows with replay data are masked.
+    """
+    cp_size = mpu.get_context_parallel_world_size()
+    tp_rank = mpu.get_tensor_model_parallel_rank()
+    vocab_start = tp_rank * vocab_local
+    vocab_end = vocab_start + vocab_local
+
+    # Normalize ragged payloads (may arrive as CPU int32 tensors) to python lists.
+    top_p_token_ids = [t.tolist() if torch.is_tensor(t) else list(t) for t in top_p_token_ids]
+    top_p_token_offsets = [t.tolist() if torch.is_tensor(t) else list(t) for t in top_p_token_offsets]
+
+    keep = torch.ones((T, vocab_local), dtype=torch.bool, device=device)
+
+    if cp_size > 1 and not allgather_cp:
+        local_base = 0
+        for ids, offsets, total_length, response_length in zip(
+            top_p_token_ids, top_p_token_offsets, total_lengths, response_lengths, strict=False
+        ):
+            prompt_length = total_length - response_length
+            chunk_size_cp, chunks_offset, logits_offset, tokens_offset = get_logits_and_tokens_offset_with_cp(
+                total_length, response_length
+            )
+            for half, base in ((0, local_base), (1, local_base + chunk_size_cp)):
+                local_start = base + logits_offset[half][0] - chunks_offset[half][0]
+                length = logits_offset[half][1] - logits_offset[half][0]
+                response_start = tokens_offset[half][0] - prompt_length
+                _fill_topp_mask_rows(keep, ids, offsets, response_start, local_start, length, vocab_start, vocab_end)
+            local_base += 2 * chunk_size_cp
+        return keep
+
+    if allgather_cp:
+        cp_rank = mpu.get_context_parallel_rank()
+        chunk_start = cp_rank * T
+        chunk_end = chunk_start + T
+        seq_start = 0
+        for ids, offsets, total_length, response_length in zip(
+            top_p_token_ids, top_p_token_offsets, total_lengths, response_lengths, strict=False
+        ):
+            prompt_length = total_length - response_length
+            logit_global_start = seq_start + prompt_length - 1
+            logit_global_end = seq_start + total_length - 1
+            s = max(logit_global_start, chunk_start)
+            e = min(logit_global_end, chunk_end)
+            if e > s:
+                _fill_topp_mask_rows(
+                    keep,
+                    ids,
+                    offsets,
+                    s - logit_global_start,
+                    s - chunk_start,
+                    e - s,
+                    vocab_start,
+                    vocab_end,
+                )
+            seq_start += total_length
+        return keep
+
+    offset = 0
+    for ids, offsets, total_length, response_length in zip(
+        top_p_token_ids, top_p_token_offsets, total_lengths, response_lengths, strict=False
+    ):
+        end = offset + total_length
+        start = end - response_length
+        _fill_topp_mask_rows(keep, ids, offsets, 0, start - 1, response_length, vocab_start, vocab_end)
+        offset += total_length
+
+    return keep
+
+
 def _extract_per_sample(
     log_prob_full: torch.Tensor,
     entropy_full: torch.Tensor | None,
@@ -351,6 +457,8 @@ def get_log_probs_and_entropy(
     response_lengths: list[int],
     with_entropy: bool = False,
     non_loss_data: bool = True,
+    top_p_token_ids: list[list[int]] | None = None,
+    top_p_token_offsets: list[list[int]] | None = None,
 ) -> dict[str, list[torch.Tensor]]:
     """Compute per-token log-probabilities (and optionally entropy) on responses.
 
@@ -380,6 +488,20 @@ def get_log_probs_and_entropy(
     # --- build full shifted-token target tensor ---
     full_tokens = _build_shifted_tokens(T, device, unconcat_tokens, total_lengths, response_lengths, args.allgather_cp)
 
+    # --- build top-p nucleus keep-mask (logprob only; entropy stays unmasked) ---
+    top_p_keep_mask = None
+    if top_p_token_ids is not None and top_p_token_offsets is not None:
+        top_p_keep_mask = _build_topp_keep_mask(
+            T,
+            logits.size(-1),
+            device,
+            top_p_token_ids,
+            top_p_token_offsets,
+            total_lengths,
+            response_lengths,
+            args.allgather_cp,
+        )
+
     # --- compute on full [T,V] logits at once via calculate_log_probs_and_entropy ---
     log_prob_full, entropy_full = calculate_log_probs_and_entropy(
         logits,
@@ -387,6 +509,7 @@ def get_log_probs_and_entropy(
         tp_group,
         with_entropy=with_entropy,
         chunk_size=chunk_size,
+        log_prob_keep_mask=top_p_keep_mask,
     )
     log_prob_full = log_prob_full.squeeze(-1)  # [T, 1] -> [T]
 
@@ -767,6 +890,11 @@ def policy_loss_function(
 
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
+    top_p_token_ids = None
+    top_p_token_offsets = None
+    if args.rollout_top_p != 1.0:
+        top_p_token_ids = batch.get("rollout_top_p_token_ids")
+        top_p_token_offsets = batch.get("rollout_top_p_token_offsets")
 
     _, log_probs_and_entropy = get_log_probs_and_entropy(
         logits,
@@ -775,6 +903,8 @@ def policy_loss_function(
         total_lengths=total_lengths,
         response_lengths=response_lengths,
         with_entropy=True,
+        top_p_token_ids=top_p_token_ids,
+        top_p_token_offsets=top_p_token_offsets,
     )
 
     log_probs = log_probs_and_entropy["log_probs"]
