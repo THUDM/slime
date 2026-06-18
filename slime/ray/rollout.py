@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 import ray
 import torch
+from ray.exceptions import ActorUnavailableError
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
@@ -35,6 +36,10 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+ROLLOUT_ENGINE_ONLOAD_MAX_RETRIES = 5
+ROLLOUT_ENGINE_ONLOAD_BASE_BACKOFF = 1.0
+ROLLOUT_ENGINE_ONLOAD_MAX_BACKOFF = 10.0
 
 _ROLLOUT_DATA_TENSOR_DTYPES = {
     "tokens": torch.long,
@@ -98,6 +103,33 @@ def _tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:
             rollout_data["rollout_mask_sums"],
             dtype=torch.float32,
         )
+
+
+def _wait_rollout_engine_onload_handles(handles, *, what: str):
+    for attempt in range(ROLLOUT_ENGINE_ONLOAD_MAX_RETRIES):
+        try:
+            return ray.get(handles)
+        except ActorUnavailableError as exc:
+            if attempt + 1 >= ROLLOUT_ENGINE_ONLOAD_MAX_RETRIES:
+                raise
+            backoff = (
+                min(
+                    ROLLOUT_ENGINE_ONLOAD_BASE_BACKOFF * (2**attempt),
+                    ROLLOUT_ENGINE_ONLOAD_MAX_BACKOFF,
+                )
+                + random.random()
+            )
+            logger.warning(
+                "%s: %s, retrying in %.1fs (%s/%s): %s",
+                what,
+                type(exc).__name__,
+                backoff,
+                attempt + 1,
+                ROLLOUT_ENGINE_ONLOAD_MAX_RETRIES,
+                exc,
+            )
+            time.sleep(backoff)
+    raise AssertionError("_wait_rollout_engine_onload_handles exhausted without return or raise")
 
 
 @dataclasses.dataclass
@@ -391,7 +423,7 @@ class RolloutServer:
         handles = []
         for g in self.server_groups:
             handles.extend(g.onload(tags))
-        return ray.get(handles) if handles else []
+        return _wait_rollout_engine_onload_handles(handles, what="rollout engine onload") if handles else []
 
     def onload_weights(self):
         """Restore weights for offloaded groups.
@@ -406,14 +438,14 @@ class RolloutServer:
             if not g.needs_offload:
                 continue
             handles.extend(g.onload(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
-        return ray.get(handles) if handles else []
+        return _wait_rollout_engine_onload_handles(handles, what="rollout engine onload weights") if handles else []
 
     def onload_kv(self):
         """Resume KV cache and CUDA graphs for offloaded groups."""
         handles = []
         for g in self.server_groups:
             handles.extend(g.onload(tags=[GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH]))
-        return ray.get(handles) if handles else []
+        return _wait_rollout_engine_onload_handles(handles, what="rollout engine onload kv") if handles else []
 
 
 @ray.remote
