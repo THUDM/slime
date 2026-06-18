@@ -56,7 +56,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Jun 17, 2026"/>
+    <meta name="docbuild:last-update" content="Jun 18, 2026"/>
   </head>
   
   
@@ -578,7 +578,7 @@
 <section id="qwen3-5-series">
 <h4>Qwen3.5 Series<a class="headerlink" href="#qwen3-5-series" title="Link to this heading">#</a></h4>
 <p>We provide an <a class="reference internal" href="#./run_geo3k_qwen35.sh"><span class="xref myst">example</span></a> for Qwen3.5-35B-A3B. To support other Qwen3.5 models, add a model config file in <code class="docutils literal notranslate"><span class="pre">scripts/models/</span></code> and update the model name and config path in the script accordingly.</p>
-<p>Since Megatron does not currently support packing for GDN, you must set <code class="docutils literal notranslate"><span class="pre">--qkv-format</span> <span class="pre">bshd</span></code>, <code class="docutils literal notranslate"><span class="pre">--micro-batch-size</span> <span class="pre">1</span></code>, and remove <code class="docutils literal notranslate"><span class="pre">--use-dynamic-batch-size</span></code>.</p>
+<p>For GDN training, use <code class="docutils literal notranslate"><span class="pre">--micro-batch-size</span> <span class="pre">1</span></code> and remove <code class="docutils literal notranslate"><span class="pre">--use-dynamic-batch-size</span></code>.</p>
 </section>
 </section>
 </section>
@@ -683,7 +683,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jun 17, 2026.
+  Last updated on Jun 18, 2026.
   <br/>
 </p>
   </div>

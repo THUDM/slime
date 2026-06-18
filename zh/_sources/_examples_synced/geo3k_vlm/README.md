@@ -95,7 +95,7 @@ SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-4B-Instruct ./examples/geo3k_vlm/run_geo3k_vlm.
 #### Qwen3.5 Series
 We provide an [example](./run_geo3k_qwen35.sh) for Qwen3.5-35B-A3B. To support other Qwen3.5 models, add a model config file in `scripts/models/` and update the model name and config path in the script accordingly.
 
-Since Megatron does not currently support packing for GDN, you must set `--qkv-format bshd`, `--micro-batch-size 1`, and remove `--use-dynamic-batch-size`.
+For GDN training, use `--micro-batch-size 1` and remove `--use-dynamic-batch-size`.
 
 ## Notes
 
