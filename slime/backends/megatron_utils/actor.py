@@ -372,6 +372,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 data_iterator,
                 num_microbatches,
                 store_prefix=store_prefix,
+                use_rollout_top_p_replay=True,
             )
 
     def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):

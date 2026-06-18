@@ -31,6 +31,25 @@ from .cp_utils import (
     slice_log_prob_with_cp,
 )
 
+ROLLOUT_TOP_P_TOKEN_KEYS = (
+    "rollout_top_p_token_ids",
+    "rollout_top_p_token_offsets",
+)
+
+
+def get_rollout_top_p_logprob_kwargs(args: Namespace, batch: dict[str, Any]) -> dict[str, Any]:
+    if args.rollout_top_p == 1.0:
+        return {}
+
+    top_p_token_ids = batch.get("rollout_top_p_token_ids")
+    top_p_token_offsets = batch.get("rollout_top_p_token_offsets")
+    if top_p_token_ids is None or top_p_token_offsets is None:
+        raise ValueError("rollout_top_p != 1.0 requires rollout_top_p_token_ids and rollout_top_p_token_offsets.")
+    return {
+        "top_p_token_ids": top_p_token_ids,
+        "top_p_token_offsets": top_p_token_offsets,
+    }
+
 
 def get_responses(
     logits: torch.Tensor,
@@ -890,11 +909,6 @@ def policy_loss_function(
 
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
-    top_p_token_ids = None
-    top_p_token_offsets = None
-    if args.rollout_top_p != 1.0:
-        top_p_token_ids = batch.get("rollout_top_p_token_ids")
-        top_p_token_offsets = batch.get("rollout_top_p_token_offsets")
 
     _, log_probs_and_entropy = get_log_probs_and_entropy(
         logits,
@@ -903,8 +917,7 @@ def policy_loss_function(
         total_lengths=total_lengths,
         response_lengths=response_lengths,
         with_entropy=True,
-        top_p_token_ids=top_p_token_ids,
-        top_p_token_offsets=top_p_token_offsets,
+        **get_rollout_top_p_logprob_kwargs(args, batch),
     )
 
     log_probs = log_probs_and_entropy["log_probs"]
