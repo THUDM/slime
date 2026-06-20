@@ -56,7 +56,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Jun 18, 2026"/>
+    <meta name="docbuild:last-update" content="Jun 20, 2026"/>
   </head>
   
   
@@ -492,7 +492,7 @@ hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-4B-Instruct
 <p>You need to configure your litellm API in <code class="docutils literal notranslate"><span class="pre">generate_with_tau.py</span></code> for user simulation:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">TAU_CONFIGS</span> <span class="o">=</span> <span class="p">{</span>
     <span class="s2">&quot;env&quot;</span><span class="p">:</span> <span class="s2">&quot;retail&quot;</span><span class="p">,</span>  <span class="c1"># Select between [&quot;retail&quot;, &quot;airline&quot;]</span>
-    <span class="s2">&quot;agent&quot;</span><span class="p">:</span> <span class="s2">&quot;tool-calling&quot;</span><span class="p">,</span>  <span class="c1"># Select between [&quot;tool-calling&quot;, &quot;act&quot;, &quot;react&quot;, &quot;few-shot&quot;], only tool-calling implemented for now</span>
+    <span class="s2">&quot;agent_strategy&quot;</span><span class="p">:</span> <span class="s2">&quot;tool-calling&quot;</span><span class="p">,</span>  <span class="c1"># Select between [&quot;tool-calling&quot;, &quot;act&quot;, &quot;react&quot;, &quot;few-shot&quot;], only tool-calling implemented for now</span>
     <span class="s2">&quot;user_model&quot;</span><span class="p">:</span> <span class="s2">&quot;gemini-2.0-flash-lite&quot;</span><span class="p">,</span>  <span class="c1"># Cheap Model for user simulator</span>
     <span class="s2">&quot;user_model_provider&quot;</span><span class="p">:</span> <span class="s2">&quot;gemini&quot;</span><span class="p">,</span>
     <span class="s2">&quot;task_split&quot;</span><span class="p">:</span> <span class="s2">&quot;train&quot;</span><span class="p">,</span>  <span class="c1"># Select between [&quot;train&quot;, &quot;test&quot;, &quot;dev&quot;] for retail, [&quot;test&quot;] for airline</span>
@@ -576,7 +576,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jun 18, 2026.
+  Last updated on Jun 20, 2026.
   <br/>
 </p>
   </div>
