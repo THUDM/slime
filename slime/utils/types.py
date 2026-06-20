@@ -33,6 +33,10 @@ class Sample:
     loss_mask: list[int] | None = None
     weight_versions: list[str] = field(default_factory=list)
     rollout_log_probs: list[float] | None = None  # Log probabilities from rollout engine
+    # Ragged top-p nucleus token ids replayed from rollout sampling. For response
+    # token i, kept ids are rollout_top_p_token_ids[offsets[i]:offsets[i + 1]].
+    rollout_top_p_token_ids: list[int] | None = None
+    rollout_top_p_token_offsets: list[int] | None = None
     rollout_routed_experts: list[list[int]] | None = None  # Routed experts from rollout engine
     remove_sample: bool = False
     teacher_log_probs: list[float] | None = None  # Log probabilities from teacher model for OPD

@@ -36,6 +36,7 @@ def execute():
         "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 1024 "
         "--rollout-temperature 0.8 "
+        "--rollout-top-p 0.95 "
         "--rollout-data-transport nixl "
         "--over-sampling-batch-size 8 "
         "--dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std "
