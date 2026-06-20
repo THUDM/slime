@@ -801,8 +801,9 @@ class RolloutManager:
                     f"top-p token offsets length {len(sample.rollout_top_p_token_offsets)} "
                     f"!= response length + 1 {sample.response_length + 1}"
                 )
-                assert sample.rollout_top_p_token_offsets[-1] == len(sample.rollout_top_p_token_ids), (
-                    f"top-p token offsets[-1] {sample.rollout_top_p_token_offsets[-1]} "
+                offset_end = int(sample.rollout_top_p_token_offsets[-1])
+                assert offset_end == len(sample.rollout_top_p_token_ids), (
+                    f"top-p token offsets[-1] {offset_end} "
                     f"!= token ids length {len(sample.rollout_top_p_token_ids)}"
                 )
             train_data["rollout_top_p_token_ids"] = [sample.rollout_top_p_token_ids for sample in samples]
@@ -1428,10 +1429,26 @@ def _compute_top_p_kept_vocab_metrics(args, all_samples: list[Sample]):
     total_tokens = 0
     for sample in all_samples:
         offsets = sample.rollout_top_p_token_offsets
-        if not offsets or sample.response_length == 0:
+        if offsets is None or sample.response_length == 0:
             continue
-        total_kept += offsets[-1] - offsets[0]
-        total_tokens += sample.response_length
+        offsets = torch.as_tensor(offsets, dtype=torch.int64)
+        if offsets.numel() == 0:
+            continue
+        assert (
+            offsets.numel() == sample.response_length + 1
+        ), f"top-p token offsets length {offsets.numel()} != response length + 1 {sample.response_length + 1}"
+        if sample.remove_sample:
+            continue
+        if sample.loss_mask is None:
+            total_kept += int(offsets[-1] - offsets[0])
+            total_tokens += sample.response_length
+            continue
+        loss_mask = torch.as_tensor(sample.loss_mask, dtype=torch.bool, device=offsets.device)
+        assert (
+            loss_mask.numel() == sample.response_length
+        ), f"loss mask length {loss_mask.numel()} != response length {sample.response_length}"
+        total_kept += int(torch.diff(offsets)[loss_mask].sum())
+        total_tokens += int(loss_mask.sum())
     if total_tokens == 0:
         return {}
     return {"top_p_kept_vocab_per_token": total_kept / total_tokens}

@@ -29,15 +29,7 @@ import logging
 from argparse import Namespace
 from typing import Any
 
-import numpy as np
-import pybase64
-
-from slime.rollout.sglang_rollout import (
-    GenerateState,
-    _extract_rollout_top_p_token_data,
-    _merge_rollout_top_p_token_data,
-    _prepare_prompt_ids,
-)
+from slime.rollout.sglang_rollout import GenerateState, _prepare_prompt_ids
 from slime.utils import http_utils
 from slime.utils.processing_utils import encode_image_for_rollout_engine
 from slime.utils.trace_utils import build_sglang_meta_trace_attrs, trace_span
@@ -104,8 +96,8 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     base_response = sample.response or ""
     base_response_length = sample.response_length
     base_log_probs = list(sample.rollout_log_probs or [])
-    base_top_p_token_ids = list(sample.rollout_top_p_token_ids or [])
-    base_top_p_token_offsets = list(sample.rollout_top_p_token_offsets or [0])
+    base_top_p_token_ids = sample.rollout_top_p_token_ids
+    base_top_p_token_offsets = sample.rollout_top_p_token_offsets
     base_loss_mask = list(sample.loss_mask) if sample.loss_mask is not None else None
 
     last_meta_info: dict[str, Any] = {}
@@ -148,15 +140,13 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
                 sample.response = base_response + call_text
                 sample.response_length = base_response_length + len(call_tokens)
                 sample.rollout_log_probs = base_log_probs + call_log_probs
-                top_p_data = _extract_rollout_top_p_token_data(meta, expected_num_tokens=len(call_tokens))
-                if top_p_data is not None:
-                    sample.rollout_top_p_token_ids, sample.rollout_top_p_token_offsets = (
-                        _merge_rollout_top_p_token_data(
-                            base_top_p_token_ids,
-                            base_top_p_token_offsets,
-                            *top_p_data,
-                        )
-                    )
+                sample.update_from_meta_info(
+                    args,
+                    meta,
+                    expected_top_p_tokens=len(call_tokens),
+                    rollout_top_p_base=(base_top_p_token_ids, base_top_p_token_offsets),
+                    update_terminal_info=False,
+                )
                 if base_loss_mask is not None:
                     assert args.partial_rollout and args.mask_offpolicy_in_partial_rollout
                     sample.loss_mask = base_loss_mask + [1] * len(call_tokens)
@@ -167,19 +157,13 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
         if last_meta_info.get("finish_reason"):
             span.update(build_sglang_meta_trace_attrs(last_meta_info))
 
-    # MoE routing replay (when requested) ships in the terminal chunk.
-    if "routed_experts" in last_meta_info:
-        sample.rollout_routed_experts = np.frombuffer(
-            pybase64.b64decode(last_meta_info["routed_experts"].encode("ascii")),
-            dtype=np.int32,
-        ).reshape(
-            len(sample.tokens) - 1,
-            args.num_layers,
-            args.moe_router_topk,
-        )
-
     if last_meta_info.get("finish_reason"):
-        sample.update_from_meta_info(args, last_meta_info)
+        sample.update_from_meta_info(
+            args,
+            last_meta_info,
+            expected_top_p_tokens=len(call_tokens),
+            rollout_top_p_base=(base_top_p_token_ids, base_top_p_token_offsets),
+        )
     elif state.aborted:
         sample.status = Sample.Status.ABORTED
 
