@@ -1,4 +1,4 @@
-ARG SGLANG_IMAGE_TAG=v0.5.12.post1-cu129
+ARG SGLANG_IMAGE_TAG=v0.5.13-cu129
 FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
@@ -113,6 +113,18 @@ RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
     exit 1; \
   fi && \
   rm sglang.patch; \
+fi
+
+COPY docker/patch/${PATCH_VERSION}/sglang-top_p.patch /sgl-workspace/sglang/
+RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
+  cd /sgl-workspace/sglang && \
+  git update-index --refresh && \
+  git apply sglang-top_p.patch --3way && \
+  if grep -R -n '^<<<<<<< ' .; then \
+    echo "Patch failed to apply cleanly. Please resolve conflicts." && \
+    exit 1; \
+  fi && \
+  rm sglang-top_p.patch; \
 fi
 
 # ====================================== Install main package ============================================

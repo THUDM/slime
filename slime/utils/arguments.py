@@ -7,7 +7,6 @@ import warnings
 from typing import Any
 
 import yaml
-from sglang_router.launch_router import RouterArgs
 
 from slime.backends.sglang_utils.arguments import sglang_parse_args
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
@@ -49,8 +48,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "Number of GPUs for inference. Note that when using --colocate, "
-                    "i.e. the training and the inference engines are on the same gpus, this param will be ignored and will be set as "
-                    "actor_num_gpus_per_node * actor_num_nodes."
+                    "i.e. the training and the inference engines are on the same gpus, this param will be set as "
+                    "actor_num_gpus_per_node * actor_num_nodes unless it is explicitly set. "
+                    "Set it to 0 to launch routers without local SGLang engines."
                 ),
             )
             parser.add_argument(
@@ -107,13 +107,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
         def add_train_arguments(parser):
             # --train-backend is parsed early in _pre_parse_mode() and merged later.
-            parser.add_argument(
-                "--qkv-format",
-                type=str,
-                choices=["thd", "bshd"],
-                default="thd",
-                help="The qkv layout for Megatron backend.",
-            )
             parser.add_argument(
                 "--qwen-gdn-backend",
                 type=str,
@@ -528,6 +521,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--rollout-data-transport",
+                type=str,
+                choices=["object-store", "nixl"],
+                default="object-store",
+                help=(
+                    "Transport for rollout data refs sent from rollout manager to trainer. Large rollout "
+                    "fields are tensorized on CPU before the refs are stored. Set to nixl to transfer "
+                    "those torch tensors via Ray NIXL."
+                ),
+            )
+            parser.add_argument(
                 "--rollout-external-engine-addrs",
                 type=str,
                 default=None,
@@ -906,6 +910,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 choices=[
                     "grpo",
                     "gspo",
+                    "cispo",
                     "reinforce_plus_plus",
                     "reinforce_plus_plus_baseline",
                     "ppo",
@@ -1038,7 +1043,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--custom-pg-loss-reducer-function-path",
                 type=str,
                 default=None,
-                help="Path to a custom reducer function for pg_loss only. When set, pg_loss will use this custom reducer while other metrics (pg_clipfrac, ppo_kl, entropy_loss, etc.) still use the default sum_of_sample_mean. (e.g., examples/Dr.GRPO/custom_reducer.py:get_pg_loss_reducer).",
+                help="Path to a custom reducer function for pg_loss only. When set, pg_loss will use this custom reducer while other metrics (pg_clipfrac, ppo_kl, entropy_loss, etc.) still use the default sum_of_sample_mean.",
             )
 
             parser.add_argument(
@@ -1108,16 +1113,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--opd-teacher-ckpt-step", type=int, default=None, help="The checkpoint step for OPD teacher model."
             )
-            return parser
-
-        def add_router_arguments(parser):
-            parser.add_argument(
-                "--use-slime-router",
-                action="store_true",
-                default=False,
-                help="Whether to use SlimeRouter for text-based routing instead of SGLang token-based routing",
-            )
-            RouterArgs.add_cli_args(parser, use_router_prefix=True, exclude_host_port=True)
             return parser
 
         # wandb
@@ -1481,7 +1476,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_on_policy_distillation_arguments(parser)
         parser = add_wandb_arguments(parser)
         parser = add_tensorboard_arguments(parser)
-        parser = add_router_arguments(parser)
         parser = add_debug_arguments(parser)
         parser = add_network_arguments(parser)
         parser = add_reward_model_arguments(parser)
@@ -1745,13 +1739,6 @@ def _validate_update_weight_args(args) -> None:
 def slime_validate_args(args):
     args.eval_datasets = _resolve_eval_datasets(args)
 
-    if args.use_slime_router:
-        logger.warning(
-            "--use-slime-router is deprecated and ignored. slime now always uses sglang_router "
-            "built from https://github.com/zhuzilin/sgl-router."
-        )
-        args.use_slime_router = False
-
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):
             raise FileNotFoundError(f"ref_load {args.ref_load} does not exist, please check the path.")
@@ -1860,6 +1847,14 @@ def slime_validate_args(args):
     if args.eps_clip_high is None:
         args.eps_clip_high = args.eps_clip
 
+    if args.advantage_estimator == "cispo" and args.eps_clip < 1.0:
+        logger.warning(
+            "CISPO is canonically single-sided, but --eps-clip=%s keeps the lower clip bound %s active. "
+            "Set --eps-clip 1.0 (and tune --eps-clip-high, e.g. 4.0) for the canonical wide setting.",
+            args.eps_clip,
+            1.0 - args.eps_clip,
+        )
+
     if args.eval_reward_key is None:
         args.eval_reward_key = args.reward_key
 
@@ -1890,8 +1885,11 @@ def slime_validate_args(args):
     del args.offload
 
     if args.debug_rollout_only:
-        if args.colocate and (not args.rollout_num_gpus):
+        if args.colocate and args.rollout_num_gpus is None:
             args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
+        elif args.rollout_num_gpus == 0:
+            args.actor_num_gpus_per_node = 0
+            args.actor_num_nodes = 0
         else:
             args.actor_num_gpus_per_node = min(8, args.rollout_num_gpus)
             args.actor_num_nodes = args.rollout_num_gpus // args.actor_num_gpus_per_node
@@ -1911,12 +1909,10 @@ def slime_validate_args(args):
             args.offload_train = True
         if args.offload_rollout is None:
             args.offload_rollout = True
-        if args.rollout_num_gpus != args.actor_num_gpus_per_node * args.actor_num_nodes:
-            logger.info(
-                f"rollout_num_gpus {args.rollout_num_gpus} != actor_num_gpus_per_node {args.actor_num_gpus_per_node} "
-                f"* actor_num_nodes {args.actor_num_nodes}, overriding rollout_num_gpus to match actor_num_gpus_per_node * actor_num_nodes."
-            )
+        if args.rollout_num_gpus is None:
             args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
+        elif args.rollout_num_gpus == 0:
+            logger.info("rollout_num_gpus is 0 under colocate; no local SGLang engines will be launched.")
 
     if args.offload_train is None:
         args.offload_train = False
@@ -1998,12 +1994,6 @@ def slime_validate_args(args):
         assert (
             args.rollout_max_prompt_len <= args.rollout_max_context_len - 1
         ), f"args.rollout_max_prompt_len ({args.rollout_max_prompt_len}) must be smaller than args.rollout_max_context_len ({args.rollout_max_context_len}) so that there is at least one generated token to compute loss."
-
-    if args.qkv_format == "bshd":
-        assert args.train_backend == "megatron", "bshd format is only supported for megatron backend."
-        assert (
-            args.use_dynamic_batch_size is False
-        ), "Dynamic batch size is not supported for bshd format. Please specify --micro-batch-size instead."
 
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")

@@ -161,6 +161,7 @@ ray job submit --address="http://127.0.0.1:8265" \
         "MASTER_ADDR": "${MASTER_ADDR}",
         "PYTHONPATH": "/root/Megatron-LM/",
         "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+        "NVSHMEM_DISABLE_NCCL": "1",
         "LD_LIBRARY_PATH": "/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/sgl-workspace/nvshmem/install/lib/"
      }
    }' \

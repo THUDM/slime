@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
 import logging
 import os
 from pathlib import Path
@@ -53,6 +52,10 @@ class Sandbox(Protocol):
 
 
 def _getenv(*names: str, default: str = "") -> str:
+    """First non-empty environment value among ``names`` (else ``default``).
+
+    Lets a setting carry a primary name plus legacy aliases: list the canonical
+    ``SLIME_AGENT_*`` name first, older names after."""
     for name in names:
         value = os.environ.get(name)
         if value is not None and value.strip():
@@ -63,8 +66,6 @@ def _getenv(*names: str, default: str = "") -> str:
 class E2BSandbox:
     """Async context manager around e2b.AsyncSandbox."""
 
-    metadata_file_env = ("SLIME_AGENT_SANDBOX_METADATA_FILE", "SWE_SANDBOX_METADATA_FILE")
-    metadata_json_env = ("SLIME_AGENT_SANDBOX_METADATA_JSON", "SWE_SANDBOX_METADATA_JSON")
     image_metadata_key_env = ("SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY", "SWE_SANDBOX_IMAGE_METADATA_KEY")
     lifetime_sec_env = ("SLIME_AGENT_SANDBOX_LIFETIME_SEC", "SWE_SANDBOX_LIFETIME_SEC")
     rpc_retries_env = ("SLIME_AGENT_SANDBOX_RPC_RETRIES", "SWE_RPC_RETRIES")
@@ -80,42 +81,15 @@ class E2BSandbox:
         image: str,
         *,
         timeout: int | None = None,
-        metadata: dict[str, str] | None = None,
         image_metadata_key: str | None = None,
         rpc_retries: int | None = None,
     ) -> None:
         self.image = image
         self.timeout = timeout if timeout is not None else self._lifetime_sec_from_env()
-        self.metadata = dict(metadata) if metadata is not None else self._metadata_from_env()
         self.image_metadata_key = image_metadata_key or self._image_metadata_key_from_env()
         self.rpc_retries = rpc_retries if rpc_retries is not None else self._rpc_retries_from_env()
         self._sb = None
         self.sandbox_id = ""
-
-    @classmethod
-    def _metadata_from_env(cls) -> dict[str, str]:
-        """Read E2B routing metadata from file or JSON environment values."""
-        file_path = _getenv(*cls.metadata_file_env)
-        raw = ""
-        if file_path:
-            try:
-                raw = Path(file_path).read_text()
-            except OSError as e:
-                logger.warning("[agent.sandbox] metadata file %s unreadable: %s", file_path, e)
-                raw = ""
-        if not raw:
-            raw = _getenv(*cls.metadata_json_env)
-        if not raw:
-            return {}
-        try:
-            md = json.loads(raw)
-        except json.JSONDecodeError as e:
-            logger.warning("[agent.sandbox] metadata not valid JSON, ignoring: %s", e)
-            return {}
-        if not isinstance(md, dict):
-            logger.warning("[agent.sandbox] metadata must be a JSON object, got %s", type(md).__name__)
-            return {}
-        return {str(k): str(v) for k, v in md.items()}
 
     @classmethod
     def _image_metadata_key_from_env(cls) -> str | None:
@@ -189,8 +163,7 @@ class E2BSandbox:
             )
         from e2b import AsyncSandbox  # type: ignore
 
-        md = dict(self.metadata)
-        md.setdefault(self.image_metadata_key, self.image)
+        md = {self.image_metadata_key: self.image}
         self._sb = await AsyncSandbox.create(timeout=self.timeout, metadata=md)
         self.sandbox_id = self._sb.sandbox_id
         return self
@@ -279,3 +252,15 @@ class E2BSandbox:
             )
         except Exception:
             return ""
+
+
+async def ensure_agent_user(sb: Sandbox, workdir: str) -> None:
+    """Create the unprivileged 'agent' user that owns workdir + can git diff."""
+    await sb.exec(
+        f"id agent >/dev/null 2>&1 || useradd -m -s /bin/bash agent && "
+        f"chown -R agent:agent /home/agent {workdir} && "
+        f"git config --system --add safe.directory '*' && id agent",
+        user="root",
+        check=True,
+        timeout=60,
+    )

@@ -24,6 +24,7 @@ class Sample:
     tokens: list[int] = field(default_factory=list)
     multimodal_inputs: dict[str, Any] | None = None  # raw multimodal data, e.g. images, videos, etc.
     multimodal_train_inputs: dict[str, Any] | None = None  # processed multimodal data, e.g. pixel_values, etc.
+    apply_chat_template_kwargs: dict = field(default_factory=dict)
     # response
     response: str = ""
     response_length: int = 0
@@ -32,6 +33,10 @@ class Sample:
     loss_mask: list[int] | None = None
     weight_versions: list[str] = field(default_factory=list)
     rollout_log_probs: list[float] | None = None  # Log probabilities from rollout engine
+    # Ragged top-p nucleus token ids replayed from rollout sampling. For response
+    # token i, kept ids are rollout_top_p_token_ids[offsets[i]:offsets[i + 1]].
+    rollout_top_p_token_ids: list[int] | None = None
+    rollout_top_p_token_offsets: list[int] | None = None
     rollout_routed_experts: list[list[int]] | None = None  # Routed experts from rollout engine
     remove_sample: bool = False
     teacher_log_probs: list[float] | None = None  # Log probabilities from teacher model for OPD
@@ -50,6 +55,7 @@ class Sample:
 
     metadata: dict = field(default_factory=dict)
     generate_function_path: str | None = None
+    custom_rm_path: str | None = None
     # metadata used during training, e.g., what loss to use for this sample.
     train_metadata: dict | None = None
 

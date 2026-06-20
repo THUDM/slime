@@ -2,11 +2,12 @@
 
 This directory provides an example of running end-to-end **SWE (Software-Engineering) coding-agent RL** with slime: a real coding agent (claude-code CLI) drives `Read/Edit/Grep/Bash/Agent` tools inside a fresh sandbox per sample, the model produces a `git diff`, and the diff is graded against the dataset's test harness in a second clean sandbox (no test-cheating).
 
-Two example files and one shared adapter implement the loop:
+Two example files, the shared harness package, and one shared adapter implement the loop:
 
-- `generate.py` — per-sample `generate()` registered via `--custom-generate-function-path`. Boots the sandbox, runs claude-code, captures the diff, scores it, and emits one or more `Sample`s back to slime.
-- `slime.agent.adapters.AnthropicAdapter` — the shared Anthropic Messages adapter. claude-code talks to it as if it were Anthropic; the adapter tokenizes the current message history each turn, records prompt/output token snapshots, preserves model-generated tokens (`loss_mask=1`) only while later prompts stitch onto them, masks template/observation tokens (`0`), and emits **three kinds of segments** per trajectory: `subagent` (completed `Task/Agent` dispatch), `wipe` (chain frozen by auto-compact), `final` (tail of the main chain).
-- `sandbox.py` — coding-agent/SWE helpers built on `slime.agent.sandbox`: install bootstraps, spawn claude-code, capture patches, and run the fresh-sandbox evaluator. The shared sandbox contract lives in `slime.agent.sandbox.Sandbox`.
+- `generate.py` — per-sample `generate()` registered via `--custom-generate-function-path`. Boots the sandbox, prepares the SWE workspace, runs the coding harness (claude-code), captures the diff, scores it, and emits one or more `Sample`s back to slime.
+- `slime.agent.adapters.AnthropicAdapter` — the shared Anthropic Messages adapter. claude-code talks to it as if it were Anthropic; the adapter tokenizes the current message history each turn, records prompt/output token snapshots, preserves model-generated tokens (`loss_mask=1`) only while later prompts stitch onto them, and masks template/observation tokens (`0`). Each turn is routed into a per-session message tree inside `slime.agent.trajectory.TrajectoryManager`; any divergence in the prompt prefix forks a new branch, so sub-agent dispatches and auto-compaction are handled as separate root-to-leaf chains. `get_trajectory` linearizes each leaf chain into one `Sample`.
+- `slime.agent.harness` — harness-agnostic coding-agent lifecycle (install CLI, write config, spawn detached, poll done-marker). `BaseHarness` defines the contract; `CLAUDE_CODE` / `CODEX` are the shipped implementations. Adding a harness is one new file. The shared sandbox contract lives in `slime.agent.sandbox.Sandbox`.
+- `swe.py` — harness-agnostic SWE task layer built on `slime.agent.sandbox`: `prepare_workspace` (pre_commands + PROBLEM_STATEMENT.md), `git_diff` (patch capture), and `evaluate` (fresh-sandbox grading). `SWE_PROMPT` is the task instruction handed to whichever harness runs.
 
 `generate.py` owns one `AnthropicAdapter` instance. For each sample it calls
 `adapter.open_session(...)` before starting claude-code, serves `adapter.app` as
@@ -19,10 +20,10 @@ The slime training stack itself follows the standard setup. On top of that you n
 
 1. **An E2B-compatible sandbox cluster** (or any provider that speaks the E2B SDK). Configure via `E2B_API_KEY` (e.g. the standard `e2b_xxx` key from https://e2b.dev, or any internal endpoint that accepts the same SDK). The official SDK validates this value locally, so internal gateways that ignore auth still need a syntactically valid `e2b_` + 40 hex-character placeholder.
 2. **Host-side tarballs** that get uploaded into each sandbox at boot:
-   - Node 22 (`node-v22.x-linux-x64.tar.xz`) — exported as `SWE_HOST_NODE_TARBALL`.
-   - Claude Code CLI npm tarball (`anthropic-ai-claude-code-local-linux-x64.tgz`) — exported as `SWE_HOST_CC_TARBALL`.
-3. **A sandbox metadata file** (`SWE_SANDBOX_METADATA_FILE`, or the generic `SLIME_AGENT_SANDBOX_METADATA_FILE`) — JSON dict whose keys are passed as routing tags when booting an E2B sandbox. Must contain the image key referenced by `SWE_SANDBOX_IMAGE_METADATA_KEY` / `SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY` (e.g. `image`).
-4. **Network reachability**: each sandbox dials back to the slime head node's Anthropic adapter over `http://${SLIME_HEAD_HOST}:${SHIM_PORT}`. The head host must be reachable from inside the sandboxes (set `SLIME_HEAD_HOST` to a routable IP, not `127.0.0.1`).
+   - Node 22 (`node-v22.x-linux-x64.tar.xz`) — exported as `SLIME_AGENT_NODE_TARBALL`.
+   - Claude Code CLI npm tarball (`anthropic-ai-claude-code-local-linux-x64.tgz`) — exported as `SLIME_AGENT_CC_TARBALL`.
+3. **An image routing key** (`SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY`, legacy `SWE_SANDBOX_IMAGE_METADATA_KEY` still accepted) — the metadata key your E2B gateway uses to route a boot to a specific image (e.g. `image`). Each sample's `metadata.image` is passed under this key when booting the sandbox.
+4. **Network reachability**: each sandbox dials back to the host's Anthropic adapter over `http://${ADAPTER_PUBLIC_HOST}:${ADAPTER_PORT}`. The adapter host must be reachable from inside the sandboxes (set `ADAPTER_PUBLIC_HOST` to a routable IP, not `127.0.0.1`).
 
 ## Dataset Format
 
@@ -33,7 +34,7 @@ Standard slime JSONL with three keys:
   "prompt": "<falls back here if metadata.problem_statement is missing>",
   "label": "<instance_id or grader label>",
   "metadata": {
-    "image": "swedev/scaleswe.oh.34:<tag>",   // sandbox image reference
+    "image": "your-registry/swe-image:<tag>",  // sandbox image reference
     "workdir": "/workspace/<repo>",            // repo path inside the sandbox
     "problem_statement": "<issue body>",
     // exactly one of the following two graders:
@@ -57,14 +58,22 @@ cd slime/
 export HF_CHECKPOINT=/path/to/Qwen3.6-35B-A3B
 export REF_MODEL_PATH=/path/to/Qwen3.6-35B-A3B_torch_dist
 export PROMPT_DATA=/path/to/swe_train.jsonl
-export SANDBOX_METADATA_FILE=/path/to/sandbox_metadata.json
-export SWE_HOST_NODE_TARBALL=/path/to/node-v22.20.0-linux-x64.tar.xz
-export SWE_HOST_CC_TARBALL=/path/to/anthropic-ai-claude-code-local-linux-x64.tgz
+export SLIME_AGENT_NODE_TARBALL=/path/to/node-v22.20.0-linux-x64.tar.xz
+export SLIME_AGENT_CC_TARBALL=/path/to/anthropic-ai-claude-code-local-linux-x64.tgz
+
+# Sandbox provider:
+export E2B_API_KEY=e2b_xxx                       # real key for e2b.dev; a syntactically
+                                                 # valid placeholder if your gateway ignores auth
+export SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY=image   # metadata key your gateway routes images by
 
 bash examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nodes.sh
 ```
 
-The launcher brings up Ray across all hosts in `/root/mpi_rack_hostfile`, dumps every rollout to `runs/${EXP_TAG}_${STAMP}/rollout_dumps/`, and tees stdout into `runs/${EXP_TAG}_${STAMP}/run.log`.
+The launcher fans Ray out to every worker listed in `$HOSTFILE` (default
+`/root/mpi_rack_hostfile`, one worker IP per line, reachable over passwordless
+SSH as `root`) — create that file (or point `HOSTFILE` at your own) before
+launching. It then dumps every rollout to `runs/${EXP_TAG}_${STAMP}/rollout_dumps/`
+and tees stdout into `runs/${EXP_TAG}_${STAMP}/run.log`.
 
 ## New Arguments
 
@@ -100,19 +109,25 @@ SGLANG_ARGS=(
 
 All set in the launcher; tune per cluster.
 
+Env vars split by layer. `SLIME_AGENT_*` are the reusable agent library's
+contract (read inside `slime/agent/`); `SWE_*` are this SWE example's task knobs;
+`ADAPTER_*` are host-side deployment/reply-path addresses read only by
+`generate.py`. Keep new vars on the prefix that matches the layer that reads them.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `SLIME_HEAD_HOST` | `${MASTER_ADDR}` | Public IP the sandbox uses to reach the Anthropic adapter. **Must be routable from inside the sandbox.** |
-| `SHIM_BIND_HOST` / `SHIM_PORT` | `0.0.0.0` / `18001` | Bind address of the adapter shim on the head node. |
+| `ADAPTER_PUBLIC_HOST` | `${MASTER_ADDR}` | Public IP the sandbox uses to reach the Anthropic adapter. **Must be routable from inside the sandbox.** |
+| `ADAPTER_BIND_HOST` / `ADAPTER_PORT` | `0.0.0.0` / `18001` | Bind address of the Anthropic adapter on the host. |
 | `E2B_API_KEY` | — | E2B (or compatible) API key. |
-| `SWE_SANDBOX_METADATA_FILE` / `SLIME_AGENT_SANDBOX_METADATA_FILE` | — | JSON dict of routing metadata passed at sandbox boot. |
-| `SWE_SANDBOX_IMAGE_METADATA_KEY` / `SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY` | — | Which key in the metadata file holds the image reference (e.g. `image`). |
-| `SWE_HOST_NODE_TARBALL` | — | Host path to Node 22 tarball uploaded into each sandbox. |
-| `SWE_HOST_CC_TARBALL` | — | Host path to the Claude Code CLI npm tarball. |
-| `SWE_TIME_BUDGET_SEC` | `1800` | Wallclock budget for one agent run. |
+| `SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY` | — | **Required.** Which metadata key the E2B gateway routes images by (e.g. `image`); each sample's `metadata.image` is passed under it. (Legacy `SWE_SANDBOX_IMAGE_METADATA_KEY` still accepted.) |
+| `SLIME_AGENT_NODE_TARBALL` | — | Host path to Node 22 tarball uploaded into each sandbox. |
+| `SLIME_AGENT_CC_TARBALL` | — | Host path to the Claude Code CLI npm tarball. |
+| `SLIME_AGENT_CC_EXTRA_ARGS` | (see launcher) | Extra flags appended to the `claude` CLI invocation — registers the read-only `investigator` sub-agent, disables `WebFetch`/`WebSearch`, disables slash commands. |
+| `SLIME_AGENT_CC_EXTRA_ENVS` | unset | JSON object of extra env vars exported into the `claude` process — escape hatch for env-only knobs (`MAX_THINKING_TOKENS`, `BASH_MAX_TIMEOUT_MS`, ...). Merged last, so it can also override the built-in defaults. |
+| `SWE_AGENT_TIME_BUDGET_SEC` | `1800` | Wallclock budget for the in-sandbox agent CLI itself (think/edit/run). |
 | `SWE_EVAL_TIMEOUT_SEC` | `600` | Wallclock cap on the evaluator sandbox. |
-| `SWE_BOOT_CONCURRENCY` | `6` | Cap on simultaneous sandbox boots (eases h2/SSL long-tail). |
-| `SWE_CLAUDE_EXTRA_ARGS` | (see launcher) | Extra flags appended to the `claude` CLI invocation — registers the read-only `investigator` sub-agent, disables `WebFetch`/`WebSearch`, disables slash commands. |
+| `SWE_ROLLOUT_GUARD_SEC` | `agent+eval+180` | Outer safety net wrapping the whole rollout (boot + workspace + agent + diff + eval). Auto-derived if unset. |
+| `SWE_BOOT_CONCURRENCY` | `16` | Cap on simultaneous sandbox boots (eases h2/SSL long-tail). |
 | `SWE_CC_PROMPT` | unset | Optional override for the user-turn prompt. Setting this to require sub-agent dispatch is the most reliable way to maximize fan-out. |
 
 `--rollout-max-response-len` is the per-turn generation cap passed to each
@@ -145,8 +160,8 @@ The Anthropic adapter therefore follows a **string in, token out** contract:
 
 Multi-turn agents still force the adapter to tokenize later message
 histories, because tool observations and claude-code's own compacted messages
-arrive as strings. `slime.agent.trajectory.merge_turns` stitches those later
-prompts against the saved token stream:
+arrive as strings. `slime.agent.trajectory.TrajectoryManager` routes
+those later prompts against the saved token stream:
 
 - New prompt suffixes that are tool/user/environment context are appended with
   `loss_mask=0`.
@@ -160,15 +175,15 @@ That last case is the important correctness guard. A re-tokenization mismatch
 can make a string-level conversation look continuous while token-level
 provenance is broken. slime keeps the context needed to continue the agent, but
 does not backprop through tokens whose sampled origin can no longer be proven.
-The unit tests in `tests/test_agent_trajectory.py` cover matched prefixes,
-skipped turns, split-output drift, changed token counts, and prompt-base
-restarts.
+The unit tests in `tests/test_agent/test_trajectory_manager_branching.py` cover matched
+prefixes, skipped turns, split-output drift, changed token counts, and
+prompt-base restarts.
 
 ## Fan-out Semantics
 
-- `generate()` returns `list[Sample]` — one Sample per trajectory **segment** (`subagent` / `wipe` / `final`).
-- Per-trajectory reward is split as `reward / K` across segments; `rollout_id` is shared so the per-rollout-mean loss reducer still counts the trajectory once.
-- Sub-agent dispatch increases `K` (each completed `Agent` turn block becomes its own segment), so the effective batch after flatten can be much larger than `rollout_batch_size * n_samples_per_prompt`.
+- `generate()` returns `list[Sample]` — one Sample per root-to-leaf chain in the per-session message tree.
+- Per-trajectory reward is split as `reward / K` across chains; `rollout_id` is shared so the per-rollout-mean loss reducer still counts the trajectory once.
+- Sub-agent dispatch and auto-compaction increase `K` (each prompt-prefix divergence forks a new branch), so the effective batch after flatten can be much larger than `rollout_batch_size * n_samples_per_prompt`.
 
 ## Porting to a New Sandbox Backend
 

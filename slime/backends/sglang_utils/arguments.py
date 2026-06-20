@@ -1,6 +1,7 @@
 import argparse
 
 from sglang.srt.server_args import ServerArgs
+from sglang_router.launch_router import RouterArgs
 from slime.utils.http_utils import _wrap_ipv6
 
 
@@ -27,6 +28,7 @@ def add_sglang_router_arguments(parser):
         default=14400,
         help="Timeout for requests to the SGLang router in seconds",
     )
+    RouterArgs.add_cli_args(parser, use_router_prefix=True, exclude_host_port=True)
     return parser
 
 

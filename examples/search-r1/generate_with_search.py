@@ -157,6 +157,21 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     loss_mask = []
     rollout_log_probs = [] if SEARCH_R1_CONFIGS["return_logprob"] else None
 
+    # BUGFIX: make the inference engine STOP at the tool/answer boundary.
+    # Without a stop, sglang keeps emitting tokens after </search> / </answer>
+    # (junk, even fabricated new "Question:"s). The example only trimmed that junk
+    # via postprocess_responses when return_logprob=False; with return_logprob=True
+    # (TIS) trimming is disabled to keep token/logp aligned, so the junk stayed in
+    # the trajectory and got trained on (loss_mask=1) AND broke is_valid_sequence
+    # (trailing content after </answer> -> format invalid -> lower reward).
+    # Stopping at the tag avoids all of that and keeps token/logp aligned natively.
+    # slime already sets no_stop_trim=True, so the closing tag is kept in the output.
+    _stop_tags = ["</search>", "</answer>"]
+    _existing_stop = sampling_params.get("stop") or []
+    if isinstance(_existing_stop, str):
+        _existing_stop = [_existing_stop]
+    sampling_params = {**sampling_params, "stop": list(dict.fromkeys([*_existing_stop, *_stop_tags]))}
+
     for _turn_idx in range(SEARCH_R1_CONFIGS["max_turns"]):
         payload = {
             "text": prompt_text + response,

@@ -13,7 +13,7 @@ This makes slime one of the most battle-tested open RL post-training frameworks:
 Why This Design Matters
 -----------------------
 
-- **Battle-tested by frontier model training**: slime is the RL framework behind `GLM-5.1 <https://z.ai/blog/glm-5.1>`_, `GLM-5 <https://z.ai/blog/glm-5>`_, `GLM-4.7 <https://z.ai/blog/glm-4.7>`_, `GLM-4.6 <https://z.ai/blog/glm-4.6>`_, and `GLM-4.5 <https://z.ai/blog/glm-4.5>`_.
+- **Battle-tested by frontier model training**: slime is the RL framework behind `GLM-5.2 <https://z.ai/blog/glm-5.2>`_, `GLM-5.1 <https://z.ai/blog/glm-5.1>`_, `GLM-5 <https://z.ai/blog/glm-5>`_, `GLM-4.7 <https://z.ai/blog/glm-4.7>`_, `GLM-4.6 <https://z.ai/blog/glm-4.6>`_, and `GLM-4.5 <https://z.ai/blog/glm-4.5>`_.
 - **Native by design**: slime passes Megatron arguments through directly and exposes installed SGLang arguments with a ``--sglang-`` prefix, so upstream training and serving optimizations remain available without adding another wrapper layer.
 - **SGLang-focused rollout**: slime chooses one rollout backend intentionally. This avoids flattening multiple inference engines into a lowest-common-denominator abstraction and lets RL workloads use SGLang-specific serving, routing, caching, disaggregation, and weight-sync behavior directly.
 - **Agentic workflows as data generation**: tool use, sandbox interaction, verifier rewards, environment feedback, multi-agent loops, and long-horizon agentic workflows plug into the same training / rollout / Data Buffer path instead of forking the training kernel.
@@ -67,6 +67,7 @@ Start by Use Case
 
    examples/glm4.7-30B-A3B.md
    examples/qwen3-30B-A3B.md
+   examples/glm5.2-744B-A40B.md
    examples/glm4.7-355B-A32B.md
    examples/deepseek-r1.md
 

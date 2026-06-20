@@ -34,7 +34,7 @@ from .checkpoint import load_checkpoint, save_checkpoint
 from .cp_utils import reduce_train_step_metrics
 from .data import DataIterator, get_batch
 from .grad_reduce import configure_overlap_grad_reduce
-from .loss import loss_function
+from .loss import ROLLOUT_TOP_P_TOKEN_KEYS, get_rollout_top_p_logprob_kwargs, loss_function
 from .model_provider import get_model_provider_func
 
 logger = logging.getLogger(__name__)
@@ -72,6 +72,12 @@ def _wrap_forward_step_with_microbatch_pbar(forward_step_func, pbar):
         return result
 
     return wrapped_forward_step
+
+
+def _with_rollout_top_p_token_keys(args: Namespace, keys: Sequence[str]) -> list[str]:
+    if args.rollout_top_p == 1.0:
+        return list(keys)
+    return [*keys, *ROLLOUT_TOP_P_TOKEN_KEYS]
 
 
 def _iter_critic_output_layers(model: Sequence[DDP]):
@@ -266,6 +272,7 @@ def forward_only(
     data_iterator: Sequence[DataIterator],
     num_microbatches: Sequence[int],
     store_prefix: str = "",
+    use_rollout_top_p_replay: bool = False,
 ) -> dict[str, list[torch.Tensor]]:
     """Run forward passes only and collect non-loss outputs (e.g., logprobs).
 
@@ -285,6 +292,8 @@ def forward_only(
         data_iterator (Sequence[DataIterator]): Iterable(s) yielding batches for inference.
         num_microbatches (Sequence[int]): Number of microbatches per rollout step.
         store_prefix (str): Prefix to prepend to stored output keys.
+        use_rollout_top_p_replay (bool): Whether to pass rollout top-p token sets
+            to the post-forward log-prob callback when top-p rollout is enabled.
 
     Returns:
         dict[str, list[torch.Tensor]]: Aggregated outputs keyed by ``store_prefix + key``.
@@ -295,6 +304,15 @@ def forward_only(
         iterator.reset()
 
     config = get_model_config(model[0])
+    batch_keys = [
+        "tokens",
+        "loss_masks",
+        "multimodal_train_inputs",
+        "total_lengths",
+        "response_lengths",
+    ]
+    if use_rollout_top_p_replay:
+        batch_keys = _with_rollout_top_p_token_keys(args, batch_keys)
 
     def forward_step(
         data_iterator: DataIterator, model: GPTModel, return_schedule_plan: bool = False
@@ -316,16 +334,8 @@ def forward_only(
         # Get the batch.
         batch = get_batch(
             data_iterator,
-            [
-                "tokens",
-                "loss_masks",
-                "multimodal_train_inputs",
-                "total_lengths",
-                "response_lengths",
-                "max_seq_lens",
-            ],
+            batch_keys,
             args.data_pad_size_multiplier,
-            args.qkv_format,
             args.allgather_cp,
         )
         unconcat_tokens = batch["unconcat_tokens"]
@@ -345,15 +355,17 @@ def forward_only(
             forward_kwargs.update(batch["multimodal_train_inputs"])
         output_tensor = model(**forward_kwargs)
 
-        return output_tensor, partial(
-            f,
-            args=args,
-            unconcat_tokens=unconcat_tokens,
-            total_lengths=total_lengths,
-            response_lengths=response_lengths,
-            with_entropy=args.use_rollout_entropy,
-            max_seq_lens=batch.get("max_seq_lens", None),
-        )
+        output_kwargs = {
+            "args": args,
+            "unconcat_tokens": unconcat_tokens,
+            "total_lengths": total_lengths,
+            "response_lengths": response_lengths,
+            "with_entropy": args.use_rollout_entropy,
+        }
+        if use_rollout_top_p_replay:
+            output_kwargs.update(get_rollout_top_p_logprob_kwargs(args, batch))
+
+        return output_tensor, partial(f, **output_kwargs)
 
     # Turn on evaluation mode which disables dropout.
     for model_module in model:
@@ -487,25 +499,26 @@ def train_one_step(
         # Get the batch.
         batch = get_batch(
             data_iterator,
-            [
-                "tokens",
-                "multimodal_train_inputs",
-                "packed_seq_params",
-                "total_lengths",
-                "response_lengths",
-                "loss_masks",
-                "log_probs",
-                "ref_log_probs",
-                "values",
-                "advantages",
-                "returns",
-                "rollout_log_probs",
-                "max_seq_lens",
-                "teacher_log_probs",
-                "rollout_mask_sums",
-            ],
+            _with_rollout_top_p_token_keys(
+                args,
+                [
+                    "tokens",
+                    "multimodal_train_inputs",
+                    "packed_seq_params",
+                    "total_lengths",
+                    "response_lengths",
+                    "loss_masks",
+                    "log_probs",
+                    "ref_log_probs",
+                    "values",
+                    "advantages",
+                    "returns",
+                    "rollout_log_probs",
+                    "teacher_log_probs",
+                    "rollout_mask_sums",
+                ],
+            ),
             args.data_pad_size_multiplier,
-            args.qkv_format,
             args.allgather_cp,
         )
 
