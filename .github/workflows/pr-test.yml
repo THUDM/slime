@@ -643,6 +643,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_eval_only_optimizer_scheduler.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "plugin_contracts/test_plugin_rollout_contracts.py"
             },
             {
