@@ -4,6 +4,87 @@ from typing import Any
 
 import torch
 
+from slime.utils.misc import decode_int32_meta_array
+
+_TOP_P_TOKEN_ID_META_KEYS = ("top_p_token_ids", "top_p_kept_token_ids")
+_TOP_P_TOKEN_OFFSET_META_KEYS = ("top_p_token_offsets", "top_p_kept_token_offsets")
+
+
+def _extract_rollout_top_p_token_data(
+    meta_info: dict[str, Any],
+    *,
+    expected_num_tokens: int | None = None,
+) -> tuple[torch.Tensor, torch.Tensor] | None:
+    token_ids = decode_int32_meta_array(meta_info, _TOP_P_TOKEN_ID_META_KEYS)
+    offsets = decode_int32_meta_array(meta_info, _TOP_P_TOKEN_OFFSET_META_KEYS)
+    if token_ids is None and offsets is None:
+        return None
+    if token_ids is None or offsets is None:
+        raise ValueError("SGLang top-p token replay must include both token ids and offsets.")
+    if offsets.numel() == 0 or int(offsets[0]) != 0:
+        raise ValueError(f"SGLang top-p token offsets must start with 0, got {offsets[:1].tolist()}.")
+    if int(offsets[-1]) != token_ids.numel():
+        raise ValueError(
+            "SGLang top-p token ids/offsets mismatch: "
+            f"offsets[-1]={int(offsets[-1])}, len(token_ids)={token_ids.numel()}."
+        )
+    if expected_num_tokens is not None and offsets.numel() != expected_num_tokens + 1:
+        raise ValueError(
+            "SGLang top-p token offsets length must equal generated token count + 1: "
+            f"len(offsets)={offsets.numel()}, generated={expected_num_tokens}."
+        )
+    return token_ids, offsets
+
+
+def _merge_rollout_top_p_token_data(
+    base_token_ids: list[int] | torch.Tensor | None,
+    base_offsets: list[int] | torch.Tensor | None,
+    token_ids: torch.Tensor,
+    offsets: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    base_token_ids = torch.as_tensor([] if base_token_ids is None else base_token_ids, dtype=torch.int32).reshape(-1)
+    base_offsets = torch.as_tensor([0] if base_offsets is None else base_offsets, dtype=torch.int32).reshape(-1)
+    base_offset = int(base_offsets[-1])
+    return (
+        torch.cat([base_token_ids, token_ids]),
+        torch.cat([base_offsets, offsets[1:] + base_offset]),
+    )
+
+
+def _pad_rollout_top_p_offsets(
+    token_ids: list[int] | torch.Tensor | None,
+    offsets: list[int] | torch.Tensor | None,
+    num_tokens: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if offsets is None or token_ids is None:
+        raise ValueError("Cannot append empty top-p spans without existing token ids and offsets.")
+    if num_tokens < 0:
+        raise ValueError(f"num_tokens must be non-negative, got {num_tokens}.")
+    token_ids = torch.as_tensor(token_ids, dtype=torch.int32).reshape(-1)
+    offsets = torch.as_tensor(offsets, dtype=torch.int32).reshape(-1)
+    if offsets.numel() == 0:
+        raise ValueError("Cannot append empty top-p spans to empty offsets.")
+    if num_tokens == 0:
+        return token_ids, offsets
+    empty_offsets = offsets.new_full((num_tokens,), int(offsets[-1]))
+    return token_ids, torch.cat([offsets, empty_offsets])
+
+
+def _to_int_list(tokens) -> list[int]:
+    if tokens is None:
+        return []
+    if torch.is_tensor(tokens):
+        return [int(token) for token in tokens.detach().cpu().reshape(-1).tolist()]
+    return [int(token) for token in tokens]
+
+
+def _to_float_list(values) -> list[float] | None:
+    if values is None:
+        return None
+    if torch.is_tensor(values):
+        return [float(value) for value in values.detach().cpu().reshape(-1).tolist()]
+    return [float(value) for value in values]
+
 
 @dataclass
 class Sample:
@@ -35,9 +116,9 @@ class Sample:
     rollout_log_probs: list[float] | None = None  # Log probabilities from rollout engine
     # Ragged top-p nucleus token ids replayed from rollout sampling. For response
     # token i, kept ids are rollout_top_p_token_ids[offsets[i]:offsets[i + 1]].
-    rollout_top_p_token_ids: list[int] | None = None
-    rollout_top_p_token_offsets: list[int] | None = None
-    rollout_routed_experts: list[list[int]] | None = None  # Routed experts from rollout engine
+    rollout_top_p_token_ids: list[int] | torch.Tensor | None = None
+    rollout_top_p_token_offsets: list[int] | torch.Tensor | None = None
+    rollout_routed_experts: list[list[int]] | torch.Tensor | None = None  # Routed experts from rollout engine
     remove_sample: bool = False
     teacher_log_probs: list[float] | None = None  # Log probabilities from teacher model for OPD
 
@@ -164,12 +245,98 @@ class Sample:
     def effective_response_length(self):
         return sum(self.loss_mask) if self.loss_mask is not None else self.response_length
 
-    def update_from_meta_info(self, args, meta_info: dict):
+    def append_response_tokens(
+        self,
+        args=None,
+        *,
+        tokens=None,
+        log_probs=None,
+        trainable: bool = True,
+        meta_info: dict | None = None,
+        text: str | None = None,
+        update_terminal_info: bool = True,
+    ):
         """
-        Update the sample with new information from meta_info returned by the rollout engine.
-        And extract
+        Append response-side tokens and keep training metadata aligned.
+
+        Model-generated tokens should pass ``trainable=True`` plus SGLang
+        ``meta_info`` and log probabilities. Tool/environment tokens should pass
+        ``trainable=False``; they receive loss-mask zeros and empty top-p spans
+        when top-p replay is active.
         """
-        if args.sglang_speculative_algorithm:
+        tokens = _to_int_list(tokens)
+        log_probs = _to_float_list(log_probs)
+        if log_probs is not None and len(log_probs) != len(tokens):
+            raise ValueError(f"log_probs length {len(log_probs)} != tokens length {len(tokens)}")
+
+        if text is not None:
+            self.response += text
+
+        if tokens:
+            self.tokens += tokens
+            self.response_length += len(tokens)
+            if self.loss_mask is None:
+                self.loss_mask = []
+            self.loss_mask += [1 if trainable else 0] * len(tokens)
+
+        if log_probs is not None:
+            if self.rollout_log_probs is None:
+                self.rollout_log_probs = []
+            self.rollout_log_probs += log_probs
+        elif tokens and not trainable and self.rollout_log_probs is not None:
+            self.rollout_log_probs += [0.0] * len(tokens)
+
+        if trainable:
+            if meta_info is not None:
+                self._apply_meta_info(
+                    args,
+                    meta_info,
+                    expected_top_p_tokens=len(tokens),
+                    update_terminal_info=update_terminal_info,
+                )
+        elif tokens and self.rollout_top_p_token_offsets is not None:
+            self.rollout_top_p_token_ids, self.rollout_top_p_token_offsets = _pad_rollout_top_p_offsets(
+                self.rollout_top_p_token_ids,
+                self.rollout_top_p_token_offsets,
+                len(tokens),
+            )
+            if meta_info is not None and update_terminal_info:
+                self._apply_meta_info(args, meta_info, expected_top_p_tokens=None, update_terminal_info=True)
+
+    def _apply_meta_info(
+        self,
+        args,
+        meta_info: dict,
+        *,
+        expected_top_p_tokens: int | None = None,
+        update_terminal_info: bool = True,
+    ):
+        top_p_data = _extract_rollout_top_p_token_data(meta_info, expected_num_tokens=expected_top_p_tokens)
+        if top_p_data is not None:
+            base_token_ids, base_offsets = self.rollout_top_p_token_ids, self.rollout_top_p_token_offsets
+            if base_token_ids is None and base_offsets is None:
+                self.rollout_top_p_token_ids, self.rollout_top_p_token_offsets = top_p_data
+            else:
+                self.rollout_top_p_token_ids, self.rollout_top_p_token_offsets = _merge_rollout_top_p_token_data(
+                    base_token_ids,
+                    base_offsets,
+                    *top_p_data,
+                )
+
+        routed_experts = decode_int32_meta_array(meta_info, "routed_experts")
+        if routed_experts is not None:
+            if args is None:
+                raise ValueError("args is required to decode routed experts metadata.")
+            self.rollout_routed_experts = routed_experts.reshape(
+                len(self.tokens) - 1,
+                args.num_layers,
+                args.moe_router_topk,
+            )
+
+        if not update_terminal_info or "finish_reason" not in meta_info:
+            return
+
+        if getattr(args, "sglang_speculative_algorithm", False):
             # cannot directly use spec info from sglang because of partial rollout.
             self.spec_info.add(meta_info=meta_info)
 

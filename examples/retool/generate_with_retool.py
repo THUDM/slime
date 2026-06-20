@@ -221,9 +221,11 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     # clean; otherwise the concatenation below appends new tokens to old ones
     # and downstream `slice_log_prob_with_cp` sees a length mismatch.
     sample.rollout_log_probs = None
+    sample.rollout_top_p_token_ids = None
+    sample.rollout_top_p_token_offsets = None
     sample.response = ""
     sample.response_length = 0
-    sample.loss_mask = None
+    sample.loss_mask = []
 
     state = GenerateState(args)
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
@@ -233,9 +235,10 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     prompt = format_conversation_with_tools(prompt=sample.prompt, tools=tool_specs)
 
     prompt_tokens_ids = state.tokenizer(prompt, add_special_tokens=False)["input_ids"]
+    sample.tokens = list(prompt_tokens_ids)
     response = ""
     response_token_ids = []
-    loss_masks = []
+    loss_masks = sample.loss_mask
     tool_call_count = 0  # Track actual tool call rounds
 
     if args.rollout_max_context_len is not None:
@@ -304,9 +307,6 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             cur_response_token_ids = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
             cur_response = state.tokenizer.decode(cur_response_token_ids)
             cur_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
-            if sample.rollout_log_probs is None:
-                sample.rollout_log_probs = []
-            sample.rollout_log_probs += cur_log_probs
 
         else:
             # sglang returned text but no output_token_logprobs — we cannot
@@ -320,7 +320,13 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
         response += cur_response
         response_token_ids += cur_response_token_ids
-        loss_masks += [1] * len(cur_response_token_ids)
+        sample.append_response_tokens(
+            args,
+            tokens=cur_response_token_ids,
+            log_probs=cur_log_probs,
+            trainable=True,
+            meta_info=output["meta_info"],
+        )
 
         # Check length limit
         if output["meta_info"]["finish_reason"]["type"] == "length":
@@ -337,15 +343,17 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
         assert next_obs != "", "Next observation should not be empty."
         obs_tokens_ids = state.tokenizer(next_obs, add_special_tokens=False)["input_ids"]
-        response += next_obs
-        response_token_ids += obs_tokens_ids
-        loss_masks += [0] * len(obs_tokens_ids)
+        overflow = len(prompt_tokens_ids) + len(response_token_ids) + len(obs_tokens_ids) - max_context_length
+        truncated_by_observation = overflow > 0
+        if truncated_by_observation:
+            obs_tokens_ids = obs_tokens_ids[: max(0, len(obs_tokens_ids) - overflow)]
 
         # Add dummy log probs for observation tokens (they won't be used due to loss_mask=0)
         # Check if maximum tool call count reached
-        if sample.rollout_log_probs is not None:
-            sample.rollout_log_probs += [0.0] * len(obs_tokens_ids)
+        response_token_ids += obs_tokens_ids
+        sample.append_response_tokens(args, tokens=obs_tokens_ids, trainable=False)
 
+        if sample.rollout_log_probs is not None:
             assert len(response_token_ids) == len(
                 sample.rollout_log_probs
             ), f"Token/logp length mismatch at turn {turn}: {len(response_token_ids)} tokens vs {len(sample.rollout_log_probs)} logps"
@@ -354,12 +362,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         # max_context_length (the per-turn generation was clamped to the
         # remaining budget, but tool output is unconstrained). Trim tail
         # tokens so the final sample fits the training budget exactly.
-        overflow = len(prompt_tokens_ids) + len(response_token_ids) - max_context_length
-        if overflow > 0:
-            response_token_ids = response_token_ids[:-overflow]
-            loss_masks = loss_masks[:-overflow]
-            if sample.rollout_log_probs is not None:
-                sample.rollout_log_probs = sample.rollout_log_probs[:-overflow]
+        if truncated_by_observation:
             # Resync the text field from the trimmed token list so
             # reward_func's `sample.prompt + sample.response` matches what
             # the model was actually trained on. decode(tokenize(text)) can
@@ -369,6 +372,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             response = state.tokenizer.decode(response_token_ids)
             sample.status = Sample.Status.TRUNCATED
             break
+        response += next_obs
 
         if tool_call_count >= TOOL_CONFIGS["max_tool_calls"]:
             break
@@ -388,13 +392,14 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     sample.tool_call_count = tool_call_count
 
     # Set status
-    match output["meta_info"]["finish_reason"]["type"]:
-        case "length":
-            sample.status = Sample.Status.TRUNCATED
-        case "abort":
-            sample.status = Sample.Status.ABORTED
-        case "stop":
-            sample.status = Sample.Status.COMPLETED
+    if sample.status is Sample.Status.PENDING:
+        match output["meta_info"]["finish_reason"]["type"]:
+            case "length":
+                sample.status = Sample.Status.TRUNCATED
+            case "abort":
+                sample.status = Sample.Status.ABORTED
+            case "stop":
+                sample.status = Sample.Status.COMPLETED
 
     return sample
 
