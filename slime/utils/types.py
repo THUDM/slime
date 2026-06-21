@@ -291,7 +291,7 @@ class Sample:
                 self._apply_meta_info(
                     args,
                     meta_info,
-                    expected_top_p_tokens=len(tokens),
+                    expected_top_p_tokens=len(tokens) if tokens else None,
                     update_terminal_info=update_terminal_info,
                 )
         elif tokens and self.rollout_top_p_token_offsets is not None:
@@ -311,17 +311,18 @@ class Sample:
         expected_top_p_tokens: int | None = None,
         update_terminal_info: bool = True,
     ):
-        top_p_data = _extract_rollout_top_p_token_data(meta_info, expected_num_tokens=expected_top_p_tokens)
-        if top_p_data is not None:
-            base_token_ids, base_offsets = self.rollout_top_p_token_ids, self.rollout_top_p_token_offsets
-            if base_token_ids is None and base_offsets is None:
-                self.rollout_top_p_token_ids, self.rollout_top_p_token_offsets = top_p_data
-            else:
-                self.rollout_top_p_token_ids, self.rollout_top_p_token_offsets = _merge_rollout_top_p_token_data(
-                    base_token_ids,
-                    base_offsets,
-                    *top_p_data,
-                )
+        if expected_top_p_tokens is not None:
+            top_p_data = _extract_rollout_top_p_token_data(meta_info, expected_num_tokens=expected_top_p_tokens)
+            if top_p_data is not None:
+                base_token_ids, base_offsets = self.rollout_top_p_token_ids, self.rollout_top_p_token_offsets
+                if base_token_ids is None and base_offsets is None:
+                    self.rollout_top_p_token_ids, self.rollout_top_p_token_offsets = top_p_data
+                else:
+                    self.rollout_top_p_token_ids, self.rollout_top_p_token_offsets = _merge_rollout_top_p_token_data(
+                        base_token_ids,
+                        base_offsets,
+                        *top_p_data,
+                    )
 
         routed_experts = decode_int32_meta_array(meta_info, "routed_experts")
         if routed_experts is not None:
