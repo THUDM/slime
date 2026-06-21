@@ -8,7 +8,7 @@ Pins two contracts that the rollout / training boundary depends on:
      sample loses its status / spec_info / prefix_cache_info on the way
      to the trainer with no crash signal.
 
-  2. ``update_from_meta_info`` finish_reason → Status enum mapping
+  2. ``append_response_tokens`` finish_reason → Status enum mapping
      (length→TRUNCATED, abort→ABORTED, stop→COMPLETED). The match
      statement at types.py:176-182 is the only place sglang's
      finish_reason gets translated; a typo'd enum or removed case here
@@ -173,12 +173,12 @@ def test_round_trip_through_default_constructed_sample():
 
 
 # ---------------------------------------------------------------------------
-# update_from_meta_info — finish_reason → Status mapping
+# append_response_tokens — finish_reason → Status mapping
 # ---------------------------------------------------------------------------
 
 
 def _make_args(speculative: bool = False) -> argparse.Namespace:
-    """``update_from_meta_info`` only consults ``args.sglang_speculative_algorithm``
+    """``append_response_tokens`` only consults ``args.sglang_speculative_algorithm``
     — minimal stub is enough."""
     return argparse.Namespace(sglang_speculative_algorithm=speculative)
 
@@ -197,8 +197,10 @@ def test_status_mapping_for_each_finish_reason(finish_reason, expected_status):
     finish_reason ever gets translated. Each branch must hit the right
     enum; a typo in the enum name would crash later in unrelated places."""
     sample = Sample()
-    sample.update_from_meta_info(
+    sample.append_response_tokens(
         _make_args(),
+        tokens=[],
+        trainable=True,
         meta_info={"finish_reason": {"type": finish_reason}},
     )
     assert sample.status is expected_status
@@ -211,8 +213,10 @@ def test_unknown_finish_reason_leaves_status_unchanged():
     a default doesn't silently break this contract."""
     sample = Sample()
     sample.status = Sample.Status.PENDING
-    sample.update_from_meta_info(
+    sample.append_response_tokens(
         _make_args(),
+        tokens=[],
+        trainable=True,
         meta_info={"finish_reason": {"type": "something_new"}},
     )
     assert sample.status is Sample.Status.PENDING
@@ -225,8 +229,10 @@ def test_weight_version_is_appended_when_present():
     version produced each chunk."""
     sample = Sample()
     sample.weight_versions = ["v1"]
-    sample.update_from_meta_info(
+    sample.append_response_tokens(
         _make_args(),
+        tokens=[],
+        trainable=True,
         meta_info={
             "finish_reason": {"type": "stop"},
             "weight_version": "v2",
@@ -237,13 +243,15 @@ def test_weight_version_is_appended_when_present():
 
 @pytest.mark.unit
 def test_prefix_cache_info_is_accumulated_across_calls():
-    """Every call to update_from_meta_info adds to prefix_cache_info
+    """Every call to append_response_tokens with terminal metadata adds to prefix_cache_info
     (types.py:171). Multi-turn rollouts call this once per turn — the
     counts must accumulate, not overwrite."""
     sample = Sample()
     for prompt_tokens, cached_tokens in [(100, 0), (200, 50)]:
-        sample.update_from_meta_info(
+        sample.append_response_tokens(
             _make_args(),
+            tokens=[],
+            trainable=True,
             meta_info={
                 "finish_reason": {"type": "stop"},
                 "prompt_tokens": prompt_tokens,
@@ -266,11 +274,11 @@ def test_spec_info_only_updated_when_speculative_enabled():
     }
 
     no_spec = Sample()
-    no_spec.update_from_meta_info(_make_args(speculative=False), meta_info=meta_info)
+    no_spec.append_response_tokens(_make_args(speculative=False), tokens=[], trainable=True, meta_info=meta_info)
     assert no_spec.spec_info.spec_accept_token_num == 0
 
     with_spec = Sample()
-    with_spec.update_from_meta_info(_make_args(speculative=True), meta_info=meta_info)
+    with_spec.append_response_tokens(_make_args(speculative=True), tokens=[], trainable=True, meta_info=meta_info)
     assert with_spec.spec_info.spec_accept_token_num == 7
     assert with_spec.spec_info.spec_draft_token_num == 10
 
