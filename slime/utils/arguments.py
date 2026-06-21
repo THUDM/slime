@@ -1113,6 +1113,53 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--opd-teacher-ckpt-step", type=int, default=None, help="The checkpoint step for OPD teacher model."
             )
+            parser.add_argument(
+                "--teacher-tokenizer-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to the teacher tokenizer for cross-vocabulary SGLang OPD. "
+                    "Required when using slime.rollout.on_policy_distillation.reward_func_cross_vocab."
+                ),
+            )
+            parser.add_argument(
+                "--opd-prompt-messages-key",
+                type=str,
+                default=None,
+                help=(
+                    "Metadata key used to preserve the raw chat messages for cross-vocabulary OPD. "
+                    "When set, Dataset stores the pre-template prompt messages in sample.metadata under this key, "
+                    "and reward_func_cross_vocab renders those messages with the teacher chat template."
+                ),
+            )
+            parser.add_argument(
+                "--opd-mask-teacher-logprob-tokens",
+                type=str,
+                nargs="+",
+                default=None,
+                help=(
+                    "Student-tokenizer strings whose OPD teacher log-probs should be replaced with student rollout "
+                    "log-probs, making the OPD delta zero on protected format tokens."
+                ),
+            )
+            parser.add_argument(
+                "--opd-teacher-timeout",
+                type=float,
+                default=300.0,
+                help="Total timeout in seconds for each SGLang OPD teacher HTTP request.",
+            )
+            parser.add_argument(
+                "--opd-teacher-retries",
+                type=int,
+                default=2,
+                help="Number of retries for transient SGLang OPD teacher HTTP failures before falling back.",
+            )
+            parser.add_argument(
+                "--opd-teacher-concurrency",
+                type=int,
+                default=0,
+                help="Maximum concurrent SGLang OPD teacher HTTP requests per rollout worker. 0 disables this limit.",
+            )
             return parser
 
         # wandb
@@ -1751,6 +1798,13 @@ def slime_validate_args(args):
 
     # Validate on-policy distillation (OPD) arguments
     if args.use_opd:
+        if args.opd_teacher_timeout <= 0:
+            raise ValueError("--opd-teacher-timeout must be positive.")
+        if args.opd_teacher_retries < 0:
+            raise ValueError("--opd-teacher-retries must be non-negative.")
+        if args.opd_teacher_concurrency < 0:
+            raise ValueError("--opd-teacher-concurrency must be non-negative.")
+
         if args.opd_type is None:
             raise ValueError("--opd-type must be specified when --use-opd is enabled. Choose 'sglang' or 'megatron'.")
 

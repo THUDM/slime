@@ -11,6 +11,8 @@
 | `--opd-kl-coef` | OPD KL 惩罚系数（默认值：1.0）。控制蒸馏信号相对于 RL advantage 的权重。 |
 | `--opd-teacher-load` | 教师模型的 Megatron checkpoint 路径。`--opd-type=megatron` 时**必须**设置，`--opd-type=sglang` 时**不可**设置。 |
 | `--opd-teacher-ckpt-step` | 可选的教师模型 checkpoint 步数。 |
+| `--teacher-tokenizer-path` | cross-vocabulary SGLang OPD 使用的教师 tokenizer 路径。 |
+| `--opd-prompt-messages-key` | 保存原始 chat messages 的 metadata key，用于让教师 tokenizer 用自己的 chat template 重新渲染 prompt。 |
 
 ## 原理
 
@@ -47,6 +49,20 @@ $$
 --custom-reward-post-process-path slime.rollout.on_policy_distillation.post_process_rewards
 --rm-url http://<TEACHER_IP>:<TEACHER_PORT>/generate
 ```
+
+如果教师和学生使用不同 tokenizer，仍然使用 `--opd-type sglang`，但切换到 cross-vocabulary hooks：
+```bash
+--use-opd
+--opd-type sglang
+--opd-kl-coef 1.0
+--custom-rm-path slime.rollout.on_policy_distillation.reward_func_cross_vocab
+--custom-reward-post-process-path slime.rollout.on_policy_distillation.post_process_rewards_cross_vocab
+--teacher-tokenizer-path /path/to/teacher_hf_checkpoint
+--opd-prompt-messages-key opd_messages
+--rm-url http://<TEACHER_IP>:<TEACHER_PORT>/generate
+```
+
+设置 `--opd-prompt-messages-key` 后，如果数据集 prompt 是 chat messages，slime 会在应用学生 chat template 前把原始 messages 保存到 `sample.metadata[opd_messages]`。教师请求会用教师 tokenizer 重新渲染这些 messages，并且只在 response 中 decoded token text 和文本位置都能 1:1 对齐的 token 上应用 OPD；无法对齐的位置使用 student rollout log-prob，使 OPD delta 为零。
 
 ### Megatron 模式 (`--opd-type megatron`)
 
