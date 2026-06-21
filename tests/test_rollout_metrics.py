@@ -69,6 +69,7 @@ def test_append_response_tokens_merges_top_p_tensors():
         tokens=[0, 1],
         response_length=1,
         loss_mask=[1],
+        rollout_log_probs=[-0.3],
         rollout_top_p_token_ids=torch.tensor([1], dtype=torch.int32),
         rollout_top_p_token_offsets=torch.tensor([0, 1], dtype=torch.int32),
     )
@@ -88,7 +89,7 @@ def test_append_response_tokens_merges_top_p_tensors():
     assert sample.tokens == [0, 1, 10, 20]
     assert sample.response_length == 3
     assert sample.loss_mask == [1, 1, 1]
-    assert sample.rollout_log_probs == [-0.1, -0.2]
+    assert sample.rollout_log_probs == [-0.3, -0.1, -0.2]
     torch.testing.assert_close(sample.rollout_top_p_token_ids, torch.tensor([1, 10, 11, 20], dtype=torch.int32))
     torch.testing.assert_close(sample.rollout_top_p_token_offsets, torch.tensor([0, 1, 3, 4], dtype=torch.int32))
 
@@ -98,6 +99,8 @@ def test_append_response_tokens_can_skip_terminal_status_for_streaming_chunks():
     sample = Sample(
         tokens=[0, 1],
         response_length=1,
+        loss_mask=[1],
+        rollout_log_probs=[-0.3],
         rollout_top_p_token_ids=torch.tensor([1], dtype=torch.int32),
         rollout_top_p_token_offsets=torch.tensor([0, 1], dtype=torch.int32),
     )
@@ -116,6 +119,8 @@ def test_append_response_tokens_can_skip_terminal_status_for_streaming_chunks():
     )
 
     assert sample.status is Sample.Status.PENDING
+    assert sample.loss_mask == [1, 1, 1]
+    assert sample.rollout_log_probs == [-0.3, -0.1, -0.2]
     torch.testing.assert_close(sample.rollout_top_p_token_ids, torch.tensor([1, 10, 11, 20], dtype=torch.int32))
     torch.testing.assert_close(sample.rollout_top_p_token_offsets, torch.tensor([0, 1, 3, 4], dtype=torch.int32))
 
@@ -160,3 +165,19 @@ def test_append_response_tokens_pads_top_p_for_non_trainable_tokens():
     assert sample.rollout_log_probs == [-0.1, 0.0, 0.0, 0.0]
     torch.testing.assert_close(sample.rollout_top_p_token_ids, torch.tensor([10, 11], dtype=torch.int32))
     torch.testing.assert_close(sample.rollout_top_p_token_offsets, torch.tensor([0, 2, 2, 2, 2], dtype=torch.int32))
+
+
+@pytest.mark.unit
+def test_append_response_tokens_requires_trainable_log_probs():
+    sample = Sample()
+
+    with pytest.raises(ValueError, match="trainable response tokens require rollout log probabilities"):
+        sample.append_response_tokens(tokens=[10], trainable=True)
+
+
+@pytest.mark.unit
+def test_append_response_tokens_rejects_non_trainable_log_probs():
+    sample = Sample()
+
+    with pytest.raises(ValueError, match="non-trainable response tokens should not pass rollout log probabilities"):
+        sample.append_response_tokens(tokens=[10], log_probs=[-0.1], trainable=False)

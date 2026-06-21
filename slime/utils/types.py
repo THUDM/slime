@@ -86,6 +86,10 @@ def _to_float_list(values) -> list[float] | None:
     return [float(value) for value in values]
 
 
+def _numel(value) -> int:
+    return int(torch.as_tensor(value).reshape(-1).numel())
+
+
 @dataclass
 class Sample:
     """The sample generated"""
@@ -105,6 +109,7 @@ class Sample:
     tokens: list[int] = field(default_factory=list)
     multimodal_inputs: dict[str, Any] | None = None  # raw multimodal data, e.g. images, videos, etc.
     multimodal_train_inputs: dict[str, Any] | None = None  # processed multimodal data, e.g. pixel_values, etc.
+    multimodal_train_input_id: str | None = None
     apply_chat_template_kwargs: dict = field(default_factory=dict)
     # response
     response: str = ""
@@ -268,52 +273,60 @@ class Sample:
         log_probs = _to_float_list(log_probs)
         if log_probs is not None and len(log_probs) != len(tokens):
             raise ValueError(f"log_probs length {len(log_probs)} != tokens length {len(tokens)}")
+        if tokens and trainable and log_probs is None:
+            raise ValueError("trainable response tokens require rollout log probabilities.")
+        if tokens and not trainable:
+            if log_probs is not None:
+                raise ValueError("non-trainable response tokens should not pass rollout log probabilities.")
+            log_probs = [0.0] * len(tokens)
 
         if text is not None:
             self.response += text
 
+        previous_response_length = self.response_length
         if tokens:
             self.tokens += tokens
             self.response_length += len(tokens)
             if self.loss_mask is None:
-                self.loss_mask = []
+                self.loss_mask = [1] * previous_response_length
             self.loss_mask += [1 if trainable else 0] * len(tokens)
 
         if log_probs is not None:
             if self.rollout_log_probs is None:
-                self.rollout_log_probs = []
+                if trainable and previous_response_length:
+                    raise ValueError(
+                        "Cannot append trainable rollout log probabilities to a sample with existing response "
+                        "tokens but no existing rollout_log_probs."
+                    )
+                self.rollout_log_probs = [0.0] * previous_response_length
             self.rollout_log_probs += log_probs
-        elif tokens and not trainable and self.rollout_log_probs is not None:
-            self.rollout_log_probs += [0.0] * len(tokens)
 
-        if trainable:
-            if meta_info is not None:
-                self._apply_meta_info(
-                    args,
-                    meta_info,
-                    expected_top_p_tokens=len(tokens) if tokens else None,
-                    update_terminal_info=update_terminal_info,
-                )
-        elif tokens and self.rollout_top_p_token_offsets is not None:
-            self.rollout_top_p_token_ids, self.rollout_top_p_token_offsets = _pad_rollout_top_p_offsets(
-                self.rollout_top_p_token_ids,
-                self.rollout_top_p_token_offsets,
-                len(tokens),
+        should_pad_top_p = bool(tokens and not trainable)
+        if meta_info is not None or should_pad_top_p:
+            self._apply_meta_info(
+                args,
+                meta_info or {},
+                new_token_count=len(tokens),
+                pad_missing_top_p=should_pad_top_p,
+                update_terminal_info=update_terminal_info,
             )
-            if meta_info is not None and update_terminal_info:
-                self._apply_meta_info(args, meta_info, expected_top_p_tokens=None, update_terminal_info=True)
+
+        self._validate_response_metadata_lengths()
 
     def _apply_meta_info(
         self,
         args,
         meta_info: dict,
         *,
-        expected_top_p_tokens: int | None = None,
+        new_token_count: int = 0,
+        pad_missing_top_p: bool = False,
         update_terminal_info: bool = True,
-    ):
-        if expected_top_p_tokens is not None:
-            top_p_data = _extract_rollout_top_p_token_data(meta_info, expected_num_tokens=expected_top_p_tokens)
+    ) -> None:
+        applied_top_p_data = False
+        if new_token_count:
+            top_p_data = _extract_rollout_top_p_token_data(meta_info, expected_num_tokens=new_token_count)
             if top_p_data is not None:
+                applied_top_p_data = True
                 base_token_ids, base_offsets = self.rollout_top_p_token_ids, self.rollout_top_p_token_offsets
                 if base_token_ids is None and base_offsets is None:
                     self.rollout_top_p_token_ids, self.rollout_top_p_token_offsets = top_p_data
@@ -323,6 +336,18 @@ class Sample:
                         base_offsets,
                         *top_p_data,
                     )
+
+        if (
+            pad_missing_top_p
+            and new_token_count
+            and self.rollout_top_p_token_offsets is not None
+            and not applied_top_p_data
+        ):
+            self.rollout_top_p_token_ids, self.rollout_top_p_token_offsets = _pad_rollout_top_p_offsets(
+                self.rollout_top_p_token_ids,
+                self.rollout_top_p_token_offsets,
+                new_token_count,
+            )
 
         routed_experts = decode_int32_meta_array(meta_info, "routed_experts")
         if routed_experts is not None:
@@ -354,6 +379,33 @@ class Sample:
                 self.status = Sample.Status.ABORTED
             case "stop":
                 self.status = Sample.Status.COMPLETED
+
+    def _validate_response_metadata_lengths(self):
+        if self.loss_mask is not None and len(self.loss_mask) != self.response_length:
+            raise ValueError(f"loss_mask length {len(self.loss_mask)} != response_length {self.response_length}")
+
+        if self.rollout_log_probs is not None and len(self.rollout_log_probs) != self.response_length:
+            raise ValueError(
+                f"rollout_log_probs length {len(self.rollout_log_probs)} != response_length {self.response_length}"
+            )
+
+        if self.rollout_top_p_token_ids is None and self.rollout_top_p_token_offsets is None:
+            return
+        if self.rollout_top_p_token_ids is None or self.rollout_top_p_token_offsets is None:
+            raise ValueError("rollout top-p replay must include both token ids and offsets.")
+
+        offsets = torch.as_tensor(self.rollout_top_p_token_offsets, dtype=torch.int32).reshape(-1)
+        if offsets.numel() != self.response_length + 1:
+            raise ValueError(
+                "rollout_top_p_token_offsets length must equal response_length + 1: "
+                f"len(offsets)={offsets.numel()}, response_length={self.response_length}."
+            )
+        token_id_count = _numel(self.rollout_top_p_token_ids)
+        if int(offsets[-1]) != token_id_count:
+            raise ValueError(
+                "rollout top-p token ids/offsets mismatch: "
+                f"offsets[-1]={int(offsets[-1])}, len(token_ids)={token_id_count}."
+            )
 
 
 @dataclass(frozen=True)
