@@ -271,7 +271,7 @@ def _build_items_from_trace(sample: dict[str, Any], sample_idx: int) -> dict[str
                 "display_end_ts": None,
                 "attempt": event["attempt"],
                 "span_id": event["span_id"],
-                "parent_span_id": event.get("parent_span_id"),
+                "parent_span_id": event.get("parent_span_id") or event.get("inferred_parent_span_id"),
                 "start_attrs": event.get("attrs") or {},
                 "end_attrs": {},
             }
@@ -309,7 +309,7 @@ def _build_items_from_trace(sample: dict[str, Any], sample_idx: int) -> dict[str
                 "ts": event["ts"],
                 "attempt": event["attempt"],
                 "span_id": None,
-                "parent_span_id": event.get("inferred_parent_span_id"),
+                "parent_span_id": event.get("parent_span_id") or event.get("inferred_parent_span_id"),
                 "attrs": event.get("attrs") or {},
             }
         )
@@ -376,12 +376,12 @@ def _build_items_from_trace(sample: dict[str, Any], sample_idx: int) -> dict[str
 
     for event in point_events:
         parent_span_id = event.get("parent_span_id")
-        event["depth"] = span_depths.get(parent_span_id or "", 0)
+        event["depth"] = span_depths[parent_span_id] + 1 if parent_span_id in span_depths else 0
         event["lane"] = event["depth"]
 
     for item in orphan_ends:
         parent_span_id = item.get("parent_span_id")
-        item["depth"] = span_depths.get(parent_span_id or "", 0)
+        item["depth"] = span_depths[parent_span_id] + 1 if parent_span_id in span_depths else 0
         item["lane"] = item["depth"]
 
     def parent_span_name(parent_span_id: str | None) -> str | None:
@@ -476,6 +476,8 @@ def _build_items_from_trace(sample: dict[str, Any], sample_idx: int) -> dict[str
     next_virtual_lane = max((item["lane"] for item in all_items), default=-1)
     for span in all_spans:
         if span["state"] != "closed_span" or span.get("end_ts") is None:
+            continue
+        if str(span.get("name") or "").startswith("sglang_pd_"):
             continue
         end_attrs = span.get("end_attrs") or {}
         for role, suffix, keys in pd_lane_specs:
@@ -1253,7 +1255,7 @@ HTML_TEMPLATE = r"""<!doctype html>
           ['decode_alloc_wait', '[D] alloc wait'],
           ['decode_prealloc', '[D] prealloc'],
         ];
-        html += '<span style="color:var(--muted);margin-left:8px;font-size:11px">PD (collapsed: P over D; expanded: separate P/D lanes):</span>';
+        html += '<span style="color:var(--muted);margin-left:8px;font-size:11px">PD phases:</span>';
         for (const [phase, label] of pdLegend) {
           html += `<span class="chip" style="font-size:11px">` +
             `<span class="bar" style="background:${pdPhaseColor(phase, 0.85)}"></span>` +
