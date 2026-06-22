@@ -52,6 +52,7 @@ from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.timer import Timer, timer
 
 from ..sglang import DeltaEncoding, DeltaParam, DeltaSpec
+from ._apply_result_check import check_apply_results
 from .update_weight_from_distributed import UpdateWeightFromDistributed
 
 logger = logging.getLogger(__name__)
@@ -808,7 +809,8 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
             # Futures unblocks the (commit-then-RPC) chain; ray.get waits for the
             # receivers' apply to finish.
             object_refs = [ref for fut in self._pending_publishes for ref in fut.result()]
-            ray.get(object_refs)
+            results = ray.get(object_refs)
+            check_apply_results(results)
             self._pending_publishes.clear()
             if not self._published_any:
                 # No delta files needed publishing this sync (e.g. all-zero diff).
