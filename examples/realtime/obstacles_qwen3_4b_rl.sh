@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# RL on the clear-obstacles grid game (real-time/environment/clear_obstacles).
+# The model plays a grid game via move_up/move_down/move_left/move_right tool
+# calls; reward is 1.0 for reaching the GOAL row, 0.0 otherwise.
+
 # for rerun the task
 pkill -9 sglang
 sleep 3
@@ -30,40 +34,43 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+# Repo root that contains slime/, real-time/, Megatron-LM/ (this script lives at
+# slime/examples/realtime/), used to put the obstacles `environment` package on
+# PYTHONPATH.
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." &>/dev/null && pwd)"
 source "slime/scripts/models/qwen3-4B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint $HOME/font-info/qwen3-4b-sft
-   --ref-load $HOME/font-info/qwen3-4b-sft_torch_dist
+   --hf-checkpoint $HOME/Qwen/Qwen3-4B
+   --ref-load $HOME/Qwen/Qwen3-4B_torch_dist
    # --load $HOME/Qwen3-4B_slime/
-   --save $HOME/font-info/qwen3-4b-sft/qwen3-4b-sft-multi-turn/
+   --save $HOME/Qwen/Qwen3-4B/qwen3-4b-obstacles/
    --save-interval 20
-   --rotary-base 5000000
+   --rotary-base 1000000
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data $HOME/dapo-math-17k/dapo-math-17k.jsonl
+   # Seed dataset produced by obstacles_data_preprocess.py. Each row is
+   # {"prompt": <game rules>, "seed": <int>}; the seed arrives on sample.label
+   # and the env is reconstructed from it at rollout time.
+   --prompt-data $HOME/obstacles-seeds/train.jsonl
    --input-key prompt
-   --label-key label
-   --apply-chat-template
+   --label-key seed
    --rollout-shuffle
    --reward-key score
    --num-rollout 3000
-   --rollout-batch-size 32
+   --rollout-batch-size 16
    --n-samples-per-prompt 8
-   --rollout-max-response-len 8192
+   --rollout-max-response-len 16384
    --rollout-temperature 1
 
-   --global-batch-size 256
-   --balance-data
-)
+   # Dump every rollout's samples (decoded completions + prompt/tokens/loss_mask/
+   # metadata via Sample.to_dict) to a per-step .pt file for inspection during
+   # training. {rollout_id} is filled in by slime, not bash.
+   --save-debug-rollout-data $HOME/qwen3-4b-obstacles/rollout_dumps/{rollout_id}.pt
 
-EVAL_ARGS=(
-   --eval-interval 20
-   --eval-prompt-data aime  $HOME/aime-2024/aime-2024.jsonl
-   --n-samples-per-eval-prompt 16
-   --eval-max-response-len 16384
-   --eval-top-p 1
+   --global-batch-size 128
+   --balance-data
 )
 
 PERF_ARGS=(
@@ -80,7 +87,7 @@ PERF_ARGS=(
 
    # --micro-batch-size 1
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 9216
+   --max-tokens-per-gpu 17408
 )
 
 GRPO_ARGS=(
@@ -104,8 +111,8 @@ OPTIMIZER_ARGS=(
 
 WANDB_ARGS=(
    --use-wandb
-   --wandb-project slime-dapo
-   --wandb-group qwen3-4B-test-multi-turn
+   --wandb-project slime-obstacles
+   --wandb-group qwen3-4B-clear-obstacles
    #--wandb-key ${WANDB_KEY}
 )
 
@@ -126,8 +133,8 @@ MISC_ARGS=(
 )
 
 CUSTOM_ARGS=(
-   --custom-generate-function-path generate_with_retool.generate
-   --custom-rm-path generate_with_retool.reward_func
+   --custom-generate-function-path generate_with_obstacles.generate
+   --custom-rm-path generate_with_obstacles.reward_func
 )
 
 # Cap the open-file limit: the default (1048576) triggers a raylet SIGABRT crash
@@ -139,10 +146,12 @@ ulimit -n 65535
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 1 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
-# Build the runtime environment JSON with proper variable substitution
+# Build the runtime environment JSON with proper variable substitution.
+# ${REPO_ROOT}/real-time puts the obstacles `environment` package on PYTHONPATH
+# for the ray rollout workers; ${SCRIPT_DIR} makes generate_with_obstacles importable.
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
-    \"PYTHONPATH\": \"./Megatron-LM/:${SCRIPT_DIR}:./slime\",
+    \"PYTHONPATH\": \"./Megatron-LM/:${SCRIPT_DIR}:./slime:${REPO_ROOT}/real-time\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
     \"LIBRARY_PATH\": \"${LIBRARY_PATH}\",

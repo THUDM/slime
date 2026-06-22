@@ -1,96 +1,88 @@
-# Retool: from SFT to RL
+# Clear-Obstacles: RL on an interactive grid game
 
-This example demonstrates how to use the retool functionality for tool-enabled language model generation.
+This example trains a model with GRPO to play the **clear-obstacles** grid game
+from `real-time/environment/clear_obstacles.py`. It replaces the Python
+code-interpreter tool environment with an interactive environment exposed through
+four move tools.
 
-## Overview
+The model sees a grid and must move `F` up to the GOAL row (row 0) while avoiding
+obstacles (`#`). It acts by emitting `move_up` / `move_down` / `move_left` /
+`move_right` tool calls. Reaching the GOAL gives reward `1.0`; crashing into an
+obstacle (or running out of turns) gives `0.0`.
 
-The retool example provides:
-- Safe Python code execution in a sandbox environment
-- Tool registry for managing available tools
-- Integration with language model generation
-- Reward calculation for tool usage
+## How it works
+
+1. **Seed dataset** (`obstacles_data_preprocess.py`). Each training example is a
+   `(prompt, seed)` pair. The seed *is* the problem instance: it fully determines
+   the obstacle layout and start position. Initializing the environment with that
+   seed is all that's needed to materialize the grid.
+
+2. **Interactive rollout** (`generate_with_obstacles.py`). At rollout time the
+   seed arrives on `sample.label`. `generate` reconstructs the **exact** same grid
+   with `ClearObstaclesToolEnv.reset(seed=...)` and keeps that single env instance
+   live for the whole tool-calling loop, so every move acts on the real, evolving
+   grid (true interactivity). The opening prompt contains the game rules (system),
+   the four move tools (in the `<tools>` block), and the **first observation** —
+   the rendered starting grid — as the user message. Each move's resulting grid is
+   appended as an `<observation>...</observation>` block.
+
+3. **Reward** (`generate_with_obstacles.reward_func`). The terminal reward from the
+   environment (`1.0` win / `0.0` otherwise) is stashed on `sample.metadata` during
+   the rollout and returned under the `score` key (selected via `--reward-key score`).
 
 ## Files
 
-- `generate_with_retool.py`: Main generation function with tool support
-- `tool_sandbox.py`: Tool execution and safety management
-- `sft_data_processing.py`: Process SFT dataset
+- `obstacles_data_preprocess.py`: build the seed dataset (train only).
+- `generate_with_obstacles.py`: rollout generation + reward function.
+- `obstacles_qwen3_4b_rl.sh`: GRPO training launcher.
+
+The original Python-code-interpreter (`retool`) files (`generate_with_retool.py`,
+`tool_sandbox.py`, `retool_*.sh`) remain in this directory for reference.
 
 ## Usage
 
-1. Setup and download datasets (run all commands from the directory that contains `slime/`):
+Run all commands from the directory that contains `slime/` (the repo root, which
+also contains `real-time/` and `Megatron-LM/`).
+
+1. Install slime, then download and convert the base model
+   (`Qwen/Qwen3-4B`):
+
 ```bash
 pip install -e ./slime --no-deps
-# For SFT part, you can use later model to RL directly and skip SFT. 
-hf download --repo-type dataset JoeYing/ReTool-SFT  --local-dir $HOME/JoeYing/ReTool-SFT
-hf download Qwen/Qwen3-4B-Instruct-2507 --local-dir $HOME/Qwen/Qwen3-4B-Instruct-2507
+hf download Qwen/Qwen3-4B --local-dir $HOME/Qwen/Qwen3-4B
 
-# For RL part
-hf download --repo-type dataset zhuzilin/dapo-math-17k --local-dir $HOME/dapo-math-17k
-hf download --repo-type dataset zhuzilin/aime-2024  --local-dir $HOME/aime-2024
-# download our SFT model if you want to skip SFT
-hf download font-info/qwen3-4b-sft-SGLang-RL --local-dir $HOME/font-info/qwen3-4b-sft
-```
-
-2. Create torch dist
-For SFT 
-```bash
 source ./slime/scripts/models/qwen3-4B.sh
 PYTHONPATH=./Megatron-LM python ./slime/tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
-    --hf-checkpoint $HOME/Qwen/Qwen3-4B-Instruct-2507 \
-    --rotary-base 5000000 \
-    --save $HOME/Qwen/Qwen3-4B-Instruct-2507_torch_dist
+    --hf-checkpoint $HOME/Qwen/Qwen3-4B \
+    --rotary-base 1000000 \
+    --save $HOME/Qwen/Qwen3-4B_torch_dist
 ```
 
-Or RL only
+2. Build the seed dataset (the `environment` package must be importable, so put
+   `real-time/` on `PYTHONPATH`):
+
 ```bash
-source ./slime/scripts/models/qwen3-4B.sh
-PYTHONPATH=./Megatron-LM python ./slime/tools/convert_hf_to_torch_dist.py \
-    ${MODEL_ARGS[@]} \
-    --hf-checkpoint $HOME/font-info/qwen3-4b-sft \
-    --rotary-base 5000000 \
-    --save $HOME/font-info/qwen3-4b-sft_torch_dist
-
+PYTHONPATH=./real-time python3 ./slime/examples/realtime/obstacles_data_preprocess.py
+# -> $HOME/obstacles-seeds/train.jsonl
 ```
 
-3. SFT:
+3. Launch RL:
+
 ```bash
-python ./slime/examples/retool/sft_data_processing.py
-bash ./slime/examples/retool/retool_qwen3_4b_sft.sh
+bash ./slime/examples/realtime/obstacles_qwen3_4b_rl.sh
 ```
 
-4. RL:
-```bash
-bash ./slime/examples/retool/retool_qwen3_4b_rl.sh
-```
+The training script adds `real-time/` to the ray workers' `PYTHONPATH` so the
+rollout can import `environment.clear_obstacles`.
 
-5. Use in your training scripts by importing the generate function:
-```python
-from generate_with_retool import generate, reward_func
-```
+## Tool format
 
-## Tool Format
-
-The system uses the following tool format:
+The model is given four no-argument tools and calls them with the standard Qwen
+tool-call format:
 
 ```
-You may call one or more functions to assist with the user query.
-
-You are provided with function signatures within <tools></tools> XML tags:
-<tools>
-{"type": "function", "function": {"name": "code_interpreter", "description": "A tool for executing code.", "parameters": {"type": "object", "properties": {"code": {"type": "string", "description": "The code to execute."}}, "required": ["code"]}}}
-</tools>
-
-For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
 <tool_call>
-{"name": <function-name>, "arguments": <args-json-object>}
+{"name": "move_up", "arguments": {}}
 </tool_call>
 ```
-
-## Safety Features
-
-- Code execution in isolated sandbox
-- Memory and time limits
-- Dangerous operation detection
-- Allowed module restrictions 
