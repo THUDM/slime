@@ -265,12 +265,6 @@ class BaseAdapter:
         return samples
 
     async def drop_session(self, sid: str, *, wait_timeout: float = 5.0) -> None:
-        """Discard a session without producing Samples (cleanup paths).
-
-        Drains in-flight turns and frees all per-sid state, like finish_session
-        but without linearizing the trajectory — for rollouts that ended before
-        the trajectory could be consumed. Idempotent.
-        """
         await self.shutdown_session(sid, wait_timeout=wait_timeout)
         self.store.pop(sid, None)
         self.manager.drop_session(sid)
