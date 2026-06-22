@@ -206,6 +206,7 @@ export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-${MLP_SOCKET_IFNAME:-eth0}}"
 
 # ============ SWE / claude-code rollout knobs ============
 
+export SWE_AGENT="${SWE_AGENT:-claude_code}"
 export E2B_API_KEY="${E2B_API_KEY:-e2b_0000000000000000000000000000000000000000}"
 # Metadata key your gateway routes images by; `image` is the neutral default.
 export SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY="${SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY:-image}"
@@ -268,6 +269,7 @@ RUNTIME_ENV_JSON=$(python3 - <<PY
 import json, os
 keys = (
     "no_proxy", "NO_PROXY",
+    "SWE_AGENT",
     "E2B_API_KEY", "ADAPTER_PUBLIC_HOST",
     "SLIME_AGENT_NODE_TARBALL", "SLIME_AGENT_CC_TARBALL",
     "SWE_AGENT_TIME_BUDGET_SEC", "SWE_EVAL_TIMEOUT_SEC", "SWE_BOOT_CONCURRENCY",

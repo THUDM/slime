@@ -2,14 +2,16 @@
 
     --custom-generate-function-path examples.coding_agent_rl.generate.generate
 
-generate() is a four-stage orchestrator: swe.prepare_workspace + ClaudeCodeHarness.run
--> swe.git_diff -> swe.evaluate -> adapter.finish_session. Sandbox-side work is
-split across three layers: the provider-agnostic sandbox contract
-(slime.agent.sandbox), the swappable harness lifecycle (slime.agent.harness), and
-the SWE task layer (examples.coding_agent_rl.swe -- dataset parsing, workspace
-prep, diff, eval). LLM plumbing (Anthropic <-> SGLang /generate, token capture,
-segment split) is slime.agent.adapters.AnthropicAdapter. swe.get_metadata documents
-the dataset row schema and produces the md dict consumed below.
+generate() is a four-stage orchestrator: swe.prepare_workspace + harness.run
+-> swe.git_diff -> swe.evaluate -> adapter.finish_session. The (harness, adapter)
+pair is chosen by the SWE_AGENT env var (claude_code | codex); see _AGENTS below.
+Sandbox-side work is split across three layers: the provider-agnostic sandbox
+contract (slime.agent.sandbox), the swappable harness lifecycle
+(slime.agent.harness), and the SWE task layer (examples.coding_agent_rl.swe --
+dataset parsing, workspace prep, diff, eval). LLM plumbing (Anthropic / OpenAI
+<-> SGLang /generate, token capture, segment split) is the matching
+slime.agent.adapters adapter. swe.get_metadata documents the dataset row schema
+and produces the md dict consumed below.
 """
 
 from __future__ import annotations
@@ -25,9 +27,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from slime.agent.adapters import AnthropicAdapter
+from slime.agent.adapters import AnthropicAdapter, OpenAIAdapter
 from slime.agent.aiohttp_threaded import FilteredAccessLogger, run_app_in_thread
-from slime.agent.harness import ClaudeCodeHarness
+from slime.agent.harness import ClaudeCodeHarness, CodexHarness
 from slime.agent.sandbox import E2BSandbox
 from slime.utils.misc import SingletonMeta
 from slime.utils.processing_utils import load_tokenizer
@@ -37,6 +39,15 @@ from . import swe
 
 logger = logging.getLogger(__name__)
 logging.getLogger("e2b").setLevel(logging.WARNING)
+
+_AGENTS = {
+    "claude_code": (ClaudeCodeHarness, AnthropicAdapter),
+    "codex": (CodexHarness, OpenAIAdapter),
+}
+AGENT_NAME = os.environ.get("SWE_AGENT", "claude_code")
+if AGENT_NAME not in _AGENTS:
+    raise ValueError(f"SWE_AGENT={AGENT_NAME!r} not in {sorted(_AGENTS)}")
+HARNESS_CLS, ADAPTER_CLS = _AGENTS[AGENT_NAME]
 
 
 @dataclass(frozen=True)
@@ -77,7 +88,7 @@ _BOOT_SEM = asyncio.Semaphore(CONFIG.boot_concurrency)
 
 @asynccontextmanager
 async def boot_agent_sandbox(image: str, instance_id: str) -> AsyncIterator[E2BSandbox]:
-    """Boot a fresh E2B sandbox and install the Claude Code toolchain.
+    """Boot a fresh E2B sandbox and install the selected harness toolchain.
 
     Create the sandbox from the dataset image, install Node 22 + the harness CLI
     from host tarballs, retry transient boot/install failures, and close the
@@ -91,7 +102,7 @@ async def boot_agent_sandbox(image: str, instance_id: str) -> AsyncIterator[E2BS
             async with _BOOT_SEM:
                 await cand.__aenter__()
                 try:
-                    await ClaudeCodeHarness().install_cli(cand)
+                    await HARNESS_CLS().install_cli(cand)
                 except BaseException:
                     await cand.__aexit__(None, None, None)
                     raise
@@ -130,7 +141,7 @@ class _AdapterService(metaclass=SingletonMeta):
                 "sandboxes can reach for reverse-connection to the adapter; "
                 "without it the sandbox cannot dial back and the rollout aborts."
             )
-        self.adapter = AnthropicAdapter(
+        self.adapter = ADAPTER_CLS(
             tokenizer=self.tokenizer,
             sglang_url=sglang_url,
             tool_parser=self.tool_parser,
@@ -181,7 +192,7 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any]):
         async with asyncio.timeout(CONFIG.rollout_guard_sec):
             async with boot_agent_sandbox(md["image"], instance_id) as sb:
                 await swe.prepare_workspace(sb, md["workdir"], md)
-                agent_exit_code = await ClaudeCodeHarness().run(
+                agent_exit_code = await HARNESS_CLS().run(
                     sb,
                     workdir=md["workdir"],
                     session_id=session_id,
