@@ -328,6 +328,15 @@ class TrajectoryManager:
         self._turn_count.pop(sid, None)
         return samples
 
+    def drop_session(self, sid: str) -> None:
+        """Discard a session's tree without linearizing it into Samples.
+
+        For cleanup paths (e.g. a rollout that raised before consuming its
+        trajectory) where the tree must be freed but nothing should be trained.
+        """
+        self._trees.pop(sid, None)
+        self._turn_count.pop(sid, None)
+
     # -------------------- internals ----------------------------------------
 
     def _find_mount_point(self, root: MessageNode, messages: list[dict[str, Any]]) -> tuple[MessageNode, int]:

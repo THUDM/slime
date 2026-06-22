@@ -151,8 +151,10 @@ async def run_command(sb: Sandbox, *, workdir: str, start_cmd: str, env: dict[st
             check=False,
         )
         if ec == 0:
-            exit_code = int((out or "").strip())
-            break
+            exit_code_text = (out or "").strip()
+            if exit_code_text:
+                exit_code = int(exit_code_text)
+                break
     return exit_code
 
 

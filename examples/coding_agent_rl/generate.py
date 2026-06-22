@@ -242,7 +242,7 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any]):
         )
         return _abort_result(base_sample, f"exception:{type(e).__name__}", instance_id)
     finally:
-        await state.adapter.finish_session(session_id)  # idempotent
+        await state.adapter.drop_session(session_id)  # cleanup only, idempotent
 
 
 def _log_timeout_diagnostic(t0: float, instance_id: str) -> None:
