@@ -404,8 +404,6 @@ async def generate_rollout_async(
     data = []
     all_data = []
     do_print = True
-    total_reward = 0.0
-    n_reward_samples = 0
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
     while len(data) < target_data_size:
         while state.remaining_batch_size < target_data_size:
@@ -427,16 +425,6 @@ async def generate_rollout_async(
 
             assert len(group) == args.n_samples_per_prompt
             all_data.append(group)
-
-            # accumulate reward statistics
-            for s in group:
-                s_ = s[0] if isinstance(s, list) else s
-                if s_.reward is not None:
-                    r = s_.reward if isinstance(s_.reward, (int, float)) else list(s_.reward.values())[0]
-                    total_reward += float(r)
-                    n_reward_samples += 1
-            if n_reward_samples > 0:
-                pbar.set_postfix(avg_r=f"{total_reward / n_reward_samples:.4f}")
 
             dynamic_filter_output = call_dynamic_filter(dynamic_filter, args, group)
             if not dynamic_filter_output.keep:
