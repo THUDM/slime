@@ -152,13 +152,13 @@ PERF_ARGS=(
 )
 
 ALGO_ARGS=(
-   --advantage-estimator gspo
+   --advantage-estimator grpo
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
    --kl-coef 0.00
    --entropy-coef 0.00
-   --eps-clip 1e-4
-   --eps-clip-high 2e-4
+   --eps-clip 0.2
+   --eps-clip-high 0.28
 )
 
 OPTIMIZER_ARGS=(

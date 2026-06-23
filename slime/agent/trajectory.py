@@ -328,6 +328,10 @@ class TrajectoryManager:
         self._turn_count.pop(sid, None)
         return samples
 
+    def drop_session(self, sid: str) -> None:
+        self._trees.pop(sid, None)
+        self._turn_count.pop(sid, None)
+
     # -------------------- internals ----------------------------------------
 
     def _find_mount_point(self, root: MessageNode, messages: list[dict[str, Any]]) -> tuple[MessageNode, int]:

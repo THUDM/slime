@@ -242,7 +242,7 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any]):
         )
         return _abort_result(base_sample, f"exception:{type(e).__name__}", instance_id)
     finally:
-        await state.adapter.finish_session(session_id)  # idempotent
+        await state.adapter.drop_session(session_id)  # cleanup only, idempotent
 
 
 def _log_timeout_diagnostic(t0: float, instance_id: str) -> None:
@@ -282,7 +282,9 @@ def _abort_result(sample: Sample, reason: str, instance_id: str) -> list[Sample]
     sample.response = ""
     sample.response_length = 1
     sample.loss_mask = [0]
+    sample.rollout_log_probs = [0.0]
     sample.reward = 0.0
+    sample.remove_sample = True
     sample.status = Sample.Status.ABORTED
     sample.metadata = {**(sample.metadata or {}), "abort_reason": reason}
     logger.warning("[coding_agent_rl] %s aborted: %s", instance_id, reason)
