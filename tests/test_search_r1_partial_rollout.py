@@ -21,9 +21,7 @@ if "sglang_router" not in sys.modules:
 
 if "ray" not in sys.modules:
     ray_stub = types.ModuleType("ray")
-    ray_stub._private = types.SimpleNamespace(
-        services=types.SimpleNamespace(get_node_ip_address=lambda: "127.0.0.1")
-    )
+    ray_stub._private = types.SimpleNamespace(services=types.SimpleNamespace(get_node_ip_address=lambda: "127.0.0.1"))
     sys.modules["ray"] = ray_stub
 
 if "transformers" not in sys.modules:
@@ -125,17 +123,14 @@ def test_search_r1_fresh_rollout_records_turn_state_and_keeps_logprob_alignment(
     assert result.status is Sample.Status.COMPLETED
     assert result.metadata[search_gen._SEARCH_R1_TURN_COUNT_KEY] == 2
     assert result.response == (
-        "<search>cats</search>\n\n"
-        "<information>result for cats</information>\n\n"
-        "<answer>cats</answer>"
+        "<search>cats</search>\n\n" "<information>result for cats</information>\n\n" "<answer>cats</answer>"
     )
     assert len(result.loss_mask) == result.response_length
     assert len(result.rollout_log_probs) == result.response_length
     assert sum(result.loss_mask) == len("<search>cats</search>") + len("<answer>cats</answer>")
     assert calls[0]["text"] == "Question: cats\n"
     assert (
-        calls[1]["text"]
-        == "Question: cats\n<search>cats</search>\n\n<information>result for cats</information>\n\n"
+        calls[1]["text"] == "Question: cats\n<search>cats</search>\n\n<information>result for cats</information>\n\n"
     )
     assert calls[0]["sampling_params"]["stop"] == ["</old>", "</search>", "</answer>"]
 
@@ -168,7 +163,9 @@ def test_search_r1_partial_rollout_resumes_without_clearing_existing_trajectory(
 
     assert result.status is Sample.Status.COMPLETED
     assert result.response == old_response + "<answer>cats</answer>"
-    assert result.tokens[: len(old_prompt_tokens) + len(old_response_tokens)] == old_prompt_tokens + old_response_tokens
+    assert (
+        result.tokens[: len(old_prompt_tokens) + len(old_response_tokens)] == old_prompt_tokens + old_response_tokens
+    )
     assert result.rollout_log_probs[: len(old_log_probs)] == old_log_probs
     assert result.loss_mask[: len(old_response)] == [0] * len(old_response)
     assert result.loss_mask[len(old_response) :] == [1] * len("<answer>cats</answer>")
