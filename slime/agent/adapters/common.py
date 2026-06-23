@@ -237,7 +237,7 @@ class BaseAdapter:
         self,
         sid: str,
         *,
-        base_sample=None,
+        base_sample,
         reward: float = 0.0,
         extra_metadata: dict | None = None,
         wait_timeout: float = 5.0,
@@ -263,6 +263,11 @@ class BaseAdapter:
                 self.tokenizer.decode(s.tokens[-rlen:], skip_special_tokens=False) if rlen and s.tokens else ""
             )
         return samples
+
+    async def drop_session(self, sid: str, *, wait_timeout: float = 5.0) -> None:
+        await self.shutdown_session(sid, wait_timeout=wait_timeout)
+        self.store.pop(sid, None)
+        self.manager.drop_session(sid)
 
     # -- shared request pipeline ---------------------------------------------
 
