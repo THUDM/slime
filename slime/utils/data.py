@@ -108,8 +108,6 @@ def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_l
             from slime.utils.processing_utils import build_processor_kwargs
 
             for sample in multimodal:
-                # Reuse the stored multimodal inputs; sample.prompt is the rendered
-                # string here, so re-extracting from it would crash.
                 processor_kwargs = build_processor_kwargs(sample.multimodal_inputs)
                 processor_output = processor(text=sample.prompt, **processor_kwargs)
                 input_ids = processor_output["input_ids"][0]
