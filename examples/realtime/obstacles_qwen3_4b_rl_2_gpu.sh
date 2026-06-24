@@ -59,7 +59,7 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    --reward-key score
    --num-rollout 100
-   --rollout-batch-size 16
+   --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 16384
    --rollout-temperature 1
@@ -69,7 +69,7 @@ ROLLOUT_ARGS=(
    # training. {rollout_id} is filled in by slime, not bash.
    --save-debug-rollout-data $HOME/qwen3-4b-obstacles/rollout_dumps/{rollout_id}.pt
 
-   --global-batch-size 128
+   --global-batch-size 256
    --balance-data
 )
 
@@ -144,7 +144,7 @@ ulimit -n 65535
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 1 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 2 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
 # Build the runtime environment JSON with proper variable substitution.
 # ${REPO_ROOT}/real-time puts the obstacles `environment` package on PYTHONPATH
@@ -163,7 +163,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 slime/train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 1 \
+   --actor-num-gpus-per-node 2 \
    --colocate \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \

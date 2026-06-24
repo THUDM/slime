@@ -61,9 +61,9 @@ TOOL_SPECS: list[dict[str, Any]] = [
 ]
 
 INVALID_ACTION_MSG = (
-    "\n\nMy previous action was invalid. To move I must emit exactly one tool call, "
-    "e.g.\n<tool_call>\n{\"name\": \"move_up\", \"arguments\": {}}\n</tool_call>\n"
-    "where the name is one of move_up, move_down, move_left, move_right. Let me try again.\n\n"
+    "Invalid action: no valid tool call was found. Emit exactly one tool call, e.g.\n"
+    "<tool_call>\n{\"name\": \"move_up\", \"arguments\": {}}\n</tool_call>\n"
+    "where the name is one of move_up, move_down, move_left, move_right."
 )
 
 # Jinja2 template for tool-enabled conversations (Qwen-style). Only the initial
@@ -141,15 +141,34 @@ def postprocess_responses(resp: str) -> str:
     return resp
 
 
+def tool_response_turn(content: str, open_assistant: bool) -> str:
+    """Wrap env feedback as a native Qwen3 tool result.
+
+    The grid (or an error message) is emitted as a user turn containing a
+    <tool_response> block, matching how Qwen3 was trained on tool use. It is
+    injected verbatim into the token stream (loss_mask=0) right after the
+    assistant's <|im_end|>. When open_assistant is True we also emit the next
+    <|im_start|>assistant header so the model starts a fresh turn (and, by Qwen3
+    default, opens a <think> block); we omit it on the terminal turn.
+    """
+    turn = f"\n<|im_start|>user\n<tool_response>\n{content}\n</tool_response><|im_end|>\n"
+    if open_assistant:
+        turn += "<|im_start|>assistant\n"
+    return turn
+
+
 def step_environment(env: ClearObstaclesToolEnv, prediction: str) -> tuple[str, bool]:
-    """Apply the model's move to the live env and return (observation, done)."""
+    """Apply the model's move to the live env and return (tool_response_content, done).
+
+    Returns the raw grid render (or INVALID_ACTION_MSG); the turn markers are added
+    by tool_response_turn at the call site, not here.
+    """
     action = parse_action(prediction)
     if action is None:
         return INVALID_ACTION_MSG, False
 
     obs = getattr(env, action)()
-    next_obs = f"\n\n<observation>\n{obs}\n</observation>\n\n"
-    return next_obs, env.done
+    return obs, env.done
 
 
 async def generate(args, sample: Sample, sampling_params) -> Sample:
@@ -234,12 +253,13 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         if output["meta_info"]["finish_reason"]["type"] == "length":
             break
 
-        next_obs, done = step_environment(env, cur_response)
+        obs_content, done = step_environment(env, cur_response)
         if parse_action(cur_response) is not None:
             move_count += 1
         if done:
-            # Append the final (GAME OVER) observation so the model sees the
-            # terminal grid, then stop.
+            # Final tool result (GAME OVER grid) as a closing user turn; no new
+            # assistant header since the episode is over.
+            next_obs = tool_response_turn(obs_content, open_assistant=False)
             obs_tokens_ids = state.tokenizer(next_obs, add_special_tokens=False)["input_ids"]
             response += next_obs
             response_token_ids += obs_tokens_ids
@@ -249,7 +269,9 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             sample.status = Sample.Status.COMPLETED
             break
 
-        assert next_obs != "", "Next observation should not be empty."
+        # Native tool turn + a fresh assistant header so the model reasons and
+        # moves again on the next iteration.
+        next_obs = tool_response_turn(obs_content, open_assistant=True)
         obs_tokens_ids = state.tokenizer(next_obs, add_special_tokens=False)["input_ids"]
         response += next_obs
         response_token_ids += obs_tokens_ids
