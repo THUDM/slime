@@ -206,10 +206,10 @@ def buffer_filter(args, rollout_id, buffer: list[list[Sample]], num_samples: int
 
 **Signature**:
 ```python
-def filter_function(args, samples: list[Sample]) -> None
+def filter_function(args, groups: list[list[Sample]]) -> None
 ```
 
-**Note**: This function should directly modify the `remove_sample` attribute of each `Sample` object.
+**Note**: This function should directly modify the `remove_sample` attribute of `Sample` objects inside each group.
 
 **Use Cases**:
 - Filtering samples based on response quality
