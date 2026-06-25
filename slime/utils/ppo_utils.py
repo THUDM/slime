@@ -2,6 +2,7 @@
 # and https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/trainer/ppo_utils/experience_maker.py
 
 from argparse import Namespace
+from contextlib import nullcontext
 
 import torch
 import torch.distributed as dist
@@ -690,10 +691,27 @@ def chunked_gae(
 
 
 def calculate_log_probs_and_entropy(
-    logits, tokens, tp_group, with_entropy: bool = False, chunk_size: int = -1, log_prob_keep_mask=None
+    logits,
+    tokens,
+    tp_group,
+    with_entropy: bool = False,
+    chunk_size: int = -1,
+    log_prob_keep_mask=None,
+    need_entropy_grad: bool = True,
 ):
+    """Compute per-token log-probs and (optionally) entropy from vocab-parallel logits.
+
+    When ``with_entropy`` is set but ``need_entropy_grad`` is ``False`` (i.e. the caller
+    multiplies entropy by ``entropy_coef == 0``, so it never contributes a gradient), the
+    entropy is computed under ``torch.no_grad()``. This avoids retaining the autograd graph
+    for the ``[num_tokens, vocab]`` entropy computation, which otherwise dominates activation
+    memory for long multi-turn rollouts and can OOM. Under ``no_grad`` we also skip the
+    defensive ``logits.clone()`` (only needed to keep the backward's in-place ops off the
+    shared logits tensor), saving a full logits-sized allocation per chunk.
+    """
     logits = logits.contiguous()
     entropy = None
+    entropy_ctx = nullcontext() if need_entropy_grad else torch.no_grad()
     if logits.size(0) != 0:
         if chunk_size > 0:
             num_chunks = (logits.size(0) - 1) // chunk_size + 1
@@ -704,11 +722,12 @@ def calculate_log_probs_and_entropy(
             )
 
             if with_entropy:
-                entropys = []
-                for logits_chunk in logits_chunks:
-                    entropy_input = logits_chunk.clone()
-                    entropys.append(compute_entropy_from_logits(entropy_input, tp_group))
-                entropy = torch.cat(entropys, dim=0)
+                with entropy_ctx:
+                    entropys = []
+                    for logits_chunk in logits_chunks:
+                        entropy_input = logits_chunk.clone() if need_entropy_grad else logits_chunk
+                        entropys.append(compute_entropy_from_logits(entropy_input, tp_group))
+                    entropy = torch.cat(entropys, dim=0)
 
             log_probs = []
             for tokens_chunk, logits_chunk, mask_chunk in zip(tokens_chunks, logits_chunks, mask_chunks, strict=True):
@@ -717,8 +736,9 @@ def calculate_log_probs_and_entropy(
             log_prob = torch.cat(log_probs, dim=0)
         else:
             if with_entropy:
-                entropy_input = logits.clone()
-                entropy = compute_entropy_from_logits(entropy_input, tp_group)
+                with entropy_ctx:
+                    entropy_input = logits.clone() if need_entropy_grad else logits
+                    entropy = compute_entropy_from_logits(entropy_input, tp_group)
 
             log_prob = compute_log_probs(logits.clone(), tokens, tp_group, keep_mask=log_prob_keep_mask)
     else:

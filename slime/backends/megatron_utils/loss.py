@@ -485,8 +485,10 @@ def get_log_probs_and_entropy(
     per-sample slicing) so backward traverses ``[T, V]`` only once, then
     extracts per-sample response portions.
 
-    When ``entropy_coef == 0``, entropy is computed under ``torch.no_grad()``
-    to avoid retaining the computation graph and to skip cloning.
+    When ``entropy_coef == 0``, entropy is still returned as a metric but is computed under
+    ``torch.no_grad()`` (and without the defensive logits clone), since it is multiplied out of
+    the loss and therefore needs no gradient. This avoids retaining the ``[T, V]`` entropy graph,
+    which is a dominant activation-memory cost for long multi-turn rollouts.
     """
     assert non_loss_data
     assert logits.dtype == torch.float32, f"{logits.dtype}"
@@ -522,6 +524,11 @@ def get_log_probs_and_entropy(
         )
 
     # --- compute on full [T,V] logits at once via calculate_log_probs_and_entropy ---
+    # Entropy only contributes a gradient when it is weighted into the loss (``entropy_coef != 0``).
+    # When the coefficient is 0 the entropy is logged as a metric but multiplied out of the loss, so
+    # we compute it under ``no_grad`` to avoid retaining the [T, V] entropy graph (a major activation-
+    # memory cost / OOM source for long rollouts).
+    need_entropy_grad = with_entropy and getattr(args, "entropy_coef", 0.0) != 0
     log_prob_full, entropy_full = calculate_log_probs_and_entropy(
         logits,
         full_tokens,
@@ -529,6 +536,7 @@ def get_log_probs_and_entropy(
         with_entropy=with_entropy,
         chunk_size=chunk_size,
         log_prob_keep_mask=top_p_keep_mask,
+        need_entropy_grad=need_entropy_grad,
     )
     log_prob_full = log_prob_full.squeeze(-1)  # [T, 1] -> [T]
 
