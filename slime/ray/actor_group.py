@@ -167,3 +167,7 @@ class RayTrainGroup:
 
     def set_rollout_manager(self, rollout_manager):
         return ray.get([actor.set_rollout_manager.remote(rollout_manager) for actor in self._actor_handlers])
+
+    def compute_val_loss(self, rollout_id):
+        """Compute validation loss across all actor ranks."""
+        return ray.get([actor.compute_val_loss.remote(rollout_id) for actor in self._actor_handlers])

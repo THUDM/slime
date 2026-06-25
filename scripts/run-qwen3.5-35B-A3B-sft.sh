@@ -101,6 +101,21 @@ WANDB_ARGS=(
    # --wandb-group qwen3.5-35B-sft
 )
 
+TB_ARGS=(
+   --use-tensorboard
+   --tb-project-name qwen3.5-35B-A3B-sft
+)
+
+ENTROPY_ARGS=(
+   --log-sft-entropy
+)
+
+VAL_ARGS=(
+   # Uncomment to enable val loss monitoring (val-batch-size defaults to 64, val-input-key defaults to "messages")
+   # --val-data ${BASE_FOLDER}/val_data.jsonl
+   # --val-interval 10
+)
+
 MISC_ARGS=(
    # default dropout in megatron is 0.1
    --attention-dropout 0.0
@@ -158,6 +173,9 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${SFT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
    ${WANDB_ARGS[@]} \
+   ${TB_ARGS[@]} \
+   ${ENTROPY_ARGS[@]} \
+   ${VAL_ARGS[@]} \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \
    ${MISC_ARGS[@]} \

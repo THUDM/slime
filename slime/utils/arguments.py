@@ -801,6 +801,47 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--eval-min-new-tokens", type=int, default=None)
             parser.add_argument("--eval-max-context-len", type=int, default=None)
 
+            # Validation loss arguments (for SFT overfitting monitoring)
+            parser.add_argument(
+                "--val-data",
+                type=str,
+                default=None,
+                help=(
+                    "Path to validation data (parquet/jsonl) for loss computation during training. "
+                    "Data should contain multi-turn conversations in the column specified by --val-input-key."
+                ),
+            )
+            parser.add_argument(
+                "--val-input-key",
+                type=str,
+                default="messages",
+                help="Column name for conversations in the validation data file.",
+            )
+            parser.add_argument(
+                "--val-tool-key",
+                type=str,
+                default=None,
+                help=(
+                    "Column name for tool definitions in the validation data file. "
+                    "If None, tools are not passed to the tokenizer (same as SFT rollout when no tools)."
+                ),
+            )
+            parser.add_argument(
+                "--val-batch-size",
+                type=int,
+                default=64,
+                help="Number of samples per validation loss computation batch (per DP rank).",
+            )
+            parser.add_argument(
+                "--val-interval",
+                type=int,
+                default=None,
+                help=(
+                    "Compute validation loss every N rollout steps. "
+                    "If None, validation loss is not computed."
+                ),
+            )
+
             return parser
 
         def add_algo_arguments(parser):
@@ -988,6 +1029,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Whether to calculate the entropy when calculating the logprobs from actor and reference model. "
                     "This is useful for doing special loss mask."
+                ),
+            )
+            parser.add_argument(
+                "--log-sft-entropy",
+                action="store_true",
+                default=False,
+                help=(
+                    "Whether to compute and log token-level entropy during SFT training. "
+                    "When enabled, mean entropy is logged as 'train/entropy' to TensorBoard/WandB."
                 ),
             )
             parser.add_argument(
@@ -1819,6 +1869,9 @@ def slime_validate_args(args):
 
     if args.eval_interval is not None:
         assert args.eval_datasets, "Evaluation datasets must be configured when eval_interval is set."
+
+    if args.val_interval is not None:
+        assert getattr(args, "val_data", None), "--val-data is required when --val-interval is set."
 
     if args.save_interval is not None:
         assert args.save is not None, "'--save' is required when save_interval is set."
