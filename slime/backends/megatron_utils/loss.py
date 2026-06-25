@@ -724,13 +724,11 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         rewards = []
         kl_coef = -args.kl_coef
         cp_rank = mpu.get_context_parallel_rank()
-        for reward, k in zip(old_rewards, kl, strict=False):
-            # Build rewards out-of-place: kl aliases rollout_data["kl"], which is
-            # the source for the logged rollout/kl metric.
-            k = k * kl_coef
+        for reward, per_token_kl in zip(old_rewards, kl, strict=False):
+            token_level_rewards = per_token_kl * kl_coef
             if cp_rank == 0:
-                k[-1] += reward
-            rewards.append(k)
+                token_level_rewards[-1] += reward
+            rewards.append(token_level_rewards)
         advantages, returns = get_advantages_and_returns_batch(
             total_lengths, response_lengths, values, rewards, args.gamma, args.lambd
         )
