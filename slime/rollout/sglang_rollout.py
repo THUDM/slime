@@ -20,7 +20,7 @@ from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_fil
 from slime.utils.async_utils import run
 from slime.utils.data import Dataset
 from slime.utils.eval_config import EvalDatasetConfig
-from slime.utils.http_utils import bearer_auth_headers, get, get_rollout_num_engines, post
+from slime.utils.http_utils import bearer_auth_headers, get, get_rollout_num_engines, post, router_request_headers
 from slime.utils.misc import SingletonMeta, load_function
 from slime.utils.processing_utils import (
     build_processor_kwargs,
@@ -192,11 +192,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if not sample.tokens:
         sample.tokens = prompt_ids
 
-    # Use session_id for consistent hashing routing (SGLang Model Gateway)
-    headers = None
-    if sample.session_id:
-        if getattr(args, "router_policy", None) == "consistent_hashing":
-            headers = {"X-SMG-Routing-Key": sample.session_id}
+    headers = router_request_headers(args, sample.session_id)
 
     with trace_span(sample, "sglang_generate", attrs={"max_new_tokens": sampling_params["max_new_tokens"]}) as span:
         output = await post(url, payload, headers=headers)

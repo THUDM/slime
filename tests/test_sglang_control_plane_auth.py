@@ -51,6 +51,7 @@ sys.modules.setdefault("slime.ray.ray_actor", ray_actor_module)
 
 from slime.backends.sglang_utils import server_control  # noqa: E402
 from slime.backends.sglang_utils import sglang_engine  # noqa: E402
+from slime.utils.http_utils import router_request_headers  # noqa: E402
 
 WORKER_AUTH = {"Authorization": "Bearer worker-secret"}
 ROUTER_AUTH = {"Authorization": "Bearer router-secret"}
@@ -253,6 +254,23 @@ def test_abort_until_idle_carries_worker_bearer(monkeypatch):
 
     assert posts == [("http://10.0.0.2:15000/abort_request", WORKER_AUTH)]
     assert gets == [("http://10.0.0.2:15000/v1/loads?include=core", WORKER_AUTH)]
+
+
+@pytest.mark.unit
+def test_rollout_generate_headers_carry_router_bearer_and_routing_key():
+    args = SimpleNamespace(router_api_key="router-secret", router_policy="consistent_hashing")
+
+    assert router_request_headers(args, "sid-1") == {
+        "Authorization": "Bearer router-secret",
+        "X-SMG-Routing-Key": "sid-1",
+    }
+
+
+@pytest.mark.unit
+def test_rollout_generate_headers_omits_empty_headers():
+    args = SimpleNamespace(router_api_key=None, router_policy=None)
+
+    assert router_request_headers(args, "sid-1") is None
 
 
 @pytest.mark.unit

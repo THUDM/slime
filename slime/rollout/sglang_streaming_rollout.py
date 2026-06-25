@@ -31,6 +31,7 @@ from typing import Any
 
 from slime.rollout.sglang_rollout import GenerateState, _prepare_prompt_ids
 from slime.utils import http_utils
+from slime.utils.http_utils import router_request_headers
 from slime.utils.processing_utils import encode_image_for_rollout_engine
 from slime.utils.trace_utils import build_sglang_meta_trace_attrs, trace_span
 from slime.utils.types import Sample
@@ -84,9 +85,7 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     if not sample.tokens:
         sample.tokens = prompt_ids
 
-    headers = None
-    if sample.session_id and getattr(args, "router_policy", None) == "consistent_hashing":
-        headers = {"X-SMG-Routing-Key": sample.session_id}
+    headers = router_request_headers(args, sample.session_id)
 
     # Snapshot pre-call sample state. sglang's SSE chunks are cumulative
     # *within this call*; on each chunk we rebuild the post-call view of the

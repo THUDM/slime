@@ -19,6 +19,13 @@ def bearer_auth_headers(api_key: str | None) -> dict | None:
     return {"Authorization": f"Bearer {api_key}"} if api_key else None
 
 
+def router_request_headers(args, session_id: str | None = None) -> dict[str, str] | None:
+    headers = bearer_auth_headers(getattr(args, "router_api_key", None)) or {}
+    if session_id and getattr(args, "router_policy", None) == "consistent_hashing":
+        headers["X-SMG-Routing-Key"] = session_id
+    return headers or None
+
+
 def find_available_port(base_port: int):
     port = base_port + random.randint(100, 1000)
     while True:
