@@ -1,11 +1,11 @@
 # Gemma4 Dense and MoE with GSM8K
 
 This example is a small model-support validation for the Gemma4 text models. It
-uses GSM8K instead of SWE because the purpose is to verify the Megatron model
-path, SGLang rollout load path, loss masking, backward pass, and live weight
-update without adding sandbox, tool-use, or agent runtime variables.
+uses GSM8K because the purpose is to verify the Megatron model path, SGLang
+rollout load path, loss masking, backward pass, and live weight update without
+adding task-specific runtime variables.
 
-Use a downstream SWE recipe only after this validation passes.
+Larger task-specific recipes should be layered on after this validation passes.
 
 ## What to Run
 

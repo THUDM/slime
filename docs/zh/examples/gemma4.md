@@ -1,11 +1,10 @@
 # Gemma4 Dense 与 MoE 的 GSM8K 示例
 
 这个示例用于验证 Gemma4 text 模型在 slime 中的模型支持。这里使用
-GSM8K，而不是 SWE，因为目标是验证 Megatron 模型路径、SGLang rollout
-加载路径、loss mask、反向传播和在线权重更新，不引入 sandbox、工具调用或
-agent runtime 变量。
+GSM8K，因为目标是验证 Megatron 模型路径、SGLang rollout 加载路径、loss
+mask、反向传播和在线权重更新，不引入任务特定的 runtime 变量。
 
-SWE 类型任务应当在这个验证通过后再接入。
+更大的任务特定 recipe 应当在这个验证通过后再接入。
 
 ## 运行内容
 
