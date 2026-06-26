@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+source "${SCRIPT_DIR}/env.sh"
+
+mkdir -p \
+  "${SCRATCH_ROOT}" \
+  "${DATA_ROOT}" \
+  "${MODEL_ROOT}" \
+  "${OUTPUT_ROOT}" \
+  "${HF_HOME}" \
+  "${HF_DATASETS_CACHE}" \
+  "${TRANSFORMERS_CACHE}" \
+  "${WANDB_DIR}" \
+  "${TMPDIR}" \
+  "${RAY_TMPDIR}" \
+  "${APPTAINER_CACHEDIR}" \
+  "${APPTAINER_TMPDIR}" \
+  "$(dirname "${SLIME_SIF}")" \
+  "${CONTAINER_HOME}" \
+  "${SFT_SAVE_DIR}" \
+  "${OPD_SAVE_DIR}" \
+  "${SFT_DETAILS_DIR}" \
+  "${OPD_ROLLOUT_LOG_DIR}" \
+  "${TEACHER_LOG_DIR}" \
+  "${EVAL_OUTPUT_DIR}" \
+  "${SLURM_LOG_DIR}"
+
+cat <<EOF
+Tillicum Qwen3-8B SFT + OPD environment
+
+Slurm
+  ACCOUNT=${ACCOUNT}
+  PARTITION=${PARTITION}
+  QOS=${QOS}
+  resources per job: 1 node, 8 x H200, 64 CPUs, all node memory
+
+Container
+  SLIME_IMAGE_URI=${SLIME_IMAGE_URI}
+  SLIME_SIF=${SLIME_SIF}
+  bind roots=${CONTAINER_BIND_ROOTS}
+
+Data
+  OT3_DATASET=${OT3_DATASET}
+  filter=${DATA_MATH_FIELD} == ${DATA_MATH_VALUE}
+  seed=${DATA_SEED}
+  SFT_PARQUET=${SFT_PARQUET}
+  OPD_JSONL=${OPD_JSONL}
+  SPLIT_METADATA=${SPLIT_METADATA}
+  MATH500_JSONL=${MATH500_JSONL}
+
+Models
+  student=${STUDENT_HF_REPO}
+  teacher=${TEACHER_HF_REPO}
+  STUDENT_HF_DIR=${STUDENT_HF_DIR}
+  TEACHER_HF_DIR=${TEACHER_HF_DIR}
+  STUDENT_TORCH_DIST_DIR=${STUDENT_TORCH_DIST_DIR}
+
+Outputs
+  SFT_SAVE_DIR=${SFT_SAVE_DIR}
+  OPD_SAVE_DIR=${OPD_SAVE_DIR}
+  EVAL_OUTPUT_DIR=${EVAL_OUTPUT_DIR}
+  SLURM_LOG_DIR=${SLURM_LOG_DIR}
+
+This script created directories only. It did not download data/models,
+pull containers, install packages, submit jobs, delete files, or push commits.
+EOF
