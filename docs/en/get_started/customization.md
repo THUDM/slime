@@ -18,7 +18,7 @@ Below is a summary of all available customization interfaces and their purposes.
 | [`--rollout-data-postprocess-path`](#8-rollout-data-postprocess---rollout-data-postprocess-path) | Post-process rollout data after log probs are computed. |
 | [`--custom-loss-function-path`](#9-custom-loss-function---custom-loss-function-path) | Implement custom training loss computation. |
 | [`--custom-tis-function-path`](#10-custom-tisrs-function---custom-tis-function-path) | Implement custom importance sampling for off-policy correction. |
-| [`--custom-pg-loss-reducer-function-path`](#11-custom-pg-loss-reducer---custom-pg-loss-reducer-function-path) | Customize pg_loss reduction (e.g., for Dr.GRPO). |
+| [`--custom-pg-loss-reducer-function-path`](#11-custom-pg-loss-reducer---custom-pg-loss-reducer-function-path) | Customize pg_loss reduction not covered by `--loss-aggregation`. |
 | [`--custom-reward-post-process-path`](#12-reward-post-processing---custom-reward-post-process-path) | Custom post-processing of rewards before advantage computation. |
 | [`--custom-convert-samples-to-train-data-path`](#13-samples-to-train-data-conversion---custom-convert-samples-to-train-data-path) | Override the conversion of samples to training data format. |
 | [`--custom-rollout-log-function-path`](#14-logging-functions) | Custom logging for training rollouts. |
@@ -297,10 +297,8 @@ def get_pg_loss_reducer(
 **Use Cases**:
 - Custom loss normalization strategies not covered by `--loss-aggregation`
 
-> The four standard loss-aggregation modes (GRPO sample average, DAPO prompt
-> average, token average, Dr.GRPO constant divisor) are available first-class via
-> `--loss-aggregation` (see below) — no custom reducer needed. Reach for this
-> hook only for a normalization those modes do not express. When set, it takes
+> Use the custom reducer hook only for normalizations that the built-in
+> `--loss-aggregation` modes do not express. When set, the custom reducer takes
 > precedence over `--loss-aggregation`.
 
 **Built-in modes — `--loss-aggregation`**
@@ -312,14 +310,14 @@ Modes follow the ScaleRL taxonomy ([arXiv:2510.13786](https://arxiv.org/abs/2510
 
 | Mode | Paper | pg_loss denominator |
 | :--- | :--- | :--- |
-| `sample_mean` (default) | GRPO sample average | Per-rollout token-weighted mean — each rollout contributes equally regardless of fan-out. Byte-identical to slime's prior default. |
+| `sample_mean` (default) | GRPO sample average | Per-rollout token-weighted mean; each rollout contributes equally regardless of fan-out. |
 | `prompt_mean` | DAPO prompt average | Per-prompt-group token-weighted mean (all rollouts sharing a prompt share one denominator). |
-| `token_mean` | token average | Global per-token mean. The legacy `--calculate-per-token-loss` flag is exactly this mode (see below); prefer `--loss-aggregation=token_mean`. |
+| `token_mean` | token average | Global per-token mean. `--calculate-per-token-loss` is accepted as an alias for this mode when no conflicting `--loss-aggregation` is set. |
 | `constant` | Dr.GRPO ([arXiv:2503.20783](https://arxiv.org/abs/2503.20783)) | `sum(token_loss * loss_mask) / L`, where `L = --loss-aggregation-divisor` (e.g. the max context length). |
 
 `--loss-aggregation-divisor L` is required (validated `> 0` at startup) only for
 `constant`; it is ignored for the other modes (passing it with any other mode
-fails at startup). The default (`sample_mean`) leaves behavior unchanged.
+fails at startup). If `--loss-aggregation` is not set, slime uses `sample_mean`.
 
 The `constant` denominator `L` is *per-token*, not per-step: each mode's reducer
 returns a step sum that is then averaged by the usual `/ step_global_batch_size`
@@ -331,15 +329,10 @@ is applied on top exactly as for the other modes.
 `prompt_mean` weights every prompt group equally: each group's token-weighted
 mean contributes once, and the final scalar is the mean over prompt groups.
 
-**Legacy `--calculate-per-token-loss`.** `--calculate-per-token-loss` is not a
-separate axis: it *is* the `token_mean` point on `--loss-aggregation`. The two
-spellings are reconciled at startup so the reported objective is honest and there
-is one knob: `--loss-aggregation=token_mean` sets `--calculate-per-token-loss`,
-and `--calculate-per-token-loss` (on the default `sample_mean`) is relabeled to
-`token_mean` with no behavior change. Existing `--calculate-per-token-loss`
-recipes keep working unchanged; prefer `--loss-aggregation=token_mean` in new
-recipes. Combining `--calculate-per-token-loss` with `prompt_mean` or `constant`
-(distinct objectives) fails loud at startup.
+**`--calculate-per-token-loss`.** This flag is an alias for
+`--loss-aggregation=token_mean`. It can be used by itself, or with
+`--loss-aggregation=token_mean`. Combining it with `prompt_mean` or `constant`
+fails at startup because those modes use different denominators.
 
 ---
 
