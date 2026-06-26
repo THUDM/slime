@@ -1,17 +1,3 @@
-"""Tests for the Gemma4 loss-mask generator (``tokenizer_type='gemma4'``).
-
-Uses a tiny char-level fake tokenizer that models Gemma4's chat-template
-delimiters, so the test runs in CI without the real checkpoint. The fake
-mirrors the parts of the real template the mask generator depends on:
-
-  - turns rendered as ``<|turn>{role}\\n`` ... ``<turn|>\\n``
-  - assistant role rendered as the literal ``model``
-  - a fast-tokenizer-style ``offset_mapping`` (one char == one token)
-
-A parity check against the real tokenizer lives in the manual/on-cluster
-verification; here we pin the masking contract.
-"""
-
 import ast
 import pathlib
 
@@ -19,13 +5,6 @@ from slime.utils.mask_utils import MultiTurnLossMaskGenerator
 
 
 class FakeGemma4Tokenizer:
-    """Char-level tokenizer modeling Gemma4's chat-template formatting.
-
-    One character == one token, so ``offset_mapping`` is the identity and
-    ``apply_chat_template(tokenize=True)`` agrees with retokenizing the
-    rendered string char-by-char (the precondition the generator asserts).
-    """
-
     is_fast = True
 
     def __call__(self, text, add_special_tokens=False, return_offsets_mapping=False):
@@ -60,7 +39,6 @@ class FakeGemma4Tokenizer:
         for message in messages:
             role = "model" if message["role"] == "assistant" else message["role"]
             content = message.get("content", "")
-            # Model a thinking channel when a reasoning field is present.
             reasoning = message.get("reasoning")
             body = ""
             if role == "model" and reasoning:
@@ -119,7 +97,6 @@ def test_system_and_user_never_masked():
 
 
 def test_turn_terminator_included_in_loss():
-    """The model should learn to emit <turn|> to end its turn."""
     gen = _make_gen()
     msgs = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Yo"}]
     assert "<turn|>" in _masked_text(gen, msgs)
@@ -128,7 +105,6 @@ def test_turn_terminator_included_in_loss():
 def test_model_header_not_masked():
     gen = _make_gen()
     msgs = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Yo"}]
-    # The <|turn>model\n header precedes content and must stay at loss 0.
     assert "<|turn>model" not in _masked_text(gen, msgs)
 
 
@@ -146,8 +122,6 @@ def test_step_loss_mask_excludes_turn():
 
 
 def test_thinking_channel_excluded_from_loss():
-    """When a reasoning trace is rendered into <|channel>thought ...
-    <channel|>, only the post-thinking answer should carry loss."""
     gen = _make_gen()
     msgs = [
         {"role": "user", "content": "Q"},
@@ -175,13 +149,11 @@ def test_response_lengths_helper():
     msgs = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello."}]
     _, mask = gen.get_loss_mask(msgs)
     (length,) = gen.get_response_lengths([mask])
-    # "Hello.<turn|>\n" — first 1 to end of mask.
     assert length == sum(mask)
     assert length > 0
 
 
 def test_gemma4_is_an_accepted_argparse_choice():
-    """Keep get_loss_mask dispatch and --loss-mask-type choices in sync."""
     arguments_py = pathlib.Path(__file__).resolve().parents[2] / "slime/utils/arguments.py"
     tree = ast.parse(arguments_py.read_text())
 

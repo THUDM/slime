@@ -1,13 +1,6 @@
-# Gemma4 26B-A4B MoE model configuration
-# Based on google/gemma-4-26B-A4B-it
-# 30 layers, 2816 hidden, 16 heads (8 kv), 128 experts top-8
-# Features: SWA (window=1024, every 6th layer full attention), gelu_pytorch_tanh
-
 MODEL_ARGS=(
    --spec "slime_plugins.models.gemma4" "get_gemma4_spec"
    --custom-model-provider-path "slime_plugins.models.gemma4_provider.model_provider"
-   # Gemma4 uses GeGLU (gated GELU-tanh), not SwiGLU. Activation is set by
-   # get_gemma4_spec; --swiglu is intentionally omitted.
    --num-layers 30
    --hidden-size 2816
    --ffn-hidden-size 2112
@@ -23,7 +16,6 @@ MODEL_ARGS=(
    --rotary-percent 1.0
    --vocab-size 262144
    --qk-layernorm
-   # MoE
    --num-experts 128
    --moe-ffn-hidden-size 704
    --moe-router-topk 8

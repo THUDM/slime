@@ -54,7 +54,6 @@ _gelu_tanh = functools.partial(F.gelu, approximate="tanh")
 class Gemma4TransformerConfig(Gemma3TransformerConfig):
     """Gemma4-specific config extending Gemma3."""
 
-    # Heterogeneous attention: global layers use different head_dim and num_kv_heads
     global_kv_channels: int = 512
     global_num_query_groups: int = 4
     global_partial_rotary_factor: float = 0.25  # fraction of global head_dim that gets RoPE
@@ -119,24 +118,16 @@ class Gemma4Router(nn.Module):
         self.per_expert_scale = nn.Parameter(torch.ones(self.num_experts))
 
     def forward(self, hidden_states):
-        # hidden_states: [tokens, hidden_size]
         h = self.norm(hidden_states)
         h = h * self.scale * self.scalar_root_size
         logits = self.proj(h)
         probs = torch.softmax(logits, dim=-1)
         top_k_weights, top_k_index = torch.topk(probs, k=self.top_k, dim=-1)
-        # Order matters: renormalize FIRST, then apply per-expert scale. See
-        # class docstring.
         top_k_weights = top_k_weights / top_k_weights.sum(dim=-1, keepdim=True)
         top_k_weights = top_k_weights * self.per_expert_scale[top_k_index]
         return top_k_weights, top_k_index
 
     def set_layer_number(self, layer_number):
-        # Megatron's ``MoELayer.set_layer_number`` delegates to
-        # ``self.router.set_layer_number``. ``TopKRouter`` uses it for
-        # aux-loss scoping / logging; Gemma4Router has no aux loss and
-        # doesn't log, so this is a no-op — but the method MUST exist or
-        # ``MoELayer.set_layer_number`` raises AttributeError on first call.
         pass
 
 
@@ -145,26 +136,19 @@ class Gemma4MoELayer(MoELayer):
 
     Megatron's MoELayer hardcodes its own ``TopKRouter`` which uses a
     softmax-with-expert-bias scheme. Gemma4 has its own router semantics
-    (no-scale RMSNorm → learnable per-hidden scale → proj → softmax → topk →
+    (no-scale RMSNorm -> learnable per-hidden scale -> proj -> softmax -> topk ->
     per-expert scale multiplier). We reuse all of Megatron's infrastructure
     for dispatching (alltoall), expert parallelism, and grouped-GEMM expert
-    computation — but swap in our ``Gemma4Router`` and convert its compact
+    computation - but swap in our ``Gemma4Router`` and convert its compact
     (top_k_weights [T, K], top_k_index [T, K]) output into Megatron's
     expected (probs [T, E], routing_map [T, E]) format inside ``route()``.
     """
 
     def __init__(self, config, submodules=None, layer_number=None, pg_collection=None):
-        # Bypass MoELayer.__init__ so we can avoid building Megatron's TopKRouter,
-        # then run the rest of MoELayer's setup ourselves. The parts we need:
-        # - self.ep_group / num_local_experts / local_expert_indices (from BaseMoELayer)
-        # - token_dispatcher, experts (alltoall path, GroupedMLP)
-        # Anything shared-expert related is disabled: Gemma4 has no shared experts in
-        # this sense — its "dense MLP" lives outside the MoE block in the parent layer.
-        #
         # Fall back to Megatron's global parallel_state when pg_collection isn't
         # explicitly passed. TransformerLayer only forwards pg_collection when
         # submodules.mlp.module is *exactly* one of
-        # (MoELayer, GroupedMLP, TEGroupedMLP, SequentialMLP) — an identity check
+        # (MoELayer, GroupedMLP, TEGroupedMLP, SequentialMLP) - an identity check
         # via `in`, so Gemma4MoELayer (a MoELayer subclass) slips through and
         # receives None. BaseMoELayer.__init__ then crashes on `pg_collection.ep`.
         # Same fallback MoELayer.__init__ uses when invoked directly.
@@ -173,15 +157,12 @@ class Gemma4MoELayer(MoELayer):
 
             pg_collection = get_default_pg_collection()
         BaseMoELayer.__init__(self, config=config, layer_number=layer_number, pg_collection=pg_collection)
-        # Disable Megatron-checkpoint paths that don't apply here.
         self.moe_layer_recompute = False
         self.shared_experts_recompute = False
         self.submodules = submodules
 
-        # --- Router: Gemma4's custom router, not TopKRouter. ---
         self.router = Gemma4Router(config)
 
-        # --- Token dispatcher (identical to MoELayer.__init__). ---
         from megatron.core.transformer.moe.token_dispatcher import (
             MoEAllGatherTokenDispatcher,
             MoEAlltoAllTokenDispatcher,
@@ -212,7 +193,6 @@ class Gemma4MoELayer(MoELayer):
         else:
             raise ValueError(f"Unsupported token dispatcher type: {config.moe_token_dispatcher_type}")
 
-        # --- Experts: Megatron's GroupedMLP / TEGroupedMLP. ---
         self.experts = build_module(
             self.submodules.experts,
             self.num_local_experts,
@@ -220,10 +200,8 @@ class Gemma4MoELayer(MoELayer):
             pg_collection=pg_collection,
         )
 
-        # Gemma4 doesn't use shared experts in Megatron's sense.
         self.shared_experts = None
 
-        # cudagraph tensor store (required by MoELayer.forward decorators)
         from megatron.core.transformer.moe.moe_utils import MoECudaGraphTensorStore
 
         self.cudagraph_tensor_store = MoECudaGraphTensorStore()
@@ -244,11 +222,11 @@ class Gemma4MoELayer(MoELayer):
         ``(probs, routing_map)`` format.
 
         ``Gemma4Router`` emits compact top-k tensors:
-            top_k_weights: [T, K] — routing weights (already scaled by per_expert_scale)
-            top_k_index:   [T, K] — which experts each token routes to
+            top_k_weights: [T, K] - routing weights (already scaled by per_expert_scale)
+            top_k_index:   [T, K] - which experts each token routes to
         Megatron's dispatcher wants:
-            probs:       [T, E] — weight per (token, expert), 0 where not routed
-            routing_map: [T, E] — boolean mask
+            probs:       [T, E] - weight per (token, expert), 0 where not routed
+            routing_map: [T, E] - boolean mask
         """
         flat = hidden_states.reshape(-1, hidden_states.shape[-1])
         top_k_weights, top_k_index = self.router(flat)
@@ -287,8 +265,8 @@ class Gemma4MoELayer(MoELayer):
         ``router_input is None`` (the normal case) the router sees the same
         un-normed residual the layer was called with.
 
-        We inline the Megatron parent's ``forward`` body here — rather than
-        calling ``super().forward`` with a side-channel stash — so the
+        We inline the Megatron parent's ``forward`` body here - rather than
+        calling ``super().forward`` with a side-channel stash - so the
         router input is passed explicitly end-to-end and the code is safe
         under activation checkpointing / recomputation.
         """
@@ -331,7 +309,7 @@ class Gemma4TransformerLayer(TransformerLayer):
 
         global_layer_number = layer_number + get_transformer_layer_offset(config)
         # Megatron passes `layer_number` as 1-indexed (default 1), so in 0-indexed
-        # HF space a global layer is `(i+1) % pattern == 0` → `i % pattern == pattern-1`.
+        # HF space a global layer is `(i+1) % pattern == 0` -> `i % pattern == pattern-1`.
         # Equivalently: `is_sliding` when `global_layer_number % pattern != 0`.
         self.is_sliding = bool(global_layer_number % config.sliding_window_pattern)
         self._is_global = not self.is_sliding
@@ -359,10 +337,8 @@ class Gemma4TransformerLayer(TransformerLayer):
             **kwargs,
         )
 
-        # Tell the attention module whether this is a global layer
         self.self_attention._is_global = self._is_global
 
-        # Replace TE core attention with PyTorch SDPA for all layers.
         # Global layers require this because head_dim=512 exceeds flash attention's limit (256).
         # Local layers also use SDPA for consistency.
         self.self_attention.core_attention = SDPACoreAttention(
@@ -373,7 +349,6 @@ class Gemma4TransformerLayer(TransformerLayer):
         )
         self.self_attention.core_attention._is_sliding = self.is_sliding
 
-        # Post-attention and post-feedforward layernorms (Gemma-specific)
         self.post_attention_layernorm = build_module(
             submodules.post_attention_layernorm,
             config=self.config,
@@ -387,7 +362,7 @@ class Gemma4TransformerLayer(TransformerLayer):
             eps=self.config.layernorm_epsilon,
         )
 
-        # Layer scalar (buffer, not learned). Kept in fp32 intentionally —
+        # Layer scalar (buffer, not learned). Kept in fp32 intentionally -
         # HF stores this scalar in fp32 and relies on the implicit upcast of
         # ``bf16_hidden * fp32_scalar`` at multiply time (see HF Gemma4
         # ``Gemma4TextDecoderLayer.__init__`` at modeling_gemma4.py:1331).
@@ -402,12 +377,10 @@ class Gemma4TransformerLayer(TransformerLayer):
         # forward().
         self.enable_moe_block = getattr(config, "enable_moe_block", False)
         if self.enable_moe_block:
-            # Parallel dense MLP branch (sibling to self.mlp, which is the MoE).
             self.dense_mlp = build_module(
                 submodules.dense_mlp,
                 config=config,
             )
-            # Gemma4 pre/post layernorms that wrap the two FFN paths.
             self.post_feedforward_layernorm_1 = TENorm(
                 config=config,
                 hidden_size=config.hidden_size,
@@ -438,7 +411,7 @@ class Gemma4TransformerLayer(TransformerLayer):
         ``post_feedforward_layernorm_1``, MoE branch through
         ``post_feedforward_layernorm_2``, the two are summed, and the outer
         ``Gemma4TransformerLayer.forward`` applies ``post_feedforward_layernorm``
-        to the sum — 3 post-FFN LNs total for MoE layers is correct.
+        to the sum - 3 post-FFN LNs total for MoE layers is correct.
 
         HF routes on the un-normed residual but feeds experts the
         ``pre_feedforward_layernorm_2``'d residual; Gemma4MoELayer applies
@@ -470,16 +443,13 @@ class Gemma4TransformerLayer(TransformerLayer):
         sequence_len_offset=None,
         **kwargs,
     ):
-        # Select per-layer rotary embeddings and attention mask
-        # DualRotaryEmbedding returns concatenated [seq, 1, global_dim + local_dim] tensor.
-        # Split and select based on layer type.
         if rotary_pos_emb is not None and not isinstance(rotary_pos_emb, tuple):
             global_dim = getattr(self.config, "dual_rope_global_dim", 0)
             if global_dim > 0 and rotary_pos_emb.shape[-1] > global_dim:
                 if self.is_sliding:
-                    rotary_pos_emb = rotary_pos_emb[..., global_dim:]  # local part
+                    rotary_pos_emb = rotary_pos_emb[..., global_dim:]
                 else:
-                    rotary_pos_emb = rotary_pos_emb[..., :global_dim]  # global part
+                    rotary_pos_emb = rotary_pos_emb[..., :global_dim]
         elif isinstance(rotary_pos_emb, tuple):
             rotary_pos_emb = rotary_pos_emb[1] if self.is_sliding else rotary_pos_emb[0]
         if isinstance(attention_mask, tuple):
@@ -506,10 +476,8 @@ class Gemma4TransformerLayer(TransformerLayer):
         elif inference_params is not None:
             extra_kwargs["inference_params"] = inference_params
 
-        # Input layernorm
         input_layernorm_output = self.input_layernorm(hidden_states)
 
-        # Self attention
         hidden_states, hidden_states_bias = self.self_attention(
             input_layernorm_output,
             attention_mask=attention_mask,
@@ -527,7 +495,6 @@ class Gemma4TransformerLayer(TransformerLayer):
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = residual + hidden_states
 
-        # FFN path: dense-only (31B) vs dense + MoE (26B-A4B).
         residual = hidden_states
         pre_mlp_layernorm_output = self.pre_mlp_layernorm(hidden_states)
         if self.enable_moe_block:
@@ -537,7 +504,6 @@ class Gemma4TransformerLayer(TransformerLayer):
         hidden_states = self.post_feedforward_layernorm(hidden_states)
         hidden_states = residual + hidden_states
 
-        # Layer scalar
         hidden_states = hidden_states * self.layer_scalar
 
         output = make_viewless_tensor(
@@ -563,7 +529,7 @@ class SDPACoreAttention(nn.Module):
     Dispatch at call time (packed / thd shape):
       - CP > 1 (any layer) : all-gather K/V, apply causal + optional
         sliding-window mask computed from slime zig-zag global indices.
-      - global  + CP == 1  : sub-sequence causal SDPA (no O(T²) mask alloc).
+      - global  + CP == 1  : sub-sequence causal SDPA (no O(T^2) mask alloc).
       - sliding + CP == 1  : flash_attn_varlen_func with (sw-1, 0) window.
     """
 
@@ -591,7 +557,6 @@ class SDPACoreAttention(nn.Module):
         self._is_sliding = False  # set by Gemma4TransformerLayer
 
     def _resolve_scale(self, hn: int) -> float:
-        # `0.0 or fallback` would silently mask a misconfigured scale; be explicit.
         return self.softmax_scale if self.softmax_scale is not None else (hn**-0.5)
 
     @staticmethod
@@ -660,7 +625,7 @@ class SDPACoreAttention(nn.Module):
         scale = self._resolve_scale(hn)
 
         # Differentiable all-gather along the token dim. forward: AG,
-        # backward: RS — so K/V grads on non-owning ranks flow back to the
+        # backward: RS - so K/V grads on non-owning ranks flow back to the
         # originating rank. The raw `dist.all_gather_into_tensor` has no
         # autograd rule and PyTorch prints a "silently incorrect behavior"
         # warning + drops those grads.
@@ -696,9 +661,7 @@ class SDPACoreAttention(nn.Module):
                 f"{expected_t_local}, but query.shape[0] = {t_local}"
             )
 
-        # Un-zig-zag rank-major gathered K/V into pure packed global order.
         if cu_seqlens is None:
-            # Single-sequence fallback: treat the full t_full as one sub-seq.
             t_full_total = k_full.shape[0]
             cu_seqlens_list = [0, t_full_total]
         else:
@@ -736,7 +699,6 @@ class SDPACoreAttention(nn.Module):
             else:
                 row_idx = torch.arange(local_len, device=device)
             col_idx = torch.arange(seq_len_global, device=device)
-            # Causal: K pos <= Q pos. Sliding: also K pos > Q pos - sw.
             forbid_future = col_idx[None, :] > row_idx[:, None]
             if sliding_window is not None and sliding_window > 0:
                 forbid_past = col_idx[None, :] < (row_idx[:, None] - (sliding_window - 1))
@@ -769,7 +731,7 @@ class SDPACoreAttention(nn.Module):
         CP==1 only. For CP>1, `_forward_cp_subseq_mask` handles zig-zag.
 
         Sliding-window layers must pass `window_size=(sliding_window-1, 0)` so
-        only tokens within `sliding_window` positions back are attended to —
+        only tokens within `sliding_window` positions back are attended to -
         this matches HF's `sliding_window_mask_function`. Global layers and
         dense-attention sliding layers use the default full-causal window.
         """
@@ -799,7 +761,7 @@ class SDPACoreAttention(nn.Module):
         return out.reshape(query.shape[0], -1)
 
     def _forward_thd_sdpa_per_subseq(self, query, key, value, cu_seqlens):
-        """Per-sub-sequence causal SDPA — used when flash-attn can't handle
+        """Per-sub-sequence causal SDPA - used when flash-attn can't handle
         head_dim (global layer w/o CP). Avoids materializing a [T, T] mask.
         """
         np_q, hn = query.shape[1], query.shape[2]
@@ -828,14 +790,9 @@ class SDPACoreAttention(nn.Module):
         cp_size = getattr(self.config, "context_parallel_size", 1) or 1
         is_thd = query.dim() == 3
 
-        # Parity-test hook: force CP=1 to use the CP path so tests isolate
-        # CP correctness from kernel choice.
         force_cp_path = getattr(self.config, "force_cp_subseq_mask", False)
 
         if is_thd:
-            # CP>1 (any layer): all-gather KV, apply zig-zag-aware mask.
-            # Sliding layers also need sliding_window masking in addition to
-            # causal — `_forward_cp_subseq_mask` handles both.
             if cp_size > 1 or force_cp_path:
                 sw = None
                 if self._is_sliding:
@@ -850,7 +807,6 @@ class SDPACoreAttention(nn.Module):
                     sliding_window=sw,
                 )
 
-            # CP==1: use the existing per-layer-type paths.
             cu_seqlens = None
             if packed_seq_params is not None:
                 cu_seqlens = packed_seq_params.cu_seqlens_q
@@ -859,10 +815,8 @@ class SDPACoreAttention(nn.Module):
             if cu_seqlens is not None:
                 if hn <= 256:
                     return self._forward_thd_flash(query, key, value, cu_seqlens)
-                # Global layer, no CP, packed — flash-attn won't take head_dim>256.
                 return self._forward_thd_sdpa_per_subseq(query, key, value, cu_seqlens)
 
-            # Un-packed thd (rare: eval/smoke test with batch=1). Plain SDPA.
             q = query.unsqueeze(0).transpose(1, 2)
             k = key.unsqueeze(0).transpose(1, 2)
             v = value.unsqueeze(0).transpose(1, 2)
@@ -878,8 +832,6 @@ class SDPACoreAttention(nn.Module):
             )
             return out.transpose(1, 2).reshape(query.shape[0], -1)
 
-        # bshd path: 4D input [seq, batch, np, hn]. Used by smoke tests and
-        # potential eval with --qkv-format bshd.
         q = query.permute(1, 2, 0, 3)
         k = key.permute(1, 2, 0, 3)
         v = value.permute(1, 2, 0, 3)
@@ -900,7 +852,7 @@ class Gemma4SelfAttention(SelfAttention):
     """SelfAttention with Gemma4-specific modifications:
     - v_norm: RMSNorm without learnable scale applied to value states.
     - attention_k_eq_v: on global layers the linear_qkv projection emits
-      ``[q, k]`` only (no v_proj) and V is derived from K — specifically
+      ``[q, k]`` only (no v_proj) and V is derived from K - specifically
       ``V = v_norm(raw_k)`` while ``K = k_norm(raw_k)``.
     """
 
@@ -916,7 +868,7 @@ class Gemma4SelfAttention(SelfAttention):
         ``v_proj_weight == k_proj_weight`` (see Gemma4Bridge + convert_gemma4_to_hf),
         so ``linear_qkv(h)`` emits Q/K/V with ``raw_k == raw_v``. Gemma4's
         per-head norms then apply as ``key = k_norm(raw_k)`` and
-        ``value = v_norm(raw_k)`` — *not* ``v_norm(k_norm(raw_k))``. We
+        ``value = v_norm(raw_k)`` - *not* ``v_norm(k_norm(raw_k))``. We
         reimplement the split here rather than calling the parent so we
         don't have to mutate ``self.k_layernorm`` mid-forward.
 
@@ -932,8 +884,6 @@ class Gemma4SelfAttention(SelfAttention):
 
         q_width = num_query_heads_per_group * self.hidden_size_per_attention_head
         hn = self.hidden_size_per_attention_head
-        # _raw_value is bit-identical to raw_key (K=V linear_qkv layout);
-        # use raw_key directly and skip the extra tensor.
         query, raw_key, _raw_value = torch.split(mixed_qkv, [q_width, hn, hn], dim=3)
         query = query.reshape(query.size(0), query.size(1), -1, hn)
 
@@ -971,11 +921,6 @@ def _build_moe_submodule_spec(config):
     from megatron.core.extensions.transformer_engine_spec_provider import TESpecProvider
     from megatron.core.models.gpt.moe_module_specs import get_moe_module_spec_for_backend
 
-    # Reuse Megatron's canonical TE-backed MoE spec factory to get
-    # TEColumnParallelGroupedLinear / TERowParallelGroupedLinear etc. wired up
-    # properly for GroupedMLP experts. Then swap the top-level module from
-    # Megatron's MoELayer to our Gemma4MoELayer, which keeps all that wiring
-    # but plugs in Gemma4Router.
     base_spec = get_moe_module_spec_for_backend(
         backend=TESpecProvider(),
         num_experts=config.num_moe_experts,
@@ -1003,7 +948,7 @@ def get_gemma4_layer_spec_te(config=None) -> ModuleSpec:
     # `pre_mlp_layernorm` in the layer forward is the sole norm applied to the
     # MLP input. Using TELayerNormColumnParallelLinear here would apply a
     # SECOND layernorm inside fc1, resulting in double-normalization and
-    # ~8× inflated MLP outputs.
+    # ~8x inflated MLP outputs.
     dense_mlp_spec = ModuleSpec(
         module=MLP,
         submodules=MLPSubmodules(
@@ -1060,8 +1005,8 @@ class _Gemma4MoELayerWarningFilter(logging.Filter):
     Megatron's TransformerLayer.__init__ recognizes a hardcoded tuple of MLP
     classes via `==` (not issubclass), so Gemma4MoELayer (a MoELayer subclass)
     falls through to the default-kwargs branch. That branch is correct for us
-    — Gemma4MoELayer.__init__ fetches its own pg_collection via
-    get_default_pg_collection — but the warning spams 30 lines per layer at
+    - Gemma4MoELayer.__init__ fetches its own pg_collection via
+    get_default_pg_collection - but the warning spams 30 lines per layer at
     init and confuses log readers. See gemma4_provider.py install hook.
     """
 
@@ -1123,7 +1068,7 @@ def _apply_core_config(config, hf_text):
     # 26B's differing global vs sliding head_dim / num_kv_heads).
     # Rationale for using moe_layer_freq as the flag: Megatron's
     # TransformerBlock.__init__ sets ``non_homogeneous_layers = True`` iff
-    # ``config.moe_layer_freq is not None``. We only need that flag on —
+    # ``config.moe_layer_freq is not None``. We only need that flag on -
     # the actual dense/MoE dispatch happens inside
     # Gemma4TransformerLayer.forward, so the list contents are never
     # consulted by TransformerBlock itself. If a future Megatron refactor
@@ -1131,7 +1076,7 @@ def _apply_core_config(config, hf_text):
     # instead.
     config.moe_layer_freq = [0] * config.num_layers
 
-    # Mirror Megatron's own misspelling (`hetereogenous_*`) — correcting it
+    # Mirror Megatron's own misspelling (`hetereogenous_*`) - correcting it
     # would silently no-op on Megatron's read path.
     config.hetereogenous_dist_checkpoint = True
 
@@ -1142,7 +1087,7 @@ def _apply_core_config(config, hf_text):
     config.final_logit_softcapping = getattr(hf_text, "final_logit_softcapping", 30.0)
     config.sliding_window = hf_text.sliding_window
 
-    # `sliding_window_pattern` isn't in Gemma4 HF configs — infer from
+    # `sliding_window_pattern` isn't in Gemma4 HF configs - infer from
     # layer_types (first full_attention layer's 1-indexed position).
     layer_types = list(getattr(hf_text, "layer_types", []))
     try:
@@ -1180,7 +1125,7 @@ def get_rope_local_base_freq(hf_text) -> float:
     """Extract sliding-attention RoPE theta from an HF Gemma4 text config.
 
     Single source of truth for both the model provider and the mbridge
-    config builder — otherwise the 10000.0 default would drift between
+    config builder - otherwise the 10000.0 default would drift between
     call sites.
     """
     return (getattr(hf_text, "rope_parameters", {}) or {}).get("sliding_attention", {}).get("rope_theta", 10000.0)
@@ -1195,7 +1140,7 @@ def _apply_rope_config(config, hf_text):
 def _guard_cp_sliding_window(args, config):
     """Fail if per-rank CP token cap is smaller than the sliding window.
 
-    Strong signal of a miscounted CP sizing — we'd train on truncated
+    Strong signal of a miscounted CP sizing - we'd train on truncated
     attention windows otherwise.
     """
     cp_size = getattr(args, "context_parallel_size", 1) or 1
@@ -1221,14 +1166,6 @@ def get_gemma4_spec(args, config, vp_stage):
     _apply_rope_config(config, hf_text)
     _guard_cp_sliding_window(args, config)
 
-    # Build layer spec AFTER MoE config (so the MoE submodule spec attaches
-    # when enable_moe_block is True), then override MLP specs for HF numerics.
-    # The linear_fc1 override applies only to the dense MLP — on the MoE path
-    # the top-level `mlp` is Gemma4MoELayer and its `submodules` is an
-    # MoESubmodules (experts / shared_experts), which has no `linear_fc1`.
-    # The dense_mlp sibling already uses TEColumnParallelLinear (see
-    # `dense_mlp_spec` above), so on MoE layers this block is a no-op by
-    # design.
     spec = get_gemma4_layer_spec_te(config)
     from megatron.core.extensions.transformer_engine_spec_provider import TESpecProvider
 

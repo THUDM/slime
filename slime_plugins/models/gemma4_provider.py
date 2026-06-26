@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 
 def _is_rank_zero() -> bool:
-    """True on a single-process run, or on rank 0 when distributed."""
     if not torch.distributed.is_available() or not torch.distributed.is_initialized():
         return True
     return torch.distributed.get_rank() == 0
@@ -72,8 +71,6 @@ class DualRotaryEmbedding(torch.nn.Module):
         self.global_dim = global_dim
 
     def get_rotary_seq_len(self, *args, **kwargs):
-        # Both ropes share the same sequence-length logic (they only differ in
-        # theta and partial-rotary); delegate to the local one.
         return self.local_rope.get_rotary_seq_len(*args, **kwargs)
 
     def forward(self, seq_len, **kwargs):
@@ -123,7 +120,7 @@ def _install_hooks(model, args, config, pre_process, post_process):
         ``GPTModel.forward`` and branching on pp/vp stage.
       - The hooks are shape- and dtype-preserving, so they compose cleanly
         with PP (only first-stage runs embedding, only last-stage runs
-        output_layer) — we gate registration on ``pre_process`` /
+        output_layer) - we gate registration on ``pre_process`` /
         ``post_process`` accordingly.
       - Keeps the diff local to this plugin: we don't need to shadow any
         Megatron-maintained class.
@@ -133,7 +130,7 @@ def _install_hooks(model, args, config, pre_process, post_process):
 
     inner = model.module if hasattr(model, "module") else model
 
-    # Embedding scaling — HF applies this inside the embedding module.
+    # Embedding scaling - HF applies this inside the embedding module.
     # See ``Gemma4TextScaledWordEmbedding``: the scale is stored as an fp32
     # tensor and cast to the embedding weight's dtype at forward time, so
     # the scale-as-applied depends on the current weight dtype (bf16 during
@@ -146,7 +143,7 @@ def _install_hooks(model, args, config, pre_process, post_process):
 
         inner.embedding.register_forward_hook(_embed_hook)
 
-    # Final logit softcapping — HF applies tanh(logits / cap) * cap.
+    # Final logit softcapping - HF applies tanh(logits / cap) * cap.
     # Some Megatron output_layer variants (parallel_output paths) return
     # ``(logits, bias)``; we pass the non-logit tail through unchanged.
     softcap = getattr(hf_text, "final_logit_softcapping", None)
@@ -206,7 +203,6 @@ def _install_hooks(model, args, config, pre_process, post_process):
         global_rope.inv_freq.copy_(inv_freq.to(global_rope.inv_freq.device))
 
         inner.rotary_pos_emb = DualRotaryEmbedding(local_rope, global_rope, global_head_dim)
-        # Layers split the concatenated tensor by this dim.
         config.dual_rope_global_dim = global_head_dim
         if _is_rank_zero():
             logger.info(
@@ -218,8 +214,6 @@ def _install_hooks(model, args, config, pre_process, post_process):
                 nope,
             )
 
-    # Load layer scalars from the HF checkpoint. These are buffers, not
-    # parameters, and are applied once per layer after the MoE/MLP block.
     if hasattr(inner, "decoder") and args.hf_checkpoint:
         _load_layer_scalars(inner, args.hf_checkpoint, config)
 
@@ -229,7 +223,7 @@ def _read_layer_scalars_from_safetensors(hf_checkpoint: str) -> dict[int, float]
 
     Returns ``{global_layer_idx: scalar}`` or ``None`` if the checkpoint has
     no safetensors index (older HF layouts) or no layer_scalar weights. Only
-    called on rank 0 — results are broadcast to the other ranks.
+    called on rank 0 - results are broadcast to the other ranks.
     """
     index_path = os.path.join(hf_checkpoint, "model.safetensors.index.json")
     if not os.path.exists(index_path):
@@ -275,7 +269,7 @@ def _load_layer_scalars(inner, hf_checkpoint, config):
     # layer multiplicative gains on the residual stream, not decorative), so
     # by default we fail hard if the load breaks. Set
     # GEMMA4_ALLOW_MISSING_LAYER_SCALARS=1 to downgrade to a warning and
-    # train with the default value of 1.0 — only useful for debug runs
+    # train with the default value of 1.0 - only useful for debug runs
     # against a checkpoint that genuinely lacks these buffers.
     allow_missing = os.environ.get("GEMMA4_ALLOW_MISSING_LAYER_SCALARS") == "1"
     try:
@@ -325,8 +319,6 @@ def _load_layer_scalars(inner, hf_checkpoint, config):
                 max(scalars.values()),
             )
     except (FileNotFoundError, json.JSONDecodeError) as e:
-        # These are recoverable: older HF layouts have no safetensors index,
-        # or json is malformed. Warn and fall back.
         if allow_missing:
             logger.warning("layer scalars unavailable (%s: %s); using default 1.0", type(e).__name__, e)
             return

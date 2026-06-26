@@ -1,20 +1,3 @@
-"""Multi-rank test for Gemma4's layer_scalar rank-0-read + broadcast path.
-
-The single-process tests in ``test_gemma4_provider.py`` confirm the
-safetensors-read / PP-offset logic, but they never exercise the real
-distributed path: ``_read_layer_scalars_from_safetensors`` runs only on
-rank 0, then ``_broadcast_layer_scalars`` fans the dict out to the rest
-via ``torch.distributed.broadcast_object_list``. A regression where
-rank > 0 ends up with ``None`` or the default 1.0 would silently drift
-activations on every forward pass — caught only much later by parity
-tests.
-
-This test spawns 2 gloo ranks (no CUDA required), has rank 0 fabricate a
-safetensors ckpt in a tmpdir, then both ranks call ``_load_layer_scalars``
-on a minimal inner model. We then assert the loaded scalars match on both
-ranks.
-"""
-
 import json
 import os
 import tempfile
@@ -26,9 +9,6 @@ import torch.multiprocessing as mp
 
 
 def _worker(rank: int, world_size: int, master_port: int, ckpt_dir: str, out_dir: str):
-    """Run on each spawned rank: init PG, build a fake inner model,
-    call _load_layer_scalars, write the resulting scalars to a per-rank
-    file so the parent process can diff them."""
     os.environ["MASTER_ADDR"] = "127.0.0.1"
     os.environ["MASTER_PORT"] = str(master_port)
     os.environ["RANK"] = str(rank)
@@ -72,10 +52,6 @@ def _worker(rank: int, world_size: int, master_port: int, ckpt_dir: str, out_dir
 
 
 def _write_fake_checkpoint(ckpt_dir: str, scalars: dict[int, float]) -> None:
-    """Produce a safetensors file per layer + a matching
-    model.safetensors.index.json. Matches
-    _read_layer_scalars_from_safetensors' expectations.
-    """
     from safetensors.torch import save_file
 
     weight_map = {}
@@ -93,9 +69,6 @@ def _write_fake_checkpoint(ckpt_dir: str, scalars: dict[int, float]) -> None:
 
 
 def test_layer_scalars_broadcast_to_all_ranks():
-    """Rank 0 reads scalars from disk, broadcasts to rank 1 via
-    broadcast_object_list — both ranks must end up with identical
-    layer_scalar values."""
     expected = {0: 0.5, 1: 1.25, 2: 2.0}
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -105,7 +78,6 @@ def test_layer_scalars_broadcast_to_all_ranks():
 
         out_dir = os.path.join(tmp, "out")
         os.makedirs(out_dir)
-        # Deterministic port; tests serialized per-module so no race.
         master_port = 29577
 
         mp.spawn(
@@ -124,9 +96,5 @@ def test_layer_scalars_broadcast_to_all_ranks():
     assert r1["rank"] == 1
     assert r0["scalars"] == pytest.approx([0.5, 1.25, 2.0])
     assert r1["scalars"] == pytest.approx([0.5, 1.25, 2.0]), (
-        "rank 1 did not receive the broadcast scalars — check " "_broadcast_layer_scalars"
+        "rank 1 did not receive the broadcast scalars; check " "_broadcast_layer_scalars"
     )
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

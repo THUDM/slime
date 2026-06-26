@@ -198,20 +198,7 @@ class MultiTurnLossMaskGenerator:
     def gen_multi_turn_loss_mask_gemma4(
         self, messages: list[dict], tools: list[dict] = None
     ) -> tuple[list[int], list[int]]:
-        """Loss mask for Gemma4's chat template.
-
-        Gemma4 marks turns with ``<|turn>{role}\\n`` ... ``<turn|>\\n`` and
-        renders the assistant role as ``model``. We mark every assistant
-        ("model") turn's content — plus its trailing ``<turn|>\\n`` so the
-        model learns to terminate the turn — and leave system/user/tool
-        spans at 0.
-
-        We use the same render-then-offset-map strategy as the Qwen3.5
-        generator: build a per-character mask over the rendered string,
-        then project it onto tokens via the fast tokenizer's
-        offset_mapping. This is robust to tokenizer merges across the
-        content/marker boundary.
-        """
+        """Mask assistant content plus ``<turn|>`` in Gemma4 chat templates."""
         rendered_text = self.tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, return_dict=False)
         tokenized = self.tokenizer(rendered_text, add_special_tokens=False, return_offsets_mapping=True)
         token_ids = tokenized["input_ids"]
@@ -230,12 +217,7 @@ class MultiTurnLossMaskGenerator:
                 "Gemma4 rendered text tokenization does not match " "`apply_chat_template(..., tokenize=True)` output."
             )
 
-        # Assistant turns render with the role literal "model" (see template:
-        # `role = 'model' if message['role'] == 'assistant'`).
         assistant_header = "<|turn>model\n"
-        # Thinking is emitted inside <|channel>thought ... <channel|>. For
-        # standard SFT (content-only assistant messages) no thinking channel
-        # is rendered, but guard for it so reasoning traces aren't trained on.
         think_open = "<|channel>thought\n"
         think_close = "<channel|>"
         end_marker = "<turn|>"
@@ -256,8 +238,6 @@ class MultiTurnLossMaskGenerator:
             if end_pos < 0:
                 raise ValueError("Failed to locate <turn|> for assistant message in rendered Gemma4 text.")
 
-            # Include the <turn|> terminator (and its trailing newline) in the
-            # loss so the model learns to end its turn.
             span_end = end_pos + len(end_marker)
             if span_end < len(rendered_text) and rendered_text[span_end] == "\n":
                 span_end += 1
@@ -267,9 +247,6 @@ class MultiTurnLossMaskGenerator:
                 continue
 
             mask_start = content_start
-            # If a thinking channel is present, drop it from the loss span:
-            # mask only the post-thinking answer (mirrors how Qwen3.5 skips the
-            # <think> prefix). The closing <channel|> is also excluded.
             if rendered_text[content_start : content_start + len(think_open)] == think_open:
                 close_pos = rendered_text.find(think_close, content_start)
                 if close_pos < 0:
