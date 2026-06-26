@@ -119,6 +119,71 @@ def test_moe_route_accepts_3d_input_by_flattening():
     assert routing_map.shape == (6, cfg.num_moe_experts)
 
 
+def test_moe_forward_uses_current_megatron_preprocess_contract():
+    obj = object.__new__(Gemma4MoELayer)
+    torch.nn.Module.__init__(obj)
+    obj.config = SimpleNamespace(sequence_parallel=True)
+    obj.attn_tp_group = SimpleNamespace(size=lambda: 1)
+
+    calls = []
+
+    def norm(hidden_states):
+        calls.append(("norm", hidden_states))
+        return "experts_in"
+
+    def shared_experts_compute(experts_in):
+        calls.append(("shared", experts_in))
+        return None
+
+    def route(router_in):
+        calls.append(("route", router_in))
+        return "probs", "routing_map"
+
+    def preprocess(experts_in, probs, routing_map):
+        calls.append(("preprocess", experts_in, probs, routing_map))
+        return "preprocessed", "preprocessed_probs"
+
+    def dispatch(experts_in, probs):
+        calls.append(("dispatch", experts_in, probs))
+        return "dispatched", "dispatched_probs"
+
+    def routed_experts_compute(dispatched_input, probs):
+        calls.append(("experts", dispatched_input, probs))
+        return "expert_output", None
+
+    def combine(output):
+        calls.append(("combine", output))
+        return "combined"
+
+    def postprocess(output, shared_expert_output):
+        calls.append(("postprocess", output, shared_expert_output))
+        return "postprocessed"
+
+    obj.pre_feedforward_layernorm_2 = norm
+    obj.shared_experts_compute = shared_experts_compute
+    obj.route = route
+    obj.preprocess = preprocess
+    obj.dispatch = dispatch
+    obj.routed_experts_compute = routed_experts_compute
+    obj.combine = combine
+    obj.postprocess = postprocess
+
+    output, bias = obj.forward("hidden", router_input="router")
+
+    assert output == "postprocessed"
+    assert bias is None
+    assert calls == [
+        ("norm", "hidden"),
+        ("shared", "experts_in"),
+        ("route", "router"),
+        ("preprocess", "experts_in", "probs", "routing_map"),
+        ("dispatch", "preprocessed", "preprocessed_probs"),
+        ("experts", "dispatched", "dispatched_probs"),
+        ("combine", "expert_output"),
+        ("postprocess", "combined", None),
+    ]
+
+
 def _hf_reference_router(h, proj_w, scale, per_expert_scale, top_k, eps=1e-6):
     """Reference implementation of the HF Gemma4 router equation:
 

@@ -305,10 +305,11 @@ class Gemma4MoELayer(MoELayer):
             # Gemma4 has no shared experts; shared_experts_compute returns None.
             shared_expert_output = self.shared_experts_compute(experts_in)
             probs, routing_map = self.route(router_in)
-            experts_in2, probs, residual = self.preprocess(experts_in, probs, routing_map)
+            experts_in2, probs = self.preprocess(experts_in, probs, routing_map)
             dispatched_input, probs = self.dispatch(experts_in2, probs)
-            output, mlp_bias = self.routed_experts_compute(dispatched_input, probs, residual)
-            output = self.combine(output, shared_expert_output)
+            output, mlp_bias = self.routed_experts_compute(dispatched_input, probs)
+            output = self.combine(output)
+            output = self.postprocess(output, shared_expert_output)
             return output, mlp_bias
 
         # moe_layer_recompute is forced to False in __init__; call directly.
