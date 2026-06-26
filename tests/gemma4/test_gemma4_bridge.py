@@ -114,7 +114,7 @@ def test_convert_gemma4_to_hf_local_layer_roundtrip(monkeypatch):
     """Load convert_gemma4_to_hf and verify roundtrip for a local layer."""
     conv = _load_convert_module()
 
-    # Prime the config cache so we don't need a real HF checkpoint on disk.
+    # Seed the config cache so we don't need a real HF checkpoint on disk.
     conv._config_cache["/nonexistent"] = {
         "global_attn_layers": {i for i, t in enumerate(CFG_31B.layer_types) if t == "full_attention"},
         "local_head_dim": CFG_31B.head_dim,

@@ -16,7 +16,7 @@ _gelu_tanh = functools.partial(F.gelu, approximate="tanh")
 @register_model(["gemma4", "gemma4_text", "gemma4_unified_text"])
 class Gemma4Bridge(Gemma3Bridge):
     """
-    Bridge for Gemma 4 dense 31B.
+    Bridge for Gemma4 text dense and MoE variants.
 
     Megatron-side keys have NO language_model. prefix (text-only model).
     HF-side values have model.language_model. prefix (Gemma4ForConditionalGeneration).
