@@ -328,11 +328,8 @@ normalization for `constant` is `/ (L * step_global_batch_size)` — `L` only se
 the data-independent per-token scale; the `/ step_global_batch_size` step average
 is applied on top exactly as for the other modes.
 
-`prompt_mean` weights every prompt group equally (each group's token-weighted
-mean enters the step sum once, all under the same `/ step_global_batch_size`
-divisor). Its absolute scale differs from a strict `1/P` DAPO average by a
-constant factor (`P / N`, prompts over rollouts), which the learning rate
-absorbs; the relative per-prompt weighting is uniform.
+`prompt_mean` weights every prompt group equally: each group's token-weighted
+mean contributes once, and the final scalar is the mean over prompt groups.
 
 **Legacy `--calculate-per-token-loss`.** `--calculate-per-token-loss` is not a
 separate axis: it *is* the `token_mean` point on `--loss-aggregation`. The two

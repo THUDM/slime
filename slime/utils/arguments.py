@@ -1874,12 +1874,9 @@ def slime_validate_args(args):
 
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 
-    loss_aggregation = getattr(args, "loss_aggregation", "sample_mean")
-    # 1. Divisor only feeds the `constant` reducer: it is required+positive there and a
-    #    silent no-op everywhere else, so fail loud rather than mislead about normalization.
-    divisor = getattr(args, "loss_aggregation_divisor", None)
+    loss_aggregation = args.loss_aggregation
+    divisor = args.loss_aggregation_divisor
     if loss_aggregation == "constant":
-        # Dr.GRPO needs a fixed, positive divisor; fail at startup, not mid-train.
         if divisor is None or not (divisor > 0):
             raise ValueError(
                 "--loss-aggregation-divisor must be set to a positive value when "
@@ -1890,20 +1887,12 @@ def slime_validate_args(args):
             "--loss-aggregation-divisor is only used with --loss-aggregation=constant "
             f"(got --loss-aggregation={loss_aggregation})."
         )
-    # 2. --calculate-per-token-loss is the legacy spelling of --loss-aggregation=token_mean;
-    #    reconcile the two so there is one coherent axis (no silent label override).
     if loss_aggregation == "token_mean":
-        # Forward: token_mean drives the per-token reducer/normalizer path.
         args.calculate_per_token_loss = True
-    elif getattr(args, "calculate_per_token_loss", False):
+    elif args.calculate_per_token_loss:
         if loss_aggregation == "sample_mean":
-            # Backward: the legacy flag *is* token_mean (sample_mean already returned the
-            # per-token default reducer here); relabel so the reported objective is honest.
             loss_aggregation = args.loss_aggregation = "token_mean"
         else:
-            # prompt_mean/constant are distinct objectives from the global per-token mean;
-            # --calculate-per-token-loss would silently override the reducer's denominator
-            # (prompt_mean's per-group total / constant's L). Fail loud instead.
             raise ValueError(
                 f"--loss-aggregation={loss_aggregation} is incompatible with --calculate-per-token-loss "
                 "(use --loss-aggregation=token_mean for the per-token mean)."
@@ -2033,7 +2022,7 @@ def slime_validate_args(args):
         args.global_batch_size = global_batch_size
 
     if (
-        getattr(args, "loss_aggregation", "sample_mean") == "prompt_mean"
+        args.loss_aggregation == "prompt_mean"
         and args.global_batch_size is not None
         and args.global_batch_size % args.n_samples_per_prompt != 0
     ):

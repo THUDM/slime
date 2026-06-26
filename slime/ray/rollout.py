@@ -778,20 +778,9 @@ class RolloutManager:
             rollout_total_mask[rid] = rollout_total_mask.get(rid, 0) + ms
         train_data["rollout_mask_sums"] = [rollout_total_mask[rid] for rid in rollout_id_list]
 
-        # prompt_mask_sums: per-prompt-group mask total, summed here at the step
-        # level (every sibling is visible) and broadcast per-sample so a group
-        # split across micro-batches by packing still divides by its whole total.
-        # Built only under prompt_mean — the other modes never read it, so the
-        # default (sample_mean) batch stays byte-identical with no extra key.
-        # The broadcast per-sample full-group denom is step/mb-independent, but
-        # prompt_mean still requires the whole group within one step (enforced
-        # in slime_validate_args via global_batch_size % n_samples_per_prompt).
-        if getattr(self.args, "loss_aggregation", "sample_mean") == "prompt_mean":
+        if self.args.loss_aggregation == "prompt_mean":
             group_total_mask: dict[int, int] = {}
             for sample, ms in zip(samples, mask_sums_per_sample, strict=True):
-                # A None group_index would collapse unrelated prompts into one
-                # denominator, silently degrading prompt_mean -> sample_mean for
-                # that sample. The prompt-grouping invariant is violated, so fail.
                 if sample.group_index is None:
                     raise ValueError(
                         "--loss-aggregation prompt_mean requires every Sample.group_index to be set, "

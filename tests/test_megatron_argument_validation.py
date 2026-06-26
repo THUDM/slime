@@ -386,10 +386,8 @@ def test_loss_aggregation_token_mean_aliases_calculate_per_token_loss(monkeypatc
 
 @pytest.mark.unit
 def test_calculate_per_token_loss_alone_reconciles_to_token_mean(monkeypatch):
-    # Legacy spelling: --calculate-per-token-loss on the default sample_mean IS token_mean.
-    # Reconcile the label (no behavior change) so there is one honest axis.
     module = load_slime_arguments_module(monkeypatch)
-    args = make_slime_validate_args(calculate_per_token_loss=True)  # loss_aggregation default sample_mean
+    args = make_slime_validate_args(calculate_per_token_loss=True)
 
     module.slime_validate_args(args)
 
@@ -400,19 +398,16 @@ def test_calculate_per_token_loss_alone_reconciles_to_token_mean(monkeypatch):
 @pytest.mark.unit
 def test_loss_aggregation_default_leaves_per_token_loss_off(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
-    args = make_slime_validate_args()  # default sample_mean
+    args = make_slime_validate_args()
 
     module.slime_validate_args(args)
 
     assert args.calculate_per_token_loss is False
-    # No divisor required for non-constant modes.
     assert args.loss_aggregation == "sample_mean"
 
 
 @pytest.mark.unit
 def test_loss_aggregation_prompt_mean_rejects_calculate_per_token_loss(monkeypatch):
-    # prompt_mean + --calculate-per-token-loss would silently degrade to the global
-    # per-token mean in the reducer, so validation must fail loud.
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(loss_aggregation="prompt_mean", calculate_per_token_loss=True)
 
@@ -433,8 +428,6 @@ def test_loss_aggregation_prompt_mean_without_per_token_loss_passes(monkeypatch)
 
 @pytest.mark.unit
 def test_loss_aggregation_constant_rejects_calculate_per_token_loss(monkeypatch):
-    # constant + --calculate-per-token-loss is silently inconsistent (the reducer makes them
-    # mutually exclusive); fail loud at startup instead.
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(
         loss_aggregation="constant", loss_aggregation_divisor=40960.0, calculate_per_token_loss=True
@@ -447,8 +440,6 @@ def test_loss_aggregation_constant_rejects_calculate_per_token_loss(monkeypatch)
 @pytest.mark.unit
 @pytest.mark.parametrize("mode", ["sample_mean", "token_mean", "prompt_mean"])
 def test_loss_aggregation_divisor_rejected_on_non_constant_modes(monkeypatch, mode):
-    # A stray --loss-aggregation-divisor on a non-constant mode is silently ignored by the
-    # reducer; fail loud so the user is not misled about the normalization.
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(loss_aggregation=mode, loss_aggregation_divisor=40960.0)
 
@@ -458,10 +449,6 @@ def test_loss_aggregation_divisor_rejected_on_non_constant_modes(monkeypatch, mo
 
 @pytest.mark.unit
 def test_loss_aggregation_prompt_mean_rejects_non_multiple_global_batch_size(monkeypatch):
-    # prompt_mean normalizes per prompt group, but dp_schedule slices each step as a contiguous
-    # run of global_batch_size rollouts. When global_batch_size is not a multiple of
-    # n_samples_per_prompt a prompt group straddles a step boundary and its per-group
-    # normalization fragments across optimizer updates, so validation must fail loud.
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(loss_aggregation="prompt_mean", n_samples_per_prompt=4, global_batch_size=6)
 
@@ -483,8 +470,6 @@ def test_loss_aggregation_prompt_mean_accepts_multiple_global_batch_size(monkeyp
 @pytest.mark.unit
 @pytest.mark.parametrize("mode", ["sample_mean", "token_mean", "constant"])
 def test_loss_aggregation_non_prompt_mean_allows_non_multiple_global_batch_size(monkeypatch, mode):
-    # The step-straddle guard is specific to prompt_mean's per-group denominator; the other
-    # modes do not normalize per prompt group, so the same non-multiple gbs must NOT trip it.
     module = load_slime_arguments_module(monkeypatch)
     divisor = 40960.0 if mode == "constant" else None
     args = make_slime_validate_args(
