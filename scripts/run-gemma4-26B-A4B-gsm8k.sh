@@ -18,10 +18,14 @@ unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
 BASE_DIR=${BASE_DIR:-/root}
 MODEL_NAME=${MODEL_NAME:-gemma-4-26B-A4B-it}
 MODEL_DIR=${MODEL_DIR:-${BASE_DIR}/${MODEL_NAME}}
-TORCH_DIST_CKPT=${TORCH_DIST_CKPT:-${BASE_DIR}/${MODEL_NAME}_torch_dist}
-SLIME_CKPT=${SLIME_CKPT:-${BASE_DIR}/${MODEL_NAME}_slime}
 GSM8K_DIR=${GSM8K_DIR:-${BASE_DIR}/datasets/gsm8k}
 NUM_GPUS=${NUM_GPUS:-8}
+TP_SIZE=${TP_SIZE:-2}
+PP_SIZE=${PP_SIZE:-2}
+EP_SIZE=${EP_SIZE:-2}
+CP_SIZE=${CP_SIZE:-1}
+TORCH_DIST_CKPT=${TORCH_DIST_CKPT:-${BASE_DIR}/${MODEL_NAME}_tp${TP_SIZE}_pp${PP_SIZE}_ep${EP_SIZE}_cp${CP_SIZE}_torch_dist}
+SLIME_CKPT=${SLIME_CKPT:-${BASE_DIR}/${MODEL_NAME}_tp${TP_SIZE}_pp${PP_SIZE}_ep${EP_SIZE}_cp${CP_SIZE}_slime}
 
 NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
 if [ "$NVLINK_COUNT" -gt 0 ]; then
@@ -72,11 +76,11 @@ if [ "${ENABLE_EVAL:-0}" = "1" ]; then
 fi
 
 PERF_ARGS=(
-   --tensor-model-parallel-size "${TP_SIZE:-2}"
+   --tensor-model-parallel-size "${TP_SIZE}"
    --sequence-parallel
-   --pipeline-model-parallel-size "${PP_SIZE:-2}"
-   --context-parallel-size "${CP_SIZE:-1}"
-   --expert-model-parallel-size "${EP_SIZE:-2}"
+   --pipeline-model-parallel-size "${PP_SIZE}"
+   --context-parallel-size "${CP_SIZE}"
+   --expert-model-parallel-size "${EP_SIZE}"
    --expert-tensor-parallel-size 1
    --recompute-granularity full
    --recompute-method uniform

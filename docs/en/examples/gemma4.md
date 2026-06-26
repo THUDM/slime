@@ -21,6 +21,10 @@ prove that the model can train, not to report a meaningful GSM8K score. A small
 default `--entropy-coef` keeps the optimizer path active even when the tiny
 sample receives zero reward.
 
+Use a fresh converted checkpoint directory for each model and topology. The
+default paths include TP/PP/EP/CP because Megatron distributed checkpoints are
+sharded by the conversion topology.
+
 ## Prepare Checkpoints and Data
 
 ```bash
@@ -43,7 +47,10 @@ PYTHONPATH=/root/Megatron-LM torchrun --nproc-per-node 8 \
    tools/convert_hf_to_torch_dist.py \
    "${MODEL_ARGS[@]}" \
    --hf-checkpoint /root/gemma-4-31B-it \
-   --save /root/gemma-4-31B-it_torch_dist
+   --tensor-model-parallel-size 2 \
+   --pipeline-model-parallel-size 4 \
+   --context-parallel-size 1 \
+   --save /root/gemma-4-31B-it_tp2_pp4_cp1_torch_dist
 ```
 
 Convert the MoE checkpoint:
@@ -55,7 +62,11 @@ PYTHONPATH=/root/Megatron-LM torchrun --nproc-per-node 8 \
    tools/convert_hf_to_torch_dist.py \
    "${MODEL_ARGS[@]}" \
    --hf-checkpoint /root/gemma-4-26B-A4B-it \
-   --save /root/gemma-4-26B-A4B-it_torch_dist
+   --tensor-model-parallel-size 2 \
+   --pipeline-model-parallel-size 2 \
+   --expert-model-parallel-size 2 \
+   --context-parallel-size 1 \
+   --save /root/gemma-4-26B-A4B-it_tp2_pp2_ep2_cp1_torch_dist
 ```
 
 ## Run Training
