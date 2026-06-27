@@ -11,7 +11,11 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+if [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/examples/qwen3_8b_opd_tillicum/env.sh" ]]; then
+  SCRIPT_DIR="${SLURM_SUBMIT_DIR}/examples/qwen3_8b_opd_tillicum"
+else
+  SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+fi
 source "${SCRIPT_DIR}/env.sh"
 
 mkdir -p "${SLURM_LOG_DIR}" "${OPD_SAVE_DIR}" "${OPD_ROLLOUT_LOG_DIR}" "${TEACHER_LOG_DIR}"
