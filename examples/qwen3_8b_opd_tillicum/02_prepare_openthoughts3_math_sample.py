@@ -155,10 +155,12 @@ def flush_token_batch(
 ) -> int:
     if not texts:
         return processed
+    previous = processed
+    batch_size = len(texts)
     lengths.extend(encode_lengths(tokenizer, texts))
-    processed += len(texts)
+    processed += batch_size
     texts.clear()
-    if processed % 5000 == 0 or processed == total:
+    if processed // 5000 > previous // 5000 or processed == total:
         print(f"{label} token stats: {processed}/{total}", flush=True)
     return processed
 
@@ -287,18 +289,20 @@ def main() -> None:
             }
         )
 
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, cache_dir=args.hf_home, trust_remote_code=True)
-    length_stats = token_lengths(tokenizer, sft_rows, opd_rows)
-
-    sft_out.parent.mkdir(parents=True, exist_ok=True)
-    Dataset.from_list(sft_rows).to_parquet(str(sft_out))
-    write_jsonl(opd_out, opd_rows)
-
     sft_source_ids = [row["metadata"]["source_row_id"] for row in sft_rows]
     opd_source_ids = [row["metadata"]["source_row_id"] for row in opd_rows]
     overlap = sorted(set(sft_source_ids).intersection(opd_source_ids))
     if overlap:
         raise RuntimeError(f"SFT/OPD row split overlap detected: first overlaps {overlap[:10]}")
+
+    sft_out.parent.mkdir(parents=True, exist_ok=True)
+    Dataset.from_list(sft_rows).to_parquet(str(sft_out))
+    write_jsonl(opd_out, opd_rows)
+    print(f"Wrote {sft_out}")
+    print(f"Wrote {opd_out}")
+
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, cache_dir=args.hf_home, trust_remote_code=True)
+    length_stats = token_lengths(tokenizer, sft_rows, opd_rows)
 
     metadata = {
         "seed": args.seed,
@@ -335,8 +339,6 @@ def main() -> None:
     metadata_out.parent.mkdir(parents=True, exist_ok=True)
     metadata_out.write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    print(f"Wrote {sft_out}")
-    print(f"Wrote {opd_out}")
     print(f"Wrote {metadata_out}")
 
 
