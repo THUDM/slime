@@ -20,6 +20,8 @@ source "${SCRIPT_DIR}/env.sh"
 
 mkdir -p "${SLURM_LOG_DIR}" "${OPD_SAVE_DIR}" "${OPD_ROLLOUT_LOG_DIR}" "${TEACHER_LOG_DIR}"
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+  export RAY_TMPDIR="/tmp/${USER:-suryadv}/slime-ray-${SLURM_JOB_ID}"
+  mkdir -p "${RAY_TMPDIR}"
   exec >"${SLURM_LOG_DIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.log" 2>&1
 fi
 
