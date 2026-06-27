@@ -9,9 +9,9 @@ if [[ $# -eq 0 ]]; then
   exit 2
 fi
 
-if [[ ! -f "${SLIME_SIF}" ]]; then
+if [[ ! -e "${SLIME_SIF}" ]]; then
   cat >&2 <<EOF
-Missing container image:
+Missing container image/sandbox:
   ${SLIME_SIF}
 
 Create it with:

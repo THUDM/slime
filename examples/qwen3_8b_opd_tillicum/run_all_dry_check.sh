@@ -10,7 +10,7 @@ echo "Dry check environment"
 echo "  repo: ${SLIME_REPO_ROOT}"
 echo "  account/partition/qos: ${ACCOUNT}/${PARTITION}/${QOS}"
 echo "  scratch: ${SCRATCH_ROOT}"
-echo "  container: ${SLIME_SIF}"
+echo "  container (${SLIME_CONTAINER_FORMAT}): ${SLIME_SIF}"
 
 SHELL_FILES=(
   examples/qwen3_8b_opd_tillicum/env.sh
@@ -50,7 +50,7 @@ for file in "${SBATCH_FILES[@]}"; do
 done
 
 if [[ "${RUN_CONTAINER_CHECKS:-0}" == "1" ]]; then
-  if [[ -f "${SLIME_SIF}" ]]; then
+  if [[ -e "${SLIME_SIF}" ]]; then
     echo "Checking imports inside container"
     "${SCRIPT_DIR}/container_exec.sh" python -c "import slime, sglang, transformers, datasets; print('container imports ok')"
   else

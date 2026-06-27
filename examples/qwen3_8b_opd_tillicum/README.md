@@ -38,8 +38,11 @@ Important variables:
 - `OUTPUT_ROOT`: training/eval outputs. Default: `$SCRATCH_ROOT/outputs`.
 - `HF_HOME`: Hugging Face cache under scratch. Default: `$SCRATCH_ROOT/hf_home`.
 - `WANDB_MODE`: default `offline`.
-- `SLIME_SIF`: Apptainer SIF path. Default:
-  `$SCRATCH_ROOT/containers/slime_latest.sif`.
+- `SLIME_CONTAINER_FORMAT`: Apptainer image format. Default: `sandbox`,
+  because Tillicum's Apptainer produced invalid SquashFS SIFs for this large
+  Docker image during testing. Set to `sif` to force SIF output.
+- `SLIME_SIF`: Apptainer image/sandbox path. Default:
+  `$SCRATCH_ROOT/containers/slime_latest.sandbox`.
 
 The scripts avoid writing caches/checkpoints/data under home.
 

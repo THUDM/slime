@@ -34,7 +34,16 @@ export RAY_TMPDIR="${RAY_TMPDIR:-${SCRATCH_ROOT}/ray_tmp}"
 export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-${SCRATCH_ROOT}/apptainer_cache}"
 export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-${SCRATCH_ROOT}/apptainer_tmp}"
 export SLIME_IMAGE_URI="${SLIME_IMAGE_URI:-docker://slimerl/slime:latest}"
-export SLIME_SIF="${SLIME_SIF:-${SCRATCH_ROOT}/containers/slime_latest.sif}"
+export SLIME_CONTAINER_FORMAT="${SLIME_CONTAINER_FORMAT:-sandbox}"
+if [[ -z "${SLIME_SIF:-}" ]]; then
+  if [[ "${SLIME_CONTAINER_FORMAT}" == "sandbox" ]]; then
+    export SLIME_SIF="${SCRATCH_ROOT}/containers/slime_latest.sandbox"
+  else
+    export SLIME_SIF="${SCRATCH_ROOT}/containers/slime_latest.sif"
+  fi
+else
+  export SLIME_SIF
+fi
 export CONTAINER_BIND_ROOTS="${CONTAINER_BIND_ROOTS:-/gpfs/scrubbed/suryadv,/tmp}"
 export CONTAINER_HOME="${CONTAINER_HOME:-${SCRATCH_ROOT}/container_home}"
 export CONTAINER_HOME_INNER="${CONTAINER_HOME_INNER:-/home/${USER:-slime}}"
