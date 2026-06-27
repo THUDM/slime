@@ -69,21 +69,13 @@ Run the setup steps manually, in this order:
 ```bash
 bash examples/qwen3_8b_opd_tillicum/00_pull_or_load_container.sh
 bash examples/qwen3_8b_opd_tillicum/01_prepare_env.sh
-bash examples/qwen3_8b_opd_tillicum/container_exec.sh \
-  python examples/qwen3_8b_opd_tillicum/02_prepare_openthoughts3_math_sample.py
+bash examples/qwen3_8b_opd_tillicum/run_all_dry_check.sh
 ```
 
 Then launch only after explicit approval:
 
 ```bash
-jid0=$(sbatch -A "$ACCOUNT" -p "$PARTITION" --qos "$QOS" \
-  examples/qwen3_8b_opd_tillicum/03_convert_models_if_needed.sbatch | awk '{print $4}')
-jid1=$(sbatch -A "$ACCOUNT" -p "$PARTITION" --qos "$QOS" --dependency=afterok:$jid0 \
-  examples/qwen3_8b_opd_tillicum/04_run_sft_100k_8xh200.sbatch | awk '{print $4}')
-jid2=$(sbatch -A "$ACCOUNT" -p "$PARTITION" --qos "$QOS" --dependency=afterok:$jid1 \
-  examples/qwen3_8b_opd_tillicum/05_run_opd_50k_8xh200.sbatch | awk '{print $4}')
-sbatch -A "$ACCOUNT" -p "$PARTITION" --qos "$QOS" --dependency=afterok:$jid2 \
-  examples/qwen3_8b_opd_tillicum/06_eval_math500_greedy_1x.sbatch
+bash examples/qwen3_8b_opd_tillicum/submit_25k_10k_chain.sh
 ```
 
 ## Reproducing On Another Slurm Cluster
@@ -133,17 +125,7 @@ Submit the dependency chain, overriding the Tillicum `h200` gres embedded in
 the sbatch files:
 
 ```bash
-jid0=$(sbatch -A "$ACCOUNT" -p "$PARTITION" --qos "$QOS" --gres "$GPU_GRES" \
-  examples/qwen3_8b_opd_tillicum/03_convert_models_if_needed.sbatch | awk '{print $4}')
-jid1=$(sbatch -A "$ACCOUNT" -p "$PARTITION" --qos "$QOS" --gres "$GPU_GRES" \
-  --dependency=afterok:$jid0 \
-  examples/qwen3_8b_opd_tillicum/04_run_sft_100k_8xh200.sbatch | awk '{print $4}')
-jid2=$(sbatch -A "$ACCOUNT" -p "$PARTITION" --qos "$QOS" --gres "$GPU_GRES" \
-  --dependency=afterok:$jid1 \
-  examples/qwen3_8b_opd_tillicum/05_run_opd_50k_8xh200.sbatch | awk '{print $4}')
-sbatch -A "$ACCOUNT" -p "$PARTITION" --qos "$QOS" --gres "$GPU_GRES" \
-  --dependency=afterok:$jid2 \
-  examples/qwen3_8b_opd_tillicum/06_eval_math500_greedy_1x.sbatch
+GPU_GRES=gpu:h200:8 bash examples/qwen3_8b_opd_tillicum/submit_25k_10k_chain.sh
 ```
 
 If your cluster uses `--gpus-per-node` instead of `--gres`, replace the
@@ -162,9 +144,13 @@ Apptainer-specific layer.
 - Student HF snapshot: `$STUDENT_HF_DIR`
 - Teacher HF snapshot: `$TEACHER_HF_DIR`
 - Student Megatron torch_dist: `$STUDENT_TORCH_DIST_DIR`
-- SFT checkpoint: `$SFT_SAVE_DIR`
-- OPD checkpoint: `$OPD_SAVE_DIR`
-- Eval summaries: `$EVAL_OUTPUT_DIR`
+- SFT full optimizer checkpoint: `$SFT_SAVE_DIR`
+- OPD full optimizer checkpoint: `$OPD_SAVE_DIR`
+- SFT model-only eval snapshots: `$SFT_HF_SNAPSHOT_DIR`
+- OPD model-only eval snapshots: `$OPD_HF_SNAPSHOT_DIR`
+- Eval summaries and curves: `$BASE_EVAL_OUTPUT_DIR`, `$SFT_EVAL_OUTPUT_DIR`,
+  `$OPD_EVAL_OUTPUT_DIR`
+- Checkpoint storage reports: `$CHECKPOINT_REPORT_DIR`
 
 ## Slurm resources
 
@@ -174,10 +160,10 @@ passed at submit time from the environment variables above.
 
 The intended wall-clock budget after model/data/container preparation is:
 
-- SFT 100k: 2-4 hours.
-- OPD 50k: 2-3 hours.
-- MATH-500 greedy eval once for base, SFT, and OPD: <=1 hour.
+- SFT 25k: 3 hours.
+- OPD 10k: 5 hours.
+- MATH-500 greedy eval: base 1 hour, SFT curve 3 hours, OPD curve 3 hours.
 
 The main runtime risk is the Qwen3-32B teacher logprob server throughput during
-OPD. If dry measurements show the full OPD run will exceed the budget, the
-first reduced run to try is 100k SFT plus 25k OPD.
+OPD. The current conservative chain evaluates base first, then SFT milestones,
+then OPD milestones so SFT results are available before OPD starts.

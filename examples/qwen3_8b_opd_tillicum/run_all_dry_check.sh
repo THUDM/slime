@@ -14,10 +14,13 @@ echo "  container (${SLIME_CONTAINER_FORMAT}): ${SLIME_SIF}"
 
 SHELL_FILES=(
   examples/qwen3_8b_opd_tillicum/env.sh
+  examples/qwen3_8b_opd_tillicum/checkpoint_utils.sh
   examples/qwen3_8b_opd_tillicum/container_exec.sh
   examples/qwen3_8b_opd_tillicum/00_pull_or_load_container.sh
   examples/qwen3_8b_opd_tillicum/01_prepare_env.sh
   examples/qwen3_8b_opd_tillicum/run_all_dry_check.sh
+  examples/qwen3_8b_opd_tillicum/submit_25k_10k_chain.sh
+  examples/qwen3_8b_opd_tillicum/02_prepare_data_25k_10k.sbatch
   examples/qwen3_8b_opd_tillicum/03_convert_models_if_needed.sbatch
   examples/qwen3_8b_opd_tillicum/04_run_sft_100k_8xh200.sbatch
   examples/qwen3_8b_opd_tillicum/05_run_opd_50k_8xh200.sbatch
@@ -38,6 +41,7 @@ echo "Checking Python syntax"
 python3 -m py_compile "${PYTHON_FILES[@]}"
 
 SBATCH_FILES=(
+  examples/qwen3_8b_opd_tillicum/02_prepare_data_25k_10k.sbatch
   examples/qwen3_8b_opd_tillicum/03_convert_models_if_needed.sbatch
   examples/qwen3_8b_opd_tillicum/04_run_sft_100k_8xh200.sbatch
   examples/qwen3_8b_opd_tillicum/05_run_opd_50k_8xh200.sbatch

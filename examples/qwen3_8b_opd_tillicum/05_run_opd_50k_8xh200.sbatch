@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=slime-qwen3-opd50k
+#SBATCH --job-name=slime-qwen3-opd10k
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
 #SBATCH --gres=gpu:h200:8
 #SBATCH --mem=0
-#SBATCH --time=03:00:00
+#SBATCH --time=05:00:00
 #SBATCH --mail-user=suryadv@cs.washington.edu
 #SBATCH --mail-type=END,FAIL
 
@@ -17,8 +17,9 @@ else
   SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 fi
 source "${SCRIPT_DIR}/env.sh"
+source "${SCRIPT_DIR}/checkpoint_utils.sh"
 
-mkdir -p "${SLURM_LOG_DIR}" "${OPD_SAVE_DIR}" "${OPD_ROLLOUT_LOG_DIR}" "${TEACHER_LOG_DIR}"
+mkdir -p "${SLURM_LOG_DIR}" "${OPD_SAVE_DIR}" "${OPD_HF_SNAPSHOT_DIR}" "${OPD_ROLLOUT_LOG_DIR}" "${TEACHER_LOG_DIR}" "${CHECKPOINT_REPORT_DIR}"
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then
   export RAY_TMPDIR="/tmp/${USER:-suryadv}/slime-ray-${SLURM_JOB_ID}"
   mkdir -p "${RAY_TMPDIR}"
@@ -30,7 +31,7 @@ for required_path in \
   "${STUDENT_HF_DIR}" \
   "${STUDENT_TORCH_DIST_DIR}/latest_checkpointed_iteration.txt" \
   "${TEACHER_HF_DIR}" \
-  "${SFT_SAVE_DIR}/latest_checkpointed_iteration.txt"; do
+  "${SFT_FINAL_HF_DIR}"; do
   if [[ ! -e "${required_path}" ]]; then
     echo "Missing required path: ${required_path}" >&2
     exit 1
@@ -42,6 +43,14 @@ echo "OPD data: ${OPD_JSONL}"
 echo "Teacher: ${TEACHER_HF_DIR} on physical GPU ${OPD_TEACHER_GPU}"
 echo "Ray GPUs: 0-$((OPD_RAY_GPUS - 1))"
 echo "Save dir: ${OPD_SAVE_DIR}"
+echo "HF eval snapshots: ${OPD_HF_SNAPSHOT_DIR}"
+echo "Expected final OPD rollout id: ${OPD_FINAL_ROLLOUT_ID}"
+
+checkpoint_start_pruner opd "${OPD_SAVE_DIR}" "${CHECKPOINT_PRUNE_INTERVAL_SECONDS}" "${CHECKPOINT_REPORT_DIR}"
+cleanup_pruner() {
+  checkpoint_stop_pruner "${CHECKPOINT_PRUNER_PID:-}"
+}
+trap cleanup_pruner EXIT
 
 "${SCRIPT_DIR}/container_exec.sh" bash -lc '
 set -euo pipefail
@@ -90,13 +99,22 @@ echo "HAS_NVLINK=${HAS_NVLINK} (detected ${NVLINK_COUNT} NVLink references)"
 
 source scripts/models/qwen3-8B.sh
 
+if [[ -f "${OPD_SAVE_DIR}/latest_checkpointed_iteration.txt" ]]; then
+  OPD_LOAD_DIR="${OPD_SAVE_DIR}"
+  echo "Resuming OPD from ${OPD_LOAD_DIR}"
+else
+  OPD_LOAD_DIR="${SFT_FINAL_HF_DIR}"
+  echo "Starting OPD from final SFT HF snapshot ${OPD_LOAD_DIR}"
+fi
+
 CKPT_ARGS=(
+  --megatron-to-hf-mode bridge
   --hf-checkpoint "${STUDENT_HF_DIR}"
   --ref-load "${STUDENT_TORCH_DIST_DIR}"
-  --load "${SFT_SAVE_DIR}"
+  --load "${OPD_LOAD_DIR}"
   --save "${OPD_SAVE_DIR}"
   --save-interval "${OPD_SAVE_INTERVAL}"
-  --no-save-optim
+  --save-hf "${OPD_HF_SNAPSHOT_TEMPLATE}"
 )
 
 ROLLOUT_ARGS=(
@@ -157,7 +175,7 @@ OPTIMIZER_ARGS=(
 
 WANDB_ARGS=()
 if [[ "${WANDB_MODE}" != "disabled" ]]; then
-  WANDB_ARGS+=(--wandb-project slime-tillicum --wandb-group qwen3-8b-opd50k)
+  WANDB_ARGS+=(--wandb-project slime-tillicum --wandb-group qwen3-8b-opd10k)
 fi
 
 SGLANG_ARGS=(
@@ -184,7 +202,6 @@ RUNTIME_ENV_JSON="{
     \"PYTHONPATH\": \"/root/Megatron-LM:${SLIME_REPO_ROOT}\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
-    \"PYTORCH_CUDA_ALLOC_CONF\": \"expandable_segments:True\",
     \"WANDB_MODE\": \"${WANDB_MODE}\",
     \"HF_HOME\": \"${HF_HOME}\"
   }
@@ -207,5 +224,19 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6 ray job submit --address="http://127.0.0.1:82
   "${MISC_ARGS[@]}" \
   "${RM_ARGS[@]}"
 '
+
+checkpoint_stop_pruner "${CHECKPOINT_PRUNER_PID:-}"
+checkpoint_prune_old opd "${OPD_SAVE_DIR}"
+checkpoint_report opd "${OPD_SAVE_DIR}" "${CHECKPOINT_REPORT_DIR}"
+checkpoint_verify_single_latest opd "${OPD_SAVE_DIR}"
+
+if [[ -f "${SPLIT_METADATA}" ]]; then
+  cp -f "${SPLIT_METADATA}" "${OPD_SAVE_DIR}/split_metadata.json"
+fi
+
+if [[ ! -d "${OPD_FINAL_HF_DIR}" ]]; then
+  echo "Missing final OPD HF eval snapshot: ${OPD_FINAL_HF_DIR}" >&2
+  exit 1
+fi
 
 echo "Finished OPD at $(date)"

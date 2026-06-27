@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=slime-qwen3-sft100k
+#SBATCH --job-name=slime-qwen3-sft25k
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
 #SBATCH --gres=gpu:h200:8
 #SBATCH --mem=0
-#SBATCH --time=04:00:00
+#SBATCH --time=03:00:00
 #SBATCH --mail-user=suryadv@cs.washington.edu
 #SBATCH --mail-type=END,FAIL
 
@@ -17,8 +17,9 @@ else
   SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 fi
 source "${SCRIPT_DIR}/env.sh"
+source "${SCRIPT_DIR}/checkpoint_utils.sh"
 
-mkdir -p "${SLURM_LOG_DIR}" "${SFT_SAVE_DIR}" "${SFT_DETAILS_DIR}"
+mkdir -p "${SLURM_LOG_DIR}" "${SFT_SAVE_DIR}" "${SFT_HF_SNAPSHOT_DIR}" "${SFT_DETAILS_DIR}" "${CHECKPOINT_REPORT_DIR}"
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then
   export RAY_TMPDIR="/tmp/${USER:-suryadv}/slime-ray-${SLURM_JOB_ID}"
   mkdir -p "${RAY_TMPDIR}"
@@ -35,6 +36,14 @@ done
 echo "Starting SFT on $(hostname) at $(date)"
 echo "SFT data: ${SFT_PARQUET}"
 echo "Save dir: ${SFT_SAVE_DIR}"
+echo "HF eval snapshots: ${SFT_HF_SNAPSHOT_DIR}"
+echo "Expected final SFT rollout id: ${SFT_FINAL_ROLLOUT_ID}"
+
+checkpoint_start_pruner sft "${SFT_SAVE_DIR}" "${CHECKPOINT_PRUNE_INTERVAL_SECONDS}" "${CHECKPOINT_REPORT_DIR}"
+cleanup() {
+  checkpoint_stop_pruner "${CHECKPOINT_PRUNER_PID:-}"
+}
+trap cleanup EXIT
 
 "${SCRIPT_DIR}/container_exec.sh" bash -lc '
 set -euo pipefail
@@ -58,7 +67,7 @@ CKPT_ARGS=(
   --load "${SFT_SAVE_DIR}"
   --save "${SFT_SAVE_DIR}"
   --save-interval "${SFT_SAVE_INTERVAL}"
-  --no-save-optim
+  --save-hf "${SFT_HF_SNAPSHOT_TEMPLATE}"
 )
 
 SFT_ARGS=(
@@ -103,7 +112,7 @@ OPTIMIZER_ARGS=(
 
 WANDB_ARGS=()
 if [[ "${WANDB_MODE}" != "disabled" ]]; then
-  WANDB_ARGS+=(--wandb-project slime-tillicum --wandb-group qwen3-8b-sft100k)
+  WANDB_ARGS+=(--wandb-project slime-tillicum --wandb-group qwen3-8b-sft25k)
 fi
 
 MISC_ARGS=(
@@ -145,5 +154,19 @@ ray job submit --address="http://127.0.0.1:8265" \
   "${PERF_ARGS[@]}" \
   "${MISC_ARGS[@]}"
 '
+
+checkpoint_stop_pruner "${CHECKPOINT_PRUNER_PID:-}"
+checkpoint_prune_old sft "${SFT_SAVE_DIR}"
+checkpoint_report sft "${SFT_SAVE_DIR}" "${CHECKPOINT_REPORT_DIR}"
+checkpoint_verify_single_latest sft "${SFT_SAVE_DIR}"
+
+if [[ -f "${SPLIT_METADATA}" ]]; then
+  cp -f "${SPLIT_METADATA}" "${SFT_SAVE_DIR}/split_metadata.json"
+fi
+
+if [[ ! -d "${SFT_FINAL_HF_DIR}" ]]; then
+  echo "Missing final SFT HF eval snapshot: ${SFT_FINAL_HF_DIR}" >&2
+  exit 1
+fi
 
 echo "Finished SFT at $(date)"
