@@ -125,6 +125,21 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def iter_dataset_rows(ds: Dataset, indices: list[int], label: str, batch_size: int = 1000):
+    selected = ds.select(indices)
+    total = len(indices)
+    seen = 0
+    for batch in selected.iter(batch_size=batch_size):
+        keys = list(batch.keys())
+        if not keys:
+            continue
+        for row_idx in range(len(batch[keys[0]])):
+            seen += 1
+            if seen % 5000 == 0 or seen == total:
+                print(f"{label}: {seen}/{total}", flush=True)
+            yield {key: batch[key][row_idx] for key in keys}
+
+
 def token_lengths(tokenizer: Any, sft_rows: list[dict[str, Any]], opd_rows: list[dict[str, Any]]) -> dict[str, Any]:
     sft_lengths: list[int] = []
     for row in sft_rows:
@@ -192,15 +207,16 @@ def main() -> None:
     rng = random.Random(args.seed)
     shuffled = list(range(len(math_ds)))
     rng.shuffle(shuffled)
-    sft_indices = shuffled[: args.sft_size]
-    opd_indices = shuffled[args.sft_size : required]
+    # Split membership is seeded by the shuffled order. Materialize in dataset
+    # order to avoid very slow random Arrow row reads on GPFS.
+    sft_indices = sorted(shuffled[: args.sft_size])
+    opd_indices = sorted(shuffled[args.sft_size : required])
 
     sft_rows: list[dict[str, Any]] = []
     opd_rows: list[dict[str, Any]] = []
 
     print(f"Building SFT rows: {len(sft_indices)}")
-    for idx in sft_indices:
-        row = math_ds[int(idx)]
+    for row in iter_dataset_rows(math_ds, sft_indices, "SFT rows"):
         messages = extract_messages(row)
         prompt = extract_prompt(row, messages)
         source_row_id = int(row["source_row_id"])
@@ -218,8 +234,7 @@ def main() -> None:
         )
 
     print(f"Building OPD rows: {len(opd_indices)}")
-    for idx in opd_indices:
-        row = math_ds[int(idx)]
+    for row in iter_dataset_rows(math_ds, opd_indices, "OPD rows"):
         messages = extract_messages(row)
         prompt = extract_prompt(row, messages)
         source_row_id = int(row["source_row_id"])
@@ -258,6 +273,7 @@ def main() -> None:
             "value": args.math_value,
             "operation": "case-insensitive equality",
         },
+        "sample_materialization": "Seeded split membership, indices sorted within each split before row materialization.",
         "counts": {
             "source_rows_seen": len(ds),
             "math_rows_after_filter": len(math_ds),
