@@ -12,6 +12,8 @@ import statistics
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 
@@ -123,6 +125,23 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def write_parquet_rows(path: Path, rows: list[dict[str, Any]], batch_size: int = 1000) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    writer: pq.ParquetWriter | None = None
+    try:
+        for start in range(0, len(rows), batch_size):
+            end = min(start + batch_size, len(rows))
+            table = pa.Table.from_pylist(rows[start:end])
+            if writer is None:
+                writer = pq.ParquetWriter(str(path), table.schema)
+            writer.write_table(table)
+            if end % 5000 == 0 or end == len(rows):
+                print(f"Parquet rows: {end}/{len(rows)}", flush=True)
+    finally:
+        if writer is not None:
+            writer.close()
 
 
 def iter_dataset_rows(ds: Dataset, indices: list[int], label: str, batch_size: int = 1000):
@@ -295,8 +314,7 @@ def main() -> None:
     if overlap:
         raise RuntimeError(f"SFT/OPD row split overlap detected: first overlaps {overlap[:10]}")
 
-    sft_out.parent.mkdir(parents=True, exist_ok=True)
-    Dataset.from_list(sft_rows).to_parquet(str(sft_out))
+    write_parquet_rows(sft_out, sft_rows)
     write_jsonl(opd_out, opd_rows)
     print(f"Wrote {sft_out}")
     print(f"Wrote {opd_out}")
