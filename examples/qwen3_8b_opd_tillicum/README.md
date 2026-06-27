@@ -86,9 +86,77 @@ sbatch -A "$ACCOUNT" -p "$PARTITION" --qos "$QOS" --dependency=afterok:$jid2 \
   examples/qwen3_8b_opd_tillicum/06_eval_math500_greedy_1x.sbatch
 ```
 
+## Reproducing On Another Slurm Cluster
+
+These wrappers are Tillicum-shaped, but the core workflow is portable to a
+Slurm cluster with Apptainer or Singularity, one 8-GPU node per job, outbound
+access to Hugging Face and Docker Hub, and enough scratch space for large model
+checkpoints.
+
+Clone the fork and switch to the reproduction branch:
+
+```bash
+git clone https://github.com/suryathecreator/slime.git
+cd slime
+git checkout opd-reproduction
+```
+
+Choose cluster-local paths and Slurm settings. Keep all generated state on
+scratch or project storage, not home:
+
+```bash
+export ACCOUNT="<your-account>"
+export PARTITION="<your-gpu-partition>"
+export QOS="<your-qos>"
+export SCRATCH_ROOT="/path/to/scratch/${USER}/slime-qwen3-8b-opd"
+export CONTAINER_BIND_ROOTS="$(pwd),${SCRATCH_ROOT},/tmp"
+
+# Match your site's GPU gres. Examples: gpu:8, gpu:a100:8, gpu:h100:8.
+export GPU_GRES="gpu:8"
+
+# Use sif if your Apptainer can build a normal SIF for slimerl/slime:latest.
+export SLIME_CONTAINER_FORMAT="sandbox"
+
+source examples/qwen3_8b_opd_tillicum/env.sh
+```
+
+Run the same preparation commands:
+
+```bash
+bash examples/qwen3_8b_opd_tillicum/00_pull_or_load_container.sh
+bash examples/qwen3_8b_opd_tillicum/01_prepare_env.sh
+bash examples/qwen3_8b_opd_tillicum/container_exec.sh \
+  python examples/qwen3_8b_opd_tillicum/02_prepare_openthoughts3_math_sample.py
+```
+
+Submit the dependency chain, overriding the Tillicum `h200` gres embedded in
+the sbatch files:
+
+```bash
+jid0=$(sbatch -A "$ACCOUNT" -p "$PARTITION" --qos "$QOS" --gres "$GPU_GRES" \
+  examples/qwen3_8b_opd_tillicum/03_convert_models_if_needed.sbatch | awk '{print $4}')
+jid1=$(sbatch -A "$ACCOUNT" -p "$PARTITION" --qos "$QOS" --gres "$GPU_GRES" \
+  --dependency=afterok:$jid0 \
+  examples/qwen3_8b_opd_tillicum/04_run_sft_100k_8xh200.sbatch | awk '{print $4}')
+jid2=$(sbatch -A "$ACCOUNT" -p "$PARTITION" --qos "$QOS" --gres "$GPU_GRES" \
+  --dependency=afterok:$jid1 \
+  examples/qwen3_8b_opd_tillicum/05_run_opd_50k_8xh200.sbatch | awk '{print $4}')
+sbatch -A "$ACCOUNT" -p "$PARTITION" --qos "$QOS" --gres "$GPU_GRES" \
+  --dependency=afterok:$jid2 \
+  examples/qwen3_8b_opd_tillicum/06_eval_math500_greedy_1x.sbatch
+```
+
+If your cluster uses `--gpus-per-node` instead of `--gres`, replace the
+`--gres "$GPU_GRES"` arguments above with your site's GPU request flag. If your
+cluster uses Docker rather than Apptainer/Singularity, run the same Python and
+Slurm entrypoints inside `slimerl/slime:latest` and bind the repo plus
+`$SCRATCH_ROOT` into the container; `container_exec.sh` is the only
+Apptainer-specific layer.
+
 ## Outputs
 
-- SFT split: `$SFT_PARQUET`
+- SFT split: `$SFT_PARQUET` (JSONL by default despite the legacy variable
+  name).
 - OPD prompt split: `$OPD_JSONL`
 - Data metadata: `$SPLIT_METADATA`
 - Student HF snapshot: `$STUDENT_HF_DIR`
