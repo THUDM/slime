@@ -48,19 +48,14 @@ See [docs/en/advanced/delta-weight-sync.md](../../docs/en/advanced/delta-weight-
 
 ## Results
 
-W&B traces comparing delta sync against the full-sync baseline on GLM-4.7-355B-A32B / DAPO-Math-17k.
+W&B traces comparing delta sync against the full-sync baseline on GLM-4.7-355B-A32B / DAPO-Math-17k track:
 
-![Raw reward](./raw_reward.png)
-
-![Train/rollout logprob abs diff](./train_rollout_logprob_abs_diff.png)
-
-![Update weights time](./update_weights_time.png)
+- `raw_reward` — training reward curve vs full-sync baseline
+- `train/train_rollout_logprob_abs_diff` — token-level logprob mismatch between train and rollout
+- `perf/update_weights_time` — wall time per weight sync
+- `perf/update_weights_density` — fraction of weight positions that moved between consecutive syncs (sync 0 omitted: snapshot-seeding pass with density = 1.0)
 
 > **Note on the small curve-to-curve gap.** RL training is inherently non-deterministic (cuBLAS reductions, FlashAttention split-K, NCCL all-reduce ordering, dynamic-batch token assignment). Two identically-configured *full*-sync runs would diverge the same way. Delta sync's selective overwrite is bit-exact with full sync per step (no arithmetic, no drift); the trajectory matches, the bits don't.
-
-![Update weights density](./update_weights_density.png)
-
-*Per-sync change density (`perf/update_weights_density`) — fraction of weight positions that moved between consecutive syncs. Sync 0 is omitted: it's the snapshot-seeding pass with density = 1.0, which would compress the y-axis.*
 
 ## Why these encoding defaults
 
