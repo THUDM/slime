@@ -140,25 +140,61 @@ def iter_dataset_rows(ds: Dataset, indices: list[int], label: str, batch_size: i
             yield {key: batch[key][row_idx] for key in keys}
 
 
+def encode_lengths(tokenizer: Any, texts: list[str]) -> list[int]:
+    encoded = tokenizer(texts, add_special_tokens=False)
+    return [len(input_ids) for input_ids in encoded["input_ids"]]
+
+
+def flush_token_batch(
+    tokenizer: Any,
+    texts: list[str],
+    lengths: list[int],
+    label: str,
+    processed: int,
+    total: int,
+) -> int:
+    if not texts:
+        return processed
+    lengths.extend(encode_lengths(tokenizer, texts))
+    processed += len(texts)
+    texts.clear()
+    if processed % 5000 == 0 or processed == total:
+        print(f"{label} token stats: {processed}/{total}", flush=True)
+    return processed
+
+
 def token_lengths(tokenizer: Any, sft_rows: list[dict[str, Any]], opd_rows: list[dict[str, Any]]) -> dict[str, Any]:
     sft_lengths: list[int] = []
+    sft_text_batch: list[str] = []
+    sft_processed = 0
     for row in sft_rows:
         messages = row["messages"]
         try:
-            ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=False)
+            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
         except Exception:
             text = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
-            ids = tokenizer(text, add_special_tokens=False)["input_ids"]
-        sft_lengths.append(len(ids))
+        sft_text_batch.append(text)
+        if len(sft_text_batch) >= 256:
+            sft_processed = flush_token_batch(
+                tokenizer, sft_text_batch, sft_lengths, "SFT", sft_processed, len(sft_rows)
+            )
+    sft_processed = flush_token_batch(tokenizer, sft_text_batch, sft_lengths, "SFT", sft_processed, len(sft_rows))
 
     opd_lengths: list[int] = []
+    opd_text_batch: list[str] = []
+    opd_processed = 0
     for row in opd_rows:
         messages = [{"role": "user", "content": row["prompt"]}]
         try:
-            ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         except Exception:
-            ids = tokenizer(row["prompt"], add_special_tokens=False)["input_ids"]
-        opd_lengths.append(len(ids))
+            text = row["prompt"]
+        opd_text_batch.append(text)
+        if len(opd_text_batch) >= 256:
+            opd_processed = flush_token_batch(
+                tokenizer, opd_text_batch, opd_lengths, "OPD", opd_processed, len(opd_rows)
+            )
+    opd_processed = flush_token_batch(tokenizer, opd_text_batch, opd_lengths, "OPD", opd_processed, len(opd_rows))
 
     def stats(values: list[int]) -> dict[str, float | int]:
         return {
