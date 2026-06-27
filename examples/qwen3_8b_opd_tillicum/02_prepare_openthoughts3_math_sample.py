@@ -144,6 +144,13 @@ def write_parquet_rows(path: Path, rows: list[dict[str, Any]], batch_size: int =
             writer.close()
 
 
+def write_sft_rows(path: Path, rows: list[dict[str, Any]]) -> None:
+    if path.suffix == ".jsonl":
+        write_jsonl(path, rows)
+    else:
+        write_parquet_rows(path, rows)
+
+
 def iter_dataset_rows(ds: Dataset, indices: list[int], label: str, batch_size: int = 1000):
     selected = ds.select(indices)
     total = len(indices)
@@ -314,7 +321,7 @@ def main() -> None:
     if overlap:
         raise RuntimeError(f"SFT/OPD row split overlap detected: first overlaps {overlap[:10]}")
 
-    write_parquet_rows(sft_out, sft_rows)
+    write_sft_rows(sft_out, sft_rows)
     write_jsonl(opd_out, opd_rows)
     print(f"Wrote {sft_out}")
     print(f"Wrote {opd_out}")
@@ -339,7 +346,7 @@ def main() -> None:
             "opd": len(opd_rows),
         },
         "outputs": {
-            "sft_parquet": str(sft_out),
+            "sft_data": str(sft_out),
             "opd_jsonl": str(opd_out),
         },
         "source_row_ids": {

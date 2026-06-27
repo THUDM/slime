@@ -64,7 +64,7 @@ export DATA_MATH_FIELD="${DATA_MATH_FIELD:-domain}"
 export DATA_MATH_VALUE="${DATA_MATH_VALUE:-math}"
 export OT3_SPLIT="${OT3_SPLIT:-train}"
 
-export SFT_PARQUET="${SFT_PARQUET:-${DATA_ROOT}/openthoughts3_math_sft_${SFT_SIZE}.parquet}"
+export SFT_PARQUET="${SFT_PARQUET:-${DATA_ROOT}/openthoughts3_math_sft_${SFT_SIZE}.jsonl}"
 export OPD_JSONL="${OPD_JSONL:-${DATA_ROOT}/openthoughts3_math_opd_${OPD_SIZE}.jsonl}"
 export SPLIT_METADATA="${SPLIT_METADATA:-${DATA_ROOT}/openthoughts3_math_split_metadata.json}"
 export MATH500_JSONL="${MATH500_JSONL:-${DATA_ROOT}/math500_deepscaler.jsonl}"
