@@ -21,9 +21,15 @@ checkpoint_latest_dir() {
   printf "%s/%s" "${save_dir}" "$(checkpoint_iter_name "${iteration}")"
 }
 
+checkpoint_is_complete() {
+  local checkpoint_dir="$1"
+  [[ -d "${checkpoint_dir}" && -f "${checkpoint_dir}/.metadata" ]]
+}
+
 checkpoint_prune_old() {
   local stage="$1"
   local save_dir="$2"
+  local mode="${3:-background}"
   local latest_dir
   latest_dir="$(checkpoint_latest_dir "${save_dir}")" || return 0
 
@@ -32,9 +38,22 @@ checkpoint_prune_old() {
     return 0
   fi
 
+  if ! checkpoint_is_complete "${latest_dir}"; then
+    if [[ "${mode}" == "final" ]]; then
+      echo "CHECKPOINT_PRUNE_FAIL stage=${stage} latest_incomplete=${latest_dir}" >&2
+      return 1
+    fi
+    echo "CHECKPOINT_PRUNE_WAIT stage=${stage} latest_incomplete=${latest_dir}"
+    return 0
+  fi
+
   local dir
   find "${save_dir}" -maxdepth 1 -type d -name 'iter_*' -print | while IFS= read -r dir; do
     if [[ "${dir}" != "${latest_dir}" ]]; then
+      if [[ "${mode}" != "final" ]] && ! checkpoint_is_complete "${dir}"; then
+        echo "CHECKPOINT_PRUNE_SKIP_INCOMPLETE stage=${stage} dir=${dir}"
+        continue
+      fi
       echo "CHECKPOINT_PRUNE_REMOVE stage=${stage} dir=${dir}"
       rm -rf -- "${dir}"
     fi
@@ -52,6 +71,10 @@ checkpoint_report() {
   latest_dir="${save_dir}/$(checkpoint_iter_name "${iteration}")"
   if [[ ! -d "${latest_dir}" ]]; then
     echo "Missing latest checkpoint dir: ${latest_dir}" >&2
+    return 1
+  fi
+  if ! checkpoint_is_complete "${latest_dir}"; then
+    echo "Latest checkpoint is incomplete: ${latest_dir}" >&2
     return 1
   fi
 
@@ -88,6 +111,10 @@ checkpoint_verify_single_latest() {
     echo "CHECKPOINT_PRUNE_FAIL stage=${stage} missing_latest=${latest_dir}" >&2
     return 1
   fi
+  if ! checkpoint_is_complete "${latest_dir}"; then
+    echo "CHECKPOINT_PRUNE_FAIL stage=${stage} incomplete_latest=${latest_dir}" >&2
+    return 1
+  fi
 
   echo "CHECKPOINT_PRUNE_OK stage=${stage} remaining_iter=$(basename "${latest_dir}")"
 }
@@ -107,7 +134,7 @@ checkpoint_start_pruner() {
         iteration="$(checkpoint_latest_iteration "${save_dir}" 2>/dev/null)"
         if [[ -n "${iteration}" && "${iteration}" != "${last_reported_iteration}" ]]; then
           latest_dir="${save_dir}/$(checkpoint_iter_name "${iteration}")"
-          if [[ -d "${latest_dir}" ]]; then
+          if checkpoint_is_complete "${latest_dir}"; then
             checkpoint_report "${stage}" "${save_dir}" "${report_dir}"
             last_reported_iteration="${iteration}"
           fi

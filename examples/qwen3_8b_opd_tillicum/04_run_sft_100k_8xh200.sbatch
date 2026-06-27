@@ -156,7 +156,7 @@ ray job submit --address="http://127.0.0.1:8265" \
 '
 
 checkpoint_stop_pruner "${CHECKPOINT_PRUNER_PID:-}"
-checkpoint_prune_old sft "${SFT_SAVE_DIR}"
+checkpoint_prune_old sft "${SFT_SAVE_DIR}" final
 checkpoint_report sft "${SFT_SAVE_DIR}" "${CHECKPOINT_REPORT_DIR}"
 checkpoint_verify_single_latest sft "${SFT_SAVE_DIR}"
 

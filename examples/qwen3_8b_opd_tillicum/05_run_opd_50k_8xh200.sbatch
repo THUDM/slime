@@ -226,7 +226,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6 ray job submit --address="http://127.0.0.1:82
 '
 
 checkpoint_stop_pruner "${CHECKPOINT_PRUNER_PID:-}"
-checkpoint_prune_old opd "${OPD_SAVE_DIR}"
+checkpoint_prune_old opd "${OPD_SAVE_DIR}" final
 checkpoint_report opd "${OPD_SAVE_DIR}" "${CHECKPOINT_REPORT_DIR}"
 checkpoint_verify_single_latest opd "${OPD_SAVE_DIR}"
 
