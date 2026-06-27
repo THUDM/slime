@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --gres=gpu:h200:8
 #SBATCH --mem=0
-#SBATCH --time=05:00:00
+#SBATCH --time=10:00:00
 #SBATCH --mail-user=suryadv@cs.washington.edu
 #SBATCH --mail-type=END,FAIL
 

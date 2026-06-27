@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import math
+import re
 import struct
 import zlib
 from pathlib import Path
@@ -26,27 +27,73 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def reward_value(sample: dict[str, Any]) -> float:
-    reward = sample.get("reward", 0.0)
-    if isinstance(reward, dict):
-        for key in ("reward", "score", "acc", "accuracy"):
-            if key in reward:
-                return float(reward[key])
-        return 0.0
-    return float(reward or 0.0)
+FINAL_ANSWER_RE = re.compile(r"(?i)\b(?:final\s+answer|answer)\s*(?:is|:)\s*(?P<answer>.+)$")
 
 
-def extract_answer_or_none(response: str) -> str | None:
-    try:
-        from slime.rollout.rm_hub.math_utils import extract_answer
-    except Exception:
-        return None
-
+def answer_segment(response: str) -> str:
     if "</think>" in response:
-        response = response.split("</think>")[-1]
-    elif "###Response" in response:
-        response = response.split("###Response", 1)[1]
-    return extract_answer(response)
+        return response.rsplit("</think>", 1)[1]
+    if "###Response" in response:
+        return response.split("###Response", 1)[1]
+    return response
+
+
+def clean_final_answer_candidate(candidate: str) -> str:
+    candidate = candidate.strip()
+    candidate = re.split(r"<\|endoftext\|>|</s>|<pad>", candidate, maxsplit=1)[0].strip()
+    candidate = candidate.split(". ", 1)[0].strip()
+    candidate = candidate.split("\n", 1)[0].strip()
+
+    for left, right in (("\\(", "\\)"), ("\\[", "\\]"), ("$", "$")):
+        if candidate.startswith(left) and candidate.endswith(right):
+            candidate = candidate[len(left) : -len(right)].strip()
+
+    while candidate and candidate[-1] in ".,;:":
+        candidate = candidate[:-1].strip()
+    return candidate
+
+
+def extract_prediction(response: str) -> str | None:
+    from slime.rollout.rm_hub.math_utils import extract_answer
+
+    segment = answer_segment(response)
+    boxed = extract_answer(segment)
+    if boxed is not None:
+        return boxed
+
+    for line in reversed(segment.splitlines()):
+        match = FINAL_ANSWER_RE.search(line.strip())
+        if not match:
+            continue
+        candidate = clean_final_answer_candidate(match.group("answer"))
+        if candidate and len(candidate) <= 120:
+            return candidate
+    return None
+
+
+def extract_ground_truth(label: Any) -> str:
+    from slime.rollout.rm_hub.math_utils import extract_answer
+
+    ground_truth = str(label)
+    if "\\boxed" in ground_truth:
+        boxed = extract_answer(ground_truth)
+        if boxed is not None:
+            return boxed
+    return ground_truth
+
+
+def score_sample(sample: dict[str, Any]) -> tuple[float, bool]:
+    from slime.rollout.rm_hub.math_utils import grade_answer_mathd, grade_answer_sympy
+
+    response = str(sample.get("response", ""))
+    label = sample.get("label", "")
+    prediction = extract_prediction(response)
+    if prediction is None:
+        return 0.0, False
+
+    ground_truth = extract_ground_truth(label)
+    is_correct = grade_answer_mathd(prediction, ground_truth) or grade_answer_sympy(prediction, ground_truth)
+    return float(is_correct), True
 
 
 def summarize_debug_file(
@@ -60,15 +107,12 @@ def summarize_debug_file(
     if not samples:
         raise RuntimeError(f"No samples found in {debug_file}")
 
-    rewards = [reward_value(sample) for sample in samples]
+    scores_and_parseable = [score_sample(sample) for sample in samples]
+    rewards = [score for score, _ in scores_and_parseable]
+    parseable_count = sum(1 for _, parseable in scores_and_parseable if parseable)
     response_lengths = [int(sample.get("response_length") or 0) for sample in samples]
     statuses = [str(sample.get("status", "")) for sample in samples]
-
-    parse_failures = 0
-    for sample in samples:
-        response = str(sample.get("response", ""))
-        if extract_answer_or_none(response) is None:
-            parse_failures += 1
+    parse_failures = len(samples) - parseable_count
 
     cap_hits = 0
     for length, status in zip(response_lengths, statuses, strict=True):
@@ -77,12 +121,16 @@ def summarize_debug_file(
 
     n = len(samples)
     accuracy = sum(rewards) / n
+    accuracy_on_parseable = sum(rewards) / parseable_count if parseable_count else None
     return {
         "stage": stage,
         "train_samples": train_samples,
         "debug_file": str(debug_file),
         "n": n,
+        "correct_count": int(sum(rewards)),
+        "parseable_count": parseable_count,
         "accuracy": accuracy,
+        "accuracy_on_parseable": accuracy_on_parseable,
         "mean_accuracy": accuracy,
         "std_accuracy": None,
         "avg_generated_tokens": sum(response_lengths) / n,
@@ -118,6 +166,7 @@ def write_accuracy_curve_csv(path: Path, summaries: list[dict[str, Any]]) -> Non
                 "stage",
                 "train_samples",
                 "accuracy",
+                "accuracy_on_parseable",
                 "avg_generated_tokens",
                 "parse_failure_rate",
                 "cap_hit_rate",
@@ -130,6 +179,7 @@ def write_accuracy_curve_csv(path: Path, summaries: list[dict[str, Any]]) -> Non
                     "stage": item.get("stage"),
                     "train_samples": item.get("train_samples"),
                     "accuracy": item.get("accuracy"),
+                    "accuracy_on_parseable": item.get("accuracy_on_parseable"),
                     "avg_generated_tokens": item.get("avg_generated_tokens"),
                     "parse_failure_rate": item.get("parse_failure_rate"),
                     "cap_hit_rate": item.get("cap_hit_rate"),

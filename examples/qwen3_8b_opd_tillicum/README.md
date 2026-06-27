@@ -160,10 +160,15 @@ passed at submit time from the environment variables above.
 
 The intended wall-clock budget after model/data/container preparation is:
 
-- SFT 25k: 3 hours.
-- OPD 10k: 5 hours.
-- MATH-500 greedy eval: base 1 hour, SFT curve 3 hours, OPD curve 3 hours.
+- SFT 25k: 8 hours.
+- OPD 10k: 10 hours.
+- MATH-500 greedy eval: base 2 hours, SFT curve 5 hours, OPD curve 5 hours.
 
 The main runtime risk is the Qwen3-32B teacher logprob server throughput during
-OPD. The current conservative chain evaluates base first, then SFT milestones,
-then OPD milestones so SFT results are available before OPD starts.
+OPD. The current conservative chain runs SFT, evaluates SFT milestones, runs
+OPD, evaluates OPD milestones, then runs the fixed base eval so SFT results are
+available before OPD starts.
+
+MATH-500 summaries report `accuracy` with parse failures counted wrong,
+`accuracy_on_parseable` as a diagnostic over parseable responses only, and
+`parse_failure_rate` separately.

@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --gres=gpu:h200:8
 #SBATCH --mem=0
-#SBATCH --time=03:00:00
+#SBATCH --time=02:00:00
 #SBATCH --mail-user=suryadv@cs.washington.edu
 #SBATCH --mail-type=END,FAIL
 
@@ -67,7 +67,7 @@ cfg.write_text(
     "  datasets:\n"
     "    - name: math500\n"
     f"      path: {out}\n"
-    "      rm_type: deepscaler\n",
+    "      rm_type: math\n",
     encoding="utf-8",
 )
 print(f"Wrote {out}")
@@ -119,7 +119,7 @@ run_eval() {
     --rollout-temperature 0
     --rollout-top-p 1
     --global-batch-size "${EVAL_ROLLOUT_BATCH_SIZE}"
-    --rm-type deepscaler
+    --rm-type math
     --save-debug-rollout-data "${stage_dir}/debug_{rollout_id}.pt"
   )
 
