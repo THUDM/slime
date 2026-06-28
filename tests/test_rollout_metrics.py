@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import torch
 
-from slime.ray.rollout import _compute_top_p_kept_vocab_metrics
+from slime.ray.rollout import _compute_top_p_kept_vocab_metrics, _compute_zero_std_metrics
 from slime.utils.misc import decode_int32_meta_array
 from slime.utils.types import Sample
 
@@ -14,6 +14,37 @@ NUM_GPUS = 0
 
 def _make_args():
     return Namespace(sglang_speculative_algorithm=False, num_layers=2, moe_router_topk=2)
+
+
+def _make_reward_args():
+    return Namespace(advantage_estimator="grpo", reward_key=None)
+
+
+@pytest.mark.unit
+def test_zero_std_metric_keeps_numeric_reward_buckets():
+    samples = [
+        Sample(group_index=0, reward=1.04),
+        Sample(group_index=0, reward=1.04),
+        Sample(group_index=1, reward=0.0),
+        Sample(group_index=1, reward=0.0),
+    ]
+
+    assert _compute_zero_std_metrics(_make_reward_args(), samples) == {
+        "zero_std/count_0.0": 1,
+        "zero_std/count_1.0": 1,
+    }
+
+
+@pytest.mark.unit
+def test_zero_std_metric_skips_non_scalar_reward_buckets():
+    samples = [
+        Sample(group_index=0, reward={"meta_info": {"input_token_logprobs": []}}),
+        Sample(group_index=0, reward={"meta_info": {"input_token_logprobs": []}}),
+        Sample(group_index=1, reward=0.0),
+        Sample(group_index=1, reward=0.0),
+    ]
+
+    assert _compute_zero_std_metrics(_make_reward_args(), samples) == {"zero_std/count_0.0": 1}
 
 
 @pytest.mark.unit
