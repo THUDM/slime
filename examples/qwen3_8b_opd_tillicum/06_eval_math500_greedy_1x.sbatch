@@ -28,11 +28,60 @@ fi
 echo "Starting MATH-500 greedy eval on $(hostname) at $(date)"
 echo "Eval targets: ${EVAL_TARGETS}"
 echo "Eval output: ${EVAL_OUTPUT_DIR}"
+echo "Eval skip completed: ${EVAL_SKIP_COMPLETED}"
 
 "${SCRIPT_DIR}/container_exec.sh" bash -lc '
 set -euo pipefail
 cd "${SLIME_REPO_ROOT}"
 
+aggregate_if_available() {
+  local dir="$1"
+  local label="$2"
+  if [[ -d "${dir}" ]] && find "${dir}" -mindepth 2 -maxdepth 2 -name summary.json -print -quit | grep -q .; then
+    echo "Aggregating ${label}: ${dir}"
+    python3 examples/qwen3_8b_opd_tillicum/summarize_eval.py \
+      --aggregate-dir "${dir}" \
+      --out-json "${dir}/summary_all.json"
+  else
+    echo "No per-stage summaries to aggregate for ${label}: ${dir}"
+  fi
+}
+
+write_combined_report() {
+  local found_summary=0
+  local report_dir
+  for report_dir in "${BASE_EVAL_OUTPUT_DIR}" "${SFT_EVAL_OUTPUT_DIR}" "${OPD_EVAL_OUTPUT_DIR}"; do
+    if [[ -d "${report_dir}" ]] && find "${report_dir}" -mindepth 2 -maxdepth 2 -name summary.json -print -quit | grep -q .; then
+      found_summary=1
+      break
+    fi
+  done
+
+  if [[ "${found_summary}" -eq 1 ]]; then
+    mkdir -p "${COMBINED_EVAL_OUTPUT_DIR}"
+    echo "Writing combined eval report: ${COMBINED_EVAL_OUTPUT_DIR}"
+    python3 examples/qwen3_8b_opd_tillicum/summarize_eval.py \
+      --combined-output-dir "${COMBINED_EVAL_OUTPUT_DIR}" \
+      --base-dir "${BASE_EVAL_OUTPUT_DIR}" \
+      --sft-dir "${SFT_EVAL_OUTPUT_DIR}" \
+      --opd-dir "${OPD_EVAL_OUTPUT_DIR}" \
+      --sft-total-samples "$((SFT_NUM_ROLLOUT * SFT_ROLLOUT_BATCH_SIZE))" \
+      --sft-rollout-batch-size "${SFT_ROLLOUT_BATCH_SIZE}" \
+      --opd-rollout-batch-size "${OPD_ROLLOUT_BATCH_SIZE}" \
+      --out-json "${COMBINED_EVAL_OUTPUT_DIR}/summary_all.json"
+  else
+    echo "No summaries available for combined report yet."
+  fi
+}
+
+write_all_reports() {
+  aggregate_if_available "${BASE_EVAL_OUTPUT_DIR}" base
+  aggregate_if_available "${SFT_EVAL_OUTPUT_DIR}" sft
+  aggregate_if_available "${OPD_EVAL_OUTPUT_DIR}" opd
+  write_combined_report
+}
+
+if [[ "${EVAL_TARGETS}" != "report" ]]; then
 python3 - <<PY
 import json
 import os
@@ -73,13 +122,42 @@ cfg.write_text(
 print(f"Wrote {out}")
 print(f"Wrote {cfg}")
 PY
+fi
 
 run_eval() {
   local stage="$1"
   local load_dir="$2"
   local train_samples="$3"
   local stage_dir="${EVAL_OUTPUT_DIR}/${stage}"
+  local summary_file="${stage_dir}/summary.json"
+  local debug_file="${stage_dir}/debug_eval_0.pt"
   mkdir -p "${stage_dir}"
+
+  summarize_stage() {
+    python3 examples/qwen3_8b_opd_tillicum/summarize_eval.py \
+      --stage "${stage}" \
+      --debug-file "${debug_file}" \
+      --out-json "${summary_file}" \
+      --max-response-len "${EVAL_MAX_RESPONSE_LEN}" \
+      --expected-samples "${EVAL_EXPECTED_SAMPLES}" \
+      --train-samples "${train_samples}"
+  }
+
+  if [[ "${EVAL_SKIP_COMPLETED}" == "1" && -s "${summary_file}" ]]; then
+    echo "EVAL_SKIP_COMPLETED stage=${stage} summary=${summary_file}"
+    aggregate_if_available "${EVAL_OUTPUT_DIR}" current
+    return
+  fi
+
+  if [[ "${EVAL_SKIP_COMPLETED}" == "1" && -s "${debug_file}" && ! -s "${summary_file}" ]]; then
+    echo "Found existing debug file for ${stage}; attempting complete-debug salvage: ${debug_file}"
+    if summarize_stage; then
+      echo "EVAL_DEBUG_SALVAGE_OK stage=${stage}"
+      aggregate_if_available "${EVAL_OUTPUT_DIR}" current
+      return
+    fi
+    echo "EVAL_DEBUG_SALVAGE_FAILED stage=${stage}; rerunning full stage to preserve fidelity"
+  fi
 
   if [[ ! -e "${load_dir}" ]]; then
     echo "Missing eval load dir for ${stage}: ${load_dir}" >&2
@@ -213,12 +291,8 @@ run_eval() {
 
   ray stop --force >/dev/null 2>&1 || true
 
-  python3 examples/qwen3_8b_opd_tillicum/summarize_eval.py \
-    --stage "${stage}" \
-    --debug-file "${stage_dir}/debug_eval_0.pt" \
-    --out-json "${stage_dir}/summary.json" \
-    --max-response-len "${EVAL_MAX_RESPONSE_LEN}" \
-    --train-samples "${train_samples}"
+  summarize_stage
+  aggregate_if_available "${EVAL_OUTPUT_DIR}" current
 }
 
 hf_snapshot_dir() {
@@ -271,6 +345,9 @@ for target in ${EVAL_TARGETS}; do
     opd)
       run_opd_curve
       ;;
+    report)
+      write_all_reports
+      ;;
     *)
       echo "Unknown EVAL_TARGETS entry: ${target}" >&2
       exit 2
@@ -278,9 +355,7 @@ for target in ${EVAL_TARGETS}; do
   esac
 done
 
-python3 examples/qwen3_8b_opd_tillicum/summarize_eval.py \
-  --aggregate-dir "${EVAL_OUTPUT_DIR}" \
-  --out-json "${EVAL_OUTPUT_DIR}/summary_all.json"
+aggregate_if_available "${EVAL_OUTPUT_DIR}" current
 '
 
 echo "Finished MATH-500 eval at $(date)"

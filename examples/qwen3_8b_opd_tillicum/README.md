@@ -149,7 +149,7 @@ Apptainer-specific layer.
 - SFT model-only eval snapshots: `$SFT_HF_SNAPSHOT_DIR`
 - OPD model-only eval snapshots: `$OPD_HF_SNAPSHOT_DIR`
 - Eval summaries and curves: `$BASE_EVAL_OUTPUT_DIR`, `$SFT_EVAL_OUTPUT_DIR`,
-  `$OPD_EVAL_OUTPUT_DIR`
+  `$OPD_EVAL_OUTPUT_DIR`, `$COMBINED_EVAL_OUTPUT_DIR`
 - Checkpoint storage reports: `$CHECKPOINT_REPORT_DIR`
 
 ## Slurm resources
@@ -162,13 +162,16 @@ The intended wall-clock budget after model/data/container preparation is:
 
 - SFT 25k: 8 hours.
 - OPD 10k: 10 hours.
-- MATH-500 greedy eval: base 2 hours, SFT curve 5 hours, OPD curve 5 hours.
+- MATH-500 greedy eval: base 3 hours, full SFT curve 10 hours, SFT
+  continuation 8 hours, final OPD checkpoint 3 hours, OPD backfill 5 hours.
+- Report aggregation jobs: 30 minutes on the cluster-minimum `gpu:h200:1`.
 
 The main runtime risk is the Qwen3-32B teacher logprob server throughput during
-OPD. The current conservative chain runs SFT, evaluates SFT milestones, runs
-OPD, evaluates OPD milestones, then runs the fixed base eval so SFT results are
-available before OPD starts.
+OPD. The current conservative chain runs SFT, completes the SFT eval curve,
+runs OPD, evaluates the final OPD checkpoint first, runs the fixed base eval,
+generates an interim combined curve, then backfills the earlier OPD milestones.
 
 MATH-500 summaries report `accuracy` with parse failures counted wrong,
 `accuracy_on_parseable` as a diagnostic over parseable responses only, and
-`parse_failure_rate` separately.
+`parse_failure_rate` separately. Combined reports include a labeled SVG/PNG
+curve with light-blue SFT shading and light-purple OPD shading.

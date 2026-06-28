@@ -13,36 +13,25 @@ if [[ -n "${GPU_GRES:-}" ]]; then
   SBATCH_COMMON+=(--gres "${GPU_GRES}")
 fi
 
-submit_log="${SLURM_LOG_DIR}/submit_25k_10k_$(date +%Y%m%d_%H%M%S).txt"
+PREV_SFT_EVAL_JOB_ID="${PREV_SFT_EVAL_JOB_ID:-152211}"
+submit_log="${SLURM_LOG_DIR}/submit_resume_sft_eval_then_opd_$(date +%Y%m%d_%H%M%S).txt"
 
-echo "Submitting 25k SFT / 10k OPD chain"
+echo "Submitting SFT eval continuation / OPD / base / backfill chain"
+echo "previous SFT eval job: ${PREV_SFT_EVAL_JOB_ID}"
 echo "account/partition/qos: ${ACCOUNT}/${PARTITION}/${QOS}"
 echo "submit log: ${submit_log}"
 
-jid_data="$(
+jid_sft_eval_resume="$(
   sbatch --parsable "${SBATCH_COMMON[@]}" \
-    examples/qwen3_8b_opd_tillicum/02_prepare_data_25k_10k.sbatch
-)"
-jid_convert="$(
-  sbatch --parsable "${SBATCH_COMMON[@]}" \
-    examples/qwen3_8b_opd_tillicum/03_convert_models_if_needed.sbatch
-)"
-jid_sft="$(
-  sbatch --parsable "${SBATCH_COMMON[@]}" \
-    --dependency=afterok:${jid_data}:${jid_convert} \
-    examples/qwen3_8b_opd_tillicum/04_run_sft_100k_8xh200.sbatch
-)"
-jid_sft_eval="$(
-  sbatch --parsable "${SBATCH_COMMON[@]}" \
-    --dependency=afterok:${jid_sft} \
-    --time=10:00:00 \
-    --job-name=slime-qwen3-sft-math500 \
+    --dependency=afterany:${PREV_SFT_EVAL_JOB_ID} \
+    --time=08:00:00 \
+    --job-name=slime-qwen3-sft-math500-resume \
     --export=ALL,EVAL_TARGETS=sft,EVAL_OUTPUT_DIR="${SFT_EVAL_OUTPUT_DIR}",EVAL_SKIP_COMPLETED=1 \
     examples/qwen3_8b_opd_tillicum/06_eval_math500_greedy_1x.sbatch
 )"
 jid_sft_report="$(
   sbatch --parsable "${SBATCH_REPORT_COMMON[@]}" \
-    --dependency=afterany:${jid_sft_eval} \
+    --dependency=afterany:${jid_sft_eval_resume} \
     --time=00:30:00 \
     --job-name=slime-qwen3-sft-report \
     --export=ALL,EVAL_TARGETS=report,EVAL_OUTPUT_DIR="${COMBINED_EVAL_OUTPUT_DIR}" \
@@ -50,7 +39,7 @@ jid_sft_report="$(
 )"
 jid_opd="$(
   sbatch --parsable "${SBATCH_COMMON[@]}" \
-    --dependency=afterok:${jid_sft_eval} \
+    --dependency=afterok:${jid_sft_eval_resume} \
     examples/qwen3_8b_opd_tillicum/05_run_opd_50k_8xh200.sbatch
 )"
 jid_opd_eval_final="$(
@@ -97,10 +86,8 @@ jid_final_report="$(
 )"
 
 {
-  echo "data=${jid_data}"
-  echo "convert=${jid_convert}"
-  echo "sft=${jid_sft}"
-  echo "sft_eval=${jid_sft_eval}"
+  echo "prev_sft_eval=${PREV_SFT_EVAL_JOB_ID}"
+  echo "sft_eval_resume=${jid_sft_eval_resume}"
   echo "sft_report=${jid_sft_report}"
   echo "opd=${jid_opd}"
   echo "opd_eval_final=${jid_opd_eval_final}"
@@ -108,11 +95,11 @@ jid_final_report="$(
   echo "interim_report=${jid_interim_report}"
   echo "opd_eval_backfill=${jid_opd_eval_backfill}"
   echo "final_report=${jid_final_report}"
-  echo "SFT_SAVE_DIR=${SFT_SAVE_DIR}"
-  echo "OPD_SAVE_DIR=${OPD_SAVE_DIR}"
   echo "SFT_EVAL_OUTPUT_DIR=${SFT_EVAL_OUTPUT_DIR}"
   echo "OPD_EVAL_OUTPUT_DIR=${OPD_EVAL_OUTPUT_DIR}"
   echo "BASE_EVAL_OUTPUT_DIR=${BASE_EVAL_OUTPUT_DIR}"
   echo "COMBINED_EVAL_OUTPUT_DIR=${COMBINED_EVAL_OUTPUT_DIR}"
+  echo "SFT_SAVE_DIR=${SFT_SAVE_DIR}"
+  echo "OPD_SAVE_DIR=${OPD_SAVE_DIR}"
   echo "CHECKPOINT_REPORT_DIR=${CHECKPOINT_REPORT_DIR}"
 } | tee "${submit_log}"
