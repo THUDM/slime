@@ -59,7 +59,7 @@ done
 if [[ "${RUN_CONTAINER_CHECKS:-0}" == "1" ]]; then
   if [[ -e "${SLIME_SIF}" ]]; then
     echo "Checking imports inside container"
-    "${SCRIPT_DIR}/container_exec.sh" python -c "import slime, sglang, transformers, datasets; print('container imports ok')"
+    "${SCRIPT_DIR}/container_exec.sh" python3 -c "import encodings, slime, sglang, torch, transformers, datasets; print('container imports ok')"
   else
     echo "RUN_CONTAINER_CHECKS=1 but SLIME_SIF does not exist; skipping import check."
   fi

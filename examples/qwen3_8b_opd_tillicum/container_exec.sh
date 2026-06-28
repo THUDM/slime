@@ -161,4 +161,26 @@ APPTAINER_ARGS+=(
   --env "CUDA_DEVICE_MAX_CONNECTIONS=${CUDA_DEVICE_MAX_CONNECTIONS:-1}"
 )
 
+if [[ "${CONTAINER_PYTHON_PREFLIGHT:-1}" != "0" ]]; then
+  preflight_log="$(mktemp "${TMPDIR%/}/container_python_preflight.XXXXXX")"
+  if ! "${APPTAINER_BIN}" "${APPTAINER_ARGS[@]}" "${SLIME_SIF}" \
+    python3 -c "import encodings" >/dev/null 2>"${preflight_log}"; then
+    cat >&2 <<EOF
+Container Python preflight failed before launching the requested command.
+The container may be incomplete or corrupt:
+  ${SLIME_SIF}
+
+Python could not import the stdlib encodings module. Move the container aside
+and rebuild it with:
+  bash ${SCRIPT_DIR}/00_pull_or_load_container.sh
+
+Preflight stderr:
+EOF
+    sed -n '1,120p' "${preflight_log}" >&2 || true
+    rm -f "${preflight_log}"
+    exit 1
+  fi
+  rm -f "${preflight_log}"
+fi
+
 "${APPTAINER_BIN}" "${APPTAINER_ARGS[@]}" "${SLIME_SIF}" "$@"

@@ -16,6 +16,12 @@ if [[ -z "${APPTAINER_BIN}" ]]; then
   fi
 fi
 
+validate_container() {
+  echo "Validating container Python/imports"
+  "${APPTAINER_BIN}" exec --cleanenv "${SLIME_SIF}" \
+    python3 -c "import encodings, sglang, torch; print('container ok')"
+}
+
 mkdir -p "$(dirname "${SLIME_SIF}")" "${APPTAINER_CACHEDIR}" "${APPTAINER_TMPDIR}"
 export APPTAINER_CACHEDIR APPTAINER_TMPDIR
 
@@ -29,7 +35,18 @@ Container setup
 EOF
 
 if [[ -e "${SLIME_SIF}" && "${FORCE_PULL:-0}" != "1" ]]; then
-  echo "Container already exists. Set FORCE_PULL=1 and remove/replace it manually if needed."
+  echo "Container already exists. Validating it now."
+  if validate_container; then
+    echo "Existing container is valid: ${SLIME_SIF}"
+  else
+    cat >&2 <<EOF
+Existing container failed validation:
+  ${SLIME_SIF}
+
+Move it aside or remove it manually, then rerun this script to rebuild it.
+EOF
+    exit 1
+  fi
   exit 0
 fi
 
@@ -45,5 +62,5 @@ else
   "${APPTAINER_BIN}" pull --force "${SLIME_SIF}" "${SLIME_IMAGE_URI}"
 fi
 
-"${APPTAINER_BIN}" exec --cleanenv "${SLIME_SIF}" python -V
+validate_container
 echo "Wrote and validated ${SLIME_SIF}"
