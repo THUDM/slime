@@ -713,7 +713,7 @@ index 2574fcfb55c..a2cfea4509f 100644
              output_hidden_states=self.output_hidden_states,
              routed_experts=self.routed_experts,
 diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
-index 1f6dc90e471..a8c03bb0d65 100644
+index 1f6dc90e471..e9ec77de3bc 100644
 --- a/python/sglang/srt/managers/tokenizer_manager.py
 +++ b/python/sglang/srt/managers/tokenizer_manager.py
 @@ -205,6 +205,7 @@ class ReqState:
@@ -750,7 +750,7 @@ index 1f6dc90e471..a8c03bb0d65 100644
              meta_info["input_token_ids_logprobs"] = state.input_token_ids_logprobs
              meta_info["output_token_ids_logprobs"] = state.output_token_ids_logprobs
  
-+        if state.output_top_p_token_ids:
++        if state.output_top_p_token_ids and meta_info.get("finish_reason") is not None:
 +            token_ids, offsets = _encode_top_p_token_ids(state.output_top_p_token_ids)
 +            meta_info["top_p_token_ids"] = token_ids
 +            meta_info["top_p_token_offsets"] = offsets
