@@ -485,8 +485,8 @@ def get_log_probs_and_entropy(
     per-sample slicing) so backward traverses ``[T, V]`` only once, then
     extracts per-sample response portions.
 
-    When ``entropy_coef == 0``, entropy is computed under ``torch.no_grad()``
-    to avoid retaining the computation graph and to skip cloning.
+    If rollout top-p replay is provided, the keep-mask is applied only to
+    log-probabilities; entropy is always computed from the unmasked logits.
     """
     assert non_loss_data
     assert logits.dtype == torch.float32, f"{logits.dtype}"
