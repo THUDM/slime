@@ -99,11 +99,11 @@ def generate_rollout(args, rollout_id, data_source, evaluation: bool = False):
     logger.info("forge_load: loading samples from %s", path)
     blob = torch.load(path, weights_only=False)
     samples = [Sample.from_dict(s) for s in blob["samples"]]
-    # IMPORTANT: do NOT overwrite sample.group_id with the current rollout_id.
-    # Default-shape rollouts leave group_id=None and slime falls back to
+    # IMPORTANT: do NOT overwrite sample.rollout_id with the current rollout_id.
+    # Default-shape rollouts leave rollout_id=None and slime falls back to
     # sample.index in slime/ray/rollout.py (the dp-schedule grouping key).
-    # Forcing all samples to share one group_id collapses them into a single
-    # group, which trips the num_groups >= global_batch_size assert in
+    # Forcing all samples to share one rollout_id collapses them into a single
+    # "rollout", which trips the num_rollouts >= global_batch_size assert in
     # slime/utils/dp_schedule.py.
     logger.info(
         "forge_load: loaded %d samples for rollout_id=%d from %s",

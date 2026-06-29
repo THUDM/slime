@@ -271,7 +271,7 @@ def _build_items_from_trace(sample: dict[str, Any], sample_idx: int) -> dict[str
                 "display_end_ts": None,
                 "attempt": event["attempt"],
                 "span_id": event["span_id"],
-                "parent_span_id": event.get("parent_span_id"),
+                "parent_span_id": event.get("parent_span_id") or event.get("inferred_parent_span_id"),
                 "start_attrs": event.get("attrs") or {},
                 "end_attrs": {},
             }
@@ -309,7 +309,7 @@ def _build_items_from_trace(sample: dict[str, Any], sample_idx: int) -> dict[str
                 "ts": event["ts"],
                 "attempt": event["attempt"],
                 "span_id": None,
-                "parent_span_id": event.get("inferred_parent_span_id"),
+                "parent_span_id": event.get("parent_span_id") or event.get("inferred_parent_span_id"),
                 "attrs": event.get("attrs") or {},
             }
         )
@@ -376,12 +376,12 @@ def _build_items_from_trace(sample: dict[str, Any], sample_idx: int) -> dict[str
 
     for event in point_events:
         parent_span_id = event.get("parent_span_id")
-        event["depth"] = span_depths.get(parent_span_id or "", 0)
+        event["depth"] = span_depths[parent_span_id] + 1 if parent_span_id in span_depths else 0
         event["lane"] = event["depth"]
 
     for item in orphan_ends:
         parent_span_id = item.get("parent_span_id")
-        item["depth"] = span_depths.get(parent_span_id or "", 0)
+        item["depth"] = span_depths[parent_span_id] + 1 if parent_span_id in span_depths else 0
         item["lane"] = item["depth"]
 
     def parent_span_name(parent_span_id: str | None) -> str | None:
@@ -455,8 +455,8 @@ def _build_items_from_trace(sample: dict[str, Any], sample_idx: int) -> dict[str
             "P",
             [
                 "pd_prefill_bootstrap_queue_duration",
-                "pd_bootstrap_duration",
-                "pd_alloc_waiting_duration",
+                "pd_prefill_bootstrap_duration",
+                "pd_prefill_alloc_wait_duration",
                 "pd_prefill_forward_duration",
                 "pd_prefill_transfer_queue_duration",
             ],
@@ -466,6 +466,8 @@ def _build_items_from_trace(sample: dict[str, Any], sample_idx: int) -> dict[str
             "D",
             [
                 "pd_decode_prealloc_duration",
+                "pd_decode_bootstrap_duration",
+                "pd_decode_alloc_wait_duration",
                 "pd_decode_transfer_duration",
                 "pd_decode_forward_duration",
             ],
@@ -474,6 +476,8 @@ def _build_items_from_trace(sample: dict[str, Any], sample_idx: int) -> dict[str
     next_virtual_lane = max((item["lane"] for item in all_items), default=-1)
     for span in all_spans:
         if span["state"] != "closed_span" or span.get("end_ts") is None:
+            continue
+        if str(span.get("name") or "").startswith("sglang_pd_"):
             continue
         end_attrs = span.get("end_attrs") or {}
         for role, suffix, keys in pd_lane_specs:
@@ -1243,13 +1247,15 @@ HTML_TEMPLATE = r"""<!doctype html>
           ['prefill_forward', '[P] prefill fwd'],
           ['prefill_bootstrap_queue', '[P] bootstrap queue'],
           ['prefill_transfer_queue', '[P] transfer'],
-          ['bootstrap', '[P] bootstrap'],
-          ['alloc_waiting', '[P] alloc wait'],
+          ['prefill_bootstrap', '[P] bootstrap'],
+          ['prefill_alloc_wait', '[P] alloc wait'],
           ['decode_forward', '[D] decode fwd'],
           ['decode_transfer', '[D] kv transfer'],
+          ['decode_bootstrap', '[D] bootstrap'],
+          ['decode_alloc_wait', '[D] alloc wait'],
           ['decode_prealloc', '[D] prealloc'],
         ];
-        html += '<span style="color:var(--muted);margin-left:8px;font-size:11px">PD (collapsed: P over D; expanded: separate P/D lanes):</span>';
+        html += '<span style="color:var(--muted);margin-left:8px;font-size:11px">PD phases:</span>';
         for (const [phase, label] of pdLegend) {
           html += `<span class="chip" style="font-size:11px">` +
             `<span class="bar" style="background:${pdPhaseColor(phase, 0.85)}"></span>` +
@@ -1420,11 +1426,13 @@ HTML_TEMPLATE = r"""<!doctype html>
     // PD phase color palette (warm earth tones matching the viewer aesthetic)
     const PD_COLORS = {
       prefill_bootstrap_queue: 'rgba(180, 160, 120, A)',  // muted sand
-      bootstrap:               'rgba(140, 120, 90, A)',   // dark sand
-      alloc_waiting:           'rgba(160, 140, 110, A)',  // warm grey
+      prefill_bootstrap:       'rgba(140, 120, 90, A)',   // dark sand
+      prefill_alloc_wait:      'rgba(160, 140, 110, A)',  // warm grey
       prefill_forward:         'rgba(70, 140, 180, A)',   // steel blue (prefill)
       prefill_transfer_queue:  'rgba(200, 160, 60, A)',   // amber (transfer)
       decode_prealloc:         'rgba(160, 140, 110, A)',  // warm grey
+      decode_bootstrap:        'rgba(140, 120, 90, A)',   // dark sand
+      decode_alloc_wait:       'rgba(160, 140, 110, A)',  // warm grey
       decode_transfer:         'rgba(200, 160, 60, A)',   // amber (transfer)
       decode_forward:          'rgba(80, 170, 100, A)',   // green (decode)
     };
@@ -1452,12 +1460,14 @@ HTML_TEMPLATE = r"""<!doctype html>
       };
       // P-side phases (sequential order)
       push('prefill_bootstrap_queue', 'prefill_bootstrap_queue_duration');
-      push('bootstrap',               'bootstrap_duration');
-      push('alloc_waiting',           'alloc_waiting_duration');
+      push('prefill_bootstrap',       'prefill_bootstrap_duration');
+      push('prefill_alloc_wait',      'prefill_alloc_wait_duration');
       push('prefill_forward',         'prefill_forward_duration');
       push('prefill_transfer_queue',  'prefill_transfer_queue_duration');
       // D-side phases (sequential order)
       push('decode_prealloc',  'decode_prealloc_duration');
+      push('decode_bootstrap', 'decode_bootstrap_duration');
+      push('decode_alloc_wait','decode_alloc_wait_duration');
       push('decode_transfer',  'decode_transfer_duration');
       push('decode_forward',   'decode_forward_duration');
       return segs.length > 0 ? segs : null;
@@ -1473,8 +1483,7 @@ HTML_TEMPLATE = r"""<!doctype html>
           totalDuration: 0,
         };
       }
-      const pPhases = phases.filter((p) =>
-        p.phase.startsWith('prefill_') || p.phase === 'bootstrap' || p.phase === 'alloc_waiting');
+      const pPhases = phases.filter((p) => p.phase.startsWith('prefill_'));
       const dPhases = phases.filter((p) => p.phase.startsWith('decode_'));
       const pTotal = pPhases.reduce((sum, p) => sum + p.duration, 0);
       const dTotal = dPhases.reduce((sum, p) => sum + p.duration, 0);
@@ -1880,7 +1889,7 @@ HTML_TEMPLATE = r"""<!doctype html>
         const phases = pdPhases(attrs);
         if (phases) {
           const totalDur = phases.reduce((s, p) => s + p.duration, 0);
-          const pPhases = phases.filter(p => p.phase.startsWith('prefill_') || p.phase === 'bootstrap' || p.phase === 'alloc_waiting');
+          const pPhases = phases.filter(p => p.phase.startsWith('prefill_'));
           const dPhases = phases.filter(p => p.phase.startsWith('decode_'));
           const fmtPhase = (p) => {
             const ms = (p.duration * 1000).toFixed(1);

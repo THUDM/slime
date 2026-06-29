@@ -14,6 +14,7 @@ import torch
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
+from slime.backends.sglang_utils.external import start_external_rollout_servers
 from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
@@ -28,12 +29,77 @@ from slime.utils.types import Sample
 
 from ..utils.metric_utils import has_repetition
 from .rollout_validation import validate_server_group_gpu_indices
-from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
+from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock, add_default_ray_env_vars
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+_ROLLOUT_DATA_TENSOR_DTYPES = {
+    "tokens": torch.long,
+    "loss_masks": torch.int,
+    "rollout_log_probs": torch.float32,
+    "rollout_top_p_token_ids": torch.int32,
+    "rollout_top_p_token_offsets": torch.int32,
+    "teacher_log_probs": torch.float32,
+    "rollout_routed_experts": None,
+}
+
+_SGLANG_REQUEST_PERF_FIELDS = (
+    ("request/e2e_latency", "e2e_latency"),
+    ("request/queue_time", "queue_time"),
+    ("decode/throughput", "decode_throughput"),
+)
+_SGLANG_PREFILL_PERF_FIELDS = (
+    ("prefill/bootstrap_queue_duration", "pd_prefill_bootstrap_queue_duration"),
+    ("prefill/bootstrap_duration", "pd_prefill_bootstrap_duration"),
+    ("prefill/alloc_wait_duration", "pd_prefill_alloc_wait_duration"),
+    ("prefill/forward_duration", "pd_prefill_forward_duration"),
+    ("prefill/transfer_queue_duration", "pd_prefill_transfer_queue_duration"),
+    ("prefill/transfer_speed_gb_s", "pd_transfer_speed_gb_s"),
+    ("prefill/transfer_total_mb", "pd_transfer_total_mb"),
+    ("prefill/retry_count", "pd_prefill_retry_count"),
+)
+_SGLANG_DECODE_PERF_FIELDS = (
+    ("decode/prealloc_duration", "pd_decode_prealloc_duration"),
+    ("decode/bootstrap_duration", "pd_decode_bootstrap_duration"),
+    ("decode/alloc_wait_duration", "pd_decode_alloc_wait_duration"),
+    ("decode/transfer_duration", "pd_decode_transfer_duration"),
+    ("decode/forward_duration", "pd_decode_forward_duration"),
+)
+
+
+def _cpu_tensor(value, dtype: torch.dtype | None = None) -> torch.Tensor:
+    if isinstance(value, np.ndarray) and not value.flags.writeable:
+        value = value.copy()
+    tensor = torch.as_tensor(value, dtype=dtype) if dtype is not None else torch.as_tensor(value)
+    return tensor.detach().cpu().contiguous()
+
+
+def _tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:
+    for key, dtype in _ROLLOUT_DATA_TENSOR_DTYPES.items():
+        if key in rollout_data:
+            rollout_data[key] = [_cpu_tensor(value, dtype=dtype) for value in rollout_data[key]]
+
+    if "multimodal_train_inputs" in rollout_data:
+        rollout_data["multimodal_train_inputs"] = [
+            (
+                {
+                    key: _cpu_tensor(value) if isinstance(value, (np.ndarray, torch.Tensor)) else value
+                    for key, value in mm_dict.items()
+                }
+                if mm_dict is not None
+                else None
+            )
+            for mm_dict in rollout_data["multimodal_train_inputs"]
+        ]
+
+    if "rollout_mask_sums" in rollout_data:
+        rollout_data["rollout_mask_sums"] = _cpu_tensor(
+            rollout_data["rollout_mask_sums"],
+            dtype=torch.float32,
+        )
 
 
 @dataclasses.dataclass
@@ -139,7 +205,7 @@ class ServerGroup:
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
                 runtime_env={
-                    "env_vars": env_vars,
+                    "env_vars": add_default_ray_env_vars(env_vars),
                 },
             ).remote(
                 self.args,
@@ -158,22 +224,17 @@ class ServerGroup:
         if self.num_new_engines == 0:
             return [], port_cursors
 
-        if self.args.rollout_external:
-            addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(
-                args=self.args, rollout_engines=rollout_engines
-            )
-        else:
-            # Compute base_port from the maximum cursor across all nodes that
-            # this group's engines may land on (conservative: just use global max).
-            base_port = max(port_cursors.values()) if port_cursors else 15000
-            addr_and_ports, port_cursors = _allocate_rollout_engine_addr_and_ports_normal(
-                args=self.args,
-                rollout_engines=rollout_engines,
-                worker_type=self.worker_type,
-                num_gpus_per_engine=self.num_gpus_per_engine,
-                rank_offset=self.rank_offset,
-                base_port=base_port,
-            )
+        # Compute base_port from the maximum cursor across all nodes that
+        # this group's engines may land on (conservative: just use global max).
+        base_port = max(port_cursors.values()) if port_cursors else 15000
+        addr_and_ports, port_cursors = _allocate_rollout_engine_addr_and_ports_normal(
+            args=self.args,
+            rollout_engines=rollout_engines,
+            worker_type=self.worker_type,
+            num_gpus_per_engine=self.num_gpus_per_engine,
+            rank_offset=self.rank_offset,
+            base_port=base_port,
+        )
 
         init_handles = [
             engine.init.remote(
@@ -367,6 +428,13 @@ class RolloutManager:
         self.pg = pg
         self.args = args
 
+        rollout_init_handles: list[Any] = []
+        if self.args.debug_train_only:
+            self.servers: dict[str, Any] = {}
+        else:
+            init_http_client(args)
+            self.servers, rollout_init_handles = start_rollout_servers(args, pg)
+
         data_source_cls = load_function(self.args.data_source_path)
         self.data_source = data_source_cls(args)
 
@@ -383,14 +451,15 @@ class RolloutManager:
         logger.info(f"import {self.args.rollout_function_path} as generate_rollout function.")
         logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
-        if self.args.debug_train_only:
-            self.servers: dict[str, RolloutServer] = {}
-        else:
-            init_http_client(args)
-            self.servers = start_rollout_servers(args, pg)
+        if rollout_init_handles:
+            ray.get(rollout_init_handles)
 
         init_tracking(args, primary=False)
-        self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
+        self.rollout_engine_lock = Lock.options(
+            num_cpus=1,
+            num_gpus=0,
+            runtime_env={"env_vars": add_default_ray_env_vars()},
+        ).remote()
         self.rollout_id = -1
 
         self._health_monitors = []
@@ -402,23 +471,6 @@ class RolloutManager:
                     self._health_monitors.append(monitor)
             self._ci_fault_injection_pending = self.args.ci_test  # Flag for CI fault injection
 
-    def _get_metrics_router_addr(self) -> str | None:
-        """Return the router address for scraping SGLang engine metrics.
-
-        The sglang_router gateway exposes ``/engine_metrics`` on its main port,
-        which aggregates Prometheus metrics from all backend sglang servers.
-        Returns ``http://{ip}:{port}`` for the first server, or ``None`` when
-        metrics are disabled or no servers are running.
-        """
-        srv = self.server
-        if srv is None or srv.router_ip is None:
-            return None
-        return f"http://{srv.router_ip}:{srv.router_port}"
-
-    def get_metrics_router_addr(self) -> str | None:
-        """Public wrapper for remote calls from the driver process."""
-        return self._get_metrics_router_addr()
-
     def _try_ci_fault_injection(self):
         """Try to inject fault during generate (when health monitor is running)."""
         if not self._ci_fault_injection_pending:
@@ -427,7 +479,12 @@ class RolloutManager:
         # Only inject fault once
         self._ci_fault_injection_pending = False
 
-        if self.server and self.server.server_groups[0].all_engines and self.server.server_groups[0].all_engines[0]:
+        if (
+            self.server
+            and self.server.server_groups
+            and self.server.server_groups[0].all_engines
+            and self.server.server_groups[0].all_engines[0]
+        ):
             logger.info("CI Fault Injection: Simulating crash on engine 0 during generate")
             try:
                 # This will cause the ray actor to exit
@@ -446,13 +503,13 @@ class RolloutManager:
         logging_utils.finish_tracking(self.args)
 
     @property
-    def server(self) -> RolloutServer | None:
+    def server(self) -> Any | None:
         """Default server (first model).  For backward compatibility."""
         if not self.servers:
             return None
         return next(iter(self.servers.values()))
 
-    def _get_updatable_server(self) -> RolloutServer | None:
+    def _get_updatable_server(self) -> Any | None:
         """Return the server with ``update_weights=True``.
 
         When multiple updatable servers exist, returns the first one
@@ -602,13 +659,13 @@ class RolloutManager:
             data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
             metrics = data.metrics
             data = data.samples
-            # Enforce the group_id contract before flattening: any list[Sample]
-            # encountered in the nested output must have group_id set on every
-            # element. Default rollouts land at depth 1 and skip this validation;
-            # compact / subagent paths that split one rollout into N samples must
-            # set the same group_id on every sibling so the loss reducer counts
-            # the group once instead of N times. Legacy rollout_id is accepted.
-            _validate_group_id_annotated(data)
+            # Enforce the rollout_id contract before flattening: any list[Sample]
+            # encountered in the nested output must have rollout_id set on every
+            # element. Default rollouts inherit it from the data source; compact /
+            # subagent paths that split one rollout into N training samples must
+            # set the same rollout_id on every sibling so the loss reducer counts
+            # the rollout once instead of N times.
+            _validate_rollout_id_annotated(data)
             # flatten the data if it is a list of lists
             while isinstance(data[0], list):
                 data = list(itertools.chain.from_iterable(data))
@@ -640,7 +697,7 @@ class RolloutManager:
 
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
         if (
-            self.args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]
+            self.args.advantage_estimator in ["grpo", "gspo", "cispo", "reinforce_plus_plus_baseline"]
             and self.args.rewards_normalization
         ):
             # group norm
@@ -653,7 +710,7 @@ class RolloutManager:
             mean = rewards.mean(dim=-1, keepdim=True)
             rewards = rewards - mean
 
-            if self.args.advantage_estimator in ["grpo", "gspo"] and self.args.grpo_std_normalization:
+            if self.args.advantage_estimator in ["grpo", "gspo", "cispo"] and self.args.grpo_std_normalization:
                 std = rewards.std(dim=-1, keepdim=True)
                 rewards = rewards / (std + 1e-6)
 
@@ -673,12 +730,15 @@ class RolloutManager:
         assert len(raw_rewards) == len(samples)
         assert len(rewards) == len(samples)
 
-        # Group id (one per training aggregation unit). Default rollouts emit
-        # one sample per group, so we fall back to the unique sample index.
-        # Compact / subagent paths that emit multiple training samples per
-        # group set ``Sample.group_id`` explicitly so all siblings share a
-        # value; assigning legacy ``Sample.rollout_id`` still forwards here.
-        group_ids = [sample.group_id if sample.group_id is not None else sample.index for sample in samples]
+        rollout_ids = [sample.rollout_id for sample in samples]
+        existed_rollout_id_values = set(rid for rid in rollout_ids if rid is not None)
+        tmp_id = 0
+        for i in range(len(rollout_ids)):
+            if rollout_ids[i] is None:
+                while tmp_id in existed_rollout_id_values:
+                    tmp_id += 1
+                rollout_ids[i] = tmp_id
+                existed_rollout_id_values.add(tmp_id)
 
         train_data = {
             "tokens": [sample.tokens for sample in samples],
@@ -689,7 +749,7 @@ class RolloutManager:
             "raw_reward": raw_rewards,
             "truncated": [1 if sample.status == Sample.Status.TRUNCATED else 0 for sample in samples],
             "sample_indices": [sample.index for sample in samples],
-            "group_ids": group_ids,
+            "rollout_ids": rollout_ids,
         }
 
         # loss mask
@@ -708,23 +768,22 @@ class RolloutManager:
             loss_masks.append(sample.loss_mask)
         train_data["loss_masks"] = loss_masks
 
-        # Per-group aggregate, precomputed at the step level (where we can
-        # see every sample of every group) and broadcast per-sample so the
-        # per-mb loss reducer uses the correct whole-group denominator even
-        # when a group's samples land in different micro-batches (first-fit
-        # packing can split a group across mbs):
+        # Per-rollout aggregate, precomputed at the step level (where we can
+        # see every sample of every rollout) and broadcast per-sample so the
+        # per-mb loss reducer uses the correct whole-rollout denominator even
+        # when a rollout's samples land in different micro-batches (first-fit
+        # packing can split a rollout across mbs):
         #
-        #   ``group_mask_sums[i]`` — sum of loss-mask totals over every
-        #   sample in sample i's group. Used as the reducer's denominator
+        #   ``rollout_mask_sums[i]`` — sum of loss-mask totals over every
+        #   sample in sample i's rollout. Used as the reducer's denominator
         #   so summing partial contributions across mbs yields one
-        #   token-weighted mean per group.
-        group_id_list = train_data["group_ids"]
+        #   token-weighted mean per rollout.
+        rollout_id_list = train_data["rollout_ids"]
         mask_sums_per_sample = [sum(m) for m in loss_masks]
-        group_total_mask: dict[int, int] = {}
-        for group_id, ms in zip(group_id_list, mask_sums_per_sample, strict=True):
-            group_total_mask[group_id] = group_total_mask.get(group_id, 0) + ms
-        group_mask_sums = [group_total_mask[group_id] for group_id in group_id_list]
-        train_data["group_mask_sums"] = group_mask_sums
+        rollout_total_mask: dict[int, int] = {}
+        for rid, ms in zip(rollout_id_list, mask_sums_per_sample, strict=True):
+            rollout_total_mask[rid] = rollout_total_mask.get(rid, 0) + ms
+        train_data["rollout_mask_sums"] = [rollout_total_mask[rid] for rid in rollout_id_list]
 
         # Overwrite raw_reward when available. Mixed-source batches may only
         # populate this field for a subset of samples (e.g. SWE but not code).
@@ -741,6 +800,22 @@ class RolloutManager:
         # Add rollout log probabilities for off-policy correction
         if samples[0].rollout_log_probs is not None:
             train_data["rollout_log_probs"] = [sample.rollout_log_probs for sample in samples]
+
+        if samples[0].rollout_top_p_token_ids is not None:
+            for sample in samples:
+                assert sample.rollout_top_p_token_ids is not None
+                assert sample.rollout_top_p_token_offsets is not None
+                assert len(sample.rollout_top_p_token_offsets) == sample.response_length + 1, (
+                    f"top-p token offsets length {len(sample.rollout_top_p_token_offsets)} "
+                    f"!= response length + 1 {sample.response_length + 1}"
+                )
+                offset_end = int(sample.rollout_top_p_token_offsets[-1])
+                assert offset_end == len(sample.rollout_top_p_token_ids), (
+                    f"top-p token offsets[-1] {offset_end} "
+                    f"!= token ids length {len(sample.rollout_top_p_token_ids)}"
+                )
+            train_data["rollout_top_p_token_ids"] = [sample.rollout_top_p_token_ids for sample in samples]
+            train_data["rollout_top_p_token_offsets"] = [sample.rollout_top_p_token_offsets for sample in samples]
 
         if samples[0].rollout_routed_experts is not None:
             train_data["rollout_routed_experts"] = [sample.rollout_routed_experts for sample in samples]
@@ -764,11 +839,12 @@ class RolloutManager:
         into a Ray Box. The schedule itself is computed by
         :func:`build_dp_schedule` so it stays unit-testable without Ray/sglang.
 
-        Step split is by group id (``samples[i].group_id``, falling back to
-        ``samples[i].index``); each step holds exactly ``args.global_batch_size``
-        groups so the training step count is fixed at
-        ``rollout_batch_size * n_samples_per_prompt // global_batch_size``
-        regardless of how many training samples each group produced.
+        Step split is by rollout id (``samples[i].rollout_id``, falling back
+        to ``samples[i].index``); each step holds exactly
+        ``args.global_batch_size`` rollouts so the training-step count per
+        rollout is fixed at ``rollout_batch_size * n_samples_per_prompt //
+        global_batch_size`` regardless of how many training samples each
+        rollout produced.
         """
         dp_size = self.train_parallel_config["dp_size"]
         total_lengths = [len(t) for t in data["tokens"]]
@@ -779,7 +855,7 @@ class RolloutManager:
             self.train_parallel_config,
             total_lengths,
             global_batch_size=self.args.global_batch_size,
-            group_indices=data["group_ids"],
+            rollout_indices=data["rollout_ids"],
         )
 
         # Package per-rank rollout_data
@@ -796,9 +872,11 @@ class RolloutManager:
                 "loss_masks",
                 "round_number",
                 "sample_indices",
-                "group_ids",
-                "group_mask_sums",
+                "rollout_ids",
+                "rollout_mask_sums",
                 "rollout_log_probs",
+                "rollout_top_p_token_ids",
+                "rollout_top_p_token_offsets",
                 "rollout_routed_experts",
                 "prompt",
                 "teacher_log_probs",
@@ -814,12 +892,19 @@ class RolloutManager:
             rollout_data["global_batch_sizes"] = global_batch_sizes
             rollout_data["num_microbatches"] = num_microbatches
             rollout_data["micro_batch_indices"] = micro_batch_indices[r]
-            rollout_data_refs.append(Box(ray.put(rollout_data)))
+            _tensorize_rollout_data_for_training(rollout_data)
+            transport = getattr(self.args, "rollout_data_transport", "object-store")
+            if transport == "nixl":
+                rollout_data_refs.append(Box(ray.put(rollout_data, _tensor_transport="nixl")))
+            elif transport == "object-store":
+                rollout_data_refs.append(Box(ray.put(rollout_data)))
+            else:
+                raise ValueError(f"Unsupported rollout data transport: {transport!r}")
         return rollout_data_refs
 
 
-def _validate_group_id_annotated(node, depth=0):
-    """Walk the rollout function's nested output and validate ``group_id`` only
+def _validate_rollout_id_annotated(node, depth=0):
+    """Walk the rollout function's nested output and validate ``rollout_id`` only
     when a compact / subagent pattern is detected.
 
     "Compact" = the rollout function wraps multiple training samples from one
@@ -827,44 +912,27 @@ def _validate_group_id_annotated(node, depth=0):
     default rollout shape is ``list[list[Sample]]`` (depth-2: prompt × rollout)
     so its leaf ``list[Sample]`` lands at depth 1 and we skip validation,
     preserving backward compatibility. A compact rollout adds a third level:
-    ``list[list[list[Sample]]]`` (prompt × rollout × samples-from-one-group),
+    ``list[list[list[Sample]]]`` (prompt × rollout × samples-from-one-rollout),
     so the leaf ``list[Sample]`` lands at depth ≥ 2. At that point we require
-    every sibling to carry a non-None ``group_id`` (or legacy ``rollout_id``)
-    and to share the same value, so the loss reducer counts the group once
-    instead of N times.
+    every sibling to carry a non-None ``rollout_id`` and to share the same
+    value, so the loss reducer counts the rollout once instead of N times.
     """
     if isinstance(node, Sample):
         return
     assert isinstance(node, list), f"unexpected rollout output node type: {type(node).__name__}"
     if node and isinstance(node[0], Sample):
         if depth >= 2 and len(node) > 1:
-            group_ids = [s.group_id for s in node]
-            missing = [i for i, group_id in enumerate(group_ids) if group_id is None]
+            rids = [s.rollout_id for s in node]
+            missing = [i for i, r in enumerate(rids) if r is None]
             assert not missing, (
-                f"Compact rollout returned {len(node)} samples but group_id is unset on "
-                f"positions {missing}. Set Sample.group_id on every sibling so the loss "
-                "reducer can aggregate them as one group instead of N."
+                f"Compact rollout returned {len(node)} samples but rollout_id is unset on "
+                f"positions {missing}. Set Sample.rollout_id on every sibling so the loss "
+                "reducer can aggregate them as one rollout instead of N."
             )
-            assert (
-                len(set(group_ids)) == 1
-            ), f"Sibling samples from one compact rollout must share group_id; got {group_ids}."
+            assert len(set(rids)) == 1, f"Sibling samples from one compact rollout must share rollout_id; got {rids}."
         return
     for item in node:
-        _validate_group_id_annotated(item, depth + 1)
-
-
-def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):
-    addr_and_ports = {}
-    for rank, _ in rollout_engines:
-        addr = args.rollout_external_engine_addrs[rank]
-        [host, port] = addr.split(":")
-        addr_and_ports[rank] = dict(
-            dist_init_addr=addr,
-            nccl_port=None,
-            host=host,
-            port=int(port),
-        )
-    return addr_and_ports
+        _validate_rollout_id_annotated(item, depth + 1)
 
 
 def _allocate_rollout_engine_addr_and_ports_normal(
@@ -1026,22 +1094,27 @@ def _compute_megatron_num_gpus(args) -> int:
     return num
 
 
-def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
-    """Start rollout servers: one per model, each with its own router.
+def start_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
+    """Start rollout servers without waiting for final engine initialization.
 
     Each model defined in the sglang config gets its own router and set
     of server groups.  Server groups within a model may have different
     ``num_gpus_per_engine`` (e.g. for PD disaggregation where prefill
     and decode use different TP sizes).
 
-    Returns a dict mapping model name → ``RolloutServer``.
+    Returns ``(servers, init_handles)`` where servers maps model name to
+    ``RolloutServer`` and init_handles contains pending ``engine.init`` refs.
 
     Note: ``init_http_client`` should be called separately before this,
     as the HTTP client is shared across all servers.
     """
+    if args.rollout_external:
+        return start_external_rollout_servers(args, start_router=_start_router)
+
     config = _resolve_sglang_config(args)
 
     servers: dict[str, RolloutServer] = {}
+    pending_init_handles: list[Any] = []
     gpu_offset = 0
     engine_offset = 0
 
@@ -1105,6 +1178,8 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
 
         if has_epd:
             # --- Phase 1: start encoder groups, wait, collect URLs ---
+            # Encoder URLs are injected into the non-encoder workers' server args,
+            # so this phase must stay synchronous even though final LLM init is deferred.
             encoder_urls: list[str] = []
             for group_cfg in model_cfg.server_groups:
                 if group_cfg.worker_type != "encoder":
@@ -1135,8 +1210,7 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
                 non_encoder_handles.extend(handles)
                 server_groups.append(group)
 
-            if non_encoder_handles:
-                ray.get(non_encoder_handles)
+            pending_init_handles.extend(non_encoder_handles)
         else:
             # No EPD — start all groups in one pass (original path).
             all_init_handles: list = []
@@ -1146,8 +1220,7 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
                 all_init_handles.extend(handles)
                 server_groups.append(group)
 
-            if all_init_handles:
-                ray.get(all_init_handles)
+            pending_init_handles.extend(all_init_handles)
 
         servers[model_cfg.name] = RolloutServer(
             server_groups=server_groups,
@@ -1160,7 +1233,7 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
     # Expose per-model router info for custom rollout functions.
     args.sglang_model_routers = {name: (srv.router_ip, srv.router_port) for name, srv in servers.items()}
 
-    return servers
+    return servers, pending_init_handles
 
 
 def _resolve_sglang_config(args) -> SglangConfig:
@@ -1172,6 +1245,9 @@ def _resolve_sglang_config(args) -> SglangConfig:
         actual = config.total_num_gpus
         assert actual == expected, f"sglang_config total GPUs ({actual}) != rollout_num_gpus ({expected})"
         return config
+
+    if args.rollout_num_gpus == 0:
+        return SglangConfig(models=[ModelConfig(name="default", server_groups=[])])
 
     if args.prefill_num_servers is not None:
         return SglangConfig.from_prefill_num_servers(args)
@@ -1247,6 +1323,7 @@ def compute_metrics_from_samples(args, samples):
     log_dict |= _compute_spec_metrics(args, samples)
     log_dict |= _compute_prefix_cache_metrics(args, samples)
     log_dict |= _compute_reward_cat_metrics(args, samples)
+    log_dict |= _compute_top_p_kept_vocab_metrics(args, samples)
     log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
     log_dict["truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()
     return log_dict
@@ -1281,8 +1358,61 @@ def compute_perf_metrics_from_samples(args, samples, rollout_time):
 
     token_perf([sample.response_length for sample in samples], non_generation_time, key="")
     token_perf([sample.effective_response_length for sample in samples], non_generation_time, key="effective_")
+    log_dict |= _compute_sglang_request_perf_metrics(samples)
 
     return log_dict
+
+
+def _compute_sglang_request_perf_metrics(all_samples: list[Sample]):
+    attrs_by_request = list(_iter_sglang_generate_attrs(all_samples))
+    if not attrs_by_request:
+        return {}
+
+    values_by_metric: dict[str, list[float]] = {}
+    profiled_request_count = 0
+
+    def add_value(metric_key: str, source_key: str, attrs: dict) -> bool:
+        value = attrs.get(source_key)
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not np.isfinite(value):
+            return False
+        values_by_metric.setdefault(metric_key, []).append(float(value))
+        return True
+
+    for attrs in attrs_by_request:
+        request_has_perf = False
+
+        for metric_key, source_key in _SGLANG_REQUEST_PERF_FIELDS:
+            request_has_perf |= add_value(metric_key, source_key, attrs)
+
+        for metric_key, source_key in _SGLANG_PREFILL_PERF_FIELDS:
+            request_has_perf |= add_value(metric_key, source_key, attrs)
+
+        for metric_key, source_key in _SGLANG_DECODE_PERF_FIELDS:
+            request_has_perf |= add_value(metric_key, source_key, attrs)
+
+        if request_has_perf:
+            profiled_request_count += 1
+
+    metrics: dict[str, float] = {}
+    for key, values in values_by_metric.items():
+        if not values:
+            continue
+        metrics |= dict_add_prefix(compute_statistics(values), f"{key}/")
+
+    return metrics
+
+
+def _iter_sglang_generate_attrs(all_samples: list[Sample]):
+    for sample in all_samples:
+        trace = getattr(sample, "trace", None)
+        if not isinstance(trace, dict):
+            continue
+        for event in trace.get("events") or []:
+            if event.get("type") != "span_end" or event.get("name") != "sglang_generate":
+                continue
+            attrs = event.get("attrs")
+            if isinstance(attrs, dict):
+                yield attrs
 
 
 def _compute_zero_std_metrics(args, all_samples: list[Sample]):
@@ -1300,6 +1430,36 @@ def _compute_zero_std_metrics(args, all_samples: list[Sample]):
     interesting_rewards = [str(round(g[0].get_reward_value(args), 1)) for g in interesting_sample_groups]
 
     return {f"zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
+
+
+def _compute_top_p_kept_vocab_metrics(args, all_samples: list[Sample]):
+    total_kept = 0
+    total_tokens = 0
+    for sample in all_samples:
+        offsets = sample.rollout_top_p_token_offsets
+        if offsets is None or sample.response_length == 0:
+            continue
+        offsets = torch.as_tensor(offsets, dtype=torch.int64)
+        if offsets.numel() == 0:
+            continue
+        assert (
+            offsets.numel() == sample.response_length + 1
+        ), f"top-p token offsets length {offsets.numel()} != response length + 1 {sample.response_length + 1}"
+        if sample.remove_sample:
+            continue
+        if sample.loss_mask is None:
+            total_kept += int(offsets[-1] - offsets[0])
+            total_tokens += sample.response_length
+            continue
+        loss_mask = torch.as_tensor(sample.loss_mask, dtype=torch.bool, device=offsets.device)
+        assert (
+            loss_mask.numel() == sample.response_length
+        ), f"loss mask length {loss_mask.numel()} != response length {sample.response_length}"
+        total_kept += int(torch.diff(offsets)[loss_mask].sum())
+        total_tokens += int(loss_mask.sum())
+    if total_tokens == 0:
+        return {}
+    return {"top_p_kept_vocab_per_token": total_kept / total_tokens}
 
 
 def _compute_spec_metrics(args, all_samples: list[Sample]):

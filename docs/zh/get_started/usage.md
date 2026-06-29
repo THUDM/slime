@@ -19,7 +19,7 @@
 
 - `--actor-num-gpus-per-node`：RL 的 actor 训练的每个节点有卡；
 
-- `--rollout-num-gpus`：rollout （inference）一共需要多少卡；
+- `--rollout-num-gpus`：rollout （inference）一共需要多少卡。设置为 `0` 时，slime 仍会解析 SGLang 参数并启动 router，但不会启动本地 SGLang server；
 
 - `--rollout-num-gpus-per-engine`：每个 inference engine 有多少卡，这个参数会比较像 sglang 的 `tp_size`，也就是在进行多机 serving 的时候，这个数值应该是总卡数，例如 2 机 16 卡 serving 一个模型，这里的值应该是 16。
 
@@ -29,7 +29,7 @@
 
 当需要训推一体的时候，还需要配置上：
 
-- `--colocate`：开启训推一体。开启后会忽略 `--rollout-num-gpus` 让训练和推理的卡数相等。
+- `--colocate`：开启训推一体。开启后默认会让训练和推理的卡数相等；也可以显式设置一个不同的正数，例如让 rollout 卡数多于 actor，多出的 GPU 会作为 rollout-only 资源使用。如果显式设置 `--rollout-num-gpus 0`，则只启动 router，不启动本地 SGLang server。
 
 此外，slime 支持 Prefill 和 Decode 的分离部署 (PD Disaggregation)，可以通过设置 `--prefill-num-servers` 参数来指定用于 Prefill 的服务器数量。
 
@@ -151,6 +151,7 @@ sglang 的加载非常简单，只需要：
 - sglang 默认会从 huggingface ckpt 中 `config.json` 读取模型的最大 context length，可以使用 `--sglang-context-length` 参数来对这个值进行覆盖，从而支持进行更长的推理；
 - 在训推一体的训练过程中，虽然 megatron 和 sglang 会先后 offload，但是还是需要为对方留有一些空间，需要通过减小 `--sglang-mem-fraction-static` 来调整 sglang 的显存占用总量。
 - slime 支持透传 sgl-router 的参数，方式是在原参数名前加上 `router` 前缀。例如，sgl-router 的 `--balance-abs-threshold` 参数需要设置为 `--router-balance-abs-threshold`。由于 sgl-router 默认使用 cache-aware routing，可能会导致请求分配不均衡的问题。可以通过设置 `--router-balance-abs-threshold 0` 来强制均衡分配，但这可能会影响多轮对话场景下 prefix cache 的命中率。
+- 如果 SGLang engine 已经由外部系统预启动，可以通过 `--rollout-external-engine-addrs host1:port host2:port` 连接。此时如果训练器和 engine 无法建立 NCCL 权重同步 group，可以使用 `--update-weight-mode full --update-weight-transport disk --update-weight-disk-dir /shared/fs/updates`，slime 会写完整 HF checkpoint 并调用 SGLang 的 `update_weights_from_disk` 热加载；大模型或跨集群场景可进一步使用 `--update-weight-mode delta --update-weight-transport disk`。详见 [External Rollout Engines 配置路线图](../advanced/external-rollout-engines.md) 和 [Delta 权重同步](../advanced/delta-weight-sync.md)。
 
 对于一些 sglang 的自定义以及 slime 引入 sglang 的原理，请见 sglang 使用方法一节。
 
@@ -187,6 +188,7 @@ sglang 的加载非常简单，只需要：
 - `--advantage-estimator`: 当前训练需要的 RL 算法，目前支持：
   - `grpo`（https://arxiv.org/abs/2402.03300）；
   - `gspo`（https://arxiv.org/abs/2507.18071）；
+  - `cispo`（https://arxiv.org/abs/2506.13585）；
   - `reinforce_plus_plus` 与 `reinforce_plus_plus_baseline`（https://arxiv.org/abs/2501.03262）；
   - `ppo`（https://arxiv.org/abs/1707.06347）。
 

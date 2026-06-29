@@ -51,6 +51,7 @@ megatron:
         "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 8192 "
         "--rollout-temperature 0.8 "
+        "--rollout-data-transport nixl "
         "--global-batch-size 16 "
         "--balance-data "
     )

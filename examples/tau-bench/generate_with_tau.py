@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Tau-bench configuration
 TAU_CONFIGS = {
     "env": "retail",  # Select between ["retail", "airline"]
-    "agent": "tool-calling",  # Select between ["tool-calling", "act", "react", "few-shot"]
+    "agent_strategy": "tool-calling",  # Select between ["tool-calling", "act", "react", "few-shot"]
     "user_model": "gemini-2.5-flash-lite",  # Cheap Model for user simulator
     "task_split": "train",  # Select between ["train", "test", "dev"] for retail
     "user_strategy": "llm",  # Select between ["llm", "react", "verify", "reflection"]

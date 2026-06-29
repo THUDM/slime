@@ -54,7 +54,6 @@ from slime.utils.timer import Timer, timer
 from ..sglang import DeltaEncoding, DeltaParam, DeltaSpec
 from .update_weight_from_distributed import UpdateWeightFromDistributed
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -481,7 +480,7 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
     """
     Selective delta sync. ``--update-weight-transport`` picks the per-flush carrier:
     "nccl" broadcasts each bucket; "disk" writes each bucket as a safetensors file under
-    ``--update-weight-delta-dir`` and pushes once at end-of-sync.
+    ``--update-weight-disk-dir`` and pushes once at end-of-sync.
     """
 
     def __init__(
@@ -522,7 +521,7 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
         self._published_any: bool = False
         self._rpc_executor: ThreadPoolExecutor | None = None
         if self.transport == "disk":
-            self.delta_dir = args.update_weight_delta_dir
+            self.delta_dir = args.update_weight_disk_dir
             os.makedirs(self.delta_dir, exist_ok=True)
             self.writer = AsyncSafetensorsWriter(
                 compress_with_zstd=(self.encoding == DeltaEncoding.DELTAS_ZSTD),
@@ -577,11 +576,6 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
         if not self._snapshot_seeded:
             self._seed_snapshot()
             self._snapshot_seeded = True
-            # Pin the engine's recorded version to ours (0) on the seed call so the
-            # CI version-equality check holds before any real sync has happened.
-            if dist.get_rank() == 0 and self.transport == "disk" and self.rollout_engines:
-                weight_version = str(self.weight_version)
-                ray.get([engine.set_weight_version.remote(weight_version) for engine in self.rollout_engines])
             return
 
         self.weight_version += 1

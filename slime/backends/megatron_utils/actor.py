@@ -3,8 +3,8 @@ import os
 import random
 from argparse import Namespace
 from contextlib import nullcontext
+from pathlib import Path
 
-import numpy as np
 import ray
 import torch
 import torch.distributed as dist
@@ -29,10 +29,12 @@ from ...utils.tensor_backper import TensorBackuper
 from .checkpoint import load_checkpoint
 from .cp_utils import slice_log_prob_with_cp, slice_with_cp
 from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data
+from .hf_checkpoint_saver import save_hf_model_to_path
 from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight.common import named_params_and_buffers
+from .update_weight.update_weight_from_disk import UpdateWeightFromDisk
 from .update_weight.update_weight_from_distributed import UpdateWeightFromDistributed
 from .update_weight.update_weight_from_tensor import UpdateWeightFromTensor
 
@@ -135,6 +137,9 @@ class MegatronTrainRayActor(TrainRayActor):
             self.args.vocab_size = hf_vocab if hf_vocab is not None else self.tokenizer.vocab_size
 
         if self.args.colocate:
+            assert (
+                self.args.update_weight_mode == "full"
+            ), "--update-weight-mode=delta is not supported with --colocate"
             update_weight_cls = UpdateWeightFromTensor
         elif self.args.update_weight_mode == "delta":
             # Lazy import: the delta module pulls DeltaEncoding/DeltaParam/DeltaSpec from
@@ -144,7 +149,14 @@ class MegatronTrainRayActor(TrainRayActor):
 
             update_weight_cls = UpdateWeightFromDistributedDelta
         else:
-            update_weight_cls = UpdateWeightFromDistributed
+            assert self.args.update_weight_mode == "full"
+            if self.args.update_weight_transport == "disk":
+                update_weight_cls = UpdateWeightFromDisk
+            else:
+                assert (
+                    self.args.update_weight_mode == "full" and self.args.update_weight_transport == "nccl"
+                ), f"unsupported weight sync mode/transport: {self.args.update_weight_mode!r}/{self.args.update_weight_transport!r}"
+                update_weight_cls = UpdateWeightFromDistributed
         self.weight_updater = update_weight_cls(
             self.args,
             self.model,
@@ -216,29 +228,26 @@ class MegatronTrainRayActor(TrainRayActor):
         )
         # TODO: this is ugly, move to somewhere else?
         # move tokens to GPU in advance
+        device = torch.cuda.current_device()
         rollout_data["tokens"] = [
-            torch.tensor(t, dtype=torch.long, device=torch.cuda.current_device()) for t in rollout_data["tokens"]
+            t.to(device=device, dtype=torch.long, non_blocking=True) for t in rollout_data["tokens"]
         ]
         rollout_data["loss_masks"] = [
-            torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in rollout_data["loss_masks"]
+            t.to(device=device, dtype=torch.int, non_blocking=True) for t in rollout_data["loss_masks"]
         ]
-        if "group_mask_sums" in rollout_data:
-            # Promote precomputed per-group mask totals to GPU tensors here
+        if "rollout_mask_sums" in rollout_data:
+            # Promote precomputed per-rollout mask totals to GPU tensors here
             # (matching loss_masks) so the loss reducer can just divide.
-            rollout_data["group_mask_sums"] = torch.tensor(
-                rollout_data["group_mask_sums"], dtype=torch.float32, device=torch.cuda.current_device()
+            rollout_data["rollout_mask_sums"] = rollout_data["rollout_mask_sums"].to(
+                device=device, dtype=torch.float32, non_blocking=True
             )
         if "multimodal_train_inputs" in rollout_data:
             # Move multimodal training tensors to GPU in advance
             rollout_data["multimodal_train_inputs"] = [
                 (
                     {
-                        key: (
-                            torch.from_numpy(v.copy()).to(device=torch.cuda.current_device())
-                            if isinstance(v, np.ndarray)
-                            else v.to(device=torch.cuda.current_device())
-                        )
-                        for key, v in mm_dict.items()
+                        key: value.to(device=device, non_blocking=True) if isinstance(value, torch.Tensor) else value
+                        for key, value in mm_dict.items()
                     }
                     if mm_dict is not None
                     else None
@@ -246,43 +255,21 @@ class MegatronTrainRayActor(TrainRayActor):
                 for mm_dict in rollout_data["multimodal_train_inputs"]
             ]
 
-        if self.args.qkv_format == "bshd":
-            # TODO: micro-batch wise dynamic, possibly move to @data.py:get_data_iterator
-            max_seq_len = max(rollout_data["total_lengths"])
-
-            # pad to reduce memory fragmentation and maybe make the computation faster
-            pad_size = mpu.get_tensor_model_parallel_world_size() * self.args.data_pad_size_multiplier
-            max_seq_len = (max_seq_len + pad_size - 1) // pad_size * pad_size
-
-            rollout_data["max_seq_lens"] = [max_seq_len] * len(rollout_data["tokens"])
-
         for key in ["rollout_log_probs", "teacher_log_probs"]:
             if key not in rollout_data:
                 continue
             rollout_data[key] = [
-                torch.tensor(
-                    slice_log_prob_with_cp(
-                        log_prob,
-                        total_length,
-                        response_length,
-                        self.args.qkv_format,
-                        rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
-                    ),
-                    device=torch.cuda.current_device(),
+                slice_log_prob_with_cp(log_prob, total_length, response_length).to(
+                    device=device,
                     dtype=torch.float32,
+                    non_blocking=True,
                 )
-                for i, (log_prob, total_length, response_length) in enumerate(
-                    zip(
-                        rollout_data[key],
-                        rollout_data["total_lengths"],
-                        rollout_data["response_lengths"],
-                        strict=False,
-                    )
+                for log_prob, total_length, response_length in zip(
+                    rollout_data[key],
+                    rollout_data["total_lengths"],
+                    rollout_data["response_lengths"],
+                    strict=False,
                 )
-            ]
-        if "rollout_routed_experts" in rollout_data:
-            rollout_data["rollout_routed_experts"] = [
-                torch.from_numpy(r) for r in rollout_data["rollout_routed_experts"]
             ]
         return rollout_data
 
@@ -385,6 +372,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 data_iterator,
                 num_microbatches,
                 store_prefix=store_prefix,
+                use_rollout_top_p_replay=True,
             )
 
     def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):
@@ -584,9 +572,7 @@ class MegatronTrainRayActor(TrainRayActor):
             maybe_finalize_async_save(blocking=True)
 
         if self.args.save_hf is not None and self.role == "actor":
-            from slime.backends.megatron_utils.model import save_hf_model
-
-            save_hf_model(self.args, rollout_id, self.model)
+            save_hf_model_to_path(self.args, Path(self.args.save_hf.format(rollout_id=rollout_id)), self.model)
 
         if self.args.offload_train:
             self.sleep()
@@ -606,6 +592,11 @@ class MegatronTrainRayActor(TrainRayActor):
         )
 
         reconnect_rollout_engines = self.args.offload_train and self.args.use_critic and not self.args.colocate
+
+        if not rollout_engines and not reconnect_rollout_engines:
+            if dist.get_rank() == 0:
+                logger.info("No updatable SGLang engines are running; skip weight update.")
+            return
 
         if reconnect_rollout_engines:
             self.wake_up()
@@ -628,7 +619,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.weight_updater.update_weights()
             print_memory("after update_weights")
 
-            if self.args.ci_test and len(rollout_engines) > 0:
+            if self.args.ci_test and len(rollout_engines) > 0 and self.weight_updater.weight_version > 0:
                 engine = random.choice(rollout_engines)
                 engine_version = ray.get(engine.get_weight_version.remote())
                 if str(engine_version) != str(self.weight_updater.weight_version):

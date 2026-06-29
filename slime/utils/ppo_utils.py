@@ -148,54 +148,180 @@ def compute_policy_loss(
     return pg_losses, clipfrac
 
 
-def compute_log_probs(logits: torch.Tensor, tokens: torch.Tensor, process_group: dist.ProcessGroup | None):
-    # TODO: when megatron is not installed, fall back to naive implementation
-    from megatron.core.fusions.fused_cross_entropy import fused_vocab_parallel_cross_entropy
+@torch.compile(dynamic=True)
+def compute_cispo_loss(
+    ppo_kl: torch.Tensor,
+    log_probs: torch.Tensor,
+    advantages: torch.Tensor,
+    eps_clip: float,
+    eps_clip_high: float,
+):
+    """CISPO loss from MiniMax-M1 (https://arxiv.org/abs/2506.13585, Eq. 4-5):
+    ``-sg(clip(ratio, 1 - eps_clip, 1 + eps_clip_high)) * advantages * log_probs``.
 
-    # convert to [seq_len, batch_size, vocab_size] as expected by fused_vocab_parallel_cross_entropy
-    logits = logits.unsqueeze(1)
-    tokens = tokens.unsqueeze(1)
-    return -fused_vocab_parallel_cross_entropy(logits, tokens, process_group)
+    Unlike PPO, the IS ratio is clipped under stop-gradient and the gradient flows
+    through ``log_probs``, so clipped tokens still contribute gradient. The bounds
+    reuse the delta-from-1 convention of ``compute_policy_loss``; canonical CISPO
+    disables the lower bound (``eps_clip >= 1.0``).
+    """
+    ratio = (-ppo_kl).exp()
+    ratio_truncated = torch.clamp(ratio, min=1.0 - eps_clip, max=1.0 + eps_clip_high)
+    pg_losses = -ratio_truncated.detach() * advantages * log_probs
+    clipfrac = (ratio_truncated != ratio).float()
+    return pg_losses, clipfrac
 
 
-# from https://github.com/volcengine/verl/blob/0bdf7f469854815177e73dcfe9e420836c952e6e/verl/utils/megatron/tensor_parallel.py#L99
-class _VocabParallelEntropy(torch.autograd.Function):
+def _maybe_all_reduce(tensor: torch.Tensor, op: dist.ReduceOp, process_group) -> None:
+    if dist.is_available() and dist.is_initialized():
+        dist.all_reduce(tensor, op=op, group=process_group)
+
+
+def _get_vocab_parallel_rank_size(process_group) -> tuple[int, int]:
+    if process_group is not None and hasattr(process_group, "rank") and hasattr(process_group, "size"):
+        return process_group.rank(), process_group.size()
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_rank(group=process_group), dist.get_world_size(group=process_group)
+    return 0, 1
+
+
+class _VocabParallelLogProbEntropy(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        vocab_parallel_logits: torch.Tensor,
+        target: torch.Tensor,
+        log_prob_keep_mask: torch.Tensor | None,
+        process_group,
+        with_entropy: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        vocab_parallel_logits = vocab_parallel_logits.float()
+        seq_len, vocab_parallel_size = vocab_parallel_logits.shape
+        rank, _world_size = _get_vocab_parallel_rank_size(process_group)
+        vocab_start_index = rank * vocab_parallel_size
+        vocab_end_index = vocab_start_index + vocab_parallel_size
+
+        target_mask = (target < vocab_start_index) | (target >= vocab_end_index)
+        masked_target_1d = (target - vocab_start_index).clone()
+        masked_target_1d[target_mask] = 0
+        arange_1d = torch.arange(seq_len, device=vocab_parallel_logits.device)
+
+        def vocab_parallel_softmax(
+            logits: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            logits_max = logits.max(dim=-1, keepdim=True).values
+            _maybe_all_reduce(logits_max, dist.ReduceOp.MAX, process_group)
+            normalized_logits = logits - logits_max
+            exp_logits = normalized_logits.exp()
+            sum_exp_logits = exp_logits.sum(dim=-1, keepdim=True)
+            _maybe_all_reduce(sum_exp_logits, dist.ReduceOp.SUM, process_group)
+            softmax = exp_logits / sum_exp_logits
+            return normalized_logits, sum_exp_logits, softmax, logits_max
+
+        entropy = vocab_parallel_logits.new_zeros((0,))
+        entropy_softmax = vocab_parallel_logits.new_empty((0,))
+        sum_softmax_times_logits = vocab_parallel_logits.new_empty((0,))
+
+        if log_prob_keep_mask is None:
+            normalized_log_prob_logits, log_prob_sum_exp_logits, log_prob_softmax, log_prob_logits_max = (
+                vocab_parallel_softmax(vocab_parallel_logits)
+            )
+            if with_entropy:
+                entropy_softmax = log_prob_softmax
+                sum_softmax_times_logits = (entropy_softmax * vocab_parallel_logits).sum(dim=-1, keepdim=True)
+                _maybe_all_reduce(sum_softmax_times_logits, dist.ReduceOp.SUM, process_group)
+                entropy = log_prob_logits_max + log_prob_sum_exp_logits.log() - sum_softmax_times_logits
+                entropy = entropy.squeeze(dim=-1)
+        else:
+            if with_entropy:
+                _entropy_normalized_logits, entropy_sum_exp_logits, entropy_softmax, entropy_logits_max = (
+                    vocab_parallel_softmax(vocab_parallel_logits)
+                )
+                sum_softmax_times_logits = (entropy_softmax * vocab_parallel_logits).sum(dim=-1, keepdim=True)
+                _maybe_all_reduce(sum_softmax_times_logits, dist.ReduceOp.SUM, process_group)
+                entropy = entropy_logits_max + entropy_sum_exp_logits.log() - sum_softmax_times_logits
+                entropy = entropy.squeeze(dim=-1)
+
+            log_prob_logits = vocab_parallel_logits.masked_fill(~log_prob_keep_mask, float("-inf"))
+            local_target_rows = torch.nonzero(~target_mask, as_tuple=False).squeeze(-1)
+            if local_target_rows.numel() > 0:
+                log_prob_logits[local_target_rows, masked_target_1d[local_target_rows]] = vocab_parallel_logits[
+                    local_target_rows, masked_target_1d[local_target_rows]
+                ]
+            normalized_log_prob_logits, log_prob_sum_exp_logits, log_prob_softmax, _log_prob_logits_max = (
+                vocab_parallel_softmax(log_prob_logits)
+            )
+
+        predicted_logits = normalized_log_prob_logits.view(-1, vocab_parallel_size)[arange_1d, masked_target_1d]
+        predicted_logits = predicted_logits.masked_fill(target_mask, 0.0).unsqueeze(-1)
+        _maybe_all_reduce(predicted_logits, dist.ReduceOp.SUM, process_group)
+        log_prob = predicted_logits - log_prob_sum_exp_logits.log()
+
+        ctx.with_entropy = with_entropy
+        ctx.cast_log_prob_grad_to_bfloat16 = vocab_parallel_logits.is_cuda
+        ctx.save_for_backward(
+            log_prob_softmax,
+            target_mask,
+            masked_target_1d,
+            entropy_softmax,
+            sum_softmax_times_logits,
+            vocab_parallel_logits,
+        )
+        return log_prob, entropy
 
     @staticmethod
-    def forward(ctx, vocab_parallel_logits: torch.Tensor, process_group: dist.ProcessGroup) -> torch.Tensor:
+    def backward(
+        ctx, grad_log_prob: torch.Tensor, grad_entropy: torch.Tensor
+    ) -> tuple[torch.Tensor, None, None, None, None]:
+        (
+            log_prob_softmax,
+            target_mask,
+            masked_target_1d,
+            entropy_softmax,
+            sum_softmax_times_logits,
+            vocab_parallel_logits,
+        ) = ctx.saved_tensors
 
-        @torch.compile(dynamic=True)
-        def mul_reduce(a, b):
-            return (a * b).sum(dim=-1, keepdim=True)
+        grad_input = None
+        if grad_log_prob is not None:
+            vocab_parallel_size = log_prob_softmax.size(-1)
+            grad_log_prob_input = -log_prob_softmax
+            grad_2d = grad_log_prob_input.view(-1, vocab_parallel_size)
+            arange_1d = torch.arange(grad_2d.size(0), device=grad_2d.device)
+            target_update = (~target_mask).to(dtype=grad_2d.dtype)
+            grad_2d[arange_1d, masked_target_1d] += target_update
+            grad_log_prob_input = grad_log_prob_input * grad_log_prob.reshape(-1, 1)
+            if ctx.cast_log_prob_grad_to_bfloat16:
+                # Match Megatron's fused vocab-parallel CE backward, which
+                # returns the log-prob branch gradient in bfloat16.
+                grad_log_prob_input = grad_log_prob_input.to(torch.bfloat16)
+            grad_input = grad_log_prob_input
 
-        logits_max = vocab_parallel_logits.max(dim=-1, keepdim=True).values
-        dist.all_reduce(logits_max, op=dist.ReduceOp.MAX, group=process_group)
-        normalized_vocab_parallel_logits = vocab_parallel_logits - logits_max
-        normalized_exp_logits = normalized_vocab_parallel_logits.exp_()
-        normalized_sum_exp_logits = normalized_exp_logits.sum(dim=-1, keepdim=True)
-        dist.all_reduce(normalized_sum_exp_logits, group=process_group)
-        softmax_logits = normalized_exp_logits.div_(normalized_sum_exp_logits)
-        sum_softmax_times_logits = mul_reduce(softmax_logits, vocab_parallel_logits)
-        dist.all_reduce(sum_softmax_times_logits, group=process_group)
-        entropy = logits_max + normalized_sum_exp_logits.log() - sum_softmax_times_logits
-        ctx.save_for_backward(vocab_parallel_logits, softmax_logits, sum_softmax_times_logits)
-        return entropy.squeeze(dim=-1)
+        if ctx.with_entropy and grad_entropy is not None and grad_entropy.numel() > 0:
+            grad_entropy_input = entropy_softmax * (sum_softmax_times_logits - vocab_parallel_logits)
+            grad_entropy_input = grad_entropy_input * grad_entropy.reshape(-1, 1)
+            grad_input = grad_entropy_input if grad_input is None else grad_input + grad_entropy_input
 
-    @staticmethod
-    def backward(ctx, grad_output: torch.Tensor) -> torch.Tensor:
-        vocab_parallel_logits, softmax_logits, sum_softmax_times_logits = ctx.saved_tensors
-        # reuse softmax_logits as grad
-        vocab_parallel_logits.sub_(sum_softmax_times_logits)
-        softmax_logits.mul_(vocab_parallel_logits)
-        softmax_logits.mul_(grad_output.unsqueeze(dim=-1))
-        # recover vocab_parallel_logits
-        vocab_parallel_logits.add_(sum_softmax_times_logits)
-        softmax_logits.mul_(-1)
-        return softmax_logits, None
+        return grad_input, None, None, None, None
 
 
-def compute_entropy_from_logits(logits: torch.Tensor, process_group) -> torch.Tensor:
-    return _VocabParallelEntropy.apply(logits, process_group)
+def _calculate_log_probs_and_entropy_chunk(
+    logits: torch.Tensor,
+    tokens: torch.Tensor,
+    tp_group,
+    *,
+    with_entropy: bool,
+    log_prob_keep_mask: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    log_prob, entropy = _VocabParallelLogProbEntropy.apply(
+        logits,
+        tokens,
+        log_prob_keep_mask,
+        tp_group,
+        with_entropy,
+    )
+    if not with_entropy:
+        entropy = None
+    return log_prob, entropy
 
 
 def get_grpo_returns(
@@ -646,7 +772,9 @@ def chunked_gae(
     return advantages, returns
 
 
-def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool = False, chunk_size: int = -1):
+def calculate_log_probs_and_entropy(
+    logits, tokens, tp_group, with_entropy: bool = False, chunk_size: int = -1, log_prob_keep_mask=None
+):
     logits = logits.contiguous()
     entropy = None
     if logits.size(0) != 0:
@@ -654,25 +782,34 @@ def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool
             num_chunks = (logits.size(0) - 1) // chunk_size + 1
             logits_chunks = logits.chunk(num_chunks, dim=0)
             tokens_chunks = tokens.chunk(num_chunks, dim=0)
-
-            if with_entropy:
-                entropys = []
-                for logits_chunk in logits_chunks:
-                    entropy_input = logits_chunk.clone()
-                    entropys.append(compute_entropy_from_logits(entropy_input, tp_group))
-                entropy = torch.cat(entropys, dim=0)
+            mask_chunks = (
+                log_prob_keep_mask.chunk(num_chunks, dim=0) if log_prob_keep_mask is not None else [None] * num_chunks
+            )
 
             log_probs = []
-            for tokens_chunk, logits_chunk in zip(tokens_chunks, logits_chunks, strict=True):
-                log_prob = compute_log_probs(logits_chunk.clone(), tokens_chunk, tp_group)
+            entropy_chunks = []
+            for tokens_chunk, logits_chunk, mask_chunk in zip(tokens_chunks, logits_chunks, mask_chunks, strict=True):
+                log_prob, entropy_chunk = _calculate_log_probs_and_entropy_chunk(
+                    logits_chunk,
+                    tokens_chunk,
+                    tp_group,
+                    with_entropy=with_entropy,
+                    log_prob_keep_mask=mask_chunk,
+                )
                 log_probs.append(log_prob)
+                if entropy_chunk is not None:
+                    entropy_chunks.append(entropy_chunk)
             log_prob = torch.cat(log_probs, dim=0)
+            if entropy_chunks:
+                entropy = torch.cat(entropy_chunks, dim=0)
         else:
-            if with_entropy:
-                entropy_input = logits.clone()
-                entropy = compute_entropy_from_logits(entropy_input, tp_group)
-
-            log_prob = compute_log_probs(logits.clone(), tokens, tp_group)
+            log_prob, entropy = _calculate_log_probs_and_entropy_chunk(
+                logits,
+                tokens,
+                tp_group,
+                with_entropy=with_entropy,
+                log_prob_keep_mask=log_prob_keep_mask,
+            )
     else:
         log_prob = logits.new_zeros((0,))
         if with_entropy:

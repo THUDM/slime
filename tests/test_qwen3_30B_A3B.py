@@ -93,7 +93,7 @@ def execute():
     sglang_args = (
         "--rollout-num-gpus-per-engine 8 "
         "--sglang-mem-fraction-static 0.8 "
-        "--sglang-cuda-graph-max-bs 16 "
+        "--sglang-cuda-graph-max-bs 32 "
         "--sglang-max-running-requests 512 "
         "--sglang-enable-metrics "
     )

@@ -1,4 +1,5 @@
 from .deepseekv3 import convert_deepseekv3_to_hf
+from .gemma4 import convert_gemma4_to_hf
 from .glm4 import convert_glm4_to_hf
 from .glm4moe import convert_glm4moe_to_hf
 from .gpt_oss import convert_gpt_oss_to_hf
@@ -37,7 +38,7 @@ _cached_tensors = {}
 def _convert_to_hf_core(args, model_name, name, param):
     if "minimaxm2" in model_name or "minimax_m2" in model_name:
         converted_named_tensors = convert_minimax_m2_to_hf(args, name, param)
-    elif "glm4moelite" in model_name or "deepseekv3" in model_name:
+    elif "glm4moelite" in model_name or "deepseekv3" in model_name or "glmmoedsa" in model_name:
         converted_named_tensors = convert_deepseekv3_to_hf(args, name, param)
     elif "glm4moe" in model_name:
         converted_named_tensors = convert_glm4moe_to_hf(args, name, param)
@@ -55,6 +56,8 @@ def _convert_to_hf_core(args, model_name, name, param):
         converted_named_tensors = convert_qwen3vl_to_hf(args, name, param)
     elif "qwen2" in model_name or "qwen3" in model_name:
         converted_named_tensors = convert_qwen2_to_hf(args, name, param)
+    elif "gemma4" in model_name:
+        converted_named_tensors = convert_gemma4_to_hf(args, name, param)
     elif "llama" in model_name:
         converted_named_tensors = convert_llama_to_hf(args, name, param)
     elif "mimo" in model_name:

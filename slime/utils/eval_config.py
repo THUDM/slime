@@ -33,6 +33,11 @@ DATASET_RUNTIME_SPECS: dict[str, dict[str, tuple[str, ...]]] = {
         "default_keys": ("max_response_len",),
         "arg_attrs": ("eval_max_response_len", "rollout_max_response_len"),
     },
+    "min_eval_samples": {
+        "dataset_keys": ("min_eval_samples",),
+        "default_keys": ("min_eval_samples",),
+        "arg_attrs": (),
+    },
 }
 
 DATASET_SAMPLE_SPECS: dict[str, dict[str, tuple[str, ...]]] = {
@@ -55,6 +60,26 @@ DATASET_SAMPLE_SPECS: dict[str, dict[str, tuple[str, ...]]] = {
         "dataset_keys": ("metadata_key",),
         "default_keys": ("metadata_key",),
         "arg_attrs": ("metadata_key",),
+    },
+    "multimodal_keys": {
+        "dataset_keys": ("multimodal_keys",),
+        "default_keys": ("multimodal_keys",),
+        "arg_attrs": ("multimodal_keys",),
+    },
+    "apply_chat_template": {
+        "dataset_keys": ("apply_chat_template",),
+        "default_keys": ("apply_chat_template",),
+        "arg_attrs": ("apply_chat_template",),
+    },
+    "apply_chat_template_kwargs": {
+        "dataset_keys": ("apply_chat_template_kwargs",),
+        "default_keys": ("apply_chat_template_kwargs",),
+        "arg_attrs": ("apply_chat_template_kwargs",),
+    },
+    "custom_rm_path": {
+        "dataset_keys": ("custom_rm_path",),
+        "default_keys": ("custom_rm_path",),
+        "arg_attrs": ("eval_custom_rm_path", "custom_rm_path"),
     },
 }
 
@@ -98,12 +123,16 @@ class EvalDatasetConfig:
     name: str
     path: str
     rm_type: str | None = None
+    custom_rm_path: str | None = None
 
     # Dataset-specific overrides
     input_key: str | None = None
     label_key: str | None = None
     tool_key: str | None = None
     metadata_key: str | None = None
+    multimodal_keys: dict[str, str] | None = None
+    apply_chat_template: bool | None = None
+    apply_chat_template_kwargs: dict[str, Any] | None = None
 
     n_samples_per_eval_prompt: int | None = None
 
@@ -114,6 +143,9 @@ class EvalDatasetConfig:
     stop: list[str] | None = None
     stop_token_ids: list[int] | None = None
     min_new_tokens: int | None = None
+    repetition_penalty: float | None = None
+    skip_special_tokens: bool | None = None
+    no_stop_trim: bool | None = None
 
     # per-dataset custom generate function (e.g., for tool calling)
     custom_generate_function_path: str | None = None
@@ -123,11 +155,28 @@ class EvalDatasetConfig:
     app_service: str | None = None
 
     eval_task_timeout: int | None = None
+    min_eval_samples: int | None = None
+
+    # Early stop: terminate eval when remaining samples < eval_early_stop_remaining
+    # AND no new result has been received for eval_early_stop_idle_timeout seconds.
+    # Both must be set (non-None) for early stop to take effect.
+    eval_early_stop_remaining: int | None = None
+    eval_early_stop_idle_timeout: float | None = None
+
+    # Inline source config (mirrors the per-source fields in the train data JSON).
+    # When any of these is set, eval will treat this dataset as its own "source"
+    # and build a Dataset-level source_config keyed by `name`. No need to set
+    # --source-key or have a `source` field in the eval jsonl.
+    message_processor: dict[str, Any] | None = None
+    reward_model: dict[str, Any] | None = None
+    remote_environment: dict[str, Any] | None = None
 
     metadata_overrides: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.metadata_overrides = _ensure_metadata_overrides(self.metadata_overrides)
+        if self.min_eval_samples is not None and self.min_eval_samples <= 0:
+            raise ValueError("min_eval_samples must be positive when set.")
 
     @property
     def cache_key(self) -> tuple[Any, ...]:

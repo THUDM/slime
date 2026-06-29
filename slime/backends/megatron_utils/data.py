@@ -29,7 +29,6 @@ def get_batch(
     data_iterator: "DataIterator",
     keys: Sequence[str],
     pad_multiplier: int = 128,
-    qkv_format: str = "thd",
     allgather_cp: bool = False,
 ) -> dict[str, torch.Tensor | PackedSeqParams | list[torch.Tensor] | None]:
     """
@@ -67,63 +66,53 @@ def get_batch(
     cp_size = mpu.get_context_parallel_world_size()
     cp_rank = mpu.get_context_parallel_rank()
 
-    if qkv_format == "bshd":
-        max_seqlen = batch["max_seq_lens"][0]
-        assert max([t.size(0) for t in tokens]) <= max_seqlen
-        tokens = [slice_with_cp(t, pad_token_id, qkv_format, max_seqlen) for t in tokens]
-        tokens = torch.stack(tokens)
-        packed_seq_params = None
+    if allgather_cp:
+        # DSA mode: concatenate all sequences first, then slice once with CP.
+        # We also pad the *global* concatenated stream to make per-rank chunks equal.
+        cu_seqlens_list: list[int] = [0]
+        for t in tokens:
+            cu_seqlens_list.append(cu_seqlens_list[-1] + t.size(0))
 
-    elif qkv_format == "thd":
-        if allgather_cp:
-            # DSA mode: concatenate all sequences first, then slice once with CP.
-            # We also pad the *global* concatenated stream to make per-rank chunks equal.
-            cu_seqlens_list: list[int] = [0]
-            for t in tokens:
-                cu_seqlens_list.append(cu_seqlens_list[-1] + t.size(0))
+        tokens = torch.cat(tokens, dim=0)
 
-            tokens = torch.cat(tokens, dim=0)
+        # Pad global stream so (1) divisible by cp_size (equal chunks),
+        # (2) divisible by pad_size (reduce fragmentation).
+        global_pad_size = cp_size * pad_size
+        pad = (global_pad_size - tokens.size(0) % global_pad_size) % global_pad_size
+        if pad != 0:
+            tokens = F.pad(tokens, (0, pad), value=pad_token_id)
+            cu_seqlens_list.append(cu_seqlens_list[-1] + pad)
 
-            # Pad global stream so (1) divisible by cp_size (equal chunks),
-            # (2) divisible by pad_size (reduce fragmentation).
-            global_pad_size = cp_size * pad_size
-            pad = (global_pad_size - tokens.size(0) % global_pad_size) % global_pad_size
-            if pad != 0:
-                tokens = F.pad(tokens, (0, pad), value=pad_token_id)
-                cu_seqlens_list.append(cu_seqlens_list[-1] + pad)
-
-            cu_seqlens = torch.tensor(cu_seqlens_list, dtype=torch.int, device=torch.cuda.current_device())
-            tokens = tokens.chunk(cp_size, dim=0)[cp_rank]
-        else:
-            tokens = [slice_with_cp(t, pad_token_id, qkv_format) for t in tokens]
-
-            cu_seqlens = [0]
-            for t in tokens:
-                cu_seqlens.append(cu_seqlens[-1] + t.size(0))
-
-            tokens = torch.cat(tokens)
-
-            # Always pad to reduce memory fragmentation and maybe make the computation faster
-            pad = (pad_size - tokens.size(0) % pad_size) % pad_size
-            if pad != 0:
-                tokens = F.pad(tokens, (0, pad), value=pad_token_id)
-                cu_seqlens.append(cu_seqlens[-1] + pad)
-
-            # thd requires the cu_seqlens to be of the origin length
-            cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int).cuda() * cp_size
-
-        max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
-        packed_seq_params = PackedSeqParams(
-            cu_seqlens_q=cu_seqlens,
-            cu_seqlens_kv=cu_seqlens,
-            max_seqlen_q=max_seqlen,
-            max_seqlen_kv=max_seqlen,
-            qkv_format="thd",
-        )
-
-        tokens = tokens.unsqueeze(0)
+        cu_seqlens = torch.tensor(cu_seqlens_list, dtype=torch.int, device=torch.cuda.current_device())
+        tokens = tokens.chunk(cp_size, dim=0)[cp_rank]
     else:
-        raise ValueError(f"Unsupported qkv_format: {qkv_format}")
+        tokens = [slice_with_cp(t, pad_token_id) for t in tokens]
+
+        cu_seqlens = [0]
+        for t in tokens:
+            cu_seqlens.append(cu_seqlens[-1] + t.size(0))
+
+        tokens = torch.cat(tokens)
+
+        # Always pad to reduce memory fragmentation and maybe make the computation faster
+        pad = (pad_size - tokens.size(0) % pad_size) % pad_size
+        if pad != 0:
+            tokens = F.pad(tokens, (0, pad), value=pad_token_id)
+            cu_seqlens.append(cu_seqlens[-1] + pad)
+
+        # thd requires the cu_seqlens to be of the origin length
+        cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int).cuda() * cp_size
+
+    max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+    packed_seq_params = PackedSeqParams(
+        cu_seqlens_q=cu_seqlens,
+        cu_seqlens_kv=cu_seqlens,
+        max_seqlen_q=max_seqlen,
+        max_seqlen_kv=max_seqlen,
+        qkv_format="thd",
+    )
+
+    tokens = tokens.unsqueeze(0)
 
     batch["tokens"] = tokens
     batch["packed_seq_params"] = packed_seq_params
@@ -142,18 +131,16 @@ def get_batch(
         if allgather_cp:
             loss_masks.append(loss_mask)
             continue
-        loss_mask = slice_with_cp(loss_mask, 0, qkv_format, max_seqlen)
+        loss_mask = slice_with_cp(loss_mask, 0)
         loss_masks.append(loss_mask)
 
-    if qkv_format == "bshd":
-        loss_masks = torch.stack(loss_masks)
-    elif qkv_format == "thd" and allgather_cp:
+    if allgather_cp:
         # DSA: concatenate first (same as tokens), pad globally (same pad as above), then slice once.
         loss_masks = torch.cat(loss_masks, dim=0)
         if pad != 0:
             loss_masks = F.pad(loss_masks, (0, pad), value=0)
         loss_masks = loss_masks.chunk(cp_size, dim=0)[cp_rank].unsqueeze(0)
-    elif qkv_format == "thd":
+    else:
         loss_masks = torch.cat(loss_masks)
         loss_masks = F.pad(loss_masks, (0, pad), value=0).unsqueeze(0)
 
@@ -278,17 +265,16 @@ def log_rollout_data(
         response_lengths = rollout_data["response_lengths"]
         loss_masks = rollout_data["loss_masks"]
         total_lengths = rollout_data["total_lengths"]
-        max_seq_lens = rollout_data.get("max_seq_lens", None)
-        # Same per-group denominators the training loss uses, so reported
-        # log_probs / returns / advantages / etc. live in the same per-group
+        # Same per-rollout denominators the training loss uses, so reported
+        # log_probs / returns / advantages / etc. live in the same per-rollout
         # mean space (rather than per-sample) as the gradient signal.
-        group_mask_sums = rollout_data.get("group_mask_sums", None)
+        rollout_mask_sums = rollout_data.get("rollout_mask_sums", None)
         # For per-rollout-mean metrics: ``rollout_log_metric_contribution``
         # produces the ``(sum, count)`` tuple so gather_log_data's
-        # ``sum / count`` lands on ``sum_DP_full / num_groups`` — the
+        # ``Σsum / Σcount`` lands on ``sum_DP_full / num_rollouts`` — the
         # same number train_one_step reports for the same samples.
         dp_world = mpu.get_data_parallel_world_size(with_context_parallel=False)
-        num_groups_in_rollout = sum(rollout_data["global_batch_sizes"])
+        num_rollouts_in_rollout = sum(rollout_data["global_batch_sizes"])
 
         for key, val in rollout_data.items():
             if key in [
@@ -296,10 +282,11 @@ def log_rollout_data(
                 "multimodal_train_inputs",
                 "loss_masks",
                 "sample_indices",
-                "group_ids",
-                "group_mask_sums",
+                "rollout_ids",
+                "rollout_mask_sums",
+                "rollout_top_p_token_ids",
+                "rollout_top_p_token_offsets",
                 "rollout_routed_experts",
-                "max_seq_lens",
                 "global_batch_sizes",
                 "num_microbatches",
                 "micro_batch_indices",
@@ -328,16 +315,14 @@ def log_rollout_data(
                             total_lengths,
                             response_lengths,
                             loss_masks,
-                            group_mask_sums,
-                            qkv_format=args.qkv_format,
-                            max_seq_lens=max_seq_lens,
+                            rollout_mask_sums,
                         )
                         # Compute (sum, count) via the shared helper so this
                         # path and the unit tests stay in sync.
                         sum_value, count = rollout_log_metric_contribution(
                             sum_of_sample_mean(tensor).item(),
                             cp_size=cp_size,
-                            num_rollouts_in_rollout=num_groups_in_rollout,
+                            num_rollouts_in_rollout=num_rollouts_in_rollout,
                             dp_size=dp_world,
                         )
                         log_dict[key] = (sum_value, count)
@@ -433,8 +418,8 @@ def log_rollout_data(
                 rollout_data[f"correct_length/{p}"] = [val] * num_correct_responses
             if len(correct_entropy) > 0:
                 # NOTE: per-sample-mean over the correct subset, not per-rollout.
-                # A group's siblings may not all be correct, and slicing
-                # ``group_mask_sums`` here would leave a denom that still
+                # A rollout's siblings may not all be correct, and slicing
+                # ``rollout_mask_sums`` here would leave a denom that still
                 # includes incorrect siblings — meaningless for a "correct-only"
                 # entropy report. Per-sample-mean over the filtered subset is
                 # the cleanest semantic.

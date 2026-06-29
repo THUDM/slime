@@ -49,12 +49,11 @@ changed-test job 本身走 self-hosted Docker 路径。当 `NUM_GPUS = 0` 时，
 |---|---|---|---|
 | 自动运行 | `cpu-unittest` | CPU | 默认运行的 unit/contract tests，覆盖 argument validation、schedule、reward、sample、rollout validation、checkpoint utilities 和 plugin contracts。 |
 | 自动运行 | `agent-adapter-test` | CPU | 默认运行的 agent adapter tests，包含额外 provider SDK 依赖。 |
-| `run-ci-short` | `e2e-test-short` | GPU | 小模型轻量级 smoke tests，用于快速 GPU 反馈。 |
 | `run-ci-sglang-config` | `e2e-test-sglang-config` | GPU | SGLang config 测试，覆盖高级 rollout engine deployment 和 mixed/offload 场景。 |
 | `run-ci-megatron` | `e2e-test-megatron` | GPU | 核心 Megatron 训练测试，覆盖 dense、MoE、PPO、MTP、OPD、async rollout、PD/Mooncake 和 debug replay 路径。 |
 | `run-ci-precision` | `e2e-test-precision` | GPU | 数值精度和并行一致性检查。 |
 | `run-ci-ckpt` | `e2e-test-ckpt` | GPU | Checkpoint save/load 正确性，包括 CPU/GPU optimizer state 和 async save。 |
-| `run-ci-image` | `e2e-test-image` | GPU | 在 `slimerl/slime-test:latest` 上运行更完整的镜像验证套件。 |
+| `run-ci-image` | `e2e-test-image` | GPU | 在 `slimerl/slime-test:latest` 上运行与 `run-ci-megatron` 相同的 matrix。 |
 | `run-ci-changed` | `e2e-test-changed` | Mixed | 只运行 changed tests，并使用每个文件中的 `NUM_GPUS`。 |
 
 也可以在 Actions 页面通过 `workflow_dispatch` 手动验证；它会按照 workflow 条件运行注册的 jobs。
@@ -86,12 +85,11 @@ python -m pytest tests/test_megatron_argument_validation.py tests/plugin_contrac
 
 GPU e2e tests 验证 CPU tests 无法覆盖的集成训练/rollout 行为：
 
-- `run-ci-short`：小模型 smoke coverage，用于快速 GPU 反馈。
 - `run-ci-sglang-config`：高级 SGLang deployment path，包括 config-based engine layouts。
 - `run-ci-megatron`：主要 Megatron backend coverage，包括 dense/MoE recipe、async rollout、OPD、PPO-style path、PD/Mooncake 和 debug rollout-then-train replay。
 - `run-ci-precision`：不同并行设置下的数值一致性。
 - `run-ci-ckpt`：checkpoint save/load 组合和 async save。
-- `run-ci-image`：release/test image 的较完整验证。
+- `run-ci-image`：与 `run-ci-megatron` 相同的 matrix，但运行在 release/test image 上。
 
 日常 PR 优先使用 targeted labels。`run-ci-image` 消耗 GPU 时间较多，应谨慎使用。
 
