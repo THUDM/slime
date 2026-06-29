@@ -81,8 +81,9 @@ RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
 # https://github.com/pytorch/pytorch/issues/168167
 RUN pip install nvidia-cudnn-cu12==9.16.0.29
 
-# reinstall numpy 1.x for megatron
-RUN pip install "numpy<2"
+# Megatron requires NumPy 1.x. Keep SciPy in sync with NumPy>=1.24 because
+# older SciPy releases still reference removed aliases such as np.long.
+RUN pip install "numpy<2" "scipy>=1.13.0"
 
 RUN pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-1117d05/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
 RUN python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
