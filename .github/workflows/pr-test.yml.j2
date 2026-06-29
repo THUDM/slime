@@ -8,6 +8,7 @@
     {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8, 'enable_eval': '0'},
     {'test_file': 'test_qwen3_4B_ppo_disaggregate.py', 'num_gpus': 8, 'enable_eval': '0'},
     {'test_file': 'test_qwen3_4B_ppo_train_critic_only.py', 'num_gpus': 8, 'enable_eval': '0'},
+    {'test_file': 'test_ppo_logprob_entropy_gpu.py', 'num_gpus': 2},
     {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8, 'enable_eval': '0'},
     {'test_file': 'test_moonlight_16B_A3B_r3.py', 'num_gpus': 8, 'enable_eval': '0'},
     {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
@@ -72,6 +73,7 @@
         {'test_file': 'test_logprob_response_spans.py', 'num_gpus': 0},
         {'test_file': 'test_value_temperature.py', 'num_gpus': 0},
         {'test_file': 'test_cispo_loss.py', 'num_gpus': 0},
+        {'test_file': 'test_ppo_logprob_entropy.py', 'num_gpus': 0},
         {'test_file': 'test_rm_f1.py', 'num_gpus': 0},
         {'test_file': 'test_rm_gpqa.py', 'num_gpus': 0},
         {'test_file': 'test_rm_math.py', 'num_gpus': 0},
@@ -149,7 +151,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        info: << config.tests | tojson >>
+        info:
+<< config.tests | tojson(indent=2) | indent(10, true) >>
     defaults:
       run:
         working-directory: ${{ github.workspace }}
