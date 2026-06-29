@@ -44,6 +44,7 @@ def init_process_group(
     store: Store | None = None,
     group_name: str = None,
     pg_options: Any | None = None,
+    device_id: torch.device | None = None,
 ):
     assert (store is None) or (init_method is None), "Cannot specify both init_method and store."
 
@@ -84,6 +85,7 @@ def init_process_group(
         group_name=group_name,
         **{pg_options_param_name: pg_options},
         timeout=timeout,
+        device_id=device_id,
     )
 
     _world.pg_group_ranks[pg] = {i: i for i in range(world_size)}

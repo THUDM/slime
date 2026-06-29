@@ -127,6 +127,18 @@ RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
   rm sglang-top_p.patch; \
 fi
 
+COPY docker/patch/${PATCH_VERSION}/sglang_p2p.patch /sgl-workspace/sglang/
+RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
+  cd /sgl-workspace/sglang && \
+  git update-index --refresh && \
+  git apply sglang_p2p.patch --3way && \
+  if grep -R -n '^<<<<<<< ' .; then \
+    echo "sglang_p2p.patch failed to apply cleanly. Please resolve conflicts." && \
+    exit 1; \
+  fi && \
+  rm sglang_p2p.patch; \
+fi
+
 # ====================================== Install main package ============================================
 
 ARG SLIME_COMMIT=main

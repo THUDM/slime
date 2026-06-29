@@ -438,10 +438,12 @@ class SGLangEngine(RayActor):
         weight_version: str | None = None,
         load_format: str | None = None,
         delta=None,
+        src_tp_rank: int | None = None,
+        tp_tensor_counts: list[int] | None = None,
     ):
         payload = {
             "names": names,
-            "dtypes": [str(dtype).replace("torch.", "") for dtype in dtypes],
+            "dtypes": [str(dtype).replace("torch.", "") if not isinstance(dtype, str) else dtype for dtype in dtypes],
             "shapes": shapes,
             "group_name": group_name,
             "flush_cache": flush_cache,
@@ -450,6 +452,10 @@ class SGLangEngine(RayActor):
             payload["weight_version"] = weight_version
         if load_format is not None:
             payload["load_format"] = load_format
+        if src_tp_rank is not None:
+            payload["src_tp_rank"] = src_tp_rank
+        if tp_tensor_counts is not None:
+            payload["tp_tensor_counts"] = tp_tensor_counts
         if delta is not None:
             # DeltaSpec → JSON string. Receiver reconstructs via DeltaEncoding(...) +
             # DeltaParam(**p); avoids depending on FastAPI's nested-dataclass coercion.

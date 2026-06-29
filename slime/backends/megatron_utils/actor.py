@@ -36,6 +36,7 @@ from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight.common import named_params_and_buffers
 from .update_weight.update_weight_from_disk import UpdateWeightFromDisk
 from .update_weight.update_weight_from_distributed import UpdateWeightFromDistributed
+from .update_weight.update_weight_from_distributed_p2p import UpdateWeightFromDistributedP2P
 from .update_weight.update_weight_from_tensor import UpdateWeightFromTensor
 
 logging.getLogger("megatron").setLevel(logging.WARNING)
@@ -148,6 +149,23 @@ class MegatronTrainRayActor(TrainRayActor):
             from .update_weight.update_weight_from_distributed_delta import UpdateWeightFromDistributedDelta
 
             update_weight_cls = UpdateWeightFromDistributedDelta
+        elif getattr(self.args, "use_p2p_weight_update", False):
+            assert self.args.update_weight_mode == "full", "--use-p2p-weight-update requires --update-weight-mode=full"
+            from .update_weight.common import p2p_weight_update_fallback_reason, p2p_weight_update_supported
+
+            model_name = (
+                type(self.hf_config).__name__.lower() if self.args.model_name is None else self.args.model_name
+            )
+            if p2p_weight_update_supported(self.args, model_name):
+                update_weight_cls = UpdateWeightFromDistributedP2P
+            else:
+                update_weight_cls = UpdateWeightFromDistributed
+                if (
+                    mpu.get_data_parallel_rank(with_context_parallel=True) == 0
+                    and mpu.get_tensor_model_parallel_rank() == 0
+                ):
+                    reason = p2p_weight_update_fallback_reason(self.args, model_name)
+                    print(f"[P2P] {reason}; using NCCL broadcast weight update instead.")
         else:
             assert self.args.update_weight_mode == "full"
             if self.args.update_weight_transport == "disk":

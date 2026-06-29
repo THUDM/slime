@@ -99,6 +99,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This will always be true when --colocate is set."
                 ),
             )
+            parser.add_argument(
+                "--use-p2p-weight-update",
+                action="store_true",
+                default=False,
+                help=(
+                    "Use shard-level P2P weight update (dist.send/recv) instead of "
+                    "all_gather + broadcast for non-colocate mode when "
+                    "--megatron-to-hf-mode bridge, the model supports shard-level "
+                    "conversion, and Megatron TP equals SGLang TP. Otherwise falls "
+                    "back to NCCL broadcast automatically."
+                ),
+            )
 
             reset_arg(parser, "--distributed-backend", type=str, default="nccl")
             reset_arg(parser, "--distributed-timeout-minutes", type=int, default=10)

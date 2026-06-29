@@ -235,3 +235,78 @@ def _named_params_and_buffers_global(
                 layer_idx, rest = match.groups()
                 layer_idx = int(layer_idx) + layer_offset
                 yield f"module.module.decoder.layers.{layer_idx}.{rest}", buffer
+
+
+def get_sglang_tensor_parallel_size(args: Namespace, engine_gpu_count: int | None = None) -> int:
+    """Effective SGLang TP size for one engine (GPUs per engine // PP size)."""
+    gpu_count = args.rollout_num_gpus_per_engine if engine_gpu_count is None else engine_gpu_count
+    pp_size = get_sglang_pipeline_parallel_size(args)
+    if gpu_count % pp_size != 0:
+        raise ValueError(f"engine GPU count ({gpu_count}) must be divisible by SGLang PP size ({pp_size})")
+    return gpu_count // pp_size
+
+
+def get_sglang_pipeline_parallel_size(args: Namespace) -> int:
+    """SGLang pipeline parallel size configured for rollout engines."""
+    return getattr(args, "sglang_pp_size", 1) or getattr(args, "sglang_pipeline_parallel_size", 1) or 1
+
+
+def p2p_tp_sizes_match(args: Namespace, engine_gpu_counts: Sequence[int] | None = None) -> bool:
+    """
+    Return True when Megatron training TP equals SGLang inference TP for every engine.
+
+    P2P shard send/recv requires a 1:1 mapping between training and inference TP ranks.
+    """
+    megatron_tp = args.tensor_model_parallel_size
+    if engine_gpu_counts is None:
+        return megatron_tp == get_sglang_tensor_parallel_size(args)
+    return all(megatron_tp == get_sglang_tensor_parallel_size(args, c) for c in engine_gpu_counts)
+
+
+def p2p_weight_update_supported(
+    args: Namespace,
+    model_name: str,
+    engine_gpu_counts: Sequence[int] | None = None,
+) -> bool:
+    """
+    Return True when shard-level P2P weight update can be used.
+
+    Requires ``--megatron-to-hf-mode bridge``, a model with shard-level conversion,
+    SGLang PP=1, and matching Megatron / SGLang TP sizes.
+    """
+    from slime.backends.megatron_utils.megatron_to_hf import shard_conversion_supported
+
+    if args.megatron_to_hf_mode != "bridge":
+        return False
+    if not shard_conversion_supported(model_name):
+        return False
+    if get_sglang_pipeline_parallel_size(args) != 1:
+        return False
+    return p2p_tp_sizes_match(args, engine_gpu_counts)
+
+
+def p2p_weight_update_fallback_reason(
+    args: Namespace,
+    model_name: str,
+    engine_gpu_counts: Sequence[int] | None = None,
+) -> str:
+    """Human-readable reason why P2P falls back to NCCL broadcast."""
+    from slime.backends.megatron_utils.megatron_to_hf import shard_conversion_supported
+
+    if args.megatron_to_hf_mode != "bridge":
+        return f"megatron_to_hf_mode={args.megatron_to_hf_mode!r} " "(P2P requires --megatron-to-hf-mode bridge)"
+    if not shard_conversion_supported(model_name):
+        return f"shard-level conversion not implemented for model {model_name!r}"
+    sglang_pp = get_sglang_pipeline_parallel_size(args)
+    if sglang_pp != 1:
+        return f"sglang_pp_size={sglang_pp} (P2P requires SGLang PP=1)"
+    megatron_tp = args.tensor_model_parallel_size
+    if engine_gpu_counts is None:
+        sglang_tp = get_sglang_tensor_parallel_size(args)
+        if megatron_tp != sglang_tp:
+            return f"Megatron TP ({megatron_tp}) != SGLang TP ({sglang_tp})"
+    else:
+        sglang_tps = [get_sglang_tensor_parallel_size(args, c) for c in engine_gpu_counts]
+        if not all(megatron_tp == tp for tp in sglang_tps):
+            return f"Megatron TP ({megatron_tp}) != SGLang TP(s) {sglang_tps}"
+    return "unknown reason"
