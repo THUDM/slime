@@ -71,6 +71,7 @@ def train(args):
             rollout_data_curr_ref = ray.get(x) if (x := rollout_data_next_future) is not None else None
             rollout_data_next_future = None
             actor_model.update_weights()
+            ray.get(rollout_manager.reset_staleness.remote())
 
         if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
             ray.get(rollout_manager.eval.remote(rollout_id))

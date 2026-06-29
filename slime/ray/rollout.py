@@ -518,6 +518,14 @@ class RolloutManager:
     def load(self, rollout_id=None):
         self.data_source.load(rollout_id)
 
+    def reset_staleness(self):
+        """Reset staleness counter after weight sync (fully-async mode).
+
+        No-op when the data source does not track staleness.
+        """
+        if hasattr(self.data_source, "reset_staleness"):
+            self.data_source.reset_staleness()
+
     def offload(self):
         self.health_monitoring_pause()
         for srv in self.servers.values():

@@ -589,6 +589,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="The data source class for rollout data.",
             )
             parser.add_argument(
+                "--staleness-threshold",
+                type=int,
+                default=1,
+                help=(
+                    "Fully-async mode: maximum number of stale batches allowed before pausing "
+                    "generation.  Generation blocks when staleness threshold is exceeded and "
+                    "resumes after update_weights + reset_staleness.  Default 1 (allow one "
+                    "batch worth of samples to be generated with old weights)."
+                ),
+            )
+            parser.add_argument(
                 "--prompt-data",
                 type=str,
                 default=None,
