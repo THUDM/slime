@@ -522,6 +522,9 @@ def get_log_probs_and_entropy(
         )
 
     # --- compute on full [T,V] logits at once via calculate_log_probs_and_entropy ---
+    # When entropy_coef == 0, entropy is only used for logging, so compute it without
+    # building the autograd graph to reduce memory pressure.
+    entropy_no_grad = with_entropy and args.entropy_coef == 0
     log_prob_full, entropy_full = calculate_log_probs_and_entropy(
         logits,
         full_tokens,
@@ -529,6 +532,7 @@ def get_log_probs_and_entropy(
         with_entropy=with_entropy,
         chunk_size=chunk_size,
         log_prob_keep_mask=top_p_keep_mask,
+        entropy_no_grad=entropy_no_grad,
     )
     log_prob_full = log_prob_full.squeeze(-1)  # [T, 1] -> [T]
 
