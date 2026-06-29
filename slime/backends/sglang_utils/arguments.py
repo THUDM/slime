@@ -113,6 +113,7 @@ def add_sglang_arguments(parser):
     parser.add_argument = new_add_argument_wrapper
     ServerArgs.add_cli_args(parser)
     parser.add_argument = old_add_argument
+    _add_parallel_size_compat_args(parser)
 
     # PD disaggregation / multi-group config
     parser.add_argument(
@@ -138,10 +139,56 @@ def add_sglang_arguments(parser):
     return parser
 
 
+def _add_parallel_size_compat_args(parser):
+    """
+    Keep slime CLI stable across SGLang releases that expose either the
+    descriptive names (data/pipeline/expert-parallel-size) or the shorter
+    aliases (dp/pp/ep-size) as their argparse destinations.
+    """
+
+    def existing_dest(*candidates):
+        action_dests = {action.dest for action in parser._actions}
+        for candidate in candidates:
+            if candidate in action_dests:
+                return candidate
+        return candidates[0]
+
+    def add_alias(flag, dest):
+        if flag not in parser._option_string_actions:
+            parser.add_argument(flag, dest=dest, type=int, default=argparse.SUPPRESS)
+
+    dp_dest = existing_dest("sglang_data_parallel_size", "sglang_dp_size")
+    add_alias("--sglang-data-parallel-size", dp_dest)
+    add_alias("--sglang-dp-size", dp_dest)
+
+    pp_dest = existing_dest("sglang_pipeline_parallel_size", "sglang_pp_size")
+    add_alias("--sglang-pipeline-parallel-size", pp_dest)
+    add_alias("--sglang-pp-size", pp_dest)
+
+    ep_dest = existing_dest("sglang_expert_parallel_size", "sglang_ep_size")
+    add_alias("--sglang-expert-parallel-size", ep_dest)
+    add_alias("--sglang-ep-size", ep_dest)
+    add_alias("--sglang-ep", ep_dest)
+
+
+def _normalize_parallel_size_arg(args, descriptive_name, short_name, default=1):
+    descriptive_attr = f"sglang_{descriptive_name}"
+    short_attr = f"sglang_{short_name}"
+    if hasattr(args, descriptive_attr):
+        value = getattr(args, descriptive_attr)
+    elif hasattr(args, short_attr):
+        value = getattr(args, short_attr)
+    else:
+        value = default
+    setattr(args, descriptive_attr, value)
+    setattr(args, short_attr, value)
+    return value
+
+
 def validate_args(args):
-    args.sglang_dp_size = args.sglang_data_parallel_size
-    args.sglang_pp_size = args.sglang_pipeline_parallel_size
-    args.sglang_ep_size = args.sglang_expert_parallel_size
+    args.sglang_dp_size = _normalize_parallel_size_arg(args, "data_parallel_size", "dp_size")
+    args.sglang_pp_size = _normalize_parallel_size_arg(args, "pipeline_parallel_size", "pp_size")
+    args.sglang_ep_size = _normalize_parallel_size_arg(args, "expert_parallel_size", "ep_size")
 
     # Compute effective TP size considering PP size
     if args.sglang_pp_size > 1:
