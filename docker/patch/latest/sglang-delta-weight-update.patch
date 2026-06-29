@@ -1,0 +1,770 @@
+diff --git a/python/sglang/srt/entrypoints/engine.py b/python/sglang/srt/entrypoints/engine.py
+index d14e3d1..e7547c3 100644
+--- a/python/sglang/srt/entrypoints/engine.py
++++ b/python/sglang/srt/entrypoints/engine.py
+@@ -68,6 +68,7 @@ from sglang.srt.managers.io_struct import (
+     LoadLoRAAdapterReqInput,
+     MultimodalDataInputFormat,
+     OpenSessionReqInput,
++    PostProcessWeightsReqInput,
+     ReleaseMemoryOccupationReqInput,
+     ResumeMemoryOccupationReqInput,
+     RpcReqInput,
+@@ -1107,6 +1108,20 @@ class Engine(EngineScoreMixin, EngineBase):
+             self.tokenizer_manager.update_weights_from_ipc(obj, None)
+         )
+ 
++    def post_process_weights(
++        self,
++        restore_weights_before_load: bool = False,
++        post_process_quantization: bool = False,
++    ):
++        """Optional post-processing for updated weights, e.g. quantization packing."""
++        obj = PostProcessWeightsReqInput(
++            restore_weights_before_load=restore_weights_before_load,
++            post_process_quantization=post_process_quantization,
++        )
++        return self.loop.run_until_complete(
++            self.tokenizer_manager.post_process_weights(obj, None)
++        )
++
+     def get_weights_by_name(self, name: str, truncate_size: int = 100):
+         """Get weights by parameter name."""
+         obj = GetWeightsByNameReqInput(name=name, truncate_size=truncate_size)
+diff --git a/python/sglang/srt/entrypoints/http_server.py b/python/sglang/srt/entrypoints/http_server.py
+index eb7df2b..1057541 100644
+--- a/python/sglang/srt/entrypoints/http_server.py
++++ b/python/sglang/srt/entrypoints/http_server.py
+@@ -124,6 +124,7 @@ from sglang.srt.managers.io_struct import (
+     OpenSessionReqInput,
+     ParseFunctionCallReq,
+     PauseGenerationReqInput,
++    PostProcessWeightsReqInput,
+     ProfileReqInput,
+     ReleaseMemoryOccupationReqInput,
+     ResumeMemoryOccupationReqInput,
+@@ -1313,6 +1314,20 @@ async def update_weights_from_ipc(obj: UpdateWeightsFromIPCReqInput, request: Re
+         return ORJSONResponse(content, status_code=HTTPStatus.BAD_REQUEST)
+ 
+ 
++@app.post("/post_process_weights")
++@auth_level(AuthLevel.ADMIN_OPTIONAL)
++async def post_process_weights(req: PostProcessWeightsReqInput, request: Request):
++    """Optional post-processing for updated weights, e.g. quantization packing."""
++    success, message = await _global_state.tokenizer_manager.post_process_weights(
++        req, request
++    )
++
++    content = {"success": success, "message": message}
++    return ORJSONResponse(
++        content, status_code=200 if success else HTTPStatus.BAD_REQUEST
++    )
++
++
+ @app.post("/update_weight_version")
+ @auth_level(AuthLevel.ADMIN_OPTIONAL)
+ async def update_weight_version(obj: UpdateWeightVersionReqInput, request: Request):
+diff --git a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
+index 431ffad..27fc83a 100644
+--- a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
++++ b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
+@@ -927,6 +927,10 @@ class CompressedTensorsLinearMethod(LinearMethodBase):
+     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
+         layer.scheme.process_weights_after_loading(layer)
+ 
++    def restore_weights_before_loading(self, layer: torch.nn.Module) -> None:
++        if hasattr(layer.scheme, "restore_weights_before_loading"):
++            layer.scheme.restore_weights_before_loading(layer)
++
+     def create_weights(
+         self,
+         layer: torch.nn.Module,
+@@ -981,6 +985,10 @@ class CompressedTensorsFusedMoEMethod(FusedMoEMethodBase):
+     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
+         layer.scheme.process_weights_after_loading(layer)
+ 
++    def restore_weights_before_loading(self, layer: torch.nn.Module) -> None:
++        if hasattr(layer.scheme, "restore_weights_before_loading"):
++            layer.scheme.restore_weights_before_loading(layer)
++
+     def create_weights(
+         self,
+         layer: torch.nn.Module,
+diff --git a/python/sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16_moe.py b/python/sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16_moe.py
+index 942e3b8..bca005e 100644
+--- a/python/sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16_moe.py
++++ b/python/sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16_moe.py
+@@ -268,7 +268,7 @@ class CompressedTensorsWNA16MoE(CompressedTensorsMoEScheme):
+         layer._original_shapes["w13_weight_scale"] = tuple(w13_scale.shape)
+ 
+         if not self.sym:
+-            layer._original_shapes["w13_weight_zero_point"] = w13_qzeros.shape
++            layer._original_shapes["w13_weight_zero_point"] = tuple(w13_qzeros.shape)
+             layer._original_shapes["w2_weight_zero_point"] = tuple(w2_qzeros.shape)
+ 
+     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
+diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
+index 951f354..9aa6796 100644
+--- a/python/sglang/srt/managers/io_struct.py
++++ b/python/sglang/srt/managers/io_struct.py
+@@ -1463,6 +1463,8 @@ class PauseContinueBroadcast:
+ class UpdateWeightFromDiskReqInput(BaseReq):
+     # The model path with the new weights
+     model_path: str
++    # Required iff ``load_format == "delta"``: basenames under ``model_path`` to apply.
++    files: Optional[List[str]] = None
+     # The format to load the weights
+     load_format: Optional[str] = None
+     # Whether to abort all requests before updating weights
+@@ -1493,6 +1495,40 @@ class UpdateWeightFromDiskReqOutput(BaseReq):
+     num_paused_requests: Optional[int] = 0
+ 
+ 
++class DeltaEncoding(str, Enum):
++    """Position encoding for delta weight updates."""
++
++    # int32 absolute nonzero offsets.
++    INDICES = "indices"
++    # uint16 gap-deltas between consecutive sorted positions; uint32 per-param fallback.
++    DELTAS = "deltas"
++    # ``deltas`` wrapped in zstd L1.
++    DELTAS_ZSTD = "deltas_zstd"
++
++
++@dataclass
++class DeltaParam:
++    """Per-param slice into the shared (positions, values) bucket."""
++
++    name: str
++    dtype: str
++    shape: List[int]
++    pos_start: int
++    pos_end: int
++    pos_width: int
++    val_start: int
++    val_end: int
++
++
++@dataclass
++class DeltaSpec:
++    """Decoding manifest for one delta bucket. ``checksum`` is verified on apply."""
++
++    encoding: DeltaEncoding
++    params: List[DeltaParam]
++    checksum: int = 0
++
++
+ @dataclass
+ class UpdateWeightsFromDistributedReqInput(BaseReq):
+     names: List[str]
+@@ -1508,6 +1544,8 @@ class UpdateWeightsFromDistributedReqInput(BaseReq):
+     weight_version: Optional[str] = None
+     # Optional format specification for loading
+     load_format: Optional[str] = None
++    # JSON-encoded DeltaSpec; required iff load_format == "delta".
++    delta: Optional[str] = None
+     # Whether to call torch.cuda.empty_cache() during flush
+     torch_empty_cache: bool = False
+ 
+@@ -1694,6 +1732,18 @@ class ResumeMemoryOccupationReqOutput(BaseReq):
+     pass
+ 
+ 
++@dataclass
++class PostProcessWeightsReqInput(BaseReq):
++    restore_weights_before_load: bool = False
++    post_process_quantization: bool = False
++
++
++@dataclass
++class PostProcessWeightsReqOutput(BaseReq):
++    success: bool
++    message: str
++
++
+ @dataclass
+ class CheckWeightsReqInput(BaseReq):
+     action: str = "checksum"
+diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
+index fd1d155..972ecd0 100644
+--- a/python/sglang/srt/managers/scheduler.py
++++ b/python/sglang/srt/managers/scheduler.py
+@@ -124,6 +124,7 @@ from sglang.srt.managers.io_struct import (
+     LoadLoRAAdapterReqOutput,
+     OpenSessionReqInput,
+     PauseGenerationReqInput,
++    PostProcessWeightsReqInput,
+     ProfileReq,
+     ReleaseMemoryOccupationReqInput,
+     RemoveExternalCorpusReqInput,
+@@ -1376,6 +1377,10 @@ class Scheduler(
+                     UpdateWeightsFromIPCReqInput,
+                     self.weight_updater.update_weights_from_ipc,
+                 ),
++                (
++                    PostProcessWeightsReqInput,
++                    self.weight_updater.post_process_weights,
++                ),
+                 (
+                     GetWeightsByNameReqInput,
+                     self.weight_updater.get_weights_by_name,
+diff --git a/python/sglang/srt/managers/scheduler_components/weight_updater.py b/python/sglang/srt/managers/scheduler_components/weight_updater.py
+index c2dc1c1..c018e4b 100644
+--- a/python/sglang/srt/managers/scheduler_components/weight_updater.py
++++ b/python/sglang/srt/managers/scheduler_components/weight_updater.py
+@@ -26,6 +26,8 @@ from sglang.srt.managers.io_struct import (
+     GetWeightsByNameReqOutput,
+     InitWeightsUpdateGroupReqInput,
+     InitWeightsUpdateGroupReqOutput,
++    PostProcessWeightsReqInput,
++    PostProcessWeightsReqOutput,
+     ReleaseMemoryOccupationReqInput,
+     ReleaseMemoryOccupationReqOutput,
+     ResumeMemoryOccupationReqInput,
+@@ -177,6 +179,19 @@ class SchedulerWeightUpdaterManager:
+         parameter = self.tp_worker.get_weights_by_name(recv_req)
+         return GetWeightsByNameReqOutput(parameter)
+ 
++    def post_process_weights(self, recv_req: PostProcessWeightsReqInput):
++        success, message = self.tp_worker.post_process_weights(recv_req)
++        if (
++            success
++            and self.draft_worker is not None
++            and hasattr(self.draft_worker, "post_process_weights")
++        ):
++            success, message = self.draft_worker.post_process_weights(recv_req)
++        if not success:
++            logger.error(message)
++        torch.distributed.barrier(group=self.tp_cpu_group)
++        return PostProcessWeightsReqOutput(success, message)
++
+     def release_memory_occupation(self, recv_req: ReleaseMemoryOccupationReqInput):
+         assert (
+             self.is_fully_idle()
+diff --git a/python/sglang/srt/managers/tokenizer_control_mixin.py b/python/sglang/srt/managers/tokenizer_control_mixin.py
+index c9939a1..ee25e5e 100644
+--- a/python/sglang/srt/managers/tokenizer_control_mixin.py
++++ b/python/sglang/srt/managers/tokenizer_control_mixin.py
+@@ -48,6 +48,8 @@ from sglang.srt.managers.io_struct import (
+     LoadLoRAAdapterReqOutput,
+     LoRAUpdateOutput,
+     OpenSessionReqInput,
++    PostProcessWeightsReqInput,
++    PostProcessWeightsReqOutput,
+     ProfileReq,
+     ProfileReqOutput,
+     ProfileReqType,
+@@ -96,6 +98,7 @@ _COMMUNICATOR_SPECS = [
+     ("send_weights_to_remote_instance", SendWeightsToRemoteInstanceReqOutput),
+     ("update_weights_from_tensor", UpdateWeightsFromTensorReqOutput),
+     ("update_weights_from_ipc", UpdateWeightsFromIPCReqOutput),
++    ("post_process_weights", PostProcessWeightsReqOutput),
+     ("get_weights_by_name", GetWeightsByNameReqOutput),
+     ("release_memory_occupation", ReleaseMemoryOccupationReqOutput),
+     ("resume_memory_occupation", ResumeMemoryOccupationReqOutput),
+@@ -754,6 +757,16 @@ class TokenizerControlMixin:
+         self.auto_create_handle_loop()
+         await self.resume_memory_occupation_communicator(obj)
+ 
++    async def post_process_weights(
++        self: TokenizerManager,
++        obj: PostProcessWeightsReqInput,
++        request: Optional[fastapi.Request] = None,
++    ) -> Tuple[bool, str]:
++        self.auto_create_handle_loop()
++        async with self.model_update_lock.writer_lock:
++            results = await self.post_process_weights_communicator(obj)
++        return FanOutCommunicator.merge_results(results)
++
+     async def check_weights(
+         self: TokenizerManager,
+         obj: CheckWeightsReqInput,
+diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
+index 119e941..5545d26 100644
+--- a/python/sglang/srt/managers/tokenizer_manager.py
++++ b/python/sglang/srt/managers/tokenizer_manager.py
+@@ -1737,7 +1737,7 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
+         self.model_update_result = asyncio.Future()
+         if self.server_args.dp_size == 1:
+             result = await self.model_update_result
+-            if result.success:
++            if result.success and obj.load_format != "delta":
+                 self._update_model_path_info(obj.model_path, obj.load_format)
+             return result.success, result.message, result.num_paused_requests
+         else:  # self.server_args.dp_size > 1
+@@ -1745,7 +1745,7 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
+             result = await self.model_update_result
+ 
+             all_success = all([r.success for r in result])
+-            if all_success is True:
++            if all_success is True and obj.load_format != "delta":
+                 self._update_model_path_info(obj.model_path, obj.load_format)
+             all_message = [r.message for r in result]
+             all_message = " | ".join(all_message)
+diff --git a/python/sglang/srt/managers/tp_worker.py b/python/sglang/srt/managers/tp_worker.py
+index 2692ce0..23f4c52 100644
+--- a/python/sglang/srt/managers/tp_worker.py
++++ b/python/sglang/srt/managers/tp_worker.py
+@@ -29,6 +29,7 @@ from sglang.srt.managers.io_struct import (
+     InitWeightsUpdateGroupReqInput,
+     LoadLoRAAdapterFromTensorsReqInput,
+     LoadLoRAAdapterReqInput,
++    PostProcessWeightsReqInput,
+     SendWeightsToRemoteInstanceReqInput,
+     UnloadLoRAAdapterReqInput,
+     UpdateWeightFromDiskReqInput,
+@@ -105,6 +106,7 @@ class BaseTpWorker(ABC):
+             recv_req.model_path,
+             recv_req.load_format,
+             recapture_cuda_graph=recv_req.recapture_cuda_graph,
++            files=recv_req.files,
+         )
+         return success, message
+ 
+@@ -159,6 +161,14 @@ class BaseTpWorker(ABC):
+             recv_req.shapes,
+             recv_req.group_name,
+             recv_req.load_format,
++            recv_req.delta,
++        )
++        return success, message
++
++    def post_process_weights(self, recv_req: PostProcessWeightsReqInput):
++        success, message = self.model_runner.post_process_weights(
++            restore_weights_before_load=recv_req.restore_weights_before_load,
++            post_process_quantization=recv_req.post_process_quantization,
+         )
+         return success, message
+ 
+diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
+index 33f2826..d9b8d25 100644
+--- a/python/sglang/srt/model_executor/model_runner.py
++++ b/python/sglang/srt/model_executor/model_runner.py
+@@ -19,14 +19,16 @@ import contextlib
+ import datetime
+ import gc
+ import inspect
++import json
+ import logging
++import math
+ import os
+ import socket
+ import threading
+ import time
+ from collections import defaultdict
+ from dataclasses import dataclass
+-from typing import Any, Callable, List, Optional, Tuple, Union
++from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+ 
+ import torch
+ import torch.distributed as dist
+@@ -138,6 +140,7 @@ from sglang.srt.layers.torchao_utils import apply_torchao_config_to_model
+ from sglang.srt.layers.utils.cp_utils import is_mla_prefill_cp_enabled
+ from sglang.srt.lora.lora_manager import LoRAManager
+ from sglang.srt.lora.lora_registry import LoRARef
++from sglang.srt.managers.io_struct import DeltaEncoding, DeltaParam, DeltaSpec
+ from sglang.srt.managers.schedule_batch import sanity_check_mm_pad_shift_value
+ from sglang.srt.mem_cache.allocator import BaseTokenToKVPoolAllocator
+ from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
+@@ -1753,8 +1756,14 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+         load_format: str,
+         weight_name_filter: Optional[Callable[[str], bool]] = None,
+         recapture_cuda_graph: bool = False,
++        files: Optional[List[str]] = None,
+     ) -> tuple[bool, str]:
+-        """Update engine weights in-place from the disk."""
++        """Update engine weights in-place from disk."""
++        if load_format == "delta":
++            if not files:
++                return False, "load_format='delta' requires non-empty `files`"
++            return self._apply_delta([os.path.join(model_path, f) for f in files])
++
+         logger.info(
+             f"Update engine weights online from disk begin. "
+             f"avail mem={get_available_gpu_memory(self.device, self.gpu_id, empty_cache=False):.2f} GB"
+@@ -1984,6 +1993,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+         shapes,
+         group_name,
+         load_format: Optional[str] = None,
++        delta: Optional[str] = None,
+     ):
+         """
+         Update specific parameter in the model weights online
+@@ -2004,6 +2014,18 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+             return self._update_bucketed_weights_from_distributed(
+                 names, dtypes, shapes, group_name
+             )
++        if load_format == "delta":
++            if delta is None:
++                return False, "load_format='delta' requires a DeltaSpec in the request"
++            spec_dict = json.loads(delta)
++            spec = DeltaSpec(
++                encoding=DeltaEncoding(spec_dict["encoding"]),
++                params=[DeltaParam(**p) for p in spec_dict["params"]],
++                checksum=int(spec_dict["checksum"]),
++            )
++            return self._apply_delta_from_distributed(
++                names, dtypes, shapes, group_name, spec
++            )
+         try:
+             weights = []
+             handles = []
+@@ -2036,6 +2058,151 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+             logger.error(error_msg)
+             return False, error_msg
+ 
++    def _decode_delta_one_param(
++        self,
++        encoding: DeltaEncoding,
++        positions: torch.Tensor,
++        values: torch.Tensor,
++        p: DeltaParam,
++    ) -> torch.Tensor:
++        """Decode one param's sparse delta into a NaN-masked full tensor."""
++        numel = math.prod(p.shape)
++        param_dtype = _resolve_torch_dtype(p.dtype)
++        flat = torch.full((numel,), float("nan"), dtype=param_dtype, device=self.device)
++        val_slice = values[p.val_start : p.val_end]
++        if val_slice.numel() == 0:
++            return flat.view(tuple(p.shape))
++
++        pos_bytes = positions[p.pos_start : p.pos_end]
++        if encoding is DeltaEncoding.INDICES:
++            width = 4
++        elif encoding in (DeltaEncoding.DELTAS, DeltaEncoding.DELTAS_ZSTD):
++            width = p.pos_width
++        else:
++            raise ValueError(f"unsupported delta encoding: {encoding!r}")
++
++        n_elems = pos_bytes.numel() // width
++        b = pos_bytes.view(n_elems, width).to(torch.int64)
++        if width == 2:
++            unpacked = b[:, 0] | (b[:, 1] << 8)
++        else:
++            unpacked = b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16) | (b[:, 3] << 24)
++
++        if encoding is DeltaEncoding.INDICES:
++            idx = unpacked
++        else:
++            idx = (unpacked + 1).cumsum(dim=0) - 1
++
++        flat.index_copy_(0, idx, val_slice.to(param_dtype))
++        return flat.view(tuple(p.shape))
++
++    def _apply_delta_payload(
++        self,
++        encoding: DeltaEncoding,
++        params: List[DeltaParam],
++        positions: torch.Tensor,
++        values: torch.Tensor,
++        expected_checksum: int,
++    ) -> None:
++        actual_checksum = _delta_checksum(positions, values)
++        if actual_checksum != expected_checksum:
++            raise RuntimeError(
++                f"delta checksum mismatch: expected={expected_checksum} got={actual_checksum}"
++            )
++
++        chunk_byte_cap = self.server_args.update_weight_delta_chunk_bytes
++        with _delta_apply_context(self.model):
++            chunk: List[Tuple[str, torch.Tensor]] = []
++            chunk_bytes = 0
++            for p in params:
++                t = self._decode_delta_one_param(encoding, positions, values, p)
++                tensor_bytes = t.numel() * t.element_size()
++                if chunk_bytes + tensor_bytes > chunk_byte_cap and chunk:
++                    self.model.load_weights(chunk)
++                    chunk = []
++                    chunk_bytes = 0
++                chunk.append((p.name, t))
++                chunk_bytes += tensor_bytes
++            if chunk:
++                self.model.load_weights(chunk)
++
++    def _decode_and_apply_blob(self, blob: bytes) -> None:
++        from safetensors.torch import load as st_load
++
++        hdr_len = int.from_bytes(blob[:8], "little")
++        meta = json.loads(blob[8 : 8 + hdr_len]).get("__metadata__", {})
++        encoding = DeltaEncoding(meta["encoding"])
++        params = [DeltaParam(**p) for p in json.loads(meta["params"])]
++        expected_checksum = int(meta["checksum"])
++
++        tensors = st_load(blob)
++        positions = tensors["__positions__"].to(self.device, non_blocking=True)
++        values = tensors["__values__"].to(self.device, non_blocking=True)
++        self._apply_delta_payload(
++            encoding, params, positions, values, expected_checksum
++        )
++
++    def _apply_delta_from_distributed(
++        self,
++        names: List[str],
++        dtypes: List[str],
++        shapes: List[List[int]],
++        group_name: str,
++        delta: DeltaSpec,
++    ) -> tuple[bool, str]:
++        try:
++            recv: Dict[str, torch.Tensor] = {}
++            handles = []
++            for name, dtype, shape in zip(names, dtypes, shapes):
++                target_dtype = _resolve_torch_dtype(dtype)
++                t = torch.empty(shape, dtype=target_dtype, device=self.device)
++                handles.append(
++                    torch.distributed.broadcast(
++                        t,
++                        src=0,
++                        group=self._model_update_group[group_name],
++                        async_op=True,
++                    )
++                )
++                recv[name] = t
++            for handle in handles:
++                handle.wait()
++
++            self._apply_delta_payload(
++                delta.encoding,
++                delta.params,
++                recv["__positions__"],
++                recv["__values__"],
++                delta.checksum,
++            )
++            return True, "ok"
++        except Exception as e:
++            error_msg = f"Failed to apply delta from distributed: {e}."
++            logger.error(error_msg)
++            return False, error_msg
++
++    def _apply_delta(self, paths: List[str]) -> tuple[bool, str]:
++        import concurrent.futures
++
++        n_files = len(paths)
++        workers = min(n_files, self.server_args.update_weight_delta_read_workers)
++
++        def _read_and_decompress(path: str) -> bytes:
++            with open(path, "rb") as fh:
++                return _maybe_zstd_decompress(fh.read())
++
++        try:
++            for i in range(0, n_files, workers):
++                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
++                    batch = list(pool.map(_read_and_decompress, paths[i : i + workers]))
++                for blob in batch:
++                    self._decode_and_apply_blob(blob)
++            return True, f"Applied {n_files} delta file(s)"
++        except Exception as e:
++            error_msg = f"Failed to apply delta update from disk: {e}."
++            logger.error(error_msg)
++            return False, error_msg
++
+     def _update_bucketed_weights_from_distributed(
+         self, names, dtypes, shapes, group_name
+     ):
+@@ -3202,6 +3369,39 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+             logger.error(f"IPC weight update failed: {e}")
+             return False, str(e)
+ 
++    def post_process_weights(
++        self,
++        restore_weights_before_load: bool = False,
++        post_process_quantization: bool = False,
++    ):
++        """Run optional post-loading hooks, such as quantization repacking."""
++        from sglang.srt.model_loader.loader import device_loading_context
++
++        if self.device == "cuda":
++            target_device = torch.device("cuda", torch.cuda.current_device())
++        else:
++            target_device = torch.device(self.device)
++
++        if restore_weights_before_load:
++            for _, module in self.model.named_modules():
++                quant_method = getattr(module, "quant_method", None)
++                if quant_method is not None and hasattr(
++                    quant_method, "restore_weights_before_loading"
++                ):
++                    with device_loading_context(module, target_device):
++                        quant_method.restore_weights_before_loading(module)
++
++        if post_process_quantization:
++            for _, module in self.model.named_modules():
++                quant_method = getattr(module, "quant_method", None)
++                if quant_method is not None and hasattr(
++                    quant_method, "process_weights_after_loading"
++                ):
++                    with device_loading_context(module, target_device):
++                        quant_method.process_weights_after_loading(module)
++
++        return True, "Success"
++
+     def prealloc_symmetric_memory_pool(self):
+         # PyTorch mempools never de-fragment memory in OOM scenarios, so we need to pre-allocate a large chunk of memory to limit fragmentation.
+         if (
+@@ -3251,6 +3451,123 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+         return output
+ 
+ 
++def _param_storage_index(model):
++    import bisect
++
++    starts: List[int] = []
++    ends: List[int] = []
++    owners: List[torch.Tensor] = []
++    seen: set = set()
++    for tensors in (model.named_parameters(), model.named_buffers()):
++        for _, t in tensors:
++            if t.is_meta:
++                continue
++            try:
++                ptr = t.data_ptr()
++            except RuntimeError:
++                continue
++            if ptr == 0 or ptr in seen:
++                continue
++            seen.add(ptr)
++            sz = t.numel() * t.element_size()
++            starts.append(ptr)
++            ends.append(ptr + sz)
++            owners.append(t)
++
++    order = sorted(range(len(starts)), key=lambda i: starts[i])
++    starts = [starts[i] for i in order]
++    ends = [ends[i] for i in order]
++    owners = [owners[i] for i in order]
++
++    def find_parent(dst):
++        try:
++            ptr = dst.data_ptr()
++        except RuntimeError:
++            return None
++        idx = bisect.bisect_right(starts, ptr) - 1
++        if 0 <= idx < len(starts) and starts[idx] <= ptr < ends[idx]:
++            return owners[idx]
++        return None
++
++    return find_parent
++
++
++@contextlib.contextmanager
++def _delta_apply_context(model):
++    is_param_target = _param_storage_index(model)
++    original_copy_ = torch.Tensor.copy_
++    original_fill_ = torch.Tensor.fill_
++
++    def patched_copy_(self, src, *args, **kwargs):
++        if is_param_target(self) is not None:
++            src_aligned = (
++                src.to(device=self.device, dtype=self.dtype)
++                if src.dtype != self.dtype
++                else src
++            )
++            mask = ~torch.isnan(src_aligned)
++            self[mask] = src_aligned[mask]
++            return self
++        return original_copy_(self, src, *args, **kwargs)
++
++    def patched_fill_(self, value):
++        if is_param_target(self) is not None:
++            try:
++                if math.isnan(value):
++                    return self
++            except TypeError:
++                pass
++            return original_fill_(self, value)
++        return original_fill_(self, value)
++
++    original_post_load = getattr(model, "post_load_weights", None)
++    if original_post_load is not None:
++
++        def wrapped_post_load(*args, **kwargs):
++            current_copy = torch.Tensor.copy_
++            current_fill = torch.Tensor.fill_
++            torch.Tensor.copy_ = original_copy_
++            torch.Tensor.fill_ = original_fill_
++            try:
++                return original_post_load(*args, **kwargs)
++            finally:
++                torch.Tensor.copy_ = current_copy
++                torch.Tensor.fill_ = current_fill
++
++        model.post_load_weights = wrapped_post_load
++
++    torch.Tensor.copy_ = patched_copy_
++    torch.Tensor.fill_ = patched_fill_
++    try:
++        yield
++    finally:
++        torch.Tensor.copy_ = original_copy_
++        torch.Tensor.fill_ = original_fill_
++        if original_post_load is not None:
++            model.post_load_weights = original_post_load
++
++
++def _delta_checksum(positions: torch.Tensor, values: torch.Tensor) -> int:
++    p = int(torch.hash_tensor(positions).item()) if positions.numel() else 0
++    v = int(torch.hash_tensor(values).item()) if values.numel() else 0
++    return p ^ (v << 1)
++
++
++def _maybe_zstd_decompress(blob: bytes) -> bytes:
++    if blob.startswith(b"\x28\xb5\x2f\xfd"):
++        import zstandard
++
++        return zstandard.ZstdDecompressor().decompress(blob)
++    return blob
++
++
++def _resolve_torch_dtype(dtype: Union[str, torch.dtype]) -> torch.dtype:
++    if isinstance(dtype, torch.dtype):
++        return dtype
++    dtype_name = dtype.split(".", 1)[1] if dtype.startswith("torch.") else dtype
++    return getattr(torch, dtype_name)
++
++
+ def _model_load_weights_direct(model, named_tensors: List[Tuple[str, torch.Tensor]]):
+     params_dict = dict(model.named_parameters())
+     for name, tensor in named_tensors:
+diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
+index c7162c1..b47dcf0 100644
+--- a/python/sglang/srt/server_args.py
++++ b/python/sglang/srt/server_args.py
+@@ -2338,6 +2338,14 @@ class ServerArgs:
+         bool,
+         "Call posix_fadvise(DONTNEED) on each safetensors shard after loading it.",
+     ] = False
++    update_weight_delta_chunk_bytes: A[
++        int,
++        "Maximum bytes per delta weight chunk when applying delta updates.",
++    ] = 512 * 1024 * 1024
++    update_weight_delta_read_workers: A[
++        int,
++        "Number of worker threads used to read delta weight files.",
++    ] = 4
+     remote_instance_weight_loader_seed_instance_ip: A[
+         Optional[str],
+         "The ip of the seed instance for loading weights from remote instance.",
+diff --git a/python/sglang/srt/speculative/eagle_worker_v2.py b/python/sglang/srt/speculative/eagle_worker_v2.py
+index a6f46ea..5db3e29 100644
+--- a/python/sglang/srt/speculative/eagle_worker_v2.py
++++ b/python/sglang/srt/speculative/eagle_worker_v2.py
+@@ -1630,6 +1630,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
+             recv_req.model_path,
+             recv_req.load_format,
+             recapture_cuda_graph=recv_req.recapture_cuda_graph,
++            files=recv_req.files,
+         )
+         if not success:
+             return success, message
+diff --git a/python/sglang/srt/speculative/multi_layer_eagle_worker_v2.py b/python/sglang/srt/speculative/multi_layer_eagle_worker_v2.py
+index 0cb0d78..9664a4b 100644
+--- a/python/sglang/srt/speculative/multi_layer_eagle_worker_v2.py
++++ b/python/sglang/srt/speculative/multi_layer_eagle_worker_v2.py
+@@ -916,6 +916,7 @@ class MultiLayerEagleWorkerV2(BaseSpecWorker):
+                 recv_req.model_path,
+                 recv_req.load_format,
+                 recapture_cuda_graph=recv_req.recapture_cuda_graph,
++                files=recv_req.files,
+             )
+             if not success:
+                 return success, message

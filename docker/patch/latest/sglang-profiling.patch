@@ -1,0 +1,733 @@
+diff --git a/python/sglang/srt/disaggregation/base/conn.py b/python/sglang/srt/disaggregation/base/conn.py
+index f1b49b2..6c22c01 100644
+--- a/python/sglang/srt/disaggregation/base/conn.py
++++ b/python/sglang/srt/disaggregation/base/conn.py
+@@ -37,6 +37,7 @@ class KVArgs:
+     kv_data_ptrs: List[int]
+     kv_data_lens: List[int]
+     kv_item_lens: List[int]
++    aux_buffer_names: List[str]
+     aux_data_ptrs: List[int]
+     aux_data_lens: List[int]
+     aux_item_lens: List[int]
+diff --git a/python/sglang/srt/disaggregation/decode.py b/python/sglang/srt/disaggregation/decode.py
+index 92f636a..75fdb1e 100644
+--- a/python/sglang/srt/disaggregation/decode.py
++++ b/python/sglang/srt/disaggregation/decode.py
+@@ -50,8 +50,10 @@ from sglang.srt.disaggregation.utils import (
+     MetadataBuffers,
+     ReqToMetadataIdxAllocator,
+     TransferBackend,
++    apply_prefill_timing_payload,
+     _is_fake_transfer,
+     get_kv_class,
++    is_slime_profiling_enabled,
+     is_mla_backend,
+     poll_and_all_reduce,
+     poll_and_all_reduce_with_staging,
+@@ -432,6 +434,7 @@ class DecodePreallocQueue(DecodeHiCachePreallocMixin):
+         kv_args.aux_data_ptrs, kv_args.aux_data_lens, kv_args.aux_item_lens = (
+             self.metadata_buffers.get_buf_infos()
+         )
++        kv_args.aux_buffer_names = self.metadata_buffers.get_aux_buffer_names()
+ 
+         setup_state_kv_args(
+             kv_args,
+@@ -1080,6 +1083,7 @@ class DecodePreallocQueue(DecodeHiCachePreallocMixin):
+                 self.req_to_metadata_buffer_idx_allocator.alloc()
+             )
+             assert decode_req.metadata_buffer_index is not None
++            self.metadata_buffers.clear_profiling_buf(decode_req.metadata_buffer_index)
+             page_indices = kv_to_page_indices(kv_indices, kv_transfer_page_size)
+             decode_req.kv_receiver.send_metadata(
+                 page_indices,
+@@ -1520,6 +1524,7 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
+             output_topk_index,
+             output_hidden_states,
+             output_bootstrap_room,
++            output_prefill_timing,
+         ) = self.metadata_buffers.get_buf(idx)
+ 
+         # Validate bootstrap_room to detect context corruption
+@@ -1613,6 +1618,12 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
+                 ].tolist()
+             )
+ 
++        if is_slime_profiling_enabled():
++            apply_prefill_timing_payload(
++                decode_req.req.time_stats,
++                output_prefill_timing,
++            )
++
+         decode_req.kv_receiver.clear()
+         decode_req.kv_receiver = None
+         decode_req.req.time_stats.set_wait_queue_entry_time()
+diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
+index 2daade4..71872d8 100644
+--- a/python/sglang/srt/disaggregation/mooncake/conn.py
++++ b/python/sglang/srt/disaggregation/mooncake/conn.py
+@@ -39,7 +39,10 @@ from sglang.srt.disaggregation.common.utils import (
+ from sglang.srt.disaggregation.mooncake.utils import (
+     check_mooncake_custom_mem_pool_enabled,
+ )
+-from sglang.srt.disaggregation.utils import DisaggregationMode
++from sglang.srt.disaggregation.utils import (
++    DisaggregationMode,
++    iter_aux_transfer_specs,
++)
+ from sglang.srt.distributed.parallel_state import get_mooncake_transfer_engine
+ from sglang.srt.environ import envs
+ from sglang.srt.observability.mooncake_trace import (
+@@ -842,10 +845,14 @@ class MooncakeKVManager(CommonKVManager):
+         prefill_aux_ptrs = self.kv_args.aux_data_ptrs
+         prefill_aux_item_lens = self.kv_args.aux_item_lens
+ 
+-        for i, dst_aux_ptr in enumerate(dst_aux_ptrs):
+-            length = prefill_aux_item_lens[i]
+-            src_addr = prefill_aux_ptrs[i] + length * prefill_aux_index
+-            dst_addr = dst_aux_ptr + length * req.dst_aux_index
++        for _, src_addr, dst_addr, length in iter_aux_transfer_specs(
++            self.kv_args.aux_buffer_names,
++            prefill_aux_ptrs,
++            prefill_aux_item_lens,
++            dst_aux_ptrs,
++            prefill_aux_index,
++            req.dst_aux_index,
++        ):
+             transfer_blocks.append((src_addr, dst_addr, length))
+ 
+         return self._transfer_data(req.mooncake_session_id, transfer_blocks)
+@@ -859,9 +866,14 @@ class MooncakeKVManager(CommonKVManager):
+         prefill_aux_ptrs = self.kv_args.aux_data_ptrs
+         prefill_aux_item_lens = self.kv_args.aux_item_lens
+ 
+-        for i in range(len(prefill_aux_ptrs)):
+-            length = prefill_aux_item_lens[i]
+-            src_addr = prefill_aux_ptrs[i] + length * prefill_aux_index
++        for i, src_addr, _, length in iter_aux_transfer_specs(
++            self.kv_args.aux_buffer_names,
++            prefill_aux_ptrs,
++            prefill_aux_item_lens,
++            dst_aux_ptrs,
++            prefill_aux_index,
++            req.dst_aux_index,
++        ):
+             data = AuxDataCodec.serialize_data_from_buffer(src_addr, length)
+ 
+             self.send_aux_data_to_endpoint(
+diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
+index 4dc7e32..0e2521a 100644
+--- a/python/sglang/srt/disaggregation/prefill.py
++++ b/python/sglang/srt/disaggregation/prefill.py
+@@ -184,6 +184,7 @@ class PrefillBootstrapQueue:
+         kv_args.aux_data_ptrs, kv_args.aux_data_lens, kv_args.aux_item_lens = (
+             self.metadata_buffers.get_buf_infos()
+         )
++        kv_args.aux_buffer_names = self.metadata_buffers.get_aux_buffer_names()
+         kv_args.ib_device = self.scheduler.server_args.disaggregation_ib_device
+         kv_args.gpu_id = self.scheduler.ps.gpu_id
+ 
+diff --git a/python/sglang/srt/disaggregation/utils.py b/python/sglang/srt/disaggregation/utils.py
+index c09c0fb..0e3401b 100644
+--- a/python/sglang/srt/disaggregation/utils.py
++++ b/python/sglang/srt/disaggregation/utils.py
+@@ -2,6 +2,7 @@ from __future__ import annotations
+ 
+ import os
+ import random
++import time
+ from collections import deque
+ from contextlib import nullcontext
+ from enum import Enum
+@@ -30,6 +31,17 @@ if TYPE_CHECKING:
+ # Constants & Enums
+ #########################
+ FAKE_BOOTSTRAP_HOST = "2.2.2.2"
++PREFILL_TIMING_AUX_BUFFER_NAME = "prefill_timing"
++PREFILL_TIMING_DEST_ATTRS = (
++    ("fwd_prefill_bootstrap_queue_duration", float),
++    ("fwd_prefill_forward_duration", float),
++    ("fwd_prefill_transfer_queue_duration", float),
++    ("fwd_prefill_bootstrap_duration", float),
++    ("fwd_prefill_alloc_wait_duration", float),
++    ("fwd_transfer_speed_gb_s", float),
++    ("fwd_transfer_total_mb", float),
++    ("fwd_prefill_retry_count", int),
++)
+ 
+ 
+ class DisaggregationMode(Enum):
+@@ -255,46 +267,32 @@ class MetadataBuffers:
+             self.bootstrap_room = torch.zeros(
+                 (size, 8), dtype=bootstrap_room_dtype, device=device
+             )
++            self.prefill_timing = torch.zeros(
++                (size, 16), dtype=torch.float32, device=device
++            )
++        self.aux_buffers = [
++            ("output_ids", self.output_ids),
++            ("cached_tokens", self.cached_tokens),
++            ("output_token_logprobs_val", self.output_token_logprobs_val),
++            ("output_token_logprobs_idx", self.output_token_logprobs_idx),
++            ("output_top_logprobs_val", self.output_top_logprobs_val),
++            ("output_top_logprobs_idx", self.output_top_logprobs_idx),
++            ("output_topk_p", self.output_topk_p),
++            ("output_topk_index", self.output_topk_index),
++            ("output_hidden_states", self.output_hidden_states),
++            ("bootstrap_room", self.bootstrap_room),
++            (PREFILL_TIMING_AUX_BUFFER_NAME, self.prefill_timing),
++        ]
+ 
+     def get_buf_infos(self):
+-        ptrs = [
+-            self.output_ids.data_ptr(),
+-            self.cached_tokens.data_ptr(),
+-            self.output_token_logprobs_val.data_ptr(),
+-            self.output_token_logprobs_idx.data_ptr(),
+-            self.output_top_logprobs_val.data_ptr(),
+-            self.output_top_logprobs_idx.data_ptr(),
+-            self.output_topk_p.data_ptr(),
+-            self.output_topk_index.data_ptr(),
+-            self.output_hidden_states.data_ptr(),
+-            self.bootstrap_room.data_ptr(),
+-        ]
+-        data_lens = [
+-            self.output_ids.nbytes,
+-            self.cached_tokens.nbytes,
+-            self.output_token_logprobs_val.nbytes,
+-            self.output_token_logprobs_idx.nbytes,
+-            self.output_top_logprobs_val.nbytes,
+-            self.output_top_logprobs_idx.nbytes,
+-            self.output_topk_p.nbytes,
+-            self.output_topk_index.nbytes,
+-            self.output_hidden_states.nbytes,
+-            self.bootstrap_room.nbytes,
+-        ]
+-        item_lens = [
+-            self.output_ids[0].nbytes,
+-            self.cached_tokens[0].nbytes,
+-            self.output_token_logprobs_val[0].nbytes,
+-            self.output_token_logprobs_idx[0].nbytes,
+-            self.output_top_logprobs_val[0].nbytes,
+-            self.output_top_logprobs_idx[0].nbytes,
+-            self.output_topk_p[0].nbytes,
+-            self.output_topk_index[0].nbytes,
+-            self.output_hidden_states[0].nbytes,
+-            self.bootstrap_room[0].nbytes,
+-        ]
++        ptrs = [buffer.data_ptr() for _, buffer in self.aux_buffers]
++        data_lens = [buffer.nbytes for _, buffer in self.aux_buffers]
++        item_lens = [buffer[0].nbytes for _, buffer in self.aux_buffers]
+         return ptrs, data_lens, item_lens
+ 
++    def get_aux_buffer_names(self):
++        return [name for name, _ in self.aux_buffers]
++
+     def get_buf(self, idx: int):
+         return (
+             self.output_ids[idx].clone(),
+@@ -307,8 +305,12 @@ class MetadataBuffers:
+             self.output_topk_index[idx].clone(),
+             self.output_hidden_states[idx].clone(),
+             self.bootstrap_room[idx].clone(),
++            self.prefill_timing[idx].clone(),
+         )
+ 
++    def clear_profiling_buf(self, idx: int):
++        self.prefill_timing[idx].zero_()
++
+     def set_buf(self, req: Req):
+ 
+         self.output_ids[req.metadata_buffer_index][0] = req.output_ids[0]
+@@ -374,6 +376,93 @@ class MetadataBuffers:
+         self.bootstrap_room[req.metadata_buffer_index, 0] = (
+             req.bootstrap_room if req.bootstrap_room is not None else 0
+         )
++        ts = req.time_stats
++        timing = self.prefill_timing[req.metadata_buffer_index]
++        self.clear_profiling_buf(req.metadata_buffer_index)
++        if not is_slime_profiling_enabled():
++            return
++        for idx, value in enumerate(
++            build_prefill_timing_payload(ts, now=time.perf_counter())
++        ):
++            if value > 0:
++                timing[idx] = value
++
++
++def is_slime_profiling_enabled() -> bool:
++    return envs.SLIME_ENABLE_PROFILING.get()
++
++
++def build_prefill_timing_payload(time_stats, now: float) -> tuple[float, ...]:
++    bootstrap_queue_duration = 0.0
++    if (
++        time_stats.prefill_bootstrap_queue_entry_time > 0
++        and time_stats.wait_queue_entry_time > 0
++    ):
++        bootstrap_queue_duration = (
++            time_stats.wait_queue_entry_time
++            - time_stats.prefill_bootstrap_queue_entry_time
++        )
++
++    prefill_forward_duration = (
++        now - time_stats.forward_entry_time
++        if time_stats.forward_entry_time > 0
++        else 0.0
++    )
++
++    bootstrap_duration = 0.0
++    alloc_waiting_duration = 0.0
++    if (
++        time_stats.prefill_bootstrap_queue_entry_time > 0
++        and time_stats.bootstrap_done_time > 0
++    ):
++        bootstrap_duration = (
++            time_stats.bootstrap_done_time
++            - time_stats.prefill_bootstrap_queue_entry_time
++        )
++    if time_stats.bootstrap_done_time > 0 and time_stats.wait_queue_entry_time > 0:
++        alloc_waiting_duration = (
++            time_stats.wait_queue_entry_time - time_stats.bootstrap_done_time
++        )
++
++    return (
++        bootstrap_queue_duration,
++        prefill_forward_duration,
++        0.0,
++        max(0.0, bootstrap_duration),
++        max(0.0, alloc_waiting_duration),
++        max(0.0, time_stats.transfer_speed_gb_s),
++        max(0.0, time_stats.transfer_total_mb),
++        float(max(0, time_stats.prefill_retry_count)),
++    )
++
++
++def apply_prefill_timing_payload(time_stats, timing) -> None:
++    for value, (attr_name, caster) in zip(
++        timing[: len(PREFILL_TIMING_DEST_ATTRS)].tolist(),
++        PREFILL_TIMING_DEST_ATTRS,
++    ):
++        if value > 0:
++            setattr(time_stats, attr_name, caster(value))
++
++
++def iter_aux_transfer_specs(
++    aux_buffer_names: list[str],
++    prefill_aux_ptrs: list[int],
++    prefill_aux_item_lens: list[int],
++    dst_aux_ptrs: list[int],
++    prefill_aux_index: int,
++    dst_aux_index: int,
++):
++    profiling_enabled = is_slime_profiling_enabled()
++    for i, (buffer_name, dst_aux_ptr) in enumerate(zip(aux_buffer_names, dst_aux_ptrs)):
++        if not profiling_enabled and buffer_name == PREFILL_TIMING_AUX_BUFFER_NAME:
++            continue
++        length = prefill_aux_item_lens[i]
++        if length <= 0:
++            continue
++        src_addr = prefill_aux_ptrs[i] + length * prefill_aux_index
++        dst_addr = dst_aux_ptr + length * dst_aux_index
++        yield i, src_addr, dst_addr, length
+ 
+ 
+ #########################
+diff --git a/python/sglang/srt/environ.py b/python/sglang/srt/environ.py
+index ef5c461..3aa9ebb 100644
+--- a/python/sglang/srt/environ.py
++++ b/python/sglang/srt/environ.py
+@@ -307,6 +307,7 @@ class Envs:
+     SGLANG_DISAGGREGATION_WAITING_TIMEOUT = EnvInt(300)
+     SGLANG_DISAGGREGATION_NIXL_BACKEND = EnvStr("UCX")
+     SGLANG_DISAGGREGATION_NIXL_BACKEND_PARAMS = EnvStr("{}")
++    SLIME_ENABLE_PROFILING = EnvBool(False)
+     SGLANG_DISAGGREGATION_ALL_CP_RANKS_TRANSFER = EnvBool(False)
+     SGLANG_DISAGGREGATION_FORCE_QUERY_PREFILL_DP_RANK = EnvBool(False)
+ 
+diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
+index 9aa6796..89f80a0 100644
+--- a/python/sglang/srt/managers/io_struct.py
++++ b/python/sglang/srt/managers/io_struct.py
+@@ -2136,7 +2136,7 @@ class GetLoadsReqInput(BaseReq):
+     """Request for /v1/loads endpoint."""
+ 
+     VALID_SECTIONS = frozenset(
+-        {"core", "memory", "spec", "lora", "disagg", "queues", "all"}
++        {"core", "memory", "spec", "lora", "disagg", "queues", "inflight", "all"}
+     )
+ 
+     include: List[str] = field(default_factory=lambda: ["all"])
+@@ -2206,6 +2206,9 @@ class GetLoadsReqOutput(BaseReq):
+     lora: Optional[LoRAMetrics] = None
+     disaggregation: Optional[DisaggregationMetrics] = None
+     queues: Optional[QueueMetrics] = None
++    # Per-request breakdown of every queue, only populated when "inflight" or
++    # "all" is requested.
++    inflight: Optional[List[Dict[str, Any]]] = None
+ 
+ 
+ @dataclass
+diff --git a/python/sglang/srt/managers/scheduler_components/load_inquirer.py b/python/sglang/srt/managers/scheduler_components/load_inquirer.py
+index b49409f..aa818c0 100644
+--- a/python/sglang/srt/managers/scheduler_components/load_inquirer.py
++++ b/python/sglang/srt/managers/scheduler_components/load_inquirer.py
+@@ -212,6 +212,88 @@ class SchedulerLoadInquirer:
+                 retracted=self.get_stats().num_retracted_reqs,
+             )
+ 
++        inflight = None
++        if include_all or "inflight" in include:
++            now_perf = time.perf_counter()
++            inflight_queues = [("running", self.get_running_batch().reqs, None)]
++            if self.disaggregation_mode == DisaggregationMode.PREFILL:
++                inflight_queues += [
++                    ("waiting", self.get_waiting_queue(), "wait_queue_entry_time"),
++                    (
++                        "bootstrap",
++                        self.get_disagg_prefill_bootstrap_queue().queue,
++                        "prefill_bootstrap_queue_entry_time",
++                    ),
++                    (
++                        "prefill_inflight",
++                        self.get_disagg_prefill_inflight_queue(),
++                        "prefill_transfer_queue_entry_time",
++                    ),
++                ]
++            elif self.disaggregation_mode == DisaggregationMode.DECODE:
++                inflight_queues += [
++                    ("waiting", self.get_waiting_queue(), "wait_queue_entry_time"),
++                    (
++                        "prealloc",
++                        self.get_disagg_decode_prealloc_queue().queue,
++                        "decode_prealloc_queue_entry_time",
++                    ),
++                    (
++                        "transfer",
++                        self.get_disagg_decode_transfer_queue().queue,
++                        "decode_transfer_queue_entry_time",
++                    ),
++                    (
++                        "retracted",
++                        self.get_disagg_decode_prealloc_queue().retracted_queue,
++                        "decode_prealloc_queue_entry_time",
++                    ),
++                ]
++            else:
++                inflight_queues.append(
++                    ("waiting", self.get_waiting_queue(), "wait_queue_entry_time")
++                )
++
++            def describe_req(entry, stage, entry_time_field):
++                req = getattr(entry, "req", entry)
++                info = {
++                    "rid": getattr(req, "rid", None),
++                    "bootstrap_room": getattr(req, "bootstrap_room", None),
++                    "seqlen": getattr(entry, "seqlen", None),
++                    "stage": stage,
++                }
++                if entry_time_field is not None:
++                    time_stats = getattr(req, "time_stats", None)
++                    entry_time = (
++                        getattr(time_stats, entry_time_field, 0.0)
++                        if time_stats
++                        else 0.0
++                    )
++                    info["age_s"] = (
++                        round(now_perf - entry_time, 3) if entry_time else None
++                    )
++                if entry is not req:
++                    info["waiting_for_input"] = getattr(
++                        entry, "waiting_for_input", None
++                    )
++                    info["timeout_cancel_issued"] = getattr(
++                        entry, "timeout_cancel_issued", None
++                    )
++                return info
++
++            inflight = []
++            for name, queue, entry_time_field in inflight_queues:
++                inflight.append(
++                    {
++                        "name": name,
++                        "num_reqs": len(queue),
++                        "reqs": [
++                            describe_req(entry, name, entry_time_field)
++                            for entry in queue
++                        ],
++                    }
++                )
++
+         return GetLoadsReqOutput(
+             dp_rank=self.ps.dp_rank,
+             timestamp=time.time(),
+@@ -231,4 +313,5 @@ class SchedulerLoadInquirer:
+             lora=lora,
+             disaggregation=disaggregation,
+             queues=queues,
++            inflight=inflight,
+         )
+diff --git a/python/sglang/srt/observability/req_time_stats.py b/python/sglang/srt/observability/req_time_stats.py
+index 0c65479..106931a 100644
+--- a/python/sglang/srt/observability/req_time_stats.py
++++ b/python/sglang/srt/observability/req_time_stats.py
+@@ -23,7 +23,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+ 
+ from typing_extensions import Self
+ 
+-from sglang.srt.disaggregation.utils import DisaggregationMode
++from sglang.srt.disaggregation.utils import (
++    DisaggregationMode,
++    is_slime_profiling_enabled,
++)
+ from sglang.srt.model_executor.forward_batch_info import ForwardMode
+ from sglang.srt.observability.metrics_collector import (
+     SchedulerMetricsCollector,
+@@ -615,6 +618,14 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+ 
+     # Number of prefill retries for this request
+     prefill_retry_count: int = 0
++    fwd_prefill_bootstrap_queue_duration: Optional[float] = None
++    fwd_prefill_forward_duration: Optional[float] = None
++    fwd_prefill_transfer_queue_duration: Optional[float] = None
++    fwd_prefill_bootstrap_duration: Optional[float] = None
++    fwd_prefill_alloc_wait_duration: Optional[float] = None
++    fwd_transfer_speed_gb_s: Optional[float] = None
++    fwd_transfer_total_mb: Optional[float] = None
++    fwd_prefill_retry_count: Optional[int] = None
+ 
+     def __getstate__(self) -> object:
+         # send to detokenizer/tokenizer
+@@ -622,10 +633,35 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+             return {}
+ 
+         state = {
++            "disagg_mode": self.disagg_mode,
+             "wait_queue_entry_time": self.wait_queue_entry_time,
+             "forward_entry_time": self.forward_entry_time,
+             "prefill_finished_time": self.prefill_finished_time,
++            "completion_time": self.completion_time,
++            "prefill_bootstrap_queue_entry_time": (
++                self.prefill_bootstrap_queue_entry_time
++            ),
++            "prefill_transfer_queue_entry_time": self.prefill_transfer_queue_entry_time,
++            "decode_prealloc_queue_entry_time": self.decode_prealloc_queue_entry_time,
++            "decode_transfer_queue_entry_time": self.decode_transfer_queue_entry_time,
++            "bootstrap_done_time": self.bootstrap_done_time,
++            "transfer_speed_gb_s": self.transfer_speed_gb_s,
++            "transfer_total_mb": self.transfer_total_mb,
++            "prefill_retry_count": self.prefill_retry_count,
++            "fwd_prefill_bootstrap_queue_duration": (
++                self.fwd_prefill_bootstrap_queue_duration
++            ),
++            "fwd_prefill_forward_duration": self.fwd_prefill_forward_duration,
++            "fwd_prefill_transfer_queue_duration": (
++                self.fwd_prefill_transfer_queue_duration
++            ),
++            "fwd_prefill_bootstrap_duration": self.fwd_prefill_bootstrap_duration,
++            "fwd_prefill_alloc_wait_duration": self.fwd_prefill_alloc_wait_duration,
++            "fwd_transfer_speed_gb_s": self.fwd_transfer_speed_gb_s,
++            "fwd_transfer_total_mb": self.fwd_transfer_total_mb,
++            "fwd_prefill_retry_count": self.fwd_prefill_retry_count,
+             "diff_realtime_monotonic": global_diff_realtime_monotonic,
++            "enable_metrics": self.enable_metrics,
+         }
+         return state
+ 
+@@ -1020,6 +1056,159 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+     def get_queueing_time(self) -> float:
+         return self.forward_entry_time - self.wait_queue_entry_time
+ 
++    def get_pd_prefill_bootstrap_queue_duration(self) -> Optional[float]:
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_prefill_bootstrap_queue_duration is not None:
++            return self.fwd_prefill_bootstrap_queue_duration
++        if (
++            self.disagg_mode == DisaggregationMode.PREFILL
++            and self.prefill_bootstrap_queue_entry_time > 0.0
++            and self.wait_queue_entry_time > 0.0
++        ):
++            return self.wait_queue_entry_time - self.prefill_bootstrap_queue_entry_time
++        return None
++
++    def get_pd_prefill_forward_duration(self) -> Optional[float]:
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_prefill_forward_duration is not None:
++            return self.fwd_prefill_forward_duration
++        if (
++            self.disagg_mode == DisaggregationMode.PREFILL
++            and self.forward_entry_time > 0.0
++            and self.completion_time > 0.0
++        ):
++            return self.completion_time - self.forward_entry_time
++        return None
++
++    def get_pd_prefill_transfer_queue_duration(self) -> Optional[float]:
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_prefill_transfer_queue_duration is not None:
++            return self.fwd_prefill_transfer_queue_duration
++        if (
++            self.disagg_mode == DisaggregationMode.PREFILL
++            and self.prefill_transfer_queue_entry_time > 0.0
++            and self.completion_time > 0.0
++        ):
++            return self.completion_time - self.prefill_transfer_queue_entry_time
++        return None
++
++    def get_pd_decode_prealloc_duration(self) -> Optional[float]:
++        if not is_slime_profiling_enabled():
++            return None
++        if (
++            self.disagg_mode == DisaggregationMode.DECODE
++            and self.decode_prealloc_queue_entry_time > 0.0
++            and self.decode_transfer_queue_entry_time > 0.0
++        ):
++            return (
++                self.decode_transfer_queue_entry_time
++                - self.decode_prealloc_queue_entry_time
++            )
++        return None
++
++    def get_pd_decode_transfer_duration(self) -> Optional[float]:
++        if not is_slime_profiling_enabled():
++            return None
++        if (
++            self.disagg_mode == DisaggregationMode.DECODE
++            and self.decode_transfer_queue_entry_time > 0.0
++            and self.wait_queue_entry_time > 0.0
++        ):
++            return self.wait_queue_entry_time - self.decode_transfer_queue_entry_time
++        return None
++
++    def get_pd_decode_forward_duration(self) -> Optional[float]:
++        if not is_slime_profiling_enabled():
++            return None
++        if (
++            self.disagg_mode == DisaggregationMode.DECODE
++            and self.forward_entry_time > 0.0
++            and self.completion_time > 0.0
++        ):
++            return self.completion_time - self.forward_entry_time
++        return None
++
++    def get_pd_prefill_bootstrap_duration(self) -> Optional[float]:
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_prefill_bootstrap_duration is not None:
++            return self.fwd_prefill_bootstrap_duration
++        if (
++            self.disagg_mode == DisaggregationMode.PREFILL
++            and self.prefill_bootstrap_queue_entry_time > 0.0
++            and self.bootstrap_done_time > 0.0
++        ):
++            return self.bootstrap_done_time - self.prefill_bootstrap_queue_entry_time
++        return None
++
++    def get_pd_prefill_alloc_wait_duration(self) -> Optional[float]:
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_prefill_alloc_wait_duration is not None:
++            return self.fwd_prefill_alloc_wait_duration
++        if (
++            self.disagg_mode == DisaggregationMode.PREFILL
++            and self.bootstrap_done_time > 0.0
++            and self.wait_queue_entry_time > 0.0
++        ):
++            return self.wait_queue_entry_time - self.bootstrap_done_time
++        return None
++
++    def get_pd_decode_bootstrap_duration(self) -> Optional[float]:
++        if not is_slime_profiling_enabled():
++            return None
++        if (
++            self.disagg_mode == DisaggregationMode.DECODE
++            and self.decode_prealloc_queue_entry_time > 0.0
++            and self.bootstrap_done_time > 0.0
++        ):
++            return self.bootstrap_done_time - self.decode_prealloc_queue_entry_time
++        return None
++
++    def get_pd_decode_alloc_wait_duration(self) -> Optional[float]:
++        if not is_slime_profiling_enabled():
++            return None
++        if (
++            self.disagg_mode == DisaggregationMode.DECODE
++            and self.bootstrap_done_time > 0.0
++            and self.decode_transfer_queue_entry_time > 0.0
++        ):
++            return self.decode_transfer_queue_entry_time - self.bootstrap_done_time
++        return None
++
++    def get_pd_transfer_speed_gb_s(self) -> Optional[float]:
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_transfer_speed_gb_s is not None:
++            return self.fwd_transfer_speed_gb_s
++        if (
++            self.disagg_mode != DisaggregationMode.NULL
++            and self.transfer_speed_gb_s > 0.0
++        ):
++            return self.transfer_speed_gb_s
++        return None
++
++    def get_pd_transfer_total_mb(self) -> Optional[float]:
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_transfer_total_mb is not None:
++            return self.fwd_transfer_total_mb
++        if self.disagg_mode != DisaggregationMode.NULL and self.transfer_total_mb > 0.0:
++            return self.transfer_total_mb
++        return None
++
++    def get_pd_prefill_retry_count(self) -> Optional[int]:
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_prefill_retry_count is not None:
++            return self.fwd_prefill_retry_count
++        if self.disagg_mode == DisaggregationMode.PREFILL:
++            return self.prefill_retry_count
++        return None
++
+     def convert_to_duration(self) -> str:
+         if self.disagg_mode == DisaggregationMode.NULL:
+             queue_duration = self.duration_between(
+@@ -1153,6 +1342,36 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+                 "queue_time": self.get_queueing_time(),
+             }
+         )
++        if is_slime_profiling_enabled():
++            for key, value in {
++                "pd_prefill_bootstrap_queue_duration": (
++                    self.get_pd_prefill_bootstrap_queue_duration()
++                ),
++                "pd_prefill_forward_duration": self.get_pd_prefill_forward_duration(),
++                "pd_prefill_transfer_queue_duration": (
++                    self.get_pd_prefill_transfer_queue_duration()
++                ),
++                "pd_prefill_bootstrap_duration": (
++                    self.get_pd_prefill_bootstrap_duration()
++                ),
++                "pd_prefill_alloc_wait_duration": (
++                    self.get_pd_prefill_alloc_wait_duration()
++                ),
++                "pd_decode_prealloc_duration": self.get_pd_decode_prealloc_duration(),
++                "pd_decode_transfer_duration": self.get_pd_decode_transfer_duration(),
++                "pd_decode_forward_duration": self.get_pd_decode_forward_duration(),
++                "pd_decode_bootstrap_duration": (
++                    self.get_pd_decode_bootstrap_duration()
++                ),
++                "pd_decode_alloc_wait_duration": (
++                    self.get_pd_decode_alloc_wait_duration()
++                ),
++                "pd_transfer_speed_gb_s": self.get_pd_transfer_speed_gb_s(),
++                "pd_transfer_total_mb": self.get_pd_transfer_total_mb(),
++                "pd_prefill_retry_count": self.get_pd_prefill_retry_count(),
++            }.items():
++                if value is not None:
++                    meta_data[key] = value
+         return meta_data
+ 
+     def format_duration(self, duration: float) -> str:
