@@ -14,6 +14,7 @@ from ray.actor import ActorHandle
 from tqdm import tqdm
 
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
+from slime.utils.http_utils import _wrap_ipv6
 
 from ..megatron_to_hf import convert_to_hf
 from ..sglang import DeltaSpec
@@ -314,7 +315,7 @@ def connect_rollout_engines_from_distributed(
     ]
     model_update_groups = init_process_group(
         backend="nccl",
-        init_method=f"tcp://{master_address}:{master_port}",
+        init_method=f"tcp://{_wrap_ipv6(master_address)}:{master_port}",
         world_size=world_size,
         rank=0,
         group_name=group_name,
