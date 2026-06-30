@@ -682,7 +682,18 @@ diff --git a/python/sglang/srt/entrypoints/http_server.py b/python/sglang/srt/en
 index d7368383d89..2c881d95bd5 100644
 --- a/python/sglang/srt/entrypoints/http_server.py
 +++ b/python/sglang/srt/entrypoints/http_server.py
-@@ -127,6 +127,7 @@ from sglang.srt.managers.io_struct import (
+@@ -118,24 +118,28 @@ from sglang.srt.managers.io_struct import (
++    DestroyMooncakeWeightReceiverReqInput,
+     DestroyWeightsUpdateGroupReqInput,
+     DumperControlReqInput,
+     EmbeddingReqInput,
+     GenerateReqInput,
+     GetWeightsByNameReqInput,
++    InitMooncakeWeightReceiverReqInput,
+     InitWeightsSendGroupForRemoteInstanceReqInput,
+     InitWeightsUpdateGroupReqInput,
+     LoadLoRAAdapterFromTensorsReqInput,
+     LoadLoRAAdapterReqInput,
      OpenSessionReqInput,
      ParseFunctionCallReq,
      PauseGenerationReqInput,
@@ -690,6 +701,16 @@ index d7368383d89..2c881d95bd5 100644
      ProfileReqInput,
      ReleaseMemoryOccupationReqInput,
      ResumeMemoryOccupationReqInput,
+     SendWeightsToRemoteInstanceReqInput,
+     SeparateReasoningReqInput,
+     SetInternalStateReq,
+     SlowDownReqInput,
+     UnloadLoRAAdapterReqInput,
+     UpdateWeightFromDiskReqInput,
+     UpdateWeightsFromDistributedReqInput,
+     UpdateWeightsFromIPCReqInput,
++    UpdateWeightsFromMooncakeReqInput,
+     UpdateWeightsFromTensorReqInput,
 @@ -618,10 +619,8 @@ async def model_info():
  @app.get("/weight_version")
  async def weight_version():
@@ -725,10 +746,63 @@ index d7368383d89..2c881d95bd5 100644
  
      server_args = _global_state.tokenizer_manager.server_args
  
-@@ -1249,6 +1257,20 @@ async def update_weights_from_ipc(obj: UpdateWeightsFromIPCReqInput, request: Re
+@@ -1249,6 +1257,73 @@ async def update_weights_from_ipc(obj: UpdateWeightsFromIPCReqInput, request: Re
          return ORJSONResponse(content, status_code=HTTPStatus.BAD_REQUEST)
  
  
++@app.post("/init_mooncake_weight_receiver")
++@auth_level(AuthLevel.ADMIN_OPTIONAL)
++async def init_mooncake_weight_receiver(
++    obj: InitMooncakeWeightReceiverReqInput, request: Request
++):
++    """Initialize a Mooncake Transfer Engine receiver for trainer-side weight writes."""
++    success, message, descriptor = (
++        await _global_state.tokenizer_manager.init_mooncake_weight_receiver(
++            obj, request
++        )
++    )
++    content = {"success": success, "message": message}
++    if descriptor:
++        content.update(descriptor)
++    return ORJSONResponse(
++        content, status_code=200 if success else HTTPStatus.BAD_REQUEST
++    )
++
++
++@app.post("/update_weights_from_mooncake")
++@auth_level(AuthLevel.ADMIN_OPTIONAL)
++async def update_weights_from_mooncake(
++    obj: UpdateWeightsFromMooncakeReqInput, request: Request
++):
++    """Load weights that were already written into the local Mooncake receiver buffer."""
++    success, message = (
++        await _global_state.tokenizer_manager.update_weights_from_mooncake(
++            obj, request
++        )
++    )
++    content = {"success": success, "message": message}
++    return ORJSONResponse(
++        content, status_code=200 if success else HTTPStatus.BAD_REQUEST
++    )
++
++
++@app.post("/destroy_mooncake_weight_receiver")
++@auth_level(AuthLevel.ADMIN_OPTIONAL)
++async def destroy_mooncake_weight_receiver(
++    obj: DestroyMooncakeWeightReceiverReqInput, request: Request
++):
++    """Release the Mooncake receiver buffers and Transfer Engine instance."""
++    success, message = (
++        await _global_state.tokenizer_manager.destroy_mooncake_weight_receiver(
++            obj, request
++        )
++    )
++    content = {"success": success, "message": message}
++    return ORJSONResponse(
++        content, status_code=200 if success else HTTPStatus.BAD_REQUEST
++    )
++
++
 +@app.post("/post_process_weights")
 +@auth_level(AuthLevel.ADMIN_OPTIONAL)
 +async def post_process_weights(req: PostProcessWeightsReqInput, request: Request):
@@ -1082,10 +1156,64 @@ index 987ec512122..e098565729b 100644
      # Whether to call torch.cuda.empty_cache() during flush
      torch_empty_cache: bool = False
  
-@@ -1673,6 +1711,18 @@ class ResumeMemoryOccupationReqOutput(BaseReq):
+@@ -1673,6 +1711,72 @@ class ResumeMemoryOccupationReqOutput(BaseReq):
      pass
  
  
++@dataclass
++class InitMooncakeWeightReceiverReqInput(BaseReq):
++    metadata_server: str = "P2PHANDSHAKE"
++    protocol: str = "tcp"
++    device_name: str = ""
++    buffer_size: int = 0
++    buffer_count: int = 1
++    rpc_port_base: Optional[int] = None
++    group_name: str = "slime-mooncake-weight"
++    server_name: Optional[str] = None
++
++
++@dataclass
++class InitMooncakeWeightReceiverReqOutput(BaseReq):
++    success: bool
++    message: str
++    target_name: Optional[str] = None
++    server_name: Optional[str] = None
++    rpc_port: Optional[int] = None
++    buffer_device: Optional[str] = None
++    buffers: Optional[List[Dict[str, Any]]] = None
++
++
++@dataclass
++class UpdateWeightsFromMooncakeReqInput(BaseReq):
++    weight_version: Optional[str]
++    target_name: str
++    buffer_slot: int
++    remote_addr: int
++    nbytes: int
++    tensors: List[Dict[str, Any]]
++    load_format: Optional[str] = None
++    delta: Optional[Dict[str, Any]] = None
++    flush_cache: bool = True
++    abort_all_requests: bool = False
++
++
++@dataclass
++class UpdateWeightsFromMooncakeReqOutput(BaseReq):
++    success: bool
++    message: str
++
++
++@dataclass
++class DestroyMooncakeWeightReceiverReqInput(BaseReq):
++    pass
++
++
++@dataclass
++class DestroyMooncakeWeightReceiverReqOutput(BaseReq):
++    success: bool
++    message: str
++
++
 +@dataclass
 +class PostProcessWeightsReqInput(BaseReq):
 +    restore_weights_before_load: bool = False
@@ -1162,7 +1290,34 @@ diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/manager
 index 8e32640fc6a..98966842506 100644
 --- a/python/sglang/srt/managers/scheduler.py
 +++ b/python/sglang/srt/managers/scheduler.py
-@@ -124,6 +124,7 @@ from sglang.srt.managers.io_struct import (
+@@ -99,49 +99,53 @@ from sglang.srt.managers.io_struct import (
+     ConfigureLoggingReq,
+     ContinueGenerationReqInput,
++    DestroyMooncakeWeightReceiverReqInput,
+     DestroyWeightsUpdateGroupReqInput,
+     DetachHiCacheStorageReqInput,
+     DetachHiCacheStorageReqOutput,
+     DumperControlReqInput,
+     DumperControlReqOutput,
+     ExpertDistributionReq,
+     ExpertDistributionReqOutput,
+     ExpertDistributionReqType,
+     FlushCacheReqInput,
+     FreezeGCReq,
+     GetInternalStateReq,
+     GetInternalStateReqOutput,
+     GetLoadsReqInput,
+     GetWeightsByNameReqInput,
+     HealthCheckOutput,
++    InitMooncakeWeightReceiverReqInput,
+     InitWeightsSendGroupForRemoteInstanceReqInput,
+     InitWeightsSendGroupForRemoteInstanceReqOutput,
+     InitWeightsUpdateGroupReqInput,
+     ListExternalCorporaReqInput,
+     ListExternalCorporaReqOutput,
+     LoadLoRAAdapterFromTensorsReqInput,
+     LoadLoRAAdapterFromTensorsReqOutput,
+     LoadLoRAAdapterReqInput,
      LoadLoRAAdapterReqOutput,
      OpenSessionReqInput,
      PauseGenerationReqInput,
@@ -1170,10 +1325,41 @@ index 8e32640fc6a..98966842506 100644
      ProfileReq,
      ReleaseMemoryOccupationReqInput,
      RemoveExternalCorpusReqInput,
-@@ -1318,6 +1319,10 @@ class Scheduler(
+     RemoveExternalCorpusReqOutput,
+     ResumeMemoryOccupationReqInput,
+     RpcReqInput,
+     RpcReqOutput,
+     SendWeightsToRemoteInstanceReqInput,
+     SendWeightsToRemoteInstanceReqOutput,
+     SetInternalStateReq,
+     SetInternalStateReqOutput,
+     SlowDownReqInput,
+     SlowDownReqOutput,
+     TokenizedEmbeddingReqInput,
+     TokenizedGenerateReqInput,
+     UnloadLoRAAdapterReqInput,
+     UnloadLoRAAdapterReqOutput,
+     UpdateWeightFromDiskReqInput,
+     UpdateWeightsFromDistributedReqInput,
+     UpdateWeightsFromIPCReqInput,
++    UpdateWeightsFromMooncakeReqInput,
+     UpdateWeightsFromTensorReqInput,
+@@ -1318,6 +1319,22 @@ class Scheduler(
                      UpdateWeightsFromIPCReqInput,
                      self.weight_updater.update_weights_from_ipc,
                  ),
++                (
++                    InitMooncakeWeightReceiverReqInput,
++                    self.weight_updater.init_mooncake_weight_receiver,
++                ),
++                (
++                    UpdateWeightsFromMooncakeReqInput,
++                    self.weight_updater.update_weights_from_mooncake,
++                ),
++                (
++                    DestroyMooncakeWeightReceiverReqInput,
++                    self.weight_updater.destroy_mooncake_weight_receiver,
++                ),
 +                (
 +                    PostProcessWeightsReqInput,
 +                    self.weight_updater.post_process_weights,
@@ -1334,7 +1520,7 @@ diff --git a/python/sglang/srt/managers/scheduler_components/weight_updater.py b
 index 77bf823b081..9ab3abe5618 100644
 --- a/python/sglang/srt/managers/scheduler_components/weight_updater.py
 +++ b/python/sglang/srt/managers/scheduler_components/weight_updater.py
-@@ -16,6 +16,7 @@ from sglang.srt.constants import (
+@@ -16,17 +16,26 @@ from sglang.srt.constants import (
      GPU_MEMORY_TYPE_KV_CACHE,
      GPU_MEMORY_TYPE_WEIGHTS,
  )
@@ -1342,8 +1528,14 @@ index 77bf823b081..9ab3abe5618 100644
  from sglang.srt.managers.io_struct import (
      CheckWeightsReqInput,
      CheckWeightsReqOutput,
-@@ -25,6 +26,8 @@ from sglang.srt.managers.io_struct import (
++    DestroyMooncakeWeightReceiverReqInput,
++    DestroyMooncakeWeightReceiverReqOutput,
+     DestroyWeightsUpdateGroupReqInput,
+     DestroyWeightsUpdateGroupReqOutput,
+     GetWeightsByNameReqInput,
      GetWeightsByNameReqOutput,
++    InitMooncakeWeightReceiverReqInput,
++    InitMooncakeWeightReceiverReqOutput,
      InitWeightsUpdateGroupReqInput,
      InitWeightsUpdateGroupReqOutput,
 +    PostProcessWeightsReqInput,
@@ -1351,6 +1543,10 @@ index 77bf823b081..9ab3abe5618 100644
      ReleaseMemoryOccupationReqInput,
      ReleaseMemoryOccupationReqOutput,
      ResumeMemoryOccupationReqInput,
+     ResumeMemoryOccupationReqOutput,
++    UpdateWeightsFromMooncakeReqInput,
++    UpdateWeightsFromMooncakeReqOutput,
+     UpdateWeightFromDiskReqInput,
 @@ -78,6 +81,10 @@ class SchedulerWeightUpdaterManager:
      flush_cache: Callable[..., bool]
      is_fully_idle: Callable[..., bool]
@@ -1362,10 +1558,41 @@ index 77bf823b081..9ab3abe5618 100644
      offload_tags: set = field(default_factory=set)
      stashed_model_static_state: Any = None
  
-@@ -175,6 +182,19 @@ class SchedulerWeightUpdaterManager:
+@@ -175,6 +182,50 @@ class SchedulerWeightUpdaterManager:
          parameter = self.tp_worker.get_weights_by_name(recv_req)
          return GetWeightsByNameReqOutput(parameter)
  
++    def init_mooncake_weight_receiver(
++        self, recv_req: InitMooncakeWeightReceiverReqInput
++    ):
++        success, message, descriptor = self.tp_worker.init_mooncake_weight_receiver(
++            recv_req
++        )
++        if not success:
++            logger.error(message)
++        return InitMooncakeWeightReceiverReqOutput(
++            success=success, message=message, **(descriptor or {})
++        )
++
++    def update_weights_from_mooncake(self, recv_req: UpdateWeightsFromMooncakeReqInput):
++        success, message = self.tp_worker.update_weights_from_mooncake(recv_req)
++        if success:
++            if recv_req.flush_cache:
++                flush_cache_success = self.flush_cache()
++                assert flush_cache_success, "Cache flush failed after updating weights"
++        else:
++            logger.error(message)
++        torch.distributed.barrier(group=self.tp_cpu_group)
++        return UpdateWeightsFromMooncakeReqOutput(success, message)
++
++    def destroy_mooncake_weight_receiver(
++        self, recv_req: DestroyMooncakeWeightReceiverReqInput
++    ):
++        success, message = self.tp_worker.destroy_mooncake_weight_receiver(recv_req)
++        if not success:
++            logger.error(message)
++        return DestroyMooncakeWeightReceiverReqOutput(success, message)
++
 +    def post_process_weights(self, recv_req: PostProcessWeightsReqInput):
 +        success, message = self.tp_worker.post_process_weights(recv_req)
 +        if (
@@ -1424,7 +1651,36 @@ diff --git a/python/sglang/srt/managers/tokenizer_control_mixin.py b/python/sgla
 index c9939a1fc93..ee25e5e70e0 100644
 --- a/python/sglang/srt/managers/tokenizer_control_mixin.py
 +++ b/python/sglang/srt/managers/tokenizer_control_mixin.py
-@@ -48,6 +48,8 @@ from sglang.srt.managers.io_struct import (
+@@ -23,50 +23,58 @@ from sglang.srt.managers.io_struct import (
++    DestroyMooncakeWeightReceiverReqInput,
++    DestroyMooncakeWeightReceiverReqOutput,
+     DestroyWeightsUpdateGroupReqInput,
+     DestroyWeightsUpdateGroupReqOutput,
+     DetachHiCacheStorageReqInput,
+     DetachHiCacheStorageReqOutput,
+     DumperControlReqInput,
+     DumperControlReqOutput,
+     ExpertDistributionReq,
+     ExpertDistributionReqOutput,
+     ExpertDistributionReqType,
+     FlushCacheReqInput,
+     FlushCacheReqOutput,
+     GetInternalStateReq,
+     GetInternalStateReqOutput,
+     GetLoadsReqOutput,
+     GetWeightsByNameReqInput,
+     GetWeightsByNameReqOutput,
++    InitMooncakeWeightReceiverReqInput,
++    InitMooncakeWeightReceiverReqOutput,
+     InitWeightsSendGroupForRemoteInstanceReqInput,
+     InitWeightsSendGroupForRemoteInstanceReqOutput,
+     InitWeightsUpdateGroupReqInput,
+     InitWeightsUpdateGroupReqOutput,
+     ListExternalCorporaReqInput,
+     ListExternalCorporaReqOutput,
+     LoadLoRAAdapterFromTensorsReqInput,
+     LoadLoRAAdapterFromTensorsReqOutput,
+     LoadLoRAAdapterReqInput,
      LoadLoRAAdapterReqOutput,
      LoRAUpdateOutput,
      OpenSessionReqInput,
@@ -1433,18 +1689,92 @@ index c9939a1fc93..ee25e5e70e0 100644
      ProfileReq,
      ProfileReqOutput,
      ProfileReqType,
-@@ -96,6 +98,7 @@ _COMMUNICATOR_SPECS = [
+     ReleaseMemoryOccupationReqInput,
+     ReleaseMemoryOccupationReqOutput,
+     RemoveExternalCorpusReqInput,
+     RemoveExternalCorpusReqOutput,
+     ResumeMemoryOccupationReqInput,
+     ResumeMemoryOccupationReqOutput,
+     SendWeightsToRemoteInstanceReqInput,
+     SendWeightsToRemoteInstanceReqOutput,
+     SetInternalStateReq,
+     SetInternalStateReqOutput,
+     SlowDownReqInput,
+     SlowDownReqOutput,
+     UnloadLoRAAdapterReqInput,
+     UnloadLoRAAdapterReqOutput,
+     UpdateWeightsFromDistributedReqInput,
+     UpdateWeightsFromDistributedReqOutput,
+     UpdateWeightsFromIPCReqInput,
+     UpdateWeightsFromIPCReqOutput,
++    UpdateWeightsFromMooncakeReqInput,
++    UpdateWeightsFromMooncakeReqOutput,
+     UpdateWeightsFromTensorReqInput,
+@@ -96,6 +98,10 @@ _COMMUNICATOR_SPECS = [
      ("send_weights_to_remote_instance", SendWeightsToRemoteInstanceReqOutput),
      ("update_weights_from_tensor", UpdateWeightsFromTensorReqOutput),
      ("update_weights_from_ipc", UpdateWeightsFromIPCReqOutput),
++    ("init_mooncake_weight_receiver", InitMooncakeWeightReceiverReqOutput),
++    ("update_weights_from_mooncake", UpdateWeightsFromMooncakeReqOutput),
++    ("destroy_mooncake_weight_receiver", DestroyMooncakeWeightReceiverReqOutput),
 +    ("post_process_weights", PostProcessWeightsReqOutput),
      ("get_weights_by_name", GetWeightsByNameReqOutput),
      ("release_memory_occupation", ReleaseMemoryOccupationReqOutput),
      ("resume_memory_occupation", ResumeMemoryOccupationReqOutput),
-@@ -754,6 +757,16 @@ class TokenizerControlMixin:
+@@ -754,6 +757,66 @@ class TokenizerControlMixin:
          self.auto_create_handle_loop()
          await self.resume_memory_occupation_communicator(obj)
  
++    async def init_mooncake_weight_receiver(
++        self: TokenizerManager,
++        obj: InitMooncakeWeightReceiverReqInput,
++        request: Optional[fastapi.Request] = None,
++    ) -> Tuple[bool, str, dict]:
++        self.auto_create_handle_loop()
++        unsupported = "Mooncake weight receiver currently supports only dp_size=1."
++        if self.server_args.dp_size != 1:
++            return False, unsupported, {}
++        result = (await self.init_mooncake_weight_receiver_communicator(obj))[0]
++        descriptor = {
++            "target_name": result.target_name,
++            "server_name": result.server_name,
++            "rpc_port": result.rpc_port,
++            "buffer_device": result.buffer_device,
++            "buffers": result.buffers or [],
++        }
++        return result.success, result.message, descriptor
++
++    async def update_weights_from_mooncake(
++        self: TokenizerManager,
++        obj: UpdateWeightsFromMooncakeReqInput,
++        request: Optional[fastapi.Request] = None,
++    ) -> Tuple[bool, str]:
++        self.auto_create_handle_loop()
++        unsupported = "Mooncake weight receiver currently supports only dp_size=1."
++        if self.server_args.dp_size != 1:
++            return False, unsupported
++        if obj.abort_all_requests:
++            self.abort_request(abort_all=True)
++        async with self.model_update_lock.writer_lock:
++            results = await self.update_weights_from_mooncake_communicator(obj)
++        success, message = FanOutCommunicator.merge_results(results)
++        if success and obj.weight_version is not None:
++            self._update_weight_version_if_provided(obj.weight_version)
++            message += f" Weight version updated to {obj.weight_version}."
++        return success, message
++
++    async def destroy_mooncake_weight_receiver(
++        self: TokenizerManager,
++        obj: DestroyMooncakeWeightReceiverReqInput,
++        request: Optional[fastapi.Request] = None,
++    ) -> Tuple[bool, str]:
++        self.auto_create_handle_loop()
++        unsupported = "Mooncake weight receiver currently supports only dp_size=1."
++        if self.server_args.dp_size != 1:
++            return False, unsupported
++        results = await self.destroy_mooncake_weight_receiver_communicator(obj)
++        return FanOutCommunicator.merge_results(results)
++
 +    async def post_process_weights(
 +        self: TokenizerManager,
 +        obj: PostProcessWeightsReqInput,
@@ -1535,7 +1865,12 @@ diff --git a/python/sglang/srt/managers/tp_worker.py b/python/sglang/srt/manager
 index bd9184408ed..71bbe8f400f 100644
 --- a/python/sglang/srt/managers/tp_worker.py
 +++ b/python/sglang/srt/managers/tp_worker.py
-@@ -29,6 +29,7 @@ from sglang.srt.managers.io_struct import (
+@@ -26,12 +26,16 @@ from sglang.srt.managers.io_struct import (
++    DestroyMooncakeWeightReceiverReqInput,
+     DestroyWeightsUpdateGroupReqInput,
+     GetWeightsByNameReqInput,
++    InitMooncakeWeightReceiverReqInput,
+     InitWeightsSendGroupForRemoteInstanceReqInput,
      InitWeightsUpdateGroupReqInput,
      LoadLoRAAdapterFromTensorsReqInput,
      LoadLoRAAdapterReqInput,
@@ -1543,6 +1878,10 @@ index bd9184408ed..71bbe8f400f 100644
      SendWeightsToRemoteInstanceReqInput,
      UnloadLoRAAdapterReqInput,
      UpdateWeightFromDiskReqInput,
+     UpdateWeightsFromDistributedReqInput,
+     UpdateWeightsFromIPCReqInput,
++    UpdateWeightsFromMooncakeReqInput,
+     UpdateWeightsFromTensorReqInput,
 @@ -98,6 +99,7 @@ class BaseTpWorker(ABC):
              recv_req.model_path,
              recv_req.load_format,
@@ -1551,12 +1890,45 @@ index bd9184408ed..71bbe8f400f 100644
          )
          return success, message
  
-@@ -152,6 +154,14 @@ class BaseTpWorker(ABC):
+@@ -152,6 +154,47 @@ class BaseTpWorker(ABC):
              recv_req.shapes,
              recv_req.group_name,
              recv_req.load_format,
 +            recv_req.delta,
 +        )
++        return success, message
++
++    def init_mooncake_weight_receiver(
++        self, recv_req: InitMooncakeWeightReceiverReqInput
++    ):
++        success, message, descriptor = self.model_runner.init_mooncake_weight_receiver(
++            metadata_server=recv_req.metadata_server,
++            protocol=recv_req.protocol,
++            device_name=recv_req.device_name,
++            buffer_size=recv_req.buffer_size,
++            buffer_count=recv_req.buffer_count,
++            rpc_port_base=recv_req.rpc_port_base,
++            group_name=recv_req.group_name,
++            server_name=recv_req.server_name,
++        )
++        return success, message, descriptor
++
++    def update_weights_from_mooncake(self, recv_req: UpdateWeightsFromMooncakeReqInput):
++        success, message = self.model_runner.update_weights_from_mooncake(
++            target_name=recv_req.target_name,
++            buffer_slot=recv_req.buffer_slot,
++            remote_addr=recv_req.remote_addr,
++            nbytes=recv_req.nbytes,
++            tensors=recv_req.tensors,
++            load_format=recv_req.load_format,
++            delta=recv_req.delta,
++        )
++        return success, message
++
++    def destroy_mooncake_weight_receiver(
++        self, recv_req: DestroyMooncakeWeightReceiverReqInput
++    ):
++        success, message = self.model_runner.destroy_mooncake_weight_receiver()
 +        return success, message
 +
 +    def post_process_weights(self, recv_req: PostProcessWeightsReqInput):
@@ -1910,10 +2282,207 @@ index 3b30eb0e1f7..d715bc6893d 100644
                  no_copy_to_cpu=no_copy_to_cpu,
              )
  
-@@ -3718,6 +3895,39 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -3718,6 +3895,236 @@ class ModelRunner(ModelRunnerKVCacheMixin):
              logger.error(f"IPC weight update failed: {e}")
              return False, str(e)
  
++    def _default_mooncake_receiver_server_name(
++        self, metadata_server: str, group_name: str
++    ) -> str:
++        if metadata_server != "P2PHANDSHAKE":
++            return f"{group_name}-tp{self.tp_rank}"
++        try:
++            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
++                sock.connect(("8.8.8.8", 80))
++                return sock.getsockname()[0]
++        except OSError:
++            hostname = socket.gethostname()
++            try:
++                return socket.gethostbyname(hostname)
++            except socket.gaierror:
++                return hostname
++
++    @staticmethod
++    def _format_mooncake_target_name(server_name: str, rpc_port: int) -> str:
++        if ":" in server_name and not server_name.startswith("["):
++            return f"[{server_name}]:{rpc_port}"
++        return f"{server_name}:{rpc_port}"
++
++    def init_mooncake_weight_receiver(
++        self,
++        metadata_server: str,
++        protocol: str,
++        device_name: str,
++        buffer_size: int,
++        buffer_count: int,
++        rpc_port_base: Optional[int] = None,
++        group_name: str = "slime-mooncake-weight",
++        server_name: Optional[str] = None,
++    ) -> tuple[bool, str, Optional[Dict[str, Any]]]:
++        if rpc_port_base is not None:
++            return (
++                False,
++                "Mooncake Python TransferEngine does not expose fixed rpc_port; "
++                "unset --mooncake-rpc-port-base for now.",
++                None,
++            )
++        if buffer_size <= 0:
++            return False, "Mooncake receiver buffer_size must be positive.", None
++        if buffer_count <= 0:
++            return False, "Mooncake receiver buffer_count must be positive.", None
++
++        base_server_name = server_name or self._default_mooncake_receiver_server_name(
++            metadata_server, group_name
++        )
++        candidate_devices = [torch.device(self.device)]
++
++        last_error = None
++        for candidate_device in candidate_devices:
++            try:
++                cleanup_ok, cleanup_message = self.destroy_mooncake_weight_receiver()
++                if not cleanup_ok:
++                    return False, cleanup_message, None
++                from mooncake.engine import TransferEngine
++
++                engine = TransferEngine()
++                ret = engine.initialize(
++                    base_server_name,
++                    metadata_server,
++                    protocol,
++                    device_name or "",
++                )
++                if ret != 0:
++                    free_engine = getattr(engine, "freeEngine", None)
++                    if callable(free_engine):
++                        free_engine()
++                    last_error = f"Mooncake TransferEngine.initialize failed: {ret}"
++                    continue
++
++                buffers = []
++                buffer_descs = []
++                self._mooncake_weight_receiver = {
++                    "engine": engine,
++                    "buffers": buffers,
++                    "descriptor": {},
++                }
++                for slot in range(buffer_count):
++                    buf = torch.empty(
++                        (buffer_size,), dtype=torch.uint8, device=candidate_device
++                    )
++                    if buf.is_cuda:
++                        torch.cuda.synchronize(buf.device)
++                    ret = engine.register_memory(int(buf.data_ptr()), int(buf.numel()))
++                    if ret != 0:
++                        raise RuntimeError(f"Mooncake register_memory failed: {ret}")
++                    buffers.append(buf)
++                    buffer_descs.append(
++                        {
++                            "slot": slot,
++                            "addr": int(buf.data_ptr()),
++                            "capacity": int(buf.numel()),
++                            "device": buf.device.type,
++                        }
++                    )
++
++                rpc_port = int(engine.get_rpc_port())
++                target_name = self._format_mooncake_target_name(base_server_name, rpc_port)
++                buffer_device = buffer_descs[0]["device"] if buffer_descs else candidate_device.type
++                descriptor = {
++                    "target_name": target_name,
++                    "server_name": base_server_name,
++                    "rpc_port": rpc_port,
++                    "buffer_device": buffer_device,
++                    "buffers": buffer_descs,
++                }
++                self._mooncake_weight_receiver["descriptor"] = descriptor
++                return (
++                    True,
++                    f"Succeeded to initialize Mooncake weight receiver on {buffer_device} buffer.",
++                    descriptor,
++                )
++            except Exception as e:
++                last_error = str(e)
++                logger.warning(
++                    "Failed to initialize Mooncake weight receiver on %s: %s",
++                    candidate_device,
++                    e,
++                )
++                cleanup_ok, cleanup_message = self.destroy_mooncake_weight_receiver()
++                if not cleanup_ok:
++                    return False, cleanup_message, None
++
++        return False, f"Failed to initialize Mooncake weight receiver: {last_error}", None
++
++    def update_weights_from_mooncake(
++        self,
++        target_name: str,
++        buffer_slot: int,
++        remote_addr: int,
++        nbytes: int,
++        tensors: List[Dict[str, Any]],
++        load_format: Optional[str] = None,
++        delta: Optional[Dict[str, Any]] = None,
++    ) -> tuple[bool, str]:
++        if delta is not None:
++            return False, "Mooncake weight receiver does not support delta manifests yet."
++        state = getattr(self, "_mooncake_weight_receiver", None)
++        if state is None:
++            return False, "Mooncake weight receiver is not initialized."
++
++        descriptor = state["descriptor"]
++        if target_name != descriptor["target_name"]:
++            return False, f"Mooncake target mismatch: {target_name} != {descriptor['target_name']}"
++        buffers = state["buffers"]
++        if not (0 <= buffer_slot < len(buffers)):
++            return False, f"Invalid Mooncake buffer_slot={buffer_slot}."
++        buf = buffers[buffer_slot]
++        if int(remote_addr) != int(buf.data_ptr()):
++            return False, "Mooncake manifest remote_addr does not match receiver buffer."
++        if nbytes < 0 or nbytes > int(buf.numel()):
++            return False, "Mooncake manifest nbytes exceeds receiver buffer capacity."
++
++        try:
++            if getattr(buf, "is_cuda", False) and str(self.device).startswith("cuda"):
++                torch.cuda.synchronize(self.device)
++            named_tensors = []
++            for spec in tensors:
++                offset = int(spec["offset"])
++                size = int(spec["nbytes"])
++                if offset < 0 or size < 0 or offset + size > nbytes:
++                    return False, f"Invalid Mooncake tensor slice: {spec!r}"
++                dtype = _resolve_torch_dtype(spec["dtype"])
++                tensor = (
++                    buf.narrow(0, offset, size)
++                    .view(dtype)
++                    .view(tuple(spec["shape"]))
++                    .clone()
++                )
++                named_tensors.append((spec["name"], tensor))
++            return self.update_weights_from_tensor(named_tensors, load_format)
++        except Exception as e:
++            logger.error("Mooncake weight update failed: %s", e)
++            return False, f"Mooncake weight update failed: {e}"
++
++    def destroy_mooncake_weight_receiver(self) -> tuple[bool, str]:
++        state = getattr(self, "_mooncake_weight_receiver", None)
++        if state is None:
++            return True, "Mooncake weight receiver is not initialized."
++        errors = []
++        engine = state["engine"]
++        for buf in state["buffers"]:
++            ret = engine.unregister_memory(int(buf.data_ptr()))
++            if ret != 0:
++                errors.append(f"unregister_memory({int(buf.data_ptr())})={ret}")
++        free_engine = getattr(engine, "freeEngine", None)
++        if callable(free_engine):
++            ret = free_engine()
++            if ret not in (None, 0):
++                errors.append(f"freeEngine={ret}")
++        self._mooncake_weight_receiver = None
++        if errors:
++            return False, "; ".join(errors)
++        return True, "Succeeded to destroy Mooncake weight receiver."
++
 +    def post_process_weights(
 +        self,
 +        restore_weights_before_load: bool = False,
@@ -1950,7 +2519,7 @@ index 3b30eb0e1f7..d715bc6893d 100644
      def prealloc_symmetric_memory_pool(self):
          # PyTorch mempools never de-fragment memory in OOM scenarios, so we need to pre-allocate a large chunk of memory to limit fragmentation.
          if (
-@@ -3767,6 +3977,123 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -3767,6 +4148,123 @@ class ModelRunner(ModelRunnerKVCacheMixin):
          return output
  
  

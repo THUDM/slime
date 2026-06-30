@@ -352,6 +352,27 @@ def test_slime_validate_args_preserves_zero_rollout_gpus_without_colocate(monkey
 
 
 @pytest.mark.unit
+def test_slime_validate_args_rejects_mooncake_with_external_rollout_before_discovery(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    called = False
+
+    def _apply_external_engine_info_to_args(*_args, **_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(module, "apply_external_engine_info_to_args", _apply_external_engine_info_to_args)
+    args = make_slime_validate_args(
+        update_weight_transport="mooncake",
+        rollout_external_engine_addrs=["127.0.0.1:30000"],
+    )
+
+    with pytest.raises(ValueError, match="slime-managed SGLang"):
+        module.slime_validate_args(args)
+
+    assert called is False
+
+
+@pytest.mark.unit
 def test_update_weight_delta_rejects_colocate(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     args = types.SimpleNamespace(
@@ -378,6 +399,345 @@ def test_update_weight_delta_rejects_unknown_transport(monkeypatch):
     )
 
     with pytest.raises(ValueError, match="supports only --update-weight-transport=nccl or disk"):
+        module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_full_allows_mooncake_without_disk_dir(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = types.SimpleNamespace(
+        update_weight_mode="full",
+        update_weight_transport="mooncake",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=False,
+        mooncake_metadata_server="P2PHANDSHAKE",
+    )
+
+    module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_mooncake_rejects_multi_gpu_rollout_engine(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = types.SimpleNamespace(
+        update_weight_mode="full",
+        update_weight_transport="mooncake",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=False,
+        mooncake_metadata_server="P2PHANDSHAKE",
+        rollout_num_gpus_per_engine=2,
+    )
+
+    with pytest.raises(ValueError, match="one GPU per rollout engine"):
+        module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_mooncake_rejects_sglang_dp(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = types.SimpleNamespace(
+        update_weight_mode="full",
+        update_weight_transport="mooncake",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=False,
+        mooncake_metadata_server="P2PHANDSHAKE",
+        rollout_num_gpus_per_engine=1,
+        sglang_dp_size=2,
+    )
+
+    with pytest.raises(ValueError, match="SGLang DP size 1"):
+        module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_mooncake_rejects_sglang_ep(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = types.SimpleNamespace(
+        update_weight_mode="full",
+        update_weight_transport="mooncake",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=False,
+        mooncake_metadata_server="P2PHANDSHAKE",
+        rollout_num_gpus_per_engine=1,
+        sglang_dp_size=1,
+        sglang_ep_size=2,
+    )
+
+    with pytest.raises(ValueError, match="SGLang expert parallel size 1"):
+        module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_mooncake_rejects_sglang_dp_attention(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = types.SimpleNamespace(
+        update_weight_mode="full",
+        update_weight_transport="mooncake",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=False,
+        mooncake_metadata_server="P2PHANDSHAKE",
+        rollout_num_gpus_per_engine=1,
+        sglang_dp_size=1,
+        sglang_enable_dp_attention=True,
+    )
+
+    with pytest.raises(ValueError, match="SGLang DP attention"):
+        module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_mooncake_rejects_megatron_pipeline_parallelism(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = types.SimpleNamespace(
+        update_weight_mode="full",
+        update_weight_transport="mooncake",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=False,
+        mooncake_metadata_server="P2PHANDSHAKE",
+        rollout_num_gpus_per_engine=1,
+        sglang_dp_size=1,
+        pipeline_model_parallel_size=2,
+    )
+
+    with pytest.raises(ValueError, match="Megatron pipeline model parallel size 1"):
+        module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_mooncake_rejects_actor_megatron_config_pipeline_parallelism_override(monkeypatch, tmp_path):
+    module = load_slime_arguments_module(monkeypatch)
+    config_path = tmp_path / "megatron.yaml"
+    config_path.write_text(
+        """
+megatron:
+  - role: actor
+    overrides:
+      pipeline_model_parallel_size: 2
+""",
+        encoding="utf-8",
+    )
+    args = types.SimpleNamespace(
+        update_weight_mode="full",
+        update_weight_transport="mooncake",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=False,
+        mooncake_metadata_server="P2PHANDSHAKE",
+        rollout_num_gpus_per_engine=1,
+        sglang_dp_size=1,
+        pipeline_model_parallel_size=1,
+    )
+
+    with pytest.raises(ValueError, match="Megatron pipeline model parallel size 1"):
+        module.parse_megatron_role_args(args, str(config_path), role="actor")
+
+
+@pytest.mark.unit
+def test_update_weight_mooncake_rejects_sglang_config_multi_gpu_group(monkeypatch, tmp_path):
+    module = load_slime_arguments_module(monkeypatch)
+    config_path = tmp_path / "sglang.yaml"
+    config_path.write_text(
+        """
+sglang:
+  - name: actor
+    update_weights: true
+    server_groups:
+      - worker_type: regular
+        num_gpus: 2
+        num_gpus_per_engine: 2
+""",
+        encoding="utf-8",
+    )
+    args = types.SimpleNamespace(
+        update_weight_mode="full",
+        update_weight_transport="mooncake",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=False,
+        mooncake_metadata_server="P2PHANDSHAKE",
+        rollout_num_gpus_per_engine=1,
+        sglang_dp_size=1,
+        sglang_config=str(config_path),
+        hf_checkpoint="/actor",
+    )
+
+    with pytest.raises(ValueError, match="one GPU per rollout engine"):
+        module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "override_yaml, message",
+    [
+        ("dp_size: 2", "SGLang DP size 1"),
+        ("data-parallel-size: 2", "SGLang DP size 1"),
+        ("tp-size: 2", "one GPU per rollout engine"),
+        ("tensor_parallel_size: 2", "one GPU per rollout engine"),
+        ("pp_size: 2", "one GPU per rollout engine"),
+        ("pipeline-parallel-size: 2", "one GPU per rollout engine"),
+        ("ep_size: 2", "SGLang expert parallel size 1"),
+        ("expert-parallel-size: 2", "SGLang expert parallel size 1"),
+        ("enable_dp_attention: true", "SGLang DP attention"),
+    ],
+)
+def test_update_weight_mooncake_rejects_sglang_config_parallelism_overrides(
+    monkeypatch, tmp_path, override_yaml, message
+):
+    module = load_slime_arguments_module(monkeypatch)
+    config_path = tmp_path / "sglang.yaml"
+    config_path.write_text(
+        f"""
+sglang:
+  - name: actor
+    update_weights: true
+    server_groups:
+      - worker_type: regular
+        num_gpus: 1
+        overrides:
+          {override_yaml}
+""",
+        encoding="utf-8",
+    )
+    args = types.SimpleNamespace(
+        update_weight_mode="full",
+        update_weight_transport="mooncake",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=False,
+        mooncake_metadata_server="P2PHANDSHAKE",
+        rollout_num_gpus_per_engine=1,
+        sglang_dp_size=1,
+        sglang_config=str(config_path),
+        hf_checkpoint="/actor",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_mooncake_allows_inferred_frozen_sglang_config_multi_gpu_group(monkeypatch, tmp_path):
+    module = load_slime_arguments_module(monkeypatch)
+    config_path = tmp_path / "sglang.yaml"
+    config_path.write_text(
+        """
+sglang:
+  - name: actor
+    server_groups:
+      - worker_type: regular
+        num_gpus: 1
+  - name: ref
+    model_path: /ref
+    server_groups:
+      - worker_type: regular
+        num_gpus: 2
+        num_gpus_per_engine: 2
+""",
+        encoding="utf-8",
+    )
+    args = types.SimpleNamespace(
+        update_weight_mode="full",
+        update_weight_transport="mooncake",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=False,
+        mooncake_metadata_server="P2PHANDSHAKE",
+        rollout_num_gpus_per_engine=1,
+        sglang_dp_size=1,
+        sglang_config=str(config_path),
+        hf_checkpoint="/actor",
+    )
+
+    module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_mooncake_rejects_non_p2p_metadata_server(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = types.SimpleNamespace(
+        update_weight_mode="full",
+        update_weight_transport="mooncake",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=False,
+        mooncake_metadata_server="127.0.0.1:2379",
+    )
+
+    with pytest.raises(ValueError, match="metadata-server=P2PHANDSHAKE"):
+        module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_delta_rejects_mooncake_until_delta_carrier_exists(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = types.SimpleNamespace(
+        update_weight_mode="delta",
+        update_weight_transport="mooncake",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=False,
+        mooncake_metadata_server="P2PHANDSHAKE",
+    )
+
+    with pytest.raises(ValueError, match="delta.*mooncake.*not supported"):
+        module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_mooncake_rejects_reserved_rpc_port_base(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = types.SimpleNamespace(
+        update_weight_mode="full",
+        update_weight_transport="mooncake",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=False,
+        mooncake_metadata_server="P2PHANDSHAKE",
+        mooncake_rpc_port_base=18000,
+    )
+
+    with pytest.raises(ValueError, match="rpc-port-base.*reserved"):
+        module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_mooncake_rejects_reserved_buffer_count(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = types.SimpleNamespace(
+        update_weight_mode="full",
+        update_weight_transport="mooncake",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=False,
+        mooncake_metadata_server="P2PHANDSHAKE",
+        mooncake_buffer_count=2,
+    )
+
+    with pytest.raises(ValueError, match="buffer-count.*reserved.*must be 1"):
+        module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_mooncake_rejects_external_rollout(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = types.SimpleNamespace(
+        update_weight_mode="full",
+        update_weight_transport="mooncake",
+        update_weight_disk_dir=None,
+        update_weight_delta_dir=None,
+        colocate=False,
+        mooncake_metadata_server="P2PHANDSHAKE",
+        rollout_external=False,
+        rollout_external_engine_addrs=["127.0.0.1:30000"],
+    )
+
+    with pytest.raises(ValueError, match="slime-managed SGLang"):
         module._validate_update_weight_args(args)
 
 

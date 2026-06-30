@@ -145,14 +145,59 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             parser.add_argument(
                 "--update-weight-transport",
-                choices=["nccl", "disk"],
+                choices=["nccl", "disk", "mooncake"],
                 default="nccl",
                 help=(
                     "Carrier for weight sync. In full mode, 'nccl' broadcasts chunks and "
                     "'disk' writes a complete HF checkpoint under --update-weight-disk-dir "
-                    "before engines reload it. In delta mode, 'nccl' broadcasts sparse deltas; "
-                    "'disk' writes sparse safetensors under --update-weight-disk-dir and pushes "
-                    "once at end-of-sync."
+                    "before engines reload it; 'mooncake' sends chunks through Mooncake Transfer "
+                    "Engine. In delta mode, 'nccl' broadcasts sparse deltas; 'disk' writes sparse "
+                    "safetensors under --update-weight-disk-dir and pushes once at end-of-sync."
+                ),
+            )
+            parser.add_argument(
+                "--mooncake-metadata-server",
+                type=str,
+                default="P2PHANDSHAKE",
+                help="Mooncake Transfer Engine metadata server for --update-weight-transport=mooncake.",
+            )
+            parser.add_argument(
+                "--mooncake-protocol",
+                choices=["tcp", "rdma"],
+                default="tcp",
+                help="Mooncake Transfer Engine protocol for weight sync.",
+            )
+            parser.add_argument(
+                "--mooncake-device-name",
+                type=str,
+                default="",
+                help="Mooncake Transfer Engine device name, for example an RDMA device.",
+            )
+            parser.add_argument(
+                "--mooncake-rpc-port-base",
+                type=int,
+                default=None,
+                help=(
+                    "Reserved base RPC port for SGLang Mooncake receivers. The current Mooncake "
+                    "Python binding auto-assigns ports, so setting this option is rejected."
+                ),
+            )
+            parser.add_argument(
+                "--mooncake-buffer-size",
+                type=int,
+                default=None,
+                help=(
+                    "Mooncake receiver buffer size in bytes. Defaults to --update-weight-buffer-size " "when unset."
+                ),
+            )
+            parser.add_argument(
+                "--mooncake-buffer-count",
+                type=int,
+                default=1,
+                help=(
+                    "Reserved Mooncake receiver buffer slot count. The current sender uses one "
+                    "slot per SGLang engine, so this must stay 1 until double-buffered updates "
+                    "are implemented."
                 ),
             )
             parser.add_argument(
@@ -237,7 +282,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 nargs="*",
                 default=None,
-                help="""List of regex patterns of parameter names to TRAIN. All other parameters will be FROZEN. 
+                help=r"""List of regex patterns of parameter names to TRAIN. All other parameters will be FROZEN.
                         Supports Python regex syntax (re.search).
 
                         Examples:
@@ -1639,6 +1684,8 @@ def parse_megatron_role_args(base_args, megatron_config_path, role):
         )
 
     role_args = _apply_megatron_role_overrides(base_args, overrides, role)
+    if role == "actor" and hasattr(role_args, "update_weight_transport"):
+        _validate_update_weight_args(role_args)
     logger.info(
         f"Parsed megatron config for role={role} from {megatron_config_path}: overrides = {list(overrides.keys())}"
     )
@@ -1728,9 +1775,166 @@ def _resolve_update_weight_disk_dir(args) -> None:
         args.update_weight_delta_dir = disk_dir
 
 
+def _validate_mooncake_external_args(args) -> None:
+    if getattr(args, "update_weight_transport", None) == "mooncake":
+        if (
+            getattr(args, "rollout_external", False)
+            or getattr(args, "rollout_external_engine_addrs", None) is not None
+        ):
+            raise ValueError(
+                "--update-weight-transport=mooncake currently supports only slime-managed "
+                "SGLang engines; external engines must include the Mooncake receiver endpoint "
+                "before this transport can be enabled."
+            )
+
+
+_MOONCAKE_SGLANG_OVERRIDE_ALIASES = {
+    "dp_size": ("dp_size", "data_parallel_size"),
+    "tp_size": ("tp_size", "tensor_parallel_size"),
+    "pp_size": ("pp_size", "pipeline_parallel_size"),
+    "ep_size": ("ep_size", "expert_parallel_size"),
+    "enable_dp_attention": ("enable_dp_attention",),
+}
+
+
+def _normalize_sglang_overrides(overrides):
+    return {str(key).replace("-", "_"): value for key, value in overrides.items()}
+
+
+def _get_sglang_override(overrides, field_name):
+    for alias in _MOONCAKE_SGLANG_OVERRIDE_ALIASES[field_name]:
+        if alias in overrides:
+            return overrides[alias]
+    return None
+
+
+def _iter_mooncake_sglang_config_parallelism(args):
+    config_path = getattr(args, "sglang_config", None)
+    if not config_path:
+        return
+
+    from slime.backends.sglang_utils.sglang_config import SglangConfig
+
+    config = SglangConfig.from_yaml(config_path)
+    for model in config.models:
+        model.resolve(args)
+        # Mooncake P1 updates only the actor/weight-receiving model.  Frozen
+        # reference/reward models and placeholder groups do not need receivers.
+        if not model.update_weights:
+            continue
+        for group in model.server_groups:
+            if group.worker_type == "placeholder":
+                continue
+            overrides = _normalize_sglang_overrides(group.overrides)
+            yield {
+                "num_gpus_per_engine": group.num_gpus_per_engine,
+                "dp_size": _get_sglang_override(overrides, "dp_size"),
+                "tp_size": _get_sglang_override(overrides, "tp_size"),
+                "pp_size": _get_sglang_override(overrides, "pp_size"),
+                "ep_size": _get_sglang_override(overrides, "ep_size"),
+                "enable_dp_attention": _get_sglang_override(overrides, "enable_dp_attention"),
+            }
+
+
+def _validate_mooncake_parallelism_args(args) -> None:
+    rollout_gpus_per_engine = getattr(args, "rollout_num_gpus_per_engine", 1)
+    if int(rollout_gpus_per_engine) != 1:
+        raise ValueError(
+            "--update-weight-transport=mooncake currently supports only one GPU per rollout engine; "
+            f"got --rollout-num-gpus-per-engine={rollout_gpus_per_engine}."
+        )
+
+    pipeline_model_parallel_size = getattr(args, "pipeline_model_parallel_size", 1)
+    if int(pipeline_model_parallel_size) != 1:
+        raise ValueError(
+            "--update-weight-transport=mooncake currently supports only Megatron pipeline model parallel size 1; "
+            f"got pipeline_model_parallel_size={pipeline_model_parallel_size}."
+        )
+
+    sglang_dp_size = getattr(args, "sglang_dp_size", getattr(args, "sglang_data_parallel_size", 1))
+    if int(sglang_dp_size) != 1:
+        raise ValueError(
+            "--update-weight-transport=mooncake currently supports only SGLang DP size 1; "
+            f"got sglang_dp_size={sglang_dp_size}."
+        )
+
+    sglang_ep_size = getattr(args, "sglang_ep_size", getattr(args, "sglang_expert_parallel_size", 1))
+    if int(sglang_ep_size) != 1:
+        raise ValueError(
+            "--update-weight-transport=mooncake currently supports only SGLang expert parallel size 1; "
+            f"got sglang_ep_size={sglang_ep_size}."
+        )
+
+    if getattr(args, "sglang_enable_dp_attention", False):
+        raise ValueError("--update-weight-transport=mooncake currently does not support SGLang DP attention.")
+
+    for group_parallelism in _iter_mooncake_sglang_config_parallelism(args):
+        override_dp_size = group_parallelism["dp_size"]
+        if override_dp_size is not None and int(override_dp_size) != 1:
+            raise ValueError(
+                "--update-weight-transport=mooncake currently supports only SGLang DP size 1; "
+                f"sglang_config overrides contain dp_size={override_dp_size}."
+            )
+
+        for key in ("tp_size", "pp_size"):
+            override_size = group_parallelism[key]
+            if override_size is not None and int(override_size) != 1:
+                raise ValueError(
+                    "--update-weight-transport=mooncake currently supports only one GPU per rollout engine; "
+                    f"sglang_config overrides contain {key}={override_size}."
+                )
+
+        override_ep_size = group_parallelism["ep_size"]
+        if override_ep_size is not None and int(override_ep_size) != 1:
+            raise ValueError(
+                "--update-weight-transport=mooncake currently supports only SGLang expert parallel size 1; "
+                f"sglang_config overrides contain ep_size={override_ep_size}."
+            )
+
+        if group_parallelism["enable_dp_attention"]:
+            raise ValueError(
+                "--update-weight-transport=mooncake currently does not support SGLang DP attention; "
+                "sglang_config overrides contain enable_dp_attention=True."
+            )
+
+        gpus_per_engine = group_parallelism["num_gpus_per_engine"]
+        if int(gpus_per_engine) != 1:
+            raise ValueError(
+                "--update-weight-transport=mooncake currently supports only one GPU per rollout engine; "
+                f"sglang_config contains num_gpus_per_engine={gpus_per_engine}."
+            )
+
+
 def _validate_update_weight_args(args) -> None:
     _resolve_update_weight_disk_dir(args)
 
+    if args.update_weight_transport == "mooncake":
+        _validate_mooncake_external_args(args)
+        _validate_mooncake_parallelism_args(args)
+        if args.update_weight_mode != "full":
+            raise ValueError(
+                "--update-weight-mode=delta with --update-weight-transport=mooncake is not supported yet."
+            )
+        if getattr(args, "mooncake_metadata_server", "P2PHANDSHAKE") != "P2PHANDSHAKE":
+            raise ValueError(
+                "--update-weight-transport=mooncake currently supports only "
+                "--mooncake-metadata-server=P2PHANDSHAKE. External Mooncake metadata servers "
+                "need globally unique receiver names before they can be enabled."
+            )
+        if args.colocate:
+            raise ValueError(
+                "--update-weight-transport=mooncake is not supported with --colocate; colocated "
+                "weight sync uses CUDA IPC tensor handles."
+            )
+        if getattr(args, "mooncake_buffer_count", 1) != 1:
+            raise ValueError("--mooncake-buffer-count is reserved for future double buffering and must be 1.")
+        if getattr(args, "mooncake_buffer_size", None) is not None and args.mooncake_buffer_size <= 0:
+            raise ValueError("--mooncake-buffer-size must be positive when set.")
+        if getattr(args, "mooncake_rpc_port_base", None) is not None:
+            raise ValueError(
+                "--mooncake-rpc-port-base is reserved but not supported by the current Mooncake "
+                "Python TransferEngine binding."
+            )
     if args.update_weight_mode == "delta":
         if args.update_weight_transport not in ("nccl", "disk"):
             raise ValueError(
@@ -1879,6 +2083,7 @@ def slime_validate_args(args):
         args.debug_train_only = True
 
     args.rollout_external = args.rollout_external_engine_addrs is not None
+    _validate_mooncake_external_args(args)
 
     if args.rollout_external and not args.debug_train_only:
         apply_external_engine_info_to_args(args, logger=logger)

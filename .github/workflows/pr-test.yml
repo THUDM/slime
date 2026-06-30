@@ -559,6 +559,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_mooncake_weight_transport.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "utils/test_megatron_server_arguments.py"
             },
             {

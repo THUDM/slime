@@ -36,6 +36,7 @@ from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight.common import named_params_and_buffers
 from .update_weight.update_weight_from_disk import UpdateWeightFromDisk
 from .update_weight.update_weight_from_distributed import UpdateWeightFromDistributed
+from .update_weight.update_weight_from_mooncake import UpdateWeightFromMooncake
 from .update_weight.update_weight_from_tensor import UpdateWeightFromTensor
 
 logging.getLogger("megatron").setLevel(logging.WARNING)
@@ -152,6 +153,8 @@ class MegatronTrainRayActor(TrainRayActor):
             assert self.args.update_weight_mode == "full"
             if self.args.update_weight_transport == "disk":
                 update_weight_cls = UpdateWeightFromDisk
+            elif self.args.update_weight_transport == "mooncake":
+                update_weight_cls = UpdateWeightFromMooncake
             else:
                 assert (
                     self.args.update_weight_mode == "full" and self.args.update_weight_transport == "nccl"
