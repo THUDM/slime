@@ -39,7 +39,12 @@ def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
     ), "partition_stride != 1 is not supported"
     # TODO: here we did an extra copy during concat, maybe merge this with convert_to_hf is better?
     # TODO: check only GLU is used.
-    if "linear_fc1.weight" in name or "linear_fc1.bias" in name:
+    # GLU rechunk is only valid for 2D weights (Qwen3 per-expert / dense GLU). For Qwen3.5
+    # fused 3D experts [E, 2F, H] dim0 is the EXPERT axis, so chunk(2, dim=0) would split
+    # experts in half -> corruption. Under ETP=1 these are non-TP and we never reach here,
+    # but guard on dim==2 so this is correct regardless of the tensor_model_parallel flag;
+    # the gate/up split for fused experts is done per-expert later in convert_to_hf.
+    if ("linear_fc1.weight" in name or "linear_fc1.bias" in name) and param.dim() == 2:
         param_partitions = [p.chunk(2, dim=0) for p in param_partitions]
         param_partitions = [p[0] for p in param_partitions] + [p[1] for p in param_partitions]
     # this is bug in megatron's grouped moe.
@@ -101,7 +106,9 @@ def all_gather_params_async(
             assert partition_dim is not None, "partition_stride != 1 is not supported"
             # TODO: here we did an extra copy during concat, maybe merge this with convert_to_hf is better?
             # TODO: check only GLU is used.
-            if "linear_fc1.weight" in info.name or "linear_fc1.bias" in info.name:
+            # only 2D weights get the GLU rechunk; fused 3D experts [E,2F,H] are split
+            # per-expert later in convert_to_hf (see all_gather_param for rationale).
+            if ("linear_fc1.weight" in info.name or "linear_fc1.bias" in info.name) and param_partitions[0].dim() == 2:
                 param_partitions = [p.chunk(2, dim=0) for p in param_partitions]
                 param_partitions = [p[0] for p in param_partitions] + [p[1] for p in param_partitions]
             # this is bug in megatron's grouped moe.
@@ -215,6 +222,14 @@ def _named_params_and_buffers_global(
                 rest, param_type, expert_idx = match.groups()
                 expert_idx = int(expert_idx) + expert_offset
                 yield f"module.module.decoder.layers.{layer_idx}.mlp.experts.{rest}.{param_type}{expert_idx}", param
+            elif args.num_experts and re.match(r".*mlp\.experts(?:\.experts)*\.linear_fc[12]\.weight$", rest):
+                # Qwen3.5 fused 3D routed experts (linear_fc1.weight [E,2F,H] / linear_fc2.weight
+                # [E,H,F], no per-expert digit). Do NOT slice here: slicing drops the
+                # tensor_model_parallel / partition_dim attributes that all_gather_param asserts on.
+                # Instead encode the EP global-expert-id offset into the name; convert_to_hf splits
+                # into per-expert tensors with global ids AFTER the TP/EP gather. The "__ep_offset"
+                # suffix is non-numeric right after "weight", so it never collides with weight(\d+).
+                yield f"module.module.decoder.layers.{layer_idx}.{rest}.__ep_offset{expert_offset}", param
             else:
                 yield f"module.module.decoder.layers.{layer_idx}.{rest}", param
 
