@@ -503,6 +503,9 @@ def get_log_probs_and_entropy(
     device = logits.device
     tp_group = mpu.get_tensor_model_parallel_group()
     chunk_size = args.log_probs_chunk_size
+    # Keep entropy metrics, but skip saving entropy-backward activations when
+    # the entropy term cannot affect the loss.
+    with_entropy_grad = with_entropy and getattr(args, "entropy_coef", 0.0) != 0
 
     # --- build full shifted-token target tensor ---
     full_tokens = _build_shifted_tokens(T, device, unconcat_tokens, total_lengths, response_lengths, args.allgather_cp)
@@ -527,6 +530,7 @@ def get_log_probs_and_entropy(
         full_tokens,
         tp_group,
         with_entropy=with_entropy,
+        with_entropy_grad=with_entropy_grad,
         chunk_size=chunk_size,
         log_prob_keep_mask=top_p_keep_mask,
     )
@@ -917,9 +921,6 @@ def policy_loss_function(
         total_lengths=total_lengths,
         response_lengths=response_lengths,
         with_entropy=True,
-        # Keep entropy metrics, but skip saving entropy-backward activations when
-        # the entropy term cannot affect the loss.
-        with_entropy_grad=args.entropy_coef != 0,
         **get_rollout_top_p_logprob_kwargs(args, batch),
     )
 
