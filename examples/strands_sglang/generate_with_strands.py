@@ -1,7 +1,5 @@
-# Updated with strands-sglang 0.3.2
 import logging
 
-from camel.interpreters import SubprocessInterpreter
 from strands import Agent, tool
 from strands_sglang import SGLangModel, ToolLimiter, get_client_from_slime_args
 from strands_sglang.tool_parsers import HermesToolParser
@@ -9,6 +7,8 @@ from strands_sglang.tool_parsers import HermesToolParser
 from slime.rollout.rm_hub.math_dapo_utils import compute_score as math_dapo_compute_score
 from slime.rollout.sglang_rollout import GenerateState
 from slime.utils.types import Sample
+
+from .subprocess_interpreter import SubprocessInterpreter
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,6 @@ Guidelines:
 """.strip()
 
 MAX_TOOL_ITERS = 5
-MAX_TOOL_CALLS = None  # No limit
 
 
 @tool
@@ -51,7 +50,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         sampling_params=sampling_params,
     )
 
-    tool_limiter = ToolLimiter(max_tool_iters=MAX_TOOL_ITERS, max_tool_calls=MAX_TOOL_CALLS)
+    tool_limiter = ToolLimiter(max_tool_iters=MAX_TOOL_ITERS)
     agent = Agent(
         model=model,
         tools=[execute_python_code],
@@ -71,12 +70,12 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         sample.status = Sample.Status.TRUNCATED
         logger.warning(f"TRUNCATED: {type(e).__name__}: {e}")
 
-    # Extract token trajectory from token_manager
-    tm = model.token_manager
-    prompt_len = len(tm.segments[0])  # system + user are first segment
-    sample.tokens = tm.token_ids
-    sample.loss_mask = tm.loss_mask[prompt_len:]
-    sample.rollout_log_probs = tm.logprobs[prompt_len:]
+    # Extract token trajectory from the rollout tracker
+    rollout = model.rollout
+    prompt_len = rollout.initial_prompt_length  # system + user are the first segment
+    sample.tokens = rollout.token_ids
+    sample.loss_mask = rollout.loss_mask[prompt_len:]
+    sample.rollout_log_probs = rollout.logprobs[prompt_len:]
     sample.response_length = len(sample.tokens) - prompt_len
     sample.response = model.tokenizer.decode(sample.tokens[prompt_len:], skip_special_tokens=False)
     # Tool iteration and tool call count are different because multiple parallel tool calls count as 1 iteration

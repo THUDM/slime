@@ -33,10 +33,10 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# THD ↔ BSHD helpers (cf. Qwen3VL bridge)
+# THD ↔ batch-sequence helpers (cf. Qwen3VL bridge)
 # ---------------------------------------------------------------------------
-def _thd_to_bshd(packed: torch.Tensor, cu_seqlens: torch.Tensor) -> torch.Tensor:
-    """Unpack THD-format [1, T, ...] to BSHD [bs, max_seq, ...] using cu_seqlens."""
+def _thd_to_batch_seq(packed: torch.Tensor, cu_seqlens: torch.Tensor) -> torch.Tensor:
+    """Unpack THD-format [1, T, ...] to [bs, max_seq, ...] using cu_seqlens."""
     seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
     max_seq = seqlens.max().item()
     bs = len(cu_seqlens) - 1
@@ -46,8 +46,8 @@ def _thd_to_bshd(packed: torch.Tensor, cu_seqlens: torch.Tensor) -> torch.Tensor
     return out
 
 
-def _bshd_to_thd(unpacked: torch.Tensor, cu_seqlens: torch.Tensor) -> torch.Tensor:
-    """Pack BSHD [bs, max_seq, ...] back to THD [1, T, ...]."""
+def _batch_seq_to_thd(unpacked: torch.Tensor, cu_seqlens: torch.Tensor) -> torch.Tensor:
+    """Pack [bs, max_seq, ...] back to THD [1, T, ...]."""
     seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
     total = cu_seqlens[-1].item()
     out = unpacked.new_zeros(1, total, *unpacked.shape[2:])
@@ -275,7 +275,7 @@ class Glm4vMoeVLModel(MegatronModule):
 
     def _compute_mrope_position_ids(
         self,
-        input_ids_bshd: torch.Tensor,
+        input_ids_batch_seq: torch.Tensor,
         image_grid_thw: torch.Tensor | None,
     ) -> torch.Tensor:
         """Compute 3D M-RoPE position IDs from input_ids in [bs, seq] format.
@@ -283,8 +283,8 @@ class Glm4vMoeVLModel(MegatronModule):
         Image regions are detected by looking for consecutive runs of
         ``image_token_id`` in each sequence — no ``mm_token_type_ids`` needed.
         """
-        bs, seq_len = input_ids_bshd.shape
-        device = input_ids_bshd.device
+        bs, seq_len = input_ids_batch_seq.shape
+        device = input_ids_batch_seq.device
         spatial_merge_size = self.spatial_merge_size
 
         position_ids = torch.zeros(3, bs, seq_len, dtype=torch.long, device=device)
@@ -300,7 +300,7 @@ class Glm4vMoeVLModel(MegatronModule):
         grid_iter = iter(image_grid_thw)
 
         for b in range(bs):
-            ids = input_ids_bshd[b]
+            ids = input_ids_batch_seq[b]
             is_image = ids == self.image_token_id
 
             # Find contiguous groups: text (0) vs image (1)
@@ -430,9 +430,9 @@ class Glm4vMoeVLModel(MegatronModule):
                             full_input_ids = _gather_input_ids_from_cp(input_ids, cu_seqlens)
                     else:
                         full_input_ids = input_ids
-                    input_ids_bshd = _thd_to_bshd(full_input_ids, cu_seqlens)
-                    pos_bshd = self._compute_mrope_position_ids(input_ids_bshd, image_grid_thw)
-                    pos_packed = _bshd_to_thd(pos_bshd.permute(1, 2, 0), cu_seqlens)
+                    input_ids_batch_seq = _thd_to_batch_seq(full_input_ids, cu_seqlens)
+                    pos_batch_seq = self._compute_mrope_position_ids(input_ids_batch_seq, image_grid_thw)
+                    pos_packed = _batch_seq_to_thd(pos_batch_seq.permute(1, 2, 0), cu_seqlens)
                     position_ids = pos_packed.permute(2, 0, 1).contiguous()  # [3, 1, T_global]
                 else:
                     position_ids = self._compute_mrope_position_ids(input_ids, image_grid_thw)

@@ -298,8 +298,6 @@ def get_pg_loss_reducer(
 - Dr.GRPO: Divide by a constant instead of effective token count
 - Custom loss normalization strategies
 
-**Example**: `examples/DrGRPO/custom_reducer.py:get_pg_loss_reducer`
-
 ---
 
 ### 12. Reward Post-Processing (`--custom-reward-post-process-path`)

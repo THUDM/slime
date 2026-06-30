@@ -29,9 +29,6 @@ import logging
 from argparse import Namespace
 from typing import Any
 
-import numpy as np
-import pybase64
-
 from slime.rollout.sglang_rollout import GenerateState, _prepare_prompt_ids
 from slime.utils import http_utils
 from slime.utils.processing_utils import encode_image_for_rollout_engine
@@ -98,7 +95,9 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     base_tokens = list(sample.tokens)
     base_response = sample.response or ""
     base_response_length = sample.response_length
-    base_log_probs = list(sample.rollout_log_probs or [])
+    base_log_probs = None if sample.rollout_log_probs is None else list(sample.rollout_log_probs)
+    base_top_p_token_ids = sample.rollout_top_p_token_ids
+    base_top_p_token_offsets = sample.rollout_top_p_token_offsets
     base_loss_mask = list(sample.loss_mask) if sample.loss_mask is not None else None
 
     last_meta_info: dict[str, Any] = {}
@@ -137,13 +136,22 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
                 # Surface partial state on the sample immediately. If the
                 # outer abort path cuts us, whatever we've written so far is
                 # what survives — no /abort_request round-trip needed.
-                sample.tokens = base_tokens + call_tokens
-                sample.response = base_response + call_text
-                sample.response_length = base_response_length + len(call_tokens)
-                sample.rollout_log_probs = base_log_probs + call_log_probs
-                if base_loss_mask is not None:
-                    assert args.partial_rollout and args.mask_offpolicy_in_partial_rollout
-                    sample.loss_mask = base_loss_mask + [1] * len(call_tokens)
+                sample.tokens = list(base_tokens)
+                sample.response = base_response
+                sample.response_length = base_response_length
+                sample.rollout_log_probs = None if base_log_probs is None else list(base_log_probs)
+                sample.rollout_top_p_token_ids = base_top_p_token_ids
+                sample.rollout_top_p_token_offsets = base_top_p_token_offsets
+                sample.loss_mask = None if base_loss_mask is None else list(base_loss_mask)
+                sample.append_response_tokens(
+                    args,
+                    tokens=call_tokens,
+                    log_probs=call_log_probs,
+                    trainable=True,
+                    meta_info=meta,
+                    text=call_text,
+                    update_terminal_info=bool(meta.get("finish_reason")),
+                )
 
                 if state.aborted:
                     break
@@ -151,20 +159,7 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
         if last_meta_info.get("finish_reason"):
             span.update(build_sglang_meta_trace_attrs(last_meta_info))
 
-    # MoE routing replay (when requested) ships in the terminal chunk.
-    if "routed_experts" in last_meta_info:
-        sample.rollout_routed_experts = np.frombuffer(
-            pybase64.b64decode(last_meta_info["routed_experts"].encode("ascii")),
-            dtype=np.int32,
-        ).reshape(
-            len(sample.tokens) - 1,
-            args.num_layers,
-            args.moe_router_topk,
-        )
-
-    if last_meta_info.get("finish_reason"):
-        sample.update_from_meta_info(args, last_meta_info)
-    elif state.aborted:
+    if state.aborted and not last_meta_info.get("finish_reason"):
         sample.status = Sample.Status.ABORTED
 
     return sample

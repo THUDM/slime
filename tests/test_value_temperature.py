@@ -26,7 +26,7 @@ def test_get_values_does_not_apply_rollout_temperature(monkeypatch):
     try:
         from slime.backends.megatron_utils.loss import get_values
 
-        args = Namespace(qkv_format="thd", rollout_temperature=0.5, allgather_cp=False)
+        args = Namespace(rollout_temperature=0.5, allgather_cp=False)
         logits = torch.tensor([[[1.0], [2.0], [3.0], [4.0]]], dtype=torch.float32)
         tokens = [torch.tensor([10, 11, 12, 13], dtype=torch.long)]
 

@@ -137,7 +137,7 @@ def create_placement_groups(args):
     return result
 
 
-def allocate_train_group(args, num_nodes, num_gpus_per_node, pg, role="actor"):
+def allocate_train_group(args, num_nodes, num_gpus_per_node, pg, role="actor", actor_cls=None):
     return RayTrainGroup(
         args=args,
         num_nodes=num_nodes,
@@ -145,21 +145,26 @@ def allocate_train_group(args, num_nodes, num_gpus_per_node, pg, role="actor"):
         pg=pg,
         num_gpus_per_actor=0.4,
         role=role,
+        actor_cls=actor_cls,
     )
 
 
-def create_training_models(args, pgs, rollout_manager):
+def create_training_models(args, pgs, rollout_manager, actor_cls=None):
     actor_args = args
     if args.megatron_config_path is not None:
         from slime.utils.arguments import parse_megatron_role_args
 
         actor_args = parse_megatron_role_args(args, args.megatron_config_path, role="actor")
 
+    actor_model_kwargs = {}
+    if actor_cls is not None:
+        actor_model_kwargs["actor_cls"] = actor_cls
     actor_model = allocate_train_group(
         args=actor_args,
         num_nodes=args.actor_num_nodes,
         num_gpus_per_node=args.actor_num_gpus_per_node,
         pg=pgs["actor"],
+        **actor_model_kwargs,
     )
 
     critic_model = None

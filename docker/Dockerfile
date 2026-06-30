@@ -115,6 +115,18 @@ RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
   rm sglang.patch; \
 fi
 
+COPY docker/patch/${PATCH_VERSION}/sglang-top_p.patch /sgl-workspace/sglang/
+RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
+  cd /sgl-workspace/sglang && \
+  git update-index --refresh && \
+  git apply sglang-top_p.patch --3way && \
+  if grep -R -n '^<<<<<<< ' .; then \
+    echo "Patch failed to apply cleanly. Please resolve conflicts." && \
+    exit 1; \
+  fi && \
+  rm sglang-top_p.patch; \
+fi
+
 # ====================================== Install main package ============================================
 
 ARG SLIME_COMMIT=main

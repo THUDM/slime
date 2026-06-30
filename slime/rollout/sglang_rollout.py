@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import inspect
+import json
 import logging
 import uuid
 from argparse import Namespace
@@ -9,7 +10,6 @@ from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
-import pybase64
 import sglang_router
 from packaging.version import parse
 from tqdm import tqdm
@@ -104,6 +104,8 @@ class GenerateState(metaclass=SingletonMeta):
             no_stop_trim=True,
             spaces_between_special_tokens=False,
         )
+        if args.rollout_top_p != 1.0:
+            self.sampling_params["custom_params"] = {"return_top_p_token_ids": True}
 
         if getattr(args, "sglang_enable_deterministic_inference", False):
             sampling_seed_base = args.rollout_seed
@@ -206,31 +208,14 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     else:
         new_response_tokens, new_response_log_probs = [], []
 
-    # Update sample with tokens directly - avoiding re-tokenization
-    sample.tokens = sample.tokens + new_response_tokens
-    sample.response_length += len(new_response_tokens)
-    sample.response += output["text"]
-
-    # When partial rollout and masking off policy is enabled, update the loss mask
-    if sample.loss_mask is not None:
-        assert args.partial_rollout and args.mask_offpolicy_in_partial_rollout
-        sample.loss_mask += [1] * len(new_response_tokens)
-
-    if sample.rollout_log_probs is None:
-        sample.rollout_log_probs = []
-    sample.rollout_log_probs += new_response_log_probs
-
-    if "routed_experts" in output["meta_info"]:
-        sample.rollout_routed_experts = np.frombuffer(
-            pybase64.b64decode(output["meta_info"]["routed_experts"].encode("ascii")),
-            dtype=np.int32,
-        ).reshape(
-            len(sample.tokens) - 1,
-            args.num_layers,
-            args.moe_router_topk,
-        )
-
-    sample.update_from_meta_info(args, output["meta_info"])
+    sample.append_response_tokens(
+        args,
+        tokens=new_response_tokens,
+        log_probs=new_response_log_probs,
+        trainable=True,
+        meta_info=output["meta_info"],
+        text=output["text"],
+    )
 
     return sample
 
@@ -440,6 +425,7 @@ async def generate_rollout_async(
 
             assert len(group) == args.n_samples_per_prompt
             all_data.append(group)
+
             dynamic_filter_output = call_dynamic_filter(dynamic_filter, args, group)
             if not dynamic_filter_output.keep:
                 metric_gatherer.on_dynamic_filter_drop(reason=dynamic_filter_output.reason)
@@ -511,7 +497,28 @@ async def eval_rollout_single_dataset(
 
     global EVAL_PROMPT_DATASET
 
-    cache_key = dataset_cfg.cache_key + (args.hf_checkpoint, args.apply_chat_template)
+    eval_multimodal_keys = (
+        dataset_cfg.multimodal_keys if dataset_cfg.multimodal_keys is not None else args.multimodal_keys
+    )
+    eval_apply_chat_template = (
+        dataset_cfg.apply_chat_template if dataset_cfg.apply_chat_template is not None else args.apply_chat_template
+    )
+    eval_apply_chat_template_kwargs = (
+        dataset_cfg.apply_chat_template_kwargs
+        if dataset_cfg.apply_chat_template_kwargs is not None
+        else args.apply_chat_template_kwargs
+    )
+
+    cache_key = dataset_cfg.cache_key + (
+        args.hf_checkpoint,
+        eval_apply_chat_template,
+        json.dumps(eval_multimodal_keys, sort_keys=True) if eval_multimodal_keys is not None else None,
+        (
+            json.dumps(eval_apply_chat_template_kwargs, sort_keys=True)
+            if eval_apply_chat_template_kwargs is not None
+            else None
+        ),
+    )
     if cache_key not in EVAL_PROMPT_DATASET:
         tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
         processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
@@ -522,11 +529,11 @@ async def eval_rollout_single_dataset(
             max_length=args.eval_max_prompt_len,
             prompt_key=dataset_cfg.input_key,
             label_key=dataset_cfg.label_key,
-            multimodal_keys=args.multimodal_keys,
+            multimodal_keys=eval_multimodal_keys,
             metadata_key=dataset_cfg.metadata_key,
             tool_key=dataset_cfg.tool_key,
-            apply_chat_template=args.apply_chat_template,
-            apply_chat_template_kwargs=args.apply_chat_template_kwargs,
+            apply_chat_template=eval_apply_chat_template,
+            apply_chat_template_kwargs=eval_apply_chat_template_kwargs,
         )
     dataset = EVAL_PROMPT_DATASET[cache_key]
 
@@ -537,10 +544,16 @@ async def eval_rollout_single_dataset(
         max_new_tokens=dataset_cfg.max_response_len,
         stop=args.rollout_stop,
         stop_token_ids=args.rollout_stop_token_ids,
-        skip_special_tokens=args.rollout_skip_special_tokens,
-        no_stop_trim=True,
+        skip_special_tokens=(
+            dataset_cfg.skip_special_tokens
+            if dataset_cfg.skip_special_tokens is not None
+            else args.rollout_skip_special_tokens
+        ),
+        no_stop_trim=dataset_cfg.no_stop_trim if dataset_cfg.no_stop_trim is not None else True,
         spaces_between_special_tokens=False,
     )
+    if dataset_cfg.repetition_penalty is not None:
+        base_sampling_params["repetition_penalty"] = dataset_cfg.repetition_penalty
 
     tasks = []
     # do multiple samples for eval prompts
@@ -552,6 +565,7 @@ async def eval_rollout_single_dataset(
             sample.index = sample_index
             sample_index += 1
             sample.metadata = dataset_cfg.inject_metadata(getattr(sample, "metadata", None))
+            sample.custom_rm_path = dataset_cfg.custom_rm_path
             sample.generate_function_path = getattr(dataset_cfg, "custom_generate_function_path", None)
             sampling_params = base_sampling_params
             if getattr(args, "sglang_enable_deterministic_inference", False):
@@ -574,6 +588,7 @@ async def eval_rollout_single_dataset(
     for coro in asyncio.as_completed(tasks):
         sample = await coro
         if do_print:
+            logged_sample = sample[0] if isinstance(sample, list) else sample
             logged_sample = sample[0] if isinstance(sample, list) else sample
             logger.info(
                 "eval_rollout_single_dataset example data: "

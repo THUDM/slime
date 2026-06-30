@@ -298,8 +298,6 @@ def get_pg_loss_reducer(
 - Dr.GRPO：除以常数而非有效 token 数
 - 自定义损失归一化策略
 
-**示例**: `examples/DrGRPO/custom_reducer.py:get_pg_loss_reducer`
-
 ---
 
 ### 12. 奖励后处理 (`--custom-reward-post-process-path`)

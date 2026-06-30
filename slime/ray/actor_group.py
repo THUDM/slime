@@ -34,11 +34,13 @@ class RayTrainGroup:
         pg: tuple[PlacementGroup, list[int], list[int]],
         num_gpus_per_actor: float = 1,
         role: str = "actor",
+        actor_cls=None,
     ) -> None:
         self.args = args
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
         self.role = role
+        self._actor_cls = actor_cls
 
         # Allocate the GPUs for actors w/o instantiating them
         self._allocate_gpus_for_actor(pg, num_gpus_per_actor)
@@ -85,9 +87,12 @@ class RayTrainGroup:
         if self.args.use_routing_replay and self.role == "actor":
             env_vars["ENABLE_ROUTING_REPLAY"] = "1"
 
-        from slime.backends.megatron_utils.actor import MegatronTrainRayActor
+        if self._actor_cls is None:
+            from slime.backends.megatron_utils.actor import MegatronTrainRayActor
 
-        actor_impl = MegatronTrainRayActor
+            actor_impl = MegatronTrainRayActor
+        else:
+            actor_impl = self._actor_cls
 
         actor_options = {
             "num_gpus": 1,
