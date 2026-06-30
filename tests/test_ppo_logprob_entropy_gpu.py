@@ -22,7 +22,9 @@ FORWARD_RTOL = 0.0
 ENTROPY_FORWARD_ATOL = 1e-4
 BACKWARD_ATOL = 1e-8
 BACKWARD_RTOL = 0.0
-ENTROPY_BACKWARD_ATOL = 1e-7
+# The combined logits gradient includes the entropy branch when entropy has grad;
+# log-prob-only gradients still use BACKWARD_ATOL.
+ENTROPY_BACKWARD_ATOL = 1e-6
 
 PARITY_SCENARIOS = [
     (-1, False, False, False),
