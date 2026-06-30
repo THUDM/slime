@@ -917,6 +917,9 @@ def policy_loss_function(
         total_lengths=total_lengths,
         response_lengths=response_lengths,
         with_entropy=True,
+        # Keep entropy metrics, but skip saving entropy-backward activations when
+        # the entropy term cannot affect the loss.
+        with_entropy_grad=args.entropy_coef != 0,
         **get_rollout_top_p_logprob_kwargs(args, batch),
     )
 

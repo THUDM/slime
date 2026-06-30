@@ -13,7 +13,7 @@ This example connects `slime` with [`strands-sglang`](https://github.com/horizon
 `strands-sglang` bridges the gap by extending `strands` with SGLang's native `/generate` endpoint:
 
 - Captures exact token IDs during generation (no retokenization drift)
-- Automatically tracks `loss_mask` via `token_manager`
+- Automatically tracks `loss_mask` via the `Rollout` tracker (`model.rollout`)
 - Provides `ToolLimiter` for clean trajectory truncation
 
 ## Install Dependencies
@@ -22,11 +22,9 @@ This example connects `slime` with [`strands-sglang`](https://github.com/horizon
 2. Go to slime folder: `cd /root/slime`
 3. Install slime: `pip install -e . --no-deps`
 4. Go to the example folder: `cd /root/slime/examples/strands_sglang`
-5. Install other dependencies: `pip install -r requirements.txt`
+5. Install `strands-sglang`: `pip install strands-sglang==0.4.2`
 
-> NOTE: `strands-sglang` is under rapid development, so we recommend using the GitHub repo version: `strands-sglang @ git+https://github.com/horizon-rl/strands-sglang.git`
-
-> NOTE: We use camel-ai's subprocess code interpreter for python code execution, which is NOT a good practice; it's just for convenience of this example.
+> NOTE: The `execute_python_code` tool runs code via `subprocess_interpreter.py`, a self-contained interpreter vendored from camel-ai so this example does not depend on the full `camel-ai` package. It runs model-generated code in a local subprocess with **no isolation**, which is NOT a good practice; it is here only for the convenience of this example. Use a sandboxed interpreter (Docker, e2b, microsandbox, ...) for anything beyond local experimentation.
 
 ## Prepare Model
 

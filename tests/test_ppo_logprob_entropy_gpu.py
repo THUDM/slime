@@ -17,8 +17,14 @@ NUM_GPUS = 2
 # one fp32 ulp in the unmasked path.
 FORWARD_ATOL = 1e-7
 FORWARD_RTOL = 0.0
+# Entropy values are O(1) in this parity fixture; allow a small difference from
+# the memory-saving CUDA reduction without relaxing log-prob parity.
+ENTROPY_FORWARD_ATOL = 1e-4
 BACKWARD_ATOL = 1e-8
 BACKWARD_RTOL = 0.0
+# The combined logits gradient includes the entropy branch when entropy has grad;
+# log-prob-only gradients still use BACKWARD_ATOL.
+ENTROPY_BACKWARD_ATOL = 1e-6
 
 PARITY_SCENARIOS = [
     (-1, False, False, False),
@@ -149,6 +155,7 @@ def _assert_legacy_parity(
         with_entropy=with_entropy,
         chunk_size=chunk_size,
         log_prob_keep_mask=keep_mask,
+        with_entropy_grad=entropy_has_grad,
     )
 
     legacy_logits = logits.detach().clone().requires_grad_()
@@ -157,7 +164,8 @@ def _assert_legacy_parity(
     torch.testing.assert_close(log_probs, legacy_log_probs, rtol=FORWARD_RTOL, atol=FORWARD_ATOL)
     if with_entropy:
         legacy_entropy = _legacy_compute_entropy_from_logits(legacy_logits.clone(), process_group)
-        torch.testing.assert_close(entropy, legacy_entropy, rtol=FORWARD_RTOL, atol=FORWARD_ATOL)
+        torch.testing.assert_close(entropy, legacy_entropy, rtol=FORWARD_RTOL, atol=ENTROPY_FORWARD_ATOL)
+        assert entropy.requires_grad == entropy_has_grad
     else:
         legacy_entropy = None
         assert entropy is None
@@ -181,11 +189,12 @@ def _assert_legacy_parity(
     loss.backward()
     legacy_loss.backward()
 
+    backward_atol = ENTROPY_BACKWARD_ATOL if with_entropy and entropy_has_grad else BACKWARD_ATOL
     torch.testing.assert_close(
         logits.grad,
         legacy_logits.grad,
         rtol=BACKWARD_RTOL,
-        atol=BACKWARD_ATOL,
+        atol=backward_atol,
     )
 
 
