@@ -56,7 +56,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Jun 29, 2026"/>
+    <meta name="docbuild:last-update" content="Jun 30, 2026"/>
   </head>
   
   
@@ -485,7 +485,7 @@
 <p><code class="docutils literal notranslate"><span class="pre">strands-sglang</span></code> bridges the gap by extending <code class="docutils literal notranslate"><span class="pre">strands</span></code> with SGLang’s native <code class="docutils literal notranslate"><span class="pre">/generate</span></code> endpoint:</p>
 <ul class="simple">
 <li><p>Captures exact token IDs during generation (no retokenization drift)</p></li>
-<li><p>Automatically tracks <code class="docutils literal notranslate"><span class="pre">loss_mask</span></code> via <code class="docutils literal notranslate"><span class="pre">token_manager</span></code></p></li>
+<li><p>Automatically tracks <code class="docutils literal notranslate"><span class="pre">loss_mask</span></code> via the <code class="docutils literal notranslate"><span class="pre">Rollout</span></code> tracker (<code class="docutils literal notranslate"><span class="pre">model.rollout</span></code>)</p></li>
 <li><p>Provides <code class="docutils literal notranslate"><span class="pre">ToolLimiter</span></code> for clean trajectory truncation</p></li>
 </ul>
 </section>
@@ -496,13 +496,10 @@
 <li><p>Go to slime folder: <code class="docutils literal notranslate"><span class="pre">cd</span> <span class="pre">/root/slime</span></code></p></li>
 <li><p>Install slime: <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span> <span class="pre">--no-deps</span></code></p></li>
 <li><p>Go to the example folder: <code class="docutils literal notranslate"><span class="pre">cd</span> <span class="pre">/root/slime/examples/strands_sglang</span></code></p></li>
-<li><p>Install other dependencies: <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-r</span> <span class="pre">requirements.txt</span></code></p></li>
+<li><p>Install <code class="docutils literal notranslate"><span class="pre">strands-sglang</span></code>: <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">strands-sglang==0.4.2</span></code></p></li>
 </ol>
 <blockquote>
-<div><p>NOTE: <code class="docutils literal notranslate"><span class="pre">strands-sglang</span></code> is under rapid development, so we recommend using the GitHub repo version: <code class="docutils literal notranslate"><span class="pre">strands-sglang</span> <span class="pre">&#64;</span> <span class="pre">git+https://github.com/horizon-rl/strands-sglang.git</span></code></p>
-</div></blockquote>
-<blockquote>
-<div><p>NOTE: We use camel-ai’s subprocess code interpreter for python code execution, which is NOT a good practice; it’s just for convenience of this example.</p>
+<div><p>NOTE: The <code class="docutils literal notranslate"><span class="pre">execute_python_code</span></code> tool runs code via <code class="docutils literal notranslate"><span class="pre">subprocess_interpreter.py</span></code>, a self-contained interpreter vendored from camel-ai so this example does not depend on the full <code class="docutils literal notranslate"><span class="pre">camel-ai</span></code> package. It runs model-generated code in a local subprocess with <strong>no isolation</strong>, which is NOT a good practice; it is here only for the convenience of this example. Use a sandboxed interpreter (Docker, e2b, microsandbox, …) for anything beyond local experimentation.</p>
 </div></blockquote>
 </section>
 <section id="prepare-model">
@@ -612,7 +609,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jun 29, 2026.
+  Last updated on Jun 30, 2026.
   <br/>
 </p>
   </div>
