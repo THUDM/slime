@@ -149,6 +149,11 @@ def _set_default_megatron_args(args):
     args.use_distributed_optimizer = True
     # TODO: maybe change this after megatron has good fp8 support
     args.bf16 = not args.fp16
+    # Checkpoint I/O defaults: these keep checkpoint contents unchanged while
+    # reducing repeated validation/planning work and parallelizing load.
+    args.use_persistent_ckpt_worker = True
+    args.ckpt_assume_constant_structure = True
+    args.ckpt_fully_parallel_load = True
     # placeholders
     if args.seq_length is None:
         args.seq_length = 4096

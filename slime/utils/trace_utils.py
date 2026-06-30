@@ -14,6 +14,7 @@ from typing import Any
 from slime.utils.types import Sample
 
 TRACE_VERSION = 1
+TRACE_CHILDREN_KEY = "_trace_children"
 SGLANG_TRACE_META_KEYS = (
     "prompt_tokens",
     "completion_tokens",
@@ -21,19 +22,25 @@ SGLANG_TRACE_META_KEYS = (
     "queue_time",
     "e2e_latency",
     "decode_throughput",
-    "pd_prefill_bootstrap_queue_duration",
-    "pd_prefill_forward_duration",
-    "pd_prefill_transfer_queue_duration",
-    "pd_prefill_retry_count",
-    "pd_prefill_bootstrap_duration",
-    "pd_prefill_alloc_wait_duration",
-    "pd_decode_prealloc_duration",
-    "pd_decode_transfer_duration",
-    "pd_decode_forward_duration",
-    "pd_decode_bootstrap_duration",
-    "pd_decode_alloc_wait_duration",
+)
+SGLANG_PD_PREFILL_SEGMENTS = (
+    ("pd_prefill_bootstrap_queue_duration", "sglang_pd_prefill_bootstrap_queue"),
+    ("pd_prefill_bootstrap_duration", "sglang_pd_prefill_bootstrap"),
+    ("pd_prefill_alloc_wait_duration", "sglang_pd_prefill_alloc_wait"),
+    ("pd_prefill_forward_duration", "sglang_pd_prefill_forward"),
+    ("pd_prefill_transfer_queue_duration", "sglang_pd_prefill_transfer_queue"),
+)
+SGLANG_PD_DECODE_SEGMENTS = (
+    ("pd_decode_prealloc_duration", "sglang_pd_decode_prealloc"),
+    ("pd_decode_bootstrap_duration", "sglang_pd_decode_bootstrap"),
+    ("pd_decode_alloc_wait_duration", "sglang_pd_decode_alloc_wait"),
+    ("pd_decode_transfer_duration", "sglang_pd_decode_transfer"),
+    ("pd_decode_forward_duration", "sglang_pd_decode_forward"),
+)
+SGLANG_PD_SUMMARY_KEYS = (
     "pd_transfer_speed_gb_s",
     "pd_transfer_total_mb",
+    "pd_prefill_retry_count",
 )
 
 logger = logging.getLogger(__name__)
@@ -62,6 +69,8 @@ class TraceHandle:
 class TraceSpanContext:
     target: Sample | TraceHandle | list[Sample | TraceHandle]
     handles: list[TraceHandle]
+    span_records: list[tuple[TraceHandle, str]] = field(default_factory=list)
+    start_ts: float = 0.0
     end_attrs: dict[str, Any] = field(default_factory=dict)
     end_events: list[dict[str, Any]] = field(default_factory=list)
     closed: bool = False
@@ -72,9 +81,17 @@ class TraceSpanContext:
         return self
 
     def update(self, attrs: dict[str, Any] | None) -> TraceSpanContext:
-        if attrs:
-            self.end_attrs.update(attrs)
-            self._sync_end_events(attrs)
+        try:
+            if attrs:
+                plain_attrs = dict(attrs)
+                trace_children = plain_attrs.pop(TRACE_CHILDREN_KEY, None)
+                if plain_attrs:
+                    self.end_attrs.update(plain_attrs)
+                    self._sync_end_events(plain_attrs)
+                if trace_children:
+                    _append_trace_children(self.span_records, trace_children, parent_start_ts=self.start_ts)
+        except Exception as exc:
+            _log_trace_error("update", exc)
         return self
 
     def set_attr(self, key: str, value: Any) -> TraceSpanContext:
@@ -127,11 +144,76 @@ def _new_span_id() -> str:
 
 
 def build_sglang_meta_trace_attrs(meta: dict[str, Any]) -> dict[str, Any]:
-    attrs = {key: meta[key] for key in SGLANG_TRACE_META_KEYS if key in meta and meta[key] is not None}
-    if meta.get("id") is not None:
-        attrs["sglang_request_id"] = meta["id"]
-    attrs["finish_reason"] = meta["finish_reason"]["type"]
+    attrs: dict[str, Any] = {}
+    try:
+        attrs.update({key: meta[key] for key in SGLANG_TRACE_META_KEYS if key in meta and meta[key] is not None})
+        finish_reason = meta.get("finish_reason")
+        if isinstance(finish_reason, dict) and finish_reason.get("type") is not None:
+            attrs["finish_reason"] = finish_reason["type"]
+        elif finish_reason is not None:
+            attrs["finish_reason"] = finish_reason
+
+        if meta.get("id") is not None:
+            attrs["sglang_request_id"] = meta["id"]
+
+        trace_children = _build_sglang_pd_trace_children(meta)
+        if trace_children:
+            attrs[TRACE_CHILDREN_KEY] = trace_children
+    except Exception as exc:
+        _log_trace_error("sglang_meta_attrs", exc)
     return attrs
+
+
+def _build_sglang_pd_trace_children(meta: dict[str, Any]) -> list[dict[str, Any]]:
+    trace_children: list[dict[str, Any]] = []
+    cursor = 0.0
+    for phase_name, phase_label, segments in (
+        ("sglang_pd_prefill", "prefill", SGLANG_PD_PREFILL_SEGMENTS),
+        ("sglang_pd_decode", "decode", SGLANG_PD_DECODE_SEGMENTS),
+    ):
+        phase_children: list[dict[str, Any]] = []
+        phase_cursor = 0.0
+        for key, child_name in segments:
+            if key not in meta or meta[key] is None:
+                continue
+            duration = float(meta[key])
+            if duration <= 0.0:
+                continue
+            phase_children.append(
+                {
+                    "type": "span",
+                    "name": child_name,
+                    "start_offset": phase_cursor,
+                    "end_offset": phase_cursor + duration,
+                    "attrs": {key: meta[key]},
+                }
+            )
+            phase_cursor += duration
+        if not phase_children:
+            continue
+        trace_children.append(
+            {
+                "type": "span",
+                "name": phase_name,
+                "start_offset": cursor,
+                "end_offset": cursor + phase_cursor,
+                "attrs": {"phase": phase_label, "duration_s": phase_cursor},
+                "children": phase_children,
+            }
+        )
+        cursor += phase_cursor
+
+    summary_attrs = {key: meta[key] for key in SGLANG_PD_SUMMARY_KEYS if key in meta and meta[key] is not None}
+    if summary_attrs:
+        trace_children.append(
+            {
+                "type": "event",
+                "name": "sglang_pd_summary",
+                "start_offset": cursor,
+                "attrs": summary_attrs,
+            }
+        )
+    return trace_children
 
 
 def _ensure_trace_carrier(
@@ -253,7 +335,14 @@ def trace_event(
     try:
         timestamp = time.time()
         for handle in _coerce_handles(target):
-            _append_event(handle, kind="event", name=name, timestamp=timestamp, attrs=attrs)
+            _append_event(
+                handle,
+                kind="event",
+                name=name,
+                timestamp=timestamp,
+                parent_span_id=handle.parent_span_id or _get_current_parent_span_id(handle.trace_id),
+                attrs=attrs,
+            )
     except Exception as exc:
         _log_trace_error(f"event:{name}", exc)
 
@@ -307,6 +396,8 @@ def trace_span(
     span_context = TraceSpanContext(
         target=handles[0] if len(handles) == 1 else handles,
         handles=handles,
+        span_records=span_records,
+        start_ts=timestamp,
     )
 
     try:
@@ -431,6 +522,72 @@ def _record_span_end(
             )
         )
     return events
+
+
+def _append_trace_children(
+    parent_records: list[tuple[TraceHandle, str]],
+    trace_children: Any,
+    *,
+    parent_start_ts: float,
+) -> None:
+    if isinstance(trace_children, dict):
+        trace_children = [trace_children]
+    if not isinstance(trace_children, list):
+        return
+
+    for child in trace_children:
+        if not isinstance(child, dict):
+            continue
+        child_type = child.get("type")
+        child_name = child.get("name")
+        if child_type not in ("span", "event") or not child_name:
+            continue
+
+        child_start_ts = parent_start_ts + float(child["start_offset"])
+        attrs = child.get("attrs") if isinstance(child.get("attrs"), dict) else None
+
+        if child_type == "event":
+            for handle, parent_span_id in parent_records:
+                _append_event(
+                    handle,
+                    kind="event",
+                    name=child_name,
+                    timestamp=child_start_ts,
+                    parent_span_id=parent_span_id,
+                    attrs=attrs,
+                )
+            continue
+
+        child_end_ts = parent_start_ts + float(child["end_offset"])
+        if child_end_ts < child_start_ts:
+            continue
+        child_records: list[tuple[TraceHandle, str]] = []
+        for handle, parent_span_id in parent_records:
+            child_span_id = _new_span_id()
+            _append_event(
+                handle,
+                kind="span_start",
+                name=child_name,
+                timestamp=child_start_ts,
+                span_id=child_span_id,
+                parent_span_id=parent_span_id,
+            )
+            child_records.append((handle, child_span_id))
+
+        _append_trace_children(
+            child_records,
+            child.get("children"),
+            parent_start_ts=child_start_ts,
+        )
+        for handle, child_span_id in child_records:
+            _append_event(
+                handle,
+                kind="span_end",
+                name=child_name,
+                timestamp=child_end_ts,
+                span_id=child_span_id,
+                attrs=attrs,
+            )
 
 
 def _append_event(

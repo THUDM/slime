@@ -152,10 +152,14 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     # Handle partial rollout samples: continue generation from existing response
     prompt_text = sample.prompt
     prompt_tokens_ids = state.tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
+    sample.tokens = list(prompt_tokens_ids)
+    sample.loss_mask = []
     response = ""
     response_token_ids = []
     loss_mask = []
     rollout_log_probs = [] if SEARCH_R1_CONFIGS["return_logprob"] else None
+    sample.rollout_top_p_token_ids = None
+    sample.rollout_top_p_token_offsets = None
 
     # BUGFIX: make the inference engine STOP at the tool/answer boundary.
     # Without a stop, sglang keeps emitting tokens after </search> / </answer>
@@ -213,6 +217,13 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         response += cur_response
         response_token_ids += cur_response_token_ids
         loss_mask += [1] * len(cur_response_token_ids)
+        sample.append_response_tokens(
+            args,
+            tokens=cur_response_token_ids,
+            log_probs=cur_response_log_probs if SEARCH_R1_CONFIGS["return_logprob"] else None,
+            trainable=True,
+            meta_info=output["meta_info"] if "output_token_logprobs" in output["meta_info"] else None,
+        )
 
         # Add log probs if enabled
         if SEARCH_R1_CONFIGS["return_logprob"]:
@@ -230,6 +241,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         response += next_obs
         response_token_ids += obs_tokens_ids
         loss_mask += [0] * len(obs_tokens_ids)
+        sample.append_response_tokens(args, tokens=obs_tokens_ids, trainable=False)
 
         # Add dummy log probs for observation tokens if enabled (they won't be used due to loss_mask=0)
         if SEARCH_R1_CONFIGS["return_logprob"]:

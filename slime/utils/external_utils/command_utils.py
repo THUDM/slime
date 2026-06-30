@@ -52,7 +52,7 @@ def convert_checkpoint(
 
     exec_command(
         f"source {repo_base_dir}/scripts/models/{megatron_model_type}.sh && "
-        f"PYTHONPATH=/root/Megatron-LM "
+        f"PYTHONPATH={repo_base_dir}:/root/Megatron-LM:${{PYTHONPATH:-}} "
         f"torchrun "
         f"--nproc-per-node {num_gpus_per_node} "
         f"{multinode_args}"

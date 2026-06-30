@@ -113,6 +113,10 @@ See the [Customization Guide](docs/en/get_started/customization.md) for which in
 
 These are not just demos. They are independent systems that use slime as a reusable RL substrate for production-scale post-training, agentic RL, domain RL, and rollout-system research.
 
+### 🐎 Dressage: Scalable RL for Any Agent and Sandbox
+
+[**Dressage**](https://github.com/Accio-Lab/Dressage) is an agentic RL training framework built on slime by [Alibaba Accio](https://www.accio.com/work?im_ref=1O8wgT3poxyZWCj31F1ZJ0fNUkuTK6x9ZTHw0Y0&sharedid=&im_pid=5619512&im_pname=AI%20INTRO%20COPORATE), centered on unified RL for blackbox agents (e.g., [OpenCode](https://github.com/anomalyco/opencode), [OpenClaw](https://github.com/openclaw/openclaw)) and white loops across any sandbox environment (e.g., [bwrap](https://github.com/containers/bubblewrap), [E2B](https://github.com/e2b-dev/e2b), Kubernetes). It decouples interaction semantics, execution placement, and token-level trajectory capture through Paddock, Sandbox, and Proxy layers, adapting agent workflows without rewriting their internal loops. Dressage records token-wise logprobs, loss masks, weight versions, and MoE routing, then uses TITO and segment-aware training to turn long-horizon tool interactions into stable RL samples.
+
 ### ⛵ Miles: Enterprise-Grade Reinforcement Learning for Large-Scale Model Training
 
 [Miles](https://github.com/radixark/miles) is an RL post-training framework for large-scale models, built on slime by [RadixArk](https://github.com/radixark). It stays closely aligned with slime's upstream development while extending it with enterprise-oriented features: deeper [SGLang](https://github.com/sgl-project/sglang) integration, operational tooling, deployment support, and optimizations for new [models](https://www.radixark.com/miles/docs/models) and [hardware](https://www.radixark.com/miles/docs/platforms). Miles also adds a growing set of production features, including LoRA, TITO, and low-precision training.
