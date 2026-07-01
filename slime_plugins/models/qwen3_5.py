@@ -185,9 +185,10 @@ class Attention(HuggingfaceAttention):
 
     def hf_forward(self, hidden_states, packed_seq_params):
         hidden_states = self.input_layernorm(hidden_states)
+        cu_seqlens = packed_seq_params.cu_seqlens_q if packed_seq_params is not None else None
         hidden_states = self.linear_attn(
             hidden_states=hidden_states,
-            cu_seqlens=packed_seq_params.cu_seqlens_q,
+            cu_seqlens=cu_seqlens,
         )
         return hidden_states
 

@@ -3,16 +3,28 @@ import io
 import json
 import logging
 from pathlib import Path
+import time
+from urllib.parse import urlparse
 
-from PIL import Image
+from PIL import Image, ImageFile
+import requests
 from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 
 logger = logging.getLogger(__name__)
+
+# Some generated PPT screenshots are mildly truncated but still decodable.
+# Enable this before qwen_vl_utils opens image paths and returns lazy PIL objects.
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 # Default image patch size for vision-language models
 # Note: Qwen3-VL uses 16, Qwen2.5-VL uses 14
 # Reference: https://github.com/QwenLM/Qwen3-VL/blob/main/qwen-vl-utils/README.md
 DEFAULT_PATCH_SIZE = 14
+IMAGE_DOWNLOAD_TIMEOUT = (5, 30)
+IMAGE_DOWNLOAD_RETRIES = 3
+IMAGE_DOWNLOAD_HEADERS = {
+    "User-Agent": "slime-vlm-data-loader/1.0",
+}
 
 
 def load_tokenizer(name_or_path: str, **kwargs):
@@ -97,6 +109,75 @@ def load_processor(name_or_path: str, **kwargs):
     return proc
 
 
+def _is_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _load_image_from_bytes(raw: bytes, source: str) -> Image.Image:
+    try:
+        image = Image.open(io.BytesIO(raw))
+        image.load()
+        return image
+    except Exception as e:
+        raise RuntimeError(f"Failed to decode image from {source}") from e
+
+
+def _download_image(url: str) -> Image.Image:
+    urls = [url]
+    if url.startswith("https://"):
+        urls.append("http://" + url[len("https://") :])
+
+    last_error = None
+    for candidate in urls:
+        for attempt in range(1, IMAGE_DOWNLOAD_RETRIES + 1):
+            try:
+                response = requests.get(
+                    candidate,
+                    headers=IMAGE_DOWNLOAD_HEADERS,
+                    timeout=IMAGE_DOWNLOAD_TIMEOUT,
+                )
+                response.raise_for_status()
+                return _load_image_from_bytes(response.content, candidate)
+            except Exception as e:
+                last_error = e
+                if attempt < IMAGE_DOWNLOAD_RETRIES:
+                    time.sleep(0.5 * attempt)
+                    continue
+                logger.warning(
+                    "Failed to load image URL %s after %d attempts: %s",
+                    candidate,
+                    IMAGE_DOWNLOAD_RETRIES,
+                    e,
+                )
+
+    raise RuntimeError(f"Failed to load image URL {url}") from last_error
+
+
+def _load_image_from_file(path: str) -> Image.Image:
+    try:
+        image = Image.open(path)
+        image.load()
+        return image
+    except Exception as e:
+        raise RuntimeError(f"Failed to decode image from file {path}") from e
+
+
+def _load_image_from_string(image_data: str) -> Image.Image:
+    if image_data.startswith("data:"):
+        _, encoded = image_data.split(",", 1)
+        return _load_image_from_bytes(base64.b64decode(encoded), "data URI")
+
+    if _is_url(image_data):
+        return _download_image(image_data)
+
+    try:
+        raw = base64.b64decode(image_data)
+        return _load_image_from_bytes(raw, "base64 string")
+    except Exception:
+        return _load_image_from_file(image_data)
+
+
 def _extract_images_from_messages(messages):
     """Extract PIL images from chat messages containing multimodal content.
 
@@ -117,16 +198,7 @@ def _extract_images_from_messages(messages):
             if isinstance(image_data, Image.Image):
                 images.append(image_data)
             elif isinstance(image_data, str):
-                if image_data.startswith("data:"):
-                    _, encoded = image_data.split(",", 1)
-                    images.append(Image.open(io.BytesIO(base64.b64decode(encoded))))
-                else:
-                    try:
-                        raw = base64.b64decode(image_data)
-                        images.append(Image.open(io.BytesIO(raw)))
-                    except Exception:
-                        # Not base64 — try as file path
-                        images.append(Image.open(image_data))
+                images.append(_load_image_from_string(image_data))
     return images
 
 

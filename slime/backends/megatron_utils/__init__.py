@@ -42,3 +42,9 @@ except ImportError:
 logging.getLogger("megatron").setLevel(logging.WARNING)
 
 from . import megatron_patch  # noqa: F401, E402
+from . import linear_ce_fallback  # noqa: F401, E402
+from . import qwen_vl_packed_gdn  # noqa: F401, E402
+from . import qwen_vl_recompute_tail  # noqa: F401, E402
+from . import qwen_vl_bridge_timing  # noqa: F401, E402
+from . import qwen_vl_text_language_fastpath  # noqa: F401, E402
+from . import qwen_vl_disable_deepstack  # noqa: F401, E402
