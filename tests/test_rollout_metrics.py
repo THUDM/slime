@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import torch
 
-from slime.ray.rollout import _compute_top_p_kept_vocab_metrics
+from slime.ray.rollout import _compute_top_p_kept_vocab_metrics, _compute_zero_std_metrics
 from slime.utils.misc import decode_int32_meta_array
 from slime.utils.types import Sample
 
@@ -181,3 +181,53 @@ def test_append_response_tokens_rejects_non_trainable_log_probs():
 
     with pytest.raises(ValueError, match="non-trainable response tokens should not pass rollout log probabilities"):
         sample.append_response_tokens(tokens=[10], log_probs=[-0.1], trainable=False)
+
+
+def _make_zero_std_args(reward_key=None):
+    return Namespace(advantage_estimator="grpo", reward_key=reward_key)
+
+
+@pytest.mark.unit
+def test_zero_std_metrics_skips_none_reward_from_aborted_samples():
+    samples = [
+        Sample(group_index=0, reward=None),
+        Sample(group_index=0, reward=None),
+    ]
+
+    assert _compute_zero_std_metrics(_make_zero_std_args(), samples) == {}
+
+
+@pytest.mark.unit
+def test_zero_std_metrics_skips_dict_reward_opd():
+    teacher_payload = {"meta_info": {"output_token_logprobs": [[-0.12, 1, None], [-0.34, 2, None]]}}
+    samples = [
+        Sample(group_index=0, reward=dict(teacher_payload)),
+        Sample(group_index=1, reward=dict(teacher_payload)),
+    ]
+
+    assert _compute_zero_std_metrics(_make_zero_std_args(), samples) == {}
+
+
+@pytest.mark.unit
+def test_zero_std_metrics_counts_numeric_groups_alongside_non_numeric():
+    samples = [
+        Sample(group_index=10, reward=1.0),
+        Sample(group_index=10, reward=1.0),
+        Sample(group_index=20, reward=0.5),
+        Sample(group_index=20, reward=0.7),
+        Sample(group_index=30, reward={"meta_info": {}}),
+        Sample(group_index=40, reward=None),
+    ]
+
+    assert _compute_zero_std_metrics(_make_zero_std_args(), samples) == {"zero_std/count_1.0": 1}
+
+
+@pytest.mark.unit
+def test_zero_std_metrics_counts_group_when_first_sample_is_non_numeric():
+    samples = [
+        Sample(group_index=0, reward=None),
+        Sample(group_index=0, reward=1.0),
+        Sample(group_index=0, reward=1.0),
+    ]
+
+    assert _compute_zero_std_metrics(_make_zero_std_args(), samples) == {"zero_std/count_1.0": 1}
