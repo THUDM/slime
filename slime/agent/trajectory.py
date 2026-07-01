@@ -35,6 +35,7 @@ class TurnRecord:
     output_ids: list[int]
     finish_reason: str
     output_log_probs: list[float] = dataclasses.field(default_factory=list)
+    ill_formed: bool = False
 
 
 # ===========================================================================
@@ -234,6 +235,7 @@ class _SampleBuilder:
         """Emit the accumulated tokens as one ``Sample``, stripping the first-turn
         prompt so loss_mask / logprobs cover only the response region."""
         start = self.leading_prompt_len  # first-turn prompt stripped; response region starts here
+        md = dict(extra_metadata or {})
         return Sample(
             index=base_sample.index,
             group_index=base_sample.group_index,
@@ -246,7 +248,7 @@ class _SampleBuilder:
             rollout_log_probs=self.logprobs[start:],
             reward=0.0,
             status=Sample.Status.COMPLETED,
-            metadata=dict(extra_metadata or {}),
+            metadata=md,
         )
 
 
@@ -319,8 +321,7 @@ class TrajectoryManager:
             chain = routing_leaf.path_from_root()
             samples.extend(self._chain_to_samples(chain, base_sample=base_sample, extra_metadata=extra_metadata))
 
-        # TODO custom reward func
-        per_sample_reward = (reward / len(samples)) if samples else 0.0
+        per_sample_reward = reward
         for s in samples:
             s.reward = per_sample_reward
 
@@ -468,8 +469,19 @@ class TrajectoryManager:
         base_sample: Sample,
         extra_metadata: dict[str, Any] | None,
     ) -> list[Sample]:
+
+        asst_nodes = [n for n in chain if n.role == "assistant" and n.turn is not None]
+        truncated = bool(asst_nodes) and asst_nodes[-1].turn.finish_reason == "length"
+        use_tool = any(bool((n.message or {}).get("tool_calls")) for n in asst_nodes)
+        ill_formed = any(n.turn.ill_formed for n in asst_nodes)
+        md = {
+            **(extra_metadata or {}),
+            "truncated": truncated,
+            "use_tool": use_tool,
+            "ill_formed": ill_formed,
+        }
         return [
-            builder.to_sample(base_sample, extra_metadata)
+            builder.to_sample(base_sample, md)
             for builder in self._split_chain_into_builders(chain)
             if builder.has_trained_response()
         ]

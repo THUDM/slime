@@ -6,7 +6,7 @@ shared parts (create the agent user, the run skeleton, the launch-detached-and-
 poll transport) live here; adding a CLI-style harness means subclassing
 BaseHarness and implementing install_cli, write_config and launch_and_wait.
 Two module-level helpers cover the common cases: install_npm_cli for
-npm-packaged CLIs, and run_command for the run-one-command-to-completion case.
+npm-packaged CLIs, and run_agent for the launch-the-agent-to-completion case.
 
 The base knows nothing about the task: run() takes only generic fields
 (workdir / session_id / adapter_url / prompt). Task-specific workspace prep and
@@ -18,16 +18,14 @@ from __future__ import annotations
 import asyncio
 import lzma
 import os
-import shlex
 import shutil
 import tempfile
-import time
 from abc import ABC, ABCMeta, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
 from slime.agent import sandbox as _sandbox
-from slime.agent.sandbox import Sandbox
+from slime.agent.sandbox import Sandbox, exec_and_wait
 from slime.utils.misc import SingletonMeta
 
 
@@ -35,7 +33,10 @@ class SingletonABCMeta(ABCMeta, SingletonMeta):
     pass
 
 
-EXIT_TIME_BUDGET_EXCEEDED = -1
+# In-sandbox retry budget for the npm global install (transient flakes like
+# exit 217). Cheaper than a full sandbox recreate by the caller.
+NPM_INSTALL_RETRIES = 3
+NPM_INSTALL_BACKOFF_SEC = 2.0
 
 
 @dataclass(frozen=True)
@@ -73,7 +74,7 @@ class BaseHarness(ABC, metaclass=SingletonABCMeta):
         """Run the agent to completion and return its exit code.
 
         A non-interactive CLI builds one shell command and hands it to
-        run_command. An interactive or long-running harness drives its own loop
+        run_agent. An interactive or long-running harness drives its own loop
         here instead.
         """
 
@@ -103,72 +104,50 @@ class BaseHarness(ABC, metaclass=SingletonABCMeta):
         return await self.launch_and_wait(sb, ctx, prompt, time_budget_sec)
 
 
-async def run_command(sb: Sandbox, *, workdir: str, start_cmd: str, env: dict[str, str], time_budget_sec: int) -> int:
-    """Run start_cmd to completion in the sandbox and return its exit code.
-
-    Runs the command detached (setsid) rather than as a long-lived foreground
-    exec, so it survives sandbox gateways that cap connection lifetime. Output
-    is piped to a trajectory log and the command's exit code (PIPESTATUS[0], not
-    tee's) is written to a marker file, which we poll every 5s (the short RPCs
-    also keep the sandbox alive against idle GC). All metadata goes under
-    {workdir}/.harness/ so diff capture only has to exclude one directory.
-    Returns EXIT_TIME_BUDGET_EXCEEDED if the budget runs out first.
-    """
+async def run_agent(sb: Sandbox, *, workdir: str, start_cmd: str, env: dict[str, str], time_budget_sec: int) -> int:
+    """Launch the agent (start_cmd) and run it to completion, returning its exit code."""
     meta_dir = f"{workdir}/.harness"
-    done = f"{meta_dir}/done"
-    launcher = f"{meta_dir}/run.sh"
-    traj = f"{meta_dir}/trajectory.jsonl"
-
-    launcher_body = (
-        "#!/bin/bash\n"
-        f"cd {workdir}\n"
-        "export HOME=/home/agent\n"
-        f"{start_cmd} 2>&1 | tee {shlex.quote(traj)}\n"
-        f"echo ${{PIPESTATUS[0]}} > {done}\n"
-    )
     await sb.exec(f"mkdir -p {meta_dir} && chown agent:agent {meta_dir}", user="root", check=True, timeout=30)
-    await sb.write_file(launcher, launcher_body, user="agent")
-    await sb.exec(f"chmod +x {launcher}", user="agent", timeout=30)
-
-    env_keys = ",".join(env.keys())
-    await sb.exec(
-        f"runuser -u agent --whitelist-environment={env_keys}"
-        f" -- bash -c 'setsid {launcher} < /dev/null > /dev/null 2>&1 &'",
-        user="root",
+    exit_code, _ = await exec_and_wait(
+        sb,
+        cmd=start_cmd,
+        user="agent",
         env=env,
-        timeout=30,
-        check=True,
+        workdir=workdir,
+        out_file=f"{meta_dir}/trajectory.jsonl",
+        time_budget_sec=time_budget_sec,
+        tag="run",
+        want_output=False,
     )
-
-    deadline = time.time() + time_budget_sec
-    exit_code = EXIT_TIME_BUDGET_EXCEEDED  # until the marker yields a real code
-    while time.time() < deadline:
-        await asyncio.sleep(5)
-        ec, out, _ = await sb.exec(
-            f"test -f {done} && cat {done}",
-            user="agent",
-            timeout=15,
-            check=False,
-        )
-        if ec == 0:
-            exit_code_text = (out or "").strip()
-            if exit_code_text:
-                exit_code = int(exit_code_text)
-                break
     return exit_code
 
 
-async def install_npm_cli(sb: Sandbox, *, node_runtime: Path, npm_package: Path, check_cmd: str) -> None:
+async def install_npm_cli(
+    sb: Sandbox,
+    *,
+    node_runtime: Path,
+    npm_package: Path,
+    check_cmd: str,
+) -> None:
     """Install an npm-packaged CLI into the sandbox: the Node 22 runtime first,
     then the CLI's npm package (global install, then self-check via check_cmd).
     Non-npm harnesses write their own install_cli."""
     await install_node22(sb, node_runtime)
+
     await sb.write_file("/tmp/harness-cli.tgz", npm_package)
-    await sb.exec(
-        f"npm install -g --prefix=/usr/local --no-audit --no-fund /tmp/harness-cli.tgz && {check_cmd}",
-        user="root",
-        timeout=300,
-        check=True,
+    install_cmd = "npm install -g --prefix=/usr/local --no-audit --no-fund /tmp/harness-cli.tgz && " + check_cmd
+    # Detached install with a few in-place retries for transient disk flakes.
+    last_log = ""
+    for attempt in range(NPM_INSTALL_RETRIES):
+        exit_code, last_log = await exec_and_wait(
+            sb, cmd=install_cmd, user="root", time_budget_sec=300, tag="harness-npm-install"
+        )
+        if exit_code == 0:
+            return
+        if attempt + 1 < NPM_INSTALL_RETRIES:
+            await asyncio.sleep(NPM_INSTALL_BACKOFF_SEC * (attempt + 1))
+    raise RuntimeError(
+        f"npm install failed after {NPM_INSTALL_RETRIES} attempts (exit={exit_code}):\n{last_log[-1000:]}"
     )
 
 

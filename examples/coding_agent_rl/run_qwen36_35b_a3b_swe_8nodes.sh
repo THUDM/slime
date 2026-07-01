@@ -207,6 +207,7 @@ export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-${MLP_SOCKET_IFNAME:-eth0}}"
 # ============ SWE / claude-code rollout knobs ============
 
 export SWE_AGENT="${SWE_AGENT:-claude_code}"
+export SWE_TRAIN_PROTOCOL="${SWE_TRAIN_PROTOCOL:-scaleswe}"
 export E2B_API_KEY="${E2B_API_KEY:-e2b_0000000000000000000000000000000000000000}"
 # Metadata key your gateway routes images by; `image` is the neutral default.
 export SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY="${SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY:-image}"
@@ -277,6 +278,7 @@ keys = (
     "SLIME_AGENT_CC_EXTRA_ARGS",
     "SLIME_AGENT_CC_EXTRA_ENVS",
     "SWE_CC_PROMPT",
+    "SWE_TRAIN_PROTOCOL",
     "SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY",
 )
 env = {k: os.environ[k] for k in keys if k in os.environ}
