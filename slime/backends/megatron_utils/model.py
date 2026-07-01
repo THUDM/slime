@@ -201,7 +201,14 @@ def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer)
     # resume), so the worst case is the cosine/linear schedule reaches its
     # plateau slightly early or late. Pass ``--lr-decay-iters`` explicitly if you
     # need exact decay control.
-    args.train_iters = args.num_rollout * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+    estimated_train_iters = (
+        args.num_rollout * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+    )
+    # ``num_rollout == 0`` is eval-only (see ``train.py``): no training runs, but
+    # the scheduler is still built and Megatron asserts ``lr_decay_steps > 0``.
+    # Use the smallest valid schedule size for zero-estimated runs; the training
+    # loop itself remains controlled by ``args.num_rollout``.
+    args.train_iters = max(1, estimated_train_iters)
     if args.lr_decay_iters is None:
         args.lr_decay_iters = args.train_iters
     lr_decay_steps = args.lr_decay_iters * args.global_batch_size
