@@ -523,7 +523,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-data-transport",
                 type=str,
-                choices=["object-store", "nixl"],
+                choices=["object-store", "nixl", "mooncake"],
                 default="object-store",
                 help=(
                     "Transport for rollout data refs sent from rollout manager to trainer. Large rollout "
