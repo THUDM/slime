@@ -741,6 +741,9 @@ class RolloutManager:
             "raw_reward": raw_rewards,
             "truncated": [1 if sample.status == Sample.Status.TRUNCATED else 0 for sample in samples],
             "sample_indices": [sample.index for sample in samples],
+            # Parallel to raw_reward: lets pass-rate logging bucket ragged
+            # (over-sampled / filtered) batches by their actual prompt group.
+            "group_indices": [sample.group_index for sample in samples],
             "rollout_ids": rollout_ids,
         }
 
@@ -877,7 +880,7 @@ class RolloutManager:
                     continue
                 rollout_data[key] = [data[key][j] for j in partition]
             # keys that need to be splited at train side
-            for key in ["raw_reward", "total_lengths"]:
+            for key in ["raw_reward", "group_indices", "total_lengths"]:
                 if key not in data:
                     continue
                 rollout_data[key] = data[key]
@@ -1271,10 +1274,19 @@ def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any]
             truncated = data[key]["truncated"]
             log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
         if args.log_passrate:
+            # The default eval path never sets Sample.group_index (samples are
+            # copied straight from the eval dataset), so it keeps the rigid
+            # n_samples_per_eval_prompt layout. Rollout functions that tag
+            # every sample with group_index get ragged bucketing instead of
+            # the divisibility assert.
+            group_ids = None
+            if samples and all(s.group_index is not None for s in samples):
+                group_ids = [s.group_index for s in samples]
             log_dict |= dict_add_prefix(
                 compute_pass_rate(
                     flat_rewards=rewards,
                     group_size=args.n_samples_per_eval_prompt,
+                    group_ids=group_ids,
                 ),
                 f"eval/{key}-",
             )
