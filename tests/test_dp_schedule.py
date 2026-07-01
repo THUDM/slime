@@ -322,5 +322,136 @@ def test_rejects_when_fewer_rollouts_than_gbs():
         build_dp_schedule(args, tp, [3] * 6, global_batch_size=4, rollout_indices=[0, 0, 1, 1, 2, 2])
 
 
+@pytest.mark.unit
+def test_dynamic_long_trajectories_ragged_samples_drop_trailing_rollouts():
+    """DP4, all-long samples (1 per bin) with a sample count that does not tile.
+
+    512 rollouts where two fan out to 2 samples each -> 514 samples. Packing
+    yields ~514 singleton bins; the pre-fix align-up target (516) exceeded the
+    sample count and the splitter assert fired. The fix
+    drops the minimum number of whole trailing rollouts so the target stays
+    reachable, keeps GRPO groups atomic, and records the kept rollout count in
+    ``global_batch_sizes``.
+    """
+    dp_size = 4
+    num_rollouts = 512
+    rollout_indices = []
+    total_lengths = []
+    for g in range(num_rollouts):
+        fan_out = 2 if g < 2 else 1  # 514 samples total
+        for _ in range(fan_out):
+            rollout_indices.append(g)
+            total_lengths.append(30_000)  # ~1 sample per 32k bin
+
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=32_768)
+    tp = make_tp(dp_size=dp_size)
+
+    partitions, micro_batch_indices, num_microbatches, global_batch_sizes = build_dp_schedule(
+        args,
+        tp,
+        total_lengths,
+        global_batch_size=num_rollouts,
+        rollout_indices=rollout_indices,
+    )
+
+    # 514 samples -> align-up target 516 is unreachable; dropping the 2 trailing
+    # singleton rollouts lands on 510 kept rollouts / 512 samples (a multiple of dp_size).
+    assert global_batch_sizes == [510]
+    kept_rollouts = global_batch_sizes[0]
+
+    assert len(set(len(mbi) for mbi in micro_batch_indices)) == 1
+    covered = sorted(i for part in partitions for i in part)
+    assert len(covered) == 512
+    covered_rollouts = {rollout_indices[i] for i in covered}
+    assert covered_rollouts == set(range(kept_rollouts))  # trailing rollouts dropped, no holes
+    for g in covered_rollouts:
+        expected = [i for i, gid in enumerate(rollout_indices) if gid == g]
+        assert [i for i in covered if rollout_indices[i] == g] == expected  # rollouts stay whole
+
+    total_mbs = sum(len(mbi) for mbi in micro_batch_indices)
+    assert total_mbs % dp_size == 0
+    assert num_microbatches[0] == total_mbs // dp_size
+
+
+@pytest.mark.unit
+def test_dynamic_ragged_rollout_sizes_drop_below_dp_size_floor():
+    """DP4, ragged rollout sizes where the aligned target is only reachable after
+    dropping more trailing rollouts than the old ``len > dp_size`` floor allowed.
+
+    Rollout sizes [3, 2, 3, 1, 2] (all long -> 1 sample per bin) total 11 samples.
+    No prefix of >4 rollouts has a sample count that is a multiple of 4, so the
+    old rollout-count floor exited with the target still unreachable and the
+    splitter assert fired. The sample-count floor keeps dropping (here down to 3
+    rollouts / 8 samples) so alignment is reached without a crash.
+    """
+    dp_size = 4
+    sizes = [3, 2, 3, 1, 2]
+    rollout_indices = []
+    total_lengths = []
+    for g, n in enumerate(sizes):
+        for _ in range(n):
+            rollout_indices.append(g)
+            total_lengths.append(30_000)
+
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=32_768)
+    tp = make_tp(dp_size=dp_size)
+
+    partitions, micro_batch_indices, num_microbatches, global_batch_sizes = build_dp_schedule(
+        args,
+        tp,
+        total_lengths,
+        global_batch_size=len(sizes),
+        rollout_indices=rollout_indices,
+    )
+
+    # Dropped past the old dp_size floor (which would have kept 4 rollouts / 9
+    # samples, still unaligned) down to the 3-rollout / 8-sample prefix that tiles
+    # by align_to.
+    assert global_batch_sizes == [3]
+    kept_rollouts = global_batch_sizes[0]
+    kept_samples = sum(sizes[:kept_rollouts])
+    assert kept_samples == 8
+    assert kept_samples % dp_size == 0
+
+    total_mbs = sum(len(mbi) for mbi in micro_batch_indices)
+    assert total_mbs % dp_size == 0
+    assert len(set(len(mbi) for mbi in micro_batch_indices)) == 1
+
+    covered = sorted(i for part in partitions for i in part)
+    assert {rollout_indices[i] for i in covered} == set(range(kept_rollouts))
+
+
+@pytest.mark.unit
+def test_dynamic_ragged_unreachable_alignment_raises_actionable_error():
+    """DP4, ragged rollout sizes where NO prefix of whole rollouts has a sample
+    count that is a multiple of align_to (rollout atomicity makes alignment
+    impossible). The scheduler must fail loud with an actionable ValueError
+    naming the step / sample count / align_to, not a bare AssertionError.
+
+    Rollout sizes [1, 1, 4, 1, 3, 1] (all long) have prefix sample counts
+    1, 2, 6, 7, 10, 11 — none divisible by 4.
+    """
+    dp_size = 4
+    sizes = [1, 1, 4, 1, 3, 1]
+    rollout_indices = []
+    total_lengths = []
+    for g, n in enumerate(sizes):
+        for _ in range(n):
+            rollout_indices.append(g)
+            total_lengths.append(30_000)
+
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=32_768)
+    tp = make_tp(dp_size=dp_size)
+
+    with pytest.raises(ValueError, match="cannot align micro-batches"):
+        build_dp_schedule(
+            args,
+            tp,
+            total_lengths,
+            global_batch_size=len(sizes),
+            rollout_indices=rollout_indices,
+        )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
