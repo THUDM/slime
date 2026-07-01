@@ -25,6 +25,7 @@ from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_inf
 from slime.utils.logging_utils import configure_logger, init_tracking
 from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
 from slime.utils.misc import Box, group_by, load_function
+from slime.utils.ppo_utils import group_relative_advantages
 from slime.utils.types import Sample
 
 from ..utils.metric_utils import has_repetition
@@ -692,21 +693,26 @@ class RolloutManager:
             self.args.advantage_estimator in ["grpo", "gspo", "cispo", "reinforce_plus_plus_baseline"]
             and self.args.rewards_normalization
         ):
-            # group norm
-            rewards = torch.tensor(raw_rewards, dtype=torch.float)
-            if rewards.shape[-1] == self.args.n_samples_per_prompt * self.args.rollout_batch_size:
-                rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
-            else:
-                # when samples count are not equal in each group
-                rewards = rewards.view(-1, rewards.shape[-1])
-            mean = rewards.mean(dim=-1, keepdim=True)
-            rewards = rewards - mean
-
-            if self.args.advantage_estimator in ["grpo", "gspo", "cispo"] and self.args.grpo_std_normalization:
-                std = rewards.std(dim=-1, keepdim=True)
-                rewards = rewards / (std + 1e-6)
-
-            return raw_rewards, rewards.flatten().tolist()
+            # rollout_id groups segments of one rollout (falls back to sample.index, so the
+            # default one-sample-per-rollout path is unchanged); group_index buckets rollouts by
+            # prompt. Custom rollout paths may leave group_index unset -- collapse to None so they
+            # keep the legacy positional grouping.
+            rollout_ids = [s.rollout_id if s.rollout_id is not None else s.index for s in samples]
+            prompt_ids = [s.group_index for s in samples]
+            if any(pid is None for pid in prompt_ids):
+                prompt_ids = None
+            std_normalization = (
+                self.args.advantage_estimator in ["grpo", "gspo", "cispo"] and self.args.grpo_std_normalization
+            )
+            advantages = group_relative_advantages(
+                raw_rewards,
+                rollout_ids,
+                prompt_ids,
+                n_samples_per_prompt=self.args.n_samples_per_prompt,
+                rollout_batch_size=self.args.rollout_batch_size,
+                std_normalization=std_normalization,
+            )
+            return raw_rewards, advantages
 
         return raw_rewards, raw_rewards
 
