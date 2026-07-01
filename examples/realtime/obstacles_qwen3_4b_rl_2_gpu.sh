@@ -4,6 +4,8 @@
 # The model plays a grid game via move_up/move_down/move_left/move_right tool
 # calls; reward is 1.0 for reaching the GOAL row, 0.0 otherwise.
 
+eval "$("${MAMBA_ROOT_PREFIX:-$HOME/micromamba}/bin/micromamba" shell hook --shell bash)"
+micromamba activate slime
 # for rerun the task
 pkill -9 sglang
 sleep 3
@@ -15,6 +17,8 @@ pkill -9 ray
 pkill -9 python
 
 set -ex
+
+ARTIFACT_ROOT=${ARTIFACT_ROOT:-$HOME}
 
 # will prevent ray from buffering stdout/stderr
 export PYTHONUNBUFFERED=1
@@ -37,14 +41,22 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 # Repo root that contains slime/, real-time/, Megatron-LM/ (this script lives at
 # slime/examples/realtime/), used to put the obstacles `environment` package on
 # PYTHONPATH.
-REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." &>/dev/null && pwd)"
+# When submitted via sbatch, BASH_SOURCE[0] resolves to a SLURM-managed temp copy of
+# the script, making SCRIPT_DIR wrong. Use SLURM_SUBMIT_DIR (the directory where sbatch
+# was invoked, i.e. the repo root) to recompute both paths in that case.
+if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
+    REPO_ROOT="${SLURM_SUBMIT_DIR}"
+    SCRIPT_DIR="${REPO_ROOT}/slime/examples/realtime"
+else
+    REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." &>/dev/null && pwd)"
+fi
 source "slime/scripts/models/qwen3-4B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint $HOME/Qwen/Qwen3-4B
-   --ref-load $HOME/Qwen/Qwen3-4B_torch_dist
-   # --load $HOME/Qwen3-4B_slime/
-   --save $HOME/Qwen/Qwen3-4B/qwen3-4b-obstacles/
+   --hf-checkpoint ${ARTIFACT_ROOT}/Qwen/Qwen3-4B
+   --ref-load ${ARTIFACT_ROOT}/Qwen/Qwen3-4B_torch_dist
+   # --load ${ARTIFACT_ROOT}/Qwen3-4B_slime/
+   --save ${ARTIFACT_ROOT}/Qwen/Qwen3-4B/qwen3-4b-obstacles/
    --save-interval 20
    --rotary-base 1000000
 )
@@ -53,7 +65,7 @@ ROLLOUT_ARGS=(
    # Seed dataset produced by obstacles_data_preprocess.py. Each row is
    # {"prompt": <game rules>, "seed": <int>}; the seed arrives on sample.label
    # and the env is reconstructed from it at rollout time.
-   --prompt-data $HOME/obstacles-seeds/train.jsonl
+   --prompt-data ${ARTIFACT_ROOT}/obstacles-seeds/train.jsonl
    --input-key prompt
    --label-key seed
    --rollout-shuffle
@@ -67,7 +79,7 @@ ROLLOUT_ARGS=(
    # Dump every rollout's samples (decoded completions + prompt/tokens/loss_mask/
    # metadata via Sample.to_dict) to a per-step .pt file for inspection during
    # training. {rollout_id} is filled in by slime, not bash.
-   --save-debug-rollout-data $HOME/qwen3-4b-obstacles/rollout_dumps/{rollout_id}.pt
+   --save-debug-rollout-data ${ARTIFACT_ROOT}/qwen3-4b-obstacles/rollout_dumps/{rollout_id}.pt
 
    --global-batch-size 256
    --balance-data

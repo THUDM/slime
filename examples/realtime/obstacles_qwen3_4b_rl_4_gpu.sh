@@ -3,15 +3,14 @@
 # RL on the clear-obstacles grid game (real-time/environment/clear_obstacles).
 # The model plays a grid game via move_up/move_down/move_left/move_right tool
 # calls; reward is 1.0 for reaching the GOAL row, 0.0 otherwise.
-#
-# RESUME variant of obstacles_qwen3_4b_rl_2_gpu.sh: this sets --load to the same
-# directory as --save, so slime picks up the latest checkpoint
-# (latest_checkpointed_iteration.txt) and continues training from it -- model,
-# optimizer, RNG, and the rollout/dataset position are all restored. To train
-# past the original schedule, bump --num-rollout below.
+
+
+# use:
+# sbatch --ntasks-per-node=1 --cpus-per-task=48 --gpus-per-node=h100:4 --mem=800G --export=ALL,ARTIFACT_ROOT=/project/def-vzhong/bsch ./slime/examples/realtime/obstacles_qwen3_4b_rl_4_gpu.sh
 
 eval "$(micromamba shell hook --shell bash)"
 micromamba activate slime
+
 # for rerun the task
 pkill -9 sglang
 sleep 3
@@ -61,16 +60,10 @@ source "slime/scripts/models/qwen3-4B.sh"
 CKPT_ARGS=(
    --hf-checkpoint ${ARTIFACT_ROOT}/Qwen/Qwen3-4B
    --ref-load ${ARTIFACT_ROOT}/Qwen/Qwen3-4B_torch_dist
-   # Resume: load the latest checkpoint from the save directory.
-   --load ${ARTIFACT_ROOT}/Qwen/Qwen3-4B/qwen3-4b-obstacles/
+   # --load ${ARTIFACT_ROOT}/Qwen3-4B_slime/
    --save ${ARTIFACT_ROOT}/Qwen/Qwen3-4B/qwen3-4b-obstacles/
    --save-interval 20
    --rotary-base 1000000
-   # We bump --num-rollout below to train past the original schedule, which
-   # changes the derived lr_decay_steps and would otherwise fail the scheduler's
-   # checkpoint-consistency assert. Override it to use the new schedule values
-   # (LR is constant here anyway; step counting still resumes from num_steps).
-   --override-opt-param-scheduler
 )
 
 ROLLOUT_ARGS=(
@@ -82,7 +75,7 @@ ROLLOUT_ARGS=(
    --label-key seed
    --rollout-shuffle
    --reward-key score
-   --num-rollout 200
+   --num-rollout 100
    --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 16384
@@ -98,7 +91,7 @@ ROLLOUT_ARGS=(
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 1
+   --tensor-model-parallel-size 4
    --sequence-parallel
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
@@ -168,7 +161,7 @@ ulimit -n 65535
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 2 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 4 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
 # Build the runtime environment JSON with proper variable substitution.
 # ${REPO_ROOT}/real-time puts the obstacles `environment` package on PYTHONPATH
@@ -187,7 +180,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 slime/train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 2 \
+   --actor-num-gpus-per-node 4 \
    --colocate \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \

@@ -1,5 +1,15 @@
 #!/bin/bash
 
+# --- Compute Canada / Alliance specific ---
+# For some reason this script can sometimes land the wrong version of torchvision on install on CC
+# Looks like:
+# RuntimeError: operator torchvision::nms does not exist
+# The version should be 0.26
+# pip install torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu129
+# Similar issue with scipy which causes numpy error
+# pip install "scipy==1.17.1"
+
+
 set -ex
 
 # create conda
