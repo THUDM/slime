@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 import ray
 import torch
+from ray.exceptions import ActorUnavailableError
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
@@ -25,6 +26,7 @@ from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_inf
 from slime.utils.logging_utils import configure_logger, init_tracking
 from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
 from slime.utils.misc import Box, group_by, load_function
+from slime.utils.retry import retry_with_backoff
 from slime.utils.types import Sample
 
 from ..utils.metric_utils import has_repetition
@@ -35,6 +37,8 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+ROLLOUT_ENGINE_BRINGUP_MAX_RETRIES = 3
 
 _ROLLOUT_DATA_TENSOR_DTYPES = {
     "tokens": torch.long,
@@ -100,6 +104,25 @@ def _tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:
             rollout_data["rollout_mask_sums"],
             dtype=torch.float32,
         )
+
+
+def _is_transient_ray_unavailable(exc: Exception) -> bool:
+    """A momentary Ray control-plane heartbeat miss (gRPC UNAVAILABLE).
+
+    The engine actor is healthy; re-driving the ``ray.get`` recovers once the
+    heartbeat is back. Distinct from ``ActorDiedError`` (permanent death), which
+    is NOT an ``ActorUnavailableError`` and so is never retried.
+    """
+    return isinstance(exc, ActorUnavailableError)
+
+
+def _wait_rollout_engine_bringup_handles(handles, *, what: str):
+    return retry_with_backoff(
+        lambda h=handles: ray.get(h),
+        should_retry=_is_transient_ray_unavailable,
+        what=what,
+        max_retries=ROLLOUT_ENGINE_BRINGUP_MAX_RETRIES,
+    )
 
 
 @dataclasses.dataclass
@@ -452,7 +475,7 @@ class RolloutManager:
         logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
         if rollout_init_handles:
-            ray.get(rollout_init_handles)
+            _wait_rollout_engine_bringup_handles(rollout_init_handles, what="rollout engine bringup")
 
         init_tracking(args, primary=False)
         self.rollout_engine_lock = Lock.options(
@@ -1179,7 +1202,10 @@ def start_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
                 group = _make_group(group_cfg, router_ip, router_port)
                 handles, port_cursors = group.start_engines(port_cursors)
                 if handles:
-                    ray.get(handles)
+                    _wait_rollout_engine_bringup_handles(
+                        handles,
+                        what=f"rollout encoder engine bringup ({model_cfg.name})",
+                    )
                 urls = ray.get([e.get_url.remote() for e in group.engines])
                 encoder_urls.extend(u for u in urls if u is not None)
                 server_groups.append(group)

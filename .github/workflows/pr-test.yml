@@ -567,6 +567,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_retry.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_cp_utils.py"
             },
             {
