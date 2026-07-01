@@ -1,9 +1,35 @@
+import logging
+
 import ray
 
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.logging_utils import configure_logger, finish_tracking, init_tracking
 from slime.utils.misc import should_run_periodic_action
+
+logger = logging.getLogger(__name__)
+
+
+def _free_rollout_data_refs(rollout_data_ref):
+    """Release Ray object-store copies of rollout data before checkpoint save."""
+    if rollout_data_ref is None:
+        return
+
+    object_refs = []
+    for shard in rollout_data_ref:
+        inner = getattr(shard, "inner", None)
+        if isinstance(inner, ray.ObjectRef):
+            object_refs.append(inner)
+
+    if not object_refs:
+        return
+
+    try:
+        from ray._private.internal_api import free
+
+        free(object_refs, local_only=False)
+    except Exception as exc:
+        logger.warning("Failed to free rollout Ray object refs before checkpoint save: %s", exc)
 
 
 # The framework supports other asynchronous approaches such as fully async (which is shown in examples/full_async).
@@ -34,9 +60,15 @@ def train(args):
         if rollout_data_next_future is not None:
             rollout_data_curr_ref = ray.get(rollout_data_next_future)
 
-        # Start the next rollout early.
-        if rollout_id + 1 < args.num_rollout:
+        will_save = should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout)
+
+        # Start the next rollout early, except before checkpoint save. Saving a large
+        # model already creates a high host-memory peak, so avoid holding the next
+        # rollout batch in Ray object store at the same time.
+        if rollout_id + 1 < args.num_rollout and not will_save:
             rollout_data_next_future = rollout_manager.generate.remote(rollout_id + 1)
+        else:
+            rollout_data_next_future = None
 
         if args.use_critic:
             actor_trains_this_step = rollout_id >= args.num_critic_only_steps
@@ -48,7 +80,14 @@ def train(args):
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))
 
-        if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
+        if will_save:
+            _free_rollout_data_refs(rollout_data_curr_ref)
+            rollout_data_curr_ref = None
+            if (not args.use_critic) or rollout_id >= args.num_critic_only_steps:
+                actor_model.clear_memory()
+            if args.use_critic:
+                critic_model.clear_memory()
+
             if (not args.use_critic) or rollout_id >= args.num_critic_only_steps:
                 actor_model.save_model(
                     rollout_id,
@@ -61,6 +100,9 @@ def train(args):
                 )
             if args.rollout_global_dataset:
                 ray.get(rollout_manager.save.remote(rollout_id))
+
+            if rollout_id + 1 < args.num_rollout:
+                rollout_data_next_future = rollout_manager.generate.remote(rollout_id + 1)
 
         if (rollout_id + 1) % args.update_weights_interval == 0:
             # sync generate before update weights to prevent update weight in the middle of generation

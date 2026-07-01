@@ -33,12 +33,208 @@ from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
 from .cp_utils import reduce_train_step_metrics
-from .data import DataIterator, get_batch
-from .loss import ROLLOUT_TOP_P_TOKEN_KEYS, get_rollout_top_p_logprob_kwargs, loss_function
+from .data import (
+    DataIterator,
+    get_batch,
+    has_multimodal_train_inputs,
+    qwen_vl_text_fastpath_requires_unsplit_input,
+    qwen_vl_unsplit_only_with_mm,
+)
+from .initialize import get_use_gloo_process_groups
+from .loss import _build_shifted_tokens, loss_function, set_deferred_lm_head_weight, sft_precomputed_loss_function
 from .model_provider import get_model_provider_func
 from .stateless_adam import StatelessAdam
 
 logger = logging.getLogger(__name__)
+
+
+_DEFER_ACTIVE = {"on": False}
+_QWENVL_FORWARD_DEBUG_COUNT = 0
+
+
+def _qwen_vl_external_sft_loss() -> bool:
+    return os.environ.get("SLIME_QWENVL_EXTERNAL_SFT_LOSS", "0").lower() in {"1", "true", "yes", "on"}
+
+
+def _qwen_vl_text_language_fastpath() -> bool:
+    return os.environ.get("SLIME_QWENVL_TEXT_LANGUAGE_FASTPATH", "0").lower() in {"1", "true", "yes", "on"}
+
+
+def _qwen_vl_text_language_fastpath_safe() -> bool:
+    return _qwen_vl_text_language_fastpath() and not qwen_vl_text_fastpath_requires_unsplit_input()
+
+
+def _qwen_vl_text_fastpath_local_mrope() -> bool:
+    return os.environ.get("SLIME_QWENVL_TEXT_FASTPATH_LOCAL_MROPE", "1").lower() in {"1", "true", "yes", "on"}
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, os.environ.get(name.lower(), "0")).lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, os.environ.get(name.lower(), str(default))))
+    except ValueError:
+        return default
+
+
+def _distributed_rank() -> int:
+    try:
+        import torch.distributed as dist
+
+        if dist.is_available() and dist.is_initialized():
+            return dist.get_rank()
+    except Exception:
+        pass
+    return int(os.environ.get("RANK", "0"))
+
+
+def _debug_tensor_summary(value):
+    if torch.is_tensor(value):
+        return {
+            "shape": tuple(value.shape),
+            "dtype": str(value.dtype).replace("torch.", ""),
+            "device": str(value.device),
+            "numel": value.numel(),
+        }
+    return None
+
+
+def _debug_packed_seq_params(value):
+    if type(value).__name__ != "PackedSeqParams":
+        return None
+    summary = {
+        "qkv_format": getattr(value, "qkv_format", None),
+        "max_seqlen_q": getattr(value, "max_seqlen_q", None),
+        "max_seqlen_kv": getattr(value, "max_seqlen_kv", None),
+    }
+    for name in ("cu_seqlens_q", "cu_seqlens_kv", "cu_seqlens_q_padded", "cu_seqlens_kv_padded"):
+        tensor = getattr(value, name, None)
+        if not torch.is_tensor(tensor):
+            summary[name] = None
+            continue
+        vals = tensor.detach().cpu()
+        diffs = vals[1:] - vals[:-1] if vals.numel() > 1 else vals.new_empty((0,))
+        summary[name] = {
+            "shape": tuple(tensor.shape),
+            "dtype": str(tensor.dtype).replace("torch.", ""),
+            "device": str(tensor.device),
+            "head": vals[:8].tolist(),
+            "tail": vals[-8:].tolist(),
+            "diff_min": int(diffs.min().item()) if diffs.numel() else None,
+            "diff_max": int(diffs.max().item()) if diffs.numel() else None,
+        }
+    return summary
+
+
+def _debug_value_summary(value, depth: int = 0):
+    if depth > 2:
+        return type(value).__name__
+    tensor_summary = _debug_tensor_summary(value)
+    if tensor_summary is not None:
+        return tensor_summary
+    packed_summary = _debug_packed_seq_params(value)
+    if packed_summary is not None:
+        return {"type": "PackedSeqParams", **packed_summary}
+    if isinstance(value, dict):
+        return {str(key): _debug_value_summary(val, depth + 1) for key, val in list(value.items())[:12]}
+    if isinstance(value, (list, tuple)):
+        return [_debug_value_summary(item, depth + 1) for item in value[:4]]
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return type(value).__name__
+
+
+def _maybe_log_qwenvl_forward_debug(
+    args: Namespace,
+    batch: dict,
+    forward_kwargs: dict,
+    *,
+    has_mm_inputs: bool,
+    needs_unsplit: bool,
+    use_unsplit: bool,
+    use_precomputed_sft_loss: bool = False,
+) -> None:
+    global _QWENVL_FORWARD_DEBUG_COUNT
+
+    if not _env_flag("SLIME_QWENVL_FORWARD_SHAPE_DEBUG"):
+        return
+
+    rank_filter = _env_int("SLIME_QWENVL_FORWARD_SHAPE_DEBUG_RANK", 0)
+    rank = _distributed_rank()
+    if rank_filter >= 0 and rank != rank_filter:
+        return
+
+    limit = _env_int("SLIME_QWENVL_FORWARD_SHAPE_DEBUG_LIMIT", 16)
+    if _QWENVL_FORWARD_DEBUG_COUNT >= limit:
+        return
+    _QWENVL_FORWARD_DEBUG_COUNT += 1
+
+    try:
+        logger.info(
+            "QwenVL forward shape debug: sample=%s rank=%s has_mm_inputs=%s "
+            "uses_unsplit_forward=%s qwen_vl_unsplit_only_with_mm=%s needs_unsplit=%s "
+            "use_unsplit=%s use_precomputed_sft_loss=%s qkv_format=%s allgather_cp=%s "
+            "input_ids=%s position_ids=%s attention_mask=%s loss_mask=%s labels=%s "
+            "packed_seq_params=%s batch_packed_seq_params=%s vlm_packed_seq_params=%s "
+            "tokens=%s unsplit_tokens=%s full_loss_masks=%s multimodal_train_inputs=%s "
+            "max_seq_lens=%s padded_total_lengths=%s",
+            _QWENVL_FORWARD_DEBUG_COUNT,
+            rank,
+            has_mm_inputs,
+            getattr(args, "uses_unsplit_forward", False),
+            qwen_vl_unsplit_only_with_mm(),
+            needs_unsplit,
+            use_unsplit,
+            use_precomputed_sft_loss,
+            getattr(args, "qkv_format", None),
+            getattr(args, "allgather_cp", None),
+            _debug_value_summary(forward_kwargs.get("input_ids")),
+            _debug_value_summary(forward_kwargs.get("position_ids")),
+            _debug_value_summary(forward_kwargs.get("attention_mask")),
+            _debug_value_summary(forward_kwargs.get("loss_mask")),
+            _debug_value_summary(forward_kwargs.get("labels")),
+            _debug_value_summary(forward_kwargs.get("packed_seq_params")),
+            _debug_value_summary(batch.get("packed_seq_params")),
+            _debug_value_summary(batch.get("vlm_packed_seq_params")),
+            _debug_value_summary(batch.get("tokens")),
+            _debug_value_summary(batch.get("unsplit_tokens")),
+            _debug_value_summary(batch.get("full_loss_masks")),
+            _debug_value_summary(batch.get("multimodal_train_inputs")),
+            _debug_value_summary(batch.get("max_seq_lens")),
+            _debug_value_summary(batch.get("padded_total_lengths")),
+        )
+    except Exception:
+        logger.exception("Failed to log QwenVL forward shape debug")
+
+
+def _unwrap_to_core_model(model):
+    while hasattr(model, "module"):
+        model = model.module
+    return model
+
+
+def _ensure_deferred_output_layer(model) -> bool:
+    import types
+
+    core = _unwrap_to_core_model(model)
+    output_layer = getattr(core, "output_layer", None)
+    if output_layer is None or getattr(output_layer, "weight", None) is None:
+        return False
+
+    set_deferred_lm_head_weight(output_layer.weight)
+    if not getattr(output_layer, "_slime_deferred", False):
+        output_layer._slime_orig_forward = output_layer.forward
+
+        def _deferred_forward(self, input_, *args, **kwargs):
+            if _DEFER_ACTIVE["on"]:
+                return input_, None
+            return self._slime_orig_forward(input_, *args, **kwargs)
+
+        output_layer.forward = types.MethodType(_deferred_forward, output_layer)
+        output_layer._slime_deferred = True
+    return True
 
 
 def _disable_tqdm_for_non_main_rank() -> bool:
@@ -301,19 +497,11 @@ def setup_model_and_optimizer(
     config = OptimizerConfig(**kwargs)
     config.timers = None
 
-    if args.use_stateless_adam:
-        assert config.optimizer == "adam", "Stateless Adam only supports --optimizer adam."
-        assert args.no_save_optim, "Stateless Adam does not save Adam moment states. Please set --no-save-optim."
-
-    optimizer_context = _patch_megatron_adam(StatelessAdam) if args.use_stateless_adam else nullcontext()
-    with optimizer_context:
-        optimizer = get_megatron_optimizer(
-            config=config,
-            model_chunks=model,
-            use_gloo_process_groups=args.enable_gloo_process_groups,
-        )
-    if args.use_stateless_adam:
-        _disable_distributed_optimizer_state_initialization(optimizer)
+    optimizer = get_megatron_optimizer(
+        config=config,
+        model_chunks=model,
+        use_gloo_process_groups=get_use_gloo_process_groups(args),
+    )
     opt_param_scheduler = get_optimizer_param_scheduler(args, optimizer)
     return model, optimizer, opt_param_scheduler
 
@@ -420,29 +608,68 @@ def forward_only(
         packed_seq_params = batch["packed_seq_params"]
         total_lengths = batch["total_lengths"]
         response_lengths = batch["response_lengths"]
+
+        has_mm_inputs = has_multimodal_train_inputs(batch.get("multimodal_train_inputs", None))
+        uses_unsplit_forward = getattr(args, "uses_unsplit_forward", False)
+        needs_unsplit = has_mm_inputs or (
+            uses_unsplit_forward
+            and (not qwen_vl_unsplit_only_with_mm() or qwen_vl_text_fastpath_requires_unsplit_input())
+        )
+        text_language_fastpath = (
+            uses_unsplit_forward
+            and not needs_unsplit
+            and _qwen_vl_text_language_fastpath_safe()
+            and batch.get("packed_seq_params") is not None
+        )
+        mm_kwargs = batch["multimodal_train_inputs"] if has_mm_inputs else {}
+        use_unsplit = needs_unsplit and "unsplit_tokens" in batch
+
+        position_ids = None
+        if getattr(args, "position_embedding_type", "rope") == "mrope" and not use_unsplit:
+            from .mrope_utils import build_mrope_position_ids
+
+            position_ids = build_mrope_position_ids(
+                batch,
+                local_thd_cp=text_language_fastpath and _qwen_vl_text_fastpath_local_mrope(),
+            )
+
         forward_kwargs = {
-            "input_ids": tokens,
-            "position_ids": None,
+            "input_ids": batch["unsplit_tokens"] if use_unsplit else tokens,
+            "position_ids": position_ids,
             "attention_mask": None,
             "labels": None,
-            "packed_seq_params": packed_seq_params,
+            "packed_seq_params": None if use_unsplit else packed_seq_params,
             "loss_mask": batch["full_loss_masks"],
         }
-        if batch["multimodal_train_inputs"] is not None:
-            forward_kwargs.update(batch["multimodal_train_inputs"])
+
+        if needs_unsplit and "vlm_packed_seq_params" in batch:
+            forward_kwargs["attention_mask"] = batch["unsplit_attention_mask"]
+            forward_kwargs["packed_seq_params"] = batch["vlm_packed_seq_params"]
+            forward_kwargs["loss_mask"] = None
+
+        if has_mm_inputs:
+            forward_kwargs.update(mm_kwargs)
+
+        _maybe_log_qwenvl_forward_debug(
+            args,
+            batch,
+            forward_kwargs,
+            has_mm_inputs=has_mm_inputs,
+            needs_unsplit=needs_unsplit,
+            use_unsplit=use_unsplit,
+        )
         output_tensor = model(**forward_kwargs)
 
-        output_kwargs = {
-            "args": args,
-            "unconcat_tokens": unconcat_tokens,
-            "total_lengths": total_lengths,
-            "response_lengths": response_lengths,
-            "with_entropy": args.use_rollout_entropy,
-        }
-        if use_rollout_top_p_replay:
-            output_kwargs.update(get_rollout_top_p_logprob_kwargs(args, batch))
-
-        return output_tensor, partial(f, **output_kwargs)
+        return output_tensor, partial(
+            f,
+            args=args,
+            unconcat_tokens=unconcat_tokens,
+            total_lengths=total_lengths,
+            response_lengths=response_lengths,
+            with_entropy=args.use_rollout_entropy,
+            max_seq_lens=batch.get("max_seq_lens", None),
+            padded_total_lengths=batch.get("padded_total_lengths", None),
+        )
 
     # Turn on evaluation mode which disables dropout.
     for model_module in model:
@@ -603,9 +830,16 @@ def train_one_step(
             old_stage = os.environ["ROUTING_REPLAY_STAGE"]
             os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
 
+        use_precomputed_sft_loss = False
+
         if return_schedule_plan:
             assert not args.enable_mtp_training, "MTP training should not be enabled when using combined 1f1b"
             position_ids = None
+            if getattr(args, "position_embedding_type", "rope") == "mrope":
+                from .mrope_utils import build_mrope_position_ids
+
+                position_ids = build_mrope_position_ids(batch)
+
             output_tensor = model.build_schedule_plan(
                 input_ids=batch["tokens"],
                 position_ids=position_ids,
@@ -615,27 +849,105 @@ def train_one_step(
                 loss_mask=batch["full_loss_masks"],
             )
         else:
+            has_mm_inputs = has_multimodal_train_inputs(batch.get("multimodal_train_inputs", None))
+            uses_unsplit_forward = getattr(args, "uses_unsplit_forward", False)
+            needs_unsplit = has_mm_inputs or (
+                uses_unsplit_forward
+                and (not qwen_vl_unsplit_only_with_mm() or qwen_vl_text_fastpath_requires_unsplit_input())
+            )
+            text_language_fastpath = (
+                uses_unsplit_forward
+                and not needs_unsplit
+                and _qwen_vl_text_language_fastpath_safe()
+                and batch.get("packed_seq_params") is not None
+            )
+            use_unsplit = needs_unsplit and "unsplit_tokens" in batch
+            use_precomputed_sft_loss = (
+                args.loss_type == "sft_loss"
+                and (needs_unsplit or text_language_fastpath)
+                and getattr(args, "calculate_per_token_loss", False)
+                and not _qwen_vl_external_sft_loss()
+            )
+
+            position_ids = None
+            if getattr(args, "position_embedding_type", "rope") == "mrope" and not use_unsplit:
+                from .mrope_utils import build_mrope_position_ids
+
+                position_ids = build_mrope_position_ids(
+                    batch,
+                    local_thd_cp=text_language_fastpath and _qwen_vl_text_fastpath_local_mrope(),
+                )
+
             forward_kwargs = {
-                "input_ids": batch["tokens"],
-                "position_ids": None,
+                "input_ids": batch["unsplit_tokens"] if use_unsplit else batch["tokens"],
+                "position_ids": position_ids,
                 "attention_mask": None,
                 "labels": None,
-                "packed_seq_params": batch["packed_seq_params"],
+                "packed_seq_params": None if use_unsplit else batch["packed_seq_params"],
                 "loss_mask": batch["full_loss_masks"],
             }
 
-            if batch["multimodal_train_inputs"] is not None:
-                forward_kwargs.update(batch["multimodal_train_inputs"])
+            if needs_unsplit and "vlm_packed_seq_params" in batch:
+                forward_kwargs["attention_mask"] = batch["unsplit_attention_mask"]
+                forward_kwargs["packed_seq_params"] = batch["vlm_packed_seq_params"]
+                if not use_precomputed_sft_loss:
+                    forward_kwargs["loss_mask"] = None
+
+            if use_precomputed_sft_loss:
+                shifted_labels = _build_shifted_tokens(
+                    batch["tokens"].numel(),
+                    batch["tokens"].device,
+                    batch["unconcat_tokens"],
+                    batch["total_lengths"],
+                    batch["response_lengths"],
+                    args.qkv_format,
+                    batch.get("max_seq_lens", None),
+                    args.allgather_cp,
+                    batch.get("padded_total_lengths", None),
+                ).view_as(batch["tokens"])
+                forward_kwargs["labels"] = shifted_labels.masked_fill(
+                    batch["full_loss_masks"].view_as(shifted_labels).le(0),
+                    -100,
+                )
+                forward_kwargs["loss_mask"] = batch["full_loss_masks"]
 
             if args.enable_mtp_training:
                 forward_kwargs["mtp_kwargs"] = {"mtp_labels": batch["tokens"]}
 
-            output_tensor = model(**forward_kwargs)
+            if has_mm_inputs:
+                forward_kwargs.update(batch["multimodal_train_inputs"])
+
+            _maybe_log_qwenvl_forward_debug(
+                args,
+                batch,
+                forward_kwargs,
+                has_mm_inputs=has_mm_inputs,
+                needs_unsplit=needs_unsplit,
+                use_unsplit=use_unsplit,
+                use_precomputed_sft_loss=use_precomputed_sft_loss,
+            )
+            if (
+                os.environ.get("CHUNKED_LM_HEAD", "0") == "1"
+                and args.loss_type == "sft_loss"
+                and not use_precomputed_sft_loss
+                and _ensure_deferred_output_layer(model)
+            ):
+                _DEFER_ACTIVE["on"] = True
+                try:
+                    output_tensor = model(**forward_kwargs)
+                finally:
+                    _DEFER_ACTIVE["on"] = False
+            else:
+                output_tensor = model(**forward_kwargs)
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             os.environ["ROUTING_REPLAY_STAGE"] = old_stage
 
-        return output_tensor, partial(loss_function, args, batch, num_microbatches, step_global_batch_size)
+        if not return_schedule_plan and use_precomputed_sft_loss:
+            loss_func = sft_precomputed_loss_function
+        else:
+            loss_func = loss_function
+        return output_tensor, partial(loss_func, args, batch, num_microbatches, step_global_batch_size)
 
     # Forward pass.
     forward_backward_func = get_forward_backward_func()

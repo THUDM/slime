@@ -530,6 +530,9 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.debug_rollout_only:
             return
 
+        clear_memory(clear_host_memory=True)
+        print_memory("before save_model", clear_before_print=False)
+
         # torch dist may trigger nccl communication during saving.
         if self.args.offload_train:
             self.wake_up()
@@ -549,6 +552,9 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.offload_train:
             self.sleep()
+
+        clear_memory(clear_host_memory=True)
+        print_memory("after save_model", clear_before_print=False)
 
     @timer
     def update_weights(self) -> None:

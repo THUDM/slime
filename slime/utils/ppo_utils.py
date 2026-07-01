@@ -858,3 +858,44 @@ def calculate_log_probs_and_entropy(
             entropy = logits.new_zeros((0,))
 
     return log_prob, entropy
+
+
+def calculate_log_probs_and_entropy_fused(hidden, weight, tokens, tp_group, with_entropy: bool = False, chunk_size: int = -1):
+    """Compute LM-head logits and CE in chunks to avoid materializing full [T, V]."""
+    import torch.nn.functional as F
+    from torch.utils.checkpoint import checkpoint as _ckpt
+
+    hidden = hidden.contiguous()
+    entropy = None
+    T = hidden.size(0)
+    if T == 0:
+        log_prob = hidden.new_zeros((0, 1), dtype=torch.float32)
+        if with_entropy:
+            entropy = hidden.new_zeros((0,), dtype=torch.float32)
+        return log_prob, entropy
+
+    chunk = chunk_size if chunk_size and chunk_size > 0 else T
+
+    def _chunk_fn(hidden_chunk, token_chunk, lm_head_weight):
+        logits_chunk = F.linear(hidden_chunk.to(lm_head_weight.dtype), lm_head_weight).float()
+        return _calculate_log_probs_and_entropy_chunk(
+            logits_chunk,
+            token_chunk,
+            tp_group,
+            with_entropy=with_entropy,
+            log_prob_keep_mask=None,
+        )
+
+    log_probs, entropys = [], []
+    for start in range(0, T, chunk):
+        hidden_chunk = hidden[start : start + chunk]
+        token_chunk = tokens[start : start + chunk]
+        log_prob_chunk, entropy_chunk = _ckpt(_chunk_fn, hidden_chunk, token_chunk, weight, use_reentrant=False)
+        log_probs.append(log_prob_chunk)
+        if with_entropy:
+            entropys.append(entropy_chunk)
+
+    log_prob = torch.cat(log_probs, dim=0)
+    if with_entropy:
+        entropy = torch.cat(entropys, dim=0)
+    return log_prob, entropy
