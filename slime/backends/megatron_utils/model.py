@@ -34,6 +34,7 @@ from slime.utils.memory_utils import clear_memory
 from .checkpoint import load_checkpoint, save_checkpoint
 from .cp_utils import reduce_train_step_metrics
 from .data import DataIterator, get_batch
+from .grad_reduce import configure_overlap_grad_reduce
 from .loss import ROLLOUT_TOP_P_TOKEN_KEYS, get_rollout_top_p_logprob_kwargs, loss_function
 from .model_provider import get_model_provider_func
 from .stateless_adam import StatelessAdam
@@ -747,18 +748,7 @@ def train(
     config = get_model_config(model[0])
     config.grad_scale_func = optimizer.scale_loss
     config.timers = None
-    if isinstance(model[0], DDP) and args.overlap_grad_reduce:
-        assert config.no_sync_func is None, (
-            "When overlap_grad_reduce is True, config.no_sync_func must be None; "
-            "a custom no_sync_func is not supported when overlapping grad-reduce"
-        )
-        config.no_sync_func = [model_chunk.no_sync for model_chunk in model]
-        if len(model) == 1:
-            config.no_sync_func = config.no_sync_func[0]
-        if args.align_grad_reduce:
-            config.grad_sync_func = [model_chunk.start_grad_sync for model_chunk in model]
-            if len(model) == 1:
-                config.grad_sync_func = config.grad_sync_func[0]
+    configure_overlap_grad_reduce(model, config, args)
     if args.overlap_param_gather and args.align_param_gather:
         config.param_sync_func = [model_chunk.start_param_sync for model_chunk in model]
         if len(model) == 1:
