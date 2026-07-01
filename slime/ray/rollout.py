@@ -17,7 +17,7 @@ from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_
 from slime.backends.sglang_utils.external import start_external_rollout_servers
 from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
-from slime.rollout.base_types import call_rollout_fn
+from slime.rollout.base_types import apply_rollout_sample_filter, call_rollout_fn
 from slime.utils import logging_utils
 from slime.utils.dp_schedule import build_dp_schedule
 from slime.utils.health_monitor import RolloutHealthMonitor
@@ -658,6 +658,7 @@ class RolloutManager:
             # set the same rollout_id on every sibling so the loss reducer counts
             # the rollout once instead of N times.
             _validate_rollout_id_annotated(data)
+            apply_rollout_sample_filter(self.args, data)
             # flatten the data if it is a list of lists
             while isinstance(data[0], list):
                 data = list(itertools.chain.from_iterable(data))

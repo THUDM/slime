@@ -206,10 +206,10 @@ def buffer_filter(args, rollout_id, buffer: list[list[Sample]], num_samples: int
 
 **函数签名**:
 ```python
-def filter_function(args, samples: list[Sample]) -> None
+def filter_function(args, groups: list[list[Sample]]) -> None
 ```
 
-**注意**: 此函数应直接修改每个 `Sample` 对象的 `remove_sample` 属性。
+**注意**: 此函数应直接修改每个组内 `Sample` 对象的 `remove_sample` 属性。
 
 **使用场景**:
 - 基于响应质量过滤样本
