@@ -1,4 +1,4 @@
-ARG SGLANG_IMAGE_TAG=v0.5.13-cu129
+ARG SGLANG_IMAGE_TAG=v0.5.14-cu129
 FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
@@ -81,8 +81,9 @@ RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
 # https://github.com/pytorch/pytorch/issues/168167
 RUN pip install nvidia-cudnn-cu12==9.16.0.29
 
-# reinstall numpy 1.x for megatron
-RUN pip install "numpy<2"
+# Megatron requires NumPy 1.x. Keep SciPy in sync with NumPy>=1.24 because
+# older SciPy releases still reference removed aliases such as np.long.
+RUN pip install "numpy<2" "scipy>=1.13.0"
 
 RUN pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-1117d05/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
 RUN python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
@@ -103,29 +104,25 @@ RUN cd Megatron-LM && \
 
 # TODO temporarily skip patching for GB200/GB300 (and require users to bring their own sglang version). should add back later.
 ARG ENABLE_SGLANG_PATCH=1
-COPY docker/patch/${PATCH_VERSION}/sglang.patch /sgl-workspace/sglang/
+COPY docker/patch/${PATCH_VERSION}/ /sgl-workspace/sglang/slime-patches/
 RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
   cd /sgl-workspace/sglang && \
   git update-index --refresh && \
-  git apply sglang.patch --3way && \
-  if grep -R -n '^<<<<<<< ' .; then \
-    echo "Patch failed to apply cleanly. Please resolve conflicts." && \
-    exit 1; \
-  fi && \
-  rm sglang.patch; \
-fi
-
-COPY docker/patch/${PATCH_VERSION}/sglang-top_p.patch /sgl-workspace/sglang/
-RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
-  cd /sgl-workspace/sglang && \
-  git update-index --refresh && \
-  git apply sglang-top_p.patch --3way && \
-  if grep -R -n '^<<<<<<< ' .; then \
-    echo "Patch failed to apply cleanly. Please resolve conflicts." && \
-    exit 1; \
-  fi && \
-  rm sglang-top_p.patch; \
-fi
+  for patch in \
+    sglang.patch \
+    sglang-delta-weight-update.patch \
+    sglang-profiling.patch \
+    sglang-top_p.patch; do \
+    if [ -f "slime-patches/$patch" ]; then \
+      git apply "slime-patches/$patch" --3way || exit 1; \
+      if grep -R -n '^<<<<<<< ' .; then \
+        echo "Patch failed to apply cleanly. Please resolve conflicts." && \
+        exit 1; \
+      fi; \
+    fi; \
+  done; \
+fi && \
+rm -rf /sgl-workspace/sglang/slime-patches
 
 # ====================================== Install main package ============================================
 
