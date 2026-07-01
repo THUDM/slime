@@ -256,6 +256,26 @@ class ServerGroup:
             return []
         return [engine.release_memory_occupation.remote() for engine in self.engines if engine is not None]
 
+    def pause_generation(self):
+        """Fire pause_generation on all engines (non-blocking).
+
+        Returns a list of Ray ObjectRefs.  Skipped for groups that do not
+        overlap with megatron GPUs (``needs_offload=False``).
+        """
+        if not self.needs_offload:
+            return []
+        return [engine.pause_generation.remote() for engine in self.engines if engine is not None]
+
+    def flush_cache(self):
+        """Fire flush_cache on all engines (non-blocking).
+
+        Returns a list of Ray ObjectRefs.  Skipped for groups that do not
+        overlap with megatron GPUs (``needs_offload=False``).
+        """
+        if not self.needs_offload:
+            return []
+        return [engine.flush_cache.remote() for engine in self.engines if engine is not None]
+
     def onload(self, tags: list[str] | None = None):
         """Fire resume_memory_occupation on all engines (non-blocking).
 
@@ -265,6 +285,16 @@ class ServerGroup:
         if not self.needs_offload:
             return []
         return [engine.resume_memory_occupation.remote(tags=tags) for engine in self.engines if engine is not None]
+
+    def continue_generation(self):
+        """Fire continue_generation on all engines (non-blocking).
+
+        Returns a list of Ray ObjectRefs.  Skipped for groups that do not
+        overlap with megatron GPUs (``needs_offload=False``).
+        """
+        if not self.needs_offload:
+            return []
+        return [engine.continue_generation.remote() for engine in self.engines if engine is not None]
 
     def onload_weights_from_disk(self):
         """Reload weights from ``model_path`` for non-updatable groups.
@@ -382,11 +412,23 @@ class RolloutServer:
                 )
 
     def offload(self):
-        """Release memory occupation across all groups (concurrent)."""
-        handles = []
+        """Pause generation, drain requests, then release memory."""
+        pause_handles = []
         for g in self.server_groups:
-            handles.extend(g.offload())
-        return ray.get(handles) if handles else []
+            pause_handles.extend(g.pause_generation())
+        if pause_handles:
+            ray.get(pause_handles)
+
+        flush_handles = []
+        for g in self.server_groups:
+            flush_handles.extend(g.flush_cache())
+        if flush_handles:
+            ray.get(flush_handles)
+
+        release_handles = []
+        for g in self.server_groups:
+            release_handles.extend(g.offload())
+        return ray.get(release_handles) if release_handles else []
 
     def onload(self, tags: list[str] | None = None):
         """Resume memory occupation across all groups (concurrent)."""
@@ -411,11 +453,18 @@ class RolloutServer:
         return ray.get(handles) if handles else []
 
     def onload_kv(self):
-        """Resume KV cache and CUDA graphs for offloaded groups."""
+        """Resume KV cache and CUDA graphs, then resume generation."""
         handles = []
         for g in self.server_groups:
             handles.extend(g.onload(tags=[GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH]))
-        return ray.get(handles) if handles else []
+        results = ray.get(handles) if handles else []
+
+        continue_handles = []
+        for g in self.server_groups:
+            continue_handles.extend(g.continue_generation())
+        if continue_handles:
+            ray.get(continue_handles)
+        return results
 
 
 @ray.remote
