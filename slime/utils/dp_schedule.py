@@ -53,14 +53,142 @@ def _pack_step_into_mbs(
     use_dynamic_batch_size: bool,
     max_per_bin: int | None,
     micro_batch_size: int | None,
+    multimodal_aware_packing: str = "off",
+    step_is_multimodal: list[bool] | None = None,
 ) -> list[list[int]]:
     """Group a step's samples into mbs. Returns ``mbs[k]`` = local indices into ``step_lengths``."""
     if use_dynamic_batch_size:
         assert max_per_bin is not None
+        if (
+            multimodal_aware_packing in {"separate", "separate_raw"}
+            and step_is_multimodal is not None
+            and any(step_is_multimodal)
+        ):
+            return _first_fit_pack_separate_multimodal(
+                step_lengths,
+                step_is_multimodal,
+                max_per_bin,
+                padded_multimodal_cost=multimodal_aware_packing == "separate",
+            )
         return first_fit_pack(step_lengths, max_per_bin)
     assert micro_batch_size is not None
     n = len(step_lengths)
     return [list(range(i, min(i + micro_batch_size, n))) for i in range(0, n, micro_batch_size)]
+
+
+def _first_fit_pack_separate_multimodal(
+    step_lengths: list[int],
+    step_is_multimodal: list[bool],
+    max_tokens_per_bin: int,
+    *,
+    padded_multimodal_cost: bool,
+) -> list[list[int]]:
+    """First-fit packing that does not mix true multimodal and text-only samples.
+
+    ``separate_raw`` uses the usual sum of token lengths for both text-only and
+    multimodal bins while still avoiding text/mm mixing. ``separate`` uses
+    ``len(bin) * max(seq_len in bin)`` for multimodal bins because the QwenVL
+    unsplit path pads samples in the same microbatch to the longest sequence
+    before entering the wrapper.
+    """
+    assert len(step_lengths) == len(step_is_multimodal)
+
+    bins: list[list[int]] = []
+    bin_is_multimodal: list[bool] = []
+    bin_sums: list[int] = []
+    bin_maxes: list[int] = []
+
+    for idx, length in enumerate(step_lengths):
+        is_mm = step_is_multimodal[idx]
+        for j, bin_ in enumerate(bins):
+            if bin_is_multimodal[j] != is_mm:
+                continue
+            if is_mm and padded_multimodal_cost:
+                new_max = max(bin_maxes[j], length)
+                new_cost = new_max * (len(bin_) + 1)
+            else:
+                new_cost = bin_sums[j] + length
+            if new_cost <= max_tokens_per_bin:
+                bin_.append(idx)
+                bin_sums[j] += length
+                bin_maxes[j] = max(bin_maxes[j], length)
+                break
+        else:
+            bins.append([idx])
+            bin_is_multimodal.append(is_mm)
+            bin_sums.append(length)
+            bin_maxes.append(length)
+
+    return bins
+
+
+def _group_samples_by_rollout(rollout_indices: list[int]) -> tuple[list[int], dict[int, list[int]]]:
+    rollout_id_to_samples: dict[int, list[int]] = {}
+    for sample_pos, rid in enumerate(rollout_indices):
+        rollout_id_to_samples.setdefault(rid, []).append(sample_pos)
+    return list(rollout_id_to_samples.keys()), rollout_id_to_samples
+
+
+def _fixed_rollout_steps(rollout_ids: list[int], global_batch_size: int) -> list[list[int]]:
+    num_steps = len(rollout_ids) // global_batch_size
+    assert num_steps >= 1, (
+        f"num_rollouts ({len(rollout_ids)}) < global_batch_size ({global_batch_size}); "
+        f"need at least one rollout per step."
+    )
+    return [rollout_ids[i * global_batch_size : (i + 1) * global_batch_size] for i in range(num_steps)]
+
+
+def _token_budget_rollout_steps(
+    rollout_ids: list[int],
+    rollout_id_to_samples: dict[int, list[int]],
+    total_lengths: list[int],
+    target_tokens: int,
+    dp_size: int,
+) -> list[list[int]]:
+    if target_tokens <= 0:
+        raise ValueError(f"target_tokens must be positive, got {target_tokens}")
+
+    steps: list[list[int]] = []
+    start = 0
+    while start < len(rollout_ids):
+        chosen = len(rollout_ids)
+        prev = None
+        c = start + 1
+        while c <= len(rollout_ids):
+            step_rollouts = rollout_ids[start:c]
+            sample_count = sum(len(rollout_id_to_samples[rid]) for rid in step_rollouts)
+            token_count = sum(
+                total_lengths[i]
+                for rid in step_rollouts
+                for i in rollout_id_to_samples[rid]
+            )
+            dp_aligned = sample_count >= dp_size and sample_count % dp_size == 0
+            if dp_aligned and token_count >= target_tokens:
+                if prev is not None:
+                    prev_rollouts = rollout_ids[start:prev]
+                    prev_tokens = sum(
+                        total_lengths[i]
+                        for rid in prev_rollouts
+                        for i in rollout_id_to_samples[rid]
+                    )
+                    under_gap = target_tokens - prev_tokens
+                    over_gap = token_count - target_tokens
+                    chosen = prev if under_gap < over_gap else c
+                else:
+                    chosen = c
+                break
+            if dp_aligned:
+                prev = c
+            c += 1
+
+        step_rollouts = rollout_ids[start:chosen]
+        sample_count = sum(len(rollout_id_to_samples[rid]) for rid in step_rollouts)
+        if sample_count < dp_size or sample_count % dp_size != 0:
+            break
+        steps.append(step_rollouts)
+        start = chosen
+
+    return steps
 
 
 def build_dp_schedule(
@@ -70,6 +198,7 @@ def build_dp_schedule(
     *,
     global_batch_size: int,
     rollout_indices: list[int],
+    sample_is_multimodal: list[bool] | None = None,
 ) -> tuple[list[list[int]], list[list[list[int]]], list[int], list[int]]:
     """Compute the per-rank DP partition and micro-batch schedule.
 
@@ -87,6 +216,10 @@ def build_dp_schedule(
             samples don't fit are dropped.
         rollout_indices: rollout id for each sample (``samples[i].index``).
             Samples sharing the same id are kept together in one step.
+        sample_is_multimodal: optional boolean per sample. When
+            ``args.multimodal_aware_packing == "separate"``, dynamic packing
+            avoids mixing multimodal and text-only samples and estimates
+            multimodal mbs cost by padded unsplit size.
 
     Returns:
         ``(partitions, micro_batch_indices, num_microbatches, global_batch_sizes)``.
@@ -97,11 +230,18 @@ def build_dp_schedule(
     cp_size = train_parallel_config["cp_size"]
     vpp_size = train_parallel_config["vpp_size"]
     mb_group = train_parallel_config["microbatch_group_size_per_vp_stage"]
+    if sample_is_multimodal is not None:
+        assert len(sample_is_multimodal) == len(total_lengths), (
+            f"sample_is_multimodal length {len(sample_is_multimodal)} does not match "
+            f"total_lengths length {len(total_lengths)}"
+        )
 
     max_per_bin = None
     if args.use_dynamic_batch_size:
         assert args.max_tokens_per_gpu is not None
-        max_per_bin = args.max_tokens_per_gpu * cp_size
+        max_tokens = args.max_tokens_per_gpu * cp_size
+        packing_safety_margin = getattr(args, "packing_safety_margin", 1.0)
+        max_per_bin = max(1, int(max_tokens * packing_safety_margin))
 
     # mbs count per step must be divisible by (dp_size * mb_group_for_vpp) so
     # every rank ends up with the same num_mbs and (for VPP) the per-rank mbs
@@ -111,27 +251,32 @@ def build_dp_schedule(
     # Group samples by rollout id (preserve first-occurrence order). All
     # samples from one rollout stay in a single step so the per-rollout loss
     # reducer is well-defined.
-    rollout_id_to_samples: dict[int, list[int]] = {}
-    for sample_pos, rid in enumerate(rollout_indices):
-        rollout_id_to_samples.setdefault(rid, []).append(sample_pos)
-    rollout_ids = list(rollout_id_to_samples.keys())
-
-    num_steps = len(rollout_ids) // global_batch_size
-    assert num_steps >= 1, (
-        f"num_rollouts ({len(rollout_ids)}) < global_batch_size ({global_batch_size}); "
-        f"need at least one rollout per step."
-    )
+    rollout_ids, rollout_id_to_samples = _group_samples_by_rollout(rollout_indices)
+    if getattr(args, "global_batch_tokens", None) is not None:
+        step_rollout_groups = _token_budget_rollout_steps(
+            rollout_ids,
+            rollout_id_to_samples,
+            total_lengths,
+            args.global_batch_tokens,
+            dp_size,
+        )
+        assert step_rollout_groups, (
+            f"num_rollouts ({len(rollout_ids)}) cannot form a token-based global batch "
+            f"with dp_size {dp_size} and global_batch_tokens {args.global_batch_tokens}"
+        )
+    else:
+        step_rollout_groups = _fixed_rollout_steps(rollout_ids, global_batch_size)
 
     partitions: list[list[int]] = [[] for _ in range(dp_size)]
     micro_batch_indices: list[list[list[int]]] = [[] for _ in range(dp_size)]
     num_microbatches: list[int] = []
     global_batch_sizes: list[int] = []
 
-    for step_i in range(num_steps):
-        step_rollouts = rollout_ids[step_i * global_batch_size : (step_i + 1) * global_batch_size]
+    for step_i, step_rollouts in enumerate(step_rollout_groups):
         sample_indices = [pos for rid in step_rollouts for pos in rollout_id_to_samples[rid]]
         step_lengths = [total_lengths[i] for i in sample_indices]
-        global_batch_sizes.append(global_batch_size)
+        step_is_multimodal = [sample_is_multimodal[i] for i in sample_indices] if sample_is_multimodal is not None else None
+        global_batch_sizes.append(len(step_rollouts))
         assert len(sample_indices) >= dp_size, (
             f"step {step_i}: {len(sample_indices)} samples < dp_size {dp_size}; "
             f"each step needs at least one sample per rank."
@@ -144,6 +289,8 @@ def build_dp_schedule(
             use_dynamic_batch_size=args.use_dynamic_batch_size,
             max_per_bin=max_per_bin,
             micro_batch_size=getattr(args, "micro_batch_size", None),
+            multimodal_aware_packing=getattr(args, "multimodal_aware_packing", "off"),
+            step_is_multimodal=step_is_multimodal,
         )
 
         # 2. Align mbs count to a multiple of ``align_to``.

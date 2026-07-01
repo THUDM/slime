@@ -4,6 +4,7 @@ import logging
 import os
 import random
 import re
+from collections import defaultdict
 
 import numpy as np
 import ray
@@ -140,54 +141,67 @@ def _build_messages(data: dict, prompt_key: str, as_conversation: bool, multimod
     if multimodal_keys:
         # Build mapping: placeholder -> (MultimodalType, content_list)
         multimodals = {}
+        remain_data = defaultdict(int)
         for type_name, data_key in multimodal_keys.items():
             mt = MultimodalTypes.get(type_name)
-            if mt:
-                multimodal_data = data.get(data_key)
-                if multimodal_data is not None:
-                    multimodals[mt.placeholder] = (mt, list(multimodal_data))
+            if mt is None:
+                raise ValueError(f"Unsupported multimodal type: {type_name}")
 
-        pattern = "(" + "|".join(re.escape(p) for p in multimodals.keys()) + ")"
-
-        for message in prompt:
-            if isinstance(message["content"], str):
-                content_list = []
-                for segment in re.split(pattern, message["content"]):
-                    if not segment:
-                        continue
-                    if segment in multimodals:
-                        mt, content = multimodals[segment]
-                        assert len(content) > 0, (
-                            f"Not enough {mt.name} data: more '{mt.placeholder}' placeholders in prompt "
-                            f"than {mt.name}s provided in data"
-                        )
-                        content_list.append({"type": mt.name, mt.name: content.pop(0)})
-                    else:
-                        content_list.append({"type": "text", "text": segment})
-                message["content"] = content_list
-
-            elif isinstance(message["content"], list):
-                # TODO: handle more general cases. where message['content'] is a dict and contains multiple types of content.
-                # e.g.
-                #  "content": [
-                #     {
-                #         "type": "image",
-                #         "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg",
-                #     },
-                #     {"type": "text", "text": "Describe this image."},
-                # ],
-                logger.warning("message['content'] is a list of dicts, no processing will be done.")
-                continue
+            raw_multimodal_data = data.get(data_key)
+            if raw_multimodal_data is None:
+                multimodal_data = []
+            elif isinstance(raw_multimodal_data, (str, bytes)):
+                multimodal_data = [raw_multimodal_data]
             else:
-                raise ValueError(
-                    f"Unsupported content type: {type(message['content'])}, expected str or list of dicts"
-                )
+                multimodal_data = list(raw_multimodal_data)
 
-        for placeholder, (mt, remaining) in multimodals.items():
-            assert len(remaining) == 0, (
-                f"Multimodal data count mismatch: {len(remaining)} more {mt.name}(s)"
-                f"than '{placeholder}' placeholders in prompt"
-            )
+            multimodals[mt.placeholder] = (mt, multimodal_data)
+            remain_data[mt.name] += len(multimodal_data)
+
+        if multimodals:
+            pattern = "(" + "|".join(re.escape(p) for p in multimodals.keys()) + ")"
+            built_prompt = []
+
+            for message in prompt:
+                if isinstance(message["content"], str):
+                    content_list = []
+                    for segment in re.split(pattern, message["content"]):
+                        if not segment:
+                            continue
+                        if segment in multimodals:
+                            mt, content = multimodals[segment]
+                            remain_data[mt.name] -= 1
+                            if remain_data[mt.name] < 0:
+                                logger.warning(
+                                    "The number of placeholder %s in prompt is more than data number.", segment
+                                )
+                            if content:
+                                content_list.append({"type": mt.name, mt.name: content.pop(0)})
+                        else:
+                            content_list.append({"type": "text", "text": segment})
+
+                    built_message = dict(message)
+                    built_message["content"] = content_list
+                    built_prompt.append(built_message)
+
+                elif isinstance(message["content"], list):
+                    for item in message["content"]:
+                        item_type = item.get("type") if isinstance(item, dict) else None
+                        if item_type in remain_data:
+                            remain_data[item_type] -= 1
+                    built_prompt.append(message)
+                else:
+                    raise ValueError(
+                        f"Unsupported content type: {type(message['content'])}, expected str or list of dicts"
+                    )
+
+            prompt = built_prompt
+
+            if any(v > 0 for v in remain_data.values()):
+                raise RuntimeError(
+                    f"placeholder lost! The number of remain mutimodal data is {remain_data}. "
+                    "Please check your dataset prompt."
+                )
 
     return prompt
 

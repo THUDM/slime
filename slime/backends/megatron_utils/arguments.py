@@ -3,8 +3,19 @@ import logging
 
 from megatron.training.arguments import parse_args as _megatron_parse_args
 from megatron.training.arguments import validate_args as _megatron_validate_args
-from megatron.training.tokenizer.tokenizer import _vocab_size_with_padding
 from transformers import AutoConfig
+
+try:
+    from megatron.training.tokenizer.tokenizer import _vocab_size_with_padding
+except ImportError:
+
+    def _vocab_size_with_padding(orig_vocab_size, args):
+        after = int(orig_vocab_size)
+        multiple = int(getattr(args, "make_vocab_size_divisible_by", 128))
+        multiple *= int(getattr(args, "tensor_model_parallel_size", 1))
+        if multiple > 0:
+            after = ((after + multiple - 1) // multiple) * multiple
+        return after
 
 __all__ = ["validate_args", "megatron_parse_args", "set_default_megatron_args"]
 
@@ -155,6 +166,8 @@ def _set_default_megatron_args(args):
     args.max_position_embeddings = args.seq_length
     # TODO: revisit this when megatron(dev) have solved the optimizer-cpu-offload ckpt saving bug
     args.dist_ckpt_save_pre_mcore_014 = True
+    if not hasattr(args, "enable_gloo_process_groups"):
+        args.enable_gloo_process_groups = True
     # compatible for megatron
     if hasattr(args, "rope_type") and args.rope_type is None:
         args.rope_type = "yarn" if args.multi_latent_attention else "rope"

@@ -11,6 +11,12 @@ from megatron.training.global_vars import _build_tokenizer, set_args
 logger = logging.getLogger(__name__)
 
 
+def get_use_gloo_process_groups(args) -> bool:
+    if hasattr(args, "enable_gloo_process_groups"):
+        return args.enable_gloo_process_groups
+    return getattr(args, "use_gloo_process_groups", False)
+
+
 def _set_random_seed(
     seed_: int,
     data_parallel_random_init: bool = False,
@@ -49,7 +55,7 @@ def _initialize_distributed(args, get_embedding_ranks=None, get_position_embeddi
         order="tp-cp-ep-dp-pp" if not args.use_tp_pp_dp_mapping else "tp-cp-ep-pp-dp",
         get_embedding_ranks=get_embedding_ranks,
         get_position_embedding_ranks=get_position_embedding_ranks,
-        create_gloo_process_groups=args.enable_gloo_process_groups,
+        create_gloo_process_groups=get_use_gloo_process_groups(args),
     )
 
 

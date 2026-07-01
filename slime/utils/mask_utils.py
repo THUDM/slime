@@ -127,14 +127,19 @@ class MultiTurnLossMaskGenerator:
     def gen_multi_turn_loss_mask_qwen3_5(
         self, messages: list[dict], tools: list[dict] = None
     ) -> tuple[list[int], list[int]]:
-        rendered_text = self.tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, return_dict=False)
+        rendered_text = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            tools=tools,
+            return_dict=False,
+        )
         tokenized = self.tokenizer(rendered_text, add_special_tokens=False, return_offsets_mapping=True)
         token_ids = tokenized["input_ids"]
         offset_mapping = tokenized.get("offset_mapping")
 
         if offset_mapping is None:
             raise ValueError(
-                "Qwen3.5 loss mask generation requires a fast tokenizer " "with `return_offsets_mapping` support."
+                "Qwen3.5/Qwen3.6 loss mask generation requires a fast tokenizer with offset mapping support."
             )
 
         expected_token_ids = self.tokenizer.apply_chat_template(
@@ -142,16 +147,19 @@ class MultiTurnLossMaskGenerator:
         )
         if token_ids != expected_token_ids:
             raise ValueError(
-                "Qwen3.5 rendered text tokenization does not match "
+                "Qwen3.5/Qwen3.6 rendered text tokenization does not match "
                 "`apply_chat_template(..., tokenize=True)` output."
             )
 
         assistant_header = "<|im_start|>assistant\n"
-        think_prefix = "<think>\n"
         end_marker = "<|im_end|>"
 
         char_mask = [0] * len(rendered_text)
         cursor = 0
+
+        def mark_span(start: int, end: int) -> None:
+            for pos in range(max(start, 0), min(end, len(char_mask))):
+                char_mask[pos] = 1
 
         for message in messages:
             if message["role"] != "assistant":
@@ -159,7 +167,9 @@ class MultiTurnLossMaskGenerator:
 
             header_pos = rendered_text.find(assistant_header, cursor)
             if header_pos < 0:
-                raise ValueError("Failed to locate assistant message in rendered Qwen3.5 chat template output.")
+                raise ValueError(
+                    "Failed to locate assistant message in rendered Qwen3.5/Qwen3.6 chat template."
+                )
 
             content_start = header_pos + len(assistant_header)
             end_pos = rendered_text.find(end_marker, content_start)
@@ -174,13 +184,40 @@ class MultiTurnLossMaskGenerator:
             if message.get("step_loss_mask", 1) != 1:
                 continue
 
-            if rendered_text[content_start : content_start + len(think_prefix)] == think_prefix:
-                mask_start = content_start + len(think_prefix)
-            else:
-                mask_start = content_start
+            content_parts = self._get_assistant_content_parts(message)
+            marked_content = False
+            search_start = content_start
+            for content_part in content_parts:
+                part_pos = rendered_text.find(content_part, search_start, end_pos)
+                if part_pos < 0:
+                    continue
+                mark_span(part_pos, part_pos + len(content_part))
+                search_start = part_pos + len(content_part)
+                marked_content = True
 
-            for pos in range(mask_start, span_end):
-                char_mask[pos] = 1
+            tool_call_marked = False
+            if message.get("tool_calls"):
+                tool_search_start = search_start
+                while True:
+                    tool_start = rendered_text.find("<tool_call>", tool_search_start, end_pos)
+                    if tool_start < 0:
+                        break
+                    tool_end = rendered_text.find("</tool_call>", tool_start, end_pos)
+                    if tool_end < 0:
+                        break
+                    tool_end += len("</tool_call>")
+                    mark_span(tool_start, tool_end)
+                    tool_search_start = tool_end
+                    tool_call_marked = True
+
+                if not tool_call_marked and marked_content:
+                    mark_span(search_start, end_pos)
+                    tool_call_marked = True
+
+            if not marked_content and not tool_call_marked:
+                mark_span(content_start, end_pos)
+
+            mark_span(end_pos, span_end)
 
         char_mask_prefix_sum = [0]
         for value in char_mask:
@@ -194,6 +231,46 @@ class MultiTurnLossMaskGenerator:
                 loss_mask.append(1 if char_mask_prefix_sum[end] - char_mask_prefix_sum[start] > 0 else 0)
 
         return token_ids, loss_mask
+
+    @staticmethod
+    def _message_content_to_text(content) -> str:
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            text_parts = []
+            for item in content:
+                if isinstance(item, str):
+                    text_parts.append(item)
+                elif isinstance(item, dict):
+                    if "text" in item:
+                        text_parts.append(item["text"])
+                    elif item.get("type") == "text":
+                        text_parts.append(item.get("text", ""))
+            return "".join(text_parts)
+        return str(content)
+
+    def _get_assistant_content_parts(self, message: dict) -> list[str]:
+        content = self._message_content_to_text(message.get("content")).strip()
+        reasoning_content = message.get("reasoning_content")
+        parts = []
+
+        if isinstance(reasoning_content, str):
+            reasoning_content = reasoning_content.strip()
+            if reasoning_content:
+                parts.append(reasoning_content)
+        elif "</think>" in content:
+            reasoning_content = content.split("</think>", 1)[0].rstrip("\n").split("<think>")[-1].lstrip("\n").strip()
+            if reasoning_content:
+                parts.append(reasoning_content)
+            content = content.split("</think>", 1)[-1].lstrip("\n")
+
+        content = content.strip()
+        if content:
+            parts.append(content)
+
+        return parts
 
     def gen_multi_turn_loss_mask_distill_qwen(
         self, messages: list[dict], tools: list[dict] = None
@@ -240,7 +317,9 @@ class MultiTurnLossMaskGenerator:
                         text_parts.append(item.get("text", ""))
                     elif isinstance(item, str):
                         text_parts.append(item)
-                text.append({"role": msg["role"], "content": " ".join(text_parts)})
+                text_msg = dict(msg)
+                text_msg["content"] = "".join(text_parts)
+                text.append(text_msg)
             else:
                 text.append(msg)
 
