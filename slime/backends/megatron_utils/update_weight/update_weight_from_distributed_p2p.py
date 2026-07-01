@@ -480,7 +480,7 @@ class UpdateWeightFromDistributedP2P:
 
         Rank 0 posts a single HTTP request with concatenated metadata from every
         training TP rank (``tp_tensor_counts``). All training ranks then enter an
-        NCCL barrier with rollout workers, ``dist.send`` their local tensors to
+        NCCL barrier with rollout workers, ``dist.isend`` their local tensors to
         matching rollout TP ranks on each engine, and wait for load completion.
         """
         t_bucket_start = time.perf_counter()
@@ -532,11 +532,9 @@ class UpdateWeightFromDistributedP2P:
                 for engine in self.rollout_engines
             ]
 
-            ray.get(self.rollout_engine_lock.release.remote())
-
         t_lock_end = time.perf_counter()
 
-        # NCCL barrier: rollout workers post dist.recv before training sends.
+        # NCCL barrier: rollout workers post dist.irecv before training sends.
         dist.barrier(group=group)
 
         # Every training TP rank sends to the matching rank on each engine.
@@ -547,16 +545,20 @@ class UpdateWeightFromDistributedP2P:
         num_engines = len(self.rollout_engines)
 
         t_send_start = time.perf_counter()
+        send_handles = []
         for _, param in converted_named_tensors:
             tensor = param.data.contiguous()
             for engine_idx in range(num_engines):
                 dst_rank = tp_size + cumulative[engine_idx] + tp_rank
-                dist.send(tensor, dst=dst_rank, group=group)
+                send_handles.append(dist.isend(tensor, dst=dst_rank, group=group))
+        for handle in send_handles:
+            handle.wait()
 
         t_send_end = time.perf_counter()
 
         if refs is not None:
             ray.get(refs)
+            ray.get(self.rollout_engine_lock.release.remote())
 
         t_ray_end = time.perf_counter()
 
@@ -565,7 +567,7 @@ class UpdateWeightFromDistributedP2P:
         self._log_timing(
             f"  bucket ({'expert' if is_expert else 'non-expert'}, {num_tensors} tensors)",
             t_ray_end - t_bucket_start,
-            f" [lock+ray={t_lock_end - t_lock_start:.3f}s, dist.send={t_send_end - t_send_start:.3f}s]",
+            f" [lock+ray={t_lock_end - t_lock_start:.3f}s, dist.isend={t_send_end - t_send_start:.3f}s]",
         )
 
         if pbar is not None:
