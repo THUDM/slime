@@ -306,9 +306,10 @@ class TrajectoryManager:
         """Linearize this sid's routing tree into slime ``Sample`` objects and
         consume the session.
 
-        Each routing leaf yields one or more Samples; ``reward`` is split evenly
-        across all of them. The sid is dropped afterwards, so a second call for
-        the same sid returns ``[]``.
+        Each routing leaf yields one or more Samples; ``reward`` is assigned in
+        full to every emitted Sample (not split across them), so each trained
+        turn carries the trajectory's outcome reward. The sid is dropped
+        afterwards, so a second call for the same sid returns ``[]``.
         """
         root = self._trees.get(sid)
         if root is None:
@@ -321,9 +322,8 @@ class TrajectoryManager:
             chain = routing_leaf.path_from_root()
             samples.extend(self._chain_to_samples(chain, base_sample=base_sample, extra_metadata=extra_metadata))
 
-        per_sample_reward = reward
         for s in samples:
-            s.reward = per_sample_reward
+            s.reward = reward
 
         self._trees.pop(sid, None)
         self._turn_count.pop(sid, None)
