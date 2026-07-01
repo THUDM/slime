@@ -27,6 +27,21 @@ def _should_check_memory_for_comm(op_name):
     return op_name not in _COMM_MEMORY_CHECK_SKIP_OPS
 
 
+def _is_gloo_group(args, kwargs):
+    backend = kwargs.get("backend")
+    if backend is None and len(args) >= 3:
+        backend = args[2]
+    return backend is not None and str(backend).lower() == "gloo"
+
+
+def _get_group_ranks(args, kwargs):
+    if len(args) >= 1 and args[0] is not None:
+        return args[0]
+    if "ranks" in kwargs and kwargs["ranks"] is not None:
+        return kwargs["ranks"]
+    return list(range(dist.get_world_size()))
+
+
 def monkey_patch_torch_dist():
     pid = os.getpid()
     if pid in old_new_group_dict:
@@ -42,22 +57,14 @@ def monkey_patch_torch_dist():
     def new_group(*args, **kwargs):
         group = old_new_group(*args, **kwargs)
         # skip none nccl group.
-        if len(args) >= 3 and args[2] == "gloo" or "backend" in kwargs and kwargs["backend"] == "gloo":
+        if _is_gloo_group(args, kwargs):
             return group
 
-        # Get ranks from arguments
-        if len(args) >= 1 and args[0] is not None:
-            ranks = args[0]
-        elif "ranks" in kwargs and kwargs["ranks"] is not None:
-            ranks = kwargs["ranks"]
-        else:
-            # If no ranks specified, use all ranks in world
-            ranks = list(range(dist.get_world_size()))
-
+        ranks = _get_group_ranks(args, kwargs)
         if len(ranks) == 1:
             return group
 
-        group = ReloadableProcessGroup(group, ranks)
+        group = ReloadableProcessGroup(group, ranks, args, kwargs)
         return group
 
     dist.new_group = new_group
@@ -140,7 +147,7 @@ def monkey_patch_torch_dist():
 class ReloadableProcessGroup(torch.distributed.ProcessGroup):
     GROUPS = {}
 
-    def __init__(self, group, ranks):
+    def __init__(self, group, ranks, group_args=(), group_kwargs=None):
         super().__init__(
             rank=dist.get_rank(group),
             size=dist.get_world_size(group),
@@ -148,6 +155,8 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
         self.group = group
         self.group_info = {
             "ranks": ranks,
+            "args": tuple(group_args),
+            "kwargs": dict(group_kwargs or {}),
         }
         pid = os.getpid()
         if pid not in ReloadableProcessGroup.GROUPS:
@@ -183,7 +192,10 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
         for reloadable_group in reloadable_groups:
             if reloadable_group.group is not None:
                 continue
-            group = old_new_group(ranks=reloadable_group.group_info["ranks"], backend="nccl")
+            group = old_new_group(
+                *reloadable_group.group_info["args"],
+                **reloadable_group.group_info["kwargs"],
+            )
             reloadable_group.group = group
 
     def rank(self) -> int:
