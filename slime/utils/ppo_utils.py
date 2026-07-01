@@ -195,7 +195,6 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
         with_entropy: bool,
         with_entropy_grad: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        ctx.set_materialize_grads(False)
         with_entropy_grad = with_entropy and with_entropy_grad
         vocab_parallel_logits = vocab_parallel_logits.float()
         seq_len, vocab_parallel_size = vocab_parallel_logits.shape
@@ -279,7 +278,6 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
             ctx.mark_non_differentiable(entropy)
 
         ctx.with_entropy_grad = with_entropy_grad
-        ctx.cast_log_prob_grad_to_bfloat16 = vocab_parallel_logits.is_cuda
         # Metric-only entropy still returns values, but does not need the
         # full-vocab entropy tensors kept alive for backward.
         saved_entropy_softmax = entropy_softmax if with_entropy_grad else vocab_parallel_logits.new_empty((0,))
@@ -300,7 +298,7 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
     @staticmethod
     def backward(
         ctx, grad_log_prob: torch.Tensor | None, grad_entropy: torch.Tensor | None
-    ) -> tuple[torch.Tensor | None, None, None, None, None, None]:
+    ) -> tuple[torch.Tensor, None, None, None, None, None]:
         (
             log_prob_softmax,
             target_mask,
@@ -310,25 +308,30 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
             vocab_parallel_logits,
         ) = ctx.saved_tensors
 
-        grad_input = None
-        if ctx.with_entropy_grad and grad_entropy is not None and grad_entropy.numel() > 0:
-            grad_input = sum_softmax_times_logits - vocab_parallel_logits
-            grad_input.mul_(entropy_softmax)
-            grad_input.mul_(grad_entropy.reshape(-1, 1))
+        if grad_log_prob is None:
+            raise RuntimeError(
+                "_VocabParallelLogProbEntropy expected a materialized grad_log_prob. "
+                "Do not call ctx.set_materialize_grads(False)."
+            )
 
-        if grad_log_prob is not None:
-            vocab_parallel_size = log_prob_softmax.size(-1)
-            grad_log_prob_input = log_prob_softmax.neg_()
-            grad_2d = grad_log_prob_input.view(-1, vocab_parallel_size)
-            arange_1d = torch.arange(grad_2d.size(0), device=grad_2d.device)
-            target_update = (~target_mask).to(dtype=grad_2d.dtype)
-            grad_2d[arange_1d, masked_target_1d] += target_update
-            grad_log_prob_input.mul_(grad_log_prob.reshape(-1, 1))
-            if ctx.cast_log_prob_grad_to_bfloat16:
-                # Match Megatron's fused vocab-parallel CE backward, which
-                # returns the log-prob branch gradient in bfloat16.
-                grad_log_prob_input = grad_log_prob_input.to(torch.bfloat16)
-            grad_input = grad_log_prob_input if grad_input is None else grad_input.add_(grad_log_prob_input)
+        grad_entropy_input = None
+        if ctx.with_entropy_grad and grad_entropy is not None and grad_entropy.numel() > 0:
+            # In the unmasked path, entropy_softmax aliases log_prob_softmax.
+            # Build entropy grad before mutating log_prob_softmax below.
+            grad_entropy_input = sum_softmax_times_logits - vocab_parallel_logits
+            grad_entropy_input.mul_(entropy_softmax)
+            grad_entropy_input.mul_(grad_entropy.reshape(-1, 1))
+
+        vocab_parallel_size = log_prob_softmax.size(-1)
+        grad_input = log_prob_softmax.neg_()
+        grad_2d = grad_input.view(-1, vocab_parallel_size)
+        arange_1d = torch.arange(grad_2d.size(0), device=grad_2d.device)
+        target_update = (~target_mask).to(dtype=grad_2d.dtype)
+        grad_2d[arange_1d, masked_target_1d] += target_update
+        grad_input.mul_(grad_log_prob.reshape(-1, 1))
+
+        if grad_entropy_input is not None:
+            grad_input.add_(grad_entropy_input)
 
         return grad_input, None, None, None, None, None
 
