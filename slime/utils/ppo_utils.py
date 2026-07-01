@@ -314,6 +314,14 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
                 "Do not call ctx.set_materialize_grads(False)."
             )
 
+        grad_entropy_input = None
+        if ctx.with_entropy_grad and grad_entropy is not None and grad_entropy.numel() > 0:
+            # In the unmasked path, entropy_softmax aliases log_prob_softmax.
+            # Build entropy grad before mutating log_prob_softmax below.
+            grad_entropy_input = sum_softmax_times_logits - vocab_parallel_logits
+            grad_entropy_input.mul_(entropy_softmax)
+            grad_entropy_input.mul_(grad_entropy.reshape(-1, 1))
+
         vocab_parallel_size = log_prob_softmax.size(-1)
         grad_input = log_prob_softmax.neg_()
         grad_2d = grad_input.view(-1, vocab_parallel_size)
@@ -322,10 +330,7 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
         grad_2d[arange_1d, masked_target_1d] += target_update
         grad_input.mul_(grad_log_prob.reshape(-1, 1))
 
-        if ctx.with_entropy_grad and grad_entropy is not None and grad_entropy.numel() > 0:
-            grad_entropy_input = sum_softmax_times_logits - vocab_parallel_logits
-            grad_entropy_input.mul_(entropy_softmax)
-            grad_entropy_input.mul_(grad_entropy.reshape(-1, 1))
+        if grad_entropy_input is not None:
             grad_input.add_(grad_entropy_input)
 
         return grad_input, None, None, None, None, None
