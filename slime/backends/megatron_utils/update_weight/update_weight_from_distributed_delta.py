@@ -509,13 +509,18 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
         self.writer: AsyncSafetensorsWriter | None = None
         self.delta_dir: str | None = None
         self._pre_push_hook: Callable | None = None
-        # Disk transport: each pass boundary publishes its accumulated files
-        # (the only globally-synced flush points, since ``_publish_batch``
-        # contains collectives). ``_pre_push_hook`` may return a Future, in
-        # which case the receiver RPC is deferred behind it via
-        # ``_rpc_executor`` so the main encode thread continues immediately.
-        # ``_pending_publishes`` holds the resulting Future[list[ObjectRef]]
-        # on rank 0; ``_finalize_sync`` awaits them at end of sync.
+        self._publish_hook: Callable | None = None
+        self._publish_only = bool(getattr(args, "update_weight_delta_publish_only", False))
+        self._publish_wait = getattr(args, "update_weight_delta_publish_wait", "next-sync")
+        # Direct disk transport publishes at each pass boundary so receiver
+        # apply can overlap later encoding. Publish-only disk transport emits
+        # one complete version at finalize time, so external consumers never
+        # observe a partially published version. ``_pre_push_hook`` may return
+        # a Future; ``_pending_publishes`` holds Future[list[ObjectRef]] values.
+        # Direct transport drains them at end of sync (resume + cleanup depend
+        # on them); publish-only transport leaves the last publish in flight
+        # across the training step and drains it at the start of the next sync,
+        # so at most one version's publish is ever outstanding.
         self._pending_files: list[str] = []
         self._pending_publishes: list = []
         self._published_any: bool = False
@@ -531,6 +536,10 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
                 from slime.utils.misc import load_function
 
                 self._pre_push_hook = load_function(args.custom_delta_pre_push_path)
+            if getattr(args, "custom_delta_publish_path", None):
+                from slime.utils.misc import load_function
+
+                self._publish_hook = load_function(args.custom_delta_publish_path)
 
     def connect_rollout_engines(
         self,
@@ -561,6 +570,8 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
         self._group_name = f"slime-pp_{pp_rank}"
 
     def disconnect_rollout_engines(self) -> None:
+        # A queued publish holds engine handles; settle it before dropping them.
+        self._drain_pending_publishes()
         if self.transport == "nccl":
             super().disconnect_rollout_engines()
 
@@ -584,14 +595,17 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
             if self._is_pp_src_rank:
                 os.makedirs(self._version_dir, exist_ok=True)
 
-        if dist.get_rank() == 0:
+        if dist.get_rank() == 0 and not self._publish_only:
             ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
         self.density_nnz = self.density_numel = self.wire_bytes = self._flush_idx = 0
         self._pending_files.clear()
-        self._pending_publishes.clear()
+        # Publish-only mode leaves the previous sync's publish in flight across
+        # the training step; settle it (and surface any publish failure, one
+        # sync late) before producing the next version.
+        self._drain_pending_publishes()
         self._published_any = False
         if self.writer is not None:
             self.writer.reset_counters()
@@ -649,13 +663,15 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
 
     def _flush_and_publish(self, bucket: DeltaBucket, pbar: tqdm | None) -> None:
         """
-        End-of-sub-pass: drain the in-flight bucket, barrier all PP ranks, then
-        (disk-only) fire one publish RPC for everything since the last call.
+        End-of-sub-pass: drain the in-flight bucket and barrier all PP ranks.
+        Direct disk transport also fires one receiver RPC for everything since
+        the last call; publish-only transport waits until finalize so the hook
+        sees a complete version.
         """
         if bucket.has_updates:
             self._flush_bucket(bucket, pbar)
         dist.barrier(group=get_gloo_group())
-        if self.transport == "disk":
+        if self.transport == "disk" and not self._publish_only:
             self._publish_batch()
 
     def _pipeline_pass(
@@ -746,13 +762,15 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
 
     def _publish_batch(self) -> None:
         """
-        Drain pending fsyncs, invoke the pre-push hook (may return a Future for an
-        async durability step on shared FS), then defer rank 0's
-        ``update_weights_from_disk`` RPC behind that Future via ``_rpc_executor``.
-        Each deferred dispatch lands in ``_pending_publishes`` as a
-        Future[list[ObjectRef]]; ``_finalize_sync`` awaits both layers. Safe to call
-        with empty ``_pending_files``: the all_gather still synchronizes and rank 0
-        skips the dispatch when no rank produced files.
+        Drain pending fsyncs, invoke the pre-push hook (may return a Future for
+        an async durability step on shared FS), gather filenames, then defer
+        rank 0's publish/direct-update work behind that Future via
+        ``_rpc_executor``. Each deferred dispatch lands in
+        ``_pending_publishes`` as a Future[list[ObjectRef]]; direct disk
+        transport awaits both layers in ``_finalize_sync``, publish-only at the
+        start of the next sync. Safe to call with empty ``_pending_files``:
+        direct disk transport skips the dispatch, while publish-only still
+        calls the publish hook so a no-op version can be made visible.
         """
         self.writer.drain()
         dist.barrier(group=get_gloo_group())
@@ -768,24 +786,31 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
         flat = [f for sub in all_files for f in sub]
         self._pending_files.clear()
 
-        if dist.get_rank() == 0 and flat:
+        if dist.get_rank() == 0 and (flat or self._publish_only):
             version_dir = self._version_dir
             engines = list(self.rollout_engines)
             weight_version = str(self.weight_version)
             self._published_any = True
 
             def _fire_when_committed() -> list:
+                refs = []
                 if commit_future is not None:
                     commit_future.result()
-                return [
-                    engine.update_weights_from_disk.remote(
-                        model_path=version_dir,
-                        files=flat,
-                        load_format="delta",
-                        weight_version=weight_version,
+                if self._publish_hook is not None:
+                    hook_refs = self._publish_hook(self.args, version_dir, flat, weight_version, engines)
+                    if hook_refs is not None:
+                        refs.extend(hook_refs)
+                if not self._publish_only:
+                    refs.extend(
+                        engine.update_weights_from_disk.remote(
+                            model_path=version_dir,
+                            files=flat,
+                            load_format="delta",
+                            weight_version=weight_version,
+                        )
+                        for engine in engines
                     )
-                    for engine in engines
-                ]
+                return refs
 
             self._pending_publishes.append(self._rpc_executor.submit(_fire_when_committed))
 
@@ -793,7 +818,14 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
         """
         Per-transport end-of-sync. NCCL: each flush already broadcasted; just resume.
         Disk: publish the trailing files, wait for all streamed applies to land, then
-        cleanup + resume.
+        cleanup + resume. Publish-only: dispatch the version's publish and return
+        without awaiting it by default — the hook runs concurrently with the
+        next training step and the start of the next sync settles it. With
+        ``--update-weight-delta-publish-wait=sync``, publish-only drains the
+        hook before returning so the next rollout dispatch starts only after
+        the hook's readiness contract has been satisfied. In both modes the
+        version dir must outlive the sync, which publish-only's no-cleanup
+        rule already ensures.
         """
         if self.transport == "nccl":
             if dist.get_rank() == 0:
@@ -801,15 +833,14 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
             dist.barrier(group=get_gloo_group())
             return
 
-        if self._pending_files:
+        if self._pending_files or self._publish_only:
             self._publish_batch()
-        if dist.get_rank() == 0:
-            # Each entry is a Future returning a list of ObjectRefs. Awaiting the
-            # Futures unblocks the (commit-then-RPC) chain; ray.get waits for the
-            # receivers' apply to finish.
-            object_refs = [ref for fut in self._pending_publishes for ref in fut.result()]
-            ray.get(object_refs)
-            self._pending_publishes.clear()
+        if dist.get_rank() == 0 and self._publish_only and self._publish_wait == "sync":
+            self._drain_pending_publishes()
+        if dist.get_rank() == 0 and not self._publish_only:
+            # Resume + cleanup must order after the receivers' apply, so drain
+            # the publish chain before either.
+            self._drain_pending_publishes()
             if not self._published_any:
                 # No delta files needed publishing this sync (e.g. all-zero diff).
                 # Engines never saw the new version via update_weights_from_disk, so
@@ -820,6 +851,23 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
                 shutil.rmtree(self._version_dir, ignore_errors=True)
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
+
+    def _drain_pending_publishes(self) -> None:
+        """
+        Await every queued (commit-then-publish) Future, then the ObjectRefs it
+        returned. Awaiting the Futures unblocks the (commit-then-RPC) chain;
+        ray.get waits for the hook's work and the receivers' apply to finish.
+        Re-raises a failed publish here, on the draining rank (rank 0; the list
+        is empty elsewhere). In publish-only ``next-sync`` mode that is one
+        sync after the failing dispatch; in ``sync`` mode it is still inside the
+        publishing sync.
+        """
+        if not self._pending_publishes:
+            return
+        object_refs = [ref for fut in self._pending_publishes for ref in fut.result()]
+        self._pending_publishes.clear()
+        if object_refs:
+            ray.get(object_refs)
 
     def _record_metrics(self) -> None:
         """

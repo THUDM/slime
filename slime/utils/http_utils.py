@@ -162,7 +162,7 @@ def _next_actor():
     return actor
 
 
-async def _post(client, url, payload, max_retries=60, headers=None):
+async def _post(client, url, payload, max_retries=60, headers=None, retry_sleep: float = 1.0):
     retry_count = 0
     while retry_count < max_retries:
         response = None
@@ -188,7 +188,7 @@ async def _post(client, url, payload, max_retries=60, headers=None):
             if retry_count >= max_retries:
                 logger.info(f"Max retries ({max_retries}) reached, failing... (url={url})")
                 raise e
-            await asyncio.sleep(1)
+            await asyncio.sleep(retry_sleep)
             continue
         finally:
             if response is not None:
@@ -262,8 +262,8 @@ def _init_ray_distributed_post(args):
                 trust_env=False,  # internal SGLang comm only — never route through system proxy
             )
 
-        async def do_post(self, url, payload, max_retries=60, headers=None):
-            return await _post(self._client, url, payload, max_retries, headers=headers)
+        async def do_post(self, url, payload, max_retries=60, headers=None, retry_sleep: float = 1.0):
+            return await _post(self._client, url, payload, max_retries, headers=headers, retry_sleep=retry_sleep)
 
     # Create actors per node
     created = []
@@ -288,7 +288,7 @@ def _init_ray_distributed_post(args):
     _post_actors = created
 
 
-async def post(url, payload, max_retries=60, headers=None):
+async def post(url, payload, max_retries=60, headers=None, retry_sleep: float = 1.0):
     # If distributed mode is enabled and actors exist, dispatch via Ray.
     if _distributed_post_enabled and _post_actors:
         try:
@@ -300,13 +300,13 @@ async def post(url, payload, max_retries=60, headers=None):
                 # `min(32, cpu+4)`), which becomes a hard upper bound on the
                 # number of in-flight POSTs that can be waited on in parallel
                 # and produces large tail latencies under high concurrency.
-                obj_ref = actor.do_post.remote(url, payload, max_retries, headers=headers)
+                obj_ref = actor.do_post.remote(url, payload, max_retries, headers=headers, retry_sleep=retry_sleep)
                 return await obj_ref
         except Exception as e:
             logger.info(f"[http_utils] Distributed POST failed, falling back to local: {e} (url={url})")
             # fall through to local
 
-    return await _post(_http_client, url, payload, max_retries, headers=headers)
+    return await _post(_http_client, url, payload, max_retries, headers=headers, retry_sleep=retry_sleep)
 
 
 async def get(url):
