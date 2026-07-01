@@ -16,7 +16,6 @@ from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_
 
 from slime.backends.sglang_utils.external import start_external_rollout_servers
 from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
-from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
 from slime.utils.dp_schedule import build_dp_schedule
@@ -102,6 +101,20 @@ def _tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:
         )
 
 
+def _has_multimodal_train_inputs(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, dict):
+        return any(_has_multimodal_train_inputs(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_has_multimodal_train_inputs(v) for v in value)
+    if isinstance(value, np.ndarray):
+        return value.size > 0
+    if torch.is_tensor(value):
+        return value.numel() > 0
+    return True
+
+
 @dataclasses.dataclass
 class ServerGroup:
     """A group of homogeneous SGLang engines with the same configuration.
@@ -164,6 +177,8 @@ class ServerGroup:
             rollout_num_gpus=self.args.rollout_num_gpus,
             rollout_num_gpus_per_engine=self.args.rollout_num_gpus_per_engine,
         )
+
+        from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 
         RolloutRayActor = ray.remote(SGLangEngine)
 
@@ -841,6 +856,11 @@ class RolloutManager:
         dp_size = self.train_parallel_config["dp_size"]
         total_lengths = [len(t) for t in data["tokens"]]
         data["total_lengths"] = total_lengths
+        sample_is_multimodal = None
+        if getattr(self.args, "multimodal_aware_packing", "off") != "off" and "multimodal_train_inputs" in data:
+            sample_is_multimodal = [
+                _has_multimodal_train_inputs(mm_inputs) for mm_inputs in data["multimodal_train_inputs"]
+            ]
 
         partitions, micro_batch_indices, num_microbatches, global_batch_sizes = build_dp_schedule(
             self.args,
@@ -848,7 +868,26 @@ class RolloutManager:
             total_lengths,
             global_batch_size=self.args.global_batch_size,
             rollout_indices=data["rollout_ids"],
+            sample_is_multimodal=sample_is_multimodal,
         )
+        if getattr(self.args, "global_batch_tokens", None) is not None:
+            kept_samples = sum(len(partition) for partition in partitions)
+            logger.info(
+                "token-based global batch: steps=%s target=%s tokens/step global_batch_sizes=%s kept_samples=%s/%s",
+                len(global_batch_sizes),
+                self.args.global_batch_tokens,
+                global_batch_sizes,
+                kept_samples,
+                len(total_lengths),
+            )
+        if sample_is_multimodal is not None:
+            logger.info(
+                "multimodal-aware packing: mode=%s multimodal_samples=%s/%s num_microbatches=%s",
+                self.args.multimodal_aware_packing,
+                sum(sample_is_multimodal),
+                len(sample_is_multimodal),
+                num_microbatches,
+            )
 
         # Package per-rank rollout_data
         rollout_data_refs = []

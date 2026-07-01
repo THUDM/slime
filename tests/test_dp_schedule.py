@@ -19,23 +19,19 @@ def make_args(
     micro_batch_size=1,
     use_dynamic_batch_size=False,
     max_tokens_per_gpu=None,
+    packing_safety_margin=1.0,
+    global_batch_tokens=None,
     balance_data=False,
-    balance_by_flops=False,
+    multimodal_aware_packing="off",
 ):
     return SimpleNamespace(
         micro_batch_size=micro_batch_size,
         use_dynamic_batch_size=use_dynamic_batch_size,
         max_tokens_per_gpu=max_tokens_per_gpu,
+        packing_safety_margin=packing_safety_margin,
+        global_batch_tokens=global_batch_tokens,
         balance_data=balance_data,
-        balance_by_flops=balance_by_flops,
-        hidden_size=16,
-        num_attention_heads=2,
-        num_query_groups=2,
-        vocab_size=32,
-        ffn_hidden_size=64,
-        num_experts=None,
-        num_layers=2,
-        kv_channels=8,
+        multimodal_aware_packing=multimodal_aware_packing,
     )
 
 
@@ -225,6 +221,152 @@ def test_dynamic_oversized_sample_lands_alone():
 
 
 @pytest.mark.unit
+def test_multimodal_aware_packing_separates_text_and_mm_samples():
+    """Opt-in multimodal-aware packing avoids mixing true image samples with text-only fastpath samples."""
+    total_lengths = [70, 20, 20, 20, 20, 20, 20, 20]
+    rollout_indices = list(range(8))
+    sample_is_multimodal = [True, False, False, False, False, False, False, False]
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=100, multimodal_aware_packing="separate")
+    tp = make_tp(dp_size=2)
+
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
+        args,
+        tp,
+        total_lengths,
+        global_batch_size=8,
+        rollout_indices=rollout_indices,
+        sample_is_multimodal=sample_is_multimodal,
+    )
+
+    assert gbs_per_step == [8]
+    assert_invariants(
+        partitions,
+        mbi,
+        nmb,
+        dp_size=2,
+        expected_global_sample_indices=range(8),
+        total_lengths=total_lengths,
+        max_per_bin=100,
+    )
+    for r in range(2):
+        for mbs in mbi[r]:
+            flags = {sample_is_multimodal[partitions[r][i]] for i in mbs}
+            assert len(flags) == 1
+
+
+@pytest.mark.unit
+def test_multimodal_aware_packing_uses_padded_unsplit_cost_for_mm_bins():
+    """Two image samples whose raw sum fits should split when padded unsplit cost would exceed the cap."""
+    total_lengths = [80, 20, 10, 10, 10, 10, 10, 10]
+    rollout_indices = list(range(8))
+    sample_is_multimodal = [True, True, False, False, False, False, False, False]
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=100, multimodal_aware_packing="separate")
+    tp = make_tp(dp_size=2)
+
+    partitions, mbi, nmb, _ = build_dp_schedule(
+        args,
+        tp,
+        total_lengths,
+        global_batch_size=8,
+        rollout_indices=rollout_indices,
+        sample_is_multimodal=sample_is_multimodal,
+    )
+
+    mm_pair_seen = False
+    for r in range(2):
+        for mbs in mbi[r]:
+            globals_ = [partitions[r][i] for i in mbs]
+            if 0 in globals_ and 1 in globals_:
+                mm_pair_seen = True
+    assert not mm_pair_seen
+    assert_invariants(
+        partitions,
+        mbi,
+        nmb,
+        dp_size=2,
+        expected_global_sample_indices=range(8),
+        total_lengths=total_lengths,
+        max_per_bin=100,
+    )
+
+
+@pytest.mark.unit
+def test_multimodal_aware_packing_separate_raw_keeps_raw_sum_cost_for_mm_bins():
+    """separate_raw keeps text/mm separation without adding padded unsplit cost."""
+    total_lengths = [80, 20, 10, 10, 10, 10, 10, 10]
+    rollout_indices = list(range(8))
+    sample_is_multimodal = [True, True, False, False, False, False, False, False]
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=100, multimodal_aware_packing="separate_raw")
+    tp = make_tp(dp_size=2)
+
+    partitions, mbi, nmb, _ = build_dp_schedule(
+        args,
+        tp,
+        total_lengths,
+        global_batch_size=8,
+        rollout_indices=rollout_indices,
+        sample_is_multimodal=sample_is_multimodal,
+    )
+
+    mm_pair_seen = False
+    for r in range(2):
+        for mbs in mbi[r]:
+            globals_ = [partitions[r][i] for i in mbs]
+            flags = {sample_is_multimodal[g] for g in globals_}
+            assert len(flags) == 1
+            if 0 in globals_ and 1 in globals_:
+                mm_pair_seen = True
+    assert mm_pair_seen
+    assert_invariants(
+        partitions,
+        mbi,
+        nmb,
+        dp_size=2,
+        expected_global_sample_indices=range(8),
+        total_lengths=total_lengths,
+        max_per_bin=100,
+    )
+
+
+@pytest.mark.unit
+def test_multimodal_aware_packing_separate_raw_uses_raw_cost_for_mm_bins():
+    """separate_raw avoids text/mm mixing but does not split mm samples by padded unsplit cost."""
+    total_lengths = [80, 20, 10, 10, 10, 10, 10, 10]
+    rollout_indices = list(range(8))
+    sample_is_multimodal = [True, True, False, False, False, False, False, False]
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=100, multimodal_aware_packing="separate_raw")
+    tp = make_tp(dp_size=2)
+
+    partitions, mbi, nmb, _ = build_dp_schedule(
+        args,
+        tp,
+        total_lengths,
+        global_batch_size=8,
+        rollout_indices=rollout_indices,
+        sample_is_multimodal=sample_is_multimodal,
+    )
+
+    mm_pair_seen = False
+    for r in range(2):
+        for mbs in mbi[r]:
+            globals_ = [partitions[r][i] for i in mbs]
+            flags = {sample_is_multimodal[g] for g in globals_}
+            assert len(flags) == 1
+            if 0 in globals_ and 1 in globals_:
+                mm_pair_seen = True
+    assert mm_pair_seen
+    assert_invariants(
+        partitions,
+        mbi,
+        nmb,
+        dp_size=2,
+        expected_global_sample_indices=range(8),
+        total_lengths=total_lengths,
+        max_per_bin=100,
+    )
+
+
+@pytest.mark.unit
 def test_dynamic_with_vpp_rounds_to_mb_group():
     """num_microbatches per rank should be a multiple of mb_group when vpp_size > 1."""
     total_lengths = [4] * 32
@@ -308,6 +450,53 @@ def test_trims_trailing_rollouts_that_dont_fill_a_step():
         nmb,
         dp_size=1,
         expected_global_sample_indices=range(6),
+        total_lengths=total_lengths,
+        max_per_bin=12,
+    )
+
+
+@pytest.mark.unit
+def test_token_based_global_batch_uses_token_budget():
+    total_lengths = [8, 8, 8, 8, 2, 2, 2, 2]
+    rollout_indices = list(range(8))
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=12, global_batch_tokens=20)
+    tp = make_tp(dp_size=2)
+
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
+        args, tp, total_lengths, global_batch_size=8, rollout_indices=rollout_indices
+    )
+
+    assert gbs_per_step == [2, 4, 2]
+    assert_invariants(
+        partitions,
+        mbi,
+        nmb,
+        dp_size=2,
+        expected_global_sample_indices=range(8),
+        total_lengths=total_lengths,
+        max_per_bin=12,
+    )
+
+
+@pytest.mark.unit
+def test_packing_safety_margin_plans_more_microbatches():
+    total_lengths = [6, 6, 6, 6]
+    rollout_indices = list(range(4))
+    args = make_args(use_dynamic_batch_size=True, max_tokens_per_gpu=12, packing_safety_margin=0.5)
+    tp = make_tp(dp_size=1)
+
+    partitions, mbi, nmb, gbs_per_step = build_dp_schedule(
+        args, tp, total_lengths, global_batch_size=4, rollout_indices=rollout_indices
+    )
+
+    assert gbs_per_step == [4]
+    assert nmb == [4]
+    assert_invariants(
+        partitions,
+        mbi,
+        nmb,
+        dp_size=1,
+        expected_global_sample_indices=range(4),
         total_lengths=total_lengths,
         max_per_bin=12,
     )

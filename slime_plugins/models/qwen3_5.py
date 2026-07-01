@@ -1,4 +1,5 @@
 import copy
+import logging
 
 import torch
 import torch.nn as nn
@@ -16,6 +17,10 @@ except ImportError:
 
 from .hf_attention import HuggingfaceAttention, _load_hf_config
 from .qwen_gdn_backend import get_chunk_gated_delta_rule
+
+
+logger = logging.getLogger(__name__)
+_LOGGED_GDN_BACKENDS = set()
 
 
 def _get_text_config(hf_config):
@@ -37,6 +42,9 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         super().__init__()
         self.gdn_backend = getattr(args, "qwen_gdn_backend", "fla")
         self.chunk_gated_delta_rule = get_chunk_gated_delta_rule(self.gdn_backend)
+        if self.gdn_backend not in _LOGGED_GDN_BACKENDS:
+            logger.info("Qwen3.5 GDN backend selected: %s", self.gdn_backend)
+            _LOGGED_GDN_BACKENDS.add(self.gdn_backend)
         self.hidden_size = config.hidden_size
         self.num_v_heads = config.linear_num_value_heads
         self.num_k_heads = config.linear_num_key_heads
@@ -185,9 +193,10 @@ class Attention(HuggingfaceAttention):
 
     def hf_forward(self, hidden_states, packed_seq_params):
         hidden_states = self.input_layernorm(hidden_states)
+        cu_seqlens = packed_seq_params.cu_seqlens_q if packed_seq_params is not None else None
         hidden_states = self.linear_attn(
             hidden_states=hidden_states,
-            cu_seqlens=packed_seq_params.cu_seqlens_q,
+            cu_seqlens=cu_seqlens,
         )
         return hidden_states
 

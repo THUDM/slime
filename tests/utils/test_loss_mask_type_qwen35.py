@@ -56,13 +56,13 @@ class FakeQwen35Tokenizer:
             if role == "system":
                 if index != 0:
                     raise ValueError("System message must be at the beginning.")
-                piece = f"<|im_start|>system\n{message['content']}<|im_end|>\n"
+                piece = f"<|im_start|>system\n{self._render_content(message['content'])}<|im_end|>\n"
                 pieces.append(piece)
                 mask.extend([0] * len(piece))
                 continue
 
             if role == "user":
-                piece = f"<|im_start|>user\n{message['content']}<|im_end|>\n"
+                piece = f"<|im_start|>user\n{self._render_content(message['content'])}<|im_end|>\n"
                 pieces.append(piece)
                 mask.extend([0] * len(piece))
                 continue
@@ -71,7 +71,7 @@ class FakeQwen35Tokenizer:
                 piece = ""
                 if index > 0 and messages[index - 1]["role"] != "tool":
                     piece += "<|im_start|>user"
-                piece += f"\n<tool_response>\n{message['content']}\n</tool_response>"
+                piece += f"\n<tool_response>\n{self._render_content(message['content'])}\n</tool_response>"
                 if index == len(messages) - 1 or messages[index + 1]["role"] != "tool":
                     piece += "<|im_end|>\n"
                 pieces.append(piece)
@@ -82,25 +82,56 @@ class FakeQwen35Tokenizer:
                 raise NotImplementedError(f"Unsupported role in test tokenizer: {role}")
 
             reasoning, answer = self._split_assistant_content(message["content"])
+            assistant_header = "<|im_start|>assistant\n"
             if index > last_query_index:
-                prefix = "<|im_start|>assistant\n<think>\n"
-                target = f"{reasoning}\n</think>\n\n{answer}"
+                body = f"<think>\n{reasoning}\n</think>\n\n{answer}"
             else:
-                prefix = "<|im_start|>assistant\n"
-                target = answer
+                body = answer
 
-            target += self._render_tool_calls(answer, message.get("tool_calls"))
-            target += "<|im_end|>\n"
+            body += self._render_tool_calls(answer, message.get("tool_calls"))
+            piece = assistant_header + body + "<|im_end|>\n"
 
-            pieces.append(prefix + target)
-            mask.extend([0] * len(prefix))
-            mask.extend([1] * len(target))
+            content_start = len(assistant_header)
+            empty_think_block = "<think>\n\n</think>\n\n"
+            think_prefix = "<think>\n"
+            if piece[content_start : content_start + len(empty_think_block)] == empty_think_block:
+                mask_start = content_start + len(empty_think_block)
+            elif piece[content_start : content_start + len(think_prefix)] == think_prefix:
+                mask_start = content_start + len(think_prefix)
+            else:
+                mask_start = content_start
+
+            pieces.append(piece)
+            mask.extend([0] * mask_start)
+            mask.extend([1] * (len(piece) - mask_start))
 
         if add_generation_prompt:
             pieces.append(self.assistant_generation_prompt)
             mask.extend([0] * len(self.assistant_generation_prompt))
 
         return "".join(pieces), mask
+
+    @staticmethod
+    def _render_content(content):
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            pieces = []
+            for item in content:
+                if isinstance(item, str):
+                    pieces.append(item)
+                elif isinstance(item, dict) and item.get("type") == "image":
+                    pieces.append("<|vision_start|><|image_pad|><|vision_end|>")
+                elif isinstance(item, dict) and "image" in item:
+                    pieces.append("<|vision_start|><|image_pad|><|vision_end|>")
+                elif isinstance(item, dict) and item.get("type") == "text":
+                    pieces.append(item.get("text", ""))
+                elif isinstance(item, dict) and "text" in item:
+                    pieces.append(item["text"])
+                else:
+                    raise NotImplementedError(f"Unsupported content item in test tokenizer: {item}")
+            return "".join(pieces)
+        return "" if content is None else str(content)
 
     @staticmethod
     def _split_assistant_content(content):
@@ -156,11 +187,43 @@ def test_qwen3_and_qwen3_5_match_on_single_turn_qwen35_data():
     expected_text, expected_mask = tokenizer.render_with_expected_mask(messages)
     expected_token_ids = tokenizer(expected_text, add_special_tokens=False)["input_ids"]
 
-    for loss_mask_type in ("qwen3", "qwen3_5"):
-        generator = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type=loss_mask_type)
-        token_ids, loss_mask = generator.get_loss_mask(messages)
-        assert token_ids == expected_token_ids
-        assert loss_mask == expected_mask
+    qwen3_generator = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type="qwen3")
+    qwen35_generator = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type="qwen3_5")
+
+    qwen3_token_ids, qwen3_loss_mask = qwen3_generator.get_loss_mask(messages)
+    qwen35_token_ids, qwen35_loss_mask = qwen35_generator.get_loss_mask(messages)
+
+    assert qwen3_token_ids == expected_token_ids
+    assert qwen35_token_ids == expected_token_ids
+    assert qwen3_loss_mask == expected_mask
+    assert qwen35_loss_mask == expected_mask
+    assert qwen3_generator.get_text_from_loss_mask(qwen3_token_ids, qwen3_loss_mask) == [
+        "REASONING\n</think>\n\nANSWER<|im_end|>\n",
+    ]
+    assert qwen35_generator.get_text_from_loss_mask(qwen35_token_ids, qwen35_loss_mask) == [
+        "REASONING\n</think>\n\nANSWER<|im_end|>\n",
+    ]
+
+
+def test_qwen3_5_empty_think_block_is_prompt_scaffold():
+    tokenizer = FakeQwen35Tokenizer()
+    messages = [
+        {"role": "user", "content": "USER"},
+        {"role": "assistant", "content": "ANSWER"},
+    ]
+
+    expected_text, expected_mask = tokenizer.render_with_expected_mask(messages)
+    expected_token_ids = tokenizer(expected_text, add_special_tokens=False)["input_ids"]
+
+    generator = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type="qwen3_5")
+    token_ids, loss_mask = generator.get_loss_mask(messages)
+
+    assert token_ids == expected_token_ids
+    assert loss_mask == expected_mask
+    assert generator.get_text_from_loss_mask(token_ids, loss_mask) == [
+        "ANSWER<|im_end|>\n",
+    ]
+    assert "</think>" not in generator.get_text_from_loss_mask(token_ids, loss_mask)[0]
 
 
 def test_qwen3_and_qwen3_5_diverge_on_multi_turn_qwen35_data():
@@ -231,6 +294,49 @@ def test_qwen3_5_matches_expected_mask_for_tool_call_flow():
     assert token_ids == expected_token_ids
     assert loss_mask == expected_mask
     assert generator.get_text_from_loss_mask(token_ids, loss_mask) == [
-        "\n</think>\n\nTOOL_CALL\n\n<tool_call>\n<function=terminal>\n<parameter=command>\nls\n</parameter>\n</function>\n</tool_call><|im_end|>\n",
+        "TOOL_CALL\n\n<tool_call>\n<function=terminal>\n<parameter=command>\nls\n</parameter>\n</function>\n</tool_call><|im_end|>\n",
         "REASONING\n</think>\n\nFINAL<|im_end|>\n",
     ]
+
+
+def test_qwen3_5_multimodal_alignment_inserts_media_mask_at_turn_position():
+    tokenizer = FakeQwen35Tokenizer()
+    generator = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type="qwen3_5")
+    messages = [
+        {"role": "user", "content": "USER_1"},
+        {"role": "assistant", "content": "ANSWER_1"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": "image.jpg"},
+                {"type": "text", "text": "USER_2"},
+            ],
+        },
+        {"role": "assistant", "content": "ANSWER_2"},
+    ]
+    rendered_text, rendered_mask = tokenizer.render_with_expected_mask(messages)
+    image_token = "<|image_pad|>"
+    image_pos = rendered_text.index(image_token)
+    expanded_image_tokens = 3
+    expanded_rendered_text = rendered_text.replace(image_token, image_token * expanded_image_tokens, 1)
+    input_ids = tokenizer(expanded_rendered_text, add_special_tokens=False)["input_ids"]
+    expected_mask = (
+        rendered_mask[:image_pos]
+        + [0] * len(image_token) * expanded_image_tokens
+        + rendered_mask[image_pos + len(image_token) :]
+    )
+
+    _, loss_mask = generator.get_loss_mask_with_multimodal_alignment(
+        messages,
+        input_ids,
+        rendered_text=rendered_text,
+        image_grid_thw=[[1, 3, 4]],
+        image_token=image_token,
+        image_merge_size=2,
+    )
+
+    assert loss_mask == expected_mask
+    assert sum(loss_mask[image_pos : image_pos + len(image_token) * expanded_image_tokens]) == 0
+    assert loss_mask[expanded_rendered_text.index("ANSWER_1")] == 1
+    assert loss_mask[expanded_rendered_text.index("ANSWER_2")] == 1
+    assert "<|im_start|>user" not in "".join(generator.get_text_from_loss_mask(input_ids, loss_mask))
