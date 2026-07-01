@@ -23,7 +23,7 @@ def get_deepscaler_rule_based_reward(response, label):
     processed_ground_truths = []
     for truth in ground_truths:
         truth = str(truth)
-        if "\\boxed" in truth:
+        if "\\boxed" in truth or "\\fbox" in truth:
             processed_truth = extract_answer(truth)
             if processed_truth is not None:
                 processed_ground_truths.append(processed_truth)
