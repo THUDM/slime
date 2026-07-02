@@ -259,12 +259,14 @@ class BaseAdapter:
         Idempotent: a second call for an already-popped sid returns [].
         """
         await self.shutdown_session(sid, wait_timeout=wait_timeout)
-        self.store.pop(sid, None)
+        session = self.store.pop(sid, None)
+        max_sample_tokens = int(getattr(session, "max_context_tokens", 0) or 0) if session is not None else 0
         samples = self.manager.get_trajectory(
             sid,
             base_sample=base_sample,
             reward=reward,
             extra_metadata=extra_metadata,
+            max_sample_tokens=max_sample_tokens,
         )
         for s in samples:
             rlen = int(s.response_length or 0)

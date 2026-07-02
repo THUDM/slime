@@ -231,10 +231,19 @@ class _SampleBuilder:
     def has_trained_response(self) -> bool:
         return any(self.loss_mask[self.leading_prompt_len :])
 
-    def to_sample(self, base_sample: Sample, extra_metadata: dict[str, Any] | None) -> Sample:
+    def to_sample(
+        self, base_sample: Sample, extra_metadata: dict[str, Any] | None, max_sample_tokens: int = 0
+    ) -> Sample:
         """Emit the accumulated tokens as one ``Sample``, stripping the first-turn
         prompt so loss_mask / logprobs cover only the response region."""
         start = self.leading_prompt_len  # first-turn prompt stripped; response region starts here
+        tokens = list(self.tokens)
+        loss_mask = self.loss_mask
+        logprobs = self.logprobs
+        if max_sample_tokens and len(tokens) > max_sample_tokens:
+            tokens = tokens[:max_sample_tokens]
+            loss_mask = loss_mask[:max_sample_tokens]
+            logprobs = logprobs[:max_sample_tokens]
         md = dict(extra_metadata or {})
         return Sample(
             index=base_sample.index,
@@ -242,10 +251,10 @@ class _SampleBuilder:
             rollout_id=base_sample.rollout_id if base_sample.rollout_id is not None else base_sample.index,
             prompt=base_sample.prompt,
             label=base_sample.label,
-            tokens=list(self.tokens),
-            response_length=len(self.loss_mask) - start,
-            loss_mask=self.loss_mask[start:],
-            rollout_log_probs=self.logprobs[start:],
+            tokens=tokens,
+            response_length=len(loss_mask) - start,
+            loss_mask=loss_mask[start:],
+            rollout_log_probs=logprobs[start:],
             reward=0.0,
             status=Sample.Status.COMPLETED,
             metadata=md,
@@ -302,6 +311,7 @@ class TrajectoryManager:
         base_sample: Sample,
         reward: float = 0.0,
         extra_metadata: dict[str, Any] | None = None,
+        max_sample_tokens: int = 0,
     ) -> list[Sample]:
         """Linearize this sid's routing tree into slime ``Sample`` objects and
         consume the session.
@@ -320,7 +330,11 @@ class TrajectoryManager:
             if routing_leaf.is_root:
                 continue
             chain = routing_leaf.path_from_root()
-            samples.extend(self._chain_to_samples(chain, base_sample=base_sample, extra_metadata=extra_metadata))
+            samples.extend(
+                self._chain_to_samples(
+                    chain, base_sample=base_sample, extra_metadata=extra_metadata, max_sample_tokens=max_sample_tokens
+                )
+            )
 
         for s in samples:
             s.reward = reward
@@ -468,6 +482,7 @@ class TrajectoryManager:
         *,
         base_sample: Sample,
         extra_metadata: dict[str, Any] | None,
+        max_sample_tokens: int = 0,
     ) -> list[Sample]:
 
         asst_nodes = [n for n in chain if n.role == "assistant" and n.turn is not None]
@@ -481,7 +496,7 @@ class TrajectoryManager:
             "ill_formed": ill_formed,
         }
         return [
-            builder.to_sample(base_sample, md)
+            builder.to_sample(base_sample, md, max_sample_tokens)
             for builder in self._split_chain_into_builders(chain)
             if builder.has_trained_response()
         ]
