@@ -793,7 +793,7 @@ class RolloutManager:
         if samples[0].rollout_log_probs is not None:
             train_data["rollout_log_probs"] = [sample.rollout_log_probs for sample in samples]
 
-        if samples[0].rollout_top_p_token_ids is not None:
+        if getattr(self.args, "rollout_top_p", 1.0) != 1.0:
             for sample in samples:
                 assert sample.rollout_top_p_token_ids is not None
                 assert sample.rollout_top_p_token_offsets is not None
