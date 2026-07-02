@@ -85,6 +85,7 @@ Start by Use Case
    advanced/pd-disaggregation.md
    advanced/external-rollout-engines.md
    advanced/delta-weight-sync.md
+   advanced/p2p-weight-sync.md
    advanced/sglang-config.md
    advanced/megatron-config.md
    advanced/arch-support-beyond-megatron.md

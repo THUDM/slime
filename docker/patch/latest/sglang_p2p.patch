@@ -1,0 +1,146 @@
+diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
+index 17f2d5e..74fedec 100644
+--- a/python/sglang/srt/managers/io_struct.py
++++ b/python/sglang/srt/managers/io_struct.py
+@@ -1527,6 +1527,9 @@ class UpdateWeightsFromDistributedReqInput(BaseReq):
+     load_format: Optional[str] = None
+     # JSON-encoded DeltaSpec; required iff load_format == "delta".
+     delta: Optional[str] = None
++    src_tp_rank: Optional[int] = None
++    # Per-TP-rank tensor counts for P2P shard-level weight transfer
++    tp_tensor_counts: Optional[List[int]] = None
+     # Whether to call torch.cuda.empty_cache() during flush
+     torch_empty_cache: bool = False
+ 
+diff --git a/python/sglang/srt/managers/tp_worker.py b/python/sglang/srt/managers/tp_worker.py
+index 71bbe8f..52ede6f 100644
+--- a/python/sglang/srt/managers/tp_worker.py
++++ b/python/sglang/srt/managers/tp_worker.py
+@@ -155,6 +155,8 @@ class BaseTpWorker(ABC):
+             recv_req.group_name,
+             recv_req.load_format,
+             recv_req.delta,
++            recv_req.src_tp_rank,
++            recv_req.tp_tensor_counts,
+         )
+         return success, message
+ 
+diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
+index d715bc6..e7c4356 100644
+--- a/python/sglang/srt/model_executor/model_runner.py
++++ b/python/sglang/srt/model_executor/model_runner.py
+@@ -358,6 +358,16 @@ class _EagerBufferRegistry:
+     max_num_tokens: int = 0
+ 
+ 
++
++
++def _set_presharded_flag(model, value: bool):
++    for module in model.modules():
++        if hasattr(module, "use_presharded_weights"):
++            module.use_presharded_weights = value
++    for _name, param in model.named_parameters():
++        if hasattr(param, "use_presharded_weights"):
++            param.use_presharded_weights = value
++
+ class ModelRunner(ModelRunnerKVCacheMixin):
+     """ModelRunner runs the forward passes of the models."""
+ 
+@@ -1874,6 +1884,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+                 world_size=world_size,
+                 rank=rank,
+                 group_name=group_name,
++                device_id=torch.device("cuda", self.gpu_id),
+             )
+             return True, "Succeeded to initialize custom process group."
+         except Exception as e:
+@@ -1902,6 +1913,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+         group_name,
+         load_format: Optional[str] = None,
+         delta: Optional[str] = None,
++        src_tp_rank: Optional[int] = None,
++        tp_tensor_counts: Optional[list] = None,
+     ):
+         """
+         Update specific parameter in the model weights online
+@@ -1935,26 +1948,62 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+                 names, dtypes, shapes, group_name, spec
+             )
+         try:
+-            weights = []
+-            handles = []
+-            for name, dtype, shape in zip(names, dtypes, shapes):
+-                target_dtype = (
+-                    dtype if isinstance(dtype, torch.dtype) else getattr(torch, dtype)
+-                )
+-                weight = torch.empty(shape, dtype=target_dtype, device=self.device)
+-                handles.append(
+-                    torch.distributed.broadcast(
+-                        weight,
+-                        src=0,
+-                        group=self._model_update_group[group_name],
+-                        async_op=True,
++            pg = self._model_update_group[group_name]
++
++            if load_format == "presharded":
++                if tp_tensor_counts is not None:
++                    my_idx = self.tp_rank
++                    offset = sum(tp_tensor_counts[:my_idx])
++                    my_count = tp_tensor_counts[my_idx]
++                    my_names = names[offset:offset + my_count]
++                    my_dtypes = dtypes[offset:offset + my_count]
++                    my_shapes = shapes[offset:offset + my_count]
++                else:
++                    my_names = names
++                    my_dtypes = dtypes
++                    my_shapes = shapes
++                torch.distributed.barrier(group=pg)
++                weights = []
++                handles = []
++                src_rank = self.tp_rank
++                for name, dtype, shape in zip(my_names, my_dtypes, my_shapes):
++                    target_dtype = (
++                        dtype if isinstance(dtype, torch.dtype) else getattr(torch, dtype)
+                     )
+-                )
+-                weights.append((name, weight))
+-            for handle in handles:
+-                handle.wait()
++                    weight = torch.empty(shape, dtype=target_dtype, device=self.device)
++                    handles.append(
++                        torch.distributed.irecv(weight, src=src_rank, group=pg)
++                    )
++                    weights.append((name, weight))
++                for handle in handles:
++                    handle.wait()
++                _set_presharded_flag(self.model, True)
++                try:
++                    self.model.load_weights(weights)
++                finally:
++                    _set_presharded_flag(self.model, False)
++            else:
++                weights = []
++                handles = []
++                for name, dtype, shape in zip(names, dtypes, shapes):
++                    target_dtype = (
++                        dtype if isinstance(dtype, torch.dtype) else getattr(torch, dtype)
++                    )
++                    weight = torch.empty(shape, dtype=target_dtype, device=self.device)
++                    handles.append(
++                        torch.distributed.broadcast(
++                            weight,
++                            src=0,
++                            group=pg,
++                            async_op=True,
++                        )
++                    )
++                    weights.append((name, weight))
++                for handle in handles:
++                    handle.wait()
++
++                self.model.load_weights(weights)
+ 
+-            self.model.load_weights(weights)
+             return True, "Succeeded to update parameter online."
+ 
+         except Exception as e:

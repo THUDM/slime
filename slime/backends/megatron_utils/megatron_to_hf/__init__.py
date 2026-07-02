@@ -7,7 +7,7 @@ from .llama import convert_llama_to_hf
 from .mimo import convert_mimo_to_hf
 from .minimax_m2 import convert_minimax_m2_to_hf
 from .processors import quantize_params, remove_padding
-from .qwen2 import convert_qwen2_to_hf
+from .qwen2 import convert_qwen2_shard_to_hf, convert_qwen2_to_hf
 from .qwen3_5 import convert_qwen3_5_to_hf
 from .qwen3_next import convert_qwen3_next_to_hf
 from .qwen3_vl import convert_qwen3vl_to_hf
@@ -28,6 +28,18 @@ def convert_to_hf(args, model_name, name, param, quantization_config=None):
     converted_named_tensors = _convert_to_hf_core(args, model_name, name, param)
 
     return quantize_params(args, name, converted_named_tensors, quantization_config)
+
+
+def shard_conversion_supported(model_name: str) -> bool:
+    """Return True when shard-level Megatron→HF conversion is implemented."""
+    name = model_name.lower()
+    return "qwen2" in name or "qwen3" in name
+
+
+def convert_shard_to_hf(args, model_name, name, param, tp_rank, tp_size):
+    """Convert a single TP shard from Megatron to HF shard format (no all_gather)."""
+    param = remove_padding(name, param, args.vocab_size)
+    return _convert_shard_to_hf_core(args, model_name, name, param, tp_rank, tp_size)
 
 
 # TODO optimize
@@ -93,3 +105,9 @@ def _convert_to_hf_core(args, model_name, name, param):
             else:
                 converted_named_tensors.append((converted_name, converted_param))
     return converted_named_tensors
+
+
+def _convert_shard_to_hf_core(args, model_name, name, param, tp_rank, tp_size):
+    if shard_conversion_supported(model_name):
+        return convert_qwen2_shard_to_hf(args, name, param, tp_rank, tp_size)
+    raise ValueError(f"Shard-level conversion not yet supported for model: {model_name}")

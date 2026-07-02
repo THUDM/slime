@@ -85,6 +85,7 @@ slime 的设计目标，是让这两大能力彼此强化，同时避免把系�
    advanced/pd-disaggregation.md
    advanced/external-rollout-engines.md
    advanced/delta-weight-sync.md
+   advanced/p2p-weight-sync.md
    advanced/sglang-config.md
    advanced/megatron-config.md
    advanced/arch-support-beyond-megatron.md
