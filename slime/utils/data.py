@@ -291,7 +291,13 @@ class Dataset:
 
 def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
     assert len(rollout_data_ref) == dp_size
-    rollout_data = ray.get(rollout_data_ref[dp_rank].inner)
+    ref = rollout_data_ref[dp_rank]
+    if getattr(args, "rollout_data_transport", "object-store") == "mooncake":
+        from slime.utils.data_transfer import get_mooncake_rollout_data
+
+        rollout_data = get_mooncake_rollout_data(args, ref)
+    else:
+        rollout_data = ray.get(ref.inner)
 
     partition = rollout_data.pop("partition")
     total_lengths = rollout_data["total_lengths"]
