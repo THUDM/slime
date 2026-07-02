@@ -13,6 +13,7 @@ This page is a roadmap. Use it to decide when to use `--rollout-external-engine-
 | Trainer and external engines can form an NCCL group | Default `--update-weight-mode full --update-weight-transport nccl` |
 | Trainer and external engines cannot form an NCCL group, but can see the same filesystem path | `--update-weight-mode full --update-weight-transport disk` |
 | Full checkpoints are too heavy for large-model cross-cluster or cross-DC sync | `--update-weight-mode delta --update-weight-transport disk` |
+| slime owns the SGLang engines and you want Mooncake TransferEngine full-weight sync | [Mooncake TransferEngine Weight Sync](mooncake-weight-sync.md) |
 | Rollout serving can use an independent SGLang environment, or even different GPU models/vendors | external engines + disk transport |
 | You want to validate delta wire/apply logic inside one datacenter | `--update-weight-mode delta --update-weight-transport nccl` |
 | You need frozen reference, reward, or tool-side models | Prefer `update_weights: false` in [SGLang Config](sglang-config.md#3-multi-model-serving) |
@@ -110,6 +111,7 @@ For encoding choices, wire layout, receiver-side selective overwrite, and tuning
 - Disk transport requires trainer and SGLang engines to see the same `--update-weight-disk-dir` path; a path visible only to the trainer is not enough.
 - External engines are not recovered by slime fault tolerance; their lifecycle belongs to the external deployment system.
 - `--sglang-config` and `--rollout-external-engine-addrs` are mutually exclusive.
+- Mooncake TransferEngine weight sync is only for slime-managed engines today; it is rejected with `--rollout-external-engine-addrs`.
 - Delta mode does not support `--colocate`, because colocated sync uses CUDA IPC handles and delta encoding does not reduce the actual transfer.
 
 ## Related Work

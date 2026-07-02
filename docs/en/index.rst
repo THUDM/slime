@@ -41,6 +41,7 @@ Start by Use Case
 - Use PD disaggregation: :doc:`advanced/pd-disaggregation`
 - Use BF16 training with FP8 rollout or FP8 KV cache: :doc:`advanced/low-precision`
 - Use delta weight sync: :doc:`advanced/delta-weight-sync`
+- Use Mooncake TransferEngine weight sync: :doc:`advanced/mooncake-weight-sync`
 - Understand CI and reliability coverage: :doc:`developer_guide/ci`
 - Debug, trace, and profile long-running jobs: :doc:`developer_guide/debug`, :doc:`developer_guide/trace`, :doc:`developer_guide/profiling`
 
@@ -85,6 +86,7 @@ Start by Use Case
    advanced/pd-disaggregation.md
    advanced/external-rollout-engines.md
    advanced/delta-weight-sync.md
+   advanced/mooncake-weight-sync.md
    advanced/sglang-config.md
    advanced/megatron-config.md
    advanced/arch-support-beyond-megatron.md

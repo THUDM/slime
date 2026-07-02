@@ -468,6 +468,25 @@ class SGLangEngine(RayActor):
             payload,
         )
 
+    def init_mooncake_weight_receiver(self, config: dict):
+        if self.node_rank != 0:
+            return None
+        return self._make_request("init_mooncake_weight_receiver", config)
+
+    def update_weights_from_mooncake(self, manifest: dict):
+        if self.node_rank != 0:
+            return None
+        return self._make_request("update_weights_from_mooncake", manifest)
+
+    def destroy_mooncake_weight_receiver(self):
+        if self.node_rank != 0:
+            return None
+        try:
+            return self._make_request("destroy_mooncake_weight_receiver")
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            # The engine may have restarted before receiver initialization completed.
+            pass
+
     def pause_generation(self):
         response = requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={})
         response.raise_for_status()
