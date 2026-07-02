@@ -9,6 +9,9 @@ from slime.utils.misc import should_run_periodic_action
 # The framework supports other asynchronous approaches such as fully async (which is shown in examples/full_async).
 def train(args):
     assert not args.colocate, "Colocation is not supported for async training."
+    assert not getattr(
+        args, "reload_train_from_disk", False
+    ), "--reload-train-from-disk is only supported by train.py."
     configure_logger()
     # allocate the GPUs
     pgs = create_placement_groups(args)

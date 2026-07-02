@@ -1,3 +1,4 @@
+import logging
 import os
 
 import ray
@@ -5,6 +6,9 @@ from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
+
+
+logger = logging.getLogger(__name__)
 
 
 class RayTrainGroup:
@@ -39,8 +43,14 @@ class RayTrainGroup:
         self.args = args
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
+        self._pg = pg
+        self._num_gpus_per_actor = num_gpus_per_actor
         self.role = role
         self._actor_cls = actor_cls
+        self._init_args = None
+        self._init_with_ref = False
+        self._init_with_opd_teacher = False
+        self._rollout_manager = None
 
         # Allocate the GPUs for actors w/o instantiating them
         self._allocate_gpus_for_actor(pg, num_gpus_per_actor)
@@ -123,10 +133,59 @@ class RayTrainGroup:
         Allocate GPU resourced and initialize model, optimzier, local ckpt, etc.
         """
         self.args = args
+        self.role = role
+        self._init_args = args
+        self._init_with_ref = with_ref
+        self._init_with_opd_teacher = with_opd_teacher
         return [
             actor.init.remote(args, role, with_ref=with_ref, with_opd_teacher=with_opd_teacher)
             for actor in self._actor_handlers
         ]
+
+    @property
+    def is_started(self):
+        return bool(self._actor_handlers)
+
+    def _require_started(self):
+        assert self.is_started, "Train actors are not running; call restart() before using them."
+
+    def shutdown(self, patience_s: float = 10):
+        if not self._actor_handlers:
+            return
+
+        if patience_s <= 0:
+            for actor in self._actor_handlers:
+                ray.kill(actor, no_restart=True)
+            self._actor_handlers = []
+            return
+
+        done_refs = [actor.__ray_terminate__.remote() for actor in self._actor_handlers]
+        _, not_done = ray.wait(done_refs, timeout=patience_s)
+        if not_done:
+            logger.warning(
+                "Graceful shutdown timed out for %d train actors; falling back to ray.kill.",
+                len(not_done),
+            )
+            for actor in self._actor_handlers:
+                ray.kill(actor, no_restart=True)
+        self._actor_handlers = []
+
+    def restart(self):
+        assert not self.is_started, "Train actors are already running."
+        assert self._init_args is not None, "Train actors must be initialized before restart."
+        self._allocate_gpus_for_actor(self._pg, self._num_gpus_per_actor)
+        start_rollout_ids = ray.get(
+            self.async_init(
+                self._init_args,
+                self.role,
+                with_ref=self._init_with_ref,
+                with_opd_teacher=self._init_with_opd_teacher,
+            )
+        )
+        assert len(set(start_rollout_ids)) == 1
+        if self._rollout_manager is not None:
+            self.set_rollout_manager(self._rollout_manager)
+        return start_rollout_ids[0]
 
     def async_train(self, rollout_id, rollout_data_ref, external_data=None):
         """Do one rollout training. Returns a list of Ray refs (one per worker).
@@ -137,6 +196,7 @@ class RayTrainGroup:
         ``external_data`` may be a list (one item per worker) or a single dict
         broadcast to all workers.
         """
+        self._require_started()
         if isinstance(external_data, list):
             assert len(external_data) == len(self._actor_handlers)
             return [
@@ -150,20 +210,27 @@ class RayTrainGroup:
 
     def save_model(self, rollout_id, force_sync=False):
         """Save actor model"""
+        self._require_started()
         return ray.get([actor.save_model.remote(rollout_id, force_sync=force_sync) for actor in self._actor_handlers])
 
     def update_weights(self):
         """Broadcast weights from rank 0 to all other ranks."""
+        self._require_started()
         return ray.get([actor.update_weights.remote() for actor in self._actor_handlers])
 
     def onload(self):
+        self._require_started()
         return ray.get([actor.wake_up.remote() for actor in self._actor_handlers])
 
     def offload(self):
+        self._require_started()
         return ray.get([actor.sleep.remote() for actor in self._actor_handlers])
 
     def clear_memory(self):
+        self._require_started()
         return ray.get([actor.clear_memory.remote() for actor in self._actor_handlers])
 
     def set_rollout_manager(self, rollout_manager):
+        self._rollout_manager = rollout_manager
+        self._require_started()
         return ray.get([actor.set_rollout_manager.remote(rollout_manager) for actor in self._actor_handlers])

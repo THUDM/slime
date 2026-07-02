@@ -621,6 +621,38 @@ class RolloutManager:
         if srv:
             srv.num_new_engines = 0
 
+    def update_updatable_weights_from_disk(self, model_path: str, weight_version: str | None = None):
+        """Reload the updatable rollout engines directly from an HF checkpoint on disk."""
+        self.health_monitoring_pause()
+        if self.args.use_fault_tolerance:
+            self.recover_updatable_engines()
+
+        srv = self._get_updatable_server()
+        if srv is None or not srv.engines:
+            logger.info("No updatable SGLang engines are running; skip disk weight update.")
+            return
+
+        while not ray.get(self.rollout_engine_lock.acquire.remote()):
+            time.sleep(0.1)
+
+        try:
+            logger.info("Updating rollout weights from disk checkpoint %s", model_path)
+            ray.get([engine.pause_generation.remote() for engine in srv.engines])
+            ray.get([engine.flush_cache.remote() for engine in srv.engines])
+            ray.get(
+                [
+                    engine.update_weights_from_disk.remote(
+                        model_path=model_path,
+                        weight_version=weight_version,
+                    )
+                    for engine in srv.engines
+                ]
+            )
+            ray.get([engine.continue_generation.remote() for engine in srv.engines])
+            srv.num_new_engines = 0
+        finally:
+            ray.get(self.rollout_engine_lock.release.remote())
+
     def health_monitoring_pause(self) -> None:
         for monitor in self._health_monitors:
             monitor.pause()

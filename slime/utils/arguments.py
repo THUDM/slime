@@ -841,6 +841,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "as `--hf-checkpoint`. "
                 ),
             )
+            parser.add_argument(
+                "--reload-train-from-disk",
+                action="store_true",
+                default=False,
+                help=(
+                    "Megatron-only memory-saving mode: destroy training Ray actors after each rollout, "
+                    "reload them from the latest Megatron checkpoint before the next train step, and "
+                    "update rollout weights from the HF checkpoint written by --save-hf."
+                ),
+            )
             reset_arg(parser, "--seed", type=int, default=1234)
             reset_arg(parser, "--clip-grad", type=float, default=1.0)
             reset_arg(parser, "--calculate-per-token-loss", action="store_true")
@@ -1822,6 +1832,16 @@ def slime_validate_args(args):
 
     if args.save_interval is not None:
         assert args.save is not None, "'--save' is required when save_interval is set."
+
+    if args.reload_train_from_disk:
+        if args.train_backend != "megatron":
+            raise ValueError("--reload-train-from-disk is only supported with --train-backend=megatron.")
+        if args.save_interval != 1:
+            raise ValueError("--reload-train-from-disk requires --save-interval=1.")
+        if args.save_hf is None:
+            raise ValueError("--reload-train-from-disk requires --save-hf for rollout weight updates.")
+        if args.no_save_optim:
+            raise ValueError("--reload-train-from-disk requires optimizer checkpoints; remove --no-save-optim.")
 
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 

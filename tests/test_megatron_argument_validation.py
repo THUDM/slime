@@ -266,6 +266,9 @@ def make_slime_validate_args(**overrides):
         save_debug_rollout_data=None,
         save_debug_train_data=None,
         load_debug_rollout_data=None,
+        reload_train_from_disk=False,
+        save_hf=None,
+        no_save_optim=False,
         rollout_external_engine_addrs=None,
         debug_train_only=False,
         actor_num_gpus_per_node=8,
@@ -349,6 +352,64 @@ def test_slime_validate_args_preserves_zero_rollout_gpus_without_colocate(monkey
     assert args.actor_num_nodes == 1
     assert args.offload_train is False
     assert args.offload_rollout is False
+
+
+@pytest.mark.unit
+def test_reload_train_from_disk_requires_megatron(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        reload_train_from_disk=True,
+        train_backend="fsdp",
+        save_interval=1,
+        save="/tmp/megatron_ckpt",
+        save_hf="/tmp/hf_{rollout_id}",
+    )
+
+    with pytest.raises(ValueError, match="only supported with --train-backend=megatron"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_reload_train_from_disk_requires_every_rollout_save(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        reload_train_from_disk=True,
+        save_interval=2,
+        save="/tmp/megatron_ckpt",
+        save_hf="/tmp/hf_{rollout_id}",
+    )
+
+    with pytest.raises(ValueError, match="requires --save-interval=1"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_reload_train_from_disk_requires_save_hf(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        reload_train_from_disk=True,
+        save_interval=1,
+        save="/tmp/megatron_ckpt",
+        save_hf=None,
+    )
+
+    with pytest.raises(ValueError, match="requires --save-hf"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_reload_train_from_disk_requires_optimizer_checkpoint(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        reload_train_from_disk=True,
+        save_interval=1,
+        save="/tmp/megatron_ckpt",
+        save_hf="/tmp/hf_{rollout_id}",
+        no_save_optim=True,
+    )
+
+    with pytest.raises(ValueError, match="requires optimizer checkpoints"):
+        module.slime_validate_args(args)
 
 
 @pytest.mark.unit
