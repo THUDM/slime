@@ -547,22 +547,14 @@ python<span class="w"> </span>-m<span class="w"> </span>sglang.launch_server<spa
 </section>
 <section id="update-with-delta">
 <h2>Update With Delta<a class="headerlink" href="#update-with-delta" title="Link to this heading">#</a></h2>
-<p>Delta update targets large-model training/inference disaggregation across clusters or datacenters. Instead of writing a full checkpoint, the trainer keeps a pinned-CPU snapshot of the previous sync, detects byte-level changes, and sends only changed positions and values.</p>
-<p>Recommended for cross-cluster / shared-filesystem deployments:</p>
+<p>Delta update targets large-model training/inference disaggregation across clusters or datacenters. Instead of writing a full checkpoint every sync, the trainer keeps a CPU snapshot of the previous sync, diffs each parameter against it, and publishes only the changed bytes; every rollout host applies the delta into its local checkpoint and reloads via the vanilla <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> endpoint.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>delta
 --update-weight-transport<span class="w"> </span>disk
---update-weight-encoding<span class="w"> </span>deltas_zstd
 --update-weight-disk-dir<span class="w"> </span>/shared/fs/delta-updates
+--update-weight-local-checkpoint-dir<span class="w"> </span>/local/nvme/rollout-ckpt
 </pre></div>
 </div>
-<p>With disk transport, each sync writes sparse safetensors under <code class="docutils literal notranslate"><span class="pre">weight_v{N:06d}/</span></code>, then calls <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk(load_format=&quot;delta&quot;)</span></code>. SGLang overwrites only changed positions in the current weights; unchanged positions stay in place.</p>
-<p>For intra-datacenter validation or bandwidth-rich environments, NCCL transport is also available:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>delta
---update-weight-transport<span class="w"> </span>nccl
---update-weight-encoding<span class="w"> </span>indices
-</pre></div>
-</div>
-<p>For encoding choices, wire layout, receiver-side selective overwrite, and tuning parameters, see <a class="reference internal" href="delta-weight-sync.html"><span class="std std-doc">Delta Weight Sync</span></a>.</p>
+<p>See <a class="reference internal" href="delta-weight-sync.html"><span class="std std-doc">Delta Weight Sync</span></a> for the mechanism, encodings, integrity checks, and shared-filesystem visibility hooks.</p>
 </section>
 <section id="deployment-checklist">
 <h2>Deployment Checklist<a class="headerlink" href="#deployment-checklist" title="Link to this heading">#</a></h2>

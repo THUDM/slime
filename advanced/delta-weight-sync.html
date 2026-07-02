@@ -438,12 +438,11 @@
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why">Why</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-start">Quick Start</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mode-vs-transport">Mode vs Transport</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-works">How It Works</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#encoding-choice">Encoding Choice</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-not-colocated">Why Not Colocated</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-works">How it works</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#encodings">Encodings</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#integrity">Integrity</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#shared-filesystem-visibility-hooks">Shared-filesystem visibility hooks</a></li>
 </ul>
             </nav>
         </div>
@@ -457,138 +456,104 @@
                   
   <section class="tex2jax_ignore mathjax_ignore" id="delta-weight-sync">
 <h1>Delta Weight Sync<a class="headerlink" href="#delta-weight-sync" title="Link to this heading">#</a></h1>
-<ul class="simple">
-<li><p><a class="reference internal" href="#why"><span class="std std-ref">Why</span></a></p></li>
-<li><p><a class="reference internal" href="#quick-start"><span class="std std-ref">Quick Start</span></a></p></li>
-<li><p><a class="reference internal" href="#mode-vs-transport"><span class="std std-ref">Mode vs Transport</span></a></p></li>
-<li><p><a class="reference internal" href="#how-it-works"><span class="std std-ref">How It Works</span></a></p></li>
-<li><p><a class="reference internal" href="#encoding-choice"><span class="std std-ref">Encoding Choice</span></a></p></li>
-<li><p><a class="reference internal" href="#why-not-colocated"><span class="std std-ref">Why Not Colocated</span></a></p></li>
-</ul>
-<section id="why">
-<h2>Why<a class="headerlink" href="#why" title="Link to this heading">#</a></h2>
-<p>Slime’s default sync broadcasts every parameter every step. The cost scales linearly with model size and dominates the sync phase, even though only a few percent of weights change between consecutive RL steps. Delta sync keeps a pinned-CPU snapshot of the last broadcast and ships only the positions whose bytes differ.</p>
-<p>The motivating use case is <strong>training/inference disaggregation</strong> — running the trainer and the rollout engines in <em>different datacenters</em> over a shared filesystem with bandwidth on the order of 100s of MB/s, where a full broadcast is infeasible but a sparse delta (~3% density, ~5 GB for a 355B model) is. The same delta machinery also runs over NCCL inside a single datacenter, where it serves as the validation baseline that proves the wire encoding and apply logic are correct.</p>
-<p>Prior art: selective overwrite is inspired by <a class="reference external" href="https://arxiv.org/abs/2509.19128">arXiv:2509.19128</a>; the cross-DC disaggregation motivation is from <a class="reference external" href="https://fireworks.ai/blog/frontier-rl-is-cheaper-than-you-think">Fireworks AI — Frontier RL Is Cheaper Than You Think</a>. Another public production-shaped reference is the <a class="reference external" href="https://arxiv.org/html/2603.24477v2">Composer 2 technical report by the Cursor Research Team</a>, which describes Cursor partnering with Fireworks AI for RL inference and syncing every training-step update through shared S3, delta compression, and cross-region inference-cluster reconstruction.</p>
-</section>
-<section id="quick-start">
-<h2>Quick Start<a class="headerlink" href="#quick-start" title="Link to this heading">#</a></h2>
-<p>Disk transport (training/inference disaggregation — the main use case):</p>
+<p>Delta weight sync keeps non-colocated rollout engines up to date by shipping only the bytes
+that changed between two syncs, instead of a full checkpoint each time. It targets large-model
+training/inference disaggregation across clusters or datacenters, where writing the whole actor
+every sync is the dominant cost.</p>
+<p>It is <strong>disk-transport only</strong> and reloads through the <strong>ordinary</strong> <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code>
+endpoint, so the inference engine needs no delta-specific support.</p>
+<section id="configuration">
+<h2>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>delta
 --update-weight-transport<span class="w"> </span>disk
---update-weight-encoding<span class="w"> </span>deltas_zstd<span class="w">                 </span><span class="c1"># best for ≤ 300 MB/s shared FS</span>
 --update-weight-disk-dir<span class="w"> </span>/shared/fs/delta-updates
+--update-weight-local-checkpoint-dir<span class="w"> </span>/local/nvme/rollout-ckpt
+--update-weight-delta-encoding<span class="w"> </span>xor<span class="w">          </span><span class="c1"># or: overwrite</span>
+--update-weight-delta-checksum<span class="w"> </span>xxh3-128<span class="w">     </span><span class="c1"># or: blake3, adler32</span>
 </pre></div>
 </div>
-<p>NCCL transport (intra-datacenter validation baseline):</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>delta
---update-weight-transport<span class="w"> </span>nccl
---update-weight-encoding<span class="w"> </span>indices<span class="w">                     </span><span class="c1"># lowest compute, no compression</span>
-</pre></div>
-</div>
-<p>Full-checkpoint disk transport (simple external-engine fallback):</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>full
---update-weight-transport<span class="w"> </span>disk
---update-weight-disk-dir<span class="w"> </span>/shared/fs/full-updates
-</pre></div>
-</div>
-<p>This writes a complete HF checkpoint under <code class="docutils literal notranslate"><span class="pre">weight_v{N:06d}/</span></code> for every sync,
-then asks each SGLang engine to reload it with <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code>. It is
-useful when the trainer cannot form an NCCL group with pre-launched rollout
-engines, but it is much heavier than delta sync for large models.</p>
-<p>Receiver-side delta tuning (applies to delta NCCL and delta disk):</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-update-weight-delta-chunk-bytes<span class="w"> </span><span class="k">$((</span><span class="m">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="m">1024</span><span class="k">))</span><span class="w">  </span><span class="c1"># byte cap per load_weights call</span>
---sglang-update-weight-delta-read-workers<span class="w"> </span><span class="m">4</span><span class="w">                           </span><span class="c1"># parallel I/O threads (disk only)</span>
-</pre></div>
-</div>
-<p>See <a class="reference download internal" download="" href="../_downloads/8736b0df4e69f5be4c36c32d03a457ba/run-glm4.7-355B-A32B-delta.sh"><span class="xref download myst">examples/delta_weight_sync/run-glm4.7-355B-A32B-delta.sh</span></a> for a complete launcher.</p>
-</section>
-<section id="mode-vs-transport">
-<h2>Mode vs Transport<a class="headerlink" href="#mode-vs-transport" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">--update-weight-mode</span></code> decides <strong>what</strong> gets sent; <code class="docutils literal notranslate"><span class="pre">--update-weight-transport</span></code>
-decides <strong>how</strong> it reaches SGLang.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>mode</p></th>
-<th class="head"><p>transport</p></th>
-<th class="head"><p>behavior</p></th>
+<tr class="row-odd"><th class="head"><p>Flag</p></th>
+<th class="head"><p>Role</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">full</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">nccl</span></code></p></td>
-<td><p>default path: broadcast every HF weight chunk over a trainer-engine NCCL group</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code></p></td>
+<td><p>Shared filesystem directory the trainer publishes deltas to and the rollout hosts read from.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">full</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">disk</span></code></p></td>
-<td><p>write a complete HF checkpoint under <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code>, then call <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--update-weight-local-checkpoint-dir</span></code></p></td>
+<td><p>Host-local (e.g. NVMe) full HF checkpoint that the delta is applied into in place. Each host materializes it from <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> at engine start.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">delta</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">nccl</span></code></p></td>
-<td><p>broadcast sparse changed positions + values over NCCL</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--update-weight-delta-encoding</span></code></p></td>
+<td><p>On-disk delta encoding: <code class="docutils literal notranslate"><span class="pre">xor</span></code> (default) or <code class="docutils literal notranslate"><span class="pre">overwrite</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">delta</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">disk</span></code></p></td>
-<td><p>write sparse safetensors under <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code>, then call <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk(load_format=&quot;delta&quot;)</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--update-weight-delta-checksum</span></code></p></td>
+<td><p>Per-tensor integrity checksum: <code class="docutils literal notranslate"><span class="pre">xxh3-128</span></code> (default), <code class="docutils literal notranslate"><span class="pre">blake3</span></code>, or <code class="docutils literal notranslate"><span class="pre">adler32</span></code>.</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">--update-weight-delta-dir</span></code> is kept only as a backward-compatible alias for
-<code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code>; new launchers should use the transport-level name.</p>
+<p>Deltas are always zstd-compressed (level 1); profiling showed it dominates lz4 / gzip / snappy / brotli on both wire size and decompress speed for this data, so it is not a knob.</p>
 </section>
 <section id="how-it-works">
-<h2>How It Works<a class="headerlink" href="#how-it-works" title="Link to this heading">#</a></h2>
-<p>Delta NCCL and delta disk share one sender pipeline, one wire layout, and one receiver-side decoder; only the per-flush carrier differs.</p>
-<p><strong>Sender (per sync, PP-source rank only):</strong></p>
+<h2>How it works<a class="headerlink" href="#how-it-works" title="Link to this heading">#</a></h2>
 <ol class="arabic simple">
-<li><p><strong>Diff</strong> the current weights against the pinned-CPU snapshot via bytewise compare (<code class="docutils literal notranslate"><span class="pre">current.view(int_dtype)</span> <span class="pre">!=</span> <span class="pre">snapshot.view(int_dtype)</span></code>) — lossless, dtype-agnostic, no arithmetic.</p></li>
-<li><p><strong>Encode</strong> changed (position, value) pairs into a packed <code class="docutils literal notranslate"><span class="pre">__positions__</span></code> byte blob + <code class="docutils literal notranslate"><span class="pre">__values__</span></code> tensor + per-param decoding manifest. The encoding (<code class="docutils literal notranslate"><span class="pre">indices</span></code>, <code class="docutils literal notranslate"><span class="pre">deltas</span></code>, <code class="docutils literal notranslate"><span class="pre">deltas_zstd</span></code>) governs only how positions are packed; values are sent verbatim in the param’s dtype.</p></li>
-<li><p><strong>Bucket</strong> per-chunk encodes up to <code class="docutils literal notranslate"><span class="pre">--update-weight-buffer-size</span></code> bytes, then flush:</p>
-<ul class="simple">
-<li><p>NCCL: broadcast <code class="docutils literal notranslate"><span class="pre">(__positions__,</span> <span class="pre">__values__)</span></code> to the rollout engines with a <code class="docutils literal notranslate"><span class="pre">DeltaSpec</span></code> (encoding + per-param manifest) carried in the Ray RPC.</p></li>
-<li><p>Disk: write one safetensors file per flush under <code class="docutils literal notranslate"><span class="pre">weight_v{N:06d}/</span></code>. Async background thread does the I/O + optional zstd compression off the critical path.</p></li>
-</ul>
-</li>
-<li><p><strong>Snapshot the just-sent values</strong> via a D2H copy on a side stream so it overlaps with the next chunk’s encode.</p></li>
+<li><p><strong>Seed.</strong> On the first sync the trainer captures a CPU snapshot of every parameter — seeded
+from <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code>, which is exactly what each rollout host materializes its local
+checkpoint from. Nothing is published; this snapshot is the base the next sync diffs against.</p></li>
+<li><p><strong>Publish.</strong> On every later sync the trainer diffs each gathered HF tensor against the
+snapshot, encodes and compresses the change, and writes a new version directory
+<code class="docutils literal notranslate"><span class="pre">weight_v{N:06d}/</span></code> under <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code>. The directory is a canonical HF
+checkpoint — <code class="docutils literal notranslate"><span class="pre">model-NNNNN.safetensors</span></code> files holding the compressed diff tensors plus a
+<code class="docutils literal notranslate"><span class="pre">model.safetensors.index.json</span></code> (tensor name → file) carrying the apply metadata — so the
+artifact is portable, not tied to the trainer’s parallelism layout. The snapshot is then
+advanced to the new values for the next diff.</p></li>
+<li><p><strong>Apply.</strong> Each rollout host applies the new version’s delta into its local checkpoint in
+place. The apply is parallelized across tensors and verified per-tensor (see Integrity).</p></li>
+<li><p><strong>Reload.</strong> The engines reload the patched local checkpoint through the vanilla
+<code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> path — they never see the delta format.</p></li>
 </ol>
-<p><strong>End-of-sync (disk only):</strong> write a <code class="docutils literal notranslate"><span class="pre">DONE</span></code> marker, then rank 0 fires one HTTP push per engine and removes the directory after every engine acknowledges.</p>
-<p><strong>Receiver:</strong></p>
-<p>For both transports, the receiver ends up calling the same <code class="docutils literal notranslate"><span class="pre">_apply_delta_payload(encoding,</span> <span class="pre">params,</span> <span class="pre">positions,</span> <span class="pre">values)</span></code> helper. It decodes each param’s slice into a full-shape tensor with NaN at unchanged positions, then routes it through <code class="docutils literal notranslate"><span class="pre">model.load_weights(...)</span></code> under a <code class="docutils literal notranslate"><span class="pre">_delta_apply_context</span></code> that patches <code class="docutils literal notranslate"><span class="pre">Tensor.copy_</span></code> / <code class="docutils literal notranslate"><span class="pre">Tensor.fill_</span></code> to perform NaN-masked overwrite. Auxiliary writes (scratch buffers, fp8 scales, MoE biases via <code class="docutils literal notranslate"><span class="pre">post_load_weights</span></code>) keep their normal semantics.</p>
-<p>Selective overwrite has no arithmetic — the receiver writes the trainer’s exact bytes at changed positions — so it’s lossless by construction and there’s no notion of drift to fight with periodic base re-syncs.</p>
+<p>Because the snapshot is seeded from <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> (the engine’s actual base) rather than
+from the current GPU weights, the scheme is correct for any model even where the Megatron→HF
+round-trip is not byte-exact (e.g. trimmed vocab-padding rows in the embedding / LM head).</p>
 </section>
-<section id="encoding-choice">
-<h2>Encoding Choice<a class="headerlink" href="#encoding-choice" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">--update-weight-encoding</span></code> picks how positions are packed. All three share the same on-wire layout (<code class="docutils literal notranslate"><span class="pre">__positions__</span></code> uint8 blob + <code class="docutils literal notranslate"><span class="pre">__values__</span></code> tensor + per-param manifest); decoder dispatches on the metadata.</p>
-<div class="pst-scrollable-table-container"><table class="table">
-<thead>
-<tr class="row-odd"><th class="head"><p>value</p></th>
-<th class="head"><p>positions</p></th>
-<th class="head"><p>when to pick</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">indices</span></code></p></td>
-<td><p>int32 absolute positions (4 bytes / nnz)</p></td>
-<td><p>NCCL or fast intra-cluster FS (≥ ~600 MB/s)</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">deltas</span></code></p></td>
-<td><p>uint16 gap-deltas with uint32 fallback (~2 bytes / nnz at 2% density)</p></td>
-<td><p>medium FS bandwidth (~300-500 MB/s)</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">deltas_zstd</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">deltas</span></code> wrapped in zstd L1 on disk</p></td>
-<td><p>cross-DC / cross-region shared FS (≤ ~300 MB/s)</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p><strong>Why gap-encoded positions are smaller</strong>: positions come out of <code class="docutils literal notranslate"><span class="pre">mask.nonzero()</span></code> already sorted ascending. At density <code class="docutils literal notranslate"><span class="pre">p</span></code>, the expected gap between consecutive nonzero positions is <code class="docutils literal notranslate"><span class="pre">1/p</span></code>, and <code class="docutils literal notranslate"><span class="pre">P(gap</span> <span class="pre">&gt;</span> <span class="pre">65535)</span> <span class="pre">≈</span> <span class="pre">exp(-p</span> <span class="pre">·</span> <span class="pre">65535)</span></code>. At p = 2% that’s effectively zero, so uint16 fits with a uint32 per-param fallback for pathological inputs. Half the position bytes of <code class="docutils literal notranslate"><span class="pre">indices</span></code>, lossless.</p>
-<p><strong>Break-even with <code class="docutils literal notranslate"><span class="pre">indices</span></code></strong> at our density (~2%): <code class="docutils literal notranslate"><span class="pre">deltas</span></code> halves the positions blob (which dominates the wire); <code class="docutils literal notranslate"><span class="pre">zstd</span></code> shaves another ~35-40% on top by compressing the gap byte stream, at the cost of ~250ms/file compress + ~150ms/file decompress. The crossover with <code class="docutils literal notranslate"><span class="pre">indices</span></code> is where compress/decompress compute exceeds the bandwidth savings — empirically around 500 MB/s for <code class="docutils literal notranslate"><span class="pre">deltas</span></code> and 300 MB/s for <code class="docutils literal notranslate"><span class="pre">deltas_zstd</span></code>.</p>
+<section id="encodings">
+<h2>Encodings<a class="headerlink" href="#encodings" title="Link to this heading">#</a></h2>
+<p>Both encodings are byte-level and dtype-blind, so the same path works for quantized checkpoints.
+The engine reads the choice from each version’s index metadata.</p>
+<ul class="simple">
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">xor</span></code></strong> (default): writes <code class="docutils literal notranslate"><span class="pre">new</span> <span class="pre">^</span> <span class="pre">old</span></code>. Smallest wire and fastest to apply (sequential,
+cache-friendly; the unchanged bytes are zeros the compressor crushes). It is an involution,
+so it must be applied <strong>exactly once</strong> against the correct base — applying it twice reverts.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">overwrite</span></code></strong>: writes the changed positions and their new absolute values. Larger on the
+wire and a less cache-friendly scattered apply, but <strong>idempotent</strong>: re-applying it (or
+finishing a partially-applied delta) converges to the same state regardless of how many times
+it runs. Use it when re-applicability matters more than wire size.</p></li>
+</ul>
 </section>
-<section id="why-not-colocated">
-<h2>Why Not Colocated<a class="headerlink" href="#why-not-colocated" title="Link to this heading">#</a></h2>
-<p>Colocated weight sync uses CUDA IPC: only a memory handle (~64 B) crosses processes. Delta encoding’s “bytes saved on the wire” benefit is zero, while the bookkeeping (snapshot + diff + sparse encode) is pure overhead. Slime rejects <code class="docutils literal notranslate"><span class="pre">--update-weight-mode</span> <span class="pre">delta</span> <span class="pre">--colocate</span></code> at argparse time.</p>
+<section id="integrity">
+<h2>Integrity<a class="headerlink" href="#integrity" title="Link to this heading">#</a></h2>
+<p>The trainer stores a per-tensor checksum of each tensor’s new state in the version. After
+applying, every host recomputes the checksum and <strong>raises on any mismatch</strong>, so a corrupt delta
+or a wrong base fails loud instead of serving bad weights. The apply also refuses to run out of
+order: a version only applies on top of its declared base version.</p>
+<p><code class="docutils literal notranslate"><span class="pre">--update-weight-delta-checksum</span></code> selects the algorithm. The checksum is not the apply bottleneck
+(the apply is decompress + XOR bound), so this is a digest-property choice, not a speed one:
+<code class="docutils literal notranslate"><span class="pre">xxh3-128</span></code> (default) is the widest fast non-cryptographic digest; <code class="docutils literal notranslate"><span class="pre">blake3</span></code> is cryptographic, for
+untrusted storage; <code class="docutils literal notranslate"><span class="pre">adler32</span></code> is for interop with systems that expect it.</p>
+</section>
+<section id="shared-filesystem-visibility-hooks">
+<h2>Shared-filesystem visibility hooks<a class="headerlink" href="#shared-filesystem-visibility-hooks" title="Link to this heading">#</a></h2>
+<p>On a POSIX shared filesystem (NFS, Lustre, …) no extra step is needed. Object-store-backed
+volumes that need an explicit commit/refresh to make writes visible across hosts can supply two
+optional hooks, loaded by import path — no vendor-specific code lives in slime:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--custom-delta-pre-push-path</span></code>: called after a version’s files are written, before the engines
+are told to read it (e.g. commit the volume). Signature: <code class="docutils literal notranslate"><span class="pre">hook(args,</span> <span class="pre">version_dir,</span> <span class="pre">rollout_engines)</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--custom-delta-pre-read-path</span></code>: called on each rollout host before it reads the delta directory
+(e.g. refresh the volume). Signature: <code class="docutils literal notranslate"><span class="pre">hook(delta_dir,</span> <span class="pre">target_version)</span></code>.</p></li>
+</ul>
 </section>
 </section>
 
@@ -639,12 +604,11 @@ decides <strong>how</strong> it reaches SGLang.</p>
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why">Why</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-start">Quick Start</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mode-vs-transport">Mode vs Transport</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-works">How It Works</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#encoding-choice">Encoding Choice</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-not-colocated">Why Not Colocated</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-works">How it works</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#encodings">Encodings</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#integrity">Integrity</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#shared-filesystem-visibility-hooks">Shared-filesystem visibility hooks</a></li>
 </ul>
   </nav></div>
 

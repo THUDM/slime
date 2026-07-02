@@ -543,22 +543,14 @@ python<span class="w"> </span>-m<span class="w"> </span>sglang.launch_server<spa
 </section>
 <section id="update-with-delta">
 <h2>Update With Delta<a class="headerlink" href="#update-with-delta" title="链接到此标题。">#</a></h2>
-<p>delta update 面向大模型、跨集群或跨数据中心训推解耦。它不写完整 checkpoint，而是在训练端保留上一次同步后的 pinned CPU snapshot，逐字节检测变化，只发送变化位置和值。</p>
-<p>跨集群 / 共享文件系统推荐：</p>
+<p>delta update 面向大模型、跨集群或跨数据中心训推解耦。它不每次都写完整 checkpoint，而是在训练端保留上一次同步的 CPU snapshot，逐参数比对，只发布变化的字节；每个 rollout host 把 delta apply 进自己的本地 checkpoint，再通过原生 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> 端点 reload。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>delta
 --update-weight-transport<span class="w"> </span>disk
---update-weight-encoding<span class="w"> </span>deltas_zstd
 --update-weight-disk-dir<span class="w"> </span>/shared/fs/delta-updates
+--update-weight-local-checkpoint-dir<span class="w"> </span>/local/nvme/rollout-ckpt
 </pre></div>
 </div>
-<p>在 disk transport 下，每次同步会写一组稀疏 safetensors 到 <code class="docutils literal notranslate"><span class="pre">weight_v{N:06d}/</span></code>，然后调用 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk(load_format=&quot;delta&quot;)</span></code>。SGLang 侧只把变化位置覆写到当前权重上，不变位置保持原值。</p>
-<p>在同一数据中心内做实现验证或带宽不紧张时，也可以用 NCCL transport：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>delta
---update-weight-transport<span class="w"> </span>nccl
---update-weight-encoding<span class="w"> </span>indices
-</pre></div>
-</div>
-<p>编码如何选择、delta wire layout、接收端 selective overwrite 以及调优参数见 <a class="reference internal" href="delta-weight-sync.html"><span class="std std-doc">Delta 权重同步</span></a>。</p>
+<p>机制、编码、完整性校验以及共享文件系统可见性 hook 详见 <a class="reference internal" href="delta-weight-sync.html"><span class="std std-doc">Delta 权重同步</span></a>。</p>
 </section>
 <section id="id3">
 <h2>部署检查清单<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>

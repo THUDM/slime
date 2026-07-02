@@ -438,10 +438,8 @@
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#files">Files</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#usage">Usage</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#results">Results</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-these-encoding-defaults">Why these encoding defaults</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#try-it">Try it</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#minimal-flags">Minimal flags</a></li>
 </ul>
             </nav>
         </div>
@@ -455,61 +453,41 @@
                   
   <section class="tex2jax_ignore mathjax_ignore" id="delta-weight-sync">
 <h1>Delta Weight Sync<a class="headerlink" href="#delta-weight-sync" title="Link to this heading">#</a></h1>
-<p>Non-colocated weight sync that ships only changed positions + values instead of every parameter. Two transports over one wire format and one receiver-side decoder:</p>
+<p>Non-colocated weight sync that ships only the <strong>changed bytes</strong> between two syncs instead of a
+full checkpoint, for training/inference disaggregation across clusters or datacenters. The
+trainer publishes per-tensor deltas to a shared filesystem as a canonical HF checkpoint
+directory; each rollout host applies them into a host-local checkpoint and the engines reload
+through the ordinary <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> path — the inference engine needs no
+delta-specific support.</p>
+<p>See <a class="reference internal" href="#../../docs/en/advanced/delta-weight-sync.md"><span class="xref myst">Delta Weight Sync</span></a> for the full mechanism,
+encodings, integrity checks, and shared-filesystem visibility hooks.</p>
+<section id="try-it">
+<h2>Try it<a class="headerlink" href="#try-it" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">run-glm4.7-30B-A3B-delta.sh</span></code> runs the disk delta path on GLM-4.7-Flash, non-colocated across a
+2-node (16-GPU) Ray cluster. See its header for prerequisites.</p>
+</section>
+<section id="minimal-flags">
+<h2>Minimal flags<a class="headerlink" href="#minimal-flags" title="Link to this heading">#</a></h2>
+<p>Add to a non-colocated training run (the trainer and engines only need to share the filesystem
+at <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code>):</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>delta<span class="w"> </span><span class="se">\</span>
+--update-weight-transport<span class="w"> </span>disk<span class="w"> </span><span class="se">\</span>
+--update-weight-disk-dir<span class="w">   </span>/shared/fs/delta-updates<span class="w"> </span><span class="se">\</span>
+--update-weight-local-checkpoint-dir<span class="w"> </span>/local/nvme/rollout-ckpt<span class="w"> </span><span class="se">\</span>
+--update-weight-delta-encoding<span class="w"> </span>xor<span class="w"> </span><span class="se">\</span>
+--update-weight-delta-checksum<span class="w"> </span>xxh3-128
+</pre></div>
+</div>
 <ul class="simple">
-<li><p><strong>Disk</strong> (the point) — write per-flush safetensors to a shared filesystem; one HTTP push per sync. Designed for <strong>training/inference disaggregation</strong> across datacenters where bandwidth between trainer and rollout is on the order of 100s of MB/s.</p></li>
-<li><p><strong>NCCL</strong> (the baseline) — broadcast each per-flush bucket directly. Used intra-datacenter to validate that the wire encoding and apply logic are correct, separate from any shared-FS variable.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code> — shared directory the trainer writes deltas to and the hosts read.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--update-weight-local-checkpoint-dir</span></code> — host-local full HF checkpoint the delta patches in
+place; materialized from <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> at engine start.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--update-weight-delta-encoding</span></code> — <code class="docutils literal notranslate"><span class="pre">xor</span></code> (smallest/fastest) or <code class="docutils literal notranslate"><span class="pre">overwrite</span></code> (idempotent).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--update-weight-delta-checksum</span></code> — <code class="docutils literal notranslate"><span class="pre">xxh3-128</span></code> (default), <code class="docutils literal notranslate"><span class="pre">blake3</span></code>, or <code class="docutils literal notranslate"><span class="pre">adler32</span></code>.</p></li>
 </ul>
-<p>Both modes are lossless by construction (selective overwrite via NaN sentinel; no arithmetic).</p>
-<section id="files">
-<h2>Files<a class="headerlink" href="#files" title="Link to this heading">#</a></h2>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">run-glm4.7-355B-A32B-delta.sh</span></code>: 16-node (8 actor + 8 rollout) GLM-4.7-355B-A32B launcher. Disk transport active by default; NCCL block commented below it.</p></li>
-</ul>
-</section>
-<section id="usage">
-<h2>Usage<a class="headerlink" href="#usage" title="Link to this heading">#</a></h2>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>examples/delta_weight_sync/run-glm4.7-355B-A32B-delta.sh
-</pre></div>
-</div>
-<p><strong>Disk (default):</strong></p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">DELTA_ARGS</span><span class="o">=(</span>
-<span class="w">   </span>--update-weight-mode<span class="w"> </span>delta
-<span class="w">   </span>--update-weight-transport<span class="w"> </span>disk
-<span class="w">   </span>--update-weight-encoding<span class="w"> </span>deltas_zstd
-<span class="w">   </span>--update-weight-disk-dir<span class="w"> </span>/shared/fs/delta-updates
-<span class="o">)</span>
-</pre></div>
-</div>
-<p><strong>NCCL (baseline):</strong></p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">DELTA_ARGS</span><span class="o">=(</span>
-<span class="w">   </span>--update-weight-mode<span class="w"> </span>delta
-<span class="w">   </span>--update-weight-transport<span class="w"> </span>nccl
-<span class="w">   </span>--update-weight-encoding<span class="w"> </span>indices
-<span class="o">)</span>
-</pre></div>
-</div>
-<p>Receiver-side byte cap (both transports):</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-update-weight-delta-chunk-bytes<span class="w"> </span><span class="k">$((</span><span class="m">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="m">1024</span><span class="k">))</span>
-</pre></div>
-</div>
-<p>See <a class="reference internal" href="#../../docs/en/advanced/delta-weight-sync.md"><span class="xref myst">docs/en/advanced/delta-weight-sync.md</span></a> for the wire protocol, encoding choice, and design.</p>
-</section>
-<section id="results">
-<h2>Results<a class="headerlink" href="#results" title="Link to this heading">#</a></h2>
-<p>W&amp;B traces comparing delta sync against the full-sync baseline on GLM-4.7-355B-A32B / DAPO-Math-17k.</p>
-<p><img alt="Raw reward" src="_examples_synced/delta_weight_sync/raw_reward.png" /></p>
-<p><img alt="Train/rollout logprob abs diff" src="_examples_synced/delta_weight_sync/train_rollout_logprob_abs_diff.png" /></p>
-<p><img alt="Update weights time" src="_examples_synced/delta_weight_sync/update_weights_time.png" /></p>
-<blockquote>
-<div><p><strong>Note on the small curve-to-curve gap.</strong> RL training is inherently non-deterministic (cuBLAS reductions, FlashAttention split-K, NCCL all-reduce ordering, dynamic-batch token assignment). Two identically-configured <em>full</em>-sync runs would diverge the same way. Delta sync’s selective overwrite is bit-exact with full sync per step (no arithmetic, no drift); the trajectory matches, the bits don’t.</p>
-</div></blockquote>
-<p><img alt="Update weights density" src="_examples_synced/delta_weight_sync/update_weights_density.png" /></p>
-<p><em>Per-sync change density (<code class="docutils literal notranslate"><span class="pre">perf/update_weights_density</span></code>) — fraction of weight positions that moved between consecutive syncs. Sync 0 is omitted: it’s the snapshot-seeding pass with density = 1.0, which would compress the y-axis.</em></p>
-</section>
-<section id="why-these-encoding-defaults">
-<h2>Why these encoding defaults<a class="headerlink" href="#why-these-encoding-defaults" title="Link to this heading">#</a></h2>
-<p>Per-sync change density during RL fine-tuning at conservative LRs sits around <strong>2-3%</strong> (<a class="reference external" href="https://arxiv.org/pdf/2602.03839">arXiv:2602.03839</a> reports ~1% on a related setup; we measured ~2-3% on this run). Below the 3.125% break-even point, gap-encoded positions are smaller than absolute indices — the disk default <code class="docutils literal notranslate"><span class="pre">deltas_zstd</span></code> adds zstd L1 on top to squeeze the gap byte stream further (~35-40%), which is the right tradeoff when shared-FS bandwidth is ≤ 300 MB/s. Intra-datacenter NCCL has no bandwidth pressure, so <code class="docutils literal notranslate"><span class="pre">indices</span></code> (lowest compute, biggest payload) is the cleaner default there.</p>
+<p>For object-store-backed volumes that need an explicit commit/refresh to make writes visible
+across hosts, supply <code class="docutils literal notranslate"><span class="pre">--custom-delta-pre-push-path</span></code> / <code class="docutils literal notranslate"><span class="pre">--custom-delta-pre-read-path</span></code> (no
+vendor-specific code lives in slime; see the doc).</p>
 </section>
 </section>
 
@@ -542,10 +520,8 @@
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#files">Files</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#usage">Usage</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#results">Results</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-these-encoding-defaults">Why these encoding defaults</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#try-it">Try it</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#minimal-flags">Minimal flags</a></li>
 </ul>
   </nav></div>
 

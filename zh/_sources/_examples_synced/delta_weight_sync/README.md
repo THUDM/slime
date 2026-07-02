@@ -1,67 +1,40 @@
 # Delta Weight Sync
 
-Non-colocated weight sync that ships only changed positions + values instead of every parameter. Two transports over one wire format and one receiver-side decoder:
+Non-colocated weight sync that ships only the **changed bytes** between two syncs instead of a
+full checkpoint, for training/inference disaggregation across clusters or datacenters. The
+trainer publishes per-tensor deltas to a shared filesystem as a canonical HF checkpoint
+directory; each rollout host applies them into a host-local checkpoint and the engines reload
+through the ordinary `update_weights_from_disk` path — the inference engine needs no
+delta-specific support.
 
-- **Disk** (the point) — write per-flush safetensors to a shared filesystem; one HTTP push per sync. Designed for **training/inference disaggregation** across datacenters where bandwidth between trainer and rollout is on the order of 100s of MB/s.
-- **NCCL** (the baseline) — broadcast each per-flush bucket directly. Used intra-datacenter to validate that the wire encoding and apply logic are correct, separate from any shared-FS variable.
+See [Delta Weight Sync](../../docs/en/advanced/delta-weight-sync.md) for the full mechanism,
+encodings, integrity checks, and shared-filesystem visibility hooks.
 
-Both modes are lossless by construction (selective overwrite via NaN sentinel; no arithmetic).
+## Try it
 
-## Files
+`run-glm4.7-30B-A3B-delta.sh` runs the disk delta path on GLM-4.7-Flash, non-colocated across a
+2-node (16-GPU) Ray cluster. See its header for prerequisites.
 
-- `run-glm4.7-355B-A32B-delta.sh`: 16-node (8 actor + 8 rollout) GLM-4.7-355B-A32B launcher. Disk transport active by default; NCCL block commented below it.
+## Minimal flags
 
-## Usage
-
-```bash
-bash examples/delta_weight_sync/run-glm4.7-355B-A32B-delta.sh
-```
-
-**Disk (default):**
-
-```bash
-DELTA_ARGS=(
-   --update-weight-mode delta
-   --update-weight-transport disk
-   --update-weight-encoding deltas_zstd
-   --update-weight-disk-dir /shared/fs/delta-updates
-)
-```
-
-**NCCL (baseline):**
+Add to a non-colocated training run (the trainer and engines only need to share the filesystem
+at `--update-weight-disk-dir`):
 
 ```bash
-DELTA_ARGS=(
-   --update-weight-mode delta
-   --update-weight-transport nccl
-   --update-weight-encoding indices
-)
+--update-weight-mode delta \
+--update-weight-transport disk \
+--update-weight-disk-dir   /shared/fs/delta-updates \
+--update-weight-local-checkpoint-dir /local/nvme/rollout-ckpt \
+--update-weight-delta-encoding xor \
+--update-weight-delta-checksum xxh3-128
 ```
 
-Receiver-side byte cap (both transports):
+- `--update-weight-disk-dir` — shared directory the trainer writes deltas to and the hosts read.
+- `--update-weight-local-checkpoint-dir` — host-local full HF checkpoint the delta patches in
+  place; materialized from `--hf-checkpoint` at engine start.
+- `--update-weight-delta-encoding` — `xor` (smallest/fastest) or `overwrite` (idempotent).
+- `--update-weight-delta-checksum` — `xxh3-128` (default), `blake3`, or `adler32`.
 
-```bash
---sglang-update-weight-delta-chunk-bytes $((2 * 1024 * 1024 * 1024))
-```
-
-See [docs/en/advanced/delta-weight-sync.md](../../docs/en/advanced/delta-weight-sync.md) for the wire protocol, encoding choice, and design.
-
-## Results
-
-W&B traces comparing delta sync against the full-sync baseline on GLM-4.7-355B-A32B / DAPO-Math-17k.
-
-![Raw reward](./raw_reward.png)
-
-![Train/rollout logprob abs diff](./train_rollout_logprob_abs_diff.png)
-
-![Update weights time](./update_weights_time.png)
-
-> **Note on the small curve-to-curve gap.** RL training is inherently non-deterministic (cuBLAS reductions, FlashAttention split-K, NCCL all-reduce ordering, dynamic-batch token assignment). Two identically-configured *full*-sync runs would diverge the same way. Delta sync's selective overwrite is bit-exact with full sync per step (no arithmetic, no drift); the trajectory matches, the bits don't.
-
-![Update weights density](./update_weights_density.png)
-
-*Per-sync change density (`perf/update_weights_density`) — fraction of weight positions that moved between consecutive syncs. Sync 0 is omitted: it's the snapshot-seeding pass with density = 1.0, which would compress the y-axis.*
-
-## Why these encoding defaults
-
-Per-sync change density during RL fine-tuning at conservative LRs sits around **2-3%** ([arXiv:2602.03839](https://arxiv.org/pdf/2602.03839) reports ~1% on a related setup; we measured ~2-3% on this run). Below the 3.125% break-even point, gap-encoded positions are smaller than absolute indices — the disk default `deltas_zstd` adds zstd L1 on top to squeeze the gap byte stream further (~35-40%), which is the right tradeoff when shared-FS bandwidth is ≤ 300 MB/s. Intra-datacenter NCCL has no bandwidth pressure, so `indices` (lowest compute, biggest payload) is the cleaner default there.
+For object-store-backed volumes that need an explicit commit/refresh to make writes visible
+across hosts, supply `--custom-delta-pre-push-path` / `--custom-delta-pre-read-path` (no
+vendor-specific code lives in slime; see the doc).
