@@ -1,6 +1,7 @@
 # Adapt from https://github.com/NVIDIA/Megatron-LM/blob/b1efb3c7126ef7615e8c333432d76e08038e17ff/pretrain_gpt.py
 import argparse
 import inspect
+import logging
 import re
 from contextlib import nullcontext
 from typing import Literal
@@ -19,6 +20,53 @@ from megatron.training.arguments import core_transformer_config_from_args
 
 from slime.utils.megatron_bridge_utils import patch_auto_bridge_hf_config
 from slime.utils.misc import load_function
+
+logger = logging.getLogger(__name__)
+
+
+def _maybe_apply_qwen_vl_recompute_tail_patch() -> None:
+    try:
+        from .qwen_vl_recompute_tail import apply_qwen_vl_recompute_tail_patch
+    except Exception as exc:
+        logger.warning("Failed to import QwenVL recompute tail patch: %r", exc)
+        return
+    apply_qwen_vl_recompute_tail_patch()
+
+
+def _maybe_apply_qwen_vl_recompute_tail_patch_to_model(model) -> None:
+    try:
+        from .qwen_vl_recompute_tail import apply_qwen_vl_recompute_tail_patch_to_model
+    except Exception as exc:
+        logger.warning("Failed to import QwenVL recompute tail model patch: %r", exc)
+        return
+    apply_qwen_vl_recompute_tail_patch_to_model(model)
+
+
+def _maybe_apply_megatron_bridge_compat_shims() -> None:
+    try:
+        from .megatron_bridge_compat import apply_megatron_bridge_compat_shims
+    except Exception as exc:
+        logger.warning("Failed to import Megatron-Bridge compat shims: %r", exc)
+        return
+    apply_megatron_bridge_compat_shims()
+
+
+def _maybe_mark_unsplit_forward(args: argparse.Namespace, model: torch.nn.Module) -> None:
+    """Mark bridge Qwen-VL models that expect unsplit input under CP.
+
+    Qwen3VLModel performs the CP/SP split inside its own forward after vision
+    embedding and packed-sequence preprocessing.  This also applies to
+    text-only Qwen3.5/Qwen3.6 samples sharing the same bridge model class.
+    """
+    try:
+        from megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model import Qwen3VLModel
+    except ImportError:
+        return
+
+    if isinstance(model, Qwen3VLModel):
+        if not getattr(args, "uses_unsplit_forward", False):
+            logger.info("Detected Qwen3VLModel; enabling args.uses_unsplit_forward.")
+        args.uses_unsplit_forward = True
 
 
 # Adapt from https://github.com/volcengine/verl/blob/c3b20575d2bc815fcccd84bddb4c0401fc4b632b/verl/models/llama/megatron/layers/parallel_linear.py#L82
@@ -62,6 +110,8 @@ def _get_model_provider_func(
     args: argparse.Namespace,
     role: Literal["actor", "critic"] = "actor",
 ):
+    _maybe_apply_qwen_vl_recompute_tail_patch()
+
     # Support custom model provider path (similar to --custom-rm-path for reward models)
     if getattr(args, "custom_model_provider_path", None):
 
@@ -76,51 +126,124 @@ def _get_model_provider_func(
             else:
                 model = custom_model_provider(pre_process=pre_process, post_process=post_process)
             # Apply critic output layer if needed
+            _maybe_apply_qwen_vl_recompute_tail_patch_to_model(model)
             if post_process and role == "critic":
                 model.output_layer = LinearForLastLayer(
                     input_size=model.config.hidden_size, output_size=1, config=model.config
                 )
+            _maybe_mark_unsplit_forward(args, model)
             return model
 
         return wrapped_model_provider
 
     if args.megatron_to_hf_mode == "bridge":
+        _maybe_apply_megatron_bridge_compat_shims()
         from megatron.bridge import AutoBridge
 
         import slime_plugins.megatron_bridge  # noqa: F401  # register custom bridges
 
         bridge = patch_auto_bridge_hf_config(AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True))
         provider = bridge.to_megatron_provider(load_weights=False)
-        # TODO: we should not manually set this...
-        provider.tensor_model_parallel_size = args.tensor_model_parallel_size
-        provider.pipeline_model_parallel_size = args.pipeline_model_parallel_size
-        provider.expert_model_parallel_size = args.expert_model_parallel_size
-        provider.expert_tensor_parallel_size = args.expert_tensor_parallel_size
-        provider.sequence_parallel = args.sequence_parallel
-        provider.context_parallel_size = args.context_parallel_size
-        provider.variable_seq_lengths = args.variable_seq_lengths
-        if hasattr(args, "moe_token_dispatcher_type"):
-            provider.moe_token_dispatcher_type = args.moe_token_dispatcher_type
+
+        # Keep Megatron Bridge providers in sync with Slime/Megatron args for
+        # long-context VLM SFT. Bridge defaults are often conservative and may
+        # disagree with the already-validated launch topology.
+        bridge_keys = [
+            "attention_backend",
+            "tensor_model_parallel_size",
+            "pipeline_model_parallel_size",
+            "context_parallel_size",
+            "expert_model_parallel_size",
+            "expert_tensor_parallel_size",
+            "sequence_parallel",
+            "variable_seq_lengths",
+            "attention_softmax_in_fp32",
+            "bias_dropout_fusion",
+            "apply_rope_fusion",
+            "recompute_granularity",
+            "recompute_method",
+            "recompute_num_layers",
+            "distribute_saved_activations",
+            "moe_router_load_balancing_type",
+            "moe_router_dtype",
+            "moe_aux_loss_coeff",
+            "moe_token_dispatcher_type",
+            "moe_shared_expert_overlap",
+            "moe_enable_deepep",
+            "moe_flex_dispatcher_backend",
+            "freeze_language_model",
+            "freeze_vision_model",
+            "freeze_vision_projection",
+            "vision_dp_when_cp",
+            "vision_dp_when_tp",
+            "calculate_per_token_loss",
+            "num_layers",
+            "moe_layer_freq",
+        ]
+
+        args_dict = vars(args)
+        for attr in bridge_keys:
+            if attr not in args_dict or not hasattr(provider, attr):
+                continue
+            old_val = getattr(provider, attr)
+            new_val = args_dict[attr]
+            if old_val != new_val:
+                logger.info(f"Override provider.{attr}: {old_val!r} -> {new_val!r}")
+            setattr(provider, attr, new_val)
+
+        if getattr(args, "loss_type", None) == "sft_loss" and hasattr(provider, "cross_entropy_loss_fusion"):
+            # Long-context VLM SFT passes labels into Megatron so the model can
+            # return per-token CE directly. The native CE path still
+            # materializes [T, vocab] logits; linear CE avoids that tensor.
+            if not provider.cross_entropy_loss_fusion:
+                logger.info("Override provider.cross_entropy_loss_fusion: False -> True")
+            provider.cross_entropy_loss_fusion = True
+            if hasattr(provider, "cross_entropy_fusion_impl"):
+                old_val = getattr(provider, "cross_entropy_fusion_impl")
+                if old_val != "linear":
+                    logger.info(f"Override provider.cross_entropy_fusion_impl: {old_val!r} -> 'linear'")
+                provider.cross_entropy_fusion_impl = "linear"
+
+        if hasattr(provider, "mtp_num_layers"):
+            # Qwen3.5/3.6 HF configs may advertise MTP layers for speculative
+            # decoding. Plain SFT does not train MTP, and loading those extra
+            # Megatron params from a base HF checkpoint can produce missing
+            # bridge tasks. Only keep them when MTP training is explicitly on.
+            new_val = getattr(args, "mtp_num_layers", None) if getattr(args, "enable_mtp_training", False) else None
+            old_val = getattr(provider, "mtp_num_layers")
+            if old_val != new_val:
+                logger.info(f"Override provider.mtp_num_layers: {old_val!r} -> {new_val!r}")
+            provider.mtp_num_layers = new_val
+
         if getattr(args, "decoder_first_pipeline_num_layers", None) is not None:
             provider.num_layers_in_first_pipeline_stage = args.decoder_first_pipeline_num_layers
         if getattr(args, "decoder_last_pipeline_num_layers", None) is not None:
             provider.num_layers_in_last_pipeline_stage = args.decoder_last_pipeline_num_layers
+        if getattr(args, "fp16", False):
+            provider.fp16 = True
+            provider.bf16 = False
+            provider.params_dtype = torch.float16
+        elif getattr(args, "bf16", False):
+            provider.fp16 = False
+            provider.bf16 = True
+            provider.params_dtype = torch.bfloat16
         provider.finalize()
 
-        if role == "critic":
-            _original_provide = provider.provide
+        _original_provide = provider.provide
 
-            def _critic_provide(pre_process=True, post_process=True, vp_stage=None):
-                model = _original_provide(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
+        def _provide(pre_process=True, post_process=True, vp_stage=None):
+            _maybe_apply_qwen_vl_recompute_tail_patch()
+            model = _original_provide(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
+            _maybe_apply_qwen_vl_recompute_tail_patch_to_model(model)
+            _maybe_mark_unsplit_forward(args, model)
+            if role == "critic":
                 if post_process:
                     model.output_layer = LinearForLastLayer(
                         input_size=model.config.hidden_size, output_size=1, config=model.config
                     )
-                return model
+            return model
 
-            return _critic_provide
-
-        return provider.provide
+        return _provide
 
     def model_provider(pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None) -> GPTModel:
         """Builds the model.
@@ -153,6 +276,7 @@ def _get_model_provider_func(
                         model.output_layer = LinearForLastLayer(
                             input_size=config.hidden_size, output_size=1, config=config
                         )
+                    _maybe_mark_unsplit_forward(args, model)
                     return model
                 transformer_layer_spec = result
         else:
@@ -237,6 +361,7 @@ def _get_model_provider_func(
         if post_process and role == "critic":
             model.output_layer = LinearForLastLayer(input_size=config.hidden_size, output_size=1, config=config)
 
+        _maybe_mark_unsplit_forward(args, model)
         return model
 
     return model_provider
@@ -269,13 +394,58 @@ def get_model_provider_func(args, role="actor"):
     return wrap_model_provider_with_freeze(_get_model_provider_func(args, role), args)
 
 
+def _log_freeze_summary(model: GPTModel, args: argparse.Namespace, matched_patterns: dict[str, list[str]]) -> None:
+    try:
+        import torch.distributed as dist
+
+        if dist.is_available() and dist.is_initialized() and dist.get_rank() != 0:
+            return
+    except Exception:
+        pass
+
+    if not (
+        getattr(args, "only_train_params_name_list", None)
+        or getattr(args, "freeze_params_name_list", None)
+    ):
+        return
+
+    total_tensors = 0
+    total_numel = 0
+    trainable_tensors = 0
+    trainable_numel = 0
+    for _, param in model.named_parameters():
+        total_tensors += 1
+        total_numel += param.numel()
+        if param.requires_grad:
+            trainable_tensors += 1
+            trainable_numel += param.numel()
+
+    match_summary = {
+        pattern: {"count": len(names), "examples": names[:8]}
+        for pattern, names in matched_patterns.items()
+    }
+    logger.info(
+        "Freeze parameter summary: only_train=%s freeze=%s total_tensors=%s total_numel=%s "
+        "trainable_tensors=%s trainable_numel=%s matched=%s",
+        getattr(args, "only_train_params_name_list", None),
+        getattr(args, "freeze_params_name_list", None),
+        total_tensors,
+        total_numel,
+        trainable_tensors,
+        trainable_numel,
+        match_summary,
+    )
+
+
 def freeze_model_params(model: GPTModel, args: argparse.Namespace):
+    matched_patterns: dict[str, list[str]] = {}
     if getattr(args, "only_train_params_name_list", None):
         for name, param in model.named_parameters():
             param.requires_grad = False
             for pattern in args.only_train_params_name_list:
                 if re.search(pattern, name):
                     param.requires_grad = True
+                    matched_patterns.setdefault(f"only_train:{pattern}", []).append(name)
                     break
 
     if getattr(args, "freeze_params_name_list", None):
@@ -283,4 +453,7 @@ def freeze_model_params(model: GPTModel, args: argparse.Namespace):
             for pattern in args.freeze_params_name_list:
                 if re.search(pattern, name):
                     param.requires_grad = False
+                    matched_patterns.setdefault(f"freeze:{pattern}", []).append(name)
                     break
+
+    _log_freeze_summary(model, args, matched_patterns)
