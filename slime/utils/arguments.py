@@ -28,6 +28,8 @@ def reset_arg(parser, name, **kwargs):
         if name in action.option_strings:
             if "default" in kwargs:
                 action.default = kwargs["default"]
+            if "help" in kwargs:
+                action.help = kwargs["help"]
             break
     else:
         parser.add_argument(name, **kwargs)
@@ -843,7 +845,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             reset_arg(parser, "--seed", type=int, default=1234)
             reset_arg(parser, "--clip-grad", type=float, default=1.0)
-            reset_arg(parser, "--calculate-per-token-loss", action="store_true")
+            reset_arg(
+                parser,
+                "--calculate-per-token-loss",
+                action="store_true",
+                help=(
+                    "Legacy alias for --loss-aggregation=token_mean (the global per-token mean); "
+                    "reconciled onto that mode at startup. Prefer --loss-aggregation=token_mean. "
+                    "Incompatible with --loss-aggregation prompt_mean/constant."
+                ),
+            )
             reset_arg(parser, "--lr", type=float, default=1e-6)
 
             parser.add_argument(
@@ -1053,6 +1064,44 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
                 help="Path to a custom reducer function for pg_loss only. When set, pg_loss will use this custom reducer while other metrics (pg_clipfrac, ppo_kl, entropy_loss, etc.) still use the default sum_of_sample_mean.",
+            )
+            parser.add_argument(
+                "--loss-aggregation",
+                type=str,
+                default="sample_mean",
+                choices=["sample_mean", "prompt_mean", "token_mean", "constant"],
+                help=(
+                    "How pg_loss is aggregated across the step (applies to pg_loss only; "
+                    "pg_clipfrac, ppo_kl, entropy_loss, kl_loss keep the default sample-mean "
+                    "reducer — same scope as --custom-pg-loss-reducer-function-path, which still "
+                    "takes precedence when set). Modes follow the ScaleRL taxonomy "
+                    "(arXiv:2510.13786 §3.2): "
+                    "'sample_mean' (default; GRPO sample average) — each rollout's tokens are "
+                    "averaged with the per-rollout token-weighted denominator, so every rollout "
+                    "contributes equally regardless of fan-out (byte-identical to slime's prior "
+                    "default); "
+                    "'prompt_mean' (DAPO prompt average) — tokens are averaged over each prompt "
+                    "group (all rollouts sharing a Sample.group_index share one denominator); "
+                    "'token_mean' (token average) — global per-token mean; the legacy "
+                    "--calculate-per-token-loss flag is exactly this mode (and is reconciled onto "
+                    "it at startup); "
+                    "'constant' (Dr.GRPO, arXiv:2503.20783) — masked token sum divided by a fixed "
+                    "--loss-aggregation-divisor (e.g. the max context length)."
+                ),
+            )
+            parser.add_argument(
+                "--loss-aggregation-divisor",
+                type=float,
+                default=None,
+                help=(
+                    "Constant divisor L for --loss-aggregation=constant (Dr.GRPO). pg_loss is "
+                    "aggregated as sum(token_loss * loss_mask) / L instead of any data-dependent "
+                    "denominator. L is per-token: the usual / step_global_batch_size step average "
+                    "is then applied on top (same structure as every mode), so the effective "
+                    "per-step normalization is / (L * step_global_batch_size); L only sets the "
+                    "data-independent per-token scale. Required and validated > 0 at startup only "
+                    "when --loss-aggregation=constant; setting it with any other mode fails loud."
+                ),
             )
 
             parser.add_argument(
@@ -1825,6 +1874,30 @@ def slime_validate_args(args):
 
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 
+    loss_aggregation = args.loss_aggregation
+    divisor = args.loss_aggregation_divisor
+    if loss_aggregation == "constant":
+        if divisor is None or not (divisor > 0):
+            raise ValueError(
+                "--loss-aggregation-divisor must be set to a positive value when "
+                f"--loss-aggregation=constant (got {divisor!r})."
+            )
+    elif divisor is not None:
+        raise ValueError(
+            "--loss-aggregation-divisor is only used with --loss-aggregation=constant "
+            f"(got --loss-aggregation={loss_aggregation})."
+        )
+    if loss_aggregation == "token_mean":
+        args.calculate_per_token_loss = True
+    elif args.calculate_per_token_loss:
+        if loss_aggregation == "sample_mean":
+            loss_aggregation = args.loss_aggregation = "token_mean"
+        else:
+            raise ValueError(
+                f"--loss-aggregation={loss_aggregation} is incompatible with --calculate-per-token-loss "
+                "(use --loss-aggregation=token_mean for the per-token mean)."
+            )
+
     if args.advantage_estimator in ["reinforce_plus_plus", "reinforce_plus_plus_baseline"]:
         assert args.normalize_advantages, (
             "The 'reinforce_plus_plus' and 'reinforce_plus_plus_baseline' advantage estimators "
@@ -1947,6 +2020,17 @@ def slime_validate_args(args):
                 f"// num_steps_per_rollout {args.num_steps_per_rollout}"
             )
         args.global_batch_size = global_batch_size
+
+    if (
+        args.loss_aggregation == "prompt_mean"
+        and args.global_batch_size is not None
+        and args.global_batch_size % args.n_samples_per_prompt != 0
+    ):
+        raise ValueError(
+            "--loss-aggregation prompt_mean requires global_batch_size to be a multiple of "
+            "n_samples_per_prompt so each prompt group stays within one training step "
+            f"(got global_batch_size={args.global_batch_size}, n_samples_per_prompt={args.n_samples_per_prompt})."
+        )
 
     if args.n_samples_per_prompt == 1:
         args.grpo_std_normalization = False

@@ -15,6 +15,8 @@ checks live in ``test_metric_report.py`` and ``test_metric_report_dist.py``.
 
 from __future__ import annotations
 
+from argparse import Namespace
+
 # Import the helpers BEFORE the slime imports so the megatron stub lands
 # in sys.modules first. pytest's prepend importmode puts this file's
 # directory (``tests/``) on sys.path, which is what makes the bare-name
@@ -27,6 +29,7 @@ from slime.backends.megatron_utils.cp_utils import (  # noqa: E402
     get_logits_and_tokens_offset_with_cp,
     get_sum_of_sample_mean,
 )
+from slime.backends.megatron_utils.loss import get_pg_loss_reducer  # noqa: E402
 
 
 NUM_GPUS = 0
@@ -174,6 +177,120 @@ def test_cp_chunking_preserves_per_rollout_mean_report(monkeypatch):
         cp_total += reducer_cp2(x_for_rank).item()
 
     assert cp_total == pytest.approx(baseline)
+
+
+@pytest.mark.unit
+def test_constant_divisor_divides_masked_token_sum_by_L():
+    total_lengths, response_lengths, loss_masks = _make_inputs([3, 3])
+    L = 40.0
+    reducer = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks, constant_divisor=L)
+    x = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+
+    assert reducer(x).item() == pytest.approx(21.0 / L)
+
+
+@pytest.mark.unit
+def test_prompt_mean_denom_is_per_group_token_sum():
+    total_lengths, response_lengths, loss_masks = _make_inputs([2, 2, 4, 4])
+    prompt_denoms = _denoms(4, 4, 8, 8)
+    reducer = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks, prompt_denoms)
+
+    x = torch.tensor([1.0] * 2 + [1.0] * 2 + [1.0] * 4 + [1.0] * 4)
+    assert reducer(x).item() == pytest.approx(2.0)
+
+    x2 = torch.tensor([2.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    assert reducer(x2).item() == pytest.approx(1.5)
+
+    sample_mean = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks)
+    assert sample_mean(x2).item() == pytest.approx(3.0)
+    assert sample_mean(x2).item() != pytest.approx(reducer(x2).item())
+
+    token_sum = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks, calculate_per_token_loss=True)
+    assert token_sum(x2).item() == pytest.approx(10.0)
+    assert token_sum(x2).item() != pytest.approx(reducer(x2).item())
+
+
+@pytest.mark.unit
+def test_prompt_mean_reducer_matches_final_prompt_average():
+    total_lengths, response_lengths, loss_masks = _make_inputs([2, 2, 4, 4])
+    batch = {"prompt_mask_sums": _denoms(4, 4, 8, 8)}
+    default_reducer = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks)
+    args = Namespace(
+        loss_aggregation="prompt_mean",
+        n_samples_per_prompt=2,
+    )
+    reducer = get_pg_loss_reducer(
+        args,
+        batch,
+        total_lengths=total_lengths,
+        response_lengths=response_lengths,
+        pg_loss_masks=loss_masks,
+        default_reducer=default_reducer,
+    )
+
+    x = torch.tensor([2.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    step_global_batch_size = 4
+
+    assert (reducer(x) / step_global_batch_size).item() == pytest.approx(0.75)
+
+
+@pytest.mark.unit
+def test_constant_and_per_token_loss_are_mutually_exclusive():
+    total_lengths, response_lengths, loss_masks = _make_inputs([3])
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        get_sum_of_sample_mean(
+            total_lengths,
+            response_lengths,
+            loss_masks,
+            calculate_per_token_loss=True,
+            constant_divisor=40.0,
+        )
+
+
+@pytest.mark.unit
+def test_cp_chunking_preserves_constant_divisor(monkeypatch):
+    from megatron.core import mpu as _mpu
+
+    total_lengths = [12, 12]
+    response_lengths = [8, 8]
+    loss_masks = [torch.ones(r, dtype=torch.float32) for r in response_lengths]
+    L = 40.0
+    x_full = [
+        torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
+        torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]),
+    ]
+    x_concat = torch.cat(x_full)
+
+    monkeypatch.setattr(_mpu, "get_context_parallel_world_size", lambda: 1)
+    monkeypatch.setattr(_mpu, "get_context_parallel_rank", lambda: 0)
+    reducer_cp1 = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks, constant_divisor=L)
+    baseline = reducer_cp1(x_concat).item()
+
+    monkeypatch.setattr(_mpu, "get_context_parallel_world_size", lambda: 2)
+    cp_total = 0.0
+    for cp_rank in range(2):
+        monkeypatch.setattr(_mpu, "get_context_parallel_rank", lambda r=cp_rank: r)
+        x_chunks_per_sample = []
+        for tl, rl, x in zip(total_lengths, response_lengths, x_full, strict=True):
+            prompt_length = tl - rl
+            _, _, _, tokens_offset = get_logits_and_tokens_offset_with_cp(tl, rl)
+            chunk_0 = x[tokens_offset[0][0] - prompt_length : tokens_offset[0][1] - prompt_length]
+            chunk_1 = x[tokens_offset[1][0] - prompt_length : tokens_offset[1][1] - prompt_length]
+            x_chunks_per_sample.append(torch.cat([chunk_0, chunk_1]))
+        x_for_rank = torch.cat(x_chunks_per_sample)
+        reducer_cp2 = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks, constant_divisor=L)
+        cp_total += reducer_cp2(x_for_rank).item()
+
+    assert cp_total == pytest.approx(baseline)
+
+
+@pytest.mark.unit
+def test_sample_denoms_length_mismatch_fails_loud():
+    total_lengths, response_lengths, loss_masks = _make_inputs([3, 3, 3])
+    x = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0])
+    reducer = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks, _denoms(9, 9))
+    with pytest.raises(ValueError, match="zip"):
+        reducer(x)
 
 
 if __name__ == "__main__":

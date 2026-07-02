@@ -95,11 +95,12 @@ def _tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:
             for mm_dict in rollout_data["multimodal_train_inputs"]
         ]
 
-    if "rollout_mask_sums" in rollout_data:
-        rollout_data["rollout_mask_sums"] = _cpu_tensor(
-            rollout_data["rollout_mask_sums"],
-            dtype=torch.float32,
-        )
+    for mask_sums_key in ("rollout_mask_sums", "prompt_mask_sums"):
+        if mask_sums_key in rollout_data:
+            rollout_data[mask_sums_key] = _cpu_tensor(
+                rollout_data[mask_sums_key],
+                dtype=torch.float32,
+            )
 
 
 @dataclasses.dataclass
@@ -777,6 +778,19 @@ class RolloutManager:
             rollout_total_mask[rid] = rollout_total_mask.get(rid, 0) + ms
         train_data["rollout_mask_sums"] = [rollout_total_mask[rid] for rid in rollout_id_list]
 
+        if self.args.loss_aggregation == "prompt_mean":
+            group_total_mask: dict[int, int] = {}
+            for sample, ms in zip(samples, mask_sums_per_sample, strict=True):
+                if sample.group_index is None:
+                    raise ValueError(
+                        "--loss-aggregation prompt_mean requires every Sample.group_index to be set, "
+                        "but a sample has group_index=None. prompt_mean divides each sample by its "
+                        "prompt group's total mask; a None group_index means the sample belongs to no "
+                        "prompt group, so its denominator is undefined."
+                    )
+                group_total_mask[sample.group_index] = group_total_mask.get(sample.group_index, 0) + ms
+            train_data["prompt_mask_sums"] = [group_total_mask[sample.group_index] for sample in samples]
+
         # Overwrite raw_reward when available. Mixed-source batches may only
         # populate this field for a subset of samples (e.g. SWE but not code).
         if any(sample.metadata and "raw_reward" in sample.metadata for sample in samples):
@@ -866,6 +880,7 @@ class RolloutManager:
                 "sample_indices",
                 "rollout_ids",
                 "rollout_mask_sums",
+                "prompt_mask_sums",
                 "rollout_log_probs",
                 "rollout_top_p_token_ids",
                 "rollout_top_p_token_offsets",

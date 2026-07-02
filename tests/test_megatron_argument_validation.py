@@ -303,6 +303,9 @@ def make_slime_validate_args(**overrides):
         update_weight_disk_dir=None,
         update_weight_delta_dir=None,
         update_weight_mode="full",
+        loss_aggregation="sample_mean",
+        loss_aggregation_divisor=None,
+        calculate_per_token_loss=False,
     )
     values.update(overrides)
     return types.SimpleNamespace(**values)
@@ -349,6 +352,136 @@ def test_slime_validate_args_preserves_zero_rollout_gpus_without_colocate(monkey
     assert args.actor_num_nodes == 1
     assert args.offload_train is False
     assert args.offload_rollout is False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("divisor", [None, 0.0, -1.0, float("nan")])
+def test_loss_aggregation_constant_rejects_nonpositive_divisor(monkeypatch, divisor):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(loss_aggregation="constant", loss_aggregation_divisor=divisor)
+
+    with pytest.raises(ValueError, match="loss-aggregation-divisor"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_loss_aggregation_constant_accepts_positive_divisor(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(loss_aggregation="constant", loss_aggregation_divisor=40960.0)
+
+    module.slime_validate_args(args)
+
+    assert args.loss_aggregation_divisor == 40960.0
+
+
+@pytest.mark.unit
+def test_loss_aggregation_token_mean_aliases_calculate_per_token_loss(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(loss_aggregation="token_mean", calculate_per_token_loss=False)
+
+    module.slime_validate_args(args)
+
+    assert args.calculate_per_token_loss is True
+
+
+@pytest.mark.unit
+def test_calculate_per_token_loss_alone_reconciles_to_token_mean(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(calculate_per_token_loss=True)
+
+    module.slime_validate_args(args)
+
+    assert args.loss_aggregation == "token_mean"
+    assert args.calculate_per_token_loss is True
+
+
+@pytest.mark.unit
+def test_loss_aggregation_default_leaves_per_token_loss_off(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args()
+
+    module.slime_validate_args(args)
+
+    assert args.calculate_per_token_loss is False
+    assert args.loss_aggregation == "sample_mean"
+
+
+@pytest.mark.unit
+def test_loss_aggregation_prompt_mean_rejects_calculate_per_token_loss(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(loss_aggregation="prompt_mean", calculate_per_token_loss=True)
+
+    with pytest.raises(ValueError, match="prompt_mean is incompatible with --calculate-per-token-loss"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_loss_aggregation_prompt_mean_without_per_token_loss_passes(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(loss_aggregation="prompt_mean", calculate_per_token_loss=False)
+
+    module.slime_validate_args(args)
+
+    assert args.loss_aggregation == "prompt_mean"
+    assert args.calculate_per_token_loss is False
+
+
+@pytest.mark.unit
+def test_loss_aggregation_constant_rejects_calculate_per_token_loss(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        loss_aggregation="constant", loss_aggregation_divisor=40960.0, calculate_per_token_loss=True
+    )
+
+    with pytest.raises(ValueError, match="constant is incompatible with --calculate-per-token-loss"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("mode", ["sample_mean", "token_mean", "prompt_mean"])
+def test_loss_aggregation_divisor_rejected_on_non_constant_modes(monkeypatch, mode):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(loss_aggregation=mode, loss_aggregation_divisor=40960.0)
+
+    with pytest.raises(ValueError, match="loss-aggregation-divisor is only used with --loss-aggregation=constant"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_loss_aggregation_prompt_mean_rejects_non_multiple_global_batch_size(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(loss_aggregation="prompt_mean", n_samples_per_prompt=4, global_batch_size=6)
+
+    with pytest.raises(ValueError, match="prompt_mean requires global_batch_size to be a multiple"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_loss_aggregation_prompt_mean_accepts_multiple_global_batch_size(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(loss_aggregation="prompt_mean", n_samples_per_prompt=4, global_batch_size=8)
+
+    module.slime_validate_args(args)
+
+    assert args.loss_aggregation == "prompt_mean"
+    assert args.global_batch_size == 8
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("mode", ["sample_mean", "token_mean", "constant"])
+def test_loss_aggregation_non_prompt_mean_allows_non_multiple_global_batch_size(monkeypatch, mode):
+    module = load_slime_arguments_module(monkeypatch)
+    divisor = 40960.0 if mode == "constant" else None
+    args = make_slime_validate_args(
+        loss_aggregation=mode,
+        loss_aggregation_divisor=divisor,
+        n_samples_per_prompt=4,
+        global_batch_size=6,
+    )
+
+    module.slime_validate_args(args)
+
+    assert args.global_batch_size == 6
 
 
 @pytest.mark.unit
