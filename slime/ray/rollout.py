@@ -744,20 +744,19 @@ class RolloutManager:
             "rollout_ids": rollout_ids,
         }
 
-        # loss mask
-        # TODO: compress the loss mask
+        # loss mask: pack as np.int8 at the ray.put boundary.
         loss_masks = []
         for sample in samples:
-            # always instantiate loss_mask if not provided
-            if sample.loss_mask is None:
-                sample.loss_mask = [1] * sample.response_length
-
-            assert (
-                len(sample.loss_mask) == sample.response_length
-            ), f"loss mask length {len(sample.loss_mask)} != response length {sample.response_length}"
             if sample.remove_sample:
-                sample.loss_mask = [0] * sample.response_length
-            loss_masks.append(sample.loss_mask)
+                mask = np.zeros(sample.response_length, dtype=np.int8)
+            elif sample.loss_mask is None:
+                mask = np.ones(sample.response_length, dtype=np.int8)
+            else:
+                assert (
+                    len(sample.loss_mask) == sample.response_length
+                ), f"loss mask length {len(sample.loss_mask)} != response length {sample.response_length}"
+                mask = np.asarray(sample.loss_mask, dtype=np.int8)
+            loss_masks.append(mask)
         train_data["loss_masks"] = loss_masks
 
         # Per-rollout aggregate, precomputed at the step level (where we can
