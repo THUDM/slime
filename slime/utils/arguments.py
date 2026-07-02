@@ -3,7 +3,6 @@ import copy
 import json
 import logging
 import os
-import warnings
 from typing import Any
 
 import yaml
@@ -139,8 +138,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default="full",
                 help=(
                     "Weight sync strategy. 'full' (default) broadcasts every parameter "
-                    "every sync. 'delta' detects byte-level changes against a pinned-CPU "
-                    "snapshot of the previous broadcast and ships only the changed positions + values."
+                    "every sync. 'delta' diffs each sync against a pinned-CPU snapshot of the "
+                    "previous one and ships only the changed bytes (disk transport only)."
                 ),
             )
             parser.add_argument(
@@ -150,9 +149,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Carrier for weight sync. In full mode, 'nccl' broadcasts chunks and "
                     "'disk' writes a complete HF checkpoint under --update-weight-disk-dir "
-                    "before engines reload it. In delta mode, 'nccl' broadcasts sparse deltas; "
-                    "'disk' writes sparse safetensors under --update-weight-disk-dir and pushes "
-                    "once at end-of-sync."
+                    "before engines reload it. Delta mode is 'disk' only: each host applies the "
+                    "published deltas into its local checkpoint and reloads via update_weights_from_disk."
                 ),
             )
             parser.add_argument(
@@ -162,7 +160,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Filesystem directory for disk-backed weight sync. In --update-weight-mode=full, "
                     "one complete HF checkpoint directory is written per sync. In delta mode, "
-                    "one sparse-delta directory is written per sync."
+                    "one delta directory (changed tensors only) is written per sync."
                 ),
             )
             parser.add_argument(
@@ -175,41 +173,64 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--update-weight-encoding",
-                choices=["indices", "deltas", "deltas_zstd"],
-                default="indices",
+                "--update-weight-delta-encoding",
+                choices=["xor", "overwrite"],
+                default="xor",
                 help=(
-                    "Position encoding for partial flushes. 'indices': int32 absolute "
-                    "positions (largest, lowest compute). 'deltas': uint16 gap-deltas "
-                    "with uint32 fallback (smaller). 'deltas_zstd': 'deltas' with the "
-                    "safetensors blob wrapped in zstd L1 (smallest, heaviest compute — "
-                    "best for shared-FS bandwidth ≤ ~300 MB/s)."
+                    "On-disk delta encoding for --update-weight-mode=delta --update-weight-transport=disk. "
+                    "'xor' (default): new ^ old — smallest wire and fastest, but an involution that must be "
+                    "applied exactly once against the correct base (applying it twice reverts). 'overwrite': "
+                    "changed positions + new absolute values — larger, but idempotent (re-applicable any "
+                    "number of times). Both are byte-level and dtype-blind; the engine reads the choice from "
+                    "each version's index metadata."
                 ),
             )
             parser.add_argument(
-                "--update-weight-delta-dir",
-                type=str,
-                default=None,
+                "--update-weight-delta-checksum",
+                choices=["xxh3-128", "blake3", "adler32"],
+                default="xxh3-128",
                 help=(
-                    "Deprecated alias for --update-weight-disk-dir and will be removed in a future "
-                    "release. Prefer the transport-level directory flag for both full and delta disk sync."
+                    "Per-tensor integrity checksum for disk delta apply. The checksum is not the "
+                    "apply bottleneck (the apply is decompress + XOR bound), so this is a digest-"
+                    "property choice, not a speed one. 'xxh3-128' (default): widest fast non-"
+                    "cryptographic digest, negligible accidental-corruption collisions. 'blake3': "
+                    "cryptographic digest, for untrusted storage. 'adler32': 32-bit, for interop "
+                    "with systems that expect it. The engine reads the choice from each version's "
+                    "index metadata."
                 ),
-            )
-            parser.add_argument(
-                "--update-weight-delta-keep-files",
-                action="store_true",
-                default=False,
-                help="Skip post-apply cleanup of per-sync version directories. Useful for debugging.",
             )
             parser.add_argument(
                 "--custom-delta-pre-push-path",
                 type=str,
                 default=None,
                 help=(
-                    "Path to a custom function called by --update-weight-transport=disk after each "
-                    "trainer rank's files are durably on local disk, before rank 0 fires the engine "
-                    "RPCs. Signature: ``def hook(args, version_dir: str, rollout_engines) -> None``. "
-                    "Called from every trainer rank; the hook gates itself."
+                    "Path to a custom function called on each trainer rank after its delta files "
+                    "are written, before the engines read them — to publish the writes on a "
+                    "non-POSIX filesystem (no cross-host visibility without an explicit sync). "
+                    "Signature: ``def hook(args, version_dir: str, rollout_engines) -> None``; the hook gates itself."
+                ),
+            )
+            parser.add_argument(
+                "--custom-delta-pre-read-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a custom function called on each rollout host before it reads the "
+                    "published delta directory — refreshes the mount so the just-published version "
+                    "is visible on a non-POSIX filesystem (no cross-host read-after-write consistency). "
+                    "Signature: ``def hook(delta_dir: str, target_version: int) -> None``."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-local-checkpoint-dir",
+                type=str,
+                default=None,
+                help=(
+                    "Rollout-host-local directory (NVMe) holding a full HF checkpoint that "
+                    "disk-delta sync patches in place. Each host materializes it from "
+                    "--hf-checkpoint at engine start, applies each version's delta there, and "
+                    "the engines reload from it. Required for --update-weight-mode=delta "
+                    "--update-weight-transport=disk."
                 ),
             )
             parser.add_argument(
@@ -1694,57 +1715,6 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
     return eval_datasets
 
 
-def _resolve_update_weight_disk_dir(args) -> None:
-    """Normalize disk-sync directory args.
-
-    ``--update-weight-delta-dir`` is kept only as a compatibility alias. New
-    code should use ``--update-weight-disk-dir`` because the directory belongs
-    to the transport, not to the delta encoding mode.
-    """
-    disk_dir = args.update_weight_disk_dir
-    delta_dir = args.update_weight_delta_dir
-    if disk_dir and delta_dir and disk_dir != delta_dir:
-        raise ValueError(
-            "--update-weight-delta-dir is deprecated alias for --update-weight-disk-dir; "
-            "please set only one of them or set both to the same path."
-        )
-
-    if delta_dir:
-        warnings.warn(
-            "--update-weight-delta-dir is deprecated and will be removed in a future release; "
-            "use --update-weight-disk-dir instead.",
-            UserWarning,
-            stacklevel=2,
-        )
-
-    disk_dir = disk_dir or delta_dir
-    if args.update_weight_transport == "disk":
-        if not disk_dir:
-            raise ValueError(
-                "--update-weight-transport=disk requires --update-weight-disk-dir to point at "
-                "a filesystem shared between the trainer and the rollout engines."
-            )
-        args.update_weight_disk_dir = disk_dir
-        args.update_weight_delta_dir = disk_dir
-
-
-def _validate_update_weight_args(args) -> None:
-    _resolve_update_weight_disk_dir(args)
-
-    if args.update_weight_mode == "delta":
-        if args.update_weight_transport not in ("nccl", "disk"):
-            raise ValueError(
-                "--update-weight-mode=delta supports only --update-weight-transport=nccl or disk, "
-                f"got {args.update_weight_transport!r}."
-            )
-        if args.colocate:
-            raise ValueError(
-                "--update-weight-mode=delta is not supported with --colocate. Colocate transfers "
-                "weights via CUDA IPC (only a handle crosses processes), so the delta bookkeeping "
-                "(snapshot + diff + sparse encode) is pure overhead."
-            )
-
-
 def slime_validate_args(args):
     args.eval_datasets = _resolve_eval_datasets(args)
 
@@ -2007,4 +1977,26 @@ def slime_validate_args(args):
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")
 
-    _validate_update_weight_args(args)
+    # disk-backed sync (full or delta) writes on the trainer and reads on the engines: needs a shared dir
+    if args.update_weight_transport == "disk" and not args.update_weight_disk_dir:
+        raise ValueError(
+            "--update-weight-transport=disk requires --update-weight-disk-dir to point at "
+            "a filesystem shared between the trainer and the rollout engines."
+        )
+    if args.update_weight_mode == "delta":
+        if args.update_weight_transport != "disk":
+            raise ValueError(
+                "--update-weight-mode=delta requires --update-weight-transport=disk, "
+                f"got {args.update_weight_transport!r}."
+            )
+        if args.colocate:
+            raise ValueError(
+                "--update-weight-mode=delta is not supported with --colocate. Colocate transfers "
+                "weights via CUDA IPC (only a handle crosses processes), so the delta bookkeeping "
+                "(snapshot + diff + encode) is pure overhead."
+            )
+        if not args.update_weight_local_checkpoint_dir:
+            raise ValueError(
+                "--update-weight-mode=delta requires --update-weight-local-checkpoint-dir "
+                "(a rollout-host-local NVMe directory)."
+            )

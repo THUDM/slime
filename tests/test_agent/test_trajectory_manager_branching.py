@@ -306,8 +306,8 @@ def _iter_all(root):
 # though get_trajectory consumes the session.
 _TREE_SNAP: dict[str, str] = {}
 
-# Input reward passed to get_trajectory, keyed by sid, so the dump can show the
-# split (input_reward / n_samples == per_sample_reward) explicitly.
+# Input reward passed to get_trajectory, keyed by sid, so the dump can show that
+# every emitted sample carries the full input reward.
 _REWARD_IN: dict[str, float] = {}
 
 
@@ -317,20 +317,19 @@ def get_traj(mgr, sid, *args, **kwargs):
     Linearization (get_trajectory) pops the sid, so a later dump would only see
     ``<drained>``. Capturing the tree text here keeps the routing tree visible
     next to the Samples it produced. The input ``reward`` is captured too so the
-    dump can show how it splits across the emitted samples.
+    dump can show how it maps onto the emitted samples.
     """
     if mgr.has_session(sid):
         _TREE_SNAP[sid] = dump_tree_txt(mgr, sid)
     _REWARD_IN[sid] = kwargs.get("reward", 0.0)
     samples = mgr.get_trajectory(sid, *args, **kwargs)
-    # Reward conservation: get_trajectory splits the input reward evenly across
-    # every emitted sample, so the per-sample shares must sum back to the input
-    # (modulo float error). This is the "averaged over sample count" invariant.
-    if samples:
-        total = sum(s.reward for s in samples)
-        assert abs(total - _REWARD_IN[sid]) < 1e-9, (
-            "reward not conserved across split",
-            total,
+    # Reward assignment: get_trajectory assigns the input reward in full to every
+    # emitted sample (no split), so each per-sample reward must equal the input
+    # (modulo float error). This is the "full outcome reward per turn" invariant.
+    for s in samples:
+        assert abs(s.reward - _REWARD_IN[sid]) < 1e-9, (
+            "reward not assigned in full to every sample",
+            s.reward,
             _REWARD_IN[sid],
         )
     return samples
@@ -660,7 +659,7 @@ def test_2_3_drift_case_A_forks():
         "<sys> system:S </sys> <usr> user:u </usr> <DRIFT> <gen> r:call </ast> "
         "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
     ]
-    assert all(abs(s.reward - 1.0 / len(samples)) < 1e-9 for s in samples)
+    assert all(abs(s.reward - 1.0) < 1e-9 for s in samples)
     _check_invariants(samples)
     _record("2.3 drift case A (prompt region) -> fork", mgr, sid, samples)
     print("PASS 2.3")
@@ -713,7 +712,7 @@ def test_2_5_drift_case_B1_long_forks():
         "<sys> system:S </sys> <usr> user:u </usr> <gen> r:call <DRIFT> "
         "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
     ]
-    assert all(abs(s.reward - 1.0 / len(samples)) < 1e-9 for s in samples)
+    assert all(abs(s.reward - 1.0) < 1e-9 for s in samples)
     _check_invariants(samples)
     _record("2.5 drift case B1 (long) -> fork", mgr, sid, samples)
     print("PASS 2.5")
@@ -761,7 +760,7 @@ def test_2_7_drift_case_B2_earlier_turn_forks():
         "<sys> system:S </sys> <usr> user:u </usr> <gen> r:a1 <DRIFT> "
         "<tul> tool:t1 </tul> <gen> r:a2 </ast> <tul> tool:t2 </tul> <gen> [r:a3] [</ast>]",
     ]
-    assert all(abs(s.reward - 1.0 / len(samples)) < 1e-9 for s in samples)
+    assert all(abs(s.reward - 1.0) < 1e-9 for s in samples)
     _check_invariants(samples)
     _record("2.7 drift case B2 (earlier turn) -> fork", mgr, sid, samples)
     print("PASS 2.7")
@@ -783,10 +782,10 @@ def test_2_8_fork_reward_split():
         "<sys> system:S </sys> <usr> user:u </usr> <DRIFT> <gen> r:call </ast> "
         "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
     ]
-    # reward 1.0 split evenly across the 2 forked samples -> 0.5 each.
-    assert all(abs(s.reward - 0.5) < 1e-9 for s in samples)
+    # reward 1.0 assigned in full to each of the 2 forked samples.
+    assert all(abs(s.reward - 1.0) < 1e-9 for s in samples)
     _check_invariants(samples)
-    _record("2.8 fork reward split (1.0 / 2 = 0.5 each)", mgr, sid, samples)
+    _record("2.8 fork reward (1.0 to each sample)", mgr, sid, samples)
     print("PASS 2.8")
 
 
@@ -802,10 +801,10 @@ def test_2_9_two_leaves_reward_split():
         "<sys> system:S </sys> <usr> user:A </usr> <gen> [r:a] [</ast>]",
         "<sys> system:S </sys> <usr> user:B </usr> <gen> [r:b] [</ast>]",
     ]
-    # reward 1.0 split evenly across the 2 leaves -> 0.5 each.
-    assert all(abs(s.reward - 0.5) < 1e-9 for s in samples)
+    # reward 1.0 assigned in full to each of the 2 leaves.
+    assert all(abs(s.reward - 1.0) < 1e-9 for s in samples)
     _check_invariants(samples)
-    _record("2.9 two leaves reward split (1.0 / 2 = 0.5 each)", mgr, sid, samples)
+    _record("2.9 two leaves reward (1.0 to each sample)", mgr, sid, samples)
     print("PASS 2.9")
 
 
@@ -1034,7 +1033,7 @@ def test_3_6_tree_fork_plus_token_drift():
         # Sample 2: leaf Y, shares r:call (claimed by sample 0 -> bare), trains r:ay2.
         "<sys> system:S </sys> <usr> user:u </usr> <gen> r:call </ast> " "<tul> tool:y </tul> <gen> [r:ay2] [</ast>]",
     ]
-    assert all(abs(s.reward - 1.0 / 3) < 1e-9 for s in samples)
+    assert all(abs(s.reward - 1.0) < 1e-9 for s in samples)
     _check_invariants(samples)
     _record("3.6 tree fork + token drift -> 3 samples", mgr, sid, samples)
     print("PASS 3.6")
@@ -1121,7 +1120,7 @@ def test_3_8_long_mixed_session():
         "<tul> tool:t2 </tul> <gen> r:a3 </ast> <tul> tool:t3 </tul> <gen> r:a4 </ast> "
         "<tul> tool:t4 </tul> <gen> [r:a5] [</ast>]",
     ]
-    assert abs(sum(s.reward for s in samples) - 1.0) < 1e-9
+    assert all(abs(s.reward - 1.0) < 1e-9 for s in samples)
     _check_invariants(samples)
     _record(f"3.8 long mixed session -> {len(samples)} samples", mgr, sid, samples)
     print("PASS 3.8")
@@ -1325,8 +1324,7 @@ def _print_case(title: str, mgr, sid: str, samples: list) -> None:
     n = len(samples)
     if n:
         r_in = _REWARD_IN.get(sid, 0.0)
-        per = r_in / n
-        print(f"[samples] {n}  (reward split: {r_in:.3f} / {n} = {per:.3f} per sample)")
+        print(f"[samples] {n}  (reward: {r_in:.3f} assigned in full to each sample)")
     else:
         print(f"[samples] {n}")
     for i, s in enumerate(samples):

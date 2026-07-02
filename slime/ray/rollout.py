@@ -197,7 +197,6 @@ class ServerGroup:
                     "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
                     "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
                     "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
-                    "SLIME_ENABLE_PROFILING": "true",
                 }.items()
             }
             rollout_engine = RolloutRayActor.options(
@@ -537,7 +536,8 @@ class RolloutManager:
         gpu_counts = srv.engine_gpu_counts if srv else []
         gpu_offsets = srv.engine_gpu_offsets if srv else []
         num_new = srv.num_new_engines if srv else 0
-        return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets
+        all_engine_actors = srv.all_engines if srv else []
+        return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets, all_engine_actors
 
     def get_num_rollout_per_epoch(self):
         assert self.args.rollout_global_dataset
@@ -793,7 +793,7 @@ class RolloutManager:
         if samples[0].rollout_log_probs is not None:
             train_data["rollout_log_probs"] = [sample.rollout_log_probs for sample in samples]
 
-        if samples[0].rollout_top_p_token_ids is not None:
+        if getattr(self.args, "rollout_top_p", 1.0) != 1.0:
             for sample in samples:
                 assert sample.rollout_top_p_token_ids is not None
                 assert sample.rollout_top_p_token_offsets is not None

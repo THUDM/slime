@@ -142,12 +142,14 @@ class MegatronTrainRayActor(TrainRayActor):
             ), "--update-weight-mode=delta is not supported with --colocate"
             update_weight_cls = UpdateWeightFromTensor
         elif self.args.update_weight_mode == "delta":
-            # Lazy import: the delta module pulls DeltaEncoding/DeltaParam/DeltaSpec from
-            # sglang, which only exist on newer images. Importing eagerly would break old
-            # images even when delta mode is unused.
-            from .update_weight.update_weight_from_distributed_delta import UpdateWeightFromDistributedDelta
+            # Delta sync is disk-transport only: each host applies the published deltas into
+            # its local checkpoint and the engines reload via vanilla update_weights_from_disk.
+            assert (
+                self.args.update_weight_transport == "disk"
+            ), "--update-weight-mode=delta requires --update-weight-transport=disk"
+            from .update_weight.update_weight_from_disk_delta import UpdateWeightFromDiskDelta
 
-            update_weight_cls = UpdateWeightFromDistributedDelta
+            update_weight_cls = UpdateWeightFromDiskDelta
         else:
             assert self.args.update_weight_mode == "full"
             if self.args.update_weight_transport == "disk":
@@ -587,9 +589,14 @@ class MegatronTrainRayActor(TrainRayActor):
                 ray.get(self.rollout_manager.recover_updatable_engines.remote())
             dist.barrier(group=get_gloo_group())
 
-        rollout_engines, rollout_engine_lock, num_new_engines, engine_gpu_counts, engine_gpu_offsets = ray.get(
-            self.rollout_manager.get_updatable_engines_and_lock.remote()
-        )
+        (
+            rollout_engines,
+            rollout_engine_lock,
+            num_new_engines,
+            engine_gpu_counts,
+            engine_gpu_offsets,
+            all_engine_actors,
+        ) = ray.get(self.rollout_manager.get_updatable_engines_and_lock.remote())
 
         reconnect_rollout_engines = self.args.offload_train and self.args.use_critic and not self.args.colocate
 
@@ -609,6 +616,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 rollout_engine_lock,
                 engine_gpu_counts=engine_gpu_counts,
                 engine_gpu_offsets=engine_gpu_offsets,
+                all_engine_actors=all_engine_actors,
             )
             dist.barrier(group=get_gloo_group())
             if dist.get_rank() == 0:

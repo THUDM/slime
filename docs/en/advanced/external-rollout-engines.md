@@ -79,28 +79,16 @@ This keeps the full-checkpoint directories after engines acknowledge the load.
 
 ## Update With Delta
 
-Delta update targets large-model training/inference disaggregation across clusters or datacenters. Instead of writing a full checkpoint, the trainer keeps a pinned-CPU snapshot of the previous sync, detects byte-level changes, and sends only changed positions and values.
-
-Recommended for cross-cluster / shared-filesystem deployments:
+Delta update targets large-model training/inference disaggregation across clusters or datacenters. Instead of writing a full checkpoint every sync, the trainer keeps a CPU snapshot of the previous sync, diffs each parameter against it, and publishes only the changed bytes; every rollout host applies the delta into its local checkpoint and reloads via the vanilla `update_weights_from_disk` endpoint.
 
 ```bash
 --update-weight-mode delta
 --update-weight-transport disk
---update-weight-encoding deltas_zstd
 --update-weight-disk-dir /shared/fs/delta-updates
+--update-weight-local-checkpoint-dir /local/nvme/rollout-ckpt
 ```
 
-With disk transport, each sync writes sparse safetensors under `weight_v{N:06d}/`, then calls `update_weights_from_disk(load_format="delta")`. SGLang overwrites only changed positions in the current weights; unchanged positions stay in place.
-
-For intra-datacenter validation or bandwidth-rich environments, NCCL transport is also available:
-
-```bash
---update-weight-mode delta
---update-weight-transport nccl
---update-weight-encoding indices
-```
-
-For encoding choices, wire layout, receiver-side selective overwrite, and tuning parameters, see [Delta Weight Sync](delta-weight-sync.md).
+See [Delta Weight Sync](delta-weight-sync.md) for the mechanism, encodings, integrity checks, and shared-filesystem visibility hooks.
 
 ## Deployment Checklist
 

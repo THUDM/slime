@@ -1,111 +1,86 @@
 # Delta Weight Sync
 
-- [Why](#why)
-- [Quick Start](#quick-start)
-- [Mode vs Transport](#mode-vs-transport)
-- [How It Works](#how-it-works)
-- [Encoding Choice](#encoding-choice)
-- [Why Not Colocated](#why-not-colocated)
+Delta weight sync keeps non-colocated rollout engines up to date by shipping only the bytes
+that changed between two syncs, instead of a full checkpoint each time. It targets large-model
+training/inference disaggregation across clusters or datacenters, where writing the whole actor
+every sync is the dominant cost.
 
-## Why
+It is **disk-transport only** and reloads through the **ordinary** `update_weights_from_disk`
+endpoint, so the inference engine needs no delta-specific support.
 
-Slime's default sync broadcasts every parameter every step. The cost scales linearly with model size and dominates the sync phase, even though only a few percent of weights change between consecutive RL steps. Delta sync keeps a pinned-CPU snapshot of the last broadcast and ships only the positions whose bytes differ.
-
-The motivating use case is **training/inference disaggregation** — running the trainer and the rollout engines in *different datacenters* over a shared filesystem with bandwidth on the order of 100s of MB/s, where a full broadcast is infeasible but a sparse delta (~3% density, ~5 GB for a 355B model) is. The same delta machinery also runs over NCCL inside a single datacenter, where it serves as the validation baseline that proves the wire encoding and apply logic are correct.
-
-Prior art: selective overwrite is inspired by [arXiv:2509.19128](https://arxiv.org/abs/2509.19128); the cross-DC disaggregation motivation is from [Fireworks AI — Frontier RL Is Cheaper Than You Think](https://fireworks.ai/blog/frontier-rl-is-cheaper-than-you-think). Another public production-shaped reference is the [Composer 2 technical report by the Cursor Research Team](https://arxiv.org/html/2603.24477v2), which describes Cursor partnering with Fireworks AI for RL inference and syncing every training-step update through shared S3, delta compression, and cross-region inference-cluster reconstruction.
-
-## Quick Start
-
-Disk transport (training/inference disaggregation — the main use case):
+## Configuration
 
 ```bash
 --update-weight-mode delta
 --update-weight-transport disk
---update-weight-encoding deltas_zstd                 # best for ≤ 300 MB/s shared FS
 --update-weight-disk-dir /shared/fs/delta-updates
+--update-weight-local-checkpoint-dir /local/nvme/rollout-ckpt
+--update-weight-delta-encoding xor          # or: overwrite
+--update-weight-delta-checksum xxh3-128     # or: blake3, adler32
 ```
 
-NCCL transport (intra-datacenter validation baseline):
+| Flag | Role |
+|---|---|
+| `--update-weight-disk-dir` | Shared filesystem directory the trainer publishes deltas to and the rollout hosts read from. |
+| `--update-weight-local-checkpoint-dir` | Host-local (e.g. NVMe) full HF checkpoint that the delta is applied into in place. Each host materializes it from `--hf-checkpoint` at engine start. |
+| `--update-weight-delta-encoding` | On-disk delta encoding: `xor` (default) or `overwrite`. |
+| `--update-weight-delta-checksum` | Per-tensor integrity checksum: `xxh3-128` (default), `blake3`, or `adler32`. |
 
-```bash
---update-weight-mode delta
---update-weight-transport nccl
---update-weight-encoding indices                     # lowest compute, no compression
-```
+Deltas are always zstd-compressed (level 1); profiling showed it dominates lz4 / gzip / snappy / brotli on both wire size and decompress speed for this data, so it is not a knob.
 
-Full-checkpoint disk transport (simple external-engine fallback):
+## How it works
 
-```bash
---update-weight-mode full
---update-weight-transport disk
---update-weight-disk-dir /shared/fs/full-updates
-```
+1. **Seed.** On the first sync the trainer captures a CPU snapshot of every parameter — seeded
+   from `--hf-checkpoint`, which is exactly what each rollout host materializes its local
+   checkpoint from. Nothing is published; this snapshot is the base the next sync diffs against.
+2. **Publish.** On every later sync the trainer diffs each gathered HF tensor against the
+   snapshot, encodes and compresses the change, and writes a new version directory
+   `weight_v{N:06d}/` under `--update-weight-disk-dir`. The directory is a canonical HF
+   checkpoint — `model-NNNNN.safetensors` files holding the compressed diff tensors plus a
+   `model.safetensors.index.json` (tensor name → file) carrying the apply metadata — so the
+   artifact is portable, not tied to the trainer's parallelism layout. The snapshot is then
+   advanced to the new values for the next diff.
+3. **Apply.** Each rollout host applies the new version's delta into its local checkpoint in
+   place. The apply is parallelized across tensors and verified per-tensor (see Integrity).
+4. **Reload.** The engines reload the patched local checkpoint through the vanilla
+   `update_weights_from_disk` path — they never see the delta format.
 
-This writes a complete HF checkpoint under `weight_v{N:06d}/` for every sync,
-then asks each SGLang engine to reload it with `update_weights_from_disk`. It is
-useful when the trainer cannot form an NCCL group with pre-launched rollout
-engines, but it is much heavier than delta sync for large models.
+Because the snapshot is seeded from `--hf-checkpoint` (the engine's actual base) rather than
+from the current GPU weights, the scheme is correct for any model even where the Megatron→HF
+round-trip is not byte-exact (e.g. trimmed vocab-padding rows in the embedding / LM head).
 
-Receiver-side delta tuning (applies to delta NCCL and delta disk):
+## Encodings
 
-```bash
---sglang-update-weight-delta-chunk-bytes $((2 * 1024 * 1024 * 1024))  # byte cap per load_weights call
---sglang-update-weight-delta-read-workers 4                           # parallel I/O threads (disk only)
-```
+Both encodings are byte-level and dtype-blind, so the same path works for quantized checkpoints.
+The engine reads the choice from each version's index metadata.
 
-See [examples/delta_weight_sync/run-glm4.7-355B-A32B-delta.sh](../../../examples/delta_weight_sync/run-glm4.7-355B-A32B-delta.sh) for a complete launcher.
+- **`xor`** (default): writes `new ^ old`. Smallest wire and fastest to apply (sequential,
+  cache-friendly; the unchanged bytes are zeros the compressor crushes). It is an involution,
+  so it must be applied **exactly once** against the correct base — applying it twice reverts.
+- **`overwrite`**: writes the changed positions and their new absolute values. Larger on the
+  wire and a less cache-friendly scattered apply, but **idempotent**: re-applying it (or
+  finishing a partially-applied delta) converges to the same state regardless of how many times
+  it runs. Use it when re-applicability matters more than wire size.
 
-## Mode vs Transport
+## Integrity
 
-`--update-weight-mode` decides **what** gets sent; `--update-weight-transport`
-decides **how** it reaches SGLang.
+The trainer stores a per-tensor checksum of each tensor's new state in the version. After
+applying, every host recomputes the checksum and **raises on any mismatch**, so a corrupt delta
+or a wrong base fails loud instead of serving bad weights. The apply also refuses to run out of
+order: a version only applies on top of its declared base version.
 
-| mode | transport | behavior |
-|---|---|---|
-| `full` | `nccl` | default path: broadcast every HF weight chunk over a trainer-engine NCCL group |
-| `full` | `disk` | write a complete HF checkpoint under `--update-weight-disk-dir`, then call `update_weights_from_disk` |
-| `delta` | `nccl` | broadcast sparse changed positions + values over NCCL |
-| `delta` | `disk` | write sparse safetensors under `--update-weight-disk-dir`, then call `update_weights_from_disk(load_format="delta")` |
+`--update-weight-delta-checksum` selects the algorithm. The checksum is not the apply bottleneck
+(the apply is decompress + XOR bound), so this is a digest-property choice, not a speed one:
+`xxh3-128` (default) is the widest fast non-cryptographic digest; `blake3` is cryptographic, for
+untrusted storage; `adler32` is for interop with systems that expect it.
 
-`--update-weight-delta-dir` is kept only as a backward-compatible alias for
-`--update-weight-disk-dir`; new launchers should use the transport-level name.
+## Shared-filesystem visibility hooks
 
-## How It Works
+On a POSIX shared filesystem (NFS, Lustre, …) no extra step is needed. Object-store-backed
+volumes that need an explicit commit/refresh to make writes visible across hosts can supply two
+optional hooks, loaded by import path — no vendor-specific code lives in slime:
 
-Delta NCCL and delta disk share one sender pipeline, one wire layout, and one receiver-side decoder; only the per-flush carrier differs.
-
-**Sender (per sync, PP-source rank only):**
-
-1. **Diff** the current weights against the pinned-CPU snapshot via bytewise compare (`current.view(int_dtype) != snapshot.view(int_dtype)`) — lossless, dtype-agnostic, no arithmetic.
-2. **Encode** changed (position, value) pairs into a packed `__positions__` byte blob + `__values__` tensor + per-param decoding manifest. The encoding (`indices`, `deltas`, `deltas_zstd`) governs only how positions are packed; values are sent verbatim in the param's dtype.
-3. **Bucket** per-chunk encodes up to `--update-weight-buffer-size` bytes, then flush:
-   - NCCL: broadcast `(__positions__, __values__)` to the rollout engines with a `DeltaSpec` (encoding + per-param manifest) carried in the Ray RPC.
-   - Disk: write one safetensors file per flush under `weight_v{N:06d}/`. Async background thread does the I/O + optional zstd compression off the critical path.
-4. **Snapshot the just-sent values** via a D2H copy on a side stream so it overlaps with the next chunk's encode.
-
-**End-of-sync (disk only):** write a `DONE` marker, then rank 0 fires one HTTP push per engine and removes the directory after every engine acknowledges.
-
-**Receiver:**
-
-For both transports, the receiver ends up calling the same `_apply_delta_payload(encoding, params, positions, values)` helper. It decodes each param's slice into a full-shape tensor with NaN at unchanged positions, then routes it through `model.load_weights(...)` under a `_delta_apply_context` that patches `Tensor.copy_` / `Tensor.fill_` to perform NaN-masked overwrite. Auxiliary writes (scratch buffers, fp8 scales, MoE biases via `post_load_weights`) keep their normal semantics.
-
-Selective overwrite has no arithmetic — the receiver writes the trainer's exact bytes at changed positions — so it's lossless by construction and there's no notion of drift to fight with periodic base re-syncs.
-
-## Encoding Choice
-
-`--update-weight-encoding` picks how positions are packed. All three share the same on-wire layout (`__positions__` uint8 blob + `__values__` tensor + per-param manifest); decoder dispatches on the metadata.
-
-| value | positions | when to pick |
-|---|---|---|
-| `indices` | int32 absolute positions (4 bytes / nnz) | NCCL or fast intra-cluster FS (≥ ~600 MB/s) |
-| `deltas` | uint16 gap-deltas with uint32 fallback (~2 bytes / nnz at 2% density) | medium FS bandwidth (~300-500 MB/s) |
-| `deltas_zstd` | `deltas` wrapped in zstd L1 on disk | cross-DC / cross-region shared FS (≤ ~300 MB/s) |
-
-**Why gap-encoded positions are smaller**: positions come out of `mask.nonzero()` already sorted ascending. At density `p`, the expected gap between consecutive nonzero positions is `1/p`, and `P(gap > 65535) ≈ exp(-p · 65535)`. At p = 2% that's effectively zero, so uint16 fits with a uint32 per-param fallback for pathological inputs. Half the position bytes of `indices`, lossless.
-
-**Break-even with `indices`** at our density (~2%): `deltas` halves the positions blob (which dominates the wire); `zstd` shaves another ~35-40% on top by compressing the gap byte stream, at the cost of ~250ms/file compress + ~150ms/file decompress. The crossover with `indices` is where compress/decompress compute exceeds the bandwidth savings — empirically around 500 MB/s for `deltas` and 300 MB/s for `deltas_zstd`.
-
-## Why Not Colocated
-
-Colocated weight sync uses CUDA IPC: only a memory handle (~64 B) crosses processes. Delta encoding's "bytes saved on the wire" benefit is zero, while the bookkeeping (snapshot + diff + sparse encode) is pure overhead. Slime rejects `--update-weight-mode delta --colocate` at argparse time.
+- `--custom-delta-pre-push-path`: called after a version's files are written, before the engines
+  are told to read it (e.g. commit the volume). Signature: `hook(args, version_dir, rollout_engines)`.
+- `--custom-delta-pre-read-path`: called on each rollout host before it reads the delta directory
+  (e.g. refresh the volume). Signature: `hook(delta_dir, target_version)`.
