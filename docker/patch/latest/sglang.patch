@@ -1,17 +1,5 @@
-diff --git a/python/sglang/srt/disaggregation/base/conn.py b/python/sglang/srt/disaggregation/base/conn.py
-index a7bf990..b0cb56a 100644
---- a/python/sglang/srt/disaggregation/base/conn.py
-+++ b/python/sglang/srt/disaggregation/base/conn.py
-@@ -32,6 +32,7 @@ class KVArgs:
-     kv_data_ptrs: List[int]
-     kv_data_lens: List[int]
-     kv_item_lens: List[int]
-+    aux_buffer_names: List[str]
-     aux_data_ptrs: List[int]
-     aux_data_lens: List[int]
-     aux_item_lens: List[int]
 diff --git a/python/sglang/srt/disaggregation/decode.py b/python/sglang/srt/disaggregation/decode.py
-index e9efdcd..70265a4 100644
+index e9efdcdd9e..de570fb9fd 100644
 --- a/python/sglang/srt/disaggregation/decode.py
 +++ b/python/sglang/srt/disaggregation/decode.py
 @@ -21,6 +21,7 @@ Life cycle of a request in the decode server
@@ -22,26 +10,7 @@ index e9efdcd..70265a4 100644
  import time
  from collections import deque
  from dataclasses import dataclass
-@@ -49,8 +50,10 @@ from sglang.srt.disaggregation.utils import (
-     MetadataBuffers,
-     ReqToMetadataIdxAllocator,
-     TransferBackend,
-+    apply_prefill_timing_payload,
-     _is_fake_transfer,
-     get_kv_class,
-+    is_slime_profiling_enabled,
-     is_mla_backend,
-     poll_and_all_reduce,
-     poll_and_all_reduce_with_staging,
-@@ -425,6 +428,7 @@ class DecodePreallocQueue(DecodeHiCachePreallocMixin):
-         kv_args.aux_data_ptrs, kv_args.aux_data_lens, kv_args.aux_item_lens = (
-             self.metadata_buffers.get_buf_infos()
-         )
-+        kv_args.aux_buffer_names = self.metadata_buffers.get_aux_buffer_names()
- 
-         setup_state_kv_args(
-             kv_args,
-@@ -632,12 +636,33 @@ class DecodePreallocQueue(DecodeHiCachePreallocMixin):
+@@ -632,12 +633,33 @@ class DecodePreallocQueue(DecodeHiCachePreallocMixin):
              [decode_req.kv_receiver for decode_req in self.queue], self.gloo_group
          )
  
@@ -76,15 +45,7 @@ index e9efdcd..70265a4 100644
              elif poll == KVPoll.WaitingForInput:
                  decode_req.waiting_for_input = True
                  decode_req.req.time_stats.set_bootstrap_done_time()
-@@ -1027,6 +1052,7 @@ class DecodePreallocQueue(DecodeHiCachePreallocMixin):
-                 self.req_to_metadata_buffer_idx_allocator.alloc()
-             )
-             assert decode_req.metadata_buffer_index is not None
-+            self.metadata_buffers.clear_profiling_buf(decode_req.metadata_buffer_index)
-             page_indices = kv_to_page_indices(kv_indices, kv_transfer_page_size)
-             decode_req.kv_receiver.send_metadata(
-                 page_indices,
-@@ -1403,6 +1429,17 @@ class DecodePreallocQueue(DecodeHiCachePreallocMixin):
+@@ -1403,6 +1425,17 @@ class DecodePreallocQueue(DecodeHiCachePreallocMixin):
              return host_indices
          return kv_loc
  
@@ -102,28 +63,7 @@ index e9efdcd..70265a4 100644
  
  class DecodeTransferQueue(DecodeHiCacheTransferMixin):
      """
-@@ -1455,6 +1492,7 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
-             output_topk_index,
-             output_hidden_states,
-             output_bootstrap_room,
-+            output_prefill_timing,
-         ) = self.metadata_buffers.get_buf(idx)
- 
-         # Validate bootstrap_room to detect context corruption
-@@ -1543,6 +1581,12 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
-                 ].tolist()
-             )
- 
-+        if is_slime_profiling_enabled():
-+            apply_prefill_timing_payload(
-+                decode_req.req.time_stats,
-+                output_prefill_timing,
-+            )
-+
-         decode_req.kv_receiver.clear()
-         decode_req.kv_receiver = None
-         decode_req.req.time_stats.set_wait_queue_entry_time()
-@@ -1600,6 +1644,11 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
+@@ -1600,6 +1633,11 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
          else:
              polls = self._poll_with_metadata_gate()
  
@@ -135,7 +75,7 @@ index e9efdcd..70265a4 100644
          transferred_reqs = []
          indices_to_remove = set()
          for i, (decode_req, poll) in enumerate(zip(self.queue, polls)):
-@@ -1674,7 +1723,17 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
+@@ -1674,7 +1712,17 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
                  KVPoll.WaitingForInput,
                  KVPoll.Transferring,
              ]:
@@ -154,7 +94,7 @@ index e9efdcd..70265a4 100644
              else:
                  raise ValueError(f"Unexpected poll case: {poll}")
  
-@@ -1698,6 +1757,15 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
+@@ -1698,6 +1746,15 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
  
          return transferred_reqs
  
@@ -170,7 +110,7 @@ index e9efdcd..70265a4 100644
  
  class SchedulerDisaggregationDecodeMixin:
      @torch.no_grad()
-@@ -1893,6 +1961,11 @@ class SchedulerDisaggregationDecodeMixin:
+@@ -1893,6 +1950,11 @@ class SchedulerDisaggregationDecodeMixin:
          resumed_reqs = self.disagg_decode_prealloc_queue.resume_retracted_reqs()
          self.waiting_queue.extend(resumed_reqs)
          if len(self.disagg_decode_prealloc_queue.retracted_queue) > 0:
@@ -183,22 +123,10 @@ index e9efdcd..70265a4 100644
              return
  
 diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
-index b21aee9..87f0a6f 100644
+index b21aee9f7c..1edb76a5ce 100644
 --- a/python/sglang/srt/disaggregation/mooncake/conn.py
 +++ b/python/sglang/srt/disaggregation/mooncake/conn.py
-@@ -39,7 +39,10 @@ from sglang.srt.disaggregation.common.utils import (
- from sglang.srt.disaggregation.mooncake.utils import (
-     check_mooncake_custom_mem_pool_enabled,
- )
--from sglang.srt.disaggregation.utils import DisaggregationMode
-+from sglang.srt.disaggregation.utils import (
-+    DisaggregationMode,
-+    iter_aux_transfer_specs,
-+)
- from sglang.srt.distributed.parallel_state import get_mooncake_transfer_engine
- from sglang.srt.environ import envs
- from sglang.srt.observability.mooncake_trace import (
-@@ -257,6 +260,19 @@ class MooncakeKVManager(CommonKVManager):
+@@ -257,6 +257,19 @@ class MooncakeKVManager(CommonKVManager):
              if ptrs and lens:
                  self.engine.batch_register(ptrs, lens)
  
@@ -218,44 +146,16 @@ index b21aee9..87f0a6f 100644
      # ------------------------------------------------------------------
      # Staging buffer methods (all delegate to staging_handler.py)
      # ------------------------------------------------------------------
-@@ -827,10 +843,14 @@ class MooncakeKVManager(CommonKVManager):
-         prefill_aux_ptrs = self.kv_args.aux_data_ptrs
-         prefill_aux_item_lens = self.kv_args.aux_item_lens
- 
--        for i, dst_aux_ptr in enumerate(dst_aux_ptrs):
--            length = prefill_aux_item_lens[i]
--            src_addr = prefill_aux_ptrs[i] + length * prefill_aux_index
+@@ -830,7 +843,7 @@ class MooncakeKVManager(CommonKVManager):
+         for i, dst_aux_ptr in enumerate(dst_aux_ptrs):
+             length = prefill_aux_item_lens[i]
+             src_addr = prefill_aux_ptrs[i] + length * prefill_aux_index
 -            dst_addr = dst_aux_ptrs[i] + length * req.dst_aux_index
-+        for _, src_addr, dst_addr, length in iter_aux_transfer_specs(
-+            self.kv_args.aux_buffer_names,
-+            prefill_aux_ptrs,
-+            prefill_aux_item_lens,
-+            dst_aux_ptrs,
-+            prefill_aux_index,
-+            req.dst_aux_index,
-+        ):
++            dst_addr = dst_aux_ptr + length * req.dst_aux_index
              transfer_blocks.append((src_addr, dst_addr, length))
  
          return self._transfer_data(req.mooncake_session_id, transfer_blocks)
-@@ -844,9 +864,14 @@ class MooncakeKVManager(CommonKVManager):
-         prefill_aux_ptrs = self.kv_args.aux_data_ptrs
-         prefill_aux_item_lens = self.kv_args.aux_item_lens
- 
--        for i in range(len(prefill_aux_ptrs)):
--            length = prefill_aux_item_lens[i]
--            src_addr = prefill_aux_ptrs[i] + length * prefill_aux_index
-+        for i, src_addr, _, length in iter_aux_transfer_specs(
-+            self.kv_args.aux_buffer_names,
-+            prefill_aux_ptrs,
-+            prefill_aux_item_lens,
-+            dst_aux_ptrs,
-+            prefill_aux_index,
-+            req.dst_aux_index,
-+        ):
-             data = AuxDataCodec.serialize_data_from_buffer(src_addr, length)
- 
-             self.send_aux_data_to_endpoint(
-@@ -994,15 +1019,17 @@ class MooncakeKVManager(CommonKVManager):
+@@ -994,15 +1007,17 @@ class MooncakeKVManager(CommonKVManager):
                  src_indices = list(indices)
                  dst_indices_local = list(dst_indices)
                  if len(src_indices) > len(dst_indices_local):
@@ -279,7 +179,7 @@ index b21aee9..87f0a6f 100644
                  rc = (
                      self._send_kvcache_generic(
                          mooncake_session_id=req.mooncake_session_id,
-@@ -1279,12 +1306,6 @@ class MooncakeKVManager(CommonKVManager):
+@@ -1279,12 +1294,6 @@ class MooncakeKVManager(CommonKVManager):
                          if ret != 0:
                              with self.session_lock:
                                  self.session_failures[req.mooncake_session_id] += 1
@@ -292,7 +192,7 @@ index b21aee9..87f0a6f 100644
                              self.record_failure(
                                  kv_chunk.room,
                                  f"Failed to send kv chunk of {kv_chunk.room} to "
-@@ -1302,12 +1323,27 @@ class MooncakeKVManager(CommonKVManager):
+@@ -1302,12 +1311,27 @@ class MooncakeKVManager(CommonKVManager):
  
                          if kv_chunk.is_last_chunk:
                              if kv_chunk.state_indices:
@@ -322,7 +222,7 @@ index b21aee9..87f0a6f 100644
                              # Only the last chunk we need to send the aux data
                              ret = self.send_aux(
 diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
-index ce1afda..de8fd05 100644
+index ce1afdac3a..bdb8b448be 100644
 --- a/python/sglang/srt/disaggregation/prefill.py
 +++ b/python/sglang/srt/disaggregation/prefill.py
 @@ -21,6 +21,8 @@ from __future__ import annotations
@@ -334,15 +234,7 @@ index ce1afda..de8fd05 100644
  from array import array
  from collections import deque
  from http import HTTPStatus
-@@ -180,6 +182,7 @@ class PrefillBootstrapQueue:
-         kv_args.aux_data_ptrs, kv_args.aux_data_lens, kv_args.aux_item_lens = (
-             self.metadata_buffers.get_buf_infos()
-         )
-+        kv_args.aux_buffer_names = self.metadata_buffers.get_aux_buffer_names()
-         kv_args.ib_device = self.scheduler.server_args.disaggregation_ib_device
-         kv_args.gpu_id = self.scheduler.ps.gpu_id
- 
-@@ -332,6 +335,11 @@ class PrefillBootstrapQueue:
+@@ -332,6 +334,11 @@ class PrefillBootstrapQueue:
              self.scheduler.attn_tp_cpu_group,
          )
  
@@ -354,7 +246,7 @@ index ce1afda..de8fd05 100644
          for i, (req, poll) in enumerate(zip(self.queue, polls)):
              if (
                  rids_to_check is not None
-@@ -348,6 +356,27 @@ class PrefillBootstrapQueue:
+@@ -348,6 +355,27 @@ class PrefillBootstrapQueue:
                  indices_to_remove.add(i)
                  failed_reqs.append(req)
              elif poll == KVPoll.Bootstrapping:
@@ -382,7 +274,7 @@ index ce1afda..de8fd05 100644
                  if (
                      req.time_stats.prefill_retry_count
                      < self.scheduler.server_args.optimistic_prefill_retries
-@@ -378,6 +407,15 @@ class PrefillBootstrapQueue:
+@@ -378,6 +406,15 @@ class PrefillBootstrapQueue:
          else:
              return bootstrapped_reqs, failed_reqs
  
@@ -398,7 +290,7 @@ index ce1afda..de8fd05 100644
  
  class SchedulerDisaggregationPrefillMixin:
      """
-@@ -685,6 +723,11 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -685,6 +722,11 @@ class SchedulerDisaggregationPrefillMixin:
              self.attn_tp_cpu_group,
          )
  
@@ -410,7 +302,7 @@ index ce1afda..de8fd05 100644
          undone_reqs: List[Req] = []
          # Check .poll() for the reqs in disagg_prefill_inflight_queue. If Success, respond to the client and remove it from the queue
          for req, poll in zip(self.disagg_prefill_inflight_queue, polls):
-@@ -710,7 +753,27 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -710,7 +752,27 @@ class SchedulerDisaggregationPrefillMixin:
                      continue
  
              if poll in [KVPoll.WaitingForInput, KVPoll.Transferring]:
@@ -439,214 +331,8 @@ index ce1afda..de8fd05 100644
              elif poll == KVPoll.Success:  # transfer done
                  release_kv_cache(req, self.tree_cache)  # unlock the tree
                  req.finished_reason = FINISH_LENGTH(length=0)
-diff --git a/python/sglang/srt/disaggregation/utils.py b/python/sglang/srt/disaggregation/utils.py
-index e1d7d9c..a446857 100644
---- a/python/sglang/srt/disaggregation/utils.py
-+++ b/python/sglang/srt/disaggregation/utils.py
-@@ -2,6 +2,7 @@ from __future__ import annotations
- 
- import os
- import random
-+import time
- from collections import deque
- from contextlib import nullcontext
- from enum import Enum
-@@ -30,6 +31,17 @@ if TYPE_CHECKING:
- # Constants & Enums
- #########################
- FAKE_BOOTSTRAP_HOST = "2.2.2.2"
-+PREFILL_TIMING_AUX_BUFFER_NAME = "prefill_timing"
-+PREFILL_TIMING_DEST_ATTRS = (
-+    ("fwd_prefill_bootstrap_queue_duration", float),
-+    ("fwd_prefill_forward_duration", float),
-+    ("fwd_prefill_transfer_queue_duration", float),
-+    ("fwd_prefill_bootstrap_duration", float),
-+    ("fwd_prefill_alloc_wait_duration", float),
-+    ("fwd_transfer_speed_gb_s", float),
-+    ("fwd_transfer_total_mb", float),
-+    ("fwd_prefill_retry_count", int),
-+)
- 
- 
- class DisaggregationMode(Enum):
-@@ -255,46 +267,32 @@ class MetadataBuffers:
-             self.bootstrap_room = torch.zeros(
-                 (size, 8), dtype=bootstrap_room_dtype, device=device
-             )
-+            self.prefill_timing = torch.zeros(
-+                (size, 16), dtype=torch.float32, device=device
-+            )
-+        self.aux_buffers = [
-+            ("output_ids", self.output_ids),
-+            ("cached_tokens", self.cached_tokens),
-+            ("output_token_logprobs_val", self.output_token_logprobs_val),
-+            ("output_token_logprobs_idx", self.output_token_logprobs_idx),
-+            ("output_top_logprobs_val", self.output_top_logprobs_val),
-+            ("output_top_logprobs_idx", self.output_top_logprobs_idx),
-+            ("output_topk_p", self.output_topk_p),
-+            ("output_topk_index", self.output_topk_index),
-+            ("output_hidden_states", self.output_hidden_states),
-+            ("bootstrap_room", self.bootstrap_room),
-+            (PREFILL_TIMING_AUX_BUFFER_NAME, self.prefill_timing),
-+        ]
- 
-     def get_buf_infos(self):
--        ptrs = [
--            self.output_ids.data_ptr(),
--            self.cached_tokens.data_ptr(),
--            self.output_token_logprobs_val.data_ptr(),
--            self.output_token_logprobs_idx.data_ptr(),
--            self.output_top_logprobs_val.data_ptr(),
--            self.output_top_logprobs_idx.data_ptr(),
--            self.output_topk_p.data_ptr(),
--            self.output_topk_index.data_ptr(),
--            self.output_hidden_states.data_ptr(),
--            self.bootstrap_room.data_ptr(),
--        ]
--        data_lens = [
--            self.output_ids.nbytes,
--            self.cached_tokens.nbytes,
--            self.output_token_logprobs_val.nbytes,
--            self.output_token_logprobs_idx.nbytes,
--            self.output_top_logprobs_val.nbytes,
--            self.output_top_logprobs_idx.nbytes,
--            self.output_topk_p.nbytes,
--            self.output_topk_index.nbytes,
--            self.output_hidden_states.nbytes,
--            self.bootstrap_room.nbytes,
--        ]
--        item_lens = [
--            self.output_ids[0].nbytes,
--            self.cached_tokens[0].nbytes,
--            self.output_token_logprobs_val[0].nbytes,
--            self.output_token_logprobs_idx[0].nbytes,
--            self.output_top_logprobs_val[0].nbytes,
--            self.output_top_logprobs_idx[0].nbytes,
--            self.output_topk_p[0].nbytes,
--            self.output_topk_index[0].nbytes,
--            self.output_hidden_states[0].nbytes,
--            self.bootstrap_room[0].nbytes,
--        ]
-+        ptrs = [buffer.data_ptr() for _, buffer in self.aux_buffers]
-+        data_lens = [buffer.nbytes for _, buffer in self.aux_buffers]
-+        item_lens = [buffer[0].nbytes for _, buffer in self.aux_buffers]
-         return ptrs, data_lens, item_lens
- 
-+    def get_aux_buffer_names(self):
-+        return [name for name, _ in self.aux_buffers]
-+
-     def get_buf(self, idx: int):
-         return (
-             self.output_ids[idx].clone(),
-@@ -307,8 +305,12 @@ class MetadataBuffers:
-             self.output_topk_index[idx].clone(),
-             self.output_hidden_states[idx].clone(),
-             self.bootstrap_room[idx].clone(),
-+            self.prefill_timing[idx].clone(),
-         )
- 
-+    def clear_profiling_buf(self, idx: int):
-+        self.prefill_timing[idx].zero_()
-+
-     def set_buf(self, req: Req):
- 
-         self.output_ids[req.metadata_buffer_index][0] = req.output_ids[0]
-@@ -360,6 +362,93 @@ class MetadataBuffers:
-         self.bootstrap_room[req.metadata_buffer_index, 0] = (
-             req.bootstrap_room if req.bootstrap_room is not None else 0
-         )
-+        ts = req.time_stats
-+        timing = self.prefill_timing[req.metadata_buffer_index]
-+        self.clear_profiling_buf(req.metadata_buffer_index)
-+        if not is_slime_profiling_enabled():
-+            return
-+        for idx, value in enumerate(
-+            build_prefill_timing_payload(ts, now=time.perf_counter())
-+        ):
-+            if value > 0:
-+                timing[idx] = value
-+
-+
-+def is_slime_profiling_enabled() -> bool:
-+    return envs.SLIME_ENABLE_PROFILING.get()
-+
-+
-+def build_prefill_timing_payload(time_stats, now: float) -> tuple[float, ...]:
-+    bootstrap_queue_duration = 0.0
-+    if (
-+        time_stats.prefill_bootstrap_queue_entry_time > 0
-+        and time_stats.wait_queue_entry_time > 0
-+    ):
-+        bootstrap_queue_duration = (
-+            time_stats.wait_queue_entry_time
-+            - time_stats.prefill_bootstrap_queue_entry_time
-+        )
-+
-+    prefill_forward_duration = (
-+        now - time_stats.forward_entry_time
-+        if time_stats.forward_entry_time > 0
-+        else 0.0
-+    )
-+
-+    bootstrap_duration = 0.0
-+    alloc_waiting_duration = 0.0
-+    if (
-+        time_stats.prefill_bootstrap_queue_entry_time > 0
-+        and time_stats.bootstrap_done_time > 0
-+    ):
-+        bootstrap_duration = (
-+            time_stats.bootstrap_done_time
-+            - time_stats.prefill_bootstrap_queue_entry_time
-+        )
-+    if time_stats.bootstrap_done_time > 0 and time_stats.wait_queue_entry_time > 0:
-+        alloc_waiting_duration = (
-+            time_stats.wait_queue_entry_time - time_stats.bootstrap_done_time
-+        )
-+
-+    return (
-+        bootstrap_queue_duration,
-+        prefill_forward_duration,
-+        0.0,
-+        max(0.0, bootstrap_duration),
-+        max(0.0, alloc_waiting_duration),
-+        max(0.0, time_stats.transfer_speed_gb_s),
-+        max(0.0, time_stats.transfer_total_mb),
-+        float(max(0, time_stats.prefill_retry_count)),
-+    )
-+
-+
-+def apply_prefill_timing_payload(time_stats, timing) -> None:
-+    for value, (attr_name, caster) in zip(
-+        timing[: len(PREFILL_TIMING_DEST_ATTRS)].tolist(),
-+        PREFILL_TIMING_DEST_ATTRS,
-+    ):
-+        if value > 0:
-+            setattr(time_stats, attr_name, caster(value))
-+
-+
-+def iter_aux_transfer_specs(
-+    aux_buffer_names: list[str],
-+    prefill_aux_ptrs: list[int],
-+    prefill_aux_item_lens: list[int],
-+    dst_aux_ptrs: list[int],
-+    prefill_aux_index: int,
-+    dst_aux_index: int,
-+):
-+    profiling_enabled = is_slime_profiling_enabled()
-+    for i, (buffer_name, dst_aux_ptr) in enumerate(zip(aux_buffer_names, dst_aux_ptrs)):
-+        if not profiling_enabled and buffer_name == PREFILL_TIMING_AUX_BUFFER_NAME:
-+            continue
-+        length = prefill_aux_item_lens[i]
-+        if length <= 0:
-+            continue
-+        src_addr = prefill_aux_ptrs[i] + length * prefill_aux_index
-+        dst_addr = dst_aux_ptr + length * dst_aux_index
-+        yield i, src_addr, dst_addr, length
- 
- 
- #########################
 diff --git a/python/sglang/srt/entrypoints/engine.py b/python/sglang/srt/entrypoints/engine.py
-index 88bf194..4ede8eb 100644
+index 88bf194768..4ede8eb907 100644
 --- a/python/sglang/srt/entrypoints/engine.py
 +++ b/python/sglang/srt/entrypoints/engine.py
 @@ -71,6 +71,7 @@ from sglang.srt.managers.io_struct import (
@@ -679,7 +365,7 @@ index 88bf194..4ede8eb 100644
          """Get weights by parameter name."""
          obj = GetWeightsByNameReqInput(name=name, truncate_size=truncate_size)
 diff --git a/python/sglang/srt/entrypoints/http_server.py b/python/sglang/srt/entrypoints/http_server.py
-index d736838..2c881d9 100644
+index d7368383d8..2c881d95bd 100644
 --- a/python/sglang/srt/entrypoints/http_server.py
 +++ b/python/sglang/srt/entrypoints/http_server.py
 @@ -127,6 +127,7 @@ from sglang.srt.managers.io_struct import (
@@ -746,20 +432,8 @@ index d736838..2c881d9 100644
  @app.post("/update_weight_version")
  @auth_level(AuthLevel.ADMIN_OPTIONAL)
  async def update_weight_version(obj: UpdateWeightVersionReqInput, request: Request):
-diff --git a/python/sglang/srt/environ.py b/python/sglang/srt/environ.py
-index 435c30a..864a0f5 100644
---- a/python/sglang/srt/environ.py
-+++ b/python/sglang/srt/environ.py
-@@ -299,6 +299,7 @@ class Envs:
-     SGLANG_DISAGGREGATION_WAITING_TIMEOUT = EnvInt(300)
-     SGLANG_DISAGGREGATION_NIXL_BACKEND = EnvStr("UCX")
-     SGLANG_DISAGGREGATION_NIXL_BACKEND_PARAMS = EnvStr("{}")
-+    SLIME_ENABLE_PROFILING = EnvBool(False)
-     SGLANG_DISAGGREGATION_ALL_CP_RANKS_TRANSFER = EnvBool(False)
-     SGLANG_DISAGGREGATION_FORCE_QUERY_PREFILL_DP_RANK = EnvBool(False)
-     # Extra slots in req_to_token_pool for decode workers (only effective when
 diff --git a/python/sglang/srt/layers/attention/dsa/dsa_indexer.py b/python/sglang/srt/layers/attention/dsa/dsa_indexer.py
-index 85fcd4b..a49161f 100644
+index 85fcd4b9ec..a49161f615 100644
 --- a/python/sglang/srt/layers/attention/dsa/dsa_indexer.py
 +++ b/python/sglang/srt/layers/attention/dsa/dsa_indexer.py
 @@ -2,6 +2,7 @@ from __future__ import annotations
@@ -860,7 +534,7 @@ index 85fcd4b..a49161f 100644
              if enable_dual_stream:
                  current_stream = torch.cuda.current_stream()
 diff --git a/python/sglang/srt/layers/moe/fused_moe_triton/layer.py b/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
-index 59ca3f9..9c2d00f 100644
+index 59ca3f9cce..9c2d00fcd7 100644
 --- a/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
 +++ b/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
 @@ -793,6 +793,7 @@ class FusedMoE(torch.nn.Module):
@@ -880,7 +554,7 @@ index 59ca3f9..9c2d00f 100644
              else loaded_weight
          )
 diff --git a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
-index 28a9d56..e60a0bc 100644
+index 28a9d567a5..e60a0bcfde 100644
 --- a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
 +++ b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
 @@ -927,6 +927,10 @@ class CompressedTensorsLinearMethod(LinearMethodBase):
@@ -906,7 +580,7 @@ index 28a9d56..e60a0bc 100644
          self,
          layer: torch.nn.Module,
 diff --git a/python/sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16_moe.py b/python/sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16_moe.py
-index 58562bb..c3dc1ce 100644
+index 58562bb23d..c3dc1ceb0d 100644
 --- a/python/sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16_moe.py
 +++ b/python/sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16_moe.py
 @@ -22,6 +22,7 @@ from sglang.srt.layers.quantization.compressed_tensors.schemes import (
@@ -1020,7 +694,7 @@ index 58562bb..c3dc1ce 100644
              is_k_full=self.is_k_full,
              routed_scaling_factor=self.moe_runner_config.routed_scaling_factor,
 diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
-index 987ec51..55a51e0 100644
+index 987ec51212..55a51e0929 100644
 --- a/python/sglang/srt/managers/io_struct.py
 +++ b/python/sglang/srt/managers/io_struct.py
 @@ -1673,6 +1673,18 @@ class ResumeMemoryOccupationReqOutput(BaseReq):
@@ -1062,7 +736,7 @@ index 987ec51..55a51e0 100644
  
  @dataclass
 diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
-index 42ea843..c369b07 100755
+index 42ea843109..c369b070b5 100755
 --- a/python/sglang/srt/managers/schedule_batch.py
 +++ b/python/sglang/srt/managers/schedule_batch.py
 @@ -943,6 +943,7 @@ class Req(ReqDllmMixin):
@@ -1100,7 +774,7 @@ index 42ea843..c369b07 100755
          ):
              # Even the last remaining request cannot fit in memory.
 diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
-index 8e32640..9896684 100644
+index 8e32640fc6..9896684250 100644
 --- a/python/sglang/srt/managers/scheduler.py
 +++ b/python/sglang/srt/managers/scheduler.py
 @@ -124,6 +124,7 @@ from sglang.srt.managers.io_struct import (
@@ -1147,7 +821,7 @@ index 8e32640..9896684 100644
  
      def _pause_engine(self) -> Tuple[List[Req], int]:
 diff --git a/python/sglang/srt/managers/scheduler_components/load_inquirer.py b/python/sglang/srt/managers/scheduler_components/load_inquirer.py
-index 3f10d7e..712322a 100644
+index 3f10d7edaf..712322a95a 100644
 --- a/python/sglang/srt/managers/scheduler_components/load_inquirer.py
 +++ b/python/sglang/srt/managers/scheduler_components/load_inquirer.py
 @@ -202,6 +202,88 @@ class SchedulerLoadInquirer:
@@ -1246,7 +920,7 @@ index 3f10d7e..712322a 100644
 +            inflight=inflight,
          )
 diff --git a/python/sglang/srt/managers/scheduler_components/output_streamer.py b/python/sglang/srt/managers/scheduler_components/output_streamer.py
-index cac8071..2574fcf 100644
+index cac8071585..2574fcfb55 100644
 --- a/python/sglang/srt/managers/scheduler_components/output_streamer.py
 +++ b/python/sglang/srt/managers/scheduler_components/output_streamer.py
 @@ -481,7 +481,7 @@ class _GenerationStreamAccumulator:
@@ -1259,7 +933,7 @@ index cac8071..2574fcf 100644
          dp_ranks = [dp_rank] * len(self.rids) if self.rids else None
          return BatchTokenIDOutput(
 diff --git a/python/sglang/srt/managers/scheduler_components/profiler_manager.py b/python/sglang/srt/managers/scheduler_components/profiler_manager.py
-index 31df519..cdcf41c 100644
+index 31df519f9e..cdcf41cd8b 100644
 --- a/python/sglang/srt/managers/scheduler_components/profiler_manager.py
 +++ b/python/sglang/srt/managers/scheduler_components/profiler_manager.py
 @@ -377,7 +377,7 @@ class SchedulerProfilerManager:
@@ -1272,7 +946,7 @@ index 31df519..cdcf41c 100644
                      if self.profile_in_progress:
                          # force trace flush
 diff --git a/python/sglang/srt/managers/scheduler_components/weight_updater.py b/python/sglang/srt/managers/scheduler_components/weight_updater.py
-index 77bf823..9ab3abe 100644
+index 77bf823b08..9ab3abe561 100644
 --- a/python/sglang/srt/managers/scheduler_components/weight_updater.py
 +++ b/python/sglang/srt/managers/scheduler_components/weight_updater.py
 @@ -16,6 +16,7 @@ from sglang.srt.constants import (
@@ -1362,7 +1036,7 @@ index 77bf823..9ab3abe 100644
          return ResumeMemoryOccupationReqOutput()
  
 diff --git a/python/sglang/srt/managers/tokenizer_control_mixin.py b/python/sglang/srt/managers/tokenizer_control_mixin.py
-index c9939a1..ee25e5e 100644
+index c9939a1fc9..ee25e5e70e 100644
 --- a/python/sglang/srt/managers/tokenizer_control_mixin.py
 +++ b/python/sglang/srt/managers/tokenizer_control_mixin.py
 @@ -48,6 +48,8 @@ from sglang.srt.managers.io_struct import (
@@ -1400,7 +1074,7 @@ index c9939a1..ee25e5e 100644
          self: TokenizerManager,
          obj: CheckWeightsReqInput,
 diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
-index 357e3c4..71319d7 100644
+index 357e3c4675..71319d7a55 100644
 --- a/python/sglang/srt/managers/tokenizer_manager.py
 +++ b/python/sglang/srt/managers/tokenizer_manager.py
 @@ -1641,7 +1641,7 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
@@ -1455,7 +1129,7 @@ index 357e3c4..71319d7 100644
          if state.finished:
              # Get detailed cache breakdown if available
 diff --git a/python/sglang/srt/managers/tp_worker.py b/python/sglang/srt/managers/tp_worker.py
-index bd91844..b7cb6d4 100644
+index bd9184408e..b7cb6d4237 100644
 --- a/python/sglang/srt/managers/tp_worker.py
 +++ b/python/sglang/srt/managers/tp_worker.py
 @@ -29,6 +29,7 @@ from sglang.srt.managers.io_struct import (
@@ -1481,7 +1155,7 @@ index bd91844..b7cb6d4 100644
  
          monkey_patch_torch_reductions()
 diff --git a/python/sglang/srt/mem_cache/hiradix_cache.py b/python/sglang/srt/mem_cache/hiradix_cache.py
-index 353a02e..7e3e3f5 100644
+index 353a02ee0b..7e3e3f58cb 100644
 --- a/python/sglang/srt/mem_cache/hiradix_cache.py
 +++ b/python/sglang/srt/mem_cache/hiradix_cache.py
 @@ -1009,9 +1009,7 @@ class HiRadixCache(RadixCache):
@@ -1504,7 +1178,7 @@ index 353a02e..7e3e3f5 100644
  
      def _evict_regular(self, node: TreeNode):
 diff --git a/python/sglang/srt/mem_cache/memory_pool.py b/python/sglang/srt/mem_cache/memory_pool.py
-index 8efe9aa..79e9885 100644
+index 8efe9aae94..79e9885c92 100644
 --- a/python/sglang/srt/mem_cache/memory_pool.py
 +++ b/python/sglang/srt/mem_cache/memory_pool.py
 @@ -2244,9 +2244,12 @@ class DSATokenToKVPool(MLATokenToKVPool):
@@ -1524,7 +1198,7 @@ index 8efe9aa..79e9885 100644
              self.index_k_with_scale_buffer = [
                  torch.zeros(
 diff --git a/python/sglang/srt/mem_cache/radix_cache.py b/python/sglang/srt/mem_cache/radix_cache.py
-index bd6adb6..5ea935f 100644
+index bd6adb6e39..5ea935f76e 100644
 --- a/python/sglang/srt/mem_cache/radix_cache.py
 +++ b/python/sglang/srt/mem_cache/radix_cache.py
 @@ -467,6 +467,9 @@ class RadixCache(KVCacheEventMixin, BasePrefixCache):
@@ -1549,7 +1223,7 @@ index bd6adb6..5ea935f 100644
          return DecLockRefResult(delta=delta)
  
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
-index 3b30eb0..0e33834 100644
+index 3b30eb0e1f..0e33834f52 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
 +++ b/python/sglang/srt/model_executor/model_runner.py
 @@ -20,6 +20,7 @@ import datetime
@@ -1674,7 +1348,7 @@ index 3b30eb0..0e33834 100644
      params_dict = dict(model.named_parameters())
      for name, tensor in named_tensors:
 diff --git a/python/sglang/srt/models/glm4v_moe.py b/python/sglang/srt/models/glm4v_moe.py
-index 2f00749..8d62df8 100644
+index 2f0074924d..8d62df83c7 100644
 --- a/python/sglang/srt/models/glm4v_moe.py
 +++ b/python/sglang/srt/models/glm4v_moe.py
 @@ -45,6 +45,8 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
@@ -1785,7 +1459,7 @@ index 2f00749..8d62df8 100644
                          continue
  
 diff --git a/python/sglang/srt/models/qwen3_vl.py b/python/sglang/srt/models/qwen3_vl.py
-index 3ffe4dd..9869f11 100644
+index 3ffe4dde7f..9869f11623 100644
 --- a/python/sglang/srt/models/qwen3_vl.py
 +++ b/python/sglang/srt/models/qwen3_vl.py
 @@ -1034,9 +1034,14 @@ class Qwen3LLMModel(Qwen3Model):
@@ -1807,7 +1481,7 @@ index 3ffe4dd..9869f11 100644
                  positions,
                  hidden_states,
 diff --git a/python/sglang/srt/multimodal/processors/glm4v.py b/python/sglang/srt/multimodal/processors/glm4v.py
-index db68425..17d2cb6 100644
+index db684259d2..17d2cb6958 100644
 --- a/python/sglang/srt/multimodal/processors/glm4v.py
 +++ b/python/sglang/srt/multimodal/processors/glm4v.py
 @@ -1,7 +1,13 @@
@@ -1875,7 +1549,7 @@ index db68425..17d2cb6 100644
          image_grid_thw = None
          video_grid_thw = None
 diff --git a/python/sglang/srt/multimodal/processors/qwen_vl.py b/python/sglang/srt/multimodal/processors/qwen_vl.py
-index b8774eb..fa01537 100644
+index b8774ebade..fa01537b20 100644
 --- a/python/sglang/srt/multimodal/processors/qwen_vl.py
 +++ b/python/sglang/srt/multimodal/processors/qwen_vl.py
 @@ -678,7 +678,7 @@ class QwenVLImageProcessor(SGLangBaseProcessor):
@@ -1888,37 +1562,10 @@ index b8774eb..fa01537 100644
              image_data=image_data,
              video_data=request_obj.video_data,
 diff --git a/python/sglang/srt/observability/req_time_stats.py b/python/sglang/srt/observability/req_time_stats.py
-index 2de1073..d3ce2c6 100644
+index 2de10730c9..3f633676df 100644
 --- a/python/sglang/srt/observability/req_time_stats.py
 +++ b/python/sglang/srt/observability/req_time_stats.py
-@@ -23,7 +23,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
- 
- from typing_extensions import Self
- 
--from sglang.srt.disaggregation.utils import DisaggregationMode
-+from sglang.srt.disaggregation.utils import (
-+    DisaggregationMode,
-+    is_slime_profiling_enabled,
-+)
- from sglang.srt.model_executor.forward_batch_info import ForwardMode
- from sglang.srt.observability.metrics_collector import (
-     SchedulerMetricsCollector,
-@@ -577,6 +580,14 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
- 
-     # Number of prefill retries for this request
-     prefill_retry_count: int = 0
-+    fwd_prefill_bootstrap_queue_duration: Optional[float] = None
-+    fwd_prefill_forward_duration: Optional[float] = None
-+    fwd_prefill_transfer_queue_duration: Optional[float] = None
-+    fwd_prefill_bootstrap_duration: Optional[float] = None
-+    fwd_prefill_alloc_wait_duration: Optional[float] = None
-+    fwd_transfer_speed_gb_s: Optional[float] = None
-+    fwd_transfer_total_mb: Optional[float] = None
-+    fwd_prefill_retry_count: Optional[int] = None
- 
-     def __getstate__(self) -> object:
-         # send to detokenizer/tokenizer
-@@ -584,10 +595,35 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+@@ -584,9 +584,19 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
              return {}
  
          state = {
@@ -1927,9 +1574,7 @@ index 2de1073..d3ce2c6 100644
              "forward_entry_time": self.forward_entry_time,
              "prefill_finished_time": self.prefill_finished_time,
 +            "completion_time": self.completion_time,
-+            "prefill_bootstrap_queue_entry_time": (
-+                self.prefill_bootstrap_queue_entry_time
-+            ),
++            "prefill_bootstrap_queue_entry_time": self.prefill_bootstrap_queue_entry_time,
 +            "prefill_transfer_queue_entry_time": self.prefill_transfer_queue_entry_time,
 +            "decode_prealloc_queue_entry_time": self.decode_prealloc_queue_entry_time,
 +            "decode_transfer_queue_entry_time": self.decode_transfer_queue_entry_time,
@@ -1937,222 +1582,93 @@ index 2de1073..d3ce2c6 100644
 +            "transfer_speed_gb_s": self.transfer_speed_gb_s,
 +            "transfer_total_mb": self.transfer_total_mb,
 +            "prefill_retry_count": self.prefill_retry_count,
-+            "fwd_prefill_bootstrap_queue_duration": (
-+                self.fwd_prefill_bootstrap_queue_duration
-+            ),
-+            "fwd_prefill_forward_duration": self.fwd_prefill_forward_duration,
-+            "fwd_prefill_transfer_queue_duration": (
-+                self.fwd_prefill_transfer_queue_duration
-+            ),
-+            "fwd_prefill_bootstrap_duration": self.fwd_prefill_bootstrap_duration,
-+            "fwd_prefill_alloc_wait_duration": self.fwd_prefill_alloc_wait_duration,
-+            "fwd_transfer_speed_gb_s": self.fwd_transfer_speed_gb_s,
-+            "fwd_transfer_total_mb": self.fwd_transfer_total_mb,
-+            "fwd_prefill_retry_count": self.fwd_prefill_retry_count,
              "diff_realtime_monotonic": global_diff_realtime_monotonic,
-+            "enable_metrics": self.enable_metrics,
          }
          return state
+@@ -1107,6 +1117,13 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
  
-@@ -987,6 +1023,159 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
-     def get_queueing_time(self) -> float:
-         return self.forward_entry_time - self.wait_queue_entry_time
- 
-+    def get_pd_prefill_bootstrap_queue_duration(self) -> Optional[float]:
-+        if not is_slime_profiling_enabled():
-+            return None
-+        if self.fwd_prefill_bootstrap_queue_duration is not None:
-+            return self.fwd_prefill_bootstrap_queue_duration
-+        if (
-+            self.disagg_mode == DisaggregationMode.PREFILL
-+            and self.prefill_bootstrap_queue_entry_time > 0.0
-+            and self.wait_queue_entry_time > 0.0
-+        ):
-+            return self.wait_queue_entry_time - self.prefill_bootstrap_queue_entry_time
-+        return None
+     def convert_to_output_meta_info(self):
+         meta_data = {}
 +
-+    def get_pd_prefill_forward_duration(self) -> Optional[float]:
-+        if not is_slime_profiling_enabled():
-+            return None
-+        if self.fwd_prefill_forward_duration is not None:
-+            return self.fwd_prefill_forward_duration
-+        if (
-+            self.disagg_mode == DisaggregationMode.PREFILL
-+            and self.forward_entry_time > 0.0
-+            and self.completion_time > 0.0
-+        ):
-+            return self.completion_time - self.forward_entry_time
-+        return None
++        def add_duration(key: str, start: float, end: float):
++            if start > 0.0 and end > 0.0:
++                duration = end - start
++                if duration >= 0.0:
++                    meta_data[key] = duration
 +
-+    def get_pd_prefill_transfer_queue_duration(self) -> Optional[float]:
-+        if not is_slime_profiling_enabled():
-+            return None
-+        if self.fwd_prefill_transfer_queue_duration is not None:
-+            return self.fwd_prefill_transfer_queue_duration
-+        if (
-+            self.disagg_mode == DisaggregationMode.PREFILL
-+            and self.prefill_transfer_queue_entry_time > 0.0
-+            and self.completion_time > 0.0
-+        ):
-+            return self.completion_time - self.prefill_transfer_queue_entry_time
-+        return None
-+
-+    def get_pd_decode_prealloc_duration(self) -> Optional[float]:
-+        if not is_slime_profiling_enabled():
-+            return None
-+        if (
-+            self.disagg_mode == DisaggregationMode.DECODE
-+            and self.decode_prealloc_queue_entry_time > 0.0
-+            and self.decode_transfer_queue_entry_time > 0.0
-+        ):
-+            return (
-+                self.decode_transfer_queue_entry_time
-+                - self.decode_prealloc_queue_entry_time
-+            )
-+        return None
-+
-+    def get_pd_decode_transfer_duration(self) -> Optional[float]:
-+        if not is_slime_profiling_enabled():
-+            return None
-+        if (
-+            self.disagg_mode == DisaggregationMode.DECODE
-+            and self.decode_transfer_queue_entry_time > 0.0
-+            and self.wait_queue_entry_time > 0.0
-+        ):
-+            return self.wait_queue_entry_time - self.decode_transfer_queue_entry_time
-+        return None
-+
-+    def get_pd_decode_forward_duration(self) -> Optional[float]:
-+        if not is_slime_profiling_enabled():
-+            return None
-+        if (
-+            self.disagg_mode == DisaggregationMode.DECODE
-+            and self.forward_entry_time > 0.0
-+            and self.completion_time > 0.0
-+        ):
-+            return self.completion_time - self.forward_entry_time
-+        return None
-+
-+    def get_pd_prefill_bootstrap_duration(self) -> Optional[float]:
-+        if not is_slime_profiling_enabled():
-+            return None
-+        if self.fwd_prefill_bootstrap_duration is not None:
-+            return self.fwd_prefill_bootstrap_duration
-+        if (
-+            self.disagg_mode == DisaggregationMode.PREFILL
-+            and self.prefill_bootstrap_queue_entry_time > 0.0
-+            and self.bootstrap_done_time > 0.0
-+        ):
-+            return self.bootstrap_done_time - self.prefill_bootstrap_queue_entry_time
-+        return None
-+
-+    def get_pd_prefill_alloc_wait_duration(self) -> Optional[float]:
-+        if not is_slime_profiling_enabled():
-+            return None
-+        if self.fwd_prefill_alloc_wait_duration is not None:
-+            return self.fwd_prefill_alloc_wait_duration
-+        if (
-+            self.disagg_mode == DisaggregationMode.PREFILL
-+            and self.bootstrap_done_time > 0.0
-+            and self.wait_queue_entry_time > 0.0
-+        ):
-+            return self.wait_queue_entry_time - self.bootstrap_done_time
-+        return None
-+
-+    def get_pd_decode_bootstrap_duration(self) -> Optional[float]:
-+        if not is_slime_profiling_enabled():
-+            return None
-+        if (
-+            self.disagg_mode == DisaggregationMode.DECODE
-+            and self.decode_prealloc_queue_entry_time > 0.0
-+            and self.bootstrap_done_time > 0.0
-+        ):
-+            return self.bootstrap_done_time - self.decode_prealloc_queue_entry_time
-+        return None
-+
-+    def get_pd_decode_alloc_wait_duration(self) -> Optional[float]:
-+        if not is_slime_profiling_enabled():
-+            return None
-+        if (
-+            self.disagg_mode == DisaggregationMode.DECODE
-+            and self.bootstrap_done_time > 0.0
-+            and self.decode_transfer_queue_entry_time > 0.0
-+        ):
-+            return self.decode_transfer_queue_entry_time - self.bootstrap_done_time
-+        return None
-+
-+    def get_pd_transfer_speed_gb_s(self) -> Optional[float]:
-+        if not is_slime_profiling_enabled():
-+            return None
-+        if self.fwd_transfer_speed_gb_s is not None:
-+            return self.fwd_transfer_speed_gb_s
-+        if (
-+            self.disagg_mode != DisaggregationMode.NULL
-+            and self.transfer_speed_gb_s > 0.0
-+        ):
-+            return self.transfer_speed_gb_s
-+        return None
-+
-+    def get_pd_transfer_total_mb(self) -> Optional[float]:
-+        if not is_slime_profiling_enabled():
-+            return None
-+        if self.fwd_transfer_total_mb is not None:
-+            return self.fwd_transfer_total_mb
-+        if self.disagg_mode != DisaggregationMode.NULL and self.transfer_total_mb > 0.0:
-+            return self.transfer_total_mb
-+        return None
-+
-+    def get_pd_prefill_retry_count(self) -> Optional[int]:
-+        if not is_slime_profiling_enabled():
-+            return None
-+        if self.fwd_prefill_retry_count is not None:
-+            return self.fwd_prefill_retry_count
-+        if self.disagg_mode == DisaggregationMode.PREFILL:
-+            return self.prefill_retry_count
-+        return None
-+
-     def convert_to_duration(self) -> str:
-         if self.disagg_mode == DisaggregationMode.NULL:
-             queue_duration = self.duration_between(
-@@ -1120,6 +1309,36 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+         if self.forward_entry_time > 0.0:
+             meta_data["forward_entry_time"] = convert_time_to_realtime(
+                 self.forward_entry_time
+@@ -1120,6 +1137,67 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
                  "queue_time": self.get_queueing_time(),
              }
          )
-+        if is_slime_profiling_enabled():
-+            for key, value in {
-+                "pd_prefill_bootstrap_queue_duration": (
-+                    self.get_pd_prefill_bootstrap_queue_duration()
-+                ),
-+                "pd_prefill_forward_duration": self.get_pd_prefill_forward_duration(),
-+                "pd_prefill_transfer_queue_duration": (
-+                    self.get_pd_prefill_transfer_queue_duration()
-+                ),
-+                "pd_prefill_bootstrap_duration": (
-+                    self.get_pd_prefill_bootstrap_duration()
-+                ),
-+                "pd_prefill_alloc_wait_duration": (
-+                    self.get_pd_prefill_alloc_wait_duration()
-+                ),
-+                "pd_decode_prealloc_duration": self.get_pd_decode_prealloc_duration(),
-+                "pd_decode_transfer_duration": self.get_pd_decode_transfer_duration(),
-+                "pd_decode_forward_duration": self.get_pd_decode_forward_duration(),
-+                "pd_decode_bootstrap_duration": (
-+                    self.get_pd_decode_bootstrap_duration()
-+                ),
-+                "pd_decode_alloc_wait_duration": (
-+                    self.get_pd_decode_alloc_wait_duration()
-+                ),
-+                "pd_transfer_speed_gb_s": self.get_pd_transfer_speed_gb_s(),
-+                "pd_transfer_total_mb": self.get_pd_transfer_total_mb(),
-+                "pd_prefill_retry_count": self.get_pd_prefill_retry_count(),
-+            }.items():
-+                if value is not None:
-+                    meta_data[key] = value
++        if self.disagg_mode == DisaggregationMode.PREFILL:
++            add_duration(
++                "pd_prefill_bootstrap_queue_duration",
++                self.prefill_bootstrap_queue_entry_time,
++                self.wait_queue_entry_time,
++            )
++            add_duration(
++                "pd_prefill_bootstrap_duration",
++                self.prefill_bootstrap_queue_entry_time,
++                self.bootstrap_done_time,
++            )
++            add_duration(
++                "pd_prefill_alloc_wait_duration",
++                self.bootstrap_done_time,
++                self.wait_queue_entry_time,
++            )
++            add_duration(
++                "pd_prefill_forward_duration",
++                self.forward_entry_time,
++                self.completion_time,
++            )
++            add_duration(
++                "pd_prefill_transfer_queue_duration",
++                self.prefill_transfer_queue_entry_time,
++                self.completion_time,
++            )
++            if self.transfer_speed_gb_s > 0.0:
++                meta_data["pd_transfer_speed_gb_s"] = self.transfer_speed_gb_s
++            if self.transfer_total_mb > 0.0:
++                meta_data["pd_transfer_total_mb"] = self.transfer_total_mb
++            meta_data["pd_prefill_retry_count"] = self.prefill_retry_count
++        elif self.disagg_mode == DisaggregationMode.DECODE:
++            add_duration(
++                "pd_decode_prealloc_duration",
++                self.decode_prealloc_queue_entry_time,
++                self.decode_transfer_queue_entry_time,
++            )
++            add_duration(
++                "pd_decode_bootstrap_duration",
++                self.decode_prealloc_queue_entry_time,
++                self.bootstrap_done_time,
++            )
++            add_duration(
++                "pd_decode_alloc_wait_duration",
++                self.bootstrap_done_time,
++                self.decode_transfer_queue_entry_time,
++            )
++            add_duration(
++                "pd_decode_transfer_duration",
++                self.decode_transfer_queue_entry_time,
++                self.wait_queue_entry_time,
++            )
++            add_duration(
++                "pd_decode_forward_duration",
++                self.forward_entry_time,
++                self.completion_time,
++            )
++            if self.transfer_speed_gb_s > 0.0:
++                meta_data["pd_transfer_speed_gb_s"] = self.transfer_speed_gb_s
++            if self.transfer_total_mb > 0.0:
++                meta_data["pd_transfer_total_mb"] = self.transfer_total_mb
          return meta_data
  
      def format_duration(self, duration: float) -> str:
 diff --git a/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py b/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
-index 96c7286..9e3e2bd 100644
+index 96c7286af7..9e3e2bd714 100644
 --- a/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
 +++ b/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
 @@ -458,8 +458,12 @@ class EAGLEDraftCudaGraphRunner:
@@ -2171,7 +1687,7 @@ index 96c7286..9e3e2bd 100644
              buffers.hidden_states is not None
              and forward_batch.spec_info.hidden_states is not None
 diff --git a/python/sglang/srt/speculative/eagle_worker_v2.py b/python/sglang/srt/speculative/eagle_worker_v2.py
-index 6bf5d61..61b9603 100644
+index 6bf5d6182a..61b96031c0 100644
 --- a/python/sglang/srt/speculative/eagle_worker_v2.py
 +++ b/python/sglang/srt/speculative/eagle_worker_v2.py
 @@ -530,6 +530,21 @@ class EagleDraftWorker(BaseDraftWorker):
@@ -2208,7 +1724,7 @@ index 6bf5d61..61b9603 100644
          if (
              self.topk == 1
 diff --git a/python/sglang/srt/utils/common.py b/python/sglang/srt/utils/common.py
-index 4556d06..9c28114 100644
+index 4556d06b16..9c28114f85 100644
 --- a/python/sglang/srt/utils/common.py
 +++ b/python/sglang/srt/utils/common.py
 @@ -2399,6 +2399,7 @@ class SafeUnpickler(pickle.Unpickler):
