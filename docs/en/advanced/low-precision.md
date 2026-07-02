@@ -124,6 +124,35 @@ RUNTIME_ENV_JSON="{
 - `128` for `moonlight-16B-A3B`, `qwen3-30B-A3B`, and `qwen3-235B-A22B-int4`;
 - `32` for `kimi-k2-Thinking-int4`.
 
+### Qwen3.5 MoE INT4-QAT
+
+Qwen3.5 MoE is supported on the routed-expert INT4-QAT path. The converter automatically handles Qwen3.5 fused expert weights and produces an INT4 checkpoint that can be used by SGLang rollout.
+
+Current scope:
+
+```text
+INT4: routed experts
+BF16: attention, linear_attn, conv1d, shared_expert, router gate, visual, mtp, embedding, norm, lm_head
+```
+
+Convert the Hugging Face checkpoint:
+
+```bash
+python tools/convert_hf_to_int4_direct.py \
+  --model-dir /path/to/Qwen3.5-35B-A3B \
+  --save-dir /path/to/Qwen3.5-35B-A3B-INT4 \
+  --group-size 128 \
+  --is-symmetric
+```
+
+Then launch:
+
+```bash
+bash scripts/low_precision/run-qwen3.5-35B-A3B-int4-qat-rl.sh
+```
+
+MTP training and visual INT4-QAT are not included in this path.
+
 3. Launch an example:
 
 ```bash
@@ -138,6 +167,9 @@ bash scripts/low_precision/run-qwen3-235B-A22B-int4.sh
 
 # Kimi-k2-Thinking INT4 training (32 nodes)
 bash scripts/low_precision/run-kimi-k2-Thinking-int4.sh
+
+# Qwen3.5-35B-A3B routed-expert INT4-QAT training
+bash scripts/low_precision/run-qwen3.5-35B-A3B-int4-qat-rl.sh
 ```
 
 For multi-node environments, start the Ray service according to your cluster configuration.
