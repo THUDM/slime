@@ -311,17 +311,16 @@ class TrajectoryManager:
         sid: str,
         *,
         base_sample: Sample,
-        reward: float = 0.0,
         extra_metadata: dict[str, Any] | None = None,
         max_sample_tokens: int = 0,
     ) -> list[Sample]:
         """Linearize this sid's routing tree into slime ``Sample`` objects and
         consume the session.
 
-        Each routing leaf yields one or more Samples; ``reward`` is assigned in
-        full to every emitted Sample (not split across them), so each trained
-        turn carries the trajectory's outcome reward. The sid is dropped
-        afterwards, so a second call for the same sid returns ``[]``.
+        Reward assignment is the caller's job (the manager is reward-agnostic,
+        as it is tokenizer-agnostic): every emitted Sample carries ``reward=0.0``
+        and the adapter fills it in after draining. The sid is dropped afterwards,
+        so a second call for the same sid returns ``[]``.
         """
         root = self._trees.get(sid)
         if root is None:
@@ -337,9 +336,6 @@ class TrajectoryManager:
                     chain, base_sample=base_sample, extra_metadata=extra_metadata, max_sample_tokens=max_sample_tokens
                 )
             )
-
-        for s in samples:
-            s.reward = reward
 
         self._trees.pop(sid, None)
         self._turn_count.pop(sid, None)

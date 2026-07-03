@@ -8,7 +8,7 @@ ways a trajectory can branch, organized as a two-axis matrix:
     only, so MESSAGE IDENTITY determines tree shape; token ids are irrelevant here.
   * LAYER 2 — linearization (get_trajectory). TOKEN-ID prefix determines how each leaf
     chain becomes Samples (clean continuation / drift case A·B1·B2 / cross-leaf
-    dedup / reward split).
+    dedup).
   * COMBINED — both layers interacting (rewrite-merge, tree-fork + token-drift
     stacked, deep multi-leaf dedup, long mixed session).
 
@@ -306,32 +306,27 @@ def _iter_all(root):
 # though get_trajectory consumes the session.
 _TREE_SNAP: dict[str, str] = {}
 
-# Input reward passed to get_trajectory, keyed by sid, so the dump can show that
+# Input reward passed to get_traj, keyed by sid, so the dump can show that
 # every emitted sample carries the full input reward.
 _REWARD_IN: dict[str, float] = {}
 
 
-def get_traj(mgr, sid, *args, **kwargs):
-    """get_trajectory wrapper that snapshots the tree before draining.
+def get_traj(mgr, sid, *args, reward=0.0, **kwargs):
+    """get_trajectory wrapper that snapshots the tree before draining and mirrors
+    the adapter's reward assignment.
 
     Linearization (get_trajectory) pops the sid, so a later dump would only see
     ``<drained>``. Capturing the tree text here keeps the routing tree visible
-    next to the Samples it produced. The input ``reward`` is captured too so the
-    dump can show how it maps onto the emitted samples.
+    next to the Samples it produced. The manager is reward-agnostic (reward is
+    assigned by the adapter's finish_session, not get_trajectory), so this
+    wrapper applies the same rule: every emitted sample gets the full ``reward``.
     """
     if mgr.has_session(sid):
         _TREE_SNAP[sid] = dump_tree_txt(mgr, sid)
-    _REWARD_IN[sid] = kwargs.get("reward", 0.0)
+    _REWARD_IN[sid] = reward
     samples = mgr.get_trajectory(sid, *args, **kwargs)
-    # Reward assignment: get_trajectory assigns the input reward in full to every
-    # emitted sample (no split), so each per-sample reward must equal the input
-    # (modulo float error). This is the "full outcome reward per turn" invariant.
     for s in samples:
-        assert abs(s.reward - _REWARD_IN[sid]) < 1e-9, (
-            "reward not assigned in full to every sample",
-            s.reward,
-            _REWARD_IN[sid],
-        )
+        s.reward = reward
     return samples
 
 
