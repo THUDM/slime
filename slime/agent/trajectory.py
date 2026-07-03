@@ -101,11 +101,13 @@ class MessageNode:
         return chain
 
     def leaves(self) -> Iterator[MessageNode]:
-        if not self.children:
-            yield self
-            return
-        for c in self.children:
-            yield from c.leaves()
+        stack = [self]
+        while stack:
+            node = stack.pop()
+            if not node.children:
+                yield node
+                continue
+            stack.extend(reversed(node.children))
 
 
 # ===========================================================================
