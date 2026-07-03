@@ -222,7 +222,7 @@ index b21aee9f7c..1edb76a5ce 100644
                              # Only the last chunk we need to send the aux data
                              ret = self.send_aux(
 diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
-index ce1afdac3a..0e115cfb87 100644
+index ce1afdac3a..0a5bc0e3a4 100644
 --- a/python/sglang/srt/disaggregation/prefill.py
 +++ b/python/sglang/srt/disaggregation/prefill.py
 @@ -21,6 +21,8 @@ from __future__ import annotations
@@ -1578,10 +1578,20 @@ diff --git a/python/sglang/srt/observability/req_time_stats.py b/python/sglang/s
 index 2de10730c9..3f633676df 100644
 --- a/python/sglang/srt/observability/req_time_stats.py
 +++ b/python/sglang/srt/observability/req_time_stats.py
-@@ -584,9 +584,19 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+@@ -315,7 +315,7 @@ class ReqTimeStatsBase:
+ 
+     def __setstate__(self, state: object):
+         for key in state.keys():
+-            if key.endswith("time"):
++            if key.endswith("time") and state[key] > 0.0:
+                 state[key] = convert_time_cross_thread(
+                     state[key],
+                     state["diff_realtime_monotonic"],
+@@ -584,9 +584,20 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
              return {}
  
          state = {
++            "enable_metrics": self.enable_metrics,
 +            "disagg_mode": self.disagg_mode,
              "wait_queue_entry_time": self.wait_queue_entry_time,
              "forward_entry_time": self.forward_entry_time,
@@ -1740,6 +1750,21 @@ diff --git a/python/sglang/srt/utils/common.py b/python/sglang/srt/utils/common.
 index 4556d06b16..9c28114f85 100644
 --- a/python/sglang/srt/utils/common.py
 +++ b/python/sglang/srt/utils/common.py
+@@ -1652,7 +1652,13 @@ def _get_fastapi_request_path(request) -> Tuple[str, bool]:
+     for route in request.app.routes:
+         match, child_scope = route.matches(request.scope)
+         if match == Match.FULL:
+-            return route.path, True
++            path = getattr(route, "path", None) or getattr(route, "path_format", None)
++            if path is None:
++                child_route = child_scope.get("route")
++                path = getattr(child_route, "path", None) or getattr(
++                    child_route, "path_format", None
++                )
++            return path or request.url.path, True
+ 
+     return request.url.path, False
+ 
 @@ -2399,6 +2399,7 @@ class SafeUnpickler(pickle.Unpickler):
          "sglang.srt.utils.",
          "sglang.srt.disaggregation.",
