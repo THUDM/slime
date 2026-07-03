@@ -11,8 +11,8 @@ try:
     from mooncake.structured_object_store import (
         FieldSchema,
         MooncakeBundleTransfer,
-        export_dataproto_ref,
-        import_dataproto_ref,
+        export_ref,
+        import_ref,
     )
     from mooncake.store import MooncakeDistributedStore
 
@@ -40,7 +40,7 @@ def put_mooncake_rollout_data(args: Any, data: dict[str, Any], partition: str) -
         stage="rollout",
         field_schemas=_rollout_field_schemas(),
     )
-    return Box(export_dataproto_ref(ref))
+    return Box(export_ref(ref))
 
 
 @cache
@@ -53,13 +53,13 @@ def _rollout_field_schemas() -> dict:
 
 def get_mooncake_rollout_data(args: Any, ref: Box) -> dict[str, Any]:
     transfer = _mooncake_transfer(args)
-    result = transfer.get_legacy_dict(import_dataproto_ref(ref.inner))
+    result = transfer.get_legacy_dict(import_ref(ref.inner))
     transfer.release_result(result)
     return result
 
 
 def cleanup_mooncake_rollout_data(args: Any, ref: Box) -> None:
-    _mooncake_transfer(args).remove_legacy_dict(import_dataproto_ref(ref.inner))
+    _mooncake_transfer(args).remove_legacy_dict(import_ref(ref.inner))
 
 
 def cleanup_mooncake_rollout_refs(args: Any, refs: list[Box] | None) -> None:
