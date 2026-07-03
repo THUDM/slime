@@ -52,19 +52,21 @@ def _rollout_field_schemas() -> dict:
 
 
 def get_mooncake_rollout_data(args: Any, ref: Box) -> dict[str, Any]:
-    transfer = _mooncake_transfer(args)
-    result = transfer.get_legacy_dict(import_ref(ref.inner))
-    transfer.release_result(result)
-    return result
+    return _mooncake_transfer(args).get_legacy_dict(import_ref(ref.inner))
+
+
+def release_mooncake_rollout_data(args: Any, data: dict[str, Any]) -> None:
+    """Release pool-backed buffers after training has fully consumed the data."""
+    from mooncake.structured_object_store import MooncakeBundleTransfer
+
+    MooncakeBundleTransfer.release_result(data)
 
 
 def cleanup_mooncake_rollout_data(args: Any, ref: Box) -> None:
     _mooncake_transfer(args).remove_legacy_dict(import_ref(ref.inner))
 
 
-def cleanup_mooncake_rollout_refs(args: Any, refs: list[Box] | None) -> None:
-    if getattr(args, "rollout_data_transport", "object-store") != "mooncake" or refs is None:
-        return
+def cleanup_mooncake_rollout_refs(args: Any, refs: list[Box]) -> None:
     for ref in refs:
         cleanup_mooncake_rollout_data(args, ref)
 
