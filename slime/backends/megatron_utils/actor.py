@@ -365,6 +365,11 @@ class MegatronTrainRayActor(TrainRayActor):
             self.train_actor(rollout_id, rollout_data, external_data=external_data)
             result = None
 
+        if getattr(self.args, "rollout_data_transport", "object-store") == "mooncake":
+            from slime.utils.data_transfer import release_mooncake_rollout_data
+
+            release_mooncake_rollout_data(self.args, rollout_data)
+
         if self.args.offload_train:
             del rollout_data
             self.sleep()

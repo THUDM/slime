@@ -69,7 +69,8 @@ def train(args):
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
 
-        cleanup_mooncake_rollout_refs(args, rollout_data_ref)
+        if getattr(args, "rollout_data_transport", "object-store") == "mooncake":
+            cleanup_mooncake_rollout_refs(args, rollout_data_ref)
 
         if release_train or should_run_periodic_action(
             rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout
