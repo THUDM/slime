@@ -41,13 +41,11 @@ RUN pip install git+https://github.com/QwenLM/FlashQLA.git --no-build-isolation
 RUN pip install tilelang -f https://tile-ai.github.io/whl/nightly/cu128/
 
 # TE does not have wheel on cuda 13 yet, thus need to install from source
-# The TE will wrongly call flash-attn-4 installed by sglang.
-RUN pip uninstall -y flash-attn-4
 RUN if [ "${ENABLE_CUDA_13}" = "1" ]; then \
       pip install nvidia-mathdx==26.6.0 && \
-      pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.16; \
+      pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.10; \
     else \
-      pip -v install --no-build-isolation "transformer_engine[pytorch]==2.16.0"; \
+      pip -v install --no-build-isolation "transformer_engine[pytorch]==2.10.0"; \
     fi
 
 RUN NVCC_APPEND_FLAGS="--threads 4" \
