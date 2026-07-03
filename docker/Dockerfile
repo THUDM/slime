@@ -20,11 +20,9 @@ RUN apt install -y nvtop rsync dnsutils prometheus
 
 # ====================================== Python dependencies ============================================
 
-# The base image ships flash-attn-4, which shares the flash_attn namespace with flash-attn v2.
-RUN pip uninstall -y flash-attn-4
-
 # The compilation is slow, thus should be put at top
-RUN MAX_JOBS=64 pip -v install flash-attn==2.8.3 --no-build-isolation
+# TransformerEngines does not support too high FA2
+RUN MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1 --no-build-isolation
 
 # The compilation is slow, thus should be put at top
 RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
@@ -43,6 +41,8 @@ RUN pip install git+https://github.com/QwenLM/FlashQLA.git --no-build-isolation
 RUN pip install tilelang -f https://tile-ai.github.io/whl/nightly/cu128/
 
 # TE does not have wheel on cuda 13 yet, thus need to install from source
+# The TE will wrongly call flash-attn-4 installed by sglang.
+RUN pip uninstall -y flash-attn-4
 RUN if [ "${ENABLE_CUDA_13}" = "1" ]; then \
       pip install nvidia-mathdx==26.6.0 && \
       pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.16; \
@@ -79,9 +79,6 @@ RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
     SGL_KERNEL_VERSION=0.3.17.post2 && \
     python3 -m pip install https://github.com/sgl-project/whl/releases/download/v${SGL_KERNEL_VERSION}/sgl_kernel-${SGL_KERNEL_VERSION}+cu130-cp310-abi3-manylinux2014_$(uname -m).whl --force-reinstall --no-deps; \
   fi
-
-# https://github.com/pytorch/pytorch/issues/168167
-RUN pip install nvidia-cudnn-cu12==9.16.0.29
 
 # reinstall numpy 1.x for megatron
 RUN pip install "numpy<2"
