@@ -3,6 +3,7 @@ import ipaddress
 import logging
 import multiprocessing
 import os
+import threading
 import time
 from urllib.parse import quote
 
@@ -166,6 +167,19 @@ class SGLangEngine(RayActor):
             self._init_external(server_args_dict, external_engine_need_check_fields=external_engine_need_check_fields)
         else:
             self._init_normal(server_args_dict)
+
+        # Warm the host-local base off the actor's main thread: sglang serves the first rollout from
+        # its init-loaded weights, so the materialize (a full base copy) only has to finish before
+        # the first delta reload. init_local_checkpoint is idempotent and flock-guarded, so the first
+        # sync_local_checkpoint either finds it done or blocks on the same lock — no join needed.
+        if self.args.update_weight_mode == "delta" and self.args.update_weight_transport == "disk":
+            from slime.utils.disk_delta import init_local_checkpoint
+
+            threading.Thread(
+                target=init_local_checkpoint,
+                args=(self.args.update_weight_local_checkpoint_dir, self.args.hf_checkpoint),
+                daemon=True,
+            ).start()
 
     def _init_external(self, expect_server_args, external_engine_need_check_fields):
         logger.info(f"Use external SGLang engine (rank={self.rank}, expect_server_args={expect_server_args})")
@@ -379,6 +393,25 @@ class SGLangEngine(RayActor):
     def check_weights(self, action: str):
         return self._make_request("weights_checker", {"action": action})
 
+    def sync_local_checkpoint(self, target_version: int):
+        """Apply the published deltas into this host's local checkpoint up to target_version; the
+        engine reloads it afterwards. Assumes this actor shares the checkpoint filesystem with the
+        sglang it drives (true for slime-launched engines)."""
+        from slime.utils.disk_delta import apply_deltas, init_local_checkpoint
+
+        init_local_checkpoint(self.args.update_weight_local_checkpoint_dir, self.args.hf_checkpoint)  # idempotent
+        # non-POSIX filesystems lack cross-host read-after-write consistency, so the trainer's
+        # just-written delta isn't visible on this mount until the hook refreshes it.
+        if self.args.custom_delta_pre_read_path:
+            from slime.utils.misc import load_function
+
+            load_function(self.args.custom_delta_pre_read_path)(self.args.update_weight_disk_dir, target_version)
+        apply_deltas(
+            self.args.update_weight_local_checkpoint_dir,
+            self.args.update_weight_disk_dir,
+            target_version,
+        )
+
     def update_weights_from_disk(
         self,
         model_path: str,
@@ -437,7 +470,6 @@ class SGLangEngine(RayActor):
         flush_cache=False,
         weight_version: str | None = None,
         load_format: str | None = None,
-        delta=None,
     ):
         payload = {
             "names": names,
@@ -450,19 +482,6 @@ class SGLangEngine(RayActor):
             payload["weight_version"] = weight_version
         if load_format is not None:
             payload["load_format"] = load_format
-        if delta is not None:
-            # DeltaSpec → JSON string. Receiver reconstructs via DeltaEncoding(...) +
-            # DeltaParam(**p); avoids depending on FastAPI's nested-dataclass coercion.
-            import json
-            from dataclasses import asdict
-
-            payload["delta"] = json.dumps(
-                {
-                    "encoding": delta.encoding.value,
-                    "params": [asdict(p) for p in delta.params],
-                    "checksum": delta.checksum,
-                }
-            )
         return self._make_request(
             "update_weights_from_distributed",
             payload,
