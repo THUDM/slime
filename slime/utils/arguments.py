@@ -1864,7 +1864,9 @@ def slime_validate_args(args):
     del args.offload
 
     if args.debug_rollout_only:
-        if args.colocate and args.rollout_num_gpus is None:
+        if args.rollout_external:
+            pass
+        elif args.colocate and args.rollout_num_gpus is None:
             args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
         elif args.rollout_num_gpus == 0:
             args.actor_num_gpus_per_node = 0

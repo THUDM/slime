@@ -105,7 +105,7 @@ def _get_placement_group_layout(args) -> tuple[int, int]:
 
     if args.rollout_external:
         if args.debug_rollout_only:
-            return 0, 0
+            return actor_num_gpus, 0
         return actor_num_gpus, actor_num_gpus
 
     if args.debug_rollout_only:
