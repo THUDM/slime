@@ -44,3 +44,12 @@ repos:
       - id: black
         name: Format code
         additional_dependencies: ['click==8.0.2']
+
+  - repo: local
+    hooks:
+      - id: gen-ci-build-info
+        name: Generate CI build metadata
+        entry: bash scripts/gen_ci_info.sh
+        language: system
+        pass_filenames: false
+        always_run: true

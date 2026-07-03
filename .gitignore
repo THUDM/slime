@@ -193,3 +193,5 @@ glm/
 _examples_synced/
 .env
 .DS_Store
+
+# generated CI build metadata (kept tracked for traceability)
