@@ -20,6 +20,9 @@ RUN apt install -y nvtop rsync dnsutils prometheus
 
 # ====================================== Python dependencies ============================================
 
+# The base image ships flash-attn-4, which shares the flash_attn namespace with flash-attn v2.
+RUN pip uninstall -y flash-attn-4
+
 # The compilation is slow, thus should be put at top
 RUN MAX_JOBS=64 pip -v install flash-attn==2.8.3 --no-build-isolation
 
