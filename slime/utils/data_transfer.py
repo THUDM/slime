@@ -1,15 +1,38 @@
 """Thin Mooncake rollout data transport: put/get/cleanup."""
 
+import logging
 import os
 from functools import cache
 from typing import Any
 
 from slime.utils.misc import Box
 
+try:
+    from mooncake.structured_object_store import (
+        FieldSchema,
+        MooncakeBundleTransfer,
+        export_dataproto_ref,
+        import_dataproto_ref,
+    )
+    from mooncake.store import MooncakeDistributedStore
+
+    _MOONCAKE_AVAILABLE = True
+except ImportError:
+    _MOONCAKE_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
+
+
+def check_mooncake_available() -> None:
+    """Call during argument parsing to fail fast if mooncake is not installed."""
+    if not _MOONCAKE_AVAILABLE:
+        raise ImportError(
+            "rollout-data-transport='mooncake' requires the mooncake package. "
+            "Install it with: pip install mooncake"
+        )
+
 
 def put_mooncake_rollout_data(args: Any, data: dict[str, Any], partition: str) -> Box:
-    from mooncake.structured_object_store import export_dataproto_ref
-
     ref = _mooncake_transfer(args).put_legacy_dict(
         data,
         namespace="slime",
@@ -22,7 +45,6 @@ def put_mooncake_rollout_data(args: Any, data: dict[str, Any], partition: str) -
 
 @cache
 def _rollout_field_schemas() -> dict:
-    from mooncake.structured_object_store import FieldSchema
     from slime.ray.rollout import _ROLLOUT_DATA_TENSOR_DTYPES
 
     ragged = FieldSchema(codec="typed_ragged", nullable=False)
@@ -30,14 +52,13 @@ def _rollout_field_schemas() -> dict:
 
 
 def get_mooncake_rollout_data(args: Any, ref: Box) -> dict[str, Any]:
-    from mooncake.structured_object_store import import_dataproto_ref
-
-    return _mooncake_transfer(args).get_legacy_dict(import_dataproto_ref(ref.inner))
+    transfer = _mooncake_transfer(args)
+    result = transfer.get_legacy_dict(import_dataproto_ref(ref.inner))
+    transfer.release_result(result)
+    return result
 
 
 def cleanup_mooncake_rollout_data(args: Any, ref: Box) -> None:
-    from mooncake.structured_object_store import import_dataproto_ref
-
     _mooncake_transfer(args).remove_legacy_dict(import_dataproto_ref(ref.inner))
 
 
@@ -50,9 +71,6 @@ def cleanup_mooncake_rollout_refs(args: Any, refs: list[Box] | None) -> None:
 
 @cache
 def _mooncake_transfer(args: Any):
-    from mooncake.store import MooncakeDistributedStore
-    from mooncake.structured_object_store import MooncakeBundleTransfer
-
     store = MooncakeDistributedStore()
     mc_kwargs = getattr(args, "mooncake_store_init_kwargs", None) or {}
     ret = store.setup(

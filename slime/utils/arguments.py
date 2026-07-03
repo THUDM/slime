@@ -2018,3 +2018,8 @@ def slime_validate_args(args):
                 "--update-weight-mode=delta requires --update-weight-local-checkpoint-dir "
                 "(a rollout-host-local NVMe directory)."
             )
+
+    if getattr(args, "rollout_data_transport", "object-store") == "mooncake":
+        from slime.utils.data_transfer import check_mooncake_available
+
+        check_mooncake_available()
