@@ -10,6 +10,85 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
 
 
+def _resolve_tms_preload_lib(torch_memory_saver):
+    """Path to the torch_memory_saver preload .so matching the CUDA runtime.
+
+    Selecting by filename existence is wrong on CUDA 13 (the cu12 .so exists but
+    links the absent libcudart.so.12, crashing every LD_PRELOAD child). Prefer
+    the library's own CUDA-aware resolver; otherwise key on the CUDA major torch
+    was built for (compile-time metadata, so it works on a GPU-less Ray driver),
+    and only dlopen-probe as a last resort since that needs the host libcuda.
+    """
+    stem = "torch_memory_saver_hook_mode_preload"
+
+    # Prefer the library resolver; only a *missing* one (older build) falls back.
+    try:
+        from torch_memory_saver.utils import get_binary_path_from_package
+    except ImportError:
+        get_binary_path_from_package = None
+    if get_binary_path_from_package is not None:
+        return str(get_binary_path_from_package(stem))
+
+    import ctypes
+
+    base = os.path.dirname(os.path.dirname(torch_memory_saver.__file__))
+
+    def _first_existing(names):
+        for name in names:
+            path = os.path.join(base, name)
+            if os.path.exists(path):
+                return path
+        return None
+
+    # Key on torch's build-time CUDA major (no GPU/driver needed here).
+    major = None
+    try:
+        import torch
+
+        cuda = getattr(torch.version, "cuda", None)
+        major = cuda.split(".", 1)[0] if cuda else None
+    except ImportError:
+        pass
+
+    if major is not None:
+        path = _first_existing([f"{stem}_cu{major}.abi3.so"])
+        if path is not None:
+            return path
+
+    # Major unknown: fall back to a dlopen loadability probe (needs libcuda).
+    candidates = [f"{stem}.abi3.so", f"{stem}_cu12.abi3.so", f"{stem}_cu13.abi3.so"]
+    missing, failed = [], []
+    for name in candidates:
+        path = os.path.join(base, name)
+        if not os.path.exists(path):
+            missing.append(name)
+            continue
+        try:
+            ctypes.CDLL(path)
+        except OSError as e:
+            failed.append(f"{name}: {e}")
+            continue
+        return path
+
+    # dlopen impossible too (e.g. GPU-less driver without libcuda): pick by
+    # existence with a warning rather than fail a config the workers could run.
+    fallback_path = _first_existing(candidates)
+    if fallback_path is not None:
+        import warnings
+
+        warnings.warn(
+            "No torch_memory_saver preload lib dlopen'd here (missing libcuda.so.1?); "
+            f"using {os.path.basename(fallback_path)} by existence. "
+            f"dlopen failures: {failed or 'none'}.",
+            stacklevel=2,
+        )
+        return fallback_path
+
+    raise FileNotFoundError(
+        "Could not find a torch_memory_saver preload library under " f"{base}. Not found: {missing or 'none'}."
+    )
+
+
 class RayTrainGroup:
     """
     A group of ray actors
@@ -73,20 +152,7 @@ class RayTrainGroup:
         if self.args.offload_train and self.args.train_backend == "megatron":
             import torch_memory_saver
 
-            for path in [
-                "torch_memory_saver_hook_mode_preload_cu12.abi3.so",
-                "torch_memory_saver_hook_mode_preload.abi3.so",
-            ]:
-                dynlib_path = os.path.join(
-                    os.path.dirname(os.path.dirname(torch_memory_saver.__file__)),
-                    path,
-                )
-                if os.path.exists(dynlib_path):
-                    break
-            else:
-                raise FileNotFoundError(
-                    "Cannot find torch_memory_saver dynamic library. Please make sure torch_memory_saver is properly installed."
-                )
+            dynlib_path = _resolve_tms_preload_lib(torch_memory_saver)
 
             env_vars["LD_PRELOAD"] = dynlib_path
             env_vars["TMS_INIT_ENABLE"] = "1"
