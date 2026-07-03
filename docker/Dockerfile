@@ -21,8 +21,7 @@ RUN apt install -y nvtop rsync dnsutils prometheus
 # ====================================== Python dependencies ============================================
 
 # The compilation is slow, thus should be put at top
-# TransformerEngines does not support too high FA2
-RUN MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1 --no-build-isolation
+RUN MAX_JOBS=64 pip -v install flash-attn==2.8.3 --no-build-isolation
 
 # The compilation is slow, thus should be put at top
 RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
@@ -35,7 +34,7 @@ RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
 
 RUN pip install git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c --no-deps
 
-RUN pip install flash-linear-attention==0.4.1
+RUN pip install flash-linear-attention==0.4.2
 # FlashQLA: optional GDN backend for Qwen3.5/Qwen3-Next (--qwen-gdn-backend flashqla; requires SM90+)
 RUN pip install git+https://github.com/QwenLM/FlashQLA.git --no-build-isolation
 RUN pip install tilelang -f https://tile-ai.github.io/whl/nightly/cu128/
@@ -43,9 +42,9 @@ RUN pip install tilelang -f https://tile-ai.github.io/whl/nightly/cu128/
 # TE does not have wheel on cuda 13 yet, thus need to install from source
 RUN if [ "${ENABLE_CUDA_13}" = "1" ]; then \
       pip install nvidia-mathdx==26.6.0 && \
-      pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.10; \
+      pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.16; \
     else \
-      pip -v install --no-build-isolation "transformer_engine[pytorch]==2.10.0"; \
+      pip -v install --no-build-isolation "transformer_engine[pytorch]==2.16.0"; \
     fi
 
 RUN NVCC_APPEND_FLAGS="--threads 4" \
