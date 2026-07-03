@@ -316,11 +316,6 @@ class TrajectoryManager:
     ) -> list[Sample]:
         """Linearize this sid's routing tree into slime ``Sample`` objects and
         consume the session.
-
-        Reward assignment is the caller's job (the manager is reward-agnostic,
-        as it is tokenizer-agnostic): every emitted Sample carries ``reward=0.0``
-        and the adapter fills it in after draining. The sid is dropped afterwards,
-        so a second call for the same sid returns ``[]``.
         """
         root = self._trees.get(sid)
         if root is None:
