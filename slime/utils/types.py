@@ -353,8 +353,17 @@ class Sample:
         if routed_experts is not None:
             if args is None:
                 raise ValueError("args is required to decode routed experts metadata.")
+            expected_rows = len(self.tokens) - 1
+            expected_numel = expected_rows * args.num_layers * args.moe_router_topk
+            if routed_experts.numel() != expected_numel:
+                raise ValueError(
+                    "SGLang routed_experts element count does not match sample tokens: "
+                    f"got={routed_experts.numel()}, expected={expected_numel} "
+                    f"(tokens={len(self.tokens)}, num_layers={args.num_layers}, "
+                    f"moe_router_topk={args.moe_router_topk})."
+                )
             self.rollout_routed_experts = routed_experts.reshape(
-                len(self.tokens) - 1,
+                expected_rows,
                 args.num_layers,
                 args.moe_router_topk,
             )

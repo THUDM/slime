@@ -35,7 +35,7 @@ RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
 
 RUN pip install git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c --no-deps
 
-RUN pip install flash-linear-attention==0.4.1
+RUN pip install flash-linear-attention==0.4.2
 # FlashQLA: optional GDN backend for Qwen3.5/Qwen3-Next (--qwen-gdn-backend flashqla; requires SM90+)
 RUN pip install git+https://github.com/QwenLM/FlashQLA.git --no-build-isolation
 RUN pip install tilelang -f https://tile-ai.github.io/whl/nightly/cu128/
@@ -78,13 +78,10 @@ RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
     python3 -m pip install https://github.com/sgl-project/whl/releases/download/v${SGL_KERNEL_VERSION}/sgl_kernel-${SGL_KERNEL_VERSION}+cu130-cp310-abi3-manylinux2014_$(uname -m).whl --force-reinstall --no-deps; \
   fi
 
-# https://github.com/pytorch/pytorch/issues/168167
-RUN pip install nvidia-cudnn-cu12==9.16.0.29
-
 # reinstall numpy 1.x for megatron
 RUN pip install "numpy<2"
 
-RUN pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-1b517cf/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
+RUN pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-9daabcd/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
 RUN python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
 
 RUN rm -rf /root/.cache/pip /root/flash-attention

@@ -222,7 +222,7 @@ index b21aee9f7c..1edb76a5ce 100644
                              # Only the last chunk we need to send the aux data
                              ret = self.send_aux(
 diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
-index ce1afdac3a..bdb8b448be 100644
+index ce1afdac3a..0a5bc0e3a4 100644
 --- a/python/sglang/srt/disaggregation/prefill.py
 +++ b/python/sglang/srt/disaggregation/prefill.py
 @@ -21,6 +21,8 @@ from __future__ import annotations
@@ -302,7 +302,7 @@ index ce1afdac3a..bdb8b448be 100644
          undone_reqs: List[Req] = []
          # Check .poll() for the reqs in disagg_prefill_inflight_queue. If Success, respond to the client and remove it from the queue
          for req, poll in zip(self.disagg_prefill_inflight_queue, polls):
-@@ -710,7 +752,27 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -710,8 +752,30 @@ class SchedulerDisaggregationPrefillMixin:
                      continue
  
              if poll in [KVPoll.WaitingForInput, KVPoll.Transferring]:
@@ -329,8 +329,11 @@ index ce1afdac3a..bdb8b448be 100644
 +                else:
 +                    undone_reqs.append(req)
              elif poll == KVPoll.Success:  # transfer done
++                if req.return_routed_experts:
++                    self.batch_result_processor._maybe_collect_routed_experts(req)
                  release_kv_cache(req, self.tree_cache)  # unlock the tree
                  req.finished_reason = FINISH_LENGTH(length=0)
+                 # FIXME: clean up req's data in transfer engine
 diff --git a/python/sglang/srt/entrypoints/engine.py b/python/sglang/srt/entrypoints/engine.py
 index 88bf194768..4ede8eb907 100644
 --- a/python/sglang/srt/entrypoints/engine.py
@@ -774,7 +777,7 @@ index 42ea843109..c369b070b5 100755
          ):
              # Even the last remaining request cannot fit in memory.
 diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
-index 8e32640fc6..9896684250 100644
+index 8e32640fc6..bd154c1e38 100644
 --- a/python/sglang/srt/managers/scheduler.py
 +++ b/python/sglang/srt/managers/scheduler.py
 @@ -124,6 +124,7 @@ from sglang.srt.managers.io_struct import (
@@ -807,7 +810,17 @@ index 8e32640fc6..9896684250 100644
          )
  
      def init_lora_drainer(self) -> None:
-@@ -3721,6 +3730,12 @@ class Scheduler(
+@@ -2126,6 +2135,9 @@ class Scheduler(
+                 req.set_finish_with_abort(error_msg)
+                 self._add_request_to_queue(req)
+                 return
++            if self.disaggregation_mode == DisaggregationMode.DECODE:
++                # Prefill returns prompt-side routing; decode only owns rows after the prompt.
++                req.routed_experts_start_len = len(req.origin_input_ids)
+ 
+         added_to_grammar_queue = self.grammar_manager.process_req_with_grammar(req)
+         if not added_to_grammar_queue:
+@@ -3721,6 +3733,12 @@ class Scheduler(
                  # The request will still run one decode forward pass.
                  # Then we reuse all existing code to clean up the KV cache allocation.
                  logger.debug(f"Abort running request. {req.rid=}")
@@ -1565,10 +1578,20 @@ diff --git a/python/sglang/srt/observability/req_time_stats.py b/python/sglang/s
 index 2de10730c9..3f633676df 100644
 --- a/python/sglang/srt/observability/req_time_stats.py
 +++ b/python/sglang/srt/observability/req_time_stats.py
-@@ -584,9 +584,19 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+@@ -315,7 +315,7 @@ class ReqTimeStatsBase:
+ 
+     def __setstate__(self, state: object):
+         for key in state.keys():
+-            if key.endswith("time"):
++            if key.endswith("time") and state[key] > 0.0:
+                 state[key] = convert_time_cross_thread(
+                     state[key],
+                     state["diff_realtime_monotonic"],
+@@ -584,9 +584,20 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
              return {}
  
          state = {
++            "enable_metrics": self.enable_metrics,
 +            "disagg_mode": self.disagg_mode,
              "wait_queue_entry_time": self.wait_queue_entry_time,
              "forward_entry_time": self.forward_entry_time,
@@ -1727,6 +1750,21 @@ diff --git a/python/sglang/srt/utils/common.py b/python/sglang/srt/utils/common.
 index 4556d06b16..9c28114f85 100644
 --- a/python/sglang/srt/utils/common.py
 +++ b/python/sglang/srt/utils/common.py
+@@ -1652,7 +1652,13 @@ def _get_fastapi_request_path(request) -> Tuple[str, bool]:
+     for route in request.app.routes:
+         match, child_scope = route.matches(request.scope)
+         if match == Match.FULL:
+-            return route.path, True
++            path = getattr(route, "path", None) or getattr(route, "path_format", None)
++            if path is None:
++                child_route = child_scope.get("route")
++                path = getattr(child_route, "path", None) or getattr(
++                    child_route, "path_format", None
++                )
++            return path or request.url.path, True
+ 
+     return request.url.path, False
+ 
 @@ -2399,6 +2399,7 @@ class SafeUnpickler(pickle.Unpickler):
          "sglang.srt.utils.",
          "sglang.srt.disaggregation.",
