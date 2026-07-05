@@ -255,6 +255,13 @@ def execute():
 
     delta_dir_cm = tempfile.TemporaryDirectory(prefix="slime_external_pd_delta_")
     delta_dir = delta_dir_cm.name
+    # delta + disk sync also needs a rollout-host-local dir where each host
+    # materializes the full HF checkpoint and patches it in place. af3d7fff
+    # ("Disk-level delta weight sync", #2089) made --update-weight-local-checkpoint-dir
+    # "Required for delta + disk" in arguments.py but did not update this test,
+    # so it aborted at arg validation until this dir is passed.
+    local_ckpt_cm = tempfile.TemporaryDirectory(prefix="slime_external_pd_localckpt_")
+    local_ckpt_dir = local_ckpt_cm.name
     try:
         ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load {TORCH_DIST_CKPT} "
 
@@ -324,6 +331,7 @@ def execute():
             "--update-weight-transport disk "
             "--update-weight-encoding deltas "
             f"--update-weight-disk-dir {delta_dir} "
+            f"--update-weight-local-checkpoint-dir {local_ckpt_dir} "
             "--update-weight-delta-keep-files "
         )
 
@@ -372,6 +380,7 @@ def execute():
                 p.wait()
         U.exec_command("pkill -9 sglang; true")
         delta_dir_cm.cleanup()
+        local_ckpt_cm.cleanup()
 
 
 if __name__ == "__main__":
