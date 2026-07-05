@@ -25,8 +25,7 @@ RUN apt install -y nvtop rsync dnsutils prometheus
 RUN pip uninstall -y flash-attn-4 flash_attn_4 || true
 
 # The compilation is slow, thus should be put at top
-# TransformerEngines does not support too high FA2
-RUN MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1 --no-build-isolation
+RUN MAX_JOBS=64 pip -v install flash-attn==2.8.3 --no-build-isolation
 
 # The compilation is slow, thus should be put at top.  This FA3 commit uses the
 # window_size_left/window_size_right API required by TransformerEngine 2.16 CP.
