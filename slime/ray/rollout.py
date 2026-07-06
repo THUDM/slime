@@ -19,6 +19,7 @@ from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupCo
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
+from slime.utils.data import get_source
 from slime.utils.dp_schedule import build_dp_schedule
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
@@ -799,6 +800,9 @@ class RolloutManager:
         if samples[0].teacher_log_probs is not None:
             train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
 
+        if samples[0].metadata is not None:
+            train_data["source_names"] = [get_source(sample) for sample in samples]
+
         return train_data
 
     def set_train_parallel_config(self, config: dict):
@@ -848,6 +852,7 @@ class RolloutManager:
                 "rollout_top_p_token_ids",
                 "rollout_top_p_token_offsets",
                 "rollout_routed_experts",
+                "source_names",
                 "prompt",
                 "teacher_log_probs",
             ]:

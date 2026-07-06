@@ -183,6 +183,20 @@ sglang 的加载非常简单，只需要：
 请注意，这里的 `step_loss_mask`（默认值为 1）字段为 SFT 阶段提供，若设置为 0，则会将该轮 `loss_mask` 设置为 0；若设置为 1，则使用正常 `loss_mask`。
 另外我们还提供了一个 metadata_key，默认为 `"metadata"`，读取后我们会把数据中的 metadata 加载进 slime，可能会对自定义数据生成或者自定义 reward model 有帮助。
 
+如果同一次训练混合了多个数据 source，可以在 metadata 中写入 `source_name`：
+
+```json
+{
+  "prompt": "...",
+  "label": "...",
+  "metadata": {
+    "source_name": "math"
+  }
+}
+```
+
+推荐把 source 标识放在 `metadata["source_name"]` 中；自定义 data source 如果已经动态设置了 `sample.source`，slime 也会识别。rollout 转换成训练数据时，slime 会为每个样本生成 `source_names` 并传到训练侧。source 的读取优先级为动态 `sample.source`、`metadata["source_name"]`，都不存在时为 `"unknown"`。这可以用于自定义 reward、filter、日志统计，以及后续按 source 路由 OPD teacher 等需要分 source 处理的场景。
+
 ### RL 训练需要的超参
 
 - `--advantage-estimator`: 当前训练需要的 RL 算法，目前支持：
