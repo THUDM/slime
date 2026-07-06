@@ -46,7 +46,6 @@ class RayTrainGroup:
         self._num_gpus_per_actor = num_gpus_per_actor
         self.role = role
         self._actor_cls = actor_cls
-        self._init_role = None
         self._init_with_ref = False
         self._init_with_opd_teacher = False
         self._rollout_manager = None
@@ -126,16 +125,15 @@ class RayTrainGroup:
                 master_addr, master_port = ray.get(actor.get_master_addr_and_port.remote())
             self._actor_handlers.append(actor)
 
-    def _async_init(self, args, role, with_ref=False, with_opd_teacher=False):
+    def _async_init(self, args, with_ref=False, with_opd_teacher=False):
         """
         Allocate GPU resourced and initialize model, optimzier, local ckpt, etc.
         """
         self.args = args
-        self._init_role = role
         self._init_with_ref = with_ref
         self._init_with_opd_teacher = with_opd_teacher
         return [
-            actor.init.remote(args, role, with_ref=with_ref, with_opd_teacher=with_opd_teacher)
+            actor.init.remote(args, self.role, with_ref=with_ref, with_opd_teacher=with_opd_teacher)
             for actor in self._actor_handlers
         ]
 
@@ -196,26 +194,20 @@ class RayTrainGroup:
         if actors:
             time.sleep(5)
 
-    def create(self, args=None, role=None, with_ref=None, with_opd_teacher=None, rollout_manager=None):
+    def create(self, with_ref=None, with_opd_teacher=None, rollout_manager=None):
         if self._actor_handlers:
             return None
-        if args is not None:
-            self.args = args
-        if role is not None:
-            self._init_role = role
         if with_ref is not None:
             self._init_with_ref = with_ref
         if with_opd_teacher is not None:
             self._init_with_opd_teacher = with_opd_teacher
         if rollout_manager is not None:
             self._rollout_manager = rollout_manager
-        assert self._init_role is not None, "create requires role on the first call."
         self.args.update_weight_start_version = self._disk_weight_version
         self._allocate_gpus_for_actor(self._pg, self._num_gpus_per_actor)
         start_rollout_ids = ray.get(
             self._async_init(
                 self.args,
-                self._init_role,
                 with_ref=self._init_with_ref,
                 with_opd_teacher=self._init_with_opd_teacher,
             )

@@ -18,9 +18,6 @@ def train(args):
     # need to initialize rollout manager first to calculate num_rollout
     rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"])
 
-    if release_train and args.offload_rollout:
-        ray.get(rollout_manager.offload.remote())
-
     actor_model, critic_model = create_training_models(args, pgs, rollout_manager)
 
     if args.offload_rollout and not release_train:
@@ -87,10 +84,11 @@ def train(args):
             ray.get(rollout_manager.onload_weights.remote())
         actor_model.update_weights()
 
-        if args.offload_rollout:
+        run_eval = should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch)
+        if args.offload_rollout and (rollout_id + 1 < args.num_rollout or run_eval):
             ray.get(rollout_manager.onload_kv.remote())
 
-        if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
+        if run_eval:
             ray.get(rollout_manager.eval.remote(rollout_id))
 
     ray.get(rollout_manager.dispose.remote())

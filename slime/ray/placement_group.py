@@ -167,8 +167,6 @@ def create_actor_model(args, pgs, rollout_manager, actor_cls=None):
         **actor_model_kwargs,
     )
     actor_start_rollout_ids = actor_model.create(
-        actor_args,
-        role="actor",
         with_ref=actor_args.kl_coef != 0 or actor_args.use_kl_loss,
         with_opd_teacher=actor_args.use_opd and actor_args.opd_type == "megatron",
         rollout_manager=rollout_manager,
@@ -198,12 +196,7 @@ def create_training_models(args, pgs, rollout_manager, actor_cls=None):
             pg=pgs["critic"],
             role="critic",
         )
-        critic_start_rollout_ids = critic_model.create(
-            critic_model.args,
-            role="critic",
-            with_ref=False,
-            rollout_manager=rollout_manager,
-        )
+        critic_start_rollout_ids = critic_model.create(with_ref=False, rollout_manager=rollout_manager)
 
     # TODO how to decide rollout start id when critic is involved? For now we just require user to specify it via args.
     if args.use_critic:

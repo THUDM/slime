@@ -124,13 +124,11 @@ class TestMegatronRoleConfig:
                 self.create_calls = []
                 self.rollout_manager = None
 
-            def create(self, model_args, role, with_ref=False, with_opd_teacher=False, rollout_manager=None):
-                self.args = model_args
+            def create(self, with_ref=False, with_opd_teacher=False, rollout_manager=None):
                 self.rollout_manager = rollout_manager
                 self.create_calls.append(
                     {
-                        "args": model_args,
-                        "role": role,
+                        "args": self.args,
                         "with_ref": with_ref,
                         "with_opd_teacher": with_opd_teacher,
                         "rollout_manager": rollout_manager,
@@ -153,5 +151,4 @@ class TestMegatronRoleConfig:
         assert critic_model is None
         assert actor_model.args.lr == 1e-6
         assert actor_model.create_calls[0]["args"].lr == 1e-6
-        assert actor_model.create_calls[0]["role"] == "actor"
         assert args.start_rollout_id == 7
