@@ -468,69 +468,6 @@ def get_reinforce_plus_plus_baseline_advantages(
     return unwhitened_advantages
 
 
-def get_advantages_and_returns(
-    total_len: int,
-    response_len: int,
-    values: torch.Tensor,
-    rewards: torch.Tensor,
-    gamma: float,
-    lambd: float,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Function that computes advantages and returns from rewards and values.
-    Calculated as in the original PPO paper: https://arxiv.org/abs/1707.06347
-    Note that rewards may include a KL divergence loss term.
-
-    Advantages looks like this:
-    Adv1 =  R1 + γ * λ * R2     + γ^2 * λ^2 * R3       + ...
-            - V1 + γ * (1 - λ) V2 + γ^2 * λ * (1 - λ) V3 + ...
-
-    Returns looks like this:
-    Ret1 =  R1 + γ * λ * R2     + γ^2 * λ^2 * R3       + ...
-                + γ * (1 - λ) V2 + γ^2 * λ * (1 - λ) V3 + ...
-
-    Input:
-    - values: Tensor of shape (response_size,)
-    - rewards: Tensor of shape (response_size,)
-
-    Output:
-    - advantages: Tensor of shape (response_size,)
-    - returns: Tensor of shape (response_size,)
-    """
-    from megatron.core import mpu
-
-    cp_size = mpu.get_context_parallel_world_size()
-    if cp_size > 1:
-        from slime.backends.megatron_utils.cp_utils import all_gather_with_cp
-
-        full_rewards = all_gather_with_cp(rewards, total_len, response_len)
-        full_values = all_gather_with_cp(values, total_len, response_len)
-    else:
-        full_rewards = rewards
-        full_values = values
-
-    lastgaelam = 0
-    advantages_reversed = []
-
-    for t in reversed(range(response_len)):
-        nextvalues = full_values[t + 1] if t < response_len - 1 else 0.0
-        delta = full_rewards[t] + gamma * nextvalues - full_values[t]
-        lastgaelam = delta + gamma * lambd * lastgaelam
-        advantages_reversed.append(lastgaelam)
-    full_advantages = torch.tensor(advantages_reversed[::-1], dtype=full_values.dtype, device=full_values.device)
-    full_returns = full_advantages + full_values
-
-    if cp_size > 1:
-        from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
-
-        advantages = slice_log_prob_with_cp(full_advantages, total_len, response_len)
-        returns = slice_log_prob_with_cp(full_returns, total_len, response_len)
-    else:
-        advantages = full_advantages
-        returns = full_returns
-
-    return advantages.detach(), returns
-
-
 def get_advantages_and_returns_batch(
     total_lengths,
     response_lengths,
