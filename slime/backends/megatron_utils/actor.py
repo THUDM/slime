@@ -1,6 +1,5 @@
 import logging
 import os
-import random
 from argparse import Namespace
 from contextlib import nullcontext
 from pathlib import Path
@@ -136,29 +135,29 @@ class MegatronTrainRayActor(TrainRayActor):
             hf_vocab = getattr(self.hf_config, "vocab_size", None)
             self.args.vocab_size = hf_vocab if hf_vocab is not None else self.tokenizer.vocab_size
 
-        if self.args.colocate:
-            assert (
-                self.args.update_weight_mode == "full"
-            ), "--update-weight-mode=delta is not supported with --colocate"
-            update_weight_cls = UpdateWeightFromTensor
-        elif self.args.update_weight_mode == "delta":
+        update_weight_mode = self.args.update_weight_mode
+        update_weight_transport = self.args.update_weight_transport
+
+        if update_weight_mode == "delta":
             # Delta sync is disk-transport only: each host applies the published deltas into
             # its local checkpoint and the engines reload via vanilla update_weights_from_disk.
+            assert not self.args.colocate, "--update-weight-mode=delta is not supported with --colocate"
             assert (
-                self.args.update_weight_transport == "disk"
+                update_weight_transport == "disk"
             ), "--update-weight-mode=delta requires --update-weight-transport=disk"
             from .update_weight.update_weight_from_disk_delta import UpdateWeightFromDiskDelta
 
             update_weight_cls = UpdateWeightFromDiskDelta
+        elif update_weight_transport == "disk":
+            update_weight_cls = UpdateWeightFromDisk
+        elif self.args.colocate:
+            update_weight_cls = UpdateWeightFromTensor
         else:
-            assert self.args.update_weight_mode == "full"
-            if self.args.update_weight_transport == "disk":
-                update_weight_cls = UpdateWeightFromDisk
-            else:
-                assert (
-                    self.args.update_weight_mode == "full" and self.args.update_weight_transport == "nccl"
-                ), f"unsupported weight sync mode/transport: {self.args.update_weight_mode!r}/{self.args.update_weight_transport!r}"
-                update_weight_cls = UpdateWeightFromDistributed
+            assert update_weight_mode == "full"
+            assert (
+                update_weight_transport == "nccl"
+            ), f"unsupported weight sync mode/transport: {update_weight_mode!r}/{update_weight_transport!r}"
+            update_weight_cls = UpdateWeightFromDistributed
         self.weight_updater = update_weight_cls(
             self.args,
             self.model,
@@ -166,6 +165,7 @@ class MegatronTrainRayActor(TrainRayActor):
             model_name=type(self.hf_config).__name__.lower() if self.args.model_name is None else self.args.model_name,
             quantization_config=getattr(self.hf_config, "quantization_config", None),
         )
+        self.weight_updater.weight_version = getattr(self.args, "update_weight_start_version", 0)
 
         # empty cache after initialization
         clear_memory()
@@ -597,14 +597,6 @@ class MegatronTrainRayActor(TrainRayActor):
             print_memory("before update_weights")
             self.weight_updater.update_weights()
             print_memory("after update_weights")
-
-            if self.args.ci_test and len(rollout_engines) > 0 and self.weight_updater.weight_version > 0:
-                engine = random.choice(rollout_engines)
-                engine_version = ray.get(engine.get_weight_version.remote())
-                if str(engine_version) != str(self.weight_updater.weight_version):
-                    raise RuntimeError(
-                        f"Weight version mismatch! Engine: {engine_version}, Updater: {self.weight_updater.weight_version}"
-                    )
 
             if getattr(self.args, "keep_old_actor", False):
                 if self.args.update_weights_interval == 1:

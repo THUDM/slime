@@ -86,11 +86,6 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
             return
 
         self.weight_version += 1
-        if dist.get_rank() == 0:
-            ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
-            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
-        dist.barrier(group=get_gloo_group())
-
         self._publish()
         self._reload_engines()
         self._record_metrics()
@@ -173,6 +168,8 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
         dist.barrier(group=get_gloo_group())
         if dist.get_rank() == 0:
             ray.get([actor.sync_local_checkpoint.remote(self.weight_version) for actor in self.all_engine_actors])
+            ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
+            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
             ray.get(
                 [
                     engine.update_weights_from_disk.remote(
