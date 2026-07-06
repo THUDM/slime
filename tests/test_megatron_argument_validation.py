@@ -249,6 +249,8 @@ def make_slime_validate_args(**overrides):
         rollout_max_context_len=None,
         rollout_max_prompt_len=None,
         train_backend="megatron",
+        release_train=False,
+        keep_old_actor=False,
         only_train_params_name_list=None,
         freeze_params_name_list=None,
         update_weight_transport="nccl",
