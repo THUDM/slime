@@ -1676,11 +1676,6 @@ def parse_megatron_role_args(base_args, megatron_config_path, role):
     return role_args
 
 
-def parse_critic_args(actor_args, megatron_config_path):
-    """Backward-compatible wrapper for critic-specific Megatron role parsing."""
-    return parse_megatron_role_args(actor_args, megatron_config_path, role="critic")
-
-
 def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
     """
     Build evaluation dataset configurations from either --eval-config or --eval-prompt-data.

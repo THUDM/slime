@@ -151,14 +151,14 @@ class ServerGroup:
             self.num_new_engines = 0
             return [], port_cursors
 
-        num_gpu_per_engine = min(self.num_gpus_per_engine, self.args.num_gpus_per_node)
+        num_gpus_per_engine_on_node = min(self.num_gpus_per_engine, self.args.num_gpus_per_node)
 
         pg, reordered_bundle_indices, reordered_gpu_ids = self.pg
         validate_server_group_gpu_indices(
             worker_type=self.worker_type,
             gpu_offset=self.gpu_offset,
             num_gpus_per_engine=self.num_gpus_per_engine,
-            num_gpu_per_engine=num_gpu_per_engine,
+            num_gpus_per_engine_on_node=num_gpus_per_engine_on_node,
             num_engines=len(self.all_engines),
             num_available_gpus=len(reordered_gpu_ids),
             rollout_num_gpus=self.args.rollout_num_gpus,
@@ -177,7 +177,7 @@ class ServerGroup:
             num_cpus = num_gpus
 
             # Get the base GPU ID from placement group using gpu_offset.
-            gpu_index = self.gpu_offset + i * num_gpu_per_engine
+            gpu_index = self.gpu_offset + i * num_gpus_per_engine_on_node
             base_gpu_id = int(reordered_gpu_ids[gpu_index])
 
             scheduling_strategy = PlacementGroupSchedulingStrategy(
@@ -264,18 +264,6 @@ class ServerGroup:
         if not self.needs_offload:
             return []
         return [engine.resume_memory_occupation.remote(tags=tags) for engine in self.engines if engine is not None]
-
-    def onload_weights_from_disk(self):
-        """Reload weights from ``model_path`` for non-updatable groups.
-
-        Used instead of ``resume_memory_occupation(tags=[WEIGHTS])`` so that
-        CPU memory is not consumed by offloaded weight copies.
-        """
-        if not self.needs_offload or not self.model_path:
-            return []
-        return [
-            engine.update_weights_from_disk.remote(self.model_path) for engine in self.engines if engine is not None
-        ]
 
 
 @dataclasses.dataclass
@@ -593,7 +581,7 @@ class RolloutManager:
             srv.onload_kv()
 
     def recover_updatable_engines(self):
-        """Restart any dead rollout engines and update num_new_engines for update_weights detection.
+        """Restart dead updatable rollout engines before the next weight update.
 
         Recovers the updatable model (the one that receives weight
         updates from training).
@@ -601,19 +589,9 @@ class RolloutManager:
         self.health_monitoring_pause()
         srv = self._get_updatable_server()
         if self.rollout_id == -1 or srv is None:
-            engines = srv.engines if srv else []
-            gpu_counts = srv.engine_gpu_counts if srv else []
-            gpu_offsets = srv.engine_gpu_offsets if srv else []
-            return engines, self.rollout_engine_lock, (srv.num_new_engines if srv else 0), gpu_counts, gpu_offsets
+            return
 
         srv.recover()
-        return (
-            srv.engines,
-            self.rollout_engine_lock,
-            srv.num_new_engines,
-            srv.engine_gpu_counts,
-            srv.engine_gpu_offsets,
-        )
 
     def clear_updatable_num_new_engines(self):
         # when fault tolerance is not enabled, we need to manually clear num_new_engines after update_weights
@@ -1133,8 +1111,8 @@ def start_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
         def _make_group(group_cfg, router_ip, router_port, overrides_extra=None):
             nonlocal engine_offset, gpu_offset
             gpus_per_engine = group_cfg.num_gpus_per_engine
-            num_gpu_per_engine_local = min(gpus_per_engine, args.num_gpus_per_node)
-            num_engines = group_cfg.num_gpus // num_gpu_per_engine_local
+            num_gpus_per_engine_on_node = min(gpus_per_engine, args.num_gpus_per_node)
+            num_engines = group_cfg.num_gpus // num_gpus_per_engine_on_node
 
             group_abs_start = rollout_pg_offset + gpu_offset
             needs_offload = args.offload_rollout and group_abs_start < megatron_num_gpus

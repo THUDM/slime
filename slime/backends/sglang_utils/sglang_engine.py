@@ -488,11 +488,15 @@ class SGLangEngine(RayActor):
         )
 
     def pause_generation(self):
+        if self.node_rank != 0:
+            return
         response = requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={})
         response.raise_for_status()
         return response
 
     def continue_generation(self):
+        if self.node_rank != 0:
+            return
         response = requests.post(f"http://{self.server_host}:{self.server_port}/continue_generation", json={})
         response.raise_for_status()
         return response
@@ -503,9 +507,9 @@ class SGLangEngine(RayActor):
         post_process_quantization: bool = False,
     ):
         """
-        Update model weights from tensor data. The HTTP server will only post meta data, and the real weights will be copied directly from GPUs.
-        Note: The model should be on GPUs rather than CPU for this functionality to work properly.
-        If you encounter issues, ensure your model is loaded on GPU devices rather than CPU.
+        Run post-load weight processing on the SGLang server.
+
+        This is used for restore-before-load and post-load quantization hooks.
         """
 
         return self._make_request(
@@ -530,6 +534,8 @@ class SGLangEngine(RayActor):
         with_stack: bool | None = None,
         record_shapes: bool | None = None,
     ):
+        if self.node_rank != 0:
+            return
         response = requests.post(
             f"http://{self.server_host}:{self.server_port}/start_profile",
             json={
@@ -546,6 +552,8 @@ class SGLangEngine(RayActor):
         return response
 
     def stop_profile(self):
+        if self.node_rank != 0:
+            return
         response = requests.post(f"http://{self.server_host}:{self.server_port}/stop_profile", json={})
         response.raise_for_status()
         return response
