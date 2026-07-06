@@ -525,8 +525,7 @@ class RolloutManager:
         gpu_counts = srv.engine_gpu_counts if srv else []
         gpu_offsets = srv.engine_gpu_offsets if srv else []
         num_new = srv.num_new_engines if srv else 0
-        all_engine_actors = srv.all_engines if srv else []
-        return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets, all_engine_actors
+        return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets
 
     def get_num_rollout_per_epoch(self):
         assert self.args.rollout_global_dataset

@@ -60,7 +60,6 @@ class UpdateWeightFromDistributed:
         rollout_engine_lock: ActorHandle,
         engine_gpu_counts: Sequence[int] | None = None,
         engine_gpu_offsets: Sequence[int] | None = None,
-        all_engine_actors: Sequence[ActorHandle] | None = None,
     ) -> None:
         """
         Create NCCL "slime-pp_{pp_rank}" if PP source (DP=TP=0). Lock prevents concurrent broadcasts.
