@@ -4,7 +4,6 @@ import logging
 import multiprocessing
 import os
 import random
-import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -588,19 +587,6 @@ class RolloutManager:
     def onload_weights(self):
         for srv in self.servers.values():
             srv.onload_weights()
-
-    def update_weights_from_disk(self, model_path: str, weight_version: str):
-        srv = self._get_updatable_server()
-        if srv is None:
-            return
-        refs = [
-            engine.update_weights_from_disk.remote(model_path=model_path, weight_version=weight_version)
-            for engine in srv.engines
-        ]
-        if refs:
-            ray.get(refs)
-        if not self.args.update_weight_disk_keep_files:
-            shutil.rmtree(model_path, ignore_errors=True)
 
     def onload_kv(self):
         for srv in self.servers.values():

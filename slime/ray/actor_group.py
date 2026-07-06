@@ -1,4 +1,5 @@
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -49,7 +50,7 @@ class RayTrainGroup:
         self._init_with_ref = False
         self._init_with_opd_teacher = False
         self._rollout_manager = None
-        self._release_train_weight_version = getattr(args, "update_weight_start_version", 0)
+        self._disk_weight_version = getattr(args, "update_weight_start_version", 0)
         self._actor_handlers = []
 
     def _allocate_gpus_for_actor(self, pg, num_gpus_per_actor):
@@ -171,14 +172,15 @@ class RayTrainGroup:
 
     def update_weights(self):
         """Broadcast weights from rank 0 to all other ranks."""
-        if not self._release_train_enabled():
+        if not self._full_disk_weight_update_enabled():
             return ray.get([actor.update_weights.remote() for actor in self._actor_handlers])
 
-        weight_version = self._release_train_weight_version + 1
+        weight_version = self._disk_weight_version + 1
         disk_weight_dir = Path(self.args.update_weight_disk_dir) / f"weight_v{weight_version:06d}"
         ray.get([actor.update_weights.remote() for actor in self._actor_handlers])
-        self._release_train_weight_version = weight_version
-        self.release()
+        self._disk_weight_version = weight_version
+        if self._release_train_enabled():
+            self.release()
         self._reload_rollout_weights_from_disk(disk_weight_dir, str(weight_version))
 
     def onload(self):
@@ -208,7 +210,7 @@ class RayTrainGroup:
         if rollout_manager is not None:
             self._rollout_manager = rollout_manager
         assert self._init_role is not None, "create requires role on the first call."
-        self.args.update_weight_start_version = self._release_train_weight_version
+        self.args.update_weight_start_version = self._disk_weight_version
         self._allocate_gpus_for_actor(self._pg, self._num_gpus_per_actor)
         start_rollout_ids = ray.get(
             self._async_init(
@@ -232,13 +234,33 @@ class RayTrainGroup:
     def _release_train_enabled(self):
         return self.role == "actor" and getattr(self.args, "release_train", False)
 
+    def _full_disk_weight_update_enabled(self):
+        return (
+            self.role == "actor"
+            and self.args.update_weight_mode == "full"
+            and self.args.update_weight_transport == "disk"
+        )
+
     def _reload_rollout_weights_from_disk(self, disk_weight_dir, weight_version):
-        assert self._rollout_manager is not None, "release train requires a rollout manager."
+        assert self._rollout_manager is not None, "disk weight update requires a rollout manager."
         if self.args.offload_rollout:
             ray.get(self._rollout_manager.onload_weights.remote())
+        engines, *_ = ray.get(self._rollout_manager.get_updatable_engines_and_lock.remote())
+        if not engines:
+            if not self.args.update_weight_disk_keep_files:
+                shutil.rmtree(disk_weight_dir, ignore_errors=True)
+            return
+        ray.get([engine.pause_generation.remote() for engine in engines])
+        ray.get([engine.flush_cache.remote() for engine in engines])
         ray.get(
-            self._rollout_manager.update_weights_from_disk.remote(
-                model_path=str(disk_weight_dir),
-                weight_version=weight_version,
-            )
+            [
+                engine.update_weights_from_disk.remote(
+                    model_path=str(disk_weight_dir),
+                    weight_version=weight_version,
+                )
+                for engine in engines
+            ]
         )
+        if not self.args.update_weight_disk_keep_files:
+            shutil.rmtree(disk_weight_dir, ignore_errors=True)
+        ray.get([engine.continue_generation.remote() for engine in engines])
