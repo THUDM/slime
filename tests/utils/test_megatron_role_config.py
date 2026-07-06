@@ -119,25 +119,35 @@ class TestMegatronRoleConfig:
         args = _base_args(megatron_config_path=path, use_critic=False)
 
         class DummyModel:
-            def __init__(self, model_args):
+            def __init__(self, model_args, with_ref=False, with_opd_teacher=False):
                 self.args = model_args
+                self.with_ref = with_ref
+                self.with_opd_teacher = with_opd_teacher
                 self.create_calls = []
                 self.rollout_manager = None
 
-            def create(self, with_ref=False, with_opd_teacher=False, rollout_manager=None):
+            def create(self, rollout_manager=None):
                 self.rollout_manager = rollout_manager
                 self.create_calls.append(
                     {
                         "args": self.args,
-                        "with_ref": with_ref,
-                        "with_opd_teacher": with_opd_teacher,
+                        "with_ref": self.with_ref,
+                        "with_opd_teacher": self.with_opd_teacher,
                         "rollout_manager": rollout_manager,
                     }
                 )
                 return [7]
 
-        def fake_allocate_train_group(args, num_nodes, num_gpus_per_node, pg, role="actor"):
-            return DummyModel(args)
+        def fake_allocate_train_group(
+            args,
+            num_nodes,
+            num_gpus_per_node,
+            pg,
+            role="actor",
+            with_ref=False,
+            with_opd_teacher=False,
+        ):
+            return DummyModel(args, with_ref=with_ref, with_opd_teacher=with_opd_teacher)
 
         monkeypatch.setattr(placement_group_module, "allocate_train_group", fake_allocate_train_group)
         monkeypatch.setattr(placement_group_module.ray, "get", lambda value: value)

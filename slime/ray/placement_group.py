@@ -137,7 +137,16 @@ def create_placement_groups(args):
     return result
 
 
-def allocate_train_group(args, num_nodes, num_gpus_per_node, pg, role="actor", actor_cls=None):
+def allocate_train_group(
+    args,
+    num_nodes,
+    num_gpus_per_node,
+    pg,
+    role="actor",
+    with_ref=False,
+    with_opd_teacher=False,
+    actor_cls=None,
+):
     return RayTrainGroup(
         args=args,
         num_nodes=num_nodes,
@@ -145,6 +154,8 @@ def allocate_train_group(args, num_nodes, num_gpus_per_node, pg, role="actor", a
         pg=pg,
         num_gpus_per_actor=0.4,
         role=role,
+        with_ref=with_ref,
+        with_opd_teacher=with_opd_teacher,
         actor_cls=actor_cls,
     )
 
@@ -164,13 +175,11 @@ def create_actor_model(args, pgs, rollout_manager, actor_cls=None):
         num_nodes=args.actor_num_nodes,
         num_gpus_per_node=args.actor_num_gpus_per_node,
         pg=pgs["actor"],
-        **actor_model_kwargs,
-    )
-    actor_start_rollout_ids = actor_model.create(
         with_ref=actor_args.kl_coef != 0 or actor_args.use_kl_loss,
         with_opd_teacher=actor_args.use_opd and actor_args.opd_type == "megatron",
-        rollout_manager=rollout_manager,
+        **actor_model_kwargs,
     )
+    actor_start_rollout_ids = actor_model.create(rollout_manager=rollout_manager)
     return actor_model, actor_start_rollout_ids
 
 
@@ -196,7 +205,7 @@ def create_training_models(args, pgs, rollout_manager, actor_cls=None):
             pg=pgs["critic"],
             role="critic",
         )
-        critic_start_rollout_ids = critic_model.create(with_ref=False, rollout_manager=rollout_manager)
+        critic_start_rollout_ids = critic_model.create(rollout_manager=rollout_manager)
 
     # TODO how to decide rollout start id when critic is involved? For now we just require user to specify it via args.
     if args.use_critic:
