@@ -243,6 +243,18 @@ class RayTrainGroup:
                 for engine in engines
             ]
         )
+        if self.args.ci_test:
+            engine_versions = ray.get([engine.get_weight_version.remote() for engine in engines])
+            mismatches = [
+                f"engine {idx}: {engine_version}"
+                for idx, engine_version in enumerate(engine_versions)
+                if str(engine_version) != str(weight_version)
+            ]
+            if mismatches:
+                raise RuntimeError(
+                    "Weight version mismatch after disk reload! "
+                    f"Expected: {weight_version}; " + ", ".join(mismatches)
+                )
         if not self.args.update_weight_disk_keep_files:
             shutil.rmtree(disk_weight_dir, ignore_errors=True)
         ray.get([engine.continue_generation.remote() for engine in engines])
