@@ -7,9 +7,6 @@ from typing import Any
 
 import yaml
 
-from slime.backends.sglang_utils.arguments import sglang_parse_args
-from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
-from slime.backends.sglang_utils.external import apply_external_engine_info_to_args
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
 from slime.utils.logging_utils import configure_logger
 
@@ -106,6 +103,31 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
         def add_train_arguments(parser):
             # --train-backend is parsed early in _pre_parse_mode() and merged later.
+            parser.add_argument(
+                "--qkv-format",
+                type=str,
+                choices=["thd", "bshd"],
+                default="thd",
+                help="The qkv layout for Megatron backend.",
+            )
+            # Vendored Megatron exposes these TransformerConfig fields but does not
+            # register CLI flags for them, and Slime ignores unknown Megatron args.
+            reset_arg(
+                parser,
+                "--fp8-dot-product-attention",
+                action="store_true",
+                default=False,
+                dest="fp8_dot_product_attention",
+                help="Use TransformerEngine FP8 Dot Product Attention when FP8 is enabled.",
+            )
+            reset_arg(
+                parser,
+                "--fp8-multi-head-attention",
+                action="store_true",
+                default=False,
+                dest="fp8_multi_head_attention",
+                help="Use TransformerEngine FP8 Multi Head Attention when FP8 is enabled.",
+            )
             parser.add_argument(
                 "--qwen-gdn-backend",
                 type=str,
@@ -291,6 +313,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                         3. Freeze specific projection layers (e.g., all Gate/Up projections):
                             --freeze-params-name-list linear_fc1
                         """,
+            )
+            parser.add_argument(
+                "--vision-dp-when-cp",
+                action=argparse.BooleanOptionalAction,
+                default=False,
+                help=(
+                    "For QwenVL Bridge models under context parallelism, shard the vision tower work by CP rank "
+                    "and all-gather the resulting vision embeddings before the language model."
+                ),
             )
             parser.add_argument(
                 "--allgather-cp",
@@ -700,6 +731,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "`rollout_batch_size * n_samples_per_prompt // num_steps_per_rollout`."
                 ),
             )
+            parser.add_argument(
+                "--global-batch-tokens",
+                type=int,
+                default=None,
+                help=(
+                    "Enable token-based global batches. When set, each training step holds a near-precise "
+                    "token budget instead of a fixed rollout/sample count. Requires --use-dynamic-batch-size; "
+                    "incompatible with --use-dynamic-global-batch-size and --balance-data."
+                ),
+            )
             # mbs for the training, will be ignored if `use_dynamic_batch_size` is set.
             reset_arg(parser, "--micro-batch-size", type=int, default=1)
             parser.add_argument(
@@ -749,6 +790,29 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "The maximum number of tokens per GPU for dynamic batch size. "
                     "Note that when enabling context parallel (CP), the max tokens per gpu should be around "
                     "`max_response_len // cp_size` instead of `max_response_len`."
+                ),
+            )
+            parser.add_argument(
+                "--packing-safety-margin",
+                type=float,
+                default=1.0,
+                help=(
+                    "Multiplier applied to max_tokens_per_gpu when planning dynamic micro-batches. "
+                    "Values below 1.0 leave headroom for activation/padding spikes while validation still "
+                    "uses the real max_tokens_per_gpu cap."
+                ),
+            )
+            parser.add_argument(
+                "--multimodal-aware-packing",
+                type=str,
+                choices=["off", "separate", "separate_raw"],
+                default="off",
+                help=(
+                    "Optional dynamic micro-batch packing strategy for multimodal SFT. "
+                    "'off' preserves the standard token-sum first-fit packing. "
+                    "'separate' avoids mixing true multimodal samples with text-only samples and "
+                    "uses padded unsplit cost for multimodal bins. "
+                    "'separate_raw' also avoids mixing but keeps the standard token-sum bin cost."
                 ),
             )
             parser.add_argument(
@@ -1556,6 +1620,8 @@ def parse_args(add_custom_arguments=None):
     # Skipped when sglang servers are not needed.
     sglang_ns = None
     if not skip_sglang:
+        from slime.backends.sglang_utils.arguments import sglang_parse_args
+
         sglang_ns = sglang_parse_args()
 
     # Phase 2: Parse megatron + slime args.
@@ -1584,6 +1650,8 @@ def parse_args(add_custom_arguments=None):
         megatron_validate_args(args)
 
     if not args.debug_train_only:
+        from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
+
         sglang_validate_args(args)
 
     return args
@@ -1816,12 +1884,19 @@ def slime_validate_args(args):
 
     if args.use_dynamic_batch_size:
         assert args.max_tokens_per_gpu is not None, "max_tokens_per_gpu must be set when use_dynamic_batch_size is set"
+        assert args.packing_safety_margin > 0, "packing_safety_margin must be positive"
         if args.log_probs_max_tokens_per_gpu is None:
             args.log_probs_max_tokens_per_gpu = args.max_tokens_per_gpu
 
-    if getattr(args, "balance_by_flops", False):
-        assert args.use_dynamic_batch_size, "--balance-by-flops requires --use-dynamic-batch-size"
-        args.balance_data = True
+    if args.global_batch_tokens is not None:
+        assert args.global_batch_tokens > 0, "global_batch_tokens must be positive"
+        assert (
+            args.use_dynamic_batch_size
+        ), "--global-batch-tokens requires --use-dynamic-batch-size (token-based microbatch packing)"
+        assert (
+            not getattr(args, "use_dynamic_global_batch_size", False)
+        ), "--global-batch-tokens is incompatible with --use-dynamic-global-batch-size"
+        assert not args.balance_data, "--global-batch-tokens requires a round-robin DP split; disable --balance-data"
 
     if args.eps_clip_high is None:
         args.eps_clip_high = args.eps_clip

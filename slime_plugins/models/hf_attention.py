@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from abc import ABC, abstractmethod
 
 import torch
@@ -8,6 +9,55 @@ from megatron.core import mpu, tensor_parallel
 from megatron.core.inference.contexts import BaseInferenceContext
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.transformer.module import MegatronModule
+
+
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        value = os.environ.get(name.lower(), "0")
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = os.environ.get(name)
+        if value is None:
+            value = os.environ.get(name.lower(), str(default))
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _global_rank() -> int:
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_rank()
+    return int(os.environ.get("RANK", "0"))
+
+
+class _CudaStepTimer:
+    def __init__(self, enabled: bool):
+        self.enabled = enabled and torch.cuda.is_available()
+        self.events: list[tuple[str, torch.cuda.Event, torch.cuda.Event]] = []
+        self.start_wall = time.perf_counter()
+
+    def run(self, name, fn):
+        if not self.enabled:
+            return fn()
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        result = fn()
+        end.record()
+        self.events.append((name, start, end))
+        return result
+
+    def summary(self) -> dict[str, float]:
+        if not self.enabled:
+            return {"wall_ms": (time.perf_counter() - self.start_wall) * 1000.0}
+        torch.cuda.synchronize()
+        summary = {name: start.elapsed_time(end) for name, start, end in self.events}
+        summary["total_ms"] = sum(summary.values())
+        return summary
 
 
 def _load_hf_config(checkpoint_path):
@@ -84,6 +134,29 @@ class HuggingfaceAttention(MegatronModule, ABC):
         self.hf_config = _load_hf_config(args.hf_checkpoint)
         # hardcode to fa2 at the moment.
         self.hf_config._attn_implementation = "flash_attention_2"
+        if not getattr(HuggingfaceAttention, "_slime_hf_attention_timing_logged", False):
+            HuggingfaceAttention._slime_hf_attention_timing_logged = True
+            print(
+                "SLIME HF attention timing config: "
+                f"enabled={_env_flag('SLIME_HF_ATTENTION_TIMING')} "
+                f"rank={_env_int('SLIME_HF_ATTENTION_TIMING_RANK', 0)} "
+                f"interval={_env_int('SLIME_HF_ATTENTION_TIMING_INTERVAL', 32)} "
+                f"limit={_env_int('SLIME_HF_ATTENTION_TIMING_LIMIT', 64)} "
+                f"file={__file__}",
+                flush=True,
+            )
+
+    def _timing_should_sample(self) -> bool:
+        if not _env_flag("SLIME_HF_ATTENTION_TIMING"):
+            return False
+        rank_filter = _env_int("SLIME_HF_ATTENTION_TIMING_RANK", 0)
+        if rank_filter >= 0 and _global_rank() != rank_filter:
+            return False
+        count = getattr(self, "_slime_hf_attention_timing_count", 0) + 1
+        self._slime_hf_attention_timing_count = count
+        limit = _env_int("SLIME_HF_ATTENTION_TIMING_LIMIT", 64)
+        interval = max(1, _env_int("SLIME_HF_ATTENTION_TIMING_INTERVAL", 32))
+        return count <= limit and (count == 1 or count % interval == 0)
 
     def forward(
         self,
@@ -101,69 +174,105 @@ class HuggingfaceAttention(MegatronModule, ABC):
         *,
         inference_params: BaseInferenceContext | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        assert packed_seq_params is not None
-        cu_seqlens = packed_seq_params.cu_seqlens_q
+        cu_seqlens = packed_seq_params.cu_seqlens_q if packed_seq_params is not None else None
+        should_time = self._timing_should_sample()
+        timer = _CudaStepTimer(should_time)
+        timing_meta = {
+            "layer": self.layer_number,
+            "input_shape": tuple(hidden_states.shape),
+            "cp": mpu.get_context_parallel_world_size(),
+            "sp": bool(self.args.sequence_parallel),
+            "packed": cu_seqlens is not None,
+        }
 
         if self.args.sequence_parallel:
             # tensor_parallel_output_grad=False: the linear attention after this
             # gather is NOT TP-sharded (duplicated on all ranks), so the backward
             # should split (not reduce-scatter) to avoid inflating gradients by TP.
-            hidden_states = tensor_parallel.gather_from_sequence_parallel_region(
-                hidden_states,
-                tensor_parallel_output_grad=False,
-                group=mpu.get_tensor_model_parallel_group(),
+            hidden_states = timer.run(
+                "sp_gather",
+                lambda: tensor_parallel.gather_from_sequence_parallel_region(
+                    hidden_states,
+                    tensor_parallel_output_grad=False,
+                    group=mpu.get_tensor_model_parallel_group(),
+                ),
             )
 
         if mpu.get_context_parallel_world_size() > 1:
+            assert cu_seqlens is not None, "Context parallelism for HF attention requires packed_seq_params."
             cp_size = mpu.get_context_parallel_world_size()
             # Use custom all-gather whose backward returns local gradient
             # instead of reduce-scatter, since the computation is duplicated.
-            hidden_states_list = _AllGatherForDuplicatedComputation.apply(
-                hidden_states,
-                mpu.get_context_parallel_group(),
+            hidden_states_list = timer.run(
+                "cp_all_gather",
+                lambda: _AllGatherForDuplicatedComputation.apply(
+                    hidden_states,
+                    mpu.get_context_parallel_group(),
+                ),
             )
 
             # TODO: preprocess this for each batch to prevent tolist in the training step
-            whole_hidden_states_list = []
+            def rebuild_cp_hidden_states():
+                whole_hidden_states_list = []
+                local_cu_seqlens = cu_seqlens // cp_size
+                for i in range(len(cu_seqlens) - 1):
+                    seqlen = cu_seqlens[i + 1] - cu_seqlens[i]
+                    chunk_size = seqlen // 2 // cp_size
+                    whole_hidden_states_list.extend(
+                        [
+                            hidden_states_list[cp_rank][local_cu_seqlens[i] : local_cu_seqlens[i] + chunk_size]
+                            for cp_rank in range(cp_size)
+                        ]
+                        + [
+                            hidden_states_list[cp_rank][local_cu_seqlens[i] + chunk_size : local_cu_seqlens[i + 1]]
+                            for cp_rank in range(cp_size)
+                        ][::-1],
+                    )
+                return torch.cat(whole_hidden_states_list, dim=0)
 
-            local_cu_seqlens = cu_seqlens // cp_size
-            for i in range(len(cu_seqlens) - 1):
-                seqlen = cu_seqlens[i + 1] - cu_seqlens[i]
-                chunk_size = seqlen // 2 // cp_size
-                whole_hidden_states_list.extend(
-                    [
-                        hidden_states_list[cp_rank][local_cu_seqlens[i] : local_cu_seqlens[i] + chunk_size]
-                        for cp_rank in range(cp_size)
-                    ]
-                    + [
-                        hidden_states_list[cp_rank][local_cu_seqlens[i] + chunk_size : local_cu_seqlens[i + 1]]
-                        for cp_rank in range(cp_size)
-                    ][::-1],
-                )
-            hidden_states = torch.cat(whole_hidden_states_list, dim=0)
+            hidden_states = timer.run("cp_rebuild", rebuild_cp_hidden_states)
 
-        hidden_states = hidden_states.permute(1, 0, 2)  # [bsz, seq_len, hidden_dim]
+        hidden_states = timer.run("permute_in", lambda: hidden_states.permute(1, 0, 2))  # [bsz, seq_len, hidden_dim]
 
-        output = self.hf_forward(hidden_states, packed_seq_params)
+        output = timer.run("hf_forward", lambda: self.hf_forward(hidden_states, packed_seq_params))
         bias = None
 
-        output = output.permute(1, 0, 2)  # [seq_len, bsz, hidden_dim]
+        output = timer.run("permute_out", lambda: output.permute(1, 0, 2))  # [seq_len, bsz, hidden_dim]
 
         if mpu.get_context_parallel_world_size() > 1:
             cp_rank = mpu.get_context_parallel_rank()
-            output_list = []
-            for i in range(len(cu_seqlens) - 1):
-                seqlen = cu_seqlens[i + 1] - cu_seqlens[i]
-                chunk_size = seqlen // 2 // cp_size
-                seq = output[cu_seqlens[i] : cu_seqlens[i + 1]]
-                chunks = torch.chunk(seq, 2 * cp_size, dim=0)
-                output_list.append(chunks[cp_rank])
-                output_list.append(chunks[2 * cp_size - 1 - cp_rank])
-            output = torch.cat(output_list, dim=0)
+
+            def scatter_cp_output():
+                output_list = []
+                for i in range(len(cu_seqlens) - 1):
+                    seqlen = cu_seqlens[i + 1] - cu_seqlens[i]
+                    chunk_size = seqlen // 2 // cp_size
+                    seq = output[cu_seqlens[i] : cu_seqlens[i + 1]]
+                    chunks = torch.chunk(seq, 2 * cp_size, dim=0)
+                    output_list.append(chunks[cp_rank])
+                    output_list.append(chunks[2 * cp_size - 1 - cp_rank])
+                return torch.cat(output_list, dim=0)
+
+            output = timer.run("cp_scatter", scatter_cp_output)
 
         if self.args.sequence_parallel:
-            output = tensor_parallel.scatter_to_sequence_parallel_region(
-                output, group=mpu.get_tensor_model_parallel_group()
+            output = timer.run(
+                "sp_scatter",
+                lambda: tensor_parallel.scatter_to_sequence_parallel_region(
+                    output, group=mpu.get_tensor_model_parallel_group()
+                ),
+            )
+
+        if should_time:
+            if cu_seqlens is not None:
+                timing_meta["num_sequences"] = int(cu_seqlens.numel() - 1)
+                timing_meta["max_seqlen"] = int((cu_seqlens[1:] - cu_seqlens[:-1]).max().detach().item())
+            timing_meta["output_shape"] = tuple(output.shape)
+            print(
+                "SLIME HF attention timing: "
+                f"meta={timing_meta} times_ms="
+                f"{ {key: round(value, 3) for key, value in timer.summary().items()} }",
+                flush=True,
             )
 
         return output, bias

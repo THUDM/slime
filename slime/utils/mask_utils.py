@@ -1,3 +1,5 @@
+import json
+
 from transformers import AutoTokenizer
 
 
@@ -6,10 +8,23 @@ def get_response_lengths(loss_masks: list[list[int]]) -> list[int]:
     return [len(mask[mask.index(1) :]) if 1 in mask else 0 for mask in loss_masks]
 
 
+def _normalize_chat_template_kwargs(chat_template_kwargs) -> dict:
+    if chat_template_kwargs is None:
+        return {}
+    if isinstance(chat_template_kwargs, str):
+        if not chat_template_kwargs.strip():
+            return {}
+        chat_template_kwargs = json.loads(chat_template_kwargs)
+    if not isinstance(chat_template_kwargs, dict):
+        raise TypeError(f"chat_template_kwargs must be a dict or JSON string, got {type(chat_template_kwargs)}")
+    return dict(chat_template_kwargs)
+
+
 class MultiTurnLossMaskGenerator:
-    def __init__(self, tokenizer: AutoTokenizer, tokenizer_type: str = "qwen"):
+    def __init__(self, tokenizer: AutoTokenizer, tokenizer_type: str = "qwen", chat_template_kwargs=None):
         self.tokenizer = tokenizer
         self.tokenizer_type = tokenizer_type
+        self.chat_template_kwargs = _normalize_chat_template_kwargs(chat_template_kwargs)
         self.system_message_length = 0
         self.gen_token_length = 0
         if self.tokenizer_type in ("qwen", "qwen3"):
@@ -127,31 +142,67 @@ class MultiTurnLossMaskGenerator:
     def gen_multi_turn_loss_mask_qwen3_5(
         self, messages: list[dict], tools: list[dict] = None
     ) -> tuple[list[int], list[int]]:
-        rendered_text = self.tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, return_dict=False)
+        rendered_text = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            tools=tools,
+            return_dict=False,
+            **self.chat_template_kwargs,
+        )
+        token_ids, loss_mask = self.get_loss_mask_from_rendered_qwen3_5(messages, rendered_text)
+
+        expected_token_ids = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=True,
+            tools=tools,
+            return_dict=False,
+            **self.chat_template_kwargs,
+        )
+        if token_ids != expected_token_ids:
+            raise ValueError(
+                "Qwen3.5/Qwen3.6 rendered text tokenization does not match "
+                "`apply_chat_template(..., tokenize=True)` output."
+            )
+
+        return token_ids, loss_mask
+
+    def get_loss_mask_from_rendered_qwen3_5(
+        self,
+        messages: list[dict],
+        rendered_text: str,
+        input_ids: list[int] | None = None,
+    ) -> tuple[list[int], list[int]]:
         tokenized = self.tokenizer(rendered_text, add_special_tokens=False, return_offsets_mapping=True)
         token_ids = tokenized["input_ids"]
         offset_mapping = tokenized.get("offset_mapping")
 
         if offset_mapping is None:
             raise ValueError(
-                "Qwen3.5 loss mask generation requires a fast tokenizer " "with `return_offsets_mapping` support."
+                "Qwen3.5/Qwen3.6 loss mask generation requires a fast tokenizer with offset mapping support."
             )
 
-        expected_token_ids = self.tokenizer.apply_chat_template(
-            messages, tokenize=True, tools=tools, return_dict=False
-        )
-        if token_ids != expected_token_ids:
+        if input_ids is not None and token_ids != input_ids:
+            mismatch_idx = next(
+                (idx for idx, (actual, expected) in enumerate(zip(token_ids, input_ids)) if actual != expected),
+                min(len(token_ids), len(input_ids)),
+            )
             raise ValueError(
-                "Qwen3.5 rendered text tokenization does not match "
-                "`apply_chat_template(..., tokenize=True)` output."
+                "Rendered multimodal text tokenization does not match processor input_ids: "
+                f"{len(token_ids)=}, {len(input_ids)=}, first_mismatch_index={mismatch_idx}. "
+                "Please check processor visual-token expansion logic."
             )
 
         assistant_header = "<|im_start|>assistant\n"
         think_prefix = "<think>\n"
+        empty_think_block = "<think>\n\n</think>\n\n"
         end_marker = "<|im_end|>"
 
         char_mask = [0] * len(rendered_text)
         cursor = 0
+
+        def mark_span(start: int, end: int) -> None:
+            for pos in range(max(start, 0), min(end, len(char_mask))):
+                char_mask[pos] = 1
 
         for message in messages:
             if message["role"] != "assistant":
@@ -159,7 +210,9 @@ class MultiTurnLossMaskGenerator:
 
             header_pos = rendered_text.find(assistant_header, cursor)
             if header_pos < 0:
-                raise ValueError("Failed to locate assistant message in rendered Qwen3.5 chat template output.")
+                raise ValueError(
+                    "Failed to locate assistant message in rendered Qwen3.5/Qwen3.6 chat template."
+                )
 
             content_start = header_pos + len(assistant_header)
             end_pos = rendered_text.find(end_marker, content_start)
@@ -174,13 +227,19 @@ class MultiTurnLossMaskGenerator:
             if message.get("step_loss_mask", 1) != 1:
                 continue
 
-            if rendered_text[content_start : content_start + len(think_prefix)] == think_prefix:
+            # In non-thinking mode, Qwen3.6's generation prompt pre-fills the
+            # empty think block. The model should learn only the answer/tool
+            # call after it, not generate a duplicate closing </think>.
+            if rendered_text[content_start : content_start + len(empty_think_block)] == empty_think_block:
+                mask_start = content_start + len(empty_think_block)
+            # In thinking mode, only the opening <think>\n is prompt scaffold;
+            # reasoning, </think>, answer, and <|im_end|> are model targets.
+            elif rendered_text[content_start : content_start + len(think_prefix)] == think_prefix:
                 mask_start = content_start + len(think_prefix)
             else:
                 mask_start = content_start
 
-            for pos in range(mask_start, span_end):
-                char_mask[pos] = 1
+            mark_span(mask_start, span_end)
 
         char_mask_prefix_sum = [0]
         for value in char_mask:
@@ -195,79 +254,92 @@ class MultiTurnLossMaskGenerator:
 
         return token_ids, loss_mask
 
-    def gen_multi_turn_loss_mask_gemma4(
-        self, messages: list[dict], tools: list[dict] = None
-    ) -> tuple[list[int], list[int]]:
-        """Mask assistant content plus ``<turn|>`` in Gemma4 chat templates."""
-        rendered_text = self.tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, return_dict=False)
-        tokenized = self.tokenizer(rendered_text, add_special_tokens=False, return_offsets_mapping=True)
-        token_ids = tokenized["input_ids"]
-        offset_mapping = tokenized.get("offset_mapping")
+    @staticmethod
+    def _to_plain_list(value):
+        if value is None:
+            return []
+        if hasattr(value, "detach"):
+            value = value.detach().cpu()
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+        return value
 
-        if offset_mapping is None:
-            raise ValueError(
-                "Gemma4 loss mask generation requires a fast tokenizer with `return_offsets_mapping` support."
-            )
+    @staticmethod
+    def _grid_token_count(grid, merge_size: int) -> int:
+        prod = 1
+        for dim in grid:
+            prod *= int(dim)
+        return prod // (int(merge_size) ** 2)
 
-        expected_token_ids = self.tokenizer.apply_chat_template(
-            messages, tokenize=True, tools=tools, return_dict=False
-        )
-        if token_ids != expected_token_ids:
-            raise ValueError(
-                "Gemma4 rendered text tokenization does not match " "`apply_chat_template(..., tokenize=True)` output."
-            )
+    def _expand_image_tokens_in_rendered_text(
+        self,
+        rendered_text: str,
+        image_grid_thw,
+        *,
+        image_token: str,
+        merge_size: int,
+    ) -> str:
+        grids = self._to_plain_list(image_grid_thw)
+        if not grids:
+            return rendered_text
 
-        assistant_header = "<|turn>model\n"
-        think_open = "<|channel>thought\n"
-        think_close = "<channel|>"
-        end_marker = "<turn|>"
-
-        char_mask = [0] * len(rendered_text)
+        pieces = []
         cursor = 0
+        for grid in grids:
+            image_pos = rendered_text.find(image_token, cursor)
+            if image_pos < 0:
+                raise ValueError(
+                    "Failed to locate image token in rendered multimodal text while expanding visual tokens: "
+                    f"{image_token=}, expanded_images={len(pieces)}."
+                )
 
-        for message in messages:
-            if message["role"] != "assistant":
-                continue
+            num_image_tokens = self._grid_token_count(grid, merge_size)
+            pieces.append(rendered_text[cursor:image_pos])
+            pieces.append(image_token * num_image_tokens)
+            cursor = image_pos + len(image_token)
 
-            header_pos = rendered_text.find(assistant_header, cursor)
-            if header_pos < 0:
-                raise ValueError("Failed to locate assistant (model) turn in rendered Gemma4 chat template output.")
+        pieces.append(rendered_text[cursor:])
+        return "".join(pieces)
 
-            content_start = header_pos + len(assistant_header)
-            end_pos = rendered_text.find(end_marker, content_start)
-            if end_pos < 0:
-                raise ValueError("Failed to locate <turn|> for assistant message in rendered Gemma4 text.")
+    @staticmethod
+    def _message_content_to_text(content) -> str:
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            text_parts = []
+            for item in content:
+                if isinstance(item, str):
+                    text_parts.append(item)
+                elif isinstance(item, dict):
+                    if "text" in item:
+                        text_parts.append(item["text"])
+                    elif item.get("type") == "text":
+                        text_parts.append(item.get("text", ""))
+            return "".join(text_parts)
+        return str(content)
 
-            span_end = end_pos + len(end_marker)
-            if span_end < len(rendered_text) and rendered_text[span_end] == "\n":
-                span_end += 1
-            cursor = span_end
+    def _get_assistant_content_parts(self, message: dict) -> list[str]:
+        content = self._message_content_to_text(message.get("content")).strip()
+        reasoning_content = message.get("reasoning_content")
+        parts = []
 
-            if message.get("step_loss_mask", 1) != 1:
-                continue
+        if isinstance(reasoning_content, str):
+            reasoning_content = reasoning_content.strip()
+            if reasoning_content:
+                parts.append(reasoning_content)
+        elif "</think>" in content:
+            reasoning_content = content.split("</think>", 1)[0].rstrip("\n").split("<think>")[-1].lstrip("\n").strip()
+            if reasoning_content:
+                parts.append(reasoning_content)
+            content = content.split("</think>", 1)[-1].lstrip("\n")
 
-            mask_start = content_start
-            if rendered_text[content_start : content_start + len(think_open)] == think_open:
-                close_pos = rendered_text.find(think_close, content_start)
-                if close_pos < 0:
-                    raise ValueError("Found <|channel>thought open without matching <channel|> close.")
-                mask_start = close_pos + len(think_close)
+        content = content.strip()
+        if content:
+            parts.append(content)
 
-            for pos in range(mask_start, span_end):
-                char_mask[pos] = 1
-
-        char_mask_prefix_sum = [0]
-        for value in char_mask:
-            char_mask_prefix_sum.append(char_mask_prefix_sum[-1] + value)
-
-        loss_mask = []
-        for start, end in offset_mapping:
-            if end <= start:
-                loss_mask.append(0)
-            else:
-                loss_mask.append(1 if char_mask_prefix_sum[end] - char_mask_prefix_sum[start] > 0 else 0)
-
-        return token_ids, loss_mask
+        return parts
 
     def gen_multi_turn_loss_mask_distill_qwen(
         self, messages: list[dict], tools: list[dict] = None
@@ -305,31 +377,32 @@ class MultiTurnLossMaskGenerator:
             raise ValueError(f"Unsupported tokenizer type: {self.tokenizer_type}")
 
     def get_loss_mask_with_multimodal_alignment(
-        self, messages: list[dict], input_ids: list[int], tools: list[dict] = None
+        self,
+        messages: list[dict],
+        input_ids: list[int],
+        tools: list[dict] = None,
+        rendered_text: str | None = None,
+        image_grid_thw=None,
+        image_token: str = "<|image_pad|>",
+        image_merge_size: int = 2,
     ) -> tuple[list[int], list[int]]:
-        text = []
-        for msg in messages:
-            if isinstance(msg.get("content"), list):
-                text_parts = []
-                for item in msg["content"]:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        text_parts.append(item.get("text", ""))
-                    elif isinstance(item, str):
-                        text_parts.append(item)
-                text.append({"role": msg["role"], "content": " ".join(text_parts)})
-            else:
-                text.append(msg)
+        if self.tokenizer_type == "qwen3_5" and rendered_text is not None:
+            expanded_rendered_text = self._expand_image_tokens_in_rendered_text(
+                rendered_text,
+                image_grid_thw,
+                image_token=image_token,
+                merge_size=image_merge_size,
+            )
+            return self.get_loss_mask_from_rendered_qwen3_5(
+                messages,
+                expanded_rendered_text,
+                input_ids=input_ids,
+            )
 
-        _, loss_mask_text = self.get_loss_mask(text, tools=tools)
-
-        diff = len(input_ids) - len(loss_mask_text)
-        assert diff >= 0, (
-            f"input_ids (length={len(input_ids)}) is shorter than text loss_mask (length={len(loss_mask_text)}) "
-            f"Please check if processor and tokenizer tokenization are consistent."
+        raise ValueError(
+            "Multimodal loss-mask alignment requires the actual rendered multimodal text for Qwen3.5/Qwen3.6. "
+            "Pass rendered_text plus processor image_grid_thw so visual token positions can be masked directly."
         )
-        loss_mask = [0] * diff + loss_mask_text
-
-        return input_ids, loss_mask
 
     def get_text_from_loss_mask(self, token_ids: list[int], loss_masks: list[int]) -> list[str]:
         selected_texts = []
