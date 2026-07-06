@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Jul 02, 2026"/>
+    <meta name="docbuild:last-update" content="Jul 06, 2026"/>
   </head>
   
   
@@ -654,6 +654,17 @@ The reason for not using a parameter like <code class="docutils literal notransl
 </div>
 <p>Please note that the <code class="docutils literal notranslate"><span class="pre">step_loss_mask</span></code> (default=1) here is for SFT phase. If it is set to 0, the turn will not contibute to the final loss; if it is set to 1, slime will use the normal <code class="docutils literal notranslate"><span class="pre">loss_mask</span></code>.
 Additionally, we provide a <code class="docutils literal notranslate"><span class="pre">metadata_key</span></code>, which defaults to <code class="docutils literal notranslate"><span class="pre">&quot;metadata&quot;</span></code>. When read, slime will load the metadata from the data, which can be helpful for custom data generation or creating custom reward models.</p>
+<p>If one run mixes multiple data sources, put <code class="docutils literal notranslate"><span class="pre">source_name</span></code> in the sample metadata:</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;source_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;math&quot;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>The recommended contract is to put the source identifier in <code class="docutils literal notranslate"><span class="pre">metadata[&quot;source_name&quot;]</span></code>; slime also recognizes a dynamically set <code class="docutils literal notranslate"><span class="pre">sample.source</span></code> from custom data sources. When rollout samples are converted to training data, slime carries one <code class="docutils literal notranslate"><span class="pre">source_names</span></code> entry per sample to the training side. The source lookup order is dynamic <code class="docutils literal notranslate"><span class="pre">sample.source</span></code>, then <code class="docutils literal notranslate"><span class="pre">metadata[&quot;source_name&quot;]</span></code>; if neither is set, the source is <code class="docutils literal notranslate"><span class="pre">&quot;unknown&quot;</span></code>. This is useful for custom rewards, filters, logging, and future per-source routing such as OPD teacher selection.</p>
 </section>
 <section id="hyperparameters-for-rl-training">
 <h3>Hyperparameters for RL Training<a class="headerlink" href="#hyperparameters-for-rl-training" title="Link to this heading">#</a></h3>
@@ -1021,7 +1032,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jul 02, 2026.
+  Last updated on Jul 06, 2026.
   <br/>
 </p>
   </div>
