@@ -575,6 +575,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_mtp_loss_logging.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_metric_report.py"
             },
             {

@@ -403,3 +403,13 @@ def prepare_routed_experts_for_routing_replay(
         routed_experts = routed_experts[start:end]
 
     return routed_experts
+
+
+def compute_mtp_losses(values: torch.Tensor, mtp_loss_scale: float) -> list[float]:
+    """Scale the MTP loss tracker's ``values`` into one loss per MTP layer.
+
+    ``values`` holds one accumulated loss per MTP layer (shape
+    ``(mtp_num_layers,)``), so a multi-head MTP model (``mtp_num_layers > 1``)
+    must not be squeezed into a single scalar via ``.item()``.
+    """
+    return (values * mtp_loss_scale).tolist()
