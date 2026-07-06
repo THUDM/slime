@@ -102,28 +102,25 @@ RUN cd Megatron-LM && \
 
 # TODO temporarily skip patching for GB200/GB300 (and require users to bring their own sglang version). should add back later.
 ARG ENABLE_SGLANG_PATCH=1
-COPY docker/patch/${PATCH_VERSION}/sglang.patch /sgl-workspace/sglang/
+COPY docker/patch/${PATCH_VERSION}/sglang.patch \
+     docker/patch/${PATCH_VERSION}/sglang-top_p.patch \
+     docker/patch/${PATCH_VERSION}/sglang-release_hicache.patch \
+     /sgl-workspace/sglang/
 RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
   cd /sgl-workspace/sglang && \
-  git update-index --refresh && \
-  git apply sglang.patch --3way && \
-  if grep -R -n '^<<<<<<< ' .; then \
-    echo "Patch failed to apply cleanly. Please resolve conflicts." && \
-    exit 1; \
-  fi && \
-  rm sglang.patch; \
-fi
-
-COPY docker/patch/${PATCH_VERSION}/sglang-top_p.patch /sgl-workspace/sglang/
-RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
-  cd /sgl-workspace/sglang && \
-  git update-index --refresh && \
-  git apply sglang-top_p.patch --3way && \
-  if grep -R -n '^<<<<<<< ' .; then \
-    echo "Patch failed to apply cleanly. Please resolve conflicts." && \
-    exit 1; \
-  fi && \
-  rm sglang-top_p.patch; \
+  for patch in sglang.patch sglang-top_p.patch sglang-release_hicache.patch; do \
+    git update-index --refresh && \
+    if [ "$patch" = "sglang.patch" ]; then \
+      git apply --3way "$patch"; \
+    else \
+      git apply "$patch"; \
+    fi && \
+    if grep -R -n '^<<<<<<< ' .; then \
+      echo "Patch failed to apply cleanly. Please resolve conflicts." && \
+      exit 1; \
+    fi; \
+  done && \
+  rm sglang.patch sglang-top_p.patch sglang-release_hicache.patch; \
 fi
 
 # ====================================== Install main package ============================================

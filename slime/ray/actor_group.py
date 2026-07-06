@@ -1,4 +1,6 @@
 import os
+import time
+from pathlib import Path
 
 import ray
 from ray.util.placement_group import PlacementGroup
@@ -39,11 +41,16 @@ class RayTrainGroup:
         self.args = args
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
+        self._pg = pg
+        self._num_gpus_per_actor = num_gpus_per_actor
         self.role = role
         self._actor_cls = actor_cls
-
-        # Allocate the GPUs for actors w/o instantiating them
-        self._allocate_gpus_for_actor(pg, num_gpus_per_actor)
+        self._init_role = None
+        self._init_with_ref = False
+        self._init_with_opd_teacher = False
+        self._rollout_manager = None
+        self._release_train_weight_version = getattr(args, "update_weight_start_version", 0)
+        self._actor_handlers = []
 
     def _allocate_gpus_for_actor(self, pg, num_gpus_per_actor):
         world_size = self._num_nodes * self._num_gpus_per_node
@@ -118,11 +125,14 @@ class RayTrainGroup:
                 master_addr, master_port = ray.get(actor.get_master_addr_and_port.remote())
             self._actor_handlers.append(actor)
 
-    def async_init(self, args, role, with_ref=False, with_opd_teacher=False):
+    def _async_init(self, args, role, with_ref=False, with_opd_teacher=False):
         """
         Allocate GPU resourced and initialize model, optimzier, local ckpt, etc.
         """
         self.args = args
+        self._init_role = role
+        self._init_with_ref = with_ref
+        self._init_with_opd_teacher = with_opd_teacher
         return [
             actor.init.remote(args, role, with_ref=with_ref, with_opd_teacher=with_opd_teacher)
             for actor in self._actor_handlers
@@ -150,11 +160,26 @@ class RayTrainGroup:
 
     def save_model(self, rollout_id, force_sync=False):
         """Save actor model"""
-        return ray.get([actor.save_model.remote(rollout_id, force_sync=force_sync) for actor in self._actor_handlers])
+        ret = ray.get([actor.save_model.remote(rollout_id, force_sync=force_sync) for actor in self._actor_handlers])
+        if self._release_train_enabled():
+            self.args.load = self.args.save
+            self.args.ckpt_step = None
+            self.args.finetune = False
+            self.args.no_load_optim = self.args.no_save_optim
+            self.args.no_load_rng = False
+        return ret
 
     def update_weights(self):
         """Broadcast weights from rank 0 to all other ranks."""
-        return ray.get([actor.update_weights.remote() for actor in self._actor_handlers])
+        if not self._release_train_enabled():
+            return ray.get([actor.update_weights.remote() for actor in self._actor_handlers])
+
+        weight_version = self._release_train_weight_version + 1
+        disk_weight_dir = Path(self.args.update_weight_disk_dir) / f"weight_v{weight_version:06d}"
+        ray.get([actor.update_weights.remote() for actor in self._actor_handlers])
+        self._release_train_weight_version = weight_version
+        self.release()
+        self._reload_rollout_weights_from_disk(disk_weight_dir, str(weight_version))
 
     def onload(self):
         return ray.get([actor.wake_up.remote() for actor in self._actor_handlers])
@@ -162,8 +187,58 @@ class RayTrainGroup:
     def offload(self):
         return ray.get([actor.sleep.remote() for actor in self._actor_handlers])
 
+    def release(self):
+        actors, self._actor_handlers = self._actor_handlers, []
+        for actor in actors:
+            ray.kill(actor, no_restart=True)
+        if actors:
+            time.sleep(5)
+
+    def create(self, args=None, role=None, with_ref=None, with_opd_teacher=None, rollout_manager=None):
+        if self._actor_handlers:
+            return None
+        if args is not None:
+            self.args = args
+        if role is not None:
+            self._init_role = role
+        if with_ref is not None:
+            self._init_with_ref = with_ref
+        if with_opd_teacher is not None:
+            self._init_with_opd_teacher = with_opd_teacher
+        if rollout_manager is not None:
+            self._rollout_manager = rollout_manager
+        assert self._init_role is not None, "create requires role on the first call."
+        self.args.update_weight_start_version = self._release_train_weight_version
+        self._allocate_gpus_for_actor(self._pg, self._num_gpus_per_actor)
+        start_rollout_ids = ray.get(
+            self._async_init(
+                self.args,
+                self._init_role,
+                with_ref=self._init_with_ref,
+                with_opd_teacher=self._init_with_opd_teacher,
+            )
+        )
+        if self._rollout_manager is not None:
+            self.set_rollout_manager(self._rollout_manager)
+        return start_rollout_ids
+
     def clear_memory(self):
         return ray.get([actor.clear_memory.remote() for actor in self._actor_handlers])
 
     def set_rollout_manager(self, rollout_manager):
+        self._rollout_manager = rollout_manager
         return ray.get([actor.set_rollout_manager.remote(rollout_manager) for actor in self._actor_handlers])
+
+    def _release_train_enabled(self):
+        return self.role == "actor" and getattr(self.args, "release_train", False)
+
+    def _reload_rollout_weights_from_disk(self, disk_weight_dir, weight_version):
+        assert self._rollout_manager is not None, "release train requires a rollout manager."
+        if self.args.offload_rollout:
+            ray.get(self._rollout_manager.onload_weights.remote())
+        ray.get(
+            self._rollout_manager.update_weights_from_disk.remote(
+                model_path=str(disk_weight_dir),
+                weight_version=weight_version,
+            )
+        )

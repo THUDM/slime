@@ -149,7 +149,7 @@ def allocate_train_group(args, num_nodes, num_gpus_per_node, pg, role="actor", a
     )
 
 
-def create_training_models(args, pgs, rollout_manager, actor_cls=None):
+def create_actor_model(args, pgs, rollout_manager, actor_cls=None):
     actor_args = args
     if args.megatron_config_path is not None:
         from slime.utils.arguments import parse_megatron_role_args
@@ -166,6 +166,18 @@ def create_training_models(args, pgs, rollout_manager, actor_cls=None):
         pg=pgs["actor"],
         **actor_model_kwargs,
     )
+    actor_start_rollout_ids = actor_model.create(
+        actor_args,
+        role="actor",
+        with_ref=actor_args.kl_coef != 0 or actor_args.use_kl_loss,
+        with_opd_teacher=actor_args.use_opd and actor_args.opd_type == "megatron",
+        rollout_manager=rollout_manager,
+    )
+    return actor_model, actor_start_rollout_ids
+
+
+def create_training_models(args, pgs, rollout_manager, actor_cls=None):
+    actor_model, actor_start_rollout_ids = create_actor_model(args, pgs, rollout_manager, actor_cls=actor_cls)
 
     critic_model = None
     if args.use_critic:
@@ -186,16 +198,13 @@ def create_training_models(args, pgs, rollout_manager, actor_cls=None):
             pg=pgs["critic"],
             role="critic",
         )
-        critic_start_rollout_ids = ray.get(critic_model.async_init(critic_model.args, role="critic", with_ref=False))
-
-    actor_start_rollout_ids = ray.get(
-        actor_model.async_init(
-            actor_args,
-            role="actor",
-            with_ref=actor_args.kl_coef != 0 or actor_args.use_kl_loss,
-            with_opd_teacher=actor_args.use_opd and actor_args.opd_type == "megatron",
+        critic_start_rollout_ids = critic_model.create(
+            critic_model.args,
+            role="critic",
+            with_ref=False,
+            rollout_manager=rollout_manager,
         )
-    )
+
     # TODO how to decide rollout start id when critic is involved? For now we just require user to specify it via args.
     if args.use_critic:
         start_rollout_ids = critic_start_rollout_ids
@@ -206,10 +215,6 @@ def create_training_models(args, pgs, rollout_manager, actor_cls=None):
 
     if args.start_rollout_id is None:
         args.start_rollout_id = start_rollout_ids[0]
-
-    actor_model.set_rollout_manager(rollout_manager)
-    if args.use_critic:
-        critic_model.set_rollout_manager(rollout_manager)
 
     if args.rollout_global_dataset:
         ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))

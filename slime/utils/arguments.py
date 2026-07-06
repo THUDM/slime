@@ -154,6 +154,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--release-train",
+                action="store_true",
+                default=False,
+                help=(
+                    "Release Megatron training actors during rollout and recreate them before each train step. "
+                    "Requires disk weight sync and --save for Megatron reload."
+                ),
+            )
+            parser.add_argument(
                 "--update-weight-disk-dir",
                 type=str,
                 default=None,
@@ -1882,9 +1891,17 @@ def slime_validate_args(args):
         "debug_rollout_only and debug_train_only cannot be set at the same time, " "please set only one of them."
     )
 
-    # always true on offload for colocate at the moment.
+    # Colocate normally offloads Megatron between rollout and train.  Release-train mode
+    # releases Megatron actors instead, so only rollout needs memory-saver offload.
     if args.colocate:
-        if args.offload_train is None:
+        if args.release_train:
+            if args.offload_train:
+                logger.info("Ignoring --offload-train because --release-train releases train actors instead.")
+            args.offload_train = False
+            if args.offload_rollout is False:
+                logger.info("Ignoring --no-offload-rollout because colocated --release-train needs rollout offload.")
+            args.offload_rollout = True
+        elif args.offload_train is None:
             args.offload_train = True
         if args.offload_rollout is None:
             args.offload_rollout = True
@@ -1983,6 +2000,19 @@ def slime_validate_args(args):
             "--update-weight-transport=disk requires --update-weight-disk-dir to point at "
             "a filesystem shared between the trainer and the rollout engines."
         )
+    if args.release_train:
+        if args.train_backend != "megatron":
+            raise ValueError("--release-train is only supported with the Megatron train backend.")
+        if args.use_critic:
+            raise ValueError("--release-train does not support critic training yet.")
+        if args.keep_old_actor:
+            raise ValueError("--release-train does not support --keep-old-actor.")
+        if args.save is None:
+            raise ValueError("--release-train requires --save so the next Megatron actor can reload.")
+        if args.save_interval is None:
+            args.save_interval = 1
+        if args.update_weight_mode != "full" or args.update_weight_transport != "disk":
+            raise ValueError("--release-train requires --update-weight-mode=full and --update-weight-transport=disk.")
     if args.update_weight_mode == "delta":
         if args.update_weight_transport != "disk":
             raise ValueError(

@@ -67,7 +67,9 @@ class UpdateWeightFromDisk:
             shutil.rmtree(version_dir, ignore_errors=True)
         dist.barrier(group=get_gloo_group())
 
-        if dist.get_rank() == 0:
+        release_train = getattr(self.args, "release_train", False)
+
+        if dist.get_rank() == 0 and not release_train:
             logger.info("Updating rollout weights from disk checkpoint %s", version_dir)
             ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
@@ -82,6 +84,9 @@ class UpdateWeightFromDisk:
             progress_desc="Save HF  weights for update from disk",
         )
         dist.barrier(group=get_gloo_group())
+
+        if release_train:
+            return
 
         if dist.get_rank() == 0:
             refs = [

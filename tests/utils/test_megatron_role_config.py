@@ -121,23 +121,22 @@ class TestMegatronRoleConfig:
         class DummyModel:
             def __init__(self, model_args):
                 self.args = model_args
-                self.init_calls = []
+                self.create_calls = []
                 self.rollout_manager = None
 
-            def async_init(self, model_args, role, with_ref=False, with_opd_teacher=False):
+            def create(self, model_args, role, with_ref=False, with_opd_teacher=False, rollout_manager=None):
                 self.args = model_args
-                self.init_calls.append(
+                self.rollout_manager = rollout_manager
+                self.create_calls.append(
                     {
                         "args": model_args,
                         "role": role,
                         "with_ref": with_ref,
                         "with_opd_teacher": with_opd_teacher,
+                        "rollout_manager": rollout_manager,
                     }
                 )
                 return [7]
-
-            def set_rollout_manager(self, rollout_manager):
-                self.rollout_manager = rollout_manager
 
         def fake_allocate_train_group(args, num_nodes, num_gpus_per_node, pg, role="actor"):
             return DummyModel(args)
@@ -153,6 +152,6 @@ class TestMegatronRoleConfig:
 
         assert critic_model is None
         assert actor_model.args.lr == 1e-6
-        assert actor_model.init_calls[0]["args"].lr == 1e-6
-        assert actor_model.init_calls[0]["role"] == "actor"
+        assert actor_model.create_calls[0]["args"].lr == 1e-6
+        assert actor_model.create_calls[0]["role"] == "actor"
         assert args.start_rollout_id == 7
