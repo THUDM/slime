@@ -38,9 +38,9 @@ Start by Use Case
 - Build agentic RL workflows: :doc:`get_started/agent`
 - Configure production SGLang rollout topology: :doc:`advanced/sglang-config`
 - Connect external rollout engines: :doc:`advanced/external-rollout-engines`
+- Sync weights as byte-level deltas: :doc:`advanced/delta-weight-sync`
 - Use PD disaggregation: :doc:`advanced/pd-disaggregation`
 - Use BF16 training with FP8 rollout or FP8 KV cache: :doc:`advanced/low-precision`
-- Use delta weight sync: :doc:`advanced/delta-weight-sync`
 - Understand CI and reliability coverage: :doc:`developer_guide/ci`
 - Debug, trace, and profile long-running jobs: :doc:`developer_guide/debug`, :doc:`developer_guide/trace`, :doc:`developer_guide/profiling`
 
