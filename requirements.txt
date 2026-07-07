@@ -1,5 +1,6 @@
 accelerate
 anthropic
+blake3
 blobfile
 datasets
 e2b
@@ -21,3 +22,5 @@ sglang-router>=0.2.3
 tensorboard
 transformers
 wandb
+xxhash  # disk delta weight sync (checksum + codec)
+zstandard
