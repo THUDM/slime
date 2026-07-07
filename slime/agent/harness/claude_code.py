@@ -9,7 +9,7 @@ from pathlib import Path
 
 from slime.agent.sandbox import Sandbox
 
-from .common import BaseHarness, HarnessContext, install_npm_cli, run_command
+from .common import BaseHarness, HarnessContext, install_npm_cli, run_agent
 
 
 class ClaudeCodeHarness(BaseHarness):
@@ -68,4 +68,4 @@ class ClaudeCodeHarness(BaseHarness):
         extra_envs = os.environ.get(self.extra_envs_env, "").strip()
         if extra_envs:
             env.update(json.loads(extra_envs))
-        return await run_command(sb, workdir=ctx.workdir, start_cmd=cmd, env=env, time_budget_sec=time_budget_sec)
+        return await run_agent(sb, workdir=ctx.workdir, start_cmd=cmd, env=env, time_budget_sec=time_budget_sec)
