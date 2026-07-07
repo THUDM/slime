@@ -354,15 +354,6 @@ class SGLangEngine(RayActor):
         response.raise_for_status()
         return response.json()["weight_version"]
 
-    def set_weight_version(self, new_version: str):
-        """Bump the engine's recorded weight version without changing weights.
-
-        Used by the delta-update path when a sync produced no bytes (e.g. an
-        all-zero diff): we still need the engine's version to track the
-        updater's, otherwise the CI version-equality check will trip.
-        """
-        return self._make_request("update_weight_version", {"new_version": str(new_version)})
-
     def release_memory_occupation(self):
         self.flush_cache()
         return self._make_request("release_memory_occupation")
@@ -379,28 +370,32 @@ class SGLangEngine(RayActor):
     def check_weights(self, action: str):
         return self._make_request("weights_checker", {"action": action})
 
+    def pull_weights(self, target_version: int):
+        """Have the engine sync every host it spans to target_version: each host pulls the
+        published weights (a full checkpoint copied as-is, or deltas verified per-tensor and
+        applied onto the local checkpoint) into its local checkpoint dir. The engine reloads
+        it afterwards via update_weights_from_disk."""
+        return self._make_request(
+            "pull_weights",
+            {
+                "local_checkpoint_dir": self.args.update_weight_local_checkpoint_dir,
+                "source_dir": self.args.update_weight_disk_dir,
+                "target_version": target_version,
+            },
+        )
+
     def update_weights_from_disk(
         self,
         model_path: str,
         load_format: str | None = None,
         weight_version: str | None = None,
-        files: list[str] | None = None,
     ):
-        """Reload weights from *model_path* without restarting the engine.
-
-        Standard HF reload: ``model_path`` is the checkpoint directory.
-        Delta (``load_format="delta"``): ``model_path`` is the parent of the
-        per-sync version subdir and ``files`` is the basenames within it to read +
-        apply. Each delta call is independent — sender owns batching, sync
-        boundaries, cleanup.
-        """
+        """Reload weights from the checkpoint at *model_path* without restarting the engine."""
         payload: dict = {"model_path": model_path}
         if load_format is not None:
             payload["load_format"] = load_format
         if weight_version is not None:
             payload["weight_version"] = weight_version
-        if files is not None:
-            payload["files"] = files
         return self._make_request("update_weights_from_disk", payload)
 
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
@@ -437,7 +432,6 @@ class SGLangEngine(RayActor):
         flush_cache=False,
         weight_version: str | None = None,
         load_format: str | None = None,
-        delta=None,
     ):
         payload = {
             "names": names,
@@ -450,30 +444,21 @@ class SGLangEngine(RayActor):
             payload["weight_version"] = weight_version
         if load_format is not None:
             payload["load_format"] = load_format
-        if delta is not None:
-            # DeltaSpec → JSON string. Receiver reconstructs via DeltaEncoding(...) +
-            # DeltaParam(**p); avoids depending on FastAPI's nested-dataclass coercion.
-            import json
-            from dataclasses import asdict
-
-            payload["delta"] = json.dumps(
-                {
-                    "encoding": delta.encoding.value,
-                    "params": [asdict(p) for p in delta.params],
-                    "checksum": delta.checksum,
-                }
-            )
         return self._make_request(
             "update_weights_from_distributed",
             payload,
         )
 
     def pause_generation(self):
+        if self.node_rank != 0:
+            return
         response = requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={})
         response.raise_for_status()
         return response
 
     def continue_generation(self):
+        if self.node_rank != 0:
+            return
         response = requests.post(f"http://{self.server_host}:{self.server_port}/continue_generation", json={})
         response.raise_for_status()
         return response
@@ -484,9 +469,9 @@ class SGLangEngine(RayActor):
         post_process_quantization: bool = False,
     ):
         """
-        Update model weights from tensor data. The HTTP server will only post meta data, and the real weights will be copied directly from GPUs.
-        Note: The model should be on GPUs rather than CPU for this functionality to work properly.
-        If you encounter issues, ensure your model is loaded on GPU devices rather than CPU.
+        Run post-load weight processing on the SGLang server.
+
+        This is used for restore-before-load and post-load quantization hooks.
         """
 
         return self._make_request(
@@ -511,6 +496,8 @@ class SGLangEngine(RayActor):
         with_stack: bool | None = None,
         record_shapes: bool | None = None,
     ):
+        if self.node_rank != 0:
+            return
         response = requests.post(
             f"http://{self.server_host}:{self.server_port}/start_profile",
             json={
@@ -527,6 +514,8 @@ class SGLangEngine(RayActor):
         return response
 
     def stop_profile(self):
+        if self.node_rank != 0:
+            return
         response = requests.post(f"http://{self.server_host}:{self.server_port}/stop_profile", json={})
         response.raise_for_status()
         return response
