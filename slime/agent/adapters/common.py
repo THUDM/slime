@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import time
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -227,11 +228,19 @@ class BaseAdapter:
         tasks = [t for t in self.inflight.pop(sid, ()) if not t.done()]
         if not tasks:
             return
-        _, pending = await asyncio.wait(tasks, timeout=wait_timeout)
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+
+        async def _drain() -> None:
+            _, pending = await asyncio.wait(tasks, timeout=wait_timeout)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+
+        loop = tasks[0].get_loop()
+        try:
+            await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(_drain(), loop))
+        except Exception:
+            self.logger.exception("[%s] sid=%s shutdown drain failed", self.log_prefix, sid)
 
     async def finish_session(
         self,
@@ -250,12 +259,14 @@ class BaseAdapter:
         Idempotent: a second call for an already-popped sid returns [].
         """
         await self.shutdown_session(sid, wait_timeout=wait_timeout)
-        self.store.pop(sid, None)
+        session = self.store.pop(sid, None)
+        max_sample_tokens = int(getattr(session, "max_context_tokens", 0) or 0) if session is not None else 0
         samples = self.manager.get_trajectory(
             sid,
             base_sample=base_sample,
             reward=reward,
             extra_metadata=extra_metadata,
+            max_sample_tokens=max_sample_tokens,
         )
         for s in samples:
             rlen = int(s.response_length or 0)
@@ -325,6 +336,7 @@ class BaseAdapter:
         s = self.store.setdefault(sid, Session())
         task = asyncio.current_task()
         self.inflight.setdefault(sid, set()).add(task)
+        t0 = time.monotonic()
         try:
             translated, tools_schema = self._translate(body)
             prompt_ids = _render_token_ids(translated, tok, tools=tools_schema, add_generation_prompt=True)
@@ -339,7 +351,27 @@ class BaseAdapter:
                 reasoning_parser_name=self.reasoning_parser,
             )
             reply = self._build_reply(parsed, turn.finish_reason, translated, tools_schema)
-            turn = dataclasses.replace(turn, finish_reason=reply.finish_reason)
+            turn = dataclasses.replace(turn, ill_formed=parsed.ill_formed)
+
+            in_tok, out_tok = len(prompt_ids), len(turn.output_ids)
+            stream = body.get("stream") is True or "text/event-stream" in request.headers.get("Accept", "")
+
+            # Flush the response before recording the trajectory: a client that
+            # disconnected during generation makes _respond raise here, and we
+            # must not record a turn the client never received.
+            try:
+                response = await self._respond(request, body, reply, in_tok, out_tok, stream)
+            except (ConnectionResetError, asyncio.CancelledError) as e:
+                self.logger.warning(
+                    "[%s] sid=%s client disconnected before response flush: %s after %.1fs",
+                    self.log_prefix,
+                    sid,
+                    type(e).__name__,
+                    time.monotonic() - t0,
+                )
+                if isinstance(e, asyncio.CancelledError):
+                    raise
+                return web.Response(status=499, text="client disconnected")
 
             self._run_debug_callback(
                 sid,
@@ -356,10 +388,7 @@ class BaseAdapter:
                 response_message=reply.manager_message,
                 metadata={"sid": sid},
             )
-            in_tok, out_tok = len(prompt_ids), len(turn.output_ids)
-
-            stream = body.get("stream") is True or "text/event-stream" in request.headers.get("Accept", "")
-            return await self._respond(request, body, reply, in_tok, out_tok, stream)
+            return response
         finally:
             self.inflight.get(sid, set()).discard(task)
 
