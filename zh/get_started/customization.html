@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 07 月 06 日"/>
+    <meta name="docbuild:last-update" content="2026 年 07 月 07 日"/>
   </head>
   
   
@@ -467,6 +467,7 @@
 </ul>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#moe">18. MoE 路由重放</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#disk-post-write-hook-custom-update-weight-post-write-path">19. Disk 权重同步 Post-Write Hook（<code class="docutils literal notranslate"><span class="pre">--custom-update-weight-post-write-path</span></code>）</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">自定义函数路径的测试</a></li>
@@ -971,6 +972,22 @@
 </table>
 </div>
 </section>
+<hr class="docutils" />
+<section id="disk-post-write-hook-custom-update-weight-post-write-path">
+<h3>19. Disk 权重同步 Post-Write Hook（<code class="docutils literal notranslate"><span class="pre">--custom-update-weight-post-write-path</span></code>）<a class="headerlink" href="#disk-post-write-hook-custom-update-weight-post-write-path" title="链接到此标题。">#</a></h3>
+<p><strong>签名</strong>：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">hook</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">version_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">rollout_engines</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</pre></div>
+</div>
+<p><strong>用途</strong>：在 disk 权重同步（<code class="docutils literal notranslate"><span class="pre">--update-weight-transport</span> <span class="pre">disk</span></code>，full 或 delta 模式）的文件写完之后、
+engine 读取之前，在每个训练 rank 上调用。用于在非 POSIX 共享文件系统上发布写入——例如 commit
+一个对象存储挂载——否则其他 host 无法看到这些文件。hook 会在每个 rank 上被调用，需要自行去重
+（例如每个容器只执行一次）。</p>
+<p>读取侧的对应 hook 运行在推理引擎内部、engine 覆盖的每个 host 上，因此它是一个 sglang server
+参数而不是 slime hook：传入 <code class="docutils literal notranslate"><span class="pre">--sglang-custom-pull-weights-pre-read-hook</span> <span class="pre">&lt;import.path&gt;</span></code>，签名为
+<code class="docutils literal notranslate"><span class="pre">hook(source_dir:</span> <span class="pre">str,</span> <span class="pre">target_version:</span> <span class="pre">int)</span></code>——在 <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> 读取已发布权重之前调用
+（例如刷新挂载视图）。完整机制见 <a class="reference internal" href="../advanced/delta-weight-sync.html"><span class="std std-doc">Delta 权重同步</span></a>。</p>
+</section>
 </section>
 <section id="id5">
 <h2>自定义函数路径的测试<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h2>
@@ -1085,6 +1102,7 @@
 </ul>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#moe">18. MoE 路由重放</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#disk-post-write-hook-custom-update-weight-post-write-path">19. Disk 权重同步 Post-Write Hook（<code class="docutils literal notranslate"><span class="pre">--custom-update-weight-post-write-path</span></code>）</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">自定义函数路径的测试</a></li>
@@ -1121,7 +1139,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 07 月 06 日.
+  最后更新于 2026 年 07 月 07 日.
   <br/>
 </p>
   </div>

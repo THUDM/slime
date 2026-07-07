@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 07 月 06 日"/>
+    <meta name="docbuild:last-update" content="2026 年 07 月 07 日"/>
   </head>
   
   
@@ -534,6 +534,7 @@ python<span class="w"> </span>-m<span class="w"> </span>sglang.launch_server<spa
 </pre></div>
 </div>
 <p>每次权重同步时，训练端会在 <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code> 下写一个完整 HF checkpoint 目录，例如 <code class="docutils literal notranslate"><span class="pre">weight_v000123/</span></code>，然后通过 HTTP 调用每个 SGLang engine 的 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code>，让 engine 在不重启进程的情况下重新加载 checkpoint。</p>
+<p>额外设置 <code class="docutils literal notranslate"><span class="pre">--update-weight-local-checkpoint-dir</span></code> 后，每个 engine 会先把发布的 checkpoint pull 到它覆盖的每个 host 的本地磁盘（<code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code>，随 slime 的 sglang patch 提供），再从本地（如 NVMe）reload——共享文件系统每个 host 只读一次，而不是每个 rank 读一次；当共享目录是对象存储或 engine 跨多个节点时尤其重要。</p>
 <p>这个模式的优点是控制面简单：不要求训练器和 engine 建 NCCL group，只要求二者能看到同一个共享文件系统路径。缺点也直接：每次同步都写完整 actor 权重，对大模型和高频同步来说非常重。</p>
 <p>调试时可以加：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-disk-keep-files
@@ -543,7 +544,7 @@ python<span class="w"> </span>-m<span class="w"> </span>sglang.launch_server<spa
 </section>
 <section id="update-with-delta">
 <h2>Update With Delta<a class="headerlink" href="#update-with-delta" title="链接到此标题。">#</a></h2>
-<p>delta update 面向大模型、跨集群或跨数据中心训推解耦。它不每次都写完整 checkpoint，而是在训练端保留上一次同步的 CPU snapshot，逐参数比对，只发布变化的字节；每个 rollout host 把 delta apply 进自己的本地 checkpoint，再通过原生 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> 端点 reload。</p>
+<p>delta update 面向大模型、跨集群或跨数据中心训推解耦。它不每次都写完整 checkpoint，而是在训练端保留上一次同步的 CPU snapshot，逐参数比对，只发布变化的字节；每个 engine 的 <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> 端点（随 slime 的 sglang patch 提供）把 delta apply 进 engine 覆盖的每个 host 的本地 checkpoint，再通过原生 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> 端点 reload。slime 只调用 engine 的 HTTP 端点，所以多节点 external engine 与 slime 拉起的 engine 行为一致。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>delta
 --update-weight-transport<span class="w"> </span>disk
 --update-weight-disk-dir<span class="w"> </span>/shared/fs/delta-updates
@@ -659,7 +660,7 @@ python<span class="w"> </span>-m<span class="w"> </span>sglang.launch_server<spa
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 07 月 06 日.
+  最后更新于 2026 年 07 月 07 日.
   <br/>
 </p>
   </div>

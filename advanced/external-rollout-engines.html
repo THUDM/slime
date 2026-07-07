@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Jul 06, 2026"/>
+    <meta name="docbuild:last-update" content="Jul 07, 2026"/>
   </head>
   
   
@@ -538,6 +538,7 @@ python<span class="w"> </span>-m<span class="w"> </span>sglang.launch_server<spa
 </pre></div>
 </div>
 <p>At every weight sync, the trainer writes a complete HF checkpoint directory under <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code>, such as <code class="docutils literal notranslate"><span class="pre">weight_v000123/</span></code>, then calls each SGLang engine’s <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> endpoint over HTTP so the engine reloads the checkpoint without a process restart.</p>
+<p>Adding <code class="docutils literal notranslate"><span class="pre">--update-weight-local-checkpoint-dir</span></code> makes each engine first pull the published checkpoint onto every host it spans (<code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code>, shipped in slime’s sglang patch) and reload from local disk (e.g. NVMe) — one shared-filesystem read per host instead of one per rank, which matters when the shared dir is object-store-backed or the engine spans several nodes.</p>
 <p>This mode has a simple control plane: it does not require an NCCL group between trainer and engines. It only requires both sides to see the same shared filesystem path. The tradeoff is size: every sync writes the full actor weights, which is expensive for large models or frequent updates.</p>
 <p>For debugging, add:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-disk-keep-files
@@ -547,7 +548,7 @@ python<span class="w"> </span>-m<span class="w"> </span>sglang.launch_server<spa
 </section>
 <section id="update-with-delta">
 <h2>Update With Delta<a class="headerlink" href="#update-with-delta" title="Link to this heading">#</a></h2>
-<p>Delta update targets large-model training/inference disaggregation across clusters or datacenters. Instead of writing a full checkpoint every sync, the trainer keeps a CPU snapshot of the previous sync, diffs each parameter against it, and publishes only the changed bytes; every rollout host applies the delta into its local checkpoint and reloads via the vanilla <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> endpoint.</p>
+<p>Delta update targets large-model training/inference disaggregation across clusters or datacenters. Instead of writing a full checkpoint every sync, the trainer keeps a CPU snapshot of the previous sync, diffs each parameter against it, and publishes only the changed bytes; each engine’s <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> endpoint (shipped in slime’s sglang patch) applies the delta into a host-local checkpoint on every host the engine spans, and the engine reloads via the vanilla <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> endpoint. slime only calls the engine’s HTTP endpoint, so multi-node external engines work the same as slime-launched ones.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>delta
 --update-weight-transport<span class="w"> </span>disk
 --update-weight-disk-dir<span class="w"> </span>/shared/fs/delta-updates
@@ -663,7 +664,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jul 06, 2026.
+  Last updated on Jul 07, 2026.
   <br/>
 </p>
   </div>

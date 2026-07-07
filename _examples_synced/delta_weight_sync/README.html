@@ -56,7 +56,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Jul 06, 2026"/>
+    <meta name="docbuild:last-update" content="Jul 07, 2026"/>
   </head>
   
   
@@ -456,9 +456,9 @@
 <p>Non-colocated weight sync that ships only the <strong>changed bytes</strong> between two syncs instead of a
 full checkpoint, for training/inference disaggregation across clusters or datacenters. The
 trainer publishes per-tensor deltas to a shared filesystem as a canonical HF checkpoint
-directory; each rollout host applies them into a host-local checkpoint and the engines reload
-through the ordinary <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> path — the inference engine needs no
-delta-specific support.</p>
+directory; each engine’s <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> applies them into a host-local checkpoint on every
+host it spans, and the engines reload through the ordinary <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> path —
+slime only ever talks to one endpoint per engine.</p>
 <p>See <a class="reference internal" href="#../../docs/en/advanced/delta-weight-sync.md"><span class="xref myst">Delta Weight Sync</span></a> for the full mechanism,
 encodings, integrity checks, and shared-filesystem visibility hooks.</p>
 <section id="try-it">
@@ -481,13 +481,14 @@ at <code class="docutils literal notranslate"><span class="pre">--update-weight-
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code> — shared directory the trainer writes deltas to and the hosts read.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--update-weight-local-checkpoint-dir</span></code> — host-local full HF checkpoint the delta patches in
-place; materialized from <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> at engine start.</p></li>
+place; materialized from the engine’s model path on the first <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code>.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--update-weight-delta-encoding</span></code> — <code class="docutils literal notranslate"><span class="pre">xor</span></code> (smallest/fastest) or <code class="docutils literal notranslate"><span class="pre">overwrite</span></code> (idempotent).</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--update-weight-delta-checksum</span></code> — <code class="docutils literal notranslate"><span class="pre">xxh3-128</span></code> (default), <code class="docutils literal notranslate"><span class="pre">blake3</span></code>, or <code class="docutils literal notranslate"><span class="pre">adler32</span></code>.</p></li>
 </ul>
 <p>For object-store-backed volumes that need an explicit commit/refresh to make writes visible
-across hosts, supply <code class="docutils literal notranslate"><span class="pre">--custom-delta-pre-push-path</span></code> / <code class="docutils literal notranslate"><span class="pre">--custom-delta-pre-read-path</span></code> (no
-vendor-specific code lives in slime; see the doc).</p>
+across hosts, supply <code class="docutils literal notranslate"><span class="pre">--custom-update-weight-post-write-path</span></code> (trainer side) /
+<code class="docutils literal notranslate"><span class="pre">--sglang-custom-pull-weights-pre-read-hook</span></code> (engine side) — no vendor-specific code lives in slime
+or sglang; see the doc.</p>
 </section>
 </section>
 
@@ -555,7 +556,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jul 06, 2026.
+  Last updated on Jul 07, 2026.
   <br/>
 </p>
   </div>

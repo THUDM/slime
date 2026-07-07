@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 07 月 06 日"/>
+    <meta name="docbuild:last-update" content="2026 年 07 月 07 日"/>
   </head>
   
   
@@ -453,7 +453,7 @@
   <section class="tex2jax_ignore mathjax_ignore" id="delta">
 <h1>Delta 权重同步<a class="headerlink" href="#delta" title="链接到此标题。">#</a></h1>
 <p>Delta 权重同步只发送两次同步之间发生变化的字节，而不是每次都写一份完整 checkpoint，以此让非 colocate 的 rollout engine 保持最新。它面向大模型、跨集群或跨数据中心的训推解耦场景——这种场景下每次都写整份 actor 权重是主要开销。</p>
-<p>它<strong>只支持 disk transport</strong>，并且通过<strong>原生</strong>的 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> 端点 reload，因此推理引擎不需要任何 delta 相关的支持。</p>
+<p>它<strong>只支持 disk transport</strong>。训练端把每次同步发布为一份 canonical HF checkpoint 目录；engine 的 <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> 端点（随 slime 的 sglang patch 提供）把 apply 扇出到 <strong>engine 覆盖的每一个 host</strong> 并校验，随后 engine 通过<strong>原生</strong>的 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> 端点 reload 打过补丁的本地 checkpoint。slime 对每个 engine 只与一个端点通信，所以多节点 serving 和外部 rollout engine 在 slime 侧都不需要任何额外支持。</p>
 <section id="id1">
 <h2>配置<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>delta
@@ -475,7 +475,7 @@
 <td><p>训练端发布 delta、rollout host 读取 delta 的共享文件系统目录。</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--update-weight-local-checkpoint-dir</span></code></p></td>
-<td><p>host 本地（如 NVMe）的完整 HF checkpoint，delta 原地 apply 到这里。每个 host 在 engine 启动时由 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 物化。</p></td>
+<td><p>host 本地（如 NVMe）的完整 HF checkpoint，由 <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> 保持同步——delta 原地 apply，发布的完整 checkpoint 则整份替换。每个 host 在第一次 <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> 时由 engine 的 model path seed。</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--update-weight-delta-encoding</span></code></p></td>
 <td><p>磁盘上的 delta 编码：<code class="docutils literal notranslate"><span class="pre">xor</span></code>（默认）或 <code class="docutils literal notranslate"><span class="pre">overwrite</span></code>。</p></td>
@@ -490,11 +490,16 @@
 </section>
 <section id="id2">
 <h2>工作原理<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
-<ol class="arabic simple">
-<li><p><strong>Seed。</strong> 第一次同步时，训练端为每个参数捕获一份 CPU snapshot——从 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> seed，而这正是每个 rollout host 物化本地 checkpoint 的来源。此次不发布任何东西；这份 snapshot 就是下一次同步 diff 的基准。</p></li>
+<ol class="arabic">
+<li><p><strong>Seed。</strong> 第一次同步时，训练端为每个参数捕获一份 CPU snapshot——从 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> seed，而这正是每个 rollout host 物化本地 checkpoint 的来源。此次不发布任何东西；这份 snapshot 就是下一次同步 diff 的基准。训练端同时发出 <code class="docutils literal notranslate"><span class="pre">target_version=0</span></code> 的 <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code>，让每个 host 现在就物化本地 base，与 snapshot 捕获重叠进行。</p></li>
 <li><p><strong>Publish。</strong> 之后每次同步，训练端把每个 gather 出的 HF tensor 与 snapshot 做 diff，编码、压缩，写到 <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code> 下的新版本目录 <code class="docutils literal notranslate"><span class="pre">weight_v{N:06d}/</span></code>。该目录是一份 canonical HF checkpoint——<code class="docutils literal notranslate"><span class="pre">model-NNNNN.safetensors</span></code> 文件装着压缩后的 diff tensor，外加 <code class="docutils literal notranslate"><span class="pre">model.safetensors.index.json</span></code>（tensor 名 → 文件）承载 apply 元数据——所以这个产物是可移植的，不绑定训练端的并行 layout。随后 snapshot 推进到新值，供下次 diff。</p></li>
-<li><p><strong>Apply。</strong> 每个 rollout host 把新版本的 delta 原地 apply 进它的本地 checkpoint。apply 在 tensor 之间并行，并逐 tensor 校验（见“完整性”）。</p></li>
-<li><p><strong>Reload。</strong> engine 通过原生 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> 路径 reload 打过补丁的本地 checkpoint——它从不接触 delta 格式。</p></li>
+<li><p><strong>Pull。</strong> 训练端对每个 engine 调用 <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code>。engine 内部把请求广播到每个节点的每个 rank；每个 host 把新版本的 delta 原地 apply 进它的本地 checkpoint（host 级文件锁把同 host 的多个 rank 合并成一次 apply）。apply 在 tensor 之间并行，并逐 tensor 校验（见&quot;完整性&quot;）；只有<strong>每一个 host</strong> 都持有校验通过的 checkpoint，该调用才报告成功。</p>
+<p><code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> 并不绑定 delta：每个发布的版本是自描述的。若某个版本是一份普通的完整 HF
+checkpoint（index 中没有 delta 元数据），pull 就直接整份拷贝——同时重置链条，因此晚加入的
+新 host 从最近的完整版本 seed，而不必回放全部 delta，旧的 delta 也可以被清理。slime 的
+full 模式 disk 同步在设置了 <code class="docutils literal notranslate"><span class="pre">--update-weight-local-checkpoint-dir</span></code> 时正是走这条路径。</p>
+</li>
+<li><p><strong>Reload。</strong> engine 通过原生 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> 路径 reload 打过补丁的本地 checkpoint——权重加载代码从不接触 delta 格式。</p></li>
 </ol>
 <p>由于 snapshot 是从 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code>（engine 真正的 base）seed，而不是从当前 GPU 权重 seed，即使 Megatron→HF 往返不是逐字节相等（例如 embedding / LM head 中被裁掉的 vocab padding 行），该方案对任意模型也都正确。</p>
 </section>
@@ -508,15 +513,15 @@
 </section>
 <section id="id4">
 <h2>完整性<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
-<p>训练端把每个 tensor 新状态的逐 tensor checksum 存进版本里。apply 之后每个 host 重新计算 checksum，<strong>任何不匹配都会 raise</strong>，所以损坏的 delta 或错误的 base 会直接报错失败，而不会把坏权重提供出去。apply 还拒绝乱序执行：一个版本只会在它声明的 base 版本之上 apply。</p>
+<p>训练端把每个 tensor 新状态的逐 tensor checksum 存进版本里。apply 之后每个 host 重新计算 checksum，<strong>任何不匹配都会 raise</strong>——失败会通过 <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> 的响应传回，所以损坏的 delta 或错误的 base 会直接报错失败，而不会把坏权重提供出去。apply 还拒绝乱序执行：一个版本只会在它声明的 base 版本之上 apply。</p>
 <p><code class="docutils literal notranslate"><span class="pre">--update-weight-delta-checksum</span></code> 选择算法。checksum 不是 apply 的瓶颈（apply 受解压 + XOR 限制），所以这是一个 digest 属性的选择，而非速度选择：<code class="docutils literal notranslate"><span class="pre">xxh3-128</span></code>（默认）是最宽的快速非加密 digest；<code class="docutils literal notranslate"><span class="pre">blake3</span></code> 是加密 digest，用于不可信存储；<code class="docutils literal notranslate"><span class="pre">adler32</span></code> 用于与期望它的系统互操作。</p>
 </section>
 <section id="hook">
 <h2>共享文件系统可见性 hook<a class="headerlink" href="#hook" title="链接到此标题。">#</a></h2>
-<p>在 POSIX 共享文件系统（NFS、Lustre……）上不需要额外步骤。对于需要显式 commit/refresh 才能让写入跨 host 可见的对象存储卷，可以提供两个可选 hook（通过 import 路径加载——slime 里不存在任何厂商特定代码）：</p>
+<p>在 POSIX 共享文件系统（NFS、Lustre……）上不需要额外步骤。对于需要显式 commit/refresh 才能让写入跨 host 可见的对象存储挂载，可以提供两个可选 hook（通过 import 路径加载——slime 和 sglang 里都不存在任何厂商特定代码）：</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--custom-delta-pre-push-path</span></code>：在一个版本的文件写完之后、通知 engine 读取之前调用（例如 commit volume）。签名：<code class="docutils literal notranslate"><span class="pre">hook(args,</span> <span class="pre">version_dir,</span> <span class="pre">rollout_engines)</span></code>。</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--custom-delta-pre-read-path</span></code>：在每个 rollout host 读取 delta 目录之前调用（例如 refresh volume）。签名：<code class="docutils literal notranslate"><span class="pre">hook(delta_dir,</span> <span class="pre">target_version)</span></code>。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--custom-update-weight-post-write-path</span></code>（slime，训练端）：在一个版本的文件写完之后、通知 engine 读取之前调用（例如把待写入数据上传到底层对象存储）。签名：<code class="docutils literal notranslate"><span class="pre">hook(args,</span> <span class="pre">version_dir,</span> <span class="pre">rollout_engines)</span></code>。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--sglang-custom-pull-weights-pre-read-hook</span></code>（sglang server 参数，engine 端）：在每个 host 上、<code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> 读取 delta 目录之前于 engine 内部调用（例如刷新挂载视图）。签名：<code class="docutils literal notranslate"><span class="pre">hook(delta_dir,</span> <span class="pre">target_version)</span></code>。</p></li>
 </ul>
 </section>
 </section>
@@ -606,7 +611,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 07 月 06 日.
+  最后更新于 2026 年 07 月 07 日.
   <br/>
 </p>
   </div>

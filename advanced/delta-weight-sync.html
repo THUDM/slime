@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Jul 06, 2026"/>
+    <meta name="docbuild:last-update" content="Jul 07, 2026"/>
   </head>
   
   
@@ -460,8 +460,12 @@
 that changed between two syncs, instead of a full checkpoint each time. It targets large-model
 training/inference disaggregation across clusters or datacenters, where writing the whole actor
 every sync is the dominant cost.</p>
-<p>It is <strong>disk-transport only</strong> and reloads through the <strong>ordinary</strong> <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code>
-endpoint, so the inference engine needs no delta-specific support.</p>
+<p>It is <strong>disk-transport only</strong>. The trainer publishes each sync as a canonical HF checkpoint
+directory; the engine’s <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> endpoint (shipped in slime’s sglang patch) fans the
+apply out to <strong>every host the engine spans</strong> and verifies it, then the engine reloads the
+patched local checkpoint through the <strong>ordinary</strong> <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> endpoint. slime
+only ever talks to one endpoint per engine, so multi-node serving and external rollout engines
+need nothing extra on the slime side.</p>
 <section id="configuration">
 <h2>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>delta
@@ -483,7 +487,7 @@ endpoint, so the inference engine needs no delta-specific support.</p>
 <td><p>Shared filesystem directory the trainer publishes deltas to and the rollout hosts read from.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--update-weight-local-checkpoint-dir</span></code></p></td>
-<td><p>Host-local (e.g. NVMe) full HF checkpoint that the delta is applied into in place. Each host materializes it from <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> at engine start.</p></td>
+<td><p>Host-local (e.g. NVMe) full HF checkpoint that <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> keeps in sync — deltas are applied into it in place; a published full checkpoint replaces it. Each host seeds it from the engine’s model path on the first <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code>.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--update-weight-delta-encoding</span></code></p></td>
 <td><p>On-disk delta encoding: <code class="docutils literal notranslate"><span class="pre">xor</span></code> (default) or <code class="docutils literal notranslate"><span class="pre">overwrite</span></code>.</p></td>
@@ -498,10 +502,12 @@ endpoint, so the inference engine needs no delta-specific support.</p>
 </section>
 <section id="how-it-works">
 <h2>How it works<a class="headerlink" href="#how-it-works" title="Link to this heading">#</a></h2>
-<ol class="arabic simple">
+<ol class="arabic">
 <li><p><strong>Seed.</strong> On the first sync the trainer captures a CPU snapshot of every parameter — seeded
 from <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code>, which is exactly what each rollout host materializes its local
-checkpoint from. Nothing is published; this snapshot is the base the next sync diffs against.</p></li>
+checkpoint from. Nothing is published; this snapshot is the base the next sync diffs against.
+The trainer also issues <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> with <code class="docutils literal notranslate"><span class="pre">target_version=0</span></code> so every host materializes
+its local base now, overlapped with the snapshot capture.</p></li>
 <li><p><strong>Publish.</strong> On every later sync the trainer diffs each gathered HF tensor against the
 snapshot, encodes and compresses the change, and writes a new version directory
 <code class="docutils literal notranslate"><span class="pre">weight_v{N:06d}/</span></code> under <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code>. The directory is a canonical HF
@@ -509,10 +515,19 @@ checkpoint — <code class="docutils literal notranslate"><span class="pre">mode
 <code class="docutils literal notranslate"><span class="pre">model.safetensors.index.json</span></code> (tensor name → file) carrying the apply metadata — so the
 artifact is portable, not tied to the trainer’s parallelism layout. The snapshot is then
 advanced to the new values for the next diff.</p></li>
-<li><p><strong>Apply.</strong> Each rollout host applies the new version’s delta into its local checkpoint in
-place. The apply is parallelized across tensors and verified per-tensor (see Integrity).</p></li>
+<li><p><strong>Pull.</strong> The trainer calls <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> on each engine. Inside the engine the request is
+broadcast to every rank on every node; each host applies the new version’s delta into its
+local checkpoint in place (a per-host file lock collapses co-located ranks to one apply).
+The apply is parallelized across tensors and verified per-tensor (see Integrity); the call
+only reports success once <strong>every host</strong> holds a checksum-verified checkpoint.</p>
+<p><code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> is not delta-specific: each published version is self-describing, and a
+version that is an ordinary full HF checkpoint (no delta metadata in its index) is pulled by
+copying it as-is — resetting the chain, so a fresh host joining late seeds from the newest
+full version instead of replaying every delta, and older deltas can be pruned. slime’s
+full-mode disk sync uses exactly this when <code class="docutils literal notranslate"><span class="pre">--update-weight-local-checkpoint-dir</span></code> is set.</p>
+</li>
 <li><p><strong>Reload.</strong> The engines reload the patched local checkpoint through the vanilla
-<code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> path — they never see the delta format.</p></li>
+<code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> path — the weight-loading code never sees the delta format.</p></li>
 </ol>
 <p>Because the snapshot is seeded from <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> (the engine’s actual base) rather than
 from the current GPU weights, the scheme is correct for any model even where the Megatron→HF
@@ -535,9 +550,10 @@ it runs. Use it when re-applicability matters more than wire size.</p></li>
 <section id="integrity">
 <h2>Integrity<a class="headerlink" href="#integrity" title="Link to this heading">#</a></h2>
 <p>The trainer stores a per-tensor checksum of each tensor’s new state in the version. After
-applying, every host recomputes the checksum and <strong>raises on any mismatch</strong>, so a corrupt delta
-or a wrong base fails loud instead of serving bad weights. The apply also refuses to run out of
-order: a version only applies on top of its declared base version.</p>
+applying, every host recomputes the checksum and <strong>raises on any mismatch</strong> — the failure
+propagates through the <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> response, so a corrupt delta or a wrong base fails loud
+instead of serving bad weights. The apply also refuses to run out of order: a version only
+applies on top of its declared base version.</p>
 <p><code class="docutils literal notranslate"><span class="pre">--update-weight-delta-checksum</span></code> selects the algorithm. The checksum is not the apply bottleneck
 (the apply is decompress + XOR bound), so this is a digest-property choice, not a speed one:
 <code class="docutils literal notranslate"><span class="pre">xxh3-128</span></code> (default) is the widest fast non-cryptographic digest; <code class="docutils literal notranslate"><span class="pre">blake3</span></code> is cryptographic, for
@@ -546,13 +562,15 @@ untrusted storage; <code class="docutils literal notranslate"><span class="pre">
 <section id="shared-filesystem-visibility-hooks">
 <h2>Shared-filesystem visibility hooks<a class="headerlink" href="#shared-filesystem-visibility-hooks" title="Link to this heading">#</a></h2>
 <p>On a POSIX shared filesystem (NFS, Lustre, …) no extra step is needed. Object-store-backed
-volumes that need an explicit commit/refresh to make writes visible across hosts can supply two
-optional hooks, loaded by import path — no vendor-specific code lives in slime:</p>
+mounts that need an explicit publish/refresh to make writes visible across hosts can supply two
+optional hooks, loaded by import path — no vendor-specific code lives in slime or sglang:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--custom-delta-pre-push-path</span></code>: called after a version’s files are written, before the engines
-are told to read it (e.g. commit the volume). Signature: <code class="docutils literal notranslate"><span class="pre">hook(args,</span> <span class="pre">version_dir,</span> <span class="pre">rollout_engines)</span></code>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--custom-delta-pre-read-path</span></code>: called on each rollout host before it reads the delta directory
-(e.g. refresh the volume). Signature: <code class="docutils literal notranslate"><span class="pre">hook(delta_dir,</span> <span class="pre">target_version)</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--custom-update-weight-post-write-path</span></code> (slime, trainer side): called after a version’s files are
+written, before the engines are told to read it (e.g. upload pending writes to the backing object store).
+Signature: <code class="docutils literal notranslate"><span class="pre">hook(args,</span> <span class="pre">version_dir,</span> <span class="pre">rollout_engines)</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--sglang-custom-pull-weights-pre-read-hook</span></code> (sglang server arg, engine side): called on each host
+inside the engine before <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> reads the delta directory (e.g. refresh the mount’s view).
+Signature: <code class="docutils literal notranslate"><span class="pre">hook(delta_dir,</span> <span class="pre">target_version)</span></code>.</p></li>
 </ul>
 </section>
 </section>
@@ -642,7 +660,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jul 06, 2026.
+  Last updated on Jul 07, 2026.
   <br/>
 </p>
   </div>
