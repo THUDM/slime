@@ -139,8 +139,9 @@ class MegatronTrainRayActor(TrainRayActor):
         update_weight_transport = self.args.update_weight_transport
 
         if update_weight_mode == "delta":
-            # Delta sync is disk-transport only: each host applies the published deltas into
-            # its local checkpoint and the engines reload via vanilla update_weights_from_disk.
+            # Delta sync is disk-transport only: each engine's /pull_weights applies the published
+            # deltas into a host-local checkpoint on every host it spans, and the engines reload
+            # via vanilla update_weights_from_disk.
             assert not self.args.colocate, "--update-weight-mode=delta is not supported with --colocate"
             assert (
                 update_weight_transport == "disk"
@@ -566,7 +567,6 @@ class MegatronTrainRayActor(TrainRayActor):
             num_new_engines,
             engine_gpu_counts,
             engine_gpu_offsets,
-            all_engine_actors,
         ) = ray.get(self.rollout_manager.get_updatable_engines_and_lock.remote())
 
         reconnect_rollout_engines = self.args.offload_train and self.args.use_critic and not self.args.colocate
@@ -587,7 +587,6 @@ class MegatronTrainRayActor(TrainRayActor):
                 rollout_engine_lock,
                 engine_gpu_counts=engine_gpu_counts,
                 engine_gpu_offsets=engine_gpu_offsets,
-                all_engine_actors=all_engine_actors,
             )
             dist.barrier(group=get_gloo_group())
             if dist.get_rank() == 0:

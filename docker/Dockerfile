@@ -105,18 +105,19 @@ ARG ENABLE_SGLANG_PATCH=1
 COPY docker/patch/${PATCH_VERSION}/sglang.patch \
      docker/patch/${PATCH_VERSION}/sglang-top_p.patch \
      docker/patch/${PATCH_VERSION}/sglang-release_hicache.patch \
+     docker/patch/${PATCH_VERSION}/sglang-pull_weights.patch \
      /sgl-workspace/sglang/
 RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
   cd /sgl-workspace/sglang && \
   git update-index --refresh && \
-  for patch in sglang.patch sglang-top_p.patch sglang-release_hicache.patch; do \
+  for patch in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch; do \
     git apply --3way "$patch" || exit 1; \
     if git grep -n '^<<<<<<< ' -- .; then \
       echo "Patch failed to apply cleanly. Please resolve conflicts." && \
       exit 1; \
     fi; \
   done && \
-  rm sglang.patch sglang-top_p.patch sglang-release_hicache.patch; \
+  rm sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch; \
 fi
 
 # ====================================== Install main package ============================================

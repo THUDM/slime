@@ -232,12 +232,20 @@ class RayTrainGroup:
             if not self.args.update_weight_disk_keep_files:
                 shutil.rmtree(disk_weight_dir, ignore_errors=True)
             return
+        if self.args.update_weight_local_checkpoint_dir:
+            # each host pulls the published checkpoint onto local disk (e.g. NVMe) and
+            # the engines reload from there; the pull is disk-only, so it runs before
+            # pause and overlaps generation
+            ray.get([engine.pull_weights.remote(int(weight_version)) for engine in engines])
+            model_path = self.args.update_weight_local_checkpoint_dir
+        else:
+            model_path = str(disk_weight_dir)
         ray.get([engine.pause_generation.remote() for engine in engines])
         ray.get([engine.flush_cache.remote() for engine in engines])
         ray.get(
             [
                 engine.update_weights_from_disk.remote(
-                    model_path=str(disk_weight_dir),
+                    model_path=model_path,
                     weight_version=weight_version,
                 )
                 for engine in engines

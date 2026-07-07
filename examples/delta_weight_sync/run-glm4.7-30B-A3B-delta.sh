@@ -1,8 +1,8 @@
 #!/bin/bash
 # Disk delta weight-sync demo on GLM-4.7-Flash (30B-A3B), non-colocated, 2 nodes x 8 GPU.
 # The trainer publishes per-tensor deltas to --update-weight-disk-dir as a canonical HF directory;
-# each rollout host applies them into --update-weight-local-checkpoint-dir and reloads via the
-# vanilla update_weights_from_disk path.
+# each engine's /pull_weights applies them into --update-weight-local-checkpoint-dir on every host
+# it spans, and the engine reloads via the vanilla update_weights_from_disk path.
 #
 # Prerequisites:
 #   - A 2-node (16-GPU) Ray cluster, this script run on the head node.
@@ -10,7 +10,7 @@
 #   - dapo-math-17k.jsonl.
 #   - --update-weight-disk-dir on a filesystem both nodes share. On an object-store-backed volume
 #     that needs an explicit commit/refresh to surface writes across hosts, also pass
-#     --custom-delta-pre-push-path / --custom-delta-pre-read-path (see the doc).
+#     --custom-update-weight-post-write-path / --sglang-custom-pull-weights-pre-read-hook (see the doc).
 
 set -ex
 export PYTHONUNBUFFERED=1

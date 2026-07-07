@@ -31,8 +31,9 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
     """
     Delta weight sync over a shared filesystem. PP-src ranks diff each gathered HF tensor against
     a CPU snapshot of the previous sync and publish the changes as a canonical HF checkpoint dir;
-    every rollout host applies the delta into its local checkpoint and reloads via the ordinary
-    update_weights_from_disk path, so sglang needs no delta support.
+    each engine's /pull_weights fans the apply out to every host it spans, then the engine reloads
+    the patched local checkpoint via the ordinary update_weights_from_disk path. slime only ever
+    talks to one endpoint per engine, so multi-node serving and external engines need nothing extra.
     """
 
     def __init__(
@@ -51,11 +52,14 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
         self.checksum_algorithm = args.update_weight_delta_checksum
         self._snapshot: dict[str, np.ndarray] = {}
         self._baseline_captured = False
-        self._commit_hook: Callable | None = None
-        if args.custom_delta_pre_push_path:
+        # Post-write hook: object-store-backed shared filesystems lack cross-host
+        # read-after-write consistency, so written files need an explicit step
+        # (e.g. uploading them to the backing object store) before the engines can see them.
+        self._post_write_hook: Callable | None = None
+        if args.custom_update_weight_post_write_path:
             from slime.utils.misc import load_function
 
-            self._commit_hook = load_function(args.custom_delta_pre_push_path)
+            self._post_write_hook = load_function(args.custom_update_weight_post_write_path)
 
     def connect_rollout_engines(
         self,
@@ -63,13 +67,10 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
         rollout_engine_lock: ActorHandle,
         engine_gpu_counts: Sequence[int] | None = None,
         engine_gpu_offsets: Sequence[int] | None = None,
-        all_engine_actors: Sequence[ActorHandle] | None = None,
     ) -> None:
-        # The local checkpoint is host-local, so every host applies its own copy:
-        # all_engine_actors is one actor per host, vs rollout_engines (node 0 only). The
-        # rollout_engine_lock the NCCL path uses isn't needed — a per-host flock serializes applies.
+        # The rollout_engine_lock the NCCL path uses isn't needed — the engine-side apply is
+        # serialized by a per-host flock.
         self.rollout_engines = rollout_engines
-        self.all_engine_actors = list(all_engine_actors or rollout_engines)
         self._is_pp_src_rank = (
             mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
         )
@@ -95,13 +96,16 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
         stale stream from a prior run. Seeds from hf_checkpoint — what each host materializes its
         base from — so the invariant ``snapshot == engine base`` holds even where the megatron->HF
         round-trip trims vocab-padding rows (embed/lm_head). A tensor absent there (rare) falls back
-        to the gathered value."""
+        to the gathered value. pull_weights(0) makes each host materialize its local base now,
+        overlapped with the snapshot gather, so the first real sync only pays the delta apply."""
         # a prior run's versions would apply against the wrong base; start the dir clean
+        pulls = []
         if dist.get_rank() == 0:
             shutil.rmtree(self.delta_dir, ignore_errors=True)
             os.makedirs(self.delta_dir, exist_ok=True)
-            if self._commit_hook is not None:
-                self._commit_hook(self.args, self.delta_dir, list(self.rollout_engines))
+            if self._post_write_hook is not None:
+                self._post_write_hook(self.args, self.delta_dir, list(self.rollout_engines))
+            pulls = [engine.pull_weights.remote(target_version=0) for engine in self.rollout_engines]
         dist.barrier(group=get_gloo_group())
 
         read_hf = make_tensor_reader(self.args.hf_checkpoint)  # index the HF headers once
@@ -112,6 +116,7 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
                 self._snapshot[name] = tensor.detach().cpu().contiguous().view(torch.uint8).numpy().reshape(-1)
                 logger.warning("seed: %s absent from hf_checkpoint; seeding from current weights", name)
         if dist.get_rank() == 0:
+            ray.get(pulls)
             logger.info(
                 "[disk delta] captured baseline snapshot of %d tensors from %s",
                 len(self._snapshot),
@@ -127,7 +132,7 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
     def _write_delta_files(self) -> None:
         """Write this rank's changed tensors as one canonical model-NNNNN.safetensors, and on rank
         0 the HF index. The sequential file numbers and the index are coordinated over gloo (small
-        object gathers), not the filesystem — a shared volume may not surface one rank's writes to
+        object gathers), not the filesystem — a non-POSIX shared filesystem may not surface one rank's writes to
         another until commit."""
         group = get_gloo_group()
         world, rank = dist.get_world_size(), dist.get_rank()
@@ -162,12 +167,13 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
         dist.barrier(group=group)
 
     def _reload_engines(self) -> None:
-        """Commit the published files, have each host apply the delta, then reload the engines."""
-        if self._commit_hook is not None:
-            self._commit_hook(self.args, self._version_dir, list(self.rollout_engines))
+        """Commit the published files, have each engine pull the delta onto every host it spans
+        (checksum-verified), then reload the engines."""
+        if self._post_write_hook is not None:
+            self._post_write_hook(self.args, self._version_dir, list(self.rollout_engines))
         dist.barrier(group=get_gloo_group())
         if dist.get_rank() == 0:
-            ray.get([actor.sync_local_checkpoint.remote(self.weight_version) for actor in self.all_engine_actors])
+            ray.get([engine.pull_weights.remote(self.weight_version) for engine in self.rollout_engines])
             ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
             ray.get(

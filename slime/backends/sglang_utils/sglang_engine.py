@@ -3,7 +3,6 @@ import ipaddress
 import logging
 import multiprocessing
 import os
-import threading
 import time
 from urllib.parse import quote
 
@@ -167,19 +166,6 @@ class SGLangEngine(RayActor):
             self._init_external(server_args_dict, external_engine_need_check_fields=external_engine_need_check_fields)
         else:
             self._init_normal(server_args_dict)
-
-        # Warm the host-local base off the actor's main thread: sglang serves the first rollout from
-        # its init-loaded weights, so the materialize (a full base copy) only has to finish before
-        # the first delta reload. init_local_checkpoint is idempotent and flock-guarded, so the first
-        # sync_local_checkpoint either finds it done or blocks on the same lock — no join needed.
-        if self.args.update_weight_mode == "delta" and self.args.update_weight_transport == "disk":
-            from slime.utils.disk_delta import init_local_checkpoint
-
-            threading.Thread(
-                target=init_local_checkpoint,
-                args=(self.args.update_weight_local_checkpoint_dir, self.args.hf_checkpoint),
-                daemon=True,
-            ).start()
 
     def _init_external(self, expect_server_args, external_engine_need_check_fields):
         logger.info(f"Use external SGLang engine (rank={self.rank}, expect_server_args={expect_server_args})")
@@ -368,15 +354,6 @@ class SGLangEngine(RayActor):
         response.raise_for_status()
         return response.json()["weight_version"]
 
-    def set_weight_version(self, new_version: str):
-        """Bump the engine's recorded weight version without changing weights.
-
-        Used by the delta-update path when a sync produced no bytes (e.g. an
-        all-zero diff): we still need the engine's version to track the
-        updater's, otherwise the CI version-equality check will trip.
-        """
-        return self._make_request("update_weight_version", {"new_version": str(new_version)})
-
     def release_memory_occupation(self):
         self.flush_cache()
         return self._make_request("release_memory_occupation")
@@ -393,23 +370,18 @@ class SGLangEngine(RayActor):
     def check_weights(self, action: str):
         return self._make_request("weights_checker", {"action": action})
 
-    def sync_local_checkpoint(self, target_version: int):
-        """Apply the published deltas into this host's local checkpoint up to target_version; the
-        engine reloads it afterwards. Assumes this actor shares the checkpoint filesystem with the
-        sglang it drives (true for slime-launched engines)."""
-        from slime.utils.disk_delta import apply_deltas, init_local_checkpoint
-
-        init_local_checkpoint(self.args.update_weight_local_checkpoint_dir, self.args.hf_checkpoint)  # idempotent
-        # non-POSIX filesystems lack cross-host read-after-write consistency, so the trainer's
-        # just-written delta isn't visible on this mount until the hook refreshes it.
-        if self.args.custom_delta_pre_read_path:
-            from slime.utils.misc import load_function
-
-            load_function(self.args.custom_delta_pre_read_path)(self.args.update_weight_disk_dir, target_version)
-        apply_deltas(
-            self.args.update_weight_local_checkpoint_dir,
-            self.args.update_weight_disk_dir,
-            target_version,
+    def pull_weights(self, target_version: int):
+        """Have the engine sync every host it spans to target_version: each host pulls the
+        published weights (a full checkpoint copied as-is, or deltas verified per-tensor and
+        applied onto the local checkpoint) into its local checkpoint dir. The engine reloads
+        it afterwards via update_weights_from_disk."""
+        return self._make_request(
+            "pull_weights",
+            {
+                "local_checkpoint_dir": self.args.update_weight_local_checkpoint_dir,
+                "source_dir": self.args.update_weight_disk_dir,
+                "target_version": target_version,
+            },
         )
 
     def update_weights_from_disk(
@@ -417,23 +389,13 @@ class SGLangEngine(RayActor):
         model_path: str,
         load_format: str | None = None,
         weight_version: str | None = None,
-        files: list[str] | None = None,
     ):
-        """Reload weights from *model_path* without restarting the engine.
-
-        Standard HF reload: ``model_path`` is the checkpoint directory.
-        Delta (``load_format="delta"``): ``model_path`` is the parent of the
-        per-sync version subdir and ``files`` is the basenames within it to read +
-        apply. Each delta call is independent — sender owns batching, sync
-        boundaries, cleanup.
-        """
+        """Reload weights from the checkpoint at *model_path* without restarting the engine."""
         payload: dict = {"model_path": model_path}
         if load_format is not None:
             payload["load_format"] = load_format
         if weight_version is not None:
             payload["weight_version"] = weight_version
-        if files is not None:
-            payload["files"] = files
         return self._make_request("update_weights_from_disk", payload)
 
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
