@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import logging
 import shutil
 from argparse import Namespace
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
-import ray
 import torch
 import torch.distributed as dist
 from ray.actor import ActorHandle
@@ -14,8 +12,6 @@ from ray.actor import ActorHandle
 from slime.utils.distributed_utils import get_gloo_group
 
 from ..hf_checkpoint_saver import save_hf_model_to_path
-
-logger = logging.getLogger(__name__)
 
 
 class UpdateWeightFromDisk:
@@ -39,6 +35,14 @@ class UpdateWeightFromDisk:
         self.update_weight_metrics: dict[str, float] = {}
         self.rollout_engines: Sequence[ActorHandle] = []
         self.rollout_engine_lock: ActorHandle | None = None
+        # Post-write hook: object-store-backed shared filesystems lack cross-host
+        # read-after-write consistency, so written files need an explicit step
+        # (e.g. uploading them to the backing object store) before the engines can see them.
+        self._post_write_hook: Callable | None = None
+        if args.custom_update_weight_post_write_path:
+            from slime.utils.misc import load_function
+
+            self._post_write_hook = load_function(args.custom_update_weight_post_write_path)
 
     def connect_rollout_engines(
         self,
@@ -66,12 +70,9 @@ class UpdateWeightFromDisk:
             shutil.rmtree(version_dir, ignore_errors=True)
         dist.barrier(group=get_gloo_group())
 
-        if dist.get_rank() == 0:
-            logger.info("Updating rollout weights from disk checkpoint %s", version_dir)
-            ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
-            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
-        dist.barrier(group=get_gloo_group())
-
+        # every writing rank creates the dir itself: a non-POSIX shared filesystem may not surface
+        # one rank's mkdir to another until commit
+        version_dir.mkdir(parents=True, exist_ok=True)
         save_hf_model_to_path(
             self.args,
             version_dir,
@@ -82,16 +83,12 @@ class UpdateWeightFromDisk:
         )
         dist.barrier(group=get_gloo_group())
 
-        if dist.get_rank() == 0:
-            refs = [
-                engine.update_weights_from_disk.remote(
-                    model_path=str(version_dir),
-                    weight_version=str(self.weight_version),
-                )
-                for engine in self.rollout_engines
-            ]
-            ray.get(refs)
-            if not self.args.update_weight_disk_keep_files:
-                shutil.rmtree(version_dir, ignore_errors=True)
-            ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
+        # every rank runs the hook (it gates itself): each container must publish
+        # its own writes
+        if self._post_write_hook is not None:
+            self._post_write_hook(self.args, str(version_dir), list(self.rollout_engines))
         dist.barrier(group=get_gloo_group())
+
+        # SGLang reload is orchestrated by RayTrainGroup after the checkpoint
+        # is fully written, so training-side lifecycle can decide whether
+        # Megatron actors are still alive.
