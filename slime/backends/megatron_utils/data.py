@@ -282,6 +282,7 @@ def log_rollout_data(
                 "multimodal_train_inputs",
                 "loss_masks",
                 "sample_indices",
+                "group_indices",
                 "rollout_ids",
                 "rollout_mask_sums",
                 "rollout_top_p_token_ids",
@@ -476,8 +477,11 @@ def log_passrate(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -
     """
     Compute pass@k metrics from `raw_reward` groups and log the results.
 
-    `raw_reward` is reshaped to `[group_number, group_size]`, then pass@k is
-    estimated per problem and averaged.
+    When every sample carries a `group_index` (packed parallel to `raw_reward`
+    by `_convert_samples_to_train_data`), rewards are bucketed by their actual
+    prompt group, so over-sampled / filtered batches whose total is not
+    `rollout_batch_size * n_samples_per_prompt` still report pass@k. Otherwise
+    `raw_reward` is reshaped to `[group_number, group_size]` as before.
     """
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
         log_dict = {}
@@ -485,11 +489,21 @@ def log_passrate(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -
             if key != "raw_reward":
                 continue
 
-            log_dict |= compute_pass_rate(
-                flat_rewards=val,
-                group_size=args.n_samples_per_prompt,
-                num_groups=args.rollout_batch_size,
-            )
+            group_indices = rollout_data.get("group_indices")
+            if group_indices is not None and all(idx is not None for idx in group_indices):
+                log_dict |= compute_pass_rate(
+                    flat_rewards=val,
+                    group_size=args.n_samples_per_prompt,
+                    group_ids=group_indices,
+                )
+            else:
+                # Custom rollout/convert functions may not tag samples with
+                # group_index; keep the rigid legacy layout for them.
+                log_dict |= compute_pass_rate(
+                    flat_rewards=val,
+                    group_size=args.n_samples_per_prompt,
+                    num_groups=args.rollout_batch_size,
+                )
 
         gather_log_data("passrate", args, rollout_id, log_dict)
 
