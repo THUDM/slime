@@ -179,6 +179,20 @@ This corresponds to the following configuration:
 Please note that the `step_loss_mask` (default=1) here is for SFT phase. If it is set to 0, the turn will not contibute to the final loss; if it is set to 1, slime will use the normal `loss_mask`.
 Additionally, we provide a `metadata_key`, which defaults to `"metadata"`. When read, slime will load the metadata from the data, which can be helpful for custom data generation or creating custom reward models.
 
+If one run mixes multiple data sources, put `source_name` in the sample metadata:
+
+```json
+{
+  "prompt": "...",
+  "label": "...",
+  "metadata": {
+    "source_name": "math"
+  }
+}
+```
+
+The recommended contract is to put the source identifier in `metadata["source_name"]`; slime also recognizes a dynamically set `sample.source` from custom data sources. When rollout samples are converted to training data, slime carries one `source_names` entry per sample to the training side. The source lookup order is dynamic `sample.source`, then `metadata["source_name"]`; if neither is set, the source is `"unknown"`. This is useful for custom rewards, filters, logging, and future per-source routing such as OPD teacher selection.
+
 ### Hyperparameters for RL Training
 
 - `--advantage-estimator`: Specifies the RL algorithm for the training process. Currently supported algorithms include:

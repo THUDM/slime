@@ -223,10 +223,10 @@ class FakeSandbox:
     Records every ``exec`` (so harness tests can assert the right commands were
     issued) and keeps an in-memory file store for ``write_file`` / ``read_file``.
     It drives the detached-launch / poll-marker handshake of
-    ``harness.common.run_command`` without any real process: when it sees the
-    ``setsid`` launch command it awaits the injected ``on_launch(env)`` agent
-    coroutine, then writes its exit code into the done-marker file so the next
-    poll succeeds.
+    ``harness.common.run_agent`` (via ``sandbox.exec_and_wait``) without any real
+    process: when it sees the ``setsid`` launch command it awaits the injected
+    ``on_launch(env)`` agent coroutine, then writes its exit code into the
+    done-marker file so the next poll succeeds.
 
     Construct directly, or via :meth:`factory` to get a zero-arg callable that
     ``examples...generate.E2BSandbox`` / ``swe.E2BSandbox`` can be monkeypatched
@@ -263,10 +263,10 @@ class FakeSandbox:
     async def __aexit__(self, *exc) -> None:
         return None
 
-    async def exec(self, cmd, *, user="root", env=None, timeout=120, check=False):
+    async def exec(self, cmd, *, user="root", env=None, timeout=120, check=False, idempotent=True):
         self.exec_log.append((cmd, user))
 
-        # Detached launch (run_command): drive the fake agent, then drop the marker.
+        # Detached launch (run_agent): drive the fake agent, then drop the marker.
         if "setsid" in cmd and self.on_launch is not None:
             code = await self.on_launch(env or {})
             done = _done_path_from_launch(cmd)
@@ -274,7 +274,7 @@ class FakeSandbox:
                 self.files[done] = f"{code}\n"
             return 0, "", ""
 
-        # Marker poll (run_command): succeed only once the marker file exists.
+        # Marker poll (run_agent): succeed only once the marker file exists.
         m = _POLL_RE.search(cmd)
         if m:
             path = m.group(1)
@@ -299,10 +299,10 @@ def _as_str(v: str | bytes) -> str:
 
 
 def _done_path_from_launch(cmd: str) -> str | None:
-    """The launcher script writes ``$PIPESTATUS`` into ``{workdir}/.harness/done``;
-    recover that path from the ``setsid {launcher}`` command so the poll matches.
-    ``run_command`` always names the marker ``.harness/done`` under the workdir."""
-    m = re.search(r"(\S+/\.harness)/run\.sh", cmd)
+    """Recover the exit-code marker path from a ``setsid bash {launcher}`` command
+    so the subsequent poll matches. ``sandbox.exec_and_wait`` names the launcher
+    ``/tmp/.{tag}.sh`` and its sibling marker ``/tmp/.{tag}.done``."""
+    m = re.search(r"setsid bash (\S+)\.sh\b", cmd)
     if m:
-        return f"{m.group(1)}/done"
+        return f"{m.group(1)}.done"
     return None
