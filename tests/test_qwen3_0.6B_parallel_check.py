@@ -61,6 +61,7 @@ def execute():
         "--rollout-num-gpus 8 "
         "--sglang-mem-fraction-static 0.8 "
         "--sglang-cuda-graph-max-bs 16 "
+        "--sglang-disable-piecewise-cuda-graph "
     )
 
     ci_args = "--ci-test "

@@ -203,7 +203,7 @@ def _allgather_cp_redistribute(
                     response_length,
                     dtype=ref_dtype,
                     device=ref_device,
-                    requires_grad=True,
+                    requires_grad=ref_value.requires_grad,
                 )
             else:
                 resp_start = s - logit_global_start
@@ -214,7 +214,7 @@ def _allgather_cp_redistribute(
             full_resps.append(full_resp)
             seq_start += total_length
 
-        # Single differentiable all-reduce to gather full response from all CP ranks
+        # Single differentiable all-reduce to gather full response from all CP ranks.
         all_cat = torch.cat(full_resps, dim=0)
         all_cat = dist.nn.all_reduce(all_cat, group=cp_group)
 
@@ -445,9 +445,9 @@ def _extract_per_sample(
             s = max(logit_global_start, chunk_start)
             e = min(logit_global_end, chunk_end)
             if e <= s:
-                log_probs_list.append(torch.zeros((0,), dtype=log_prob_full.dtype, device=log_prob_full.device))
+                log_probs_list.append(log_prob_full[:0])
                 if entropy_full is not None:
-                    entropy_list.append(torch.zeros((0,), dtype=entropy_full.dtype, device=entropy_full.device))
+                    entropy_list.append(entropy_full[:0])
             else:
                 log_probs_list.append(log_prob_full[s - chunk_start : e - chunk_start])
                 if entropy_full is not None:
@@ -504,6 +504,9 @@ def get_log_probs_and_entropy(
     device = logits.device
     tp_group = mpu.get_tensor_model_parallel_group()
     chunk_size = args.log_probs_chunk_size
+    # Keep entropy metrics, but skip saving entropy-backward activations when
+    # the entropy term cannot affect the loss.
+    with_entropy_grad = with_entropy and getattr(args, "entropy_coef", 0.0) != 0
 
     # --- build full shifted-token target tensor ---
     full_tokens = _build_shifted_tokens(T, device, unconcat_tokens, total_lengths, response_lengths, args.allgather_cp)
@@ -528,6 +531,7 @@ def get_log_probs_and_entropy(
         full_tokens,
         tp_group,
         with_entropy=with_entropy,
+        with_entropy_grad=with_entropy_grad,
         chunk_size=chunk_size,
         log_prob_keep_mask=top_p_keep_mask,
     )
@@ -1072,7 +1076,8 @@ def policy_loss_function(
     train_rollout_logprob_abs_diff = None
     if "rollout_log_probs" in batch and batch["rollout_log_probs"]:
         rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
-        train_rollout_logprob_abs_diff = sum_of_sample_mean((old_log_probs - rollout_log_probs).abs())
+        log_probs_to_compare = log_probs if args.use_rollout_logprobs else old_log_probs
+        train_rollout_logprob_abs_diff = sum_of_sample_mean((log_probs_to_compare - rollout_log_probs).abs())
 
     reported_loss = {
         "loss": loss.clone().detach(),
