@@ -225,7 +225,9 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
         log_prob_keep_mask: torch.Tensor | None,
         process_group,
         with_entropy: bool,
+        with_entropy_grad: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        with_entropy_grad = with_entropy and with_entropy_grad
         vocab_parallel_logits = vocab_parallel_logits.float()
         seq_len, vocab_parallel_size = vocab_parallel_logits.shape
         rank, _world_size = _get_vocab_parallel_rank_size(process_group)
@@ -239,71 +241,96 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
 
         def vocab_parallel_softmax(
             logits: torch.Tensor,
+            inplace: bool = False,
         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
             logits_max = logits.max(dim=-1, keepdim=True).values
             _maybe_all_reduce(logits_max, dist.ReduceOp.MAX, process_group)
-            normalized_logits = logits - logits_max
-            exp_logits = normalized_logits.exp()
+            # Subtract the max for numerical stability. When ``inplace`` is set, the
+            # caller passed a scratch buffer it owns, so overwrite it instead of
+            # allocating another [seq_len, vocab] tensor.
+            normalized_logits = logits.sub_(logits_max) if inplace else logits - logits_max
+            # The normalized logit at the target position is the log-prob numerator;
+            # gather it (a small copy) before the in-place ``exp_`` destroys it.
+            predicted_logits = normalized_logits.view(-1, vocab_parallel_size)[arange_1d, masked_target_1d]
+            # Reuse the ``normalized_logits`` storage for exp and softmax so the whole
+            # softmax costs a single [seq_len, vocab] buffer instead of three.
+            exp_logits = normalized_logits.exp_()
             sum_exp_logits = exp_logits.sum(dim=-1, keepdim=True)
             _maybe_all_reduce(sum_exp_logits, dist.ReduceOp.SUM, process_group)
-            softmax = exp_logits / sum_exp_logits
-            return normalized_logits, sum_exp_logits, softmax, logits_max
+            softmax = exp_logits.div_(sum_exp_logits)
+            return predicted_logits, sum_exp_logits, softmax, logits_max
 
         entropy = vocab_parallel_logits.new_zeros((0,))
         entropy_softmax = vocab_parallel_logits.new_empty((0,))
         sum_softmax_times_logits = vocab_parallel_logits.new_empty((0,))
 
+        def sum_softmax_logits(softmax: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
+            if softmax.is_cuda:
+                # Avoid materializing the full [seq_len, vocab] product buffer.
+                return torch.einsum("ij,ij->i", softmax, logits).unsqueeze(-1)
+            return (softmax * logits).sum(dim=-1, keepdim=True)
+
         if log_prob_keep_mask is None:
-            normalized_log_prob_logits, log_prob_sum_exp_logits, log_prob_softmax, log_prob_logits_max = (
-                vocab_parallel_softmax(vocab_parallel_logits)
+            predicted_logits, log_prob_sum_exp_logits, log_prob_softmax, log_prob_logits_max = vocab_parallel_softmax(
+                vocab_parallel_logits
             )
             if with_entropy:
                 entropy_softmax = log_prob_softmax
-                sum_softmax_times_logits = (entropy_softmax * vocab_parallel_logits).sum(dim=-1, keepdim=True)
+                sum_softmax_times_logits = sum_softmax_logits(entropy_softmax, vocab_parallel_logits)
                 _maybe_all_reduce(sum_softmax_times_logits, dist.ReduceOp.SUM, process_group)
                 entropy = log_prob_logits_max + log_prob_sum_exp_logits.log() - sum_softmax_times_logits
                 entropy = entropy.squeeze(dim=-1)
         else:
             if with_entropy:
-                _entropy_normalized_logits, entropy_sum_exp_logits, entropy_softmax, entropy_logits_max = (
+                _entropy_predicted_logits, entropy_sum_exp_logits, entropy_softmax, entropy_logits_max = (
                     vocab_parallel_softmax(vocab_parallel_logits)
                 )
-                sum_softmax_times_logits = (entropy_softmax * vocab_parallel_logits).sum(dim=-1, keepdim=True)
+                sum_softmax_times_logits = sum_softmax_logits(entropy_softmax, vocab_parallel_logits)
                 _maybe_all_reduce(sum_softmax_times_logits, dist.ReduceOp.SUM, process_group)
                 entropy = entropy_logits_max + entropy_sum_exp_logits.log() - sum_softmax_times_logits
                 entropy = entropy.squeeze(dim=-1)
 
-            log_prob_logits = vocab_parallel_logits.masked_fill(~log_prob_keep_mask, float("-inf"))
             local_target_rows = torch.nonzero(~target_mask, as_tuple=False).squeeze(-1)
+            log_prob_logits = vocab_parallel_logits.masked_fill(~log_prob_keep_mask, float("-inf"))
             if local_target_rows.numel() > 0:
                 log_prob_logits[local_target_rows, masked_target_1d[local_target_rows]] = vocab_parallel_logits[
                     local_target_rows, masked_target_1d[local_target_rows]
                 ]
-            normalized_log_prob_logits, log_prob_sum_exp_logits, log_prob_softmax, _log_prob_logits_max = (
-                vocab_parallel_softmax(log_prob_logits)
+            # ``log_prob_logits`` is an owned scratch buffer here, so let the softmax
+            # consume it in place rather than allocating another copy.
+            predicted_logits, log_prob_sum_exp_logits, log_prob_softmax, _log_prob_logits_max = vocab_parallel_softmax(
+                log_prob_logits, inplace=True
             )
 
-        predicted_logits = normalized_log_prob_logits.view(-1, vocab_parallel_size)[arange_1d, masked_target_1d]
-        predicted_logits = predicted_logits.masked_fill(target_mask, 0.0).unsqueeze(-1)
+        predicted_logits = predicted_logits.masked_fill_(target_mask, 0.0).unsqueeze(-1)
         _maybe_all_reduce(predicted_logits, dist.ReduceOp.SUM, process_group)
         log_prob = predicted_logits - log_prob_sum_exp_logits.log()
 
-        ctx.with_entropy = with_entropy
-        ctx.cast_log_prob_grad_to_bfloat16 = vocab_parallel_logits.is_cuda
+        if not with_entropy_grad:
+            ctx.mark_non_differentiable(entropy)
+
+        ctx.with_entropy_grad = with_entropy_grad
+        # Metric-only entropy still returns values, but does not need the
+        # full-vocab entropy tensors kept alive for backward.
+        saved_entropy_softmax = entropy_softmax if with_entropy_grad else vocab_parallel_logits.new_empty((0,))
+        saved_sum_softmax_times_logits = (
+            sum_softmax_times_logits if with_entropy_grad else vocab_parallel_logits.new_empty((0,))
+        )
+        saved_logits = vocab_parallel_logits if with_entropy_grad else vocab_parallel_logits.new_empty((0,))
         ctx.save_for_backward(
             log_prob_softmax,
             target_mask,
             masked_target_1d,
-            entropy_softmax,
-            sum_softmax_times_logits,
-            vocab_parallel_logits,
+            saved_entropy_softmax,
+            saved_sum_softmax_times_logits,
+            saved_logits,
         )
         return log_prob, entropy
 
     @staticmethod
     def backward(
-        ctx, grad_log_prob: torch.Tensor, grad_entropy: torch.Tensor
-    ) -> tuple[torch.Tensor, None, None, None, None]:
+        ctx, grad_log_prob: torch.Tensor | None, grad_entropy: torch.Tensor | None
+    ) -> tuple[torch.Tensor, None, None, None, None, None]:
         (
             log_prob_softmax,
             target_mask,
@@ -313,27 +340,32 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
             vocab_parallel_logits,
         ) = ctx.saved_tensors
 
-        grad_input = None
-        if grad_log_prob is not None:
-            vocab_parallel_size = log_prob_softmax.size(-1)
-            grad_log_prob_input = -log_prob_softmax
-            grad_2d = grad_log_prob_input.view(-1, vocab_parallel_size)
-            arange_1d = torch.arange(grad_2d.size(0), device=grad_2d.device)
-            target_update = (~target_mask).to(dtype=grad_2d.dtype)
-            grad_2d[arange_1d, masked_target_1d] += target_update
-            grad_log_prob_input = grad_log_prob_input * grad_log_prob.reshape(-1, 1)
-            if ctx.cast_log_prob_grad_to_bfloat16:
-                # Match Megatron's fused vocab-parallel CE backward, which
-                # returns the log-prob branch gradient in bfloat16.
-                grad_log_prob_input = grad_log_prob_input.to(torch.bfloat16)
-            grad_input = grad_log_prob_input
+        if grad_log_prob is None:
+            raise RuntimeError(
+                "_VocabParallelLogProbEntropy expected a materialized grad_log_prob. "
+                "Do not call ctx.set_materialize_grads(False)."
+            )
 
-        if ctx.with_entropy and grad_entropy is not None and grad_entropy.numel() > 0:
-            grad_entropy_input = entropy_softmax * (sum_softmax_times_logits - vocab_parallel_logits)
-            grad_entropy_input = grad_entropy_input * grad_entropy.reshape(-1, 1)
-            grad_input = grad_entropy_input if grad_input is None else grad_input + grad_entropy_input
+        grad_entropy_input = None
+        if ctx.with_entropy_grad and grad_entropy is not None and grad_entropy.numel() > 0:
+            # In the unmasked path, entropy_softmax aliases log_prob_softmax.
+            # Build entropy grad before mutating log_prob_softmax below.
+            grad_entropy_input = sum_softmax_times_logits - vocab_parallel_logits
+            grad_entropy_input.mul_(entropy_softmax)
+            grad_entropy_input.mul_(grad_entropy.reshape(-1, 1))
 
-        return grad_input, None, None, None, None
+        vocab_parallel_size = log_prob_softmax.size(-1)
+        grad_input = log_prob_softmax.neg_()
+        grad_2d = grad_input.view(-1, vocab_parallel_size)
+        arange_1d = torch.arange(grad_2d.size(0), device=grad_2d.device)
+        target_update = (~target_mask).to(dtype=grad_2d.dtype)
+        grad_2d[arange_1d, masked_target_1d] += target_update
+        grad_input.mul_(grad_log_prob.reshape(-1, 1))
+
+        if grad_entropy_input is not None:
+            grad_input.add_(grad_entropy_input)
+
+        return grad_input, None, None, None, None, None
 
 
 def _calculate_log_probs_and_entropy_chunk(
@@ -342,6 +374,7 @@ def _calculate_log_probs_and_entropy_chunk(
     tp_group,
     *,
     with_entropy: bool,
+    with_entropy_grad: bool = True,
     log_prob_keep_mask: torch.Tensor | None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     log_prob, entropy = _VocabParallelLogProbEntropy.apply(
@@ -350,6 +383,7 @@ def _calculate_log_probs_and_entropy_chunk(
         log_prob_keep_mask,
         tp_group,
         with_entropy,
+        with_entropy_grad,
     )
     if not with_entropy:
         entropy = None
@@ -464,69 +498,6 @@ def get_reinforce_plus_plus_baseline_advantages(
     ]
 
     return unwhitened_advantages
-
-
-def get_advantages_and_returns(
-    total_len: int,
-    response_len: int,
-    values: torch.Tensor,
-    rewards: torch.Tensor,
-    gamma: float,
-    lambd: float,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Function that computes advantages and returns from rewards and values.
-    Calculated as in the original PPO paper: https://arxiv.org/abs/1707.06347
-    Note that rewards may include a KL divergence loss term.
-
-    Advantages looks like this:
-    Adv1 =  R1 + γ * λ * R2     + γ^2 * λ^2 * R3       + ...
-            - V1 + γ * (1 - λ) V2 + γ^2 * λ * (1 - λ) V3 + ...
-
-    Returns looks like this:
-    Ret1 =  R1 + γ * λ * R2     + γ^2 * λ^2 * R3       + ...
-                + γ * (1 - λ) V2 + γ^2 * λ * (1 - λ) V3 + ...
-
-    Input:
-    - values: Tensor of shape (response_size,)
-    - rewards: Tensor of shape (response_size,)
-
-    Output:
-    - advantages: Tensor of shape (response_size,)
-    - returns: Tensor of shape (response_size,)
-    """
-    from megatron.core import mpu
-
-    cp_size = mpu.get_context_parallel_world_size()
-    if cp_size > 1:
-        from slime.backends.megatron_utils.cp_utils import all_gather_with_cp
-
-        full_rewards = all_gather_with_cp(rewards, total_len, response_len)
-        full_values = all_gather_with_cp(values, total_len, response_len)
-    else:
-        full_rewards = rewards
-        full_values = values
-
-    lastgaelam = 0
-    advantages_reversed = []
-
-    for t in reversed(range(response_len)):
-        nextvalues = full_values[t + 1] if t < response_len - 1 else 0.0
-        delta = full_rewards[t] + gamma * nextvalues - full_values[t]
-        lastgaelam = delta + gamma * lambd * lastgaelam
-        advantages_reversed.append(lastgaelam)
-    full_advantages = torch.tensor(advantages_reversed[::-1], dtype=full_values.dtype, device=full_values.device)
-    full_returns = full_advantages + full_values
-
-    if cp_size > 1:
-        from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
-
-        advantages = slice_log_prob_with_cp(full_advantages, total_len, response_len)
-        returns = slice_log_prob_with_cp(full_returns, total_len, response_len)
-    else:
-        advantages = full_advantages
-        returns = full_returns
-
-    return advantages.detach(), returns
 
 
 def get_advantages_and_returns_batch(
@@ -805,7 +776,13 @@ def chunked_gae(
 
 
 def calculate_log_probs_and_entropy(
-    logits, tokens, tp_group, with_entropy: bool = False, chunk_size: int = -1, log_prob_keep_mask=None
+    logits,
+    tokens,
+    tp_group,
+    with_entropy: bool = False,
+    chunk_size: int = -1,
+    log_prob_keep_mask=None,
+    with_entropy_grad: bool = True,
 ):
     logits = logits.contiguous()
     entropy = None
@@ -826,6 +803,7 @@ def calculate_log_probs_and_entropy(
                     tokens_chunk,
                     tp_group,
                     with_entropy=with_entropy,
+                    with_entropy_grad=with_entropy_grad,
                     log_prob_keep_mask=mask_chunk,
                 )
                 log_probs.append(log_prob)
@@ -840,6 +818,7 @@ def calculate_log_probs_and_entropy(
                 tokens,
                 tp_group,
                 with_entropy=with_entropy,
+                with_entropy_grad=with_entropy_grad,
                 log_prob_keep_mask=log_prob_keep_mask,
             )
     else:

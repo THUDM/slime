@@ -3,8 +3,9 @@
     --custom-generate-function-path examples.coding_agent_rl.generate.generate
 
 generate() is a four-stage orchestrator: swe.prepare_workspace + harness.run
--> swe.git_diff -> swe.evaluate -> adapter.finish_session. The (harness, adapter)
-pair is chosen by the SWE_AGENT env var (claude_code | codex); see _AGENTS below.
+-> swe.git_diff -> swe.run_evaluation -> adapter.finish_session. The (harness,
+adapter) pair is chosen by the SWE_AGENT env var (claude_code | codex); see
+_AGENTS below.
 Sandbox-side work is split across three layers: the provider-agnostic sandbox
 contract (slime.agent.sandbox), the swappable harness lifecycle
 (slime.agent.harness), and the SWE task layer (examples.coding_agent_rl.swe --
@@ -19,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import secrets
 import time
 import traceback
@@ -52,6 +54,8 @@ HARNESS_CLS, ADAPTER_CLS = _AGENTS[AGENT_NAME]
 
 @dataclass(frozen=True)
 class SweConfig:
+    eval_protocol: str  # eval-path schema/grader (SWE_EVAL_PROTOCOL)
+    train_protocol: str  # train-path schema/grader (SWE_TRAIN_PROTOCOL)
     adapter_public_host: str | None
     adapter_bind_host: str
     adapter_port: int
@@ -69,6 +73,8 @@ class SweConfig:
         guard = int(os.environ.get("SWE_ROLLOUT_GUARD_SEC", "0") or 0) or (agent_time_budget + eval_timeout + 180)
         fork = int(v) if (v := os.environ.get("SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS")) else None
         return cls(
+            eval_protocol=os.environ.get("SWE_EVAL_PROTOCOL", swe.PROTOCOL_SCALESWE),
+            train_protocol=os.environ.get("SWE_TRAIN_PROTOCOL", swe.PROTOCOL_SCALESWE),
             adapter_public_host=os.environ.get("ADAPTER_PUBLIC_HOST"),
             adapter_bind_host=os.environ.get("ADAPTER_BIND_HOST", "0.0.0.0"),
             adapter_port=int(os.environ.get("ADAPTER_PORT", "18001")),
@@ -118,7 +124,7 @@ async def boot_agent_sandbox(image: str, instance_id: str) -> AsyncIterator[E2BS
                 type(e).__name__,
                 str(e)[:200],
             )
-            await asyncio.sleep(1 + attempt)
+            await asyncio.sleep(1 + attempt + random.random())
     if sb is None:
         assert last_err is not None
         raise last_err
@@ -173,13 +179,17 @@ class _AdapterService(metaclass=SingletonMeta):
         )
 
 
-async def generate(args, base_sample: Sample, sampling_params: dict[str, Any]):
+async def generate(args, base_sample: Sample, sampling_params: dict[str, Any], evaluation: bool = False):
     """Per-sample agent function with wall-clock guard (see rollout_guard_sec)."""
     state = _AdapterService(args)
-    md = swe.get_metadata(base_sample)
+    protocol = CONFIG.eval_protocol if evaluation else CONFIG.train_protocol
+    md = swe.get_metadata(base_sample, protocol)
     instance_id = md["instance_id"]
     if not md["image"] or not md["workdir"]:
         return _abort_result(base_sample, "missing_image_or_workdir", instance_id)
+    reason = swe.evaluability_check(md)
+    if reason:
+        return _abort_result(base_sample, f"unevaluatable:{reason}", instance_id)
 
     session_id = base_sample.session_id = _session_id(base_sample, instance_id)
     state.adapter.open_session(
@@ -202,20 +212,36 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any]):
                 )
                 diff_text = await swe.git_diff(sb, md["workdir"])
 
-            reward, applied_cleanly = await swe.evaluate(
-                image=md["image"],
-                workdir=md["workdir"],
+            reward, applied_cleanly = await swe.run_evaluation(
+                md,
                 diff_text=diff_text,
-                swepro=md["swepro"],
-                eval_cmd=md["eval_cmd"],
-                f2p_script=md["f2p_script"],
-                pre_commands=md["pre_commands"],
                 timeout_sec=CONFIG.eval_timeout_sec,
             )
+            if evaluation:
+                logger.info(
+                    "[coding_agent_rl] %s: reward=%.2f applied=%s agent_exit_code=%d elapsed=%.1fs (eval-only)",
+                    instance_id,
+                    float(reward),
+                    bool(applied_cleanly),
+                    agent_exit_code,
+                    time.time() - t0,
+                )
+                return _eval_result(
+                    base_sample,
+                    reward=float(reward),
+                    applied_cleanly=bool(applied_cleanly),
+                    agent_exit_code=agent_exit_code,
+                    instance_id=instance_id,
+                )
+
             samples = await state.adapter.finish_session(
                 session_id,
                 base_sample=base_sample,
                 reward=float(reward),
+                extra_metadata={
+                    "grading_solved": float(reward) == 1.0,
+                    "instance_id": instance_id,
+                },
             )
             if not samples:
                 return _abort_result(base_sample, "adapter_session_empty", instance_id)
@@ -253,7 +279,8 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any]):
         )
         return _abort_result(base_sample, f"exception:{type(e).__name__}", instance_id)
     finally:
-        await state.adapter.drop_session(session_id)  # cleanup only, idempotent
+        await state.adapter.drop_session(session_id, wait_timeout=30)  # cleanup only, idempotent
+        await asyncio.sleep(10)
 
 
 def _log_timeout_diagnostic(t0: float, instance_id: str) -> None:
@@ -297,6 +324,38 @@ def _abort_result(sample: Sample, reason: str, instance_id: str) -> list[Sample]
     sample.reward = 0.0
     sample.remove_sample = True
     sample.status = Sample.Status.ABORTED
-    sample.metadata = {**(sample.metadata or {}), "abort_reason": reason}
+    sample.metadata = {
+        **(sample.metadata or {}),
+        "abort_reason": reason,
+        "instance_id": instance_id,
+    }
     logger.warning("[coding_agent_rl] %s aborted: %s", instance_id, reason)
+    return [sample]
+
+
+def _eval_result(
+    sample: Sample,
+    *,
+    reward: float,
+    applied_cleanly: bool,
+    agent_exit_code: int | None,
+    instance_id: str,
+) -> list[Sample]:
+    """Eval-path placeholder: only ``reward`` matters for ``eval/sweb``."""
+
+    sample.tokens = [0, 0]
+    sample.response = ""
+    sample.response_length = 1
+    sample.loss_mask = [0]
+    sample.rollout_log_probs = [0.0]
+    sample.reward = float(reward)
+    sample.remove_sample = True
+    sample.status = Sample.Status.COMPLETED
+    sample.metadata = {
+        **(sample.metadata or {}),
+        "instance_id": instance_id,
+        "grading_solved": float(reward) == 1.0,
+        "applied_cleanly": applied_cleanly,
+        "agent_exit_code": agent_exit_code,
+    }
     return [sample]

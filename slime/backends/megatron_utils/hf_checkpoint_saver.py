@@ -261,14 +261,37 @@ def _finalize_distributed_shards(path: Path, local_state: dict[str, Any]) -> Non
     else:
         states = [local_state]
 
-    if _is_global_rank_zero():
-        _finalize_shard_files(path, states)
+    _finalize_local_shards(path, local_state, states, write_index=_is_global_rank_zero())
 
     if dist.is_available() and dist.is_initialized():
         dist.barrier()
 
 
-def _finalize_shard_files(path: Path, shard_states: list[dict[str, Any] | None]) -> None:
+def _finalize_local_shards(
+    path: Path,
+    local_state: dict[str, Any],
+    shard_states: list[dict[str, Any] | None],
+    *,
+    write_index: bool,
+) -> None:
+    """Rename this rank's shard files per the global plan; optionally write the index.
+
+    The plan is deterministic from the gathered states, so each rank renames only
+    its own files: on a non-POSIX shared filesystem another rank's unpublished
+    writes are not visible, let alone renamable.
+    """
+    rename_map, index_data = _plan_shard_finalization(shard_states)
+    for old_name in local_state.get("shard_files", []):
+        os.replace(path / old_name, path / rename_map[old_name])
+    if write_index:
+        with open(path / "model.safetensors.index.json", "w", encoding="utf-8") as f:
+            json.dump(index_data, f, indent=2)
+
+
+def _plan_shard_finalization(
+    shard_states: list[dict[str, Any] | None],
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Compute the shard rename map and index from every rank's gathered state."""
     shard_files = []
     total_size = 0
     raw_weight_map = {}
@@ -295,9 +318,7 @@ def _finalize_shard_files(path: Path, shard_states: list[dict[str, Any] | None])
     total_files = len(shard_files)
     rename_map = {}
     for idx, old_name in enumerate(shard_files, start=1):
-        new_name = f"model-{idx:05d}-of-{total_files:05d}.safetensors"
-        os.replace(path / old_name, path / new_name)
-        rename_map[old_name] = new_name
+        rename_map[old_name] = f"model-{idx:05d}-of-{total_files:05d}.safetensors"
 
     final_weight_map = {}
     for name, filename in raw_weight_map.items():
@@ -306,8 +327,7 @@ def _finalize_shard_files(path: Path, shard_states: list[dict[str, Any] | None])
         final_weight_map[name] = rename_map[filename]
 
     index_data = {"metadata": {"total_size": total_size}, "weight_map": final_weight_map}
-    with open(path / "model.safetensors.index.json", "w", encoding="utf-8") as f:
-        json.dump(index_data, f, indent=2)
+    return rename_map, index_data
 
 
 def _shard_filename_sort_key(filename: str) -> tuple[float, str]:
