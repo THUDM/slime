@@ -17,7 +17,7 @@ from slime.utils.types import MultimodalTypes, Sample
 
 from .timer import Timer
 
-__all__ = ["Dataset"]
+__all__ = ["Dataset", "get_source"]
 
 logger = logging.getLogger(__name__)
 
@@ -301,3 +301,12 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
     rollout_data["total_lengths"] = [total_lengths[i] for i in partition]
 
     return rollout_data
+
+
+def get_source(sample: Sample) -> str:
+    metadata = getattr(sample, "metadata", None) or {}
+    if getattr(sample, "source", None):
+        return sample.source
+    if metadata.get("source_name"):
+        return metadata["source_name"]
+    return "unknown"

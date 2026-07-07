@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import torch
 import torch.distributed as dist
@@ -342,3 +342,64 @@ def slice_log_prob_with_cp(
         return chunk_1 + chunk_2
     else:
         return torch.cat([chunk_1, chunk_2], dim=0)
+
+
+def _pad_routed_experts(experts: torch.Tensor, pad: int, num_experts: int) -> torch.Tensor:
+    if pad == 0:
+        return experts
+    _, num_layers, topk = experts.shape
+    pad_experts = (
+        torch.arange(
+            pad * num_layers * topk,
+            device=experts.device,
+            dtype=experts.dtype,
+        ).reshape((pad, num_layers, topk))
+        % num_experts
+    )
+    return torch.cat([experts, pad_experts], dim=0)
+
+
+def prepare_routed_experts_for_routing_replay(
+    rollout_routed_experts: Sequence[torch.Tensor],
+    tokens: Sequence[torch.Tensor],
+    *,
+    num_experts: int,
+    data_pad_size_multiplier: int,
+    sequence_parallel: bool,
+    allgather_cp: bool,
+) -> torch.Tensor:
+    """Align rollout routed-experts metadata with the training token layout."""
+    assert len(rollout_routed_experts) == len(tokens)
+    for experts, token_ids in zip(rollout_routed_experts, tokens, strict=False):
+        assert experts.shape[0] == token_ids.shape[0] - 1, f"{experts.shape}, {token_ids.shape}"
+
+    padded_experts = [_pad_routed_experts(experts, 1, num_experts) for experts in rollout_routed_experts]
+    pad_size = mpu.get_tensor_model_parallel_world_size() * data_pad_size_multiplier
+
+    if allgather_cp:
+        routed_experts = torch.cat(padded_experts, dim=0)
+        cp_size = mpu.get_context_parallel_world_size()
+        cp_rank = mpu.get_context_parallel_rank()
+        global_pad_size = cp_size * pad_size
+        pad = (global_pad_size - routed_experts.size(0) % global_pad_size) % global_pad_size
+        routed_experts = _pad_routed_experts(routed_experts, pad, num_experts)
+        routed_experts = routed_experts.chunk(cp_size, dim=0)[cp_rank]
+    else:
+        routed_experts = [
+            slice_with_cp(experts, lambda x, pad: _pad_routed_experts(x, pad, num_experts))
+            for experts in padded_experts
+        ]
+        routed_experts = torch.cat(routed_experts, dim=0)
+        pad = (pad_size - routed_experts.size(0) % pad_size) % pad_size
+        routed_experts = _pad_routed_experts(routed_experts, pad, num_experts)
+
+    if sequence_parallel:
+        tp_rank = mpu.get_tensor_model_parallel_rank()
+        tp_size = mpu.get_tensor_model_parallel_world_size()
+        seqlen = routed_experts.size(0)
+        assert seqlen % tp_size == 0
+        start = seqlen // tp_size * tp_rank
+        end = seqlen // tp_size * (tp_rank + 1)
+        routed_experts = routed_experts[start:end]
+
+    return routed_experts

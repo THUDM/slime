@@ -19,6 +19,7 @@ class ParsedModelOutput:
     reasoning: str
     text: str
     tool_uses: list[dict[str, Any]]
+    ill_formed: bool = False
 
 
 def parse_model_output(
@@ -46,11 +47,12 @@ def parse_model_output(
         if not reasoning and "</think>" in body_text:
             reasoning, body_text = body_text.split("</think>", 1)
 
-    body_text, tool_uses = parse_tool_uses(body_text, tools_schema, tool_parser_name)
+    body_text, tool_uses, ill_formed = parse_tool_uses(body_text, tools_schema, tool_parser_name)
     return ParsedModelOutput(
         reasoning=reasoning,
         text=(body_text or "").strip(),
         tool_uses=tool_uses,
+        ill_formed=ill_formed,
     )
 
 
@@ -58,9 +60,10 @@ def parse_tool_uses(
     body_text: str,
     tools_schema: list[dict] | None,
     tool_parser_name: str | None,
-) -> tuple[str, list[dict[str, Any]]]:
+) -> tuple[str, list[dict[str, Any]], bool]:
     """Parse tool calls from body text and return visible text plus tool uses."""
     tool_uses: list[dict[str, Any]] = []
+    ill_formed = False
     if tool_parser_name and tools_schema:
         from sglang.srt.entrypoints.openai.protocol import Function, Tool
         from sglang.srt.function_call.function_call_parser import FunctionCallParser
@@ -78,12 +81,13 @@ def parse_tool_uses(
                 args = json.loads(c.parameters or "{}")
             except json.JSONDecodeError:
                 args = {"_raw_arguments": c.parameters}
+                ill_formed = True
             tool_uses.append({"name": c.name or "tool", "input": args})
 
     if not tool_uses and tools_schema:
         body_text, tool_uses = parse_xml_tool_uses(body_text, tools_schema)
 
-    return body_text, tool_uses
+    return body_text, tool_uses, ill_formed
 
 
 def parse_xml_tool_uses(body_text: str, tools_schema: list[dict]) -> tuple[str, list[dict[str, Any]]]:
