@@ -14,9 +14,9 @@ from ray.actor import ActorHandle
 from tqdm import tqdm
 
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
+from slime.utils.http_utils import _wrap_ipv6
 
 from ..megatron_to_hf import convert_to_hf
-from ..sglang import DeltaSpec
 from .common import all_gather_param, named_params_and_buffers
 
 
@@ -174,18 +174,12 @@ class UpdateWeightFromDistributed:
         if buffer:
             yield buffer
 
-    def _iter_expert_chunks(
-        self,
-        params: Iterator[tuple[str, torch.Tensor]] | None = None,
-    ) -> Iterator[list[tuple[str, torch.Tensor]]]:
+    def _iter_expert_chunks(self) -> Iterator[list[tuple[str, torch.Tensor]]]:
         """
         Yield one HF chunk per EP-weighted batch of expert params: TP gather +
-        buffer until threshold, then EP gather + HF convert. ``params`` lets
-        callers restrict the iter to a subset (used by delta-sync sub-passes);
-        defaults to all expert params on this rank.
+        buffer until threshold, then EP gather + HF convert.
         """
-        if params is None:
-            params = ((n, p) for n, p in named_params_and_buffers(self.args, self.model) if ".experts." in n)
+        params = ((n, p) for n, p in named_params_and_buffers(self.args, self.model) if ".experts." in n)
         buffer_size = 0
         batch: list[tuple[str, torch.Tensor]] = []
         for name, param in params:
@@ -247,12 +241,9 @@ class UpdateWeightFromDistributed:
         converted_named_tensors: list[tuple[str, torch.Tensor]],
         pbar: tqdm | None = None,
         load_format: str | None = None,
-        delta: DeltaSpec | None = None,
     ) -> None:
         """
         Lock → broadcast → clear → unlock → pbar++. Lock prevents NCCL deadlock.
-        Delta sync passes ``load_format="delta"`` + a ``DeltaSpec`` describing the
-        per-param decoding of the (__positions__, __values__) bucket tensors.
         """
         # lock the rollout engines to prevent dead lock on broadcast.
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
@@ -265,7 +256,6 @@ class UpdateWeightFromDistributed:
             self.rollout_engines,
             converted_named_tensors,
             load_format=load_format,
-            delta=delta,
         )
 
         ray.get(refs)
@@ -314,7 +304,7 @@ def connect_rollout_engines_from_distributed(
     ]
     model_update_groups = init_process_group(
         backend="nccl",
-        init_method=f"tcp://{master_address}:{master_port}",
+        init_method=f"tcp://{_wrap_ipv6(master_address)}:{master_port}",
         world_size=world_size,
         rank=0,
         group_name=group_name,
@@ -339,11 +329,9 @@ def update_weights_from_distributed(
     rollout_engines: Sequence[ActorHandle],
     converted_named_tensors: Sequence[tuple[str, torch.Tensor]],
     load_format: str | None = None,
-    delta: DeltaSpec | None = None,
 ) -> list[ObjectRef]:
     """
     Send metadata (Ray), broadcast tensors (NCCL rank 0 → engines).
-    Delta sync passes ``load_format="delta"`` + ``delta`` (DeltaSpec).
     """
     refs = [
         engine.update_weights_from_distributed.remote(
@@ -353,7 +341,6 @@ def update_weights_from_distributed(
             group_name=group_name,
             weight_version=str(weight_version),
             load_format=load_format,
-            delta=delta,
         )
         for engine in rollout_engines
     ]

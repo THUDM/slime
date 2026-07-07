@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-
 NUM_GPUS = 0
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -39,15 +38,30 @@ class _Engine:
 
 
 def _install_rollout_import_stubs(monkeypatch):
-    monkeypatch.setitem(sys.modules, "numpy", types.ModuleType("numpy"))
+    numpy = types.ModuleType("numpy")
+    numpy.ndarray = type("ndarray", (), {})
+    monkeypatch.setitem(sys.modules, "numpy", numpy)
+
     torch = types.ModuleType("torch")
-    torch.dtype = type("dtype", (), {})
+    dtype = type("dtype", (), {})
+    torch.dtype = dtype
     torch.Size = tuple
     torch.Tensor = type("Tensor", (), {})
-    # rollout.py builds a module-level dtype table (torch.long/int/float32/int32, ...);
-    # hand back a sentinel dtype for any constant this stub doesn't define explicitly.
-    torch.__getattr__ = lambda name: torch.dtype
+    torch.long = dtype()
+    torch.int = dtype()
+    torch.float32 = dtype()
+    torch.int32 = dtype()
     monkeypatch.setitem(sys.modules, "torch", torch)
+
+    external = types.ModuleType("slime.backends.sglang_utils.external")
+    external.start_external_rollout_servers = lambda *args, **kwargs: ({}, [])
+    monkeypatch.setitem(sys.modules, "slime.backends.sglang_utils.external", external)
+
+    sglang_config = types.ModuleType("slime.backends.sglang_utils.sglang_config")
+    sglang_config.ModelConfig = type("ModelConfig", (), {})
+    sglang_config.ServerGroupConfig = type("ServerGroupConfig", (), {})
+    sglang_config.SglangConfig = type("SglangConfig", (), {})
+    monkeypatch.setitem(sys.modules, "slime.backends.sglang_utils.sglang_config", sglang_config)
 
     http_utils = types.ModuleType("slime.utils.http_utils")
     http_utils._wrap_ipv6 = lambda host: host
@@ -62,6 +76,63 @@ def _install_rollout_import_stubs(monkeypatch):
     logging_utils.finish_tracking = lambda *args, **kwargs: None
     logging_utils.init_tracking = lambda *args, **kwargs: None
     monkeypatch.setitem(sys.modules, "slime.utils.logging_utils", logging_utils)
+
+    base_types = types.ModuleType("slime.rollout.base_types")
+    base_types.call_rollout_fn = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, "slime.rollout.base_types", base_types)
+
+    data = types.ModuleType("slime.utils.data")
+    data.get_source = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, "slime.utils.data", data)
+
+    dp_schedule = types.ModuleType("slime.utils.dp_schedule")
+    dp_schedule.build_dp_schedule = lambda *args, **kwargs: []
+    monkeypatch.setitem(sys.modules, "slime.utils.dp_schedule", dp_schedule)
+
+    health_monitor = types.ModuleType("slime.utils.health_monitor")
+
+    class _RolloutHealthMonitor:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    health_monitor.RolloutHealthMonitor = _RolloutHealthMonitor
+    monkeypatch.setitem(sys.modules, "slime.utils.health_monitor", health_monitor)
+
+    metric_utils = types.ModuleType("slime.utils.metric_utils")
+    metric_utils.compute_pass_rate = lambda *args, **kwargs: None
+    metric_utils.compute_rollout_step = lambda *args, **kwargs: None
+    metric_utils.compute_statistics = lambda *args, **kwargs: None
+    metric_utils.dict_add_prefix = lambda prefix, values: {f"{prefix}{key}": value for key, value in values.items()}
+    metric_utils.has_repetition = lambda *args, **kwargs: False
+    monkeypatch.setitem(sys.modules, "slime.utils.metric_utils", metric_utils)
+
+    misc = types.ModuleType("slime.utils.misc")
+    misc.Box = dict
+    misc.group_by = lambda values, key: {}
+    misc.load_function = lambda path: None
+    monkeypatch.setitem(sys.modules, "slime.utils.misc", misc)
+
+    types_mod = types.ModuleType("slime.utils.types")
+    types_mod.Sample = type("Sample", (), {})
+    monkeypatch.setitem(sys.modules, "slime.utils.types", types_mod)
+
+    rollout_validation = types.ModuleType("slime.ray.rollout_validation")
+    rollout_validation.validate_server_group_gpu_indices = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, "slime.ray.rollout_validation", rollout_validation)
+
+    ray_utils = types.ModuleType("slime.ray.utils")
+    ray_utils.NOSET_VISIBLE_DEVICES_ENV_VARS_LIST = []
+    ray_utils.add_default_ray_env_vars = lambda env_vars=None: env_vars or {}
+    ray_utils.Lock = types.SimpleNamespace(
+        options=lambda *args, **kwargs: types.SimpleNamespace(remote=lambda *args, **kwargs: object())
+    )
+    monkeypatch.setitem(sys.modules, "slime.ray.utils", ray_utils)
 
     ray = types.ModuleType("ray")
 
