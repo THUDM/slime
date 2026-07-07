@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from slime.utils.trace_utils import build_sglang_meta_trace_attrs, trace_span
+from slime.utils.trace_utils import TRACE_CHILDREN_KEY, build_sglang_meta_trace_attrs, trace_span
 from slime.utils.types import Sample
 
 
@@ -29,17 +29,27 @@ def test_build_sglang_meta_trace_attrs_keeps_standard_and_pd_fields():
         "completion_tokens": 7,
         "cached_tokens": 3,
         "pd_prefill_forward_duration": 0.125,
-        "pd_decode_transfer_duration": None,
+        "pd_decode_transfer_duration": 0.05,
         "finish_reason": {"type": "stop"},
         "unused_field": "ignored",
     }
 
-    assert build_sglang_meta_trace_attrs(meta) == {
+    attrs = build_sglang_meta_trace_attrs(meta)
+    trace_children = attrs.pop(TRACE_CHILDREN_KEY)
+
+    assert attrs == {
         "prompt_tokens": 12,
         "completion_tokens": 7,
         "cached_tokens": 3,
-        "pd_prefill_forward_duration": 0.125,
         "finish_reason": "stop",
+    }
+    assert trace_children[0]["name"] == "sglang_pd_prefill"
+    assert trace_children[0]["children"][0]["attrs"] == {
+        "pd_prefill_forward_duration": 0.125,
+    }
+    assert trace_children[1]["name"] == "sglang_pd_decode"
+    assert trace_children[1]["children"][0]["attrs"] == {
+        "pd_decode_transfer_duration": 0.05,
     }
 
 
