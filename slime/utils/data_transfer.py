@@ -19,30 +19,40 @@ logger = logging.getLogger(__name__)
 
 _ROLLOUT_FIELD_SCHEMA_SPECS = {
     # rollout.py tensorizes these row-aligned fields before transport.
-    "tokens": ("ragged_tensor", None),
-    "loss_masks": ("ragged_tensor", None),
-    "rollout_log_probs": ("ragged_tensor", None),
-    "rollout_top_p_token_ids": ("ragged_tensor", None),
-    "rollout_top_p_token_offsets": ("ragged_tensor", None),
-    "teacher_log_probs": ("ragged_tensor", None),
-    "rollout_routed_experts": ("ragged_tensor", None),
+    "tokens": ("ragged_tensor", None, "non_tensor_batch"),
+    "loss_masks": ("ragged_tensor", None, "non_tensor_batch"),
+    "rollout_log_probs": ("ragged_tensor", None, "non_tensor_batch"),
+    "rollout_top_p_token_ids": ("ragged_tensor", None, "non_tensor_batch"),
+    "rollout_top_p_token_offsets": ("ragged_tensor", None, "non_tensor_batch"),
+    "teacher_log_probs": ("ragged_tensor", None, "non_tensor_batch"),
+    "rollout_routed_experts": ("ragged_tensor", None, "non_tensor_batch"),
     # Row-aligned scalar fields.
-    "partition": ("ndarray", "int64"),
-    "response_lengths": ("ndarray", "int64"),
-    "rewards": ("ndarray", "float32"),
-    "truncated": ("ndarray", "int64"),
-    "round_number": ("ndarray", "int64"),
-    "sample_indices": ("ndarray", "int64"),
-    "rollout_ids": ("ndarray", "int64"),
-    "rollout_mask_sums": ("ndarray", "int64"),
+    "partition": ("ndarray", "int64", "non_tensor_batch"),
+    "response_lengths": ("ndarray", "int64", "non_tensor_batch"),
+    "rewards": ("ndarray", "float32", "non_tensor_batch"),
+    "truncated": ("ndarray", "int64", "non_tensor_batch"),
+    "round_number": ("ndarray", "int64", "non_tensor_batch"),
+    "sample_indices": ("ndarray", "int64", "non_tensor_batch"),
+    "rollout_ids": ("ndarray", "int64", "non_tensor_batch"),
+    "rollout_mask_sums": ("tensor", "float32", "batch"),
     # Optional row-aligned text fields.
-    "prompt": ("utf8_ragged", None),
+    "prompt": ("utf8_ragged", None, "non_tensor_batch"),
+    # Metadata fields carried with each DP partition.
+    "raw_reward": ("auto", None, "meta_info"),
+    "total_lengths": ("auto", None, "meta_info"),
+    "global_batch_sizes": ("auto", None, "meta_info"),
+    "num_microbatches": ("auto", None, "meta_info"),
+    "micro_batch_indices": ("auto", None, "meta_info"),
 }
 
 _ROLLOUT_FIELD_SCHEMAS = (
     {
-        key: FieldSchema(codec=codec, nullable=False, metadata=({"dtype": dtype} if dtype else {}))
-        for key, (codec, dtype) in _ROLLOUT_FIELD_SCHEMA_SPECS.items()
+        key: FieldSchema(
+            codec=codec,
+            nullable=False,
+            metadata={"section": section, **({"dtype": dtype} if dtype else {})},
+        )
+        for key, (codec, dtype, section) in _ROLLOUT_FIELD_SCHEMA_SPECS.items()
     }
     if _MOONCAKE_AVAILABLE
     else {}
