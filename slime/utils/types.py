@@ -353,20 +353,46 @@ class Sample:
         if routed_experts is not None:
             if args is None:
                 raise ValueError("args is required to decode routed experts metadata.")
-            expected_rows = len(self.tokens) - 1
+            routed_experts_start_len = int(meta_info.get("routed_experts_start_len", 0) or 0)
+            if routed_experts_start_len < 0:
+                raise ValueError(
+                    f"SGLang routed_experts_start_len must be non-negative, got {routed_experts_start_len}."
+                )
+            expected_rows = max(0, len(self.tokens) - 1 - routed_experts_start_len)
             expected_numel = expected_rows * args.num_layers * args.moe_router_topk
             if routed_experts.numel() != expected_numel:
                 raise ValueError(
                     "SGLang routed_experts element count does not match sample tokens: "
                     f"got={routed_experts.numel()}, expected={expected_numel} "
-                    f"(tokens={len(self.tokens)}, num_layers={args.num_layers}, "
+                    f"(tokens={len(self.tokens)}, routed_experts_start_len={routed_experts_start_len}, "
+                    f"num_layers={args.num_layers}, "
                     f"moe_router_topk={args.moe_router_topk})."
                 )
-            self.rollout_routed_experts = routed_experts.reshape(
+            routed_experts = routed_experts.reshape(
                 expected_rows,
                 args.num_layers,
                 args.moe_router_topk,
             )
+            if routed_experts_start_len == 0:
+                self.rollout_routed_experts = routed_experts
+            else:
+                existing = self.rollout_routed_experts
+                if existing is None:
+                    raise ValueError(
+                        "Cannot append partial routed experts without existing routed experts "
+                        f"(routed_experts_start_len={routed_experts_start_len})."
+                    )
+                if not torch.is_tensor(existing):
+                    existing = torch.as_tensor(existing, dtype=routed_experts.dtype)
+                if existing.shape[0] < routed_experts_start_len:
+                    raise ValueError(
+                        "Existing routed experts shorter than routed_experts_start_len: "
+                        f"existing_rows={existing.shape[0]}, routed_experts_start_len={routed_experts_start_len}."
+                    )
+                self.rollout_routed_experts = torch.cat(
+                    [existing[:routed_experts_start_len], routed_experts],
+                    dim=0,
+                )
 
         if not update_terminal_info or "finish_reason" not in meta_info:
             return
