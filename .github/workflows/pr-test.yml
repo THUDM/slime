@@ -148,6 +148,10 @@ jobs:
               "test_file": "test_full_disk_weight_update.py"
             },
             {
+              "num_gpus": 4,
+              "test_file": "test_release_train.py"
+            },
+            {
               "enable_eval": "0",
               "num_gpus": 8,
               "test_file": "test_quick_start_glm4_9B.py"
@@ -812,6 +816,10 @@ jobs:
             {
               "num_gpus": 4,
               "test_file": "test_full_disk_weight_update.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_file": "test_release_train.py"
             },
             {
               "enable_eval": "0",

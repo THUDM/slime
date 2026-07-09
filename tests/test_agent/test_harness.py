@@ -2,7 +2,7 @@
 
 These cover the parts a happy-path rollout can't pin down precisely: that each
 harness writes the right CLI config and launches with the right command + env,
-that ``run_command``'s detached-launch / poll-marker handshake returns the right
+that ``run_agent``'s detached-launch / poll-marker handshake returns the right
 exit code (and times out correctly), and that ``ensure_agent_user`` issues the
 expected provisioning command. A :class:`tests.test_agent._fakes.FakeSandbox`
 records every ``exec`` / ``write_file`` so we assert on the issued commands
@@ -48,11 +48,11 @@ def _find(exec_log, needle):
 
 
 # ===========================================================================
-# §1 run_command handshake (the E2B detached-launch transport)
+# §1 run_agent handshake (the E2B detached-launch transport)
 # ===========================================================================
 
 
-def test_run_command_returns_marker_exit_code():
+def test_run_agent_returns_marker_exit_code():
     async def run_case():
         seen = {}
 
@@ -62,38 +62,38 @@ def test_run_command_returns_marker_exit_code():
 
         sb = FakeSandbox(on_launch=fake_agent)
         with patch.object(hc.asyncio, "sleep", new=_fast_sleep):
-            rc = await hc.run_command(
+            rc = await hc.run_agent(
                 sb, workdir="/workspace/repo", start_cmd="claude -p hi", env={"A": "1"}, time_budget_sec=30
             )
         assert rc == 0
         assert seen["env"] == {"A": "1"}
-        # launcher script + chmod + detached setsid launch all issued.
+        # launcher script + detached setsid launch all issued, exit code captured.
         assert any("run.sh" in p for p in sb.files)
         assert _find(sb.exec_log, "setsid")
-        assert _find(sb.exec_log, "PIPESTATUS") or any("PIPESTATUS" in v for v in sb.files.values())
+        assert any("echo $?" in v for v in sb.files.values())
 
     asyncio.run(run_case())
 
 
-def test_run_command_propagates_nonzero_exit():
+def test_run_agent_propagates_nonzero_exit():
     async def run_case():
         async def fail_agent(_env):
             return 7
 
         sb = FakeSandbox(on_launch=fail_agent)
         with patch.object(hc.asyncio, "sleep", new=_fast_sleep):
-            rc = await hc.run_command(sb, workdir="/w", start_cmd="x", env={}, time_budget_sec=30)
+            rc = await hc.run_agent(sb, workdir="/w", start_cmd="x", env={}, time_budget_sec=30)
         assert rc == 7
 
     asyncio.run(run_case())
 
 
-def test_run_command_times_out_when_marker_never_appears():
+def test_run_agent_times_out_when_marker_never_appears():
     async def run_case():
         sb = FakeSandbox(on_launch=None)  # no agent -> marker never written
         with patch.object(hc.asyncio, "sleep", new=_fast_sleep):
-            rc = await hc.run_command(sb, workdir="/w", start_cmd="x", env={}, time_budget_sec=0)
-        assert rc == hc.EXIT_TIME_BUDGET_EXCEEDED
+            rc = await hc.run_agent(sb, workdir="/w", start_cmd="x", env={}, time_budget_sec=0)
+        assert rc == sandbox_mod.EXIT_TIME_BUDGET_EXCEEDED
 
     asyncio.run(run_case())
 
