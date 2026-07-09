@@ -864,6 +864,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "as `--hf-checkpoint`. "
                 ),
             )
+            parser.add_argument(
+                "--max-checkpoint-count",
+                type=int,
+                default=None,
+                help="Maximum number of Megatron checkpoints to keep. Oldest checkpoints are deleted when exceeded. None means keep all.",
+            )
             reset_arg(parser, "--seed", type=int, default=1234)
             reset_arg(parser, "--clip-grad", type=float, default=1.0)
             reset_arg(parser, "--calculate-per-token-loss", action="store_true")
@@ -1789,6 +1795,10 @@ def slime_validate_args(args):
 
     if args.save_interval is not None:
         assert args.save is not None, "'--save' is required when save_interval is set."
+
+    if args.max_checkpoint_count is not None:
+        assert args.max_checkpoint_count > 0, "'--max-checkpoint-count' must be positive."
+        assert args.save is not None, "'--save' is required when '--max-checkpoint-count' is set."
 
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 
