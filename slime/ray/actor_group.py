@@ -63,29 +63,31 @@ class RayTrainGroup:
             import torch_memory_saver
             import torch
             import ctypes
-            
+
             def check_lib(path: str) -> bool:
                 try:
                     ctypes.CDLL(path)
                     return True
                 except Exception:
                     return False
-            
+
             dynlib_path = None
             try:
-                dynlib_path = torch_memory_saver.utils.get_binary_path_from_package("torch_memory_saver_hook_mode_preload")
+                dynlib_path = torch_memory_saver.utils.get_binary_path_from_package(
+                    "torch_memory_saver_hook_mode_preload"
+                )
             except Exception:
                 pass
-            
+
             if not dynlib_path:
                 cuda_major = int(torch.version.cuda.split(".")[0]) if torch.version.cuda else 12
-                
+
                 paths_to_try = [
                     f"torch_memory_saver_hook_mode_preload_cu{cuda_major}.abi3.so",
                     "torch_memory_saver_hook_mode_preload.abi3.so",
-                    "torch_memory_saver_hook_mode_preload_cu12.abi3.so"
+                    "torch_memory_saver_hook_mode_preload_cu12.abi3.so",
                 ]
-                
+
                 for path in paths_to_try:
                     p = os.path.join(
                         os.path.dirname(os.path.dirname(torch_memory_saver.__file__)),
@@ -103,7 +105,7 @@ class RayTrainGroup:
                         if os.path.exists(p):
                             dynlib_path = p
                             break
-                            
+
             if not dynlib_path:
                 raise FileNotFoundError(
                     "Cannot find torch_memory_saver dynamic library. Please make sure torch_memory_saver is properly installed."
