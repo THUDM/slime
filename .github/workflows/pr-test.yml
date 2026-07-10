@@ -643,6 +643,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_bf16_weight_post_process.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "utils/test_hf_checkpoint_saver.py"
             },
             {

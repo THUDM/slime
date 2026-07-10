@@ -178,14 +178,15 @@ class UpdateWeightFromTensor:
         # IPC handles are now released by the consumers.  Clean them up.
         torch.cuda.ipc_collect()
 
-        # int4/fp4 post_process
+        # Re-apply engine-specific post-load transforms. Compressed-tensors
+        # repacks quantized weights, while BF16 FlashInfer TRT-LLM restores its
+        # block layout after the canonical weight copy.
         if rank == 0:
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
-                post_process_weights(
-                    restore_weights_before_load=False,
-                    post_process_quantization=True,
-                    rollout_engines=self.rollout_engines,
-                )
+            post_process_weights(
+                restore_weights_before_load=False,
+                post_process_quantization=True,
+                rollout_engines=self.rollout_engines,
+            )
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 

@@ -122,13 +122,14 @@ class UpdateWeightFromDistributed:
         self._send_weights(pbar)
 
         if dist.get_rank() == 0:
-            # int4/fp4 post_process
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
-                post_process_weights(
-                    restore_weights_before_load=False,
-                    post_process_quantization=True,
-                    rollout_engines=self.rollout_engines,
-                )
+            # Re-apply engine-specific post-load transforms. Compressed-tensors
+            # repacks quantized weights, while BF16 FlashInfer TRT-LLM restores
+            # its block layout after the canonical weight copy.
+            post_process_weights(
+                restore_weights_before_load=False,
+                post_process_quantization=True,
+                rollout_engines=self.rollout_engines,
+            )
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
@@ -360,7 +361,7 @@ def post_process_weights(
     rollout_engines: Sequence[ActorHandle],
 ):
     """
-    Trigger post-process for int4/fp4 quantization on all rollout engines.
+    Trigger engine-specific post-load processing on all rollout engines.
     """
     ray.get(
         [
