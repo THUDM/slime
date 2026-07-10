@@ -12,6 +12,11 @@ from slime.backends.megatron_utils.misc_utils import strip_param_name_prefix
 from slime.utils.types import ParamInfo
 
 
+def _requires_glu_rechunk(name: str, tensor: torch.Tensor) -> bool:
+    """Return whether a tensor uses the dense or per-expert GLU partition layout."""
+    return ("linear_fc1.weight" in name and tensor.dim() == 2) or ("linear_fc1.bias" in name and tensor.dim() == 1)
+
+
 def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
     """
     All-gather TP-sharded param to full tensor. expert_bias→param, non-TP/duplicated→param.data.
@@ -37,9 +42,9 @@ def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
     assert param.partition_stride == 1 or (
         param.partition_stride == 2 and "linear_fc1" in name
     ), "partition_stride != 1 is not supported"
-    # TODO: here we did an extra copy during concat, maybe merge this with convert_to_hf is better?
-    # TODO: check only GLU is used.
-    if "linear_fc1.weight" in name or "linear_fc1.bias" in name:
+    # GLU rechunking applies to 2D dense and per-expert weights. Grouped MoE
+    # tensors are 3D [experts, 2 * ffn, hidden], where dim 0 is the expert axis.
+    if _requires_glu_rechunk(name, param):
         param_partitions = [p.chunk(2, dim=0) for p in param_partitions]
         param_partitions = [p[0] for p in param_partitions] + [p[1] for p in param_partitions]
     # this is bug in megatron's grouped moe.
@@ -99,9 +104,7 @@ def all_gather_params_async(
         else:
             # Process the gathered partitions (same logic as original all_gather_param)
             assert partition_dim is not None, "partition_stride != 1 is not supported"
-            # TODO: here we did an extra copy during concat, maybe merge this with convert_to_hf is better?
-            # TODO: check only GLU is used.
-            if "linear_fc1.weight" in info.name or "linear_fc1.bias" in info.name:
+            if _requires_glu_rechunk(info.name, param_partitions[0]):
                 param_partitions = [p.chunk(2, dim=0) for p in param_partitions]
                 param_partitions = [p[0] for p in param_partitions] + [p[1] for p in param_partitions]
             # this is bug in megatron's grouped moe.
