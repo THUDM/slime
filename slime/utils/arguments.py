@@ -1623,6 +1623,20 @@ def _apply_megatron_role_overrides(base_args, overrides, role):
         if "disable_param_buffers_cpu_backup" not in overrides:
             role_args.disable_param_buffers_cpu_backup = False
 
+        # If the critic's own load has no checkpoint yet, fall back to the
+        # actor's resolved load.
+        critic_load = role_args.load
+        if (
+            critic_load is None
+            or not os.path.exists(critic_load)
+            or not os.path.exists(os.path.join(critic_load, "latest_checkpointed_iteration.txt"))
+        ):
+            role_args.load = base_args.load
+            role_args.no_load_optim = True
+            role_args.no_load_rng = True
+            role_args.finetune = True
+            role_args.start_rollout_id = 0
+
     return role_args
 
 
