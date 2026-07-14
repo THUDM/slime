@@ -16,7 +16,9 @@ def normalize_rewards_by_group(
     ``Sample.group_index``. Uneven groups must provide explicit identities.
     """
     if len(rewards) != len(group_indices):
-        raise ValueError(f"rewards and group_indices must have the same length, got {len(rewards)} and {len(group_indices)}")
+        raise ValueError(
+            f"rewards and group_indices must have the same length, got {len(rewards)} and {len(group_indices)}"
+        )
 
     if group_indices and all(group_index is None for group_index in group_indices):
         if fallback_group_size is None or fallback_group_size <= 0 or len(group_indices) % fallback_group_size != 0:
@@ -26,7 +28,9 @@ def normalize_rewards_by_group(
     positions_by_group: dict[int, list[int]] = defaultdict(list)
     for position, group_index in enumerate(group_indices):
         if group_index is None:
-            raise ValueError(f"group_index is required for reward normalization, but sample at position {position} has none")
+            raise ValueError(
+                f"group_index is required for reward normalization, but sample at position {position} has none"
+            )
         positions_by_group[group_index].append(position)
 
     reward_tensor = torch.tensor(rewards, dtype=torch.float)

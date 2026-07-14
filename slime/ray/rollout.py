@@ -672,8 +672,7 @@ class RolloutManager:
             and self.args.rewards_normalization
         ):
             normalize_std = (
-                self.args.advantage_estimator in ["grpo", "gspo", "cispo"]
-                and self.args.grpo_std_normalization
+                self.args.advantage_estimator in ["grpo", "gspo", "cispo"] and self.args.grpo_std_normalization
             )
             rewards = normalize_rewards_by_group(
                 raw_rewards,
