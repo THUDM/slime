@@ -15,6 +15,7 @@
 
 import re
 import signal
+from decimal import Decimal, InvalidOperation
 
 
 def last_boxed_only_string(string: str) -> str | None:
@@ -63,7 +64,6 @@ def remove_boxed(s: str) -> str:
 
 
 class timeout:
-
     def __init__(self, seconds=1, error_message="Timeout"):
         self.seconds = seconds
         self.error_message = error_message
@@ -182,9 +182,7 @@ def normalize_final_answer(final_answer: str) -> str:
     return final_answer.strip()
 
 
-def is_correct_minerva(
-    solution_str: str, gt: str, gt_need_extract: bool = False, answer_pattern: str = r"(?i)Answer\s*:\s*([^\n]+)"
-) -> tuple[bool, str]:
+def is_correct_minerva(solution_str: str, gt: str, gt_need_extract: bool = False, answer_pattern: str = r"(?i)Answer\s*:\s*([^\n]+)") -> tuple[bool, str]:
     """Check if the solution is correct according to Minerva criteria.
 
     Args:
@@ -207,7 +205,15 @@ def is_correct_minerva(
     else:
         gt = normalize_final_answer(gt)
 
-    gt = str(int(float(gt)))  # in dapo, all answers are integers
+    try:
+        numeric_gt = Decimal(gt)
+    except InvalidOperation as exc:
+        raise ValueError(f"DAPO ground-truth label must be an integer, got {gt!r}") from exc
+
+    if not numeric_gt.is_finite() or numeric_gt != numeric_gt.to_integral_value():
+        raise ValueError(f"DAPO ground-truth label must be an integer, got {gt!r}")
+
+    gt = str(int(numeric_gt))
 
     return (pred == gt), pred
 
@@ -237,9 +243,7 @@ def is_correct_strict_box(pred: str, gt: str, pause_tokens_index: list[int] | No
     return 1 if (extracted_pred == gt) else -1, extracted_pred
 
 
-def verify(
-    solution_str: str, answer: str, strict_box_verify: bool = False, pause_tokens_index: list[int] | None = None
-) -> bool:
+def verify(solution_str: str, answer: str, strict_box_verify: bool = False, pause_tokens_index: list[int] | None = None) -> bool:
     """Verify if the solution is correct.
 
     Args:
