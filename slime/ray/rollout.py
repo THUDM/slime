@@ -18,6 +18,7 @@ from slime.backends.sglang_utils.external import start_external_rollout_servers
 from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
+from slime.rollout.reward_utils import normalize_rewards_by_group
 from slime.utils import logging_utils
 from slime.utils.data import get_source
 from slime.utils.dp_schedule import build_dp_schedule
@@ -670,21 +671,17 @@ class RolloutManager:
             self.args.advantage_estimator in ["grpo", "gspo", "cispo", "reinforce_plus_plus_baseline"]
             and self.args.rewards_normalization
         ):
-            # group norm
-            rewards = torch.tensor(raw_rewards, dtype=torch.float)
-            if rewards.shape[-1] == self.args.n_samples_per_prompt * self.args.rollout_batch_size:
-                rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
-            else:
-                # when samples count are not equal in each group
-                rewards = rewards.view(-1, rewards.shape[-1])
-            mean = rewards.mean(dim=-1, keepdim=True)
-            rewards = rewards - mean
-
-            if self.args.advantage_estimator in ["grpo", "gspo", "cispo"] and self.args.grpo_std_normalization:
-                std = rewards.std(dim=-1, keepdim=True)
-                rewards = rewards / (std + 1e-6)
-
-            return raw_rewards, rewards.flatten().tolist()
+            normalize_std = (
+                self.args.advantage_estimator in ["grpo", "gspo", "cispo"]
+                and self.args.grpo_std_normalization
+            )
+            rewards = normalize_rewards_by_group(
+                raw_rewards,
+                [sample.group_index for sample in samples],
+                normalize_std=normalize_std,
+                fallback_group_size=self.args.n_samples_per_prompt,
+            )
+            return raw_rewards, rewards
 
         return raw_rewards, raw_rewards
 
