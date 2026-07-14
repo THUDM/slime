@@ -4,12 +4,7 @@ import types
 import pytest
 import torch
 
-from slime.utils.ppo_utils import (
-    chunked_discounted_returns,
-    chunked_gae,
-    get_reinforce_plus_plus_returns,
-    vanilla_gae,
-)
+from slime.utils.ppo_utils import chunked_discounted_returns, chunked_gae, get_reinforce_plus_plus_returns, vanilla_gae
 
 
 NUM_GPUS = 0
