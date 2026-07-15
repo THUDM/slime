@@ -21,7 +21,12 @@ def init_gloo_group():
     """Initialize Gloo group for distributed communication."""
     global GLOO_GROUP
     if GLOO_GROUP is None:
-        GLOO_GROUP = dist.new_group(backend="gloo")
+        # The Megatron process-group reload path monkey-patches dist.new_group so model
+        # parallel subgroups can be rebuilt.  This canonical CPU group has a
+        # separate lifecycle (it synchronizes WORLD transitions), so keep it
+        # raw and outside that registry.
+        new_group = getattr(dist, "old_new_group", dist.new_group)
+        GLOO_GROUP = new_group(backend="gloo")
     return GLOO_GROUP
 
 
@@ -31,6 +36,18 @@ def get_gloo_group():
     if GLOO_GROUP is None:
         raise RuntimeError("Gloo group has not been initialized. Call _init_gloo_group() first.")
     return GLOO_GROUP
+
+
+def set_gloo_group(group):
+    """Replace the cached all-ranks Gloo group.
+
+    Destroying the default WORLD process group also destroys every subgroup
+    registered with torch.distributed.  The Megatron reload path uses this
+    setter when it temporarily replaces the NCCL WORLD group with a CPU Gloo
+    WORLD group, and again when NCCL is restored.
+    """
+    global GLOO_GROUP
+    GLOO_GROUP = group
 
 
 # Copy from pytorch to allow creating multiple main groups.
