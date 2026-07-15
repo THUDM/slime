@@ -82,6 +82,7 @@
         {'test_file': 'test_rm_deepscaler.py', 'num_gpus': 0},
         {'test_file': 'test_sample.py', 'num_gpus': 0},
         {'test_file': 'test_rollout_validation.py', 'num_gpus': 0},
+        {'test_file': 'test_reloadable_process_group_world.py', 'num_gpus': 0},
         {'test_file': 'test_placement_group.py', 'num_gpus': 0},
         {'test_file': 'test_external_sglang_engines.py', 'num_gpus': 0},
         {'test_file': 'test_empty_colocated_weight_bucket.py', 'num_gpus': 0},
@@ -180,7 +181,7 @@ jobs:
         shell: bash
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors
+          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors psutil
 <% if config.get('extra_pip_deps') %>
           pip install << config.extra_pip_deps >>
 <% endif %>
