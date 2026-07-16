@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import Any
 
-from slime.utils.http_utils import get, post
+from slime.utils.http_utils import bearer_auth_headers, get, post
 
 logger = logging.getLogger(__name__)
 
@@ -29,25 +29,27 @@ def num_requests_from_load(load: Any) -> int:
     return (running if isinstance(running, int) else 0) + (waiting if isinstance(waiting, int) else 0)
 
 
-async def _abort_server_once(url: str) -> None:
+async def _abort_server_once(url: str, api_key: str | None = None) -> None:
     try:
-        await post(f"{url}/abort_request", {"abort_all": True})
+        await post(f"{url}/abort_request", {"abort_all": True}, headers=bearer_auth_headers(api_key))
     except Exception as e:
         logger.warning(f"Failed to abort SGLang server at {url}: {e}")
 
 
-async def _get_server_num_requests(url: str) -> int:
-    return num_requests_from_load(await get(f"{url}/v1/loads?include=core"))
+async def _get_server_num_requests(url: str, api_key: str | None = None) -> int:
+    return num_requests_from_load(await get(f"{url}/v1/loads?include=core", headers=bearer_auth_headers(api_key)))
 
 
-async def abort_server_until_idle(url: str, retry_interval: int = ABORT_RETRY_INTERVAL_SECONDS) -> None:
+async def abort_server_until_idle(
+    url: str, retry_interval: int = ABORT_RETRY_INTERVAL_SECONDS, api_key: str | None = None
+) -> None:
     attempt = 1
     while True:
         logger.info(f"Abort request for SGLang server {url}")
-        await _abort_server_once(url)
+        await _abort_server_once(url, api_key=api_key)
 
         try:
-            num_requests = await _get_server_num_requests(url)
+            num_requests = await _get_server_num_requests(url, api_key=api_key)
         except Exception as e:
             logger.warning(f"Failed to get SGLang server load from {url}: {e}")
             return
@@ -63,5 +65,5 @@ async def abort_server_until_idle(url: str, retry_interval: int = ABORT_RETRY_IN
         attempt += 1
 
 
-async def abort_servers_until_idle(urls: list[str]) -> None:
-    await asyncio.gather(*(abort_server_until_idle(url) for url in urls))
+async def abort_servers_until_idle(urls: list[str], api_key: str | None = None) -> None:
+    await asyncio.gather(*(abort_server_until_idle(url, api_key=api_key) for url in urls))

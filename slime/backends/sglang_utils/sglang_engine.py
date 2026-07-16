@@ -15,7 +15,7 @@ from urllib3.exceptions import NewConnectionError
 
 from slime.backends.sglang_utils.external import get_server_info
 from slime.ray.ray_actor import RayActor
-from slime.utils.http_utils import get_host_info
+from slime.utils.http_utils import bearer_auth_headers, get_host_info
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +80,8 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
 def _wait_server_healthy(base_url, api_key, is_process_alive):
     headers = {
         "Content-Type": "application/json; charset=utf-8",
-        "Authorization": f"Bearer {api_key}",
     }
+    headers.update(bearer_auth_headers(api_key) or {})
 
     with requests.Session() as session:
         while True:
@@ -161,6 +161,7 @@ class SGLangEngine(RayActor):
         self.node_rank = server_args_dict["node_rank"]
         self.server_host = server_args_dict["host"]  # with [] if ipv6
         self.server_port = server_args_dict["port"]
+        self.server_api_key = server_args_dict.get("api_key")
 
         if self.args.rollout_external:
             self._init_external(server_args_dict, external_engine_need_check_fields=external_engine_need_check_fields)
@@ -178,7 +179,9 @@ class SGLangEngine(RayActor):
                     actual_value == expect_value
                 ), f"{name=} {expect_value=} {actual_value=} {expect_server_args=} {actual_server_args=}"
 
-        actual_server_args = get_server_info(f"http://{self.server_host}:{self.server_port}")
+        actual_server_args = get_server_info(
+            f"http://{self.server_host}:{self.server_port}", api_key=self.server_api_key
+        )
         _sanity_check_server_args(actual_server_args, expect_server_args)
         self._register_to_router(expect_server_args)
 
@@ -193,16 +196,21 @@ class SGLangEngine(RayActor):
 
         if self.node_rank == 0 and self.router_ip and self.router_port:
             worker_url = f"http://{self.server_host}:{self.server_port}"
+            headers = self._router_auth_headers()
             if parse(sglang_router.__version__) <= parse("0.2.1"):
                 assert self.worker_type == "regular", "pd disaggregation is not supported in old router."
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/add_worker?url={worker_url}",
+                    headers=headers,
                 )
             else:
                 payload = {
                     "url": worker_url,
                     "worker_type": self.worker_type,
                 }
+                # The router uses this key to authenticate the traffic it forwards to the worker.
+                if worker_api_key := server_args_dict.get("api_key"):
+                    payload["api_key"] = worker_api_key
                 if self.worker_type == "prefill":
                     bootstrap_port = server_args_dict.get("disaggregation_bootstrap_port")
                     if bootstrap_port is None:
@@ -214,6 +222,7 @@ class SGLangEngine(RayActor):
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/workers",
                     json=payload,
+                    headers=headers,
                 )
             response.raise_for_status()
 
@@ -231,13 +240,28 @@ class SGLangEngine(RayActor):
             return
 
         url = f"http://{self.server_host}:{self.server_port}/{endpoint}"
-        response = requests.post(url, json=payload or {})
+        response = requests.post(url, json=payload or {}, headers=self._server_auth_headers())
         try:
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
             e.add_note(f"{response.text=}")
             raise
         return response.json()
+
+    def _server_auth_headers(self):
+        return bearer_auth_headers(self.server_api_key)
+
+    def _router_auth_headers(self):
+        return bearer_auth_headers(getattr(self.args, "router_api_key", None))
+
+    def _post_server_control(self, endpoint: str, payload: dict | None = None):
+        response = requests.post(
+            f"http://{self.server_host}:{self.server_port}/{endpoint}",
+            json=payload or {},
+            headers=self._server_auth_headers(),
+        )
+        response.raise_for_status()
+        return response
 
     def health_generate(self, timeout: float = 5.0) -> bool:
         """Run /health_generate on the underlying SGLang HTTP server.
@@ -256,6 +280,7 @@ class SGLangEngine(RayActor):
 
         response = requests.get(
             f"http://{self.server_host}:{self.server_port}/health_generate",
+            headers=self._server_auth_headers(),
             timeout=timeout,
         )
         response.raise_for_status()
@@ -293,13 +318,22 @@ class SGLangEngine(RayActor):
         # flush cache will not return status_code 200 when there are pending requests
         for _ in range(60):
             try:
-                response = requests.get(f"http://{self.server_host}:{self.server_port}/flush_cache")
+                response = requests.get(
+                    f"http://{self.server_host}:{self.server_port}/flush_cache",
+                    headers=self._server_auth_headers(),
+                )
                 if response.status_code == 200:
                     break
+                # An auth misconfiguration will never recover by retrying, so surface it
+                # immediately instead of spinning for the full timeout.
+                if response.status_code in (401, 403):
+                    response.raise_for_status()
                 logger.info(f"Error flushing cache: HTTP {response.status_code} {response.text!r}")
                 time.sleep(1)
             except NewConnectionError as e:
                 raise e
+            except requests.exceptions.HTTPError:
+                raise
             except Exception as e:
                 logger.info(f"Error flushing cache: {e}")
                 time.sleep(1)
@@ -319,22 +353,29 @@ class SGLangEngine(RayActor):
         logger.info(f"Shutdown engine {self.server_host}:{self.server_port}...")
         if self.worker_type != "encoder" and self.node_rank == 0:
             worker_url = f"http://{self.server_host}:{self.server_port}"
+            headers = self._router_auth_headers()
             response = None
             if parse(sglang_router.__version__) <= parse("0.2.1"):
                 response = requests.post(
-                    f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
+                    f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}",
+                    headers=headers,
                 )
             elif parse(sglang_router.__version__) < parse("0.3.0"):
                 worker_url = quote(worker_url, safe="")
-                response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}")
+                response = requests.delete(
+                    f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}", headers=headers
+                )
             else:
                 try:
-                    all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
+                    all_workers = requests.get(
+                        f"http://{self.router_ip}:{self.router_port}/workers", headers=headers
+                    ).json()["workers"]
                     for worker in all_workers:
                         if worker["url"] == worker_url:
                             worker_id = worker["id"]
                             response = requests.delete(
-                                f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}"
+                                f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}",
+                                headers=headers,
                             )
                             break
                     else:
@@ -350,7 +391,7 @@ class SGLangEngine(RayActor):
         if self.node_rank != 0:
             return
         url = f"http://{self.server_host}:{self.server_port}/get_weight_version"
-        response = requests.get(url)
+        response = requests.get(url, headers=self._server_auth_headers())
         response.raise_for_status()
         return response.json()["weight_version"]
 
@@ -452,16 +493,12 @@ class SGLangEngine(RayActor):
     def pause_generation(self):
         if self.node_rank != 0:
             return
-        response = requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={})
-        response.raise_for_status()
-        return response
+        return self._post_server_control("pause_generation")
 
     def continue_generation(self):
         if self.node_rank != 0:
             return
-        response = requests.post(f"http://{self.server_host}:{self.server_port}/continue_generation", json={})
-        response.raise_for_status()
-        return response
+        return self._post_server_control("continue_generation")
 
     def post_process_weights(
         self,
@@ -498,9 +535,9 @@ class SGLangEngine(RayActor):
     ):
         if self.node_rank != 0:
             return
-        response = requests.post(
-            f"http://{self.server_host}:{self.server_port}/start_profile",
-            json={
+        return self._post_server_control(
+            "start_profile",
+            {
                 "output_dir": output_dir,
                 "start_step": start_step,
                 "num_steps": num_steps,
@@ -510,15 +547,11 @@ class SGLangEngine(RayActor):
                 "record_shapes": record_shapes,
             },
         )
-        response.raise_for_status()
-        return response
 
     def stop_profile(self):
         if self.node_rank != 0:
             return
-        response = requests.post(f"http://{self.server_host}:{self.server_port}/stop_profile", json={})
-        response.raise_for_status()
-        return response
+        return self._post_server_control("stop_profile")
 
     def simulate_crash(self):
         if self.args.rollout_external or not getattr(self, "process", None):
