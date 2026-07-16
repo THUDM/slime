@@ -425,6 +425,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This is used to shuffle the prompts and also for the random sampling of the prompts."
                 ),
             )
+            parser.add_argument(
+                "--rollout-session-id-scope",
+                choices=["sample", "group"],
+                default="sample",
+                help=(
+                    "Scope for automatically assigned rollout session IDs. "
+                    "'sample' assigns one ID per sample; 'group' shares one ID within a rollout group."
+                ),
+            )
 
             # sampling
             parser.add_argument(
@@ -1714,6 +1723,10 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
 
 def slime_validate_args(args):
     args.eval_datasets = _resolve_eval_datasets(args)
+
+    if getattr(args, "rollout_session_id_scope", "sample") == "group":
+        if getattr(args, "router_policy", None) != "consistent_hashing":
+            raise ValueError("--rollout-session-id-scope=group requires --router-policy=consistent_hashing.")
 
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):

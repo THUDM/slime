@@ -1,3 +1,4 @@
+import argparse
 import importlib.util
 import sys
 import types
@@ -257,6 +258,8 @@ def make_slime_validate_args(**overrides):
         update_weight_disk_dir=None,
         update_weight_local_checkpoint_dir=None,
         update_weight_mode="full",
+        rollout_session_id_scope="sample",
+        router_policy="consistent_hashing",
     )
     values.update(overrides)
     return types.SimpleNamespace(**values)
@@ -344,6 +347,30 @@ def test_update_weight_delta_requires_local_checkpoint_dir(monkeypatch):
     )
 
     with pytest.raises(ValueError, match="requires --update-weight-local-checkpoint-dir"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_rollout_session_id_scope_defaults_to_sample(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    module.get_slime_extra_args_provider()(parser)
+
+    assert parser.parse_args(["--rollout-batch-size", "1"]).rollout_session_id_scope == "sample"
+    assert (
+        parser.parse_args(
+            ["--rollout-batch-size", "1", "--rollout-session-id-scope", "group"]
+        ).rollout_session_id_scope
+        == "group"
+    )
+
+
+@pytest.mark.unit
+def test_group_session_id_scope_requires_consistent_hashing(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(rollout_session_id_scope="group", router_policy="round_robin")
+
+    with pytest.raises(ValueError, match="requires --router-policy=consistent_hashing"):
         module.slime_validate_args(args)
 
 
