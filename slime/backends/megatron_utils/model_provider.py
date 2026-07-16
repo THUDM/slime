@@ -140,6 +140,36 @@ def _get_model_provider_func(
         # Experimental loading arguments from yaml
         config: TransformerConfig = core_transformer_config_from_args(args)
 
+        # --- Hybrid Mamba-Attention-MoE (e.g. NVIDIA NemotronH / Nano) ---
+        # When a hybrid layer pattern is given, the decoder is a MambaStack, not a
+        # pure transformer, so build a MambaModel (mamba_stack_spec) instead of a
+        # GPTModel. This makes the param names (decoder.layers.N.mixer.*, GroupedMLP
+        # experts.experts, final_norm) match a Megatron-core NemotronH checkpoint.
+        if getattr(args, "hybrid_override_pattern", None):
+            from megatron.core.models.mamba import MambaModel
+            from megatron.core.models.mamba.mamba_layer_specs import mamba_stack_spec
+
+            model = MambaModel(
+                config=config,
+                mamba_stack_spec=mamba_stack_spec,
+                vocab_size=args.padded_vocab_size,
+                max_sequence_length=args.max_position_embeddings,
+                pre_process=pre_process,
+                post_process=post_process,
+                hybrid_attention_ratio=getattr(args, "hybrid_attention_ratio", 0.0),
+                hybrid_mlp_ratio=getattr(args, "hybrid_mlp_ratio", 0.0),
+                hybrid_override_pattern=args.hybrid_override_pattern,
+                fp16_lm_cross_entropy=args.fp16_lm_cross_entropy,
+                parallel_output=True,
+                share_embeddings_and_output_weights=not args.untie_embeddings_and_output_weights,
+                position_embedding_type=args.position_embedding_type,
+                rotary_percent=args.rotary_percent,
+                rotary_base=args.rotary_base,
+            )
+            if post_process and role == "critic":
+                model.output_layer = LinearForLastLayer(input_size=config.hidden_size, output_size=1, config=config)
+            return model
+
         if args.spec is not None:
             transformer_layer_spec = import_module(args.spec)
             # Allow the spec to be a function so that user can use customized Megatron easier.
