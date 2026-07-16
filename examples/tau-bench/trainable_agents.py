@@ -8,6 +8,7 @@ from openai_tool_adapter import create_openai_adapter
 from tau_bench.agents.base import Agent
 from tau_bench.agents.tool_calling_agent import RESPOND_ACTION_NAME, ToolCallingAgent
 from tau_bench.types import Action, RunConfig
+from token_delta import get_token_delta
 from transformers import AutoTokenizer
 
 from slime.rollout.sglang_rollout import GenerateState
@@ -347,24 +348,7 @@ class TrainableAgentMixin:
         Returns:
             Tuple of (token_ids, loss_mask)
         """
-        curr = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
-        token_ids = []
-        loss_mask = []
-
-        # Case 1: last message is an assistant response
-        if messages[-1]["role"] == "assistant":
-            prev = tokenizer.apply_chat_template(messages[:-1], add_generation_prompt=True, tokenize=False)
-            new_tokens = tokenizer.encode(curr[len(prev) :], add_special_tokens=False)
-            token_ids += new_tokens
-            loss_mask += [1] * len(new_tokens)  # Mask only the new assistant tokens
-        else:
-            # Case 2: last message is a tool response or environment observation
-            prev = tokenizer.apply_chat_template(messages[:-1], add_generation_prompt=False, tokenize=False)
-            new_tokens = tokenizer.encode(curr[len(prev) :], add_special_tokens=False)
-            token_ids += new_tokens
-            loss_mask += [0] * len(new_tokens)  # Don't mask environment/tool tokens
-
-        return token_ids, loss_mask
+        return get_token_delta(tokenizer, messages)
 
     def _build_final_result(
         self,
