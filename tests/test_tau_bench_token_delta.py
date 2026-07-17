@@ -110,9 +110,7 @@ def test_accumulated_multiturn_tokens_keep_every_assistant_generation_prefix():
         {"role": "assistant", "content": "<think>second reasoning</think>second answer"},
     ]
 
-    initial_prompt = tokenizer.apply_chat_template(
-        messages[:1], add_generation_prompt=True, tokenize=False
-    )
+    initial_prompt = tokenizer.apply_chat_template(messages[:1], add_generation_prompt=True, tokenize=False)
     token_ids = tokenizer.encode(initial_prompt, add_special_tokens=False)
     loss_mask = [0] * len(token_ids)
 
@@ -158,6 +156,4 @@ def test_later_assistant_allows_bpe_merge_across_generation_prefix_boundary():
     expected_ids = tokenizer.encode(expected_text, add_special_tokens=False)
     generation_prefix_length = len(tokenizer.encode("<assistant>", add_special_tokens=False))
     assert token_ids == expected_ids
-    assert loss_mask == [0] * generation_prefix_length + [1] * (
-        len(expected_ids) - generation_prefix_length
-    )
+    assert loss_mask == [0] * generation_prefix_length + [1] * (len(expected_ids) - generation_prefix_length)

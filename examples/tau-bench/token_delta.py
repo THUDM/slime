@@ -16,9 +16,7 @@ def get_token_delta(
 
     if is_assistant:
         prev = tokenizer.apply_chat_template(messages[:-1], add_generation_prompt=False, tokenize=False)
-        generation_prompt = tokenizer.apply_chat_template(
-            messages[:-1], add_generation_prompt=True, tokenize=False
-        )
+        generation_prompt = tokenizer.apply_chat_template(messages[:-1], add_generation_prompt=True, tokenize=False)
         if not generation_prompt.startswith(prev):
             raise ValueError("Adding the assistant generation prompt rewrote the rendered conversation")
         if not curr.startswith(generation_prompt):
