@@ -10,6 +10,7 @@ import torch.distributed as dist
 
 import slime.utils.eval_config
 from slime.ray.ray_actor import RayActor
+from slime.utils import accelerator
 from slime.utils.distributed_utils import init_gloo_group
 from slime.utils.logging_utils import configure_logger
 from slime.utils.memory_utils import clear_memory, print_memory
@@ -18,11 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_local_gpu_id():
-    cvd = os.environ.get("CUDA_VISIBLE_DEVICES", None)
-    if cvd is None:
-        return ray.get_gpu_ids()[0]
-    else:
-        return cvd.split(",").index(str(ray.get_gpu_ids()[0]))
+    return accelerator.resolve_visible_device_id(ray.get_gpu_ids()[0])
 
 
 class TrainRayActor(RayActor):
@@ -56,9 +53,9 @@ class TrainRayActor(RayActor):
         torch.serialization.add_safe_globals([slime.utils.eval_config.EvalDatasetConfig])
 
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        torch.cuda.set_device(f"cuda:{local_rank}")
+        accelerator.set_device(local_rank)
 
-        backend = args.distributed_backend
+        backend = accelerator.process_group_backend(args.distributed_backend)
 
         dist.init_process_group(
             backend=backend,
@@ -70,7 +67,9 @@ class TrainRayActor(RayActor):
         args.world_size = dist.get_world_size()
 
         try:
-            if torch.version.hip is not None:
+            if accelerator.is_musa_available():
+                logger.info("Detected MUSA environment, skipping NVML NUMA affinity setup")
+            elif torch.version.hip is not None:
                 logger.info("Detected ROCm/HIP environment, skipping NUMA affinity setup")
                 # will find the coresponding API to implement ROCm version as below
             else:

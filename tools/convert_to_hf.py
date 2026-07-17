@@ -1,3 +1,7 @@
+from slime.utils import accelerator
+
+# isort: split
+
 import torch
 import torch.distributed as dist
 from megatron.core import mpu
@@ -57,7 +61,7 @@ def main(args):
                     param = param_
                     break
         else:
-            param = torch.empty(info.shape, dtype=info.dtype, device=torch.cuda.current_device())
+            param = torch.empty(info.shape, dtype=info.dtype, device=accelerator.device())
 
         if pp_size > 1:
             if info.src_rank in dist.get_process_group_ranks(mpu.get_pipeline_model_parallel_group()):

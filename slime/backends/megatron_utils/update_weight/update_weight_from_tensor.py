@@ -11,6 +11,7 @@ from ray import ObjectRef
 from ray.actor import ActorHandle
 from tqdm import tqdm
 
+from slime.utils import accelerator
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.types import ParamInfo
 
@@ -31,7 +32,7 @@ def _build_flattened_tensor_data(
 ) -> dict[str, Any]:
     if not named_tensors:
         return {
-            "flattened_tensor": torch.empty(0, dtype=torch.uint8, device=torch.cuda.current_device()),
+            "flattened_tensor": torch.empty(0, dtype=torch.uint8, device=accelerator.device()),
             "metadata": [],
         }
 
@@ -266,12 +267,12 @@ class UpdateWeightFromTensor:
                 refs, long_lived_tensors = self._send_hf_params(hf_named_tensors)
                 ray.get(refs)
                 dist.barrier(group=get_gloo_group())
-                torch.cuda.synchronize()
+                accelerator.synchronize()
                 del refs, long_lived_tensors, hf_named_tensors
-                torch.cuda.ipc_collect()
-                torch.cuda.empty_cache()
+                accelerator.ipc_collect()
+                accelerator.empty_cache()
         del staging_buffers
-        torch.cuda.empty_cache()
+        accelerator.empty_cache()
 
     @torch.no_grad()
     def update_weights(self) -> None:
@@ -306,8 +307,8 @@ class UpdateWeightFromTensor:
             # then release CUDA IPC cache entries whose consumers (sglang engines)
             # have already closed their IPC handles.
             del refs, long_lived_tensors, hf_named_tensors
-            torch.cuda.ipc_collect()
-            torch.cuda.empty_cache()
+            accelerator.ipc_collect()
+            accelerator.empty_cache()
 
         if self._expert_transfer_plan:
             self._update_expert_weights(megatron_local_weights)
@@ -316,8 +317,8 @@ class UpdateWeightFromTensor:
         dist.barrier(group=get_gloo_group())
         # After the barrier all engines have returned, so every rank's last-chunk
         # IPC handles are now released by the consumers.  Clean them up.
-        torch.cuda.ipc_collect()
-        torch.cuda.empty_cache()
+        accelerator.ipc_collect()
+        accelerator.empty_cache()
 
         # int4/fp4 post_process
         if self.rank == 0:
@@ -426,6 +427,6 @@ def _send_to_colocated_engine(
 
 def _empty_flattened_tensor_data():
     return {
-        "flattened_tensor": torch.empty(0, dtype=torch.uint8, device=torch.cuda.current_device()),
+        "flattened_tensor": torch.empty(0, dtype=torch.uint8, device=accelerator.device()),
         "metadata": [],
     }

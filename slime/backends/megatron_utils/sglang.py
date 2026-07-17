@@ -1,11 +1,15 @@
 # the file to manage all sglang deps in the megatron actor
-try:
-    from sglang.srt.layers.quantization.fp8_utils import quant_weight_ue8m0, transform_scale_ue8m0
-    from sglang.srt.model_loader.utils import should_deepgemm_weight_requant_ue8m0
-except ImportError:
-    quant_weight_ue8m0 = None
-    transform_scale_ue8m0 = None
-    should_deepgemm_weight_requant_ue8m0 = None
+from slime.utils import accelerator
+
+quant_weight_ue8m0 = None
+transform_scale_ue8m0 = None
+should_deepgemm_weight_requant_ue8m0 = None
+if not accelerator.is_musa_environment():
+    try:
+        from sglang.srt.layers.quantization.fp8_utils import quant_weight_ue8m0, transform_scale_ue8m0
+        from sglang.srt.model_loader.utils import should_deepgemm_weight_requant_ue8m0
+    except ImportError:
+        pass
 
 try:
     from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions

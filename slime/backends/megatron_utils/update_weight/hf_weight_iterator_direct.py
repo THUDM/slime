@@ -7,6 +7,7 @@ import torch.distributed as dist
 from megatron.core import mpu
 from tqdm import tqdm
 
+from slime.utils import accelerator
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.types import ParamInfo
 
@@ -73,13 +74,13 @@ def _get_megatron_full_params(
         if dist.get_rank() == info.src_rank:
             params.append(
                 torch.nn.Parameter(
-                    megatron_local_weights[info.name].to(device=torch.cuda.current_device(), non_blocking=True),
+                    megatron_local_weights[info.name].to(device=accelerator.device(), non_blocking=True),
                     requires_grad=False,
                 )
             )
         else:
-            params.append(torch.empty(info.shape, dtype=info.dtype, device=torch.cuda.current_device()))
-    torch.cuda.synchronize()
+            params.append(torch.empty(info.shape, dtype=info.dtype, device=accelerator.device()))
+    accelerator.synchronize()
 
     # broadcast params across pp ranks
     if pp_size > 1:

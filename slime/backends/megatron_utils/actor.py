@@ -13,7 +13,7 @@ from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
-from slime.utils import train_dump_utils
+from slime.utils import accelerator, train_dump_utils
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.logging_utils import init_tracking
@@ -243,7 +243,7 @@ class MegatronTrainRayActor(TrainRayActor):
         )
         # TODO: this is ugly, move to somewhere else?
         # move tokens to GPU in advance
-        device = torch.cuda.current_device()
+        device = accelerator.device()
         rollout_data["tokens"] = [
             t.to(device=device, dtype=torch.long, non_blocking=True) for t in rollout_data["tokens"]
         ]
@@ -349,7 +349,6 @@ class MegatronTrainRayActor(TrainRayActor):
         num_microbatches: list[int],
         store_prefix: str = "",
     ) -> dict[str, list[torch.Tensor]]:
-
         with timer(f"{store_prefix}log_probs"):
             return forward_only(
                 get_log_probs_and_entropy,

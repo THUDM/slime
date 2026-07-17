@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from megatron.core import mpu
 from megatron.core.packed_seq_params import PackedSeqParams
 
-from slime.utils import train_metric_utils
+from slime.utils import accelerator, train_metric_utils
 from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step
 from slime.utils.types import RolloutBatch
@@ -83,7 +83,7 @@ def get_batch(
             tokens = F.pad(tokens, (0, pad), value=pad_token_id)
             cu_seqlens_list.append(cu_seqlens_list[-1] + pad)
 
-        cu_seqlens = torch.tensor(cu_seqlens_list, dtype=torch.int, device=torch.cuda.current_device())
+        cu_seqlens = torch.tensor(cu_seqlens_list, dtype=torch.int, device=accelerator.device())
         tokens = tokens.chunk(cp_size, dim=0)[cp_rank]
     else:
         tokens = [slice_with_cp(t, pad_token_id) for t in tokens]
@@ -101,7 +101,7 @@ def get_batch(
             cu_seqlens.append(cu_seqlens[-1] + pad)
 
         # thd requires the cu_seqlens to be of the origin length
-        cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int).cuda() * cp_size
+        cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int, device=accelerator.device()) * cp_size
 
     max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
     packed_seq_params = PackedSeqParams(
@@ -537,5 +537,5 @@ def tensors_to_gpu(tensor_list, device=None):
     if tensor_list is None:
         return None
     if device is None:
-        device = torch.cuda.current_device()
+        device = accelerator.device()
     return [t.to(device=device, dtype=torch.float32) for t in tensor_list]
