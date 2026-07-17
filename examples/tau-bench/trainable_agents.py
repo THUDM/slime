@@ -275,7 +275,11 @@ class TrainableAgentMixin:
 
             # Add assistant response to conversation
             messages.append({"role": "assistant", "content": response})
-            assistant_token_ids, assistant_loss_mask = self._get_token_delta(state.tokenizer, messages)
+            assistant_token_ids, assistant_loss_mask = self._get_token_delta(
+                state.tokenizer,
+                messages,
+                include_generation_prompt=bool(response_token_ids),
+            )
             response_token_ids.extend(assistant_token_ids)
             loss_masks.extend(assistant_loss_mask)
 
@@ -332,7 +336,13 @@ class TrainableAgentMixin:
             res, total_reward, info, messages, loss_masks, prompt_token_ids, response_token_ids
         )
 
-    def _get_token_delta(self, tokenizer: AutoTokenizer, messages: list[dict]) -> tuple[list[int], list[int]]:
+    def _get_token_delta(
+        self,
+        tokenizer: AutoTokenizer,
+        messages: list[dict],
+        *,
+        include_generation_prompt: bool = False,
+    ) -> tuple[list[int], list[int]]:
         """
         Calculate token delta for multi-turn conversations.
 
@@ -348,7 +358,11 @@ class TrainableAgentMixin:
         Returns:
             Tuple of (token_ids, loss_mask)
         """
-        return get_token_delta(tokenizer, messages)
+        return get_token_delta(
+            tokenizer,
+            messages,
+            include_generation_prompt=include_generation_prompt,
+        )
 
     def _build_final_result(
         self,

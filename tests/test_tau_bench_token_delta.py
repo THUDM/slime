@@ -49,6 +49,25 @@ class HistoryRewritingTokenizer:
         return bytes(token_ids).decode()
 
 
+class BoundaryMergingTokenizer(HistoryRewritingTokenizer):
+    """Tokenizer where the generation-prefix tail merges with a leading newline."""
+
+    @staticmethod
+    def encode(text, *, add_special_tokens):
+        assert add_special_tokens is False
+        raw = text.encode()
+        token_ids = []
+        index = 0
+        while index < len(raw):
+            if raw[index : index + 2] == b">\n":
+                token_ids.append(1000)
+                index += 2
+            else:
+                token_ids.append(raw[index])
+                index += 1
+        return token_ids
+
+
 @pytest.mark.unit
 def test_new_user_delta_survives_history_rewrite():
     get_token_delta = _load_get_token_delta()
@@ -78,3 +97,67 @@ def test_assistant_delta_keeps_existing_append_only_behavior():
 
     assert tokenizer.decode(token_ids) == "<think>reasoning</think>answer</assistant>"
     assert loss_mask == [1] * len(token_ids)
+
+
+@pytest.mark.unit
+def test_accumulated_multiturn_tokens_keep_every_assistant_generation_prefix():
+    get_token_delta = _load_get_token_delta()
+    tokenizer = HistoryRewritingTokenizer()
+    messages = [
+        {"role": "user", "content": "first user"},
+        {"role": "assistant", "content": "<think>first reasoning</think>first answer"},
+        {"role": "user", "content": "second user"},
+        {"role": "assistant", "content": "<think>second reasoning</think>second answer"},
+    ]
+
+    initial_prompt = tokenizer.apply_chat_template(
+        messages[:1], add_generation_prompt=True, tokenize=False
+    )
+    token_ids = tokenizer.encode(initial_prompt, add_special_tokens=False)
+    loss_mask = [0] * len(token_ids)
+
+    for end in range(2, len(messages) + 1):
+        include_generation_prompt = messages[end - 1]["role"] == "assistant" and end > 2
+        delta_ids, delta_mask = get_token_delta(
+            tokenizer,
+            messages[:end],
+            include_generation_prompt=include_generation_prompt,
+        )
+        token_ids.extend(delta_ids)
+        loss_mask.extend(delta_mask)
+
+    decoded = tokenizer.decode(token_ids)
+    assert decoded.count("<assistant>") == 2
+    assert decoded.count("</assistant>") == 2
+    assert "first reasoning" in decoded
+    assert "second reasoning" in decoded
+    assert "second user" in decoded
+
+    second_prefix = decoded.rindex("<assistant>")
+    assert loss_mask[second_prefix : second_prefix + len("<assistant>")] == [0] * len("<assistant>")
+
+
+@pytest.mark.unit
+def test_later_assistant_allows_bpe_merge_across_generation_prefix_boundary():
+    get_token_delta = _load_get_token_delta()
+    tokenizer = BoundaryMergingTokenizer()
+    messages = [
+        {"role": "user", "content": "first user"},
+        {"role": "assistant", "content": "<think>first reasoning</think>first answer"},
+        {"role": "user", "content": "second user"},
+        {"role": "assistant", "content": "\nsecond answer"},
+    ]
+
+    token_ids, loss_mask = get_token_delta(
+        tokenizer,
+        messages,
+        include_generation_prompt=True,
+    )
+
+    expected_text = "<assistant>\nsecond answer</assistant>"
+    expected_ids = tokenizer.encode(expected_text, add_special_tokens=False)
+    generation_prefix_length = len(tokenizer.encode("<assistant>", add_special_tokens=False))
+    assert token_ids == expected_ids
+    assert loss_mask == [0] * generation_prefix_length + [1] * (
+        len(expected_ids) - generation_prefix_length
+    )
