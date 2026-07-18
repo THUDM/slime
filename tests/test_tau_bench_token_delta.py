@@ -136,6 +136,54 @@ def test_accumulated_multiturn_tokens_keep_every_assistant_generation_prefix():
 
 
 @pytest.mark.unit
+def test_accumulated_six_real_user_turns_keep_every_user_and_assistant_boundary():
+    get_token_delta = _load_get_token_delta()
+    tokenizer = HistoryRewritingTokenizer()
+    messages = [{"role": "user", "content": "user 1"}]
+
+    initial_prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+    token_ids = tokenizer.encode(initial_prompt, add_special_tokens=False)
+    loss_mask = [0] * len(token_ids)
+
+    for turn in range(1, 7):
+        messages.append(
+            {
+                "role": "assistant",
+                "content": f"<think>reasoning {turn}</think>answer {turn}",
+            }
+        )
+        delta_ids, delta_mask = get_token_delta(
+            tokenizer,
+            messages,
+            include_generation_prompt=turn > 1,
+        )
+        token_ids.extend(delta_ids)
+        loss_mask.extend(delta_mask)
+
+        if turn < 6:
+            messages.append({"role": "user", "content": f"user {turn + 1}"})
+            delta_ids, delta_mask = get_token_delta(tokenizer, messages)
+            token_ids.extend(delta_ids)
+            loss_mask.extend(delta_mask)
+
+    decoded = tokenizer.decode(token_ids)
+    assert decoded.count("<assistant>") == 6
+    assert decoded.count("</assistant>") == 6
+
+    for turn in range(1, 7):
+        user_span = f"<user>user {turn}</user>"
+        user_start = decoded.index(user_span)
+        assert loss_mask[user_start : user_start + len(user_span)] == [0] * len(user_span)
+
+        assistant_span = f"<think>reasoning {turn}</think>answer {turn}</assistant>"
+        assistant_start = decoded.index(assistant_span)
+        assert loss_mask[assistant_start : assistant_start + len(assistant_span)] == [1] * len(assistant_span)
+
+        prefix_start = decoded.rfind("<assistant>", 0, assistant_start)
+        assert loss_mask[prefix_start:assistant_start] == [0] * (assistant_start - prefix_start)
+
+
+@pytest.mark.unit
 def test_later_assistant_allows_bpe_merge_across_generation_prefix_boundary():
     get_token_delta = _load_get_token_delta()
     tokenizer = BoundaryMergingTokenizer()
