@@ -631,6 +631,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_sglang_rollout_abort.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_reloadable_process_group_world.py"
             },
             {

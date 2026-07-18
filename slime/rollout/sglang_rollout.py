@@ -334,11 +334,16 @@ async def generate_and_rm_group(
 
 
 async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
-    aborted_samples = []
-
     state = GenerateState(args)
     assert not state.aborted
     state.aborted = True
+
+    if not args.partial_rollout:
+        for task in state.pendings:
+            task.cancel()
+        if state.pendings:
+            await asyncio.gather(*state.pendings, return_exceptions=True)
+        state.pendings.clear()
 
     if parse(sglang_router.__version__) <= parse("0.2.1"):
         response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers")
@@ -349,15 +354,14 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
 
     await abort_servers_until_idle(urls)
 
-    # make sure all the pending tasks are finished
+    if not args.partial_rollout:
+        return []
+
+    aborted_samples = []
     count = 0
     while state.pendings:
         done, state.pendings = await asyncio.wait(state.pendings, return_when=asyncio.FIRST_COMPLETED)
 
-        if not args.partial_rollout:
-            continue
-
-        # for partial rollout, collect the partial samples into the data buffer
         for task in done:
             group = task.result()
             for sample in group:
@@ -366,8 +370,7 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
             aborted_samples.append(group)
             count += len(group)
 
-    if args.partial_rollout:
-        logger.info(f"Collected {count} partial samples into the data buffer")
+    logger.info(f"Collected {count} partial samples into the data buffer")
 
     return aborted_samples
 
