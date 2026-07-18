@@ -1930,10 +1930,9 @@ def slime_validate_args(args):
     if args.over_sampling_batch_size is None:
         args.over_sampling_batch_size = args.rollout_batch_size
 
-    assert args.over_sampling_batch_size >= args.rollout_batch_size, (
-        f"over_sampling_batch_size {args.over_sampling_batch_size} should be greater than or equal to "
-        f"rollout_batch_size {args.rollout_batch_size}"
-    )
+    assert (
+        args.over_sampling_batch_size > 0
+    ), f"over_sampling_batch_size {args.over_sampling_batch_size} should be greater than zero"
 
     if args.num_epoch is not None:
         if args.num_rollout is not None:

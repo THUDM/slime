@@ -347,7 +347,7 @@ slime 支持更复杂的采样策略，例如 [DAPO](https://dapo-sia.github.io/
      slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
 ```
 
-这里 `over_sampling_batch_size` 需要大于 `rollout_batch_size`，例如配置为：
+`over_sampling_batch_size` 控制每次请求的 prompt 组数，且必须为正数。例如：
 
 ```bash
    --rollout-batch-size 32 \
@@ -369,7 +369,7 @@ def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
     )
 ```
 
-如果过滤函数非常严格，导致大量 prompt 组被丢弃，系统会监控 ` remaining_batch_size` 中待处理的任务数量。一旦待处理的任务数因丢弃过多而降至目标数 (32) 以下，系统会自动触发新一轮的过采样，再次请求  `over_sampling_batch_size` (64) 个新的 prompt 重复上述流程。
+`remaining_batch_size` 记录已接收和待处理的 prompt 组数。每丢弃一组，该值就会减一；当它低于目标值 (32) 时，系统会按 `over_sampling_batch_size` (64) 为一批补充请求，直到已接收和待处理的总数重新达到目标值。
 
 ### Partial Rollout
 
