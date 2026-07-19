@@ -1,4 +1,5 @@
 from argparse import Namespace
+from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -8,10 +9,14 @@ import torch.distributed as dist
 from megatron.core import mpu
 from ray import ObjectRef
 from ray.actor import ActorHandle
+from tqdm import tqdm
 
 from slime.utils.distributed_utils import get_gloo_group
+from slime.utils.types import ParamInfo
 
+from ..megatron_to_hf import convert_to_hf
 from ..sglang import FlattenedTensorBucket, MultiprocessingSerializer
+from .expert_routing import configure_expert_routing
 from .hf_weight_iterator_base import HfWeightIteratorBase
 from .update_weight_from_distributed import (
     connect_rollout_engines_from_distributed,
@@ -19,6 +24,27 @@ from .update_weight_from_distributed import (
     post_process_weights,
     update_weights_from_distributed,
 )
+
+
+def _build_flattened_tensor_data(
+    named_tensors: list[tuple[str, torch.Tensor]],
+) -> dict[str, Any]:
+    if not named_tensors:
+        return {
+            "flattened_tensor": torch.empty(0, dtype=torch.uint8, device=torch.cuda.current_device()),
+            "metadata": [],
+        }
+
+    # Do not reuse the IPC-facing flattened tensor. SGLang returns from the
+    # HTTP/Ray request after enqueueing GPU copies into model weights, but it
+    # does not guarantee a CUDA-device sync before the response. Reusing and
+    # overwriting the same producer buffer immediately after ray.get can race
+    # with the consumer-side copy and corrupt weights.
+    flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
+    return {
+        "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
+        "metadata": flattened_tensor_bucket.get_metadata(),
+    }
 
 
 class UpdateWeightFromTensor:
@@ -45,6 +71,7 @@ class UpdateWeightFromTensor:
         self.args = args
         self.model = model
         self.weights_getter = weights_getter
+        self.rank = dist.get_rank()
         self.model_name = model_name
         self.quantization_config = quantization_config
         self.weight_version = 0
@@ -53,11 +80,17 @@ class UpdateWeightFromTensor:
         self._hf_weight_iterator = HfWeightIteratorBase.create(
             args=args, model=model, model_name=model_name, quantization_config=quantization_config
         )
+        param_info_buckets = getattr(self._hf_weight_iterator, "megatron_local_param_info_buckets", None)
+        self._full_param_info_buckets = (
+            tuple(tuple(bucket) for bucket in param_info_buckets) if param_info_buckets is not None else None
+        )
+        self._non_expert_param_info_buckets: list[list[ParamInfo]] | None = None
 
         self._ipc_gather_group = None
         self._ipc_gather_src = None
         self._ipc_engine = None
         self._model_update_groups = None
+        self._expert_transfer_plan = []
 
     def connect_rollout_engines(
         self,
@@ -65,6 +98,7 @@ class UpdateWeightFromTensor:
         rollout_engine_lock: ActorHandle,
         engine_gpu_counts: Sequence[int] | None = None,
         engine_gpu_offsets: Sequence[int] | None = None,
+        engine_parallel_configs: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
         """
         Split colocated/distributed engines. Global source rank (DP=TP=PP=0) creates NCCL
@@ -117,6 +151,9 @@ class UpdateWeightFromTensor:
 
         colocate_gpu_offsets = engine_gpu_offsets[:colocate_engine_nums]
         colocate_gpu_counts = engine_gpu_counts[:colocate_engine_nums]
+        colocate_parallel_configs = (
+            engine_parallel_configs[:colocate_engine_nums] if engine_parallel_configs is not None else None
+        )
 
         # Create IPC Gloo gather groups (only on first call; partitioning is
         # fixed across reconnects).
@@ -124,7 +161,7 @@ class UpdateWeightFromTensor:
             for i in range(colocate_engine_nums):
                 group_ranks = list(range(colocate_gpu_offsets[i], colocate_gpu_offsets[i] + colocate_gpu_counts[i]))
                 new_group = dist.new_group(ranks=group_ranks, backend="gloo")
-                if dist.get_rank() in group_ranks:
+                if self.rank in group_ranks:
                     self._ipc_gather_group = new_group
                     self._ipc_gather_src = colocate_gpu_offsets[i]
 
@@ -132,8 +169,18 @@ class UpdateWeightFromTensor:
         for i, engine in enumerate(self.rollout_engines):
             start = colocate_gpu_offsets[i]
             end = start + colocate_gpu_counts[i]
-            if start <= dist.get_rank() < end:
+            if start <= self.rank < end:
                 self._ipc_engine = engine
+
+        self._non_expert_param_info_buckets, self._expert_transfer_plan = configure_expert_routing(
+            args=self.args,
+            full_param_info_buckets=self._full_param_info_buckets,
+            get_local_weight_names=self.weights_getter,
+            engine_gpu_counts=colocate_gpu_counts,
+            engine_gpu_offsets=colocate_gpu_offsets,
+            engine_parallel_configs=colocate_parallel_configs,
+            use_distribute=self.use_distribute,
+        )
 
     def pop_metrics(self) -> dict[str, float]:
         """
@@ -143,6 +190,89 @@ class UpdateWeightFromTensor:
         out, self.update_weight_metrics = self.update_weight_metrics, {}
         return out
 
+    def _prepare_expert_weight_batch(
+        self,
+        transfers: Sequence[Any],
+        megatron_local_weights: Mapping[str, torch.Tensor],
+        staging_buffers: dict[tuple[torch.dtype, tuple[int, ...]], list[torch.Tensor]],
+    ) -> list[tuple[str, torch.Tensor]]:
+        local_params = []
+        p2p_ops = []
+        buffer_offsets: dict[tuple[torch.dtype, tuple[int, ...]], int] = defaultdict(int)
+        for transfer in transfers:
+            for expert_param in transfer.params:
+                info = expert_param.info
+                if self.rank != transfer.source_rank and self.rank not in transfer.target_ranks:
+                    continue
+                key = (info.dtype, tuple(info.shape))
+                pool = staging_buffers.setdefault(key, [])
+                offset = buffer_offsets[key]
+                buffer_offsets[key] = offset + 1
+                if offset == len(pool):
+                    pool.append(torch.empty(info.shape, dtype=info.dtype, device="cuda"))
+                tensor = pool[offset]
+                if self.rank == transfer.source_rank:
+                    source = megatron_local_weights[info.name]
+                    if source.shape != info.shape or source.dtype != info.dtype:
+                        raise ValueError(f"expert metadata changed for {info.name}")
+                    tensor.copy_(source, non_blocking=True)
+                    p2p_ops.extend(
+                        dist.P2POp(dist.isend, tensor, target_rank)
+                        for target_rank in transfer.target_ranks
+                        if target_rank != self.rank
+                    )
+                    if self.rank in expert_param.target_ranks:
+                        local_params.append((expert_param, tensor))
+                else:
+                    p2p_ops.append(dist.P2POp(dist.irecv, tensor, transfer.source_rank))
+                    local_params.append((expert_param, tensor))
+
+        for request in dist.batch_isend_irecv(p2p_ops) if p2p_ops else ():
+            request.wait()
+
+        hf_named_tensors = []
+        for expert_param, tensor in local_params:
+            hf_named_tensors.extend(
+                convert_to_hf(
+                    self.args,
+                    self.model_name,
+                    expert_param.info.name,
+                    tensor,
+                    self.quantization_config,
+                )
+            )
+        return hf_named_tensors
+
+    def _update_expert_weights(
+        self,
+        megatron_local_weights: Mapping[str, torch.Tensor],
+    ) -> None:
+        dist.barrier(group=get_gloo_group())
+        # Initialize WORLD on all ranks before subset batched P2P.
+        dist.barrier()
+        # Reuse staging across layers instead of fragmenting the CUDA allocator.
+        staging_buffers: dict[tuple[torch.dtype, tuple[int, ...]], list[torch.Tensor]] = {}
+        for transfer_group in tqdm(
+            self._expert_transfer_plan,
+            disable=self.rank != 0,
+            desc="Update expert weights",
+        ):
+            for transfer_batch in transfer_group:
+                hf_named_tensors = self._prepare_expert_weight_batch(
+                    transfer_batch,
+                    megatron_local_weights,
+                    staging_buffers,
+                )
+                refs, long_lived_tensors = self._send_hf_params(hf_named_tensors)
+                ray.get(refs)
+                dist.barrier(group=get_gloo_group())
+                torch.cuda.synchronize()
+                del refs, long_lived_tensors, hf_named_tensors
+                torch.cuda.ipc_collect()
+                torch.cuda.empty_cache()
+        del staging_buffers
+        torch.cuda.empty_cache()
+
     @torch.no_grad()
     def update_weights(self) -> None:
         """
@@ -150,8 +280,7 @@ class UpdateWeightFromTensor:
         """
         self.weight_version += 1
 
-        rank = dist.get_rank()
-        if rank == 0:
+        if self.rank == 0:
             ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
             if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
@@ -164,22 +293,34 @@ class UpdateWeightFromTensor:
 
         megatron_local_weights = self.weights_getter()
 
-        for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights):
+        param_info_buckets = (
+            self._non_expert_param_info_buckets if self._expert_transfer_plan else self._full_param_info_buckets
+        )
+        for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(
+            megatron_local_weights,
+            param_info_buckets=param_info_buckets,
+        ):
             refs, long_lived_tensors = self._send_hf_params(hf_named_tensors)
             ray.get(refs)
             # Free GPU tensors so the caching allocator can reuse the blocks,
             # then release CUDA IPC cache entries whose consumers (sglang engines)
             # have already closed their IPC handles.
-            del long_lived_tensors, hf_named_tensors
+            del refs, long_lived_tensors, hf_named_tensors
             torch.cuda.ipc_collect()
+            torch.cuda.empty_cache()
 
+        if self._expert_transfer_plan:
+            self._update_expert_weights(megatron_local_weights)
+
+        del megatron_local_weights
         dist.barrier(group=get_gloo_group())
         # After the barrier all engines have returned, so every rank's last-chunk
         # IPC handles are now released by the consumers.  Clean them up.
         torch.cuda.ipc_collect()
+        torch.cuda.empty_cache()
 
         # int4/fp4 post_process
-        if rank == 0:
+        if self.rank == 0:
             if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
                 post_process_weights(
                     restore_weights_before_load=False,
@@ -242,12 +383,7 @@ def _send_to_colocated_engine(
 
     serialized_tensors = []
     for _dtype, named_tensors in converted_named_tensors_by_dtypes.items():
-        flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
-        metadata = flattened_tensor_bucket.get_metadata()
-        flattened_tensor_data = {
-            "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
-            "metadata": metadata,
-        }
+        flattened_tensor_data = _build_flattened_tensor_data(named_tensors)
         long_live_tensors.append(flattened_tensor_data)
         serialized_tensors.append(MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True))
 
