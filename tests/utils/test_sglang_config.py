@@ -166,6 +166,60 @@ class TestZeroGpuRolloutConfig:
         assert args.sglang_router_port == 3456
         assert args.sglang_model_routers == {"default": ("127.0.0.1", 3456)}
 
+    def test_server_group_parallel_config_derives_tp_from_overridden_pp(self):
+        from slime.ray.rollout import ServerGroup
+
+        args = Namespace(
+            num_gpus_per_node=8,
+            sglang_pp_size=1,
+            sglang_ep_size=32,
+            sglang_moe_dp_size=1,
+            sglang_moe_a2a_backend="deepep",
+        )
+
+        group = ServerGroup(
+            args=args,
+            pg=None,
+            all_engines=[object()],
+            num_gpus_per_engine=32,
+            num_new_engines=1,
+            sglang_overrides={"pp_size": 2},
+        )
+
+        assert group.parallel_config()["pp_size"] == 2
+        assert group.parallel_config()["tp_size"] == 16
+
+    def test_sglang_server_args_derive_tp_from_overridden_pp(self):
+        from slime.backends.sglang_utils.sglang_engine import _compute_server_args
+
+        args = Namespace(
+            hf_checkpoint="/tmp/hf",
+            seed=1,
+            offload_rollout=False,
+            rollout_num_gpus_per_engine=32,
+            num_gpus_per_node=8,
+            sglang_pp_size=1,
+            sglang_dp_size=16,
+            sglang_ep_size=32,
+            use_rollout_routing_replay=False,
+            fp16=False,
+        )
+
+        kwargs, _ = _compute_server_args(
+            args,
+            rank=0,
+            dist_init_addr="127.0.0.1:12345",
+            nccl_port=12346,
+            host="127.0.0.1",
+            port=30000,
+            base_gpu_id=0,
+            sglang_overrides={"pp_size": 2},
+            num_gpus_per_engine=32,
+        )
+
+        assert kwargs["pp_size"] == 2
+        assert kwargs["tp_size"] == 16
+
     def test_start_rollout_servers_defers_engine_wait(self, monkeypatch):
         from slime.ray import rollout as rollout_module
 

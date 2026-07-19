@@ -135,6 +135,18 @@ class ServerGroup:
         """Node-0 engines only (for multi-node serving)."""
         return self.all_engines[:: self.nodes_per_engine]
 
+    def parallel_config(self) -> dict[str, Any]:
+        """Return the SGLang parallel args that affect rank-local expert routing."""
+        overrides = {key.replace("-", "_"): value for key, value in self.sglang_overrides.items()}
+        pp_size = int(overrides.get("pp_size", getattr(self.args, "sglang_pp_size", 1)))
+        tp_size = int(overrides.get("tp_size", self.num_gpus_per_engine // pp_size))
+        return {
+            "tp_size": tp_size,
+            "pp_size": pp_size,
+            "ep_size": int(overrides.get("ep_size", getattr(self.args, "sglang_ep_size", 1))),
+            "moe_dp_size": int(overrides.get("moe_dp_size", getattr(self.args, "sglang_moe_dp_size", 1))),
+        }
+
     def start_engines(self, port_cursors: dict[int, int] | None = None) -> tuple[list, dict[int, int]]:
         """Create Ray actors, allocate ports, and fire ``engine.init()`` without waiting.
 
@@ -317,6 +329,11 @@ class RolloutServer:
             for j in range(len(g.engines)):
                 offsets.append(g.gpu_offset + j * g.num_gpus_per_engine)
         return offsets
+
+    @property
+    def engine_parallel_configs(self) -> list[dict[str, Any]]:
+        """Per-engine SGLang parallel config, parallel to ``engines``."""
+        return [g.parallel_config() for g in self.server_groups for _ in g.engines]
 
     @property
     def nodes_per_engine(self):
@@ -524,8 +541,9 @@ class RolloutManager:
         engines = srv.engines if srv else []
         gpu_counts = srv.engine_gpu_counts if srv else []
         gpu_offsets = srv.engine_gpu_offsets if srv else []
+        parallel_configs = srv.engine_parallel_configs if srv else []
         num_new = srv.num_new_engines if srv else 0
-        return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets
+        return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets, parallel_configs
 
     def get_num_rollout_per_epoch(self):
         assert self.args.rollout_global_dataset
