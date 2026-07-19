@@ -371,10 +371,8 @@ def _send_to_colocated_engine(
 
     long_live_tensors = []
 
-    if not hf_named_tensors:
-        converted_named_tensors_by_dtypes = {"empty": []}
-    elif getattr(FlattenedTensorBucket, "supports_multi_dtypes", False):
-        converted_named_tensors_by_dtypes = {"dtype": hf_named_tensors}
+    if getattr(FlattenedTensorBucket, "supports_multi_dtypes", False):
+        converted_named_tensors_by_dtypes = {"dtype": hf_named_tensors} if hf_named_tensors else {}
     else:
         converted_named_tensors_by_dtypes = {}
         for name, tensor in hf_named_tensors:
