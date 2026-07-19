@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 07 月 07 日"/>
+    <meta name="docbuild:last-update" content="2026 年 07 月 19 日"/>
   </head>
   
   
@@ -699,7 +699,7 @@ bash<span class="w"> </span>scripts/run-qwen3-4B.sh
 <span class="w">   </span>...
 </pre></div>
 </div>
-<p>即开启训推一体（colocate），并且训练部分会使用 1 机 8 卡，推理会和训练共同使用这 8 张卡张卡。</p>
+<p>即开启训推一体（colocate），并且训练部分会使用 1 机 8 卡，推理会和训练共同使用这 8 张卡。</p>
 <p>如果想使用训推分离的功能，需要去掉 <code class="docutils literal notranslate"><span class="pre">--colocate</span></code> 并配置上 <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code>，例如：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>...<span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>--<span class="w"> </span>python3<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
@@ -832,7 +832,7 @@ bash<span class="w"> </span>scripts/run-qwen3-4B.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 07 月 07 日.
+  最后更新于 2026 年 07 月 19 日.
   <br/>
 </p>
   </div>
