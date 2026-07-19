@@ -67,6 +67,7 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
         rollout_engine_lock: ActorHandle,
         engine_gpu_counts: Sequence[int] | None = None,
         engine_gpu_offsets: Sequence[int] | None = None,
+        engine_parallel_configs: Sequence[Mapping[str, object]] | None = None,
     ) -> None:
         # The rollout_engine_lock the NCCL path uses isn't needed — the engine-side apply is
         # serialized by a per-host flock.

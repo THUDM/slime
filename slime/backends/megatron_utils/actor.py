@@ -579,6 +579,7 @@ class MegatronTrainRayActor(TrainRayActor):
             num_new_engines,
             engine_gpu_counts,
             engine_gpu_offsets,
+            engine_parallel_configs,
         ) = ray.get(self.rollout_manager.get_updatable_engines_and_lock.remote())
 
         reconnect_rollout_engines = self.args.offload_train and self.args.use_critic and not self.args.colocate
@@ -599,6 +600,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 rollout_engine_lock,
                 engine_gpu_counts=engine_gpu_counts,
                 engine_gpu_offsets=engine_gpu_offsets,
+                engine_parallel_configs=engine_parallel_configs,
             )
             dist.barrier(group=get_gloo_group())
             if dist.get_rank() == 0:
