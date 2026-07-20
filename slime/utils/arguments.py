@@ -1421,8 +1421,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Path to the rollout sample filter function. "
                     "This function determines whether a sample will participate in loss calculation. "
-                    "The function should take args and samples (list[Sample]) as input, and return None. "
-                    "Please directly modify the remove_sample attribute of Sample. "
+                    "The function should take args and groups (list[list[Sample]]) as input, and return None. "
+                    "Please directly modify the remove_sample attribute of Sample objects inside each group. "
                     "Note: This attribute does not determine whether the sample participates in advantage normalization."
                 ),
             )

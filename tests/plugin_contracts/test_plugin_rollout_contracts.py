@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
+from argparse import Namespace
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,12 +21,14 @@ except ImportError:
         from _shared import get_contract_path, install_paths, install_stubs, run_contract_test_for_file
 
 install_paths()
-install_stubs(with_sglang_router=True, with_transformers=True)
+install_stubs(with_sglang_router=True, with_transformers=True, with_sglang=True, with_wandb=True)
 
 NUM_GPUS = 0
 DEFAULT_ROLLOUT_FUNCTION_PATH = "slime.rollout.sglang_rollout.generate_rollout"
 REFERENCE_ROLLOUT_FUNCTION_PATH = "plugin_contracts.test_plugin_rollout_contracts.valid_rollout_function"
 
+from slime.ray.rollout import RolloutManager
+from slime.rollout import sglang_rollout
 from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput, call_rollout_fn
 from slime.rollout.sglang_rollout import generate_rollout as default_generate_rollout
 from slime.utils.misc import load_function
@@ -79,6 +84,58 @@ def valid_rollout_function(args, rollout_id, data_source, evaluation=False):
             sample.reward = float(group_index + sample_index)
             sample.status = Sample.Status.COMPLETED
     return RolloutFnTrainOutput(samples=groups, metrics={"source": "contract"})
+
+
+SAMPLE_FILTER_CALLS: list[list[list[Sample]]] = []
+SAMPLE_FILTER_PATH = "plugin_contracts.test_plugin_rollout_contracts.counting_drop_last_sample_filter"
+
+
+def counting_drop_last_sample_filter(args, groups: list[list[Sample]]) -> None:
+    SAMPLE_FILTER_CALLS.append(groups)
+    for group in groups:
+        group[-1].remove_sample = True
+
+
+def make_rollout_manager(rollout_fn) -> SimpleNamespace:
+    """Stand-in for the RolloutManager actor's self, so tests can run the real
+    ``RolloutManager._get_rollout_data`` without GPUs or a Ray cluster."""
+    args = Namespace(
+        load_debug_rollout_data=None,
+        rollout_sample_filter_path=SAMPLE_FILTER_PATH,
+        rollout_global_dataset=True,
+        rollout_batch_size=2,
+        over_sampling_batch_size=2,
+        n_samples_per_prompt=2,
+        dynamic_sampling_filter_path=None,
+        partial_rollout=False,
+        rollout_all_samples_process_path=None,
+    )
+    return SimpleNamespace(args=args, generate_rollout=rollout_fn, data_source=ContractDataSource())
+
+
+class _ImmediateGenerateState:
+    """Replaces sglang_rollout.GenerateState so the built-in rollout completes
+    without rollout servers: every submitted group resolves as-is."""
+
+    def __init__(self, args):
+        self.args = args
+        self.remaining_batch_size = 0
+        self.pendings = set()
+
+    def submit_generate_tasks(self, samples: list[list[Sample]]) -> None:
+        async def identity(group: list[Sample]) -> list[Sample]:
+            return group
+
+        for group in samples:
+            self.pendings.add(asyncio.ensure_future(identity(group)))
+        self.remaining_batch_size += len(samples)
+
+    def reset(self) -> None:
+        pass
+
+
+async def _abort_without_pending_requests(args, rollout_id) -> list[list[Sample]]:
+    return []
 
 
 def invalid_rollout_function(args, rollout_id, data_source, evaluation=False):
@@ -178,6 +235,28 @@ def test_default_rollout_compat_wrapper_stability():
 
 def test_local_rollout_plugin_aligns_with_default_input_output_format():
     assert_rollout_function_matches_default_contract(valid_rollout_function)
+
+
+def test_manager_applies_sample_filter_to_custom_rollout_exactly_once():
+    SAMPLE_FILTER_CALLS.clear()
+    manager = make_rollout_manager(valid_rollout_function)
+
+    data, _ = RolloutManager._get_rollout_data(manager, rollout_id=2)
+
+    assert len(SAMPLE_FILTER_CALLS) == 1
+    assert [sample.remove_sample for sample in data] == [False, True, False, True]
+
+
+def test_manager_applies_sample_filter_to_builtin_rollout_exactly_once(monkeypatch):
+    monkeypatch.setattr(sglang_rollout, "GenerateState", _ImmediateGenerateState)
+    monkeypatch.setattr(sglang_rollout, "abort", _abort_without_pending_requests)
+    SAMPLE_FILTER_CALLS.clear()
+    manager = make_rollout_manager(default_generate_rollout)
+
+    data, _ = RolloutManager._get_rollout_data(manager, rollout_id=2)
+
+    assert len(SAMPLE_FILTER_CALLS) == 1
+    assert [sample.remove_sample for sample in data] == [False, True, False, True]
 
 
 def test_misaligned_rollout_plugin_is_rejected():
