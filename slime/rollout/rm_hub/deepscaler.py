@@ -2,6 +2,12 @@ from .math_utils import extract_answer, grade_answer_mathd, grade_answer_sympy
 
 
 def get_deepscaler_rule_based_reward(response, label):
+    # Guard against a missing response, mirroring the gpqa / f1 reward
+    # functions in this package. async_rm passes sample.response straight
+    # through, so a None response would otherwise raise a TypeError here
+    # instead of scoring 0.
+    if not response:
+        return 0
     if "</think>" in response:
         model_solution = response.split("</think>")[-1]
     elif "###Response" in response:
