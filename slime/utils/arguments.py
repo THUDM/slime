@@ -1233,6 +1233,53 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
             return parser
 
+        # mlflow
+        def add_mlflow_arguments(parser):
+            parser.add_argument("--use-mlflow", action="store_true", default=False)
+            parser.add_argument(
+                "--mlflow-tracking-uri",
+                type=str,
+                default=None,
+                help="MLflow tracking server URI.",
+            )
+            parser.add_argument(
+                "--mlflow-experiment-name",
+                type=str,
+                default=None,
+                help="MLflow experiment name.",
+            )
+            parser.add_argument(
+                "--mlflow-run-name",
+                type=str,
+                default=None,
+                help="MLflow run name.",
+            )
+            parser.add_argument(
+                "--mlflow-log-samples-per-step",
+                type=int,
+                default=5,
+                help="Number of rollout samples to log as MLflow artifacts per step.",
+            )
+            parser.add_argument(
+                "--mlflow-eval-log-samples-per-step",
+                type=int,
+                default=0,
+                help="Number of eval samples to log as MLflow artifacts per step.",
+            )
+            parser.add_argument(
+                "--mlflow-log-max-chars",
+                type=int,
+                default=2000,
+                help="Max characters per prompt/response in MLflow rollout artifacts.",
+            )
+            parser.add_argument(
+                "--mlflow-eval-log-max-chars",
+                type=int,
+                default=2000,
+                help="Max characters per prompt/response in MLflow eval artifacts.",
+            )
+            return parser
+
         # debug
         def add_debug_arguments(parser):
             parser.add_argument(
@@ -1508,6 +1555,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_on_policy_distillation_arguments(parser)
         parser = add_wandb_arguments(parser)
         parser = add_tensorboard_arguments(parser)
+        parser = add_mlflow_arguments(parser)
         parser = add_debug_arguments(parser)
         parser = add_network_arguments(parser)
         parser = add_reward_model_arguments(parser)
