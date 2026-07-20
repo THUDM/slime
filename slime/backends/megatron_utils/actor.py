@@ -2,6 +2,7 @@ import logging
 import os
 from argparse import Namespace
 from contextlib import nullcontext
+from datetime import timedelta
 from pathlib import Path
 
 import ray
@@ -18,7 +19,12 @@ from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.logging_utils import init_tracking
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.misc import Box
-from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
+from slime.utils.reloadable_process_group import (
+    destroy_process_groups,
+    monkey_patch_torch_dist,
+    register_default_process_group,
+    reload_process_groups,
+)
 from slime.utils.routing_replay import RoutingReplay
 from slime.utils.timer import Timer, inverse_timer, timer, with_defer
 from slime.utils.types import RolloutBatch
@@ -57,6 +63,12 @@ class MegatronTrainRayActor(TrainRayActor):
 
         monkey_patch_torch_dist()
         super().init(args, role, with_ref, with_opd_teacher)
+        # Destroying and recreating WORLD invalidates raw dist.group.WORLD references cached by external code.
+        # Set SLIME_DESTROY_WORLD_PROCESS_GROUP=0 when such references may outlive a train sleep/wake cycle.
+        if os.getenv("SLIME_DESTROY_WORLD_PROCESS_GROUP", "1").lower() not in {"0", "false", "no"}:
+            register_default_process_group(timeout=timedelta(minutes=args.distributed_timeout_minutes))
+        else:
+            logger.info("Default WORLD process-group destruction is disabled")
 
         init(args)
 
@@ -567,6 +579,7 @@ class MegatronTrainRayActor(TrainRayActor):
             num_new_engines,
             engine_gpu_counts,
             engine_gpu_offsets,
+            engine_parallel_configs,
         ) = ray.get(self.rollout_manager.get_updatable_engines_and_lock.remote())
 
         reconnect_rollout_engines = self.args.offload_train and self.args.use_critic and not self.args.colocate
@@ -587,6 +600,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 rollout_engine_lock,
                 engine_gpu_counts=engine_gpu_counts,
                 engine_gpu_offsets=engine_gpu_offsets,
+                engine_parallel_configs=engine_parallel_configs,
             )
             dist.barrier(group=get_gloo_group())
             if dist.get_rank() == 0:

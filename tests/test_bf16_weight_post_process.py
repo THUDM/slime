@@ -53,6 +53,8 @@ def _load_update_modules(monkeypatch):
     distributed_utils_mod.init_process_group = lambda *_args, **_kwargs: None
     http_utils_mod = types.ModuleType("slime.utils.http_utils")
     http_utils_mod._wrap_ipv6 = lambda host: host
+    types_mod = types.ModuleType("slime.utils.types")
+    types_mod.ParamInfo = object
 
     megatron_to_hf_mod = types.ModuleType("slime.backends.megatron_utils.megatron_to_hf")
     megatron_to_hf_mod.convert_to_hf = lambda *_args, **_kwargs: []
@@ -65,6 +67,8 @@ def _load_update_modules(monkeypatch):
     sglang_mod.MultiprocessingSerializer = object
     iterator_mod = types.ModuleType("slime.backends.megatron_utils.update_weight.hf_weight_iterator_base")
     iterator_mod.HfWeightIteratorBase = object
+    expert_routing_mod = types.ModuleType("slime.backends.megatron_utils.update_weight.expert_routing")
+    expert_routing_mod.configure_expert_routing = lambda **_kwargs: (None, [])
 
     tqdm_mod = types.ModuleType("tqdm")
     tqdm_mod.tqdm = type("tqdm", (), {})
@@ -82,10 +86,12 @@ def _load_update_modules(monkeypatch):
         "megatron.core.mpu": mpu_mod,
         "slime.utils.distributed_utils": distributed_utils_mod,
         "slime.utils.http_utils": http_utils_mod,
+        "slime.utils.types": types_mod,
         "slime.backends.megatron_utils.megatron_to_hf": megatron_to_hf_mod,
         "slime.backends.megatron_utils.update_weight.common": common_mod,
         "slime.backends.megatron_utils.sglang": sglang_mod,
         "slime.backends.megatron_utils.update_weight.hf_weight_iterator_base": iterator_mod,
+        "slime.backends.megatron_utils.update_weight.expert_routing": expert_routing_mod,
         "tqdm": tqdm_mod,
     }
     for name, module in modules.items():
@@ -145,11 +151,15 @@ def _record_post_process(events, calls):
 
 def _make_tensor_updater(tensor_module, engine, quantization_config=None):
     updater = object.__new__(tensor_module.UpdateWeightFromTensor)
+    updater.rank = 0
     updater.weight_version = 0
     updater.rollout_engines = [engine]
     updater.quantization_config = quantization_config
     updater.weights_getter = lambda: {}
-    updater._hf_weight_iterator = SimpleNamespace(get_hf_weight_chunks=lambda _weights: [[]])
+    updater._full_param_info_buckets = None
+    updater._non_expert_param_info_buckets = None
+    updater._expert_transfer_plan = []
+    updater._hf_weight_iterator = SimpleNamespace(get_hf_weight_chunks=lambda _weights, **_kwargs: [[]])
     updater._send_hf_params = lambda _chunk: ([], None)
     return updater
 

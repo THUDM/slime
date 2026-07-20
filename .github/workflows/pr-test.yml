@@ -631,6 +631,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_reloadable_process_group_world.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_placement_group.py"
             },
             {
@@ -692,7 +696,7 @@ jobs:
         shell: bash
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors
+          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors psutil
 
 
       - name: Install
@@ -776,7 +780,7 @@ jobs:
         shell: bash
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors
+          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors psutil
 
 
       - name: Install

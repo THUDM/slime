@@ -123,7 +123,11 @@ def save_hf_model_direct_to_path(
     pending_write = None
 
     for chunk_idx, hf_named_tensors in enumerate(
-        hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights, progress_desc=progress_desc)
+        hf_weight_iterator.get_hf_weight_chunks(
+            megatron_local_weights,
+            progress_desc=progress_desc,
+            should_convert_chunk=lambda idx: is_writer_rank and idx % num_save_nodes == save_node_rank,
+        )
     ):
         if is_writer_rank and chunk_idx % num_save_nodes == save_node_rank:
             pending_write = (chunk_idx, hf_named_tensors)
@@ -248,6 +252,7 @@ def _write_pending_chunk(
         writer.write(named_tensors, shard_idx=shard_idx)
         if torch.cuda.is_available():
             torch.cuda.ipc_collect()
+            torch.cuda.empty_cache()
 
     return None
 

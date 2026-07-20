@@ -14,7 +14,8 @@ from slime.utils.types import ParamInfo
 
 def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
     """
-    All-gather TP-sharded param to full tensor. expert_bias→param, non-TP/duplicated→param.data.
+    All-gather TP-sharded param to full tensor. expert_bias→param,
+    non-TP/duplicated/TP-size-1→param.data.
     Uses expert-TP for ".experts.", else regular-TP. linear_fc1 rechunked (GLU), linear_fc2 dim fix.
     """
     if "expert_bias" in name:
@@ -26,9 +27,15 @@ def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
 
     if ".experts." in name:
         tp_size = mpu.get_expert_tensor_parallel_world_size()
-        tp_group = mpu.get_expert_tensor_parallel_group()
     else:
         tp_size = mpu.get_tensor_model_parallel_world_size()
+
+    if tp_size == 1:
+        return param.data
+
+    if ".experts." in name:
+        tp_group = mpu.get_expert_tensor_parallel_group()
+    else:
         tp_group = mpu.get_tensor_model_parallel_group()
 
     param_partitions = [torch.empty_like(param.data) for _ in range(tp_size)]
@@ -55,7 +62,8 @@ def all_gather_params_async(
 ) -> list[torch.Tensor]:
     """
     Parallel TP all-gather for multiple params. Loop 1: for each TP param, allocate buffers +
-    dist.all_gather(async_op=True) on expert-TP/regular-TP group (skip expert_bias/non-TP/duplicated).
+    dist.all_gather(async_op=True) on expert-TP/regular-TP group
+    (skip expert_bias/non-TP/duplicated/TP-size-1).
     Loop 2: wait all NCCL handles (enables overlap). Loop 3: concat partitions + apply GLU rechunk/MoE dim fix.
     """
     # Phase 1: Start all async all_gather operations
@@ -66,17 +74,22 @@ def all_gather_params_async(
         # Prepare async all_gather
         if "expert_bias" in info.name:
             gather_tasks.append((info, param, None, None, None))
-            handles.append(None)
         elif not param.tensor_model_parallel or getattr(param, "parallel_mode", None) == "duplicated":
             gather_tasks.append((info, param.data, None, None, None))
-            handles.append(None)
         else:
             # Start async all_gather
             if ".experts." in info.name:
                 tp_size = mpu.get_expert_tensor_parallel_world_size()
-                tp_group = mpu.get_expert_tensor_parallel_group()
             else:
                 tp_size = mpu.get_tensor_model_parallel_world_size()
+
+            if tp_size == 1:
+                gather_tasks.append((info, param.data, None, None, None))
+                continue
+
+            if ".experts." in info.name:
+                tp_group = mpu.get_expert_tensor_parallel_group()
+            else:
                 tp_group = mpu.get_tensor_model_parallel_group()
 
             param_partitions = [torch.empty_like(param.data) for _ in range(tp_size)]
@@ -87,8 +100,7 @@ def all_gather_params_async(
     # Phase 2: Wait for ALL async operations to complete at once
     # This ensures maximum parallelism by not blocking on individual operations
     for handle in handles:
-        if handle is not None:
-            handle.wait()
+        handle.wait()
 
     # Phase 3: Process all results after all communications are done
     gathered_params = []
