@@ -58,6 +58,9 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     ), f"Sample status is {sample.status}"
 
     prompt_ids = _prepare_prompt_ids(sample, state.tokenizer, state.processor)
+    # partial-rollout reuses the sample; subtract prior progress so total <= rollout_max_response_len
+    if args.partial_rollout and sample.response_length > 0:
+        sampling_params["max_new_tokens"] = max(0, args.rollout_max_response_len - sample.response_length)
 
     assert (
         sampling_params["max_new_tokens"] >= 0
