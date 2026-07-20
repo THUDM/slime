@@ -1,7 +1,5 @@
 import logging
 
-import torch
-
 from slime.utils import accelerator
 
 try:
