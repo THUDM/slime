@@ -1,4 +1,7 @@
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
+
+from slime.utils.types import ParamInfo
 
 
 class HfWeightIteratorBase(ABC):
@@ -21,7 +24,12 @@ class HfWeightIteratorBase(ABC):
         self.quantization_config = quantization_config
 
     @abstractmethod
-    def get_hf_weight_chunks(self, megatron_local_weights, progress_desc: str = "Update weights"):
+    def get_hf_weight_chunks(
+        self,
+        megatron_local_weights,
+        progress_desc: str = "Update weights",
+        param_info_buckets: Sequence[Sequence[ParamInfo]] | None = None,
+    ):
         """
         Mental model of the API:
         megatron_model.to_hf_magically().named_parameters()
