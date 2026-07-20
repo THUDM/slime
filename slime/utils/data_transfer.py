@@ -69,8 +69,9 @@ def check_mooncake_available() -> None:
 
 
 def put_mooncake_rollout_data(args: Any, data: dict[str, Any], partition: str) -> Box:
-    ref = _mooncake_transfer(args, contribute_segment=True).put_legacy_dict(
+    ref = _mooncake_transfer(args, contribute_segment=True).put(
         data,
+        type="dict",
         namespace="slime",
         partition=partition,
         stage="rollout",
@@ -84,7 +85,7 @@ def _rollout_field_schemas_for_data(data: dict[str, Any]) -> dict:
 
 
 def get_mooncake_rollout_data(args: Any, ref: Box) -> dict[str, Any]:
-    return _mooncake_transfer(args, contribute_segment=False).get_legacy_dict(import_ref(ref.inner))
+    return _mooncake_transfer(args, contribute_segment=False).get(import_ref(ref.inner), type="dict")
 
 
 def release_mooncake_rollout_data(args: Any, data: dict[str, Any]) -> None:
@@ -95,7 +96,7 @@ def release_mooncake_rollout_data(args: Any, data: dict[str, Any]) -> None:
 
 
 def cleanup_mooncake_rollout_data(args: Any, ref: Box) -> None:
-    _mooncake_transfer(args, contribute_segment=False).remove_legacy_dict(import_ref(ref.inner))
+    _mooncake_transfer(args, contribute_segment=False).cleanup_dataproto(import_ref(ref.inner))
 
 
 def cleanup_mooncake_rollout_refs(args: Any, refs: list[Box]) -> None:
