@@ -45,8 +45,9 @@ def convert_mimo_mtp_param(args, name, param):
         "final_layernorm.weight": f"model.mtp_layers.{layer_idx}.final_layernorm.weight",
     }
     if component == "eh_proj.weight":
+        # chunk and reorder halves; create new tensor to avoid mutating input
         first_half, second_half = param.chunk(2, dim=1)
-        param = torch.cat([second_half, first_half], dim=1)
+        param = torch.cat([second_half, first_half], dim=1).contiguous()
 
     # Check direct mappings first
     if component in direct_mappings:
