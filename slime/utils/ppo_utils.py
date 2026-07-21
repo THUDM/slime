@@ -305,7 +305,7 @@ def compute_rollout_align_loss(
     window = (
         (d >= args.rollout_align_delta_min)
         & (d <= args.rollout_align_delta_max)
-        & (advantages_detached > args.rollout_align_adv_min)
+        & (advantages_detached >= args.rollout_align_adv_min)
     )
     if args.rollout_align_adv_max is not None:
         window = window & (advantages_detached < args.rollout_align_adv_max)

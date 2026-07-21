@@ -15,6 +15,15 @@ from slime.utils.logging_utils import configure_logger
 logger = logging.getLogger(__name__)
 
 
+def _float_or_none(value):
+    """argparse type that accepts a float or a literal 'none'/'null'/'' -> None."""
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip().lower() in ("none", "null", ""):
+        return None
+    return float(value)
+
+
 def reset_arg(parser, name, **kwargs):
     """
     Reset the default value of a Megatron argument.
@@ -967,7 +976,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             parser.add_argument(
                 "--seg-gate-severe-delta-threshold",
-                type=float,
+                type=_float_or_none,
                 default=-1.5,
                 help="A segment is 'severe' when its mean raw_delta is below this. "
                 "Set to None to disable this trigger.",
@@ -980,7 +989,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             parser.add_argument(
                 "--seg-gate-bad-fraction-threshold",
-                type=float,
+                type=_float_or_none,
                 default=0.02,
                 help="A segment is 'severe' when its bad-token fraction exceeds "
                 "this. Set to None to disable this trigger.",
@@ -1029,7 +1038,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--rollout-align-adv-min",
                 type=float,
                 default=0.0,
-                help="Only tokens with advantage strictly above this are aligned.",
+                help="Only tokens with advantage at or above this are aligned.",
             )
             parser.add_argument(
                 "--rollout-align-adv-max",

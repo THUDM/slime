@@ -8,7 +8,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from slime.utils.ppo_utils import compute_segment_pg_weight, compute_vllm_align_loss  # noqa: E402
+from slime.utils.ppo_utils import compute_segment_pg_weight, compute_rollout_align_loss  # noqa: E402
 
 SEG_DEFAULTS = dict(
     neg_delta_threshold=-0.5,
@@ -109,11 +109,11 @@ def _single_sample_mean(mask):
 
 
 class _Args:
-    vllm_align_huber_beta = 1.0
-    vllm_align_delta_min = -6.0
-    vllm_align_delta_max = -0.5
-    vllm_align_adv_min = 0.0
-    vllm_align_adv_max = None
+    rollout_align_huber_beta = 1.0
+    rollout_align_delta_min = -6.0
+    rollout_align_delta_max = -0.5
+    rollout_align_adv_min = 0.0
+    rollout_align_adv_max = None
 
 
 def test_align_window_selection():
@@ -125,7 +125,7 @@ def test_align_window_selection():
     adv = torch.tensor([1.0, 1.0, 1.0, -0.5])
     mask = torch.ones(4)
 
-    align_loss, align_frac = compute_vllm_align_loss(
+    align_loss, align_frac = compute_rollout_align_loss(
         raw_delta_grad=raw_delta_grad,
         advantages_detached=adv,
         args=_Args(),
@@ -147,11 +147,11 @@ def test_align_window_selection():
 
 def test_align_adv_max_bound():
     args = _Args()
-    args.vllm_align_adv_max = 0.5  # exclude adv >= 0.5
+    args.rollout_align_adv_max = 0.5  # exclude adv >= 0.5
     raw_delta_grad = torch.tensor([-1.0, -1.0])
     adv = torch.tensor([0.2, 1.0])  # first inside (<0.5), second excluded
     mask = torch.ones(2)
-    align_loss, align_frac = compute_vllm_align_loss(
+    align_loss, align_frac = compute_rollout_align_loss(
         raw_delta_grad=raw_delta_grad,
         advantages_detached=adv,
         args=args,

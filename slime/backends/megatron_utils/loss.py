@@ -17,7 +17,7 @@ from slime.utils.ppo_utils import (
     compute_opsm_mask,
     compute_policy_loss,
     compute_segment_pg_weight,
-    compute_sglang_align_loss,
+    compute_rollout_align_loss,
     get_advantages_and_returns_batch,
     get_grpo_returns,
     get_reinforce_plus_plus_baseline_advantages,
@@ -712,6 +712,12 @@ def policy_loss_function(
     if args.seg_gate_enable:
         assert mpu.get_context_parallel_world_size() == 1, "seg_gate only supports cp_size==1 for now"
         assert "rollout_log_probs" in batch, "seg_gate requires rollout_log_probs"
+        # raw_delta uses the OLD train logprob (batch["log_probs"], computed in the pre-update
+        # log-prob pass) minus the rollout logprob, so the gate measures the pure train/rollout
+        # (backend/precision) mismatch, decoupled from intra-batch PPO drift, and stays stable
+        # across micro-updates. This is the same signal TIS uses. The doc writes `raw_delta =
+        # log_prob - rollout_log_prob` with the *current* train logprob, but for a detached gate
+        # the old logprob is the cleaner choice; the align aux loss below uses the current one.
         raw_delta_list = [(olp - rlp).detach() for olp, rlp in zip(batch["log_probs"], batch["rollout_log_probs"])]
         seg_weight, seg_metrics = compute_segment_pg_weight(
             raw_delta_list=raw_delta_list,
@@ -814,18 +820,18 @@ def policy_loss_function(
     # Safe-region alignment aux loss: pull medium train/rollout mismatch back to 0.
     align_loss = None
     align_frac = None
-    if args.vllm_align_enable:
-        assert mpu.get_context_parallel_world_size() == 1, "vllm_align only supports cp_size==1 for now"
-        assert "rollout_log_probs" in batch, "vllm_align requires rollout_log_probs"
+    if args.rollout_align_enable:
+        assert mpu.get_context_parallel_world_size() == 1, "rollout_align only supports cp_size==1 for now"
+        assert "rollout_log_probs" in batch, "rollout_align requires rollout_log_probs"
         rollout_lp = torch.cat(batch["rollout_log_probs"], dim=0).to(log_probs.device)
         raw_delta_grad = log_probs - rollout_lp  # current log_probs (cat), keeps gradient
-        align_loss, align_frac = compute_vllm_align_loss(
+        align_loss, align_frac = compute_rollout_align_loss(
             raw_delta_grad=raw_delta_grad,
             advantages_detached=advantages,  # L379: already cat + detached
             args=args,
             sum_of_sample_mean=sum_of_sample_mean,
         )
-        loss = loss + args.vllm_align_coef * align_loss
+        loss = loss + args.rollout_align_coef * align_loss
 
     # make sure the gradient could backprop correctly.
     if log_probs.numel() == 0:
@@ -863,7 +869,7 @@ def policy_loss_function(
         reported_loss["seg_neg_frac"] = seg_metrics["seg_neg_frac"].clone().detach()
         reported_loss["seg_severe_frac"] = seg_metrics["seg_severe_frac"].clone().detach()
 
-    if args.vllm_align_enable:
+    if args.rollout_align_enable:
         reported_loss["align_loss"] = align_loss.clone().detach()
         reported_loss["align_frac"] = align_frac.clone().detach()
         
