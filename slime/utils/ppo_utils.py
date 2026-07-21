@@ -2,7 +2,7 @@
 # and https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/trainer/ppo_utils/experience_maker.py
 
 from argparse import Namespace
-
+from typing import Callable, List, Optional, Tuple
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -147,6 +147,173 @@ def compute_policy_loss(
 
     return pg_losses, clipfrac
 
+
+def compute_segment_pg_weight(
+    *,
+    raw_delta_list: List[torch.Tensor],
+    advantages_list: List[torch.Tensor],
+    loss_masks: List[torch.Tensor],
+    segment_size: int,
+    neg_delta_threshold: float,
+    neg_adv_max: float,
+    neg_weight: float,
+    severe_delta_threshold: Optional[float],
+    bad_delta_threshold: float,
+    bad_fraction_threshold: Optional[float],
+    severe_weight: float,
+) -> Tuple[torch.Tensor, dict]:
+    """Per-segment down-weighting of the PG loss for bad logprob-mismatch regions.
+
+    Each response is split into contiguous segments of ``segment_size`` tokens.
+    For every segment, statistics are computed over the mask-valid tokens only:
+
+    - ``seg_delta``: mean ``raw_delta`` (= train logp - rollout logp).
+    - ``seg_adv``: mean advantage.
+    - ``seg_bad_fraction``: fraction of tokens with ``raw_delta < bad_delta_threshold``.
+
+    A segment is ``negative`` when ``seg_delta < neg_delta_threshold`` and
+    ``seg_adv < neg_adv_max``; it is ``severe`` when (either the severe-delta or
+    the bad-fraction trigger fires) and ``seg_adv < neg_adv_max``. Severe overrides
+    negative. Weights: severe -> ``severe_weight``, negative -> ``neg_weight``,
+    otherwise ``1.0``. Empty (fully masked) segments get weight ``1.0`` and are
+    excluded from the reported fractions.
+
+    Args:
+        raw_delta_list: Per-sample 1D detached ``raw_delta`` tensors.
+        advantages_list: Per-sample 1D advantage tensors.
+        loss_masks: Per-sample 1D response loss masks.
+        segment_size: Segment length in response tokens.
+        neg_delta_threshold, neg_adv_max, neg_weight: Negative-segment config.
+        severe_delta_threshold, bad_delta_threshold, bad_fraction_threshold,
+            severe_weight: Severe-segment config (``*_threshold`` may be None).
+
+    Returns:
+        Tuple of ``(seg_weight, metrics)`` where ``seg_weight`` is the 1D weight
+        tensor concatenated in sample order (same order/length as the ``cat`` of
+        ``pg_loss``), and ``metrics`` holds 0-dim scalar tensors
+        ``seg_neg_frac`` / ``seg_severe_frac`` (fraction of valid segments that are
+        negative / severe).
+    """
+    device = raw_delta_list[0].device if len(raw_delta_list) > 0 else torch.device("cpu")
+
+    weight_chunks = []
+    num_valid_segments = torch.zeros((), device=device)
+    num_neg_segments = torch.zeros((), device=device)
+    num_severe_segments = torch.zeros((), device=device)
+
+    for raw_delta, advantages, loss_mask in zip(raw_delta_list, advantages_list, loss_masks):
+        length = raw_delta.size(0)
+        if length == 0:
+            weight_chunks.append(raw_delta.new_zeros(0))
+            continue
+
+        raw_delta = raw_delta.float()
+        advantages = advantages.float().to(raw_delta.device)
+        mask = loss_mask.float().to(raw_delta.device)
+
+        # Pad up to a whole number of segments, then reshape to [num_seg, segment_size].
+        num_seg = (length + segment_size - 1) // segment_size
+        pad = num_seg * segment_size - length
+        if pad > 0:
+            raw_delta_p = F.pad(raw_delta, (0, pad))
+            adv_p = F.pad(advantages, (0, pad))
+            mask_p = F.pad(mask, (0, pad))
+        else:
+            raw_delta_p, adv_p, mask_p = raw_delta, advantages, mask
+        delta_2d = raw_delta_p.view(num_seg, segment_size)
+        adv_2d = adv_p.view(num_seg, segment_size)
+        mask_2d = mask_p.view(num_seg, segment_size)
+
+        count = mask_2d.sum(dim=1)  # [num_seg]
+        denom = torch.clamp_min(count, 1)
+        seg_delta = (delta_2d * mask_2d).sum(dim=1) / denom
+        seg_adv = (adv_2d * mask_2d).sum(dim=1) / denom
+        seg_bad_fraction = ((delta_2d < bad_delta_threshold).float() * mask_2d).sum(dim=1) / denom
+
+        valid = count > 0
+        adv_bad = seg_adv < neg_adv_max
+        is_neg = (seg_delta < neg_delta_threshold) & adv_bad
+
+        severe_trigger = torch.zeros_like(valid)
+        if severe_delta_threshold is not None:
+            severe_trigger = severe_trigger | (seg_delta < severe_delta_threshold)
+        if bad_fraction_threshold is not None:
+            severe_trigger = severe_trigger | (seg_bad_fraction > bad_fraction_threshold)
+        is_severe = severe_trigger & adv_bad
+
+        severe_mask = is_severe & valid
+        neg_mask = is_neg & valid & ~is_severe  # severe overrides neg
+
+        seg_w = torch.ones(num_seg, device=raw_delta.device, dtype=raw_delta.dtype)
+        seg_w = torch.where(neg_mask, seg_w.new_full((), neg_weight), seg_w)
+        seg_w = torch.where(severe_mask, seg_w.new_full((), severe_weight), seg_w)
+
+        # Broadcast per-segment weight back to tokens and trim padding.
+        token_w = seg_w.unsqueeze(1).expand(num_seg, segment_size).reshape(-1)[:length]
+        weight_chunks.append(token_w)
+
+        num_valid_segments = num_valid_segments + valid.sum()
+        num_neg_segments = num_neg_segments + neg_mask.sum()
+        num_severe_segments = num_severe_segments + severe_mask.sum()
+
+    if len(weight_chunks) > 0:
+        seg_weight = torch.cat(weight_chunks, dim=0)
+    else:
+        seg_weight = torch.zeros(0, device=device)
+
+    denom_valid = torch.clamp_min(num_valid_segments, 1)
+    metrics = {
+        "seg_neg_frac": num_neg_segments / denom_valid,
+        "seg_severe_frac": num_severe_segments / denom_valid,
+    }
+    return seg_weight, metrics
+
+
+def compute_rollout_align_loss(
+    *,
+    raw_delta_grad: torch.Tensor,
+    advantages_detached: torch.Tensor,
+    args,
+    sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Safe-region huber alignment aux loss.
+
+    Applies a smooth-L1 (huber) penalty that pulls ``raw_delta`` (= current train
+    logp - rollout logp) toward 0, but only on "safe" tokens: those inside a
+    bounded negative ``raw_delta`` window and with advantage in the configured
+    range. The penalty keeps its gradient (via ``raw_delta_grad``) so it can
+    actually push the mismatch down; the window is computed from detached values.
+
+    Args:
+        raw_delta_grad: 1D ``raw_delta`` tensor with gradient attached.
+        advantages_detached: 1D detached per-token advantages (same order/length).
+        args: Config providing ``rollout_align_huber_beta`` / ``rollout_align_delta_min``
+            / ``rollout_align_delta_max`` / ``rollout_align_adv_min`` / ``rollout_align_adv_max``.
+        sum_of_sample_mean: Reduction applying the loss mask / per-sample mean.
+
+    Returns:
+        Tuple ``(align_loss, align_frac)`` of 0-dim scalar tensors, where
+        ``align_frac`` is the mask-weighted fraction of tokens inside the window.
+    """
+    token_obj = F.smooth_l1_loss(
+        raw_delta_grad,
+        torch.zeros_like(raw_delta_grad),
+        reduction="none",
+        beta=args.rollout_align_huber_beta,
+    )
+    d = raw_delta_grad.detach()
+    window = (
+        (d >= args.rollout_align_delta_min)
+        & (d <= args.rollout_align_delta_max)
+        & (advantages_detached > args.rollout_align_adv_min)
+    )
+    if args.rollout_align_adv_max is not None:
+        window = window & (advantages_detached < args.rollout_align_adv_max)
+    window_float = window.float()
+
+    align_loss = sum_of_sample_mean(token_obj * window_float)
+    align_frac = sum_of_sample_mean(window_float)
+    return align_loss, align_frac
 
 def compute_log_probs(logits: torch.Tensor, tokens: torch.Tensor, process_group: dist.ProcessGroup | None):
     # TODO: when megatron is not installed, fall back to naive implementation
