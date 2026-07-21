@@ -936,6 +936,7 @@ def policy_loss_function(
 
     full_log_probs = None
     full_old_log_probs = None
+    full_advantages = None
     if need_full_log_probs:
         full_log_probs = [
             all_gather_with_cp(log_prob, total_length, response_length)
@@ -949,6 +950,13 @@ def policy_loss_function(
                 old_log_probs, total_lengths, response_lengths, strict=False
             )
         ]
+    if args.use_opsm:
+        full_advantages = [
+            all_gather_with_cp(advantage, total_length, response_length)
+            for advantage, total_length, response_length in zip(
+                batch["advantages"], total_lengths, response_lengths, strict=False
+            )
+        ]
 
     # Compute OPSM mask if enabled
     if args.use_opsm:
@@ -956,8 +964,9 @@ def policy_loss_function(
             args=args,
             full_log_probs=full_log_probs,
             full_old_log_probs=full_old_log_probs,
-            advantages=batch["advantages"],
+            full_advantages=full_advantages,
             loss_masks=batch["loss_masks"],
+            local_advantages=batch["advantages"],
         )
 
     # Compute KL divergence (GSPO uses sequence-level KL, others use per-token KL)
