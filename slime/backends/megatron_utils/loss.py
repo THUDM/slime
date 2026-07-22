@@ -925,6 +925,9 @@ def policy_loss_function(
     )
 
     log_probs = log_probs_and_entropy["log_probs"]
+    # Current pi_theta (grad-carrying), captured before the cat below; passed to TIS-hook
+    # corrections so they can form pi_theta / pi_rollout (see off_policy_is_function).
+    cur_log_probs_list = log_probs
     if not args.use_rollout_logprobs and not old_log_probs:
         old_log_probs = [log_prob.detach() for log_prob in log_probs]
     train_log_probs_for_tis = batch.get("log_probs")
@@ -998,9 +1001,12 @@ def policy_loss_function(
         assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
 
         ois = (-ppo_kl).exp()
+        # Pass cur_log_probs (current pi_theta, grad-carrying) so corrections can form
+        # pi_theta/pi_rollout, not just the frozen pi_theta_old/pi_rollout of vanilla TIS.
         tis_kwargs = {
             "args": args,
             "pg_loss": pg_loss,
+            "cur_log_probs": cur_log_probs_list,
             "train_log_probs": train_log_probs_for_tis,
             "rollout_log_probs": batch["rollout_log_probs"],
             "loss_masks": batch["loss_masks"],
