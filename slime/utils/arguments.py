@@ -15,6 +15,15 @@ from slime.utils.logging_utils import configure_logger
 logger = logging.getLogger(__name__)
 
 
+def _float_or_none(value):
+    """argparse type that accepts a float or a literal 'none'/'null'/'' -> None."""
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip().lower() in ("none", "null", ""):
+        return None
+    return float(value)
+
+
 def reset_arg(parser, name, **kwargs):
     """
     Reset the default value of a Megatron argument.
@@ -931,6 +940,112 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Path to a custom reducer function for pg_loss only. When set, pg_loss will use this custom reducer while other metrics (pg_clipfrac, ppo_kl, entropy_loss, etc.) still use the default sum_of_sample_mean. (e.g., examples/Dr.GRPO/custom_reducer.py:get_pg_loss_reducer).",
             )
 
+            # Segment-level gate for train/rollout logprob mismatch.
+            # Splits each response into fixed-length segments and down-weights the
+            # PG loss of segments dominated by negative logprob mismatch (raw_delta).
+            parser.add_argument(
+                "--seg-gate-enable",
+                action="store_true",
+                default=False,
+                help="Enable segment-level down-weighting of PG loss for bad "
+                "train/rollout logprob-mismatch regions.",
+            )
+            parser.add_argument(
+                "--seg-gate-size",
+                type=int,
+                default=128,
+                help="Segment length (in response tokens) used by the segment gate.",
+            )
+            parser.add_argument(
+                "--seg-gate-neg-delta-threshold",
+                type=float,
+                default=-0.5,
+                help="A segment is 'negative' when its mean raw_delta is below this.",
+            )
+            parser.add_argument(
+                "--seg-gate-neg-adv-max",
+                type=float,
+                default=0.0,
+                help="Only segments with mean advantage below this are gated.",
+            )
+            parser.add_argument(
+                "--seg-gate-neg-weight",
+                type=float,
+                default=0.3,
+                help="PG-loss weight applied to 'negative' (mildly bad) segments.",
+            )
+            parser.add_argument(
+                "--seg-gate-severe-delta-threshold",
+                type=_float_or_none,
+                default=-1.5,
+                help="A segment is 'severe' when its mean raw_delta is below this. "
+                "Set to None to disable this trigger.",
+            )
+            parser.add_argument(
+                "--seg-gate-bad-delta-threshold",
+                type=float,
+                default=-6.0,
+                help="Tokens with raw_delta below this count as 'bad' for the " "severe bad-fraction trigger.",
+            )
+            parser.add_argument(
+                "--seg-gate-bad-fraction-threshold",
+                type=_float_or_none,
+                default=0.02,
+                help="A segment is 'severe' when its bad-token fraction exceeds "
+                "this. Set to None to disable this trigger.",
+            )
+            parser.add_argument(
+                "--seg-gate-severe-weight",
+                type=float,
+                default=0.1,
+                help="PG-loss weight applied to 'severe' segments (overrides neg).",
+            )
+
+            # Safe-region alignment: a light huber aux loss that pulls medium
+            # train/rollout mismatch (raw_delta) back toward 0 on safe tokens
+            # (advantage > 0 and raw_delta within a bounded negative window).
+            parser.add_argument(
+                "--rollout-align-enable",
+                action="store_true",
+                default=False,
+                help="Enable safe-region huber alignment aux loss on medium " "train/rollout logprob mismatch.",
+            )
+            parser.add_argument(
+                "--rollout-align-coef",
+                type=float,
+                default=0.0005,
+                help="Coefficient for the safe-region alignment aux loss.",
+            )
+            parser.add_argument(
+                "--rollout-align-huber-beta",
+                type=float,
+                default=1.0,
+                help="Beta (transition point) of the smooth L1 / huber alignment loss.",
+            )
+            parser.add_argument(
+                "--rollout-align-delta-min",
+                type=float,
+                default=-6.0,
+                help="Lower bound of the raw_delta window eligible for alignment.",
+            )
+            parser.add_argument(
+                "--rollout-align-delta-max",
+                type=float,
+                default=-0.5,
+                help="Upper bound of the raw_delta window eligible for alignment.",
+            )
+            parser.add_argument(
+                "--rollout-align-adv-min",
+                type=float,
+                default=0.0,
+                help="Only tokens with advantage at or above this are aligned.",
+            )
+            parser.add_argument(
+                "--rollout-align-adv-max",
+                type=float,
+                default=None,
+                help="Optional upper bound on advantage for alignment; None = no bound.",
+            )
             parser.add_argument(
                 "--use-routing-replay",
                 action="store_true",

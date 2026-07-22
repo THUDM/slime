@@ -16,6 +16,8 @@ from slime.utils.ppo_utils import (
     compute_gspo_kl,
     compute_opsm_mask,
     compute_policy_loss,
+    compute_segment_pg_weight,
+    compute_rollout_align_loss,
     get_advantages_and_returns_batch,
     get_grpo_returns,
     get_reinforce_plus_plus_baseline_advantages,
@@ -705,6 +707,33 @@ def policy_loss_function(
 
     pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
 
+    # Segment-level down-weighting of PG loss for bad train/rollout mismatch regions.
+    seg_metrics = None
+    if args.seg_gate_enable:
+        assert mpu.get_context_parallel_world_size() == 1, "seg_gate only supports cp_size==1 for now"
+        assert "rollout_log_probs" in batch, "seg_gate requires rollout_log_probs"
+        # raw_delta uses the OLD train logprob (batch["log_probs"], computed in the pre-update
+        # log-prob pass) minus the rollout logprob, so the gate measures the pure train/rollout
+        # (backend/precision) mismatch, decoupled from intra-batch PPO drift, and stays stable
+        # across micro-updates. This is the same signal TIS uses. The doc writes `raw_delta =
+        # log_prob - rollout_log_prob` with the *current* train logprob, but for a detached gate
+        # the old logprob is the cleaner choice; the align aux loss below uses the current one.
+        raw_delta_list = [(olp - rlp).detach() for olp, rlp in zip(batch["log_probs"], batch["rollout_log_probs"])]
+        seg_weight, seg_metrics = compute_segment_pg_weight(
+            raw_delta_list=raw_delta_list,
+            advantages_list=batch["advantages"],
+            loss_masks=batch["loss_masks"],
+            segment_size=args.seg_gate_size,
+            neg_delta_threshold=args.seg_gate_neg_delta_threshold,
+            neg_adv_max=args.seg_gate_neg_adv_max,
+            neg_weight=args.seg_gate_neg_weight,
+            severe_delta_threshold=args.seg_gate_severe_delta_threshold,
+            bad_delta_threshold=args.seg_gate_bad_delta_threshold,
+            bad_fraction_threshold=args.seg_gate_bad_fraction_threshold,
+            severe_weight=args.seg_gate_severe_weight,
+        )
+        pg_loss = pg_loss * seg_weight.to(pg_loss.dtype)
+
     if args.use_opsm:
         pg_loss = pg_loss * opsm_mask
 
@@ -787,6 +816,22 @@ def policy_loss_function(
         kl_loss = sum_of_sample_mean(kl)
 
         loss = loss + args.kl_loss_coef * kl_loss
+    
+    # Safe-region alignment aux loss: pull medium train/rollout mismatch back to 0.
+    align_loss = None
+    align_frac = None
+    if args.rollout_align_enable:
+        assert mpu.get_context_parallel_world_size() == 1, "rollout_align only supports cp_size==1 for now"
+        assert "rollout_log_probs" in batch, "rollout_align requires rollout_log_probs"
+        rollout_lp = torch.cat(batch["rollout_log_probs"], dim=0).to(log_probs.device)
+        raw_delta_grad = log_probs - rollout_lp  # current log_probs (cat), keeps gradient
+        align_loss, align_frac = compute_rollout_align_loss(
+            raw_delta_grad=raw_delta_grad,
+            advantages_detached=advantages,  # L379: already cat + detached
+            args=args,
+            sum_of_sample_mean=sum_of_sample_mean,
+        )
+        loss = loss + args.rollout_align_coef * align_loss
 
     # make sure the gradient could backprop correctly.
     if log_probs.numel() == 0:
@@ -820,6 +865,14 @@ def policy_loss_function(
             key_name = f"{metric_key}"
             reported_loss[key_name] = sum_of_sample_mean_for_mismatch_metrics(metric_value)
 
+    if args.seg_gate_enable:
+        reported_loss["seg_neg_frac"] = seg_metrics["seg_neg_frac"].clone().detach()
+        reported_loss["seg_severe_frac"] = seg_metrics["seg_severe_frac"].clone().detach()
+
+    if args.rollout_align_enable:
+        reported_loss["align_loss"] = align_loss.clone().detach()
+        reported_loss["align_frac"] = align_frac.clone().detach()
+        
     if args.use_opsm:
         reported_loss["opsm_clipfrac"] = opsm_clipfrac
 
