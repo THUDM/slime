@@ -87,7 +87,7 @@ def get_responses(
     assert logits.size(0) == 1, f"{logits.shape}"
     logits = logits.squeeze(0)
 
-    if apply_temperature and args.rollout_temperature != 1.0:
+    if apply_temperature and args.rollout_temperature > 0 and args.rollout_temperature != 1.0:
         logits = logits.div(args.rollout_temperature)
 
     cp_size = mpu.get_context_parallel_world_size()
@@ -496,7 +496,7 @@ def get_log_probs_and_entropy(
 
     # Apply rollout temperature scaling to logits to match rollout-time log-probs.
     rollout_temperature = getattr(args, "rollout_temperature", 1.0)
-    if rollout_temperature != 1.0:
+    if rollout_temperature > 0 and rollout_temperature != 1.0:
         logits = logits / rollout_temperature
     logits = logits.contiguous()
     T = logits.size(0)
