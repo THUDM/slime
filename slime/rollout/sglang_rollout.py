@@ -40,6 +40,29 @@ logger = logging.getLogger(__name__)
 _PROCESSOR_PROMPT_KEYS = {"input_ids", "attention_mask"}
 
 
+def _assign_missing_session_ids(group: list[Sample], scope: str) -> None:
+    """Assign missing routing session IDs according to the requested scope."""
+    if scope == "sample":
+        for sample in group:
+            if sample.session_id is None:
+                sample.session_id = str(uuid.uuid4())
+        return
+
+    if scope != "group":
+        raise ValueError(f"Unsupported rollout session ID scope: {scope!r}.")
+
+    explicit_session_ids = {sample.session_id for sample in group if sample.session_id}
+    if len(explicit_session_ids) > 1:
+        raise ValueError("Group-scoped session IDs require at most one explicit non-empty session_id per group.")
+
+    group_session_id = next(iter(explicit_session_ids), None)
+    if group_session_id is None:
+        group_session_id = str(uuid.uuid4())
+    for sample in group:
+        if not sample.session_id:
+            sample.session_id = group_session_id
+
+
 def _prepare_prompt_ids(sample: Sample, tokenizer, processor: Any) -> list[int]:
     raw_multimodal_inputs = sample.multimodal_inputs or {}
     has_multimodal_inputs = any(value is not None for value in raw_multimodal_inputs.values())
@@ -306,10 +329,7 @@ async def generate_and_rm_group(
     if state.aborted:
         return group
 
-    # Generate a unique session_id for each sample in the group
-    for sample in group:
-        if sample.session_id is None:
-            sample.session_id = str(uuid.uuid4())
+    _assign_missing_session_ids(group, getattr(args, "rollout_session_id_scope", "sample"))
 
     tasks = []
     for idx, sample in enumerate(group):
