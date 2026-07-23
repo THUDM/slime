@@ -22,6 +22,7 @@ from .update_weight_from_distributed import (
     connect_rollout_engines_from_distributed,
     disconnect_rollout_engines_from_distributed,
     post_process_weights,
+    requires_post_process_after_update,
     update_weights_from_distributed,
 )
 
@@ -319,9 +320,10 @@ class UpdateWeightFromTensor:
         torch.cuda.ipc_collect()
         torch.cuda.empty_cache()
 
-        # int4/fp4 post_process
         if self.rank == 0:
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+            if requires_post_process_after_update(self.quantization_config):
+                # Compressed-tensors repacks quantized weights, while
+                # unquantized backends may restore runtime-specific layouts.
                 post_process_weights(
                     restore_weights_before_load=False,
                     post_process_quantization=True,

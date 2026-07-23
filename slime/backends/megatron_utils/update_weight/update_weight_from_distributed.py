@@ -123,8 +123,9 @@ class UpdateWeightFromDistributed:
         self._send_weights(pbar)
 
         if dist.get_rank() == 0:
-            # int4/fp4 post_process
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+            if requires_post_process_after_update(self.quantization_config):
+                # Compressed-tensors repacks quantized weights, while
+                # unquantized backends may restore runtime-specific layouts.
                 post_process_weights(
                     restore_weights_before_load=False,
                     post_process_quantization=True,
@@ -355,13 +356,20 @@ def update_weights_from_distributed(
     return refs
 
 
+def requires_post_process_after_update(
+    quantization_config: Mapping[str, object] | None,
+) -> bool:
+    """Return whether SGLang must finalize weights after a hot update."""
+    return quantization_config is None or quantization_config.get("quant_method") == "compressed-tensors"
+
+
 def post_process_weights(
     restore_weights_before_load: bool,
     post_process_quantization: bool,
     rollout_engines: Sequence[ActorHandle],
 ):
     """
-    Trigger post-process for int4/fp4 quantization on all rollout engines.
+    Trigger engine-specific post-load processing on all rollout engines.
     """
     ray.get(
         [
