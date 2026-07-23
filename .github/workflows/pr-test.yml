@@ -603,6 +603,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_discounted_returns.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_rm_f1.py"
             },
             {
