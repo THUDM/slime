@@ -546,7 +546,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-data-transport",
                 type=str,
-                choices=["object-store", "nixl"],
+                choices=["object-store", "nixl", "mooncake"],
                 default="object-store",
                 help=(
                     "Transport for rollout data refs sent from rollout manager to trainer. Large rollout "
@@ -2018,3 +2018,8 @@ def slime_validate_args(args):
                 "--update-weight-mode=delta requires --update-weight-local-checkpoint-dir "
                 "(a rollout-host-local NVMe directory)."
             )
+
+    if getattr(args, "rollout_data_transport", "object-store") == "mooncake":
+        from slime.utils.data_transfer import check_mooncake_available
+
+        check_mooncake_available()

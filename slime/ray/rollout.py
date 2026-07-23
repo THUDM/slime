@@ -886,7 +886,11 @@ class RolloutManager:
             rollout_data["micro_batch_indices"] = micro_batch_indices[r]
             _tensorize_rollout_data_for_training(rollout_data)
             transport = getattr(self.args, "rollout_data_transport", "object-store")
-            if transport == "nixl":
+            if transport == "mooncake":
+                from slime.utils.data_transfer import put_mooncake_rollout_data
+
+                rollout_data_refs.append(put_mooncake_rollout_data(self.args, rollout_data, partition=f"dp{r}"))
+            elif transport == "nixl":
                 rollout_data_refs.append(Box(ray.put(rollout_data, _tensor_transport="nixl")))
             elif transport == "object-store":
                 rollout_data_refs.append(Box(ray.put(rollout_data)))
