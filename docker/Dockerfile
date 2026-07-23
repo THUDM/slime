@@ -102,22 +102,20 @@ RUN cd Megatron-LM && \
 
 # TODO temporarily skip patching for GB200/GB300 (and require users to bring their own sglang version). should add back later.
 ARG ENABLE_SGLANG_PATCH=1
-COPY docker/patch/${PATCH_VERSION}/sglang.patch \
-     docker/patch/${PATCH_VERSION}/sglang-top_p.patch \
-     docker/patch/${PATCH_VERSION}/sglang-release_hicache.patch \
-     docker/patch/${PATCH_VERSION}/sglang-pull_weights.patch \
-     /sgl-workspace/sglang/
+COPY docker/patch/${PATCH_VERSION}/sglang*.patch /sgl-workspace/sglang/
 RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
   cd /sgl-workspace/sglang && \
-  git update-index --refresh && \
   for patch in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch; do \
-    git apply --3way "$patch" || exit 1; \
-    if git grep -n '^<<<<<<< ' -- .; then \
-      echo "Patch failed to apply cleanly. Please resolve conflicts." && \
+    if [ ! -f "$patch" ]; then \
+      continue; \
+    fi; \
+    if ! git apply --check "$patch"; then \
+      echo "Patch $patch does not apply to the SGLang source in the base image."; \
       exit 1; \
     fi; \
+    git apply "$patch" || exit 1; \
   done && \
-  rm sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch; \
+  rm sglang*.patch; \
 fi
 
 # ====================================== Install main package ============================================
