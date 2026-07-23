@@ -10,9 +10,10 @@ infer per-engine TP / GPU counts and registers them to its PD-enabled router.
 
 Weight sync uses ``--update-weight-mode delta --update-weight-transport disk``
 so the post-train sync writes sparse safetensors to a shared dir and the
-external engines load them via ``update_weights_from_disk(load_format=delta)``
-— that's the only sync path that actually works for pre-launched workers (no
-NCCL group between trainer and external engines).
+external engines apply them to a host-local checkpoint via ``/pull_weights``
+before reloading that checkpoint — that's the only sync path that actually
+works for pre-launched workers (no NCCL group between trainer and external
+engines).
 """
 
 import os
@@ -254,7 +255,9 @@ def execute():
             )
 
     delta_dir_cm = tempfile.TemporaryDirectory(prefix="slime_external_pd_delta_")
+    local_checkpoint_dir_cm = tempfile.TemporaryDirectory(prefix="slime_external_pd_local_checkpoint_")
     delta_dir = delta_dir_cm.name
+    local_checkpoint_dir = local_checkpoint_dir_cm.name
     try:
         ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load {TORCH_DIST_CKPT} "
 
@@ -317,14 +320,15 @@ def execute():
 
         # External engines have no NCCL group with the trainer, so weight
         # updates have to go through the disk-backed delta path: the trainer
-        # writes sparse safetensors per sync, the engines pull via
-        # update_weights_from_disk(load_format="delta", files=...).
+        # writes sparse safetensors per sync, then each engine applies them to
+        # the host-local checkpoint through /pull_weights before reloading it.
         delta_args = (
             "--update-weight-mode delta "
             "--update-weight-transport disk "
-            "--update-weight-encoding deltas "
+            "--update-weight-delta-encoding xor "
             f"--update-weight-disk-dir {delta_dir} "
-            "--update-weight-delta-keep-files "
+            f"--update-weight-local-checkpoint-dir {local_checkpoint_dir} "
+            "--update-weight-disk-keep-files "
         )
 
         ci_args = "--ci-test "
@@ -372,6 +376,7 @@ def execute():
                 p.wait()
         U.exec_command("pkill -9 sglang; true")
         delta_dir_cm.cleanup()
+        local_checkpoint_dir_cm.cleanup()
 
 
 if __name__ == "__main__":
