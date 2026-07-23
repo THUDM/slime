@@ -306,6 +306,24 @@ def test_slime_validate_args_preserves_zero_rollout_gpus_without_colocate(monkey
 
 
 @pytest.mark.unit
+def test_slime_validate_args_allows_granular_dynamic_sampling_refill(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(rollout_batch_size=64, over_sampling_batch_size=1)
+
+    module.slime_validate_args(args)
+
+    assert args.over_sampling_batch_size == 1
+
+
+@pytest.mark.unit
+def test_slime_validate_args_rejects_empty_dynamic_sampling_refill(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+
+    with pytest.raises(AssertionError, match="greater than zero"):
+        module.slime_validate_args(make_slime_validate_args(over_sampling_batch_size=0))
+
+
+@pytest.mark.unit
 def test_update_weight_delta_requires_disk_transport(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(

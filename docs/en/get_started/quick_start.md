@@ -345,7 +345,7 @@ slime supports more complex sampling strategies, such as dynamic sampling used i
      slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
 ```
 
-Here `over_sampling_batch_size` needs to be greater than `rollout_batch_size`, for example, configured as:
+`over_sampling_batch_size` controls the number of prompt groups requested at a time and must be positive. For example:
 
 ```bash
    --rollout-batch-size 32 \
@@ -367,7 +367,7 @@ def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
     )
 ```
 
-If the filtering function is very strict, causing a large number of prompt groups to be discarded, the system will monitor the number of pending tasks in `remaining_batch_size`. Once the number of pending tasks drops below the target number (32) due to too many being discarded, the system will automatically trigger a new round of oversampling, requesting `over_sampling_batch_size` (64) new prompts again to repeat the above process.
+`remaining_batch_size` tracks accepted and pending prompt groups. Rejected groups decrement it; when it falls below the target (32), the system requests batches of `over_sampling_batch_size` (64) until the accepted and pending total reaches the target again.
 
 ### Partial Rollout
 
