@@ -61,6 +61,19 @@ def _should_update_microbatch_pbar(model) -> bool:
     return mpu.is_pipeline_last_stage(ignore_virtual=True)
 
 
+def _drop_unsupported_loss_mask_kwarg(model, forward_kwargs):
+    # mcore MambaModel.forward (hybrid NemotronH) has no loss_mask kwarg
+    # (GPTModel does). Drop it when unsupported; loss masking happens in
+    # slime's own loss function, not the model.
+    import inspect
+
+    m = model
+    while hasattr(m, "module"):
+        m = m.module
+    if "loss_mask" not in inspect.signature(m.forward).parameters:
+        forward_kwargs.pop("loss_mask", None)
+
+
 def _wrap_forward_step_with_microbatch_pbar(forward_step_func, pbar):
     if pbar is None:
         return forward_step_func
@@ -428,6 +441,7 @@ def forward_only(
             "packed_seq_params": packed_seq_params,
             "loss_mask": batch["full_loss_masks"],
         }
+        _drop_unsupported_loss_mask_kwarg(model, forward_kwargs)
         if batch["multimodal_train_inputs"] is not None:
             forward_kwargs.update(batch["multimodal_train_inputs"])
         output_tensor = model(**forward_kwargs)
@@ -623,6 +637,7 @@ def train_one_step(
                 "packed_seq_params": batch["packed_seq_params"],
                 "loss_mask": batch["full_loss_masks"],
             }
+            _drop_unsupported_loss_mask_kwarg(model, forward_kwargs)
 
             if batch["multimodal_train_inputs"] is not None:
                 forward_kwargs.update(batch["multimodal_train_inputs"])
