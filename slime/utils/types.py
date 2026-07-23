@@ -250,6 +250,11 @@ class Sample:
     def effective_response_length(self):
         return sum(self.loss_mask) if self.loss_mask is not None else self.response_length
 
+    def mask_response_tokens(self, value: int = 0) -> None:
+        """Set the response-side loss mask while preserving length invariants."""
+        self.loss_mask = [int(value)] * self.response_length
+        self._validate_response_metadata_lengths()
+
     def append_response_tokens(
         self,
         args=None,
