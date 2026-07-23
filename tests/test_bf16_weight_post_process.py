@@ -218,6 +218,28 @@ def test_tensor_weight_update_preserves_compressed_tensor_processing(monkeypatch
 
 
 @pytest.mark.unit
+def test_tensor_weight_update_skips_unrelated_quantization_post_process(monkeypatch, update_modules):
+    tensor_module = update_modules.tensor
+    events = []
+    calls = []
+    engine = _Engine(events)
+    _patch_collectives(monkeypatch, tensor_module)
+    monkeypatch.setattr(tensor_module.torch.cuda, "ipc_collect", lambda: None)
+    monkeypatch.setattr(
+        tensor_module,
+        "post_process_weights",
+        _record_post_process(events, calls),
+    )
+
+    updater = _make_tensor_updater(tensor_module, engine, {"quant_method": "fp8"})
+
+    updater.update_weights()
+
+    assert events == ["pause", "flush", "continue"]
+    assert calls == []
+
+
+@pytest.mark.unit
 def test_tensor_weight_update_does_not_resume_after_post_process_failure(monkeypatch, update_modules):
     tensor_module = update_modules.tensor
     events = []
@@ -268,6 +290,33 @@ def test_distributed_weight_update_post_processes_bf16_engines(monkeypatch, upda
             "rollout_engines": [engine],
         }
     ]
+
+
+@pytest.mark.unit
+def test_distributed_weight_update_skips_unrelated_quantization_post_process(monkeypatch, update_modules):
+    distributed_module = update_modules.distributed
+    events = []
+    calls = []
+    engine = _Engine(events)
+    _patch_collectives(monkeypatch, distributed_module)
+    monkeypatch.setattr(
+        distributed_module,
+        "post_process_weights",
+        _record_post_process(events, calls),
+    )
+
+    updater = object.__new__(distributed_module.UpdateWeightFromDistributed)
+    updater.weight_version = 0
+    updater.rollout_engines = [engine]
+    updater.quantization_config = {"quant_method": "fp8"}
+    updater._group_name = "test"
+    updater._is_pp_src_rank = False
+    updater._send_weights = lambda _pbar: events.append("send")
+
+    updater.update_weights()
+
+    assert events == ["pause", "flush", "send", "continue"]
+    assert calls == []
 
 
 if __name__ == "__main__":

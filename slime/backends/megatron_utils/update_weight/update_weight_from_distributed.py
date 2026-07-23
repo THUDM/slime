@@ -123,14 +123,14 @@ class UpdateWeightFromDistributed:
         self._send_weights(pbar)
 
         if dist.get_rank() == 0:
-            # Re-apply engine-specific post-load transforms. Compressed-tensors
-            # repacks quantized weights, while BF16 FlashInfer TRT-LLM restores
-            # its block layout after the canonical weight copy.
-            post_process_weights(
-                restore_weights_before_load=False,
-                post_process_quantization=True,
-                rollout_engines=self.rollout_engines,
-            )
+            if requires_post_process_after_update(self.quantization_config):
+                # Compressed-tensors repacks quantized weights, while
+                # unquantized backends may restore runtime-specific layouts.
+                post_process_weights(
+                    restore_weights_before_load=False,
+                    post_process_quantization=True,
+                    rollout_engines=self.rollout_engines,
+                )
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
@@ -354,6 +354,13 @@ def update_weights_from_distributed(
         handle.wait()
 
     return refs
+
+
+def requires_post_process_after_update(
+    quantization_config: Mapping[str, object] | None,
+) -> bool:
+    """Return whether SGLang must finalize weights after a hot update."""
+    return not quantization_config or quantization_config.get("quant_method") == "compressed-tensors"
 
 
 def post_process_weights(

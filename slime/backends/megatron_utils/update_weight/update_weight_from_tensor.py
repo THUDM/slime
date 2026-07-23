@@ -22,6 +22,7 @@ from .update_weight_from_distributed import (
     connect_rollout_engines_from_distributed,
     disconnect_rollout_engines_from_distributed,
     post_process_weights,
+    requires_post_process_after_update,
     update_weights_from_distributed,
 )
 
@@ -319,15 +320,15 @@ class UpdateWeightFromTensor:
         torch.cuda.ipc_collect()
         torch.cuda.empty_cache()
 
-        # Re-apply engine-specific post-load transforms. Compressed-tensors
-        # repacks quantized weights, while BF16 FlashInfer TRT-LLM restores its
-        # block layout after the canonical weight copy.
         if self.rank == 0:
-            post_process_weights(
-                restore_weights_before_load=False,
-                post_process_quantization=True,
-                rollout_engines=self.rollout_engines,
-            )
+            if requires_post_process_after_update(self.quantization_config):
+                # Compressed-tensors repacks quantized weights, while
+                # unquantized backends may restore runtime-specific layouts.
+                post_process_weights(
+                    restore_weights_before_load=False,
+                    post_process_quantization=True,
+                    rollout_engines=self.rollout_engines,
+                )
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
