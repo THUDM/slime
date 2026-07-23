@@ -126,6 +126,9 @@ def _install_fake_deps(monkeypatch):
     update_from_distributed_mod.connect_rollout_engines_from_distributed = lambda *args, **kwargs: None
     update_from_distributed_mod.disconnect_rollout_engines_from_distributed = lambda *args, **kwargs: None
     update_from_distributed_mod.post_process_weights = lambda *args, **kwargs: None
+    update_from_distributed_mod.requires_post_process_after_update = (
+        lambda config: config is None or config.get("quant_method") == "compressed-tensors"
+    )
     update_from_distributed_mod.update_weights_from_distributed = lambda *args, **kwargs: []
 
     monkeypatch.setitem(sys.modules, "slime", slime_pkg)

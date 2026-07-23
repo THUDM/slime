@@ -117,6 +117,21 @@ def update_modules(monkeypatch):
     return _load_update_modules(monkeypatch)
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("quantization_config", "expected"),
+    [
+        (None, True),
+        ({"quant_method": "compressed-tensors"}, True),
+        ({"quant_method": "fp8"}, False),
+        ({}, False),
+        ({"quant_method": "unknown"}, False),
+    ],
+)
+def test_post_process_scope(update_modules, quantization_config, expected):
+    assert update_modules.distributed.requires_post_process_after_update(quantization_config) is expected
+
+
 class _RemoteMethod:
     def __init__(self, event_log, name):
         self._event_log = event_log

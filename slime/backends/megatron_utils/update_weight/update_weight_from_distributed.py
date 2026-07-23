@@ -360,7 +360,7 @@ def requires_post_process_after_update(
     quantization_config: Mapping[str, object] | None,
 ) -> bool:
     """Return whether SGLang must finalize weights after a hot update."""
-    return not quantization_config or quantization_config.get("quant_method") == "compressed-tensors"
+    return quantization_config is None or quantization_config.get("quant_method") == "compressed-tensors"
 
 
 def post_process_weights(
