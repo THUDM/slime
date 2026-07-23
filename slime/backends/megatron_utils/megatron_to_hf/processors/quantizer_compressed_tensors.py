@@ -264,7 +264,8 @@ def pack_layer(weight, group_size, sym=True):
 
 
 def quantize_params_compressed_tensors(converted_named_params, quantization_config):
-    w_cfg = quantization_config["config_groups"]["group_0"]["weights"]
+    # key-agnostic: llmcompressor writes "config_group_0", slime writes "group_0"
+    w_cfg = next(iter(quantization_config["config_groups"].values()))["weights"]
     group_size = w_cfg["group_size"]
     is_symmetric = w_cfg["symmetric"]
     ignore_rules = quantization_config.get("ignore", [])
@@ -272,11 +273,19 @@ def quantize_params_compressed_tensors(converted_named_params, quantization_conf
     results = []
 
     for name, param in converted_named_params:
+        # compressed-tensors ignore rules target MODULE names (e.g. "...mlp.gate"),
+        # but `name` here is a parameter name ("...mlp.gate.weight"). Match against
+        # both so llmcompressor-style "$"-anchored module rules apply correctly.
+        module_name = re.sub(r"\.(weight|bias)$", "", name)
         is_ignored = any(
-            (r.startswith("re:") and re.match(r[3:], name)) or r == name or name.startswith(r) for r in ignore_rules
+            (r.startswith("re:") and (re.match(r[3:], name) or re.match(r[3:], module_name)))
+            or r == name
+            or r == module_name
+            or name.startswith(r)
+            for r in ignore_rules
         )
 
-        if is_ignored or not name.endswith(".weight") or param.dim() < 2:
+        if is_ignored or not name.endswith(".weight") or param.dim() != 2:
             results.append((name, param))
             continue
 
