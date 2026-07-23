@@ -84,14 +84,12 @@ python train.py \
   --expert-tensor-parallel-size 1 \
   --actor-num-nodes 1 \
   --actor-num-gpus-per-node 8 \
-  --critic-num-nodes 1 \
-  --critic-num-gpus-per-node 8 \
   ...
 ```
 
 In this setup:
 
-- CLI defines the shared topology and resource layout.
+- CLI defines the shared topology and resource layout; in current PPO, critic training resources follow the actor configuration.
 - YAML defines the role-specific differences, such as `lr`, `load`, `save`, or optimizer / scheduler parameters.
 
 ### Overriding Only One Role
@@ -114,6 +112,7 @@ In this case the actor keeps the shared CLI arguments unchanged.
 
 - **PPO only for now.** `--megatron-config-path` is currently intended for PPO actor / critic role configuration. It is not the recommended interface for GRPO, REINFORCE++, and other critic-free workflows.
 - **Actor and critic must use the same Megatron parallel topology in current PPO.** In particular, topology-related settings such as `tensor_model_parallel_size`, `pipeline_model_parallel_size`, `context_parallel_size`, `expert_model_parallel_size`, `expert_tensor_parallel_size`, and `sequence_parallel` should not differ between actor and critic.
+- **Actor and critic share the same train placement group in current PPO.** The critic node count and GPUs per node are derived from the actor configuration and cannot be used as an independent resource scale.
 - **Keep topology-related settings on CLI.** The safest current pattern is to keep parallelism and resource arguments in the shared CLI configuration, and only put role-specific differences in YAML, such as `lr`, `load`, `save`, warmup, and optimizer / scheduler settings.
 
 If you configure different parallel topologies for actor and critic, the behavior is currently unsupported and may fail during initialization or training.
@@ -126,6 +125,6 @@ If you configure different parallel topologies for actor and critic, the behavio
 
 Yes. Missing roles automatically inherit the shared CLI arguments, so you do not need to duplicate everything in YAML.
 
-### Q: Can I move `--actor-num-nodes` or `--critic-num-gpus-per-node` into YAML?
+### Q: Can I move resource settings into YAML?
 
-No. Resource allocation and placement groups are still controlled by CLI arguments, and the corresponding YAML fields are ignored.
+No. Resource allocation and placement groups are still controlled by CLI arguments, and the corresponding YAML fields are ignored. `--actor-num-nodes` / `--actor-num-gpus-per-node` determine the PPO train resource scale; the critic node count and GPUs per node follow the actor configuration and cannot be configured independently.
