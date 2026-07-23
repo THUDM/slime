@@ -80,8 +80,9 @@ RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
     python3 -m pip install https://github.com/sgl-project/whl/releases/download/v${SGL_KERNEL_VERSION}/sgl_kernel-${SGL_KERNEL_VERSION}+cu130-cp310-abi3-manylinux2014_$(uname -m).whl --force-reinstall --no-deps; \
   fi
 
-# reinstall numpy 1.x for megatron
-RUN pip install "numpy<2"
+# Megatron currently requires NumPy 1.x, while SciPy 1.18+ requires NumPy 2.x.
+# Pin both packages together so downgrading NumPy does not leave an incompatible SciPy.
+RUN pip install "numpy==1.26.4" "scipy==1.17.1"
 
 RUN pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-9daabcd/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
 RUN python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
