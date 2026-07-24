@@ -1347,6 +1347,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="URL for the reward model service for --rm-type remote_rm, e.g. http://localhost:8000",
             )
             parser.add_argument(
+                "--rm-timeout-secs",
+                type=float,
+                default=None,
+                help="Total timeout in seconds for reward model HTTP requests. If unset, use the client default.",
+            )
+            parser.add_argument(
                 "--custom-rm-path",
                 type=str,
                 default=None,
