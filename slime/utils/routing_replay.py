@@ -1,6 +1,8 @@
 import os
 import torch
 
+from slime.utils import accelerator
+
 
 ROUTING_REPLAY = None
 
@@ -28,12 +30,12 @@ class RoutingReplay:
     def pop_forward(self):
         top_indices = self.top_indices_list[self.forward_index]
         self.forward_index += 1
-        return top_indices.to(torch.cuda.current_device())
+        return top_indices.to(accelerator.device())
 
     def pop_backward(self):
         top_indices = self.top_indices_list[self.backward_index]
         self.backward_index += 1
-        return top_indices.to(torch.cuda.current_device())
+        return top_indices.to(accelerator.device())
 
     def clear(self):
         self.forward_index = 0

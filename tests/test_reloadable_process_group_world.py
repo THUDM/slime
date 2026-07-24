@@ -10,6 +10,12 @@ NUM_GPUS = 0
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("backend", ["nccl", "mccl", "cpu:gloo,musa:mccl"])
+def test_accelerator_backend_detection(backend):
+    assert rpg._uses_accelerator_backend(backend)
+
+
+@pytest.mark.unit
 def test_register_default_process_group_captures_rendezvous_state(monkeypatch):
     timeout = timedelta(minutes=7)
     monkeypatch.setattr(rpg, "default_process_group_states", {})
@@ -27,7 +33,7 @@ def test_register_default_process_group_captures_rendezvous_state(monkeypatch):
     assert state.store == "rendezvous-store"
     assert state.rank == 3
     assert state.world_size == 8
-    assert not state.nccl_world_destroyed
+    assert not state.accelerator_world_destroyed
 
 
 @pytest.mark.unit
@@ -71,7 +77,7 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
 
     rpg.destroy_process_groups()
 
-    assert state.nccl_world_destroyed
+    assert state.accelerator_world_destroyed
     assert state.generation == 1
     assert events == [
         ("barrier", "canonical-gloo"),
@@ -95,7 +101,7 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
     events.clear()
     rpg.reload_process_groups()
 
-    assert not state.nccl_world_destroyed
+    assert not state.accelerator_world_destroyed
     assert state.generation == 2
     assert events == [
         ("barrier", "WORLD"),

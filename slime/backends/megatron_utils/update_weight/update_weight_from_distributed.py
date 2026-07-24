@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import socket
 import time
 from argparse import Namespace
@@ -13,6 +14,7 @@ from ray import ObjectRef
 from ray.actor import ActorHandle
 from tqdm import tqdm
 
+from slime.utils import accelerator
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.http_utils import _wrap_ipv6
 
@@ -22,8 +24,8 @@ from .common import all_gather_param, named_params_and_buffers
 
 class UpdateWeightFromDistributed:
     """
-    Update distributed engines via NCCL. Each PP rank: group "slime-pp_{pp_rank}",
-    only DP=TP=0 broadcasts. Non-expert (TP) and expert (EP) params separate.
+    Update distributed engines through a device process group. Each PP rank: group "slime-pp_{pp_rank}",
+    only DP=TP=0 transfers. Non-expert (TP) and expert (EP) params separate.
     Subclasses override ``_send_weights`` / ``_on_chunk`` to inject per-mode behaviour.
     """
 
@@ -63,7 +65,7 @@ class UpdateWeightFromDistributed:
         engine_parallel_configs: Sequence[Mapping[str, object]] | None = None,
     ) -> None:
         """
-        Create NCCL "slime-pp_{pp_rank}" if PP source (DP=TP=0). Lock prevents concurrent broadcasts.
+        Create "slime-pp_{pp_rank}" if PP source (DP=TP=0). Lock prevents concurrent transfers.
         """
         self.rollout_engines = rollout_engines
         self.rollout_engine_lock = rollout_engine_lock
@@ -217,7 +219,7 @@ class UpdateWeightFromDistributed:
         handles = []
         for i, (_name, param) in enumerate(named_tensors):
             params = [
-                torch.empty_like(param.data, device=torch.cuda.current_device())
+                torch.empty_like(param.data, device=accelerator.device())
                 for _ in range(mpu.get_expert_model_parallel_world_size())
             ]
             handle = dist.all_gather(params, param.data, group=mpu.get_expert_model_parallel_group(), async_op=True)
@@ -244,9 +246,9 @@ class UpdateWeightFromDistributed:
         load_format: str | None = None,
     ) -> None:
         """
-        Lock → broadcast → clear → unlock → pbar++. Lock prevents NCCL deadlock.
+        Lock → transfer → clear → unlock → pbar++. Lock prevents communication deadlock.
         """
-        # lock the rollout engines to prevent dead lock on broadcast.
+        # Lock the rollout engines to prevent communication deadlock.
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
             time.sleep(0.1)
 
@@ -272,11 +274,11 @@ def connect_rollout_engines_from_distributed(
     engine_gpu_counts: Sequence[int] | None = None,
 ) -> dist.ProcessGroup:
     """
-    Create NCCL group: training rank 0 + all engine GPUs. Blocks until joined.
+    Create a device process group: training rank 0 + all engine GPUs. Blocks until joined.
 
     ``engine_gpu_counts`` gives the number of GPUs per engine.  When engines
     have heterogeneous TP sizes (e.g. prefill TP=2, decode TP=4), each engine
-    occupies a different number of ranks in the NCCL group.
+    occupies a different number of ranks in the process group.
     """
     if engine_gpu_counts is None:
         engine_gpu_counts = [args.rollout_num_gpus_per_engine] * len(rollout_engines)
@@ -292,6 +294,7 @@ def connect_rollout_engines_from_distributed(
     for c in engine_gpu_counts:
         cumulative.append(cumulative[-1] + c)
 
+    backend = accelerator.weight_update_backend()
     refs = [
         engine.init_weights_update_group.remote(
             master_address=master_address,
@@ -299,12 +302,12 @@ def connect_rollout_engines_from_distributed(
             rank_offset=cumulative[i] + 1,
             world_size=world_size,
             group_name=group_name,
-            backend="nccl",
+            backend=backend,
         )
         for i, engine in enumerate(rollout_engines)
     ]
     model_update_groups = init_process_group(
-        backend="nccl",
+        backend=backend,
         init_method=f"tcp://{_wrap_ipv6(master_address)}:{master_port}",
         world_size=world_size,
         rank=0,
@@ -316,7 +319,7 @@ def connect_rollout_engines_from_distributed(
 
 def disconnect_rollout_engines_from_distributed(args, group_name, model_update_groups, rollout_engines):
     """
-    Destroy NCCL on training and engines.
+    Destroy the weight-update process group on training and engines.
     """
     refs = [engine.destroy_weights_update_group.remote(group_name) for engine in rollout_engines]
     dist.destroy_process_group(model_update_groups)
@@ -332,8 +335,15 @@ def update_weights_from_distributed(
     load_format: str | None = None,
 ) -> list[ObjectRef]:
     """
-    Send metadata (Ray), broadcast tensors (NCCL rank 0 → engines).
+    Send metadata through Ray and tensors through the configured transport.
     """
+    comm_mode = os.environ.get("UPDATE_MODE", "broadcast")
+    if comm_mode == "p2p-broadcast":
+        group_rank = group.rank()
+        global_rank = dist.get_global_rank(group, group_rank)
+    else:
+        global_rank = None
+
     refs = [
         engine.update_weights_from_distributed.remote(
             names=[name for name, _ in converted_named_tensors],
@@ -347,8 +357,21 @@ def update_weights_from_distributed(
     ]
 
     handles = []
-    for _, param in converted_named_tensors:
-        handles.append(dist.broadcast(param.data, 0, group=group, async_op=True))
+    if comm_mode == "broadcast":
+        for _, param in converted_named_tensors:
+            handles.append(dist.broadcast(param.data, 0, group=group, async_op=True))
+    elif comm_mode == "gloo-broadcast":
+        for _, param in converted_named_tensors:
+            dist.broadcast(param.data.cpu(), 0, group=group, async_op=False)
+    elif comm_mode == "sync-broadcast":
+        for _, param in converted_named_tensors:
+            dist.broadcast(param.data, 0, group=group, async_op=False)
+    elif comm_mode == "p2p-broadcast":
+        if global_rank == 0:
+            for tag, (_, param) in enumerate(converted_named_tensors):
+                dist.send(param.data, 1, group=group, tag=tag)
+    else:
+        raise NotImplementedError(f"Unknown UPDATE_MODE={comm_mode!r}")
     for handle in handles:
         handle.wait()
 

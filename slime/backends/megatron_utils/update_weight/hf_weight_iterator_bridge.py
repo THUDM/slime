@@ -1,7 +1,7 @@
 import dataclasses
 
 
-from slime.utils import megatron_bridge_utils
+from slime.utils import accelerator, megatron_bridge_utils
 from slime.utils.misc import chunk_named_params_by_size
 
 from ..megatron_to_hf import postprocess_hf_param
@@ -30,7 +30,7 @@ def _patch_bridge_expert_cache_to_cpu():
         cpu_dict = {k: v.cpu() for k, v in converted_weights_dict.items()}
         result = _orig(self, task, cpu_dict)
         # Move merged result back to GPU for CUDA IPC serialization
-        return {k: v.cuda() for k, v in result.items()} if result else result
+        return {k: v.to(device=accelerator.device()) for k, v in result.items()} if result else result
 
     GPTOSSBridge.maybe_modify_converted_hf_weight = _patched
     GPTOSSBridge._cpu_cache_patched = True
@@ -100,7 +100,7 @@ def _process_conversion_tasks(vanilla_conversion_tasks, new_weight_dict):
         ), f"{weight_dict_key=} not in new_weight_dict ({task.vp_stage=}, {task.param_name=}, {list(new_weight_dict)=})"
 
         new_param_weight = new_weight_dict[weight_dict_key]
-        new_param_weight = new_param_weight.cuda()
+        new_param_weight = new_param_weight.to(device=accelerator.device())
         return dataclasses.replace(task, param_weight=new_param_weight)
 
     return _MapWithLen(_handle_one, vanilla_conversion_tasks)

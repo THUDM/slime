@@ -17,6 +17,10 @@ import logging
 from copy import deepcopy
 from dataclasses import dataclass, field
 
+from slime.utils import accelerator
+
+# isort: split
+
 import torch
 from megatron.bridge.models.conversion.mapping_registry import MegatronMappingRegistry
 from megatron.bridge.models.conversion.model_bridge import MegatronModelBridge
@@ -206,8 +210,8 @@ class Glm4vMoeVLModel(MegatronModule):
             self.vision_model.requires_grad_(False)
             self.vision_model.eval()
             hook_hf_module_setattr_for_tp_grad_sync(self.vision_model)
-            if torch.cuda.is_available():
-                self.vision_model = self.vision_model.to("cuda")
+            if accelerator.device_type() != "cpu":
+                self.vision_model = self.vision_model.to(accelerator.device())
 
         # Language model -- standard Megatron GPT with M-RoPE
         self.language_model = MCoreGPTModel(
@@ -440,7 +444,7 @@ class Glm4vMoeVLModel(MegatronModule):
                 # Non-first PP stage: allocate buffer with correct shape
                 if cu_seqlens is not None:
                     T = cu_seqlens[-1].item()
-                    position_ids = torch.zeros(3, 1, T, dtype=torch.long, device=torch.cuda.current_device())
+                    position_ids = torch.zeros(3, 1, T, dtype=torch.long, device=accelerator.device())
                 else:
                     raise NotImplementedError(
                         "Non-THD position_ids broadcast not yet supported for non-first PP stages"

@@ -9,6 +9,7 @@ import torch
 import torch.distributed as dist
 from torch.distributed.distributed_c10d import PrefixStore, _get_default_group, _get_default_store
 
+from slime.utils import accelerator
 from slime.utils.distributed_utils import get_gloo_group, init_gloo_group, set_gloo_group
 from slime.utils.memory_utils import available_memory, clear_memory, print_memory
 
@@ -26,11 +27,11 @@ class _DefaultProcessGroupState:
     rank: int
     world_size: int
     generation: int = 0
-    nccl_world_destroyed: bool = False
+    accelerator_world_destroyed: bool = False
 
 
 def register_default_process_group(timeout: timedelta) -> None:
-    """Register the NCCL WORLD group so it can be destroyed and rebuilt.
+    """Register the accelerator WORLD group so it can be destroyed and rebuilt.
 
     Keeping a reference to the rendezvous store is intentional.  It keeps the
     rank-0 TCPStore alive after ``destroy_process_group()`` and lets every
@@ -58,8 +59,9 @@ def register_default_process_group(timeout: timedelta) -> None:
     )
 
 
-def _uses_nccl(backend: str) -> bool:
-    return "nccl" in backend.lower()
+def _uses_accelerator_backend(backend: str) -> bool:
+    backend = backend.lower()
+    return "nccl" in backend or "mccl" in backend
 
 
 def _new_default_process_group(state: _DefaultProcessGroupState, backend: str) -> None:
@@ -74,9 +76,9 @@ def _new_default_process_group(state: _DefaultProcessGroupState, backend: str) -
     )
 
 
-def _destroy_default_nccl_process_group() -> None:
+def _destroy_default_accelerator_process_group() -> None:
     state = default_process_group_states.get(os.getpid())
-    if state is None or state.nccl_world_destroyed or not _uses_nccl(state.backend):
+    if state is None or state.accelerator_world_destroyed or not _uses_accelerator_backend(state.backend):
         return
 
     # Use the CPU group as an out-of-band synchronization point.  PyTorch
@@ -87,7 +89,7 @@ def _destroy_default_nccl_process_group() -> None:
 
     _new_default_process_group(state, backend="gloo")
     set_gloo_group(_get_default_group())
-    state.nccl_world_destroyed = True
+    state.accelerator_world_destroyed = True
     logger.info(
         "Destroyed default %s WORLD process group and initialized a temporary Gloo WORLD (generation %s)",
         state.backend,
@@ -97,18 +99,18 @@ def _destroy_default_nccl_process_group() -> None:
 
 def _reload_default_process_group() -> None:
     state = default_process_group_states.get(os.getpid())
-    if state is None or not state.nccl_world_destroyed:
+    if state is None or not state.accelerator_world_destroyed:
         return
 
-    # WORLD uses Gloo while the NCCL WORLD is destroyed, so this barrier does
-    # not allocate CUDA or recreate an NCCL communicator before all ranks are ready.
+    # WORLD uses Gloo while the accelerator WORLD is destroyed, so this barrier
+    # does not recreate an accelerator communicator before all ranks are ready.
     dist.barrier()
     dist.destroy_process_group()
     set_gloo_group(None)
 
     _new_default_process_group(state, backend=state.backend)
     init_gloo_group()
-    state.nccl_world_destroyed = False
+    state.accelerator_world_destroyed = False
     logger.info(
         "Reloaded default WORLD process group with backend %s (generation %s)",
         state.backend,
@@ -145,9 +147,17 @@ def monkey_patch_torch_dist():
     dist.old_new_group = old_new_group
 
     def new_group(*args, **kwargs):
-        group = old_new_group(*args, **kwargs)
         explicit_backend = args[2] if len(args) >= 3 else kwargs.get("backend")
         backend = str(explicit_backend) if explicit_backend is not None else str(dist.get_backend())
+        normalized_backend = accelerator.process_group_backend(backend)
+        if normalized_backend != backend:
+            if len(args) >= 3:
+                args = (*args[:2], normalized_backend, *args[3:])
+            else:
+                kwargs = {**kwargs, "backend": normalized_backend}
+            backend = normalized_backend
+
+        group = old_new_group(*args, **kwargs)
 
         # Before WORLD is registered, preserve the historical behavior of
         # leaving CPU groups and singleton groups untouched.  Afterwards every
@@ -441,16 +451,16 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
 
 
 def destroy_process_groups():
-    """Destroy registered subgroups and replace NCCL WORLD with a temporary Gloo WORLD."""
+    """Destroy registered subgroups and replace accelerator WORLD with a temporary Gloo WORLD."""
     state = default_process_group_states.get(os.getpid())
-    if state is not None and not state.nccl_world_destroyed and _uses_nccl(state.backend):
+    if state is not None and not state.accelerator_world_destroyed and _uses_accelerator_backend(state.backend):
         dist.barrier(group=get_gloo_group())
     ReloadableProcessGroup.destroy_process_groups()
-    _destroy_default_nccl_process_group()
+    _destroy_default_accelerator_process_group()
 
 
 def reload_process_groups():
-    """Restore NCCL WORLD and recreate all registered subgroups."""
+    """Restore accelerator WORLD and recreate all registered subgroups."""
     _reload_default_process_group()
     ReloadableProcessGroup.reload_process_groups()
 

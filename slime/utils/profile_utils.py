@@ -5,6 +5,7 @@ from pathlib import Path
 
 import torch
 
+from slime.utils import accelerator
 from slime.utils.memory_utils import print_memory
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,13 @@ def _profile_simple_loop(iterator, args, name):
 
 
 def _create_torch_profiler(args, name):
+    activities = [torch.profiler.ProfilerActivity.CPU]
+    activity_name = accelerator.device_type().upper()
+    if hasattr(torch.profiler.ProfilerActivity, activity_name):
+        activities.append(getattr(torch.profiler.ProfilerActivity, activity_name))
+
     return torch.profiler.profile(
+        activities=activities,
         schedule=torch.profiler.schedule(
             # TODO the train_actor and train_log_probs ones may need to have different args to control step
             wait=max(args.profile_step_start - 1, 0),
@@ -101,30 +108,59 @@ class _BaseMemoryProfiler:
 
 
 class _TorchMemoryProfiler(_BaseMemoryProfiler):
+    def __init__(self, args):
+        super().__init__(args)
+        self._recording = False
+
+    @staticmethod
+    def _memory_module():
+        return getattr(accelerator.accelerator_module(), "memory", None)
+
     def start(self):
         logger.info("Attach OOM dump memory history.")
+        memory_module = self._memory_module()
+        if memory_module is None or not hasattr(memory_module, "_record_memory_history"):
+            logger.warning("Accelerator memory history is unavailable; skip torch memory profiler.")
+            return
+        if not hasattr(memory_module, "_dump_snapshot"):
+            logger.warning("Accelerator memory snapshot is unavailable; skip torch memory profiler.")
+            return
 
-        torch.cuda.memory._record_memory_history(
+        memory_module._record_memory_history(
             max_entries=1000000,
-            # record stack information for the trace events
-            # trace_alloc_record_context=True,
             stacks="all",
         )
+        self._recording = True
 
         def oom_observer(device, alloc, device_alloc, device_free):
             logger.info(
                 f"Observe OOM, will dump snapshot to {self._path_dump}. ({device=} {alloc=} {device_alloc=} {device_free=}; stacktrace is as follows)"
             )
             traceback.print_stack()
-            torch.cuda.memory._dump_snapshot(self._path_dump)
+            memory_module._dump_snapshot(str(self._path_dump))
             print_memory("when oom")
 
-        torch._C._cuda_attach_out_of_memory_observer(oom_observer)
+        if accelerator.is_musa_available():
+            musa_c = getattr(torch.musa, "_MUSAC", None)
+            attach_oom_observer = getattr(musa_c, "_musa_attach_out_of_memory_observer", None)
+        else:
+            attach_oom_observer = getattr(torch._C, "_cuda_attach_out_of_memory_observer", None)
+        if attach_oom_observer is not None:
+            attach_oom_observer(oom_observer)
+        else:
+            logger.warning("Accelerator OOM observer is unavailable; memory snapshot on OOM is disabled.")
 
     def stop(self):
+        if not self._recording:
+            return
         logger.info(f"Dump memory snapshot to: {self._path_dump}")
-        torch.cuda.memory._dump_snapshot(self._path_dump)
-        torch.cuda.memory._record_memory_history(enabled=None)
+        memory_module = self._memory_module()
+        if memory_module is None or not hasattr(memory_module, "_dump_snapshot"):
+            logger.warning("Accelerator memory snapshot is unavailable; skip dump.")
+            return
+        memory_module._dump_snapshot(str(self._path_dump))
+        memory_module._record_memory_history(enabled=None)
+        self._recording = False
 
 
 class _MemrayMemoryProfiler(_BaseMemoryProfiler):

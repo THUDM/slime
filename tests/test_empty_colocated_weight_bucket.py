@@ -67,6 +67,9 @@ def _install_fake_deps(monkeypatch):
     update_weight_pkg.__path__ = [str(REPO_ROOT / "slime" / "backends" / "megatron_utils" / "update_weight")]
     slime_utils_pkg = types.ModuleType("slime.utils")
     slime_utils_pkg.__path__ = [str(REPO_ROOT / "slime" / "utils")]
+    accelerator_mod = types.ModuleType("slime.utils.accelerator")
+    accelerator_mod.device = lambda: "cuda:0"
+    accelerator_mod.ipc_collect = lambda: None
 
     dist_mod = types.ModuleType("torch.distributed")
 
@@ -133,6 +136,7 @@ def _install_fake_deps(monkeypatch):
     monkeypatch.setitem(sys.modules, "slime.backends.megatron_utils", megatron_utils_pkg)
     monkeypatch.setitem(sys.modules, "slime.backends.megatron_utils.update_weight", update_weight_pkg)
     monkeypatch.setitem(sys.modules, "slime.utils", slime_utils_pkg)
+    monkeypatch.setitem(sys.modules, "slime.utils.accelerator", accelerator_mod)
     monkeypatch.setitem(sys.modules, "torch", torch_mod)
     monkeypatch.setitem(sys.modules, "torch.distributed", dist_mod)
     monkeypatch.setitem(sys.modules, "ray", ray_mod)

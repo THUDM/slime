@@ -1,3 +1,7 @@
+from slime.utils import accelerator  # noqa: F401
+
+# isort: split
+
 import ray
 
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models

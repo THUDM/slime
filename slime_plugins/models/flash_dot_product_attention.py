@@ -7,6 +7,10 @@ sequences (THD format), which TE 2.10.0 does not support.
 
 import math
 
+from slime.utils import accelerator
+
+# isort: split
+
 import torch
 from flash_attn.flash_attn_interface import flash_attn_varlen_func
 from megatron.core.packed_seq_params import PackedSeqParams
@@ -75,7 +79,7 @@ class FlashDotProductAttention(MegatronModule):
         elif config.softmax_type == "off-by-one":
             self.softmax_offset = torch.zeros(
                 num_heads_per_partition,
-                device=torch.cuda.current_device(),
+                device=accelerator.device(),
                 dtype=config.params_dtype,
             )
         elif config.softmax_type == "learnable":
@@ -84,7 +88,7 @@ class FlashDotProductAttention(MegatronModule):
                 torch.nn.Parameter(
                     torch.empty(
                         num_heads_per_partition,
-                        device=torch.cuda.current_device(),
+                        device=accelerator.device(),
                         dtype=config.params_dtype,
                     )
                 ),

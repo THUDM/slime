@@ -5,6 +5,8 @@ import re
 import torch
 import torch.nn as nn
 
+from slime.utils import accelerator
+
 try:
     import fake_int4_quant_cuda
 except ImportError:
@@ -90,7 +92,7 @@ class WQLinear_GEMM(nn.Module):
             awq_linear.bias = linear.bias.clone().half()
 
         pack_num = 32 // awq_linear.w_bit
-        device = torch.device(f"cuda:{torch.cuda.current_device()}")
+        device = accelerator.device()
 
         repeat_scales = scales.to(device).t().repeat_interleave(group_size, 1)
         if isinstance(zeros, torch.Tensor):
@@ -283,7 +285,7 @@ def quantize_params_compressed_tensors(converted_named_params, quantization_conf
         qw, s, zp = pack_layer(param, group_size, is_symmetric)
         qweight_name = name.replace(".weight", ".weight_packed")
         scale_name = name.replace(".weight", ".weight_scale")
-        weight_shape = torch.tensor(param.shape, dtype=torch.int32, device="cuda")
+        weight_shape = torch.tensor(param.shape, dtype=torch.int32, device=accelerator.device())
         weight_shape_name = name.replace(".weight", ".weight_shape")
         if zp is not None:
             zp_name = name.replace(".weight", ".weight_zero_point")
