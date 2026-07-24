@@ -1,4 +1,4 @@
-ARG SGLANG_IMAGE_TAG=v0.5.13-cu129
+ARG SGLANG_IMAGE_TAG=v0.5.15.post1-cu129
 FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
@@ -80,8 +80,9 @@ RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
     python3 -m pip install https://github.com/sgl-project/whl/releases/download/v${SGL_KERNEL_VERSION}/sgl_kernel-${SGL_KERNEL_VERSION}+cu130-cp310-abi3-manylinux2014_$(uname -m).whl --force-reinstall --no-deps; \
   fi
 
-# reinstall numpy 1.x for megatron
-RUN pip install "numpy<2"
+# Megatron currently requires NumPy 1.x, while SciPy 1.18+ requires NumPy 2.x.
+# Pin both packages together so downgrading NumPy does not leave an incompatible SciPy.
+RUN pip install "numpy==1.26.4" "scipy==1.17.1"
 
 RUN pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-9daabcd/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
 RUN python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
@@ -102,22 +103,20 @@ RUN cd Megatron-LM && \
 
 # TODO temporarily skip patching for GB200/GB300 (and require users to bring their own sglang version). should add back later.
 ARG ENABLE_SGLANG_PATCH=1
-COPY docker/patch/${PATCH_VERSION}/sglang.patch \
-     docker/patch/${PATCH_VERSION}/sglang-top_p.patch \
-     docker/patch/${PATCH_VERSION}/sglang-release_hicache.patch \
-     docker/patch/${PATCH_VERSION}/sglang-pull_weights.patch \
-     /sgl-workspace/sglang/
+COPY docker/patch/${PATCH_VERSION}/sglang*.patch /sgl-workspace/sglang/
 RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
   cd /sgl-workspace/sglang && \
-  git update-index --refresh && \
   for patch in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch; do \
-    git apply --3way "$patch" || exit 1; \
-    if git grep -n '^<<<<<<< ' -- .; then \
-      echo "Patch failed to apply cleanly. Please resolve conflicts." && \
+    if [ ! -f "$patch" ]; then \
+      continue; \
+    fi; \
+    if ! git apply --check "$patch"; then \
+      echo "Patch $patch does not apply to the SGLang source in the base image."; \
       exit 1; \
     fi; \
+    git apply "$patch" || exit 1; \
   done && \
-  rm sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch; \
+  rm sglang*.patch; \
 fi
 
 # ====================================== Install main package ============================================
