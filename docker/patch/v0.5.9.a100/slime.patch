@@ -1,0 +1,464 @@
+diff --git a/slime/backends/megatron_utils/actor.py b/slime/backends/megatron_utils/actor.py
+index 0091d0e9..87bb800d 100644
+--- a/slime/backends/megatron_utils/actor.py
++++ b/slime/backends/megatron_utils/actor.py
+@@ -18,6 +18,8 @@ from slime.utils import train_dump_utils
+ from slime.utils.data import process_rollout_data
+ from slime.utils.distributed_utils import get_gloo_group, init_process_group
+ from slime.utils.logging_utils import init_tracking
++from slime.utils import logging_utils
++from slime.utils.metric_utils import compute_rollout_step
+ from slime.utils.memory_utils import clear_memory, print_memory
+ from slime.utils.misc import Box
+ from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
+@@ -471,6 +473,7 @@ class MegatronTrainRayActor(TrainRayActor):
+             # Train
+             if self.args.use_routing_replay:
+                 os.environ["ROUTING_REPLAY_STAGE"] = "replay_backward"
++
+             with timer("actor_train"):
+                 train(
+                     rollout_id,
+@@ -489,7 +492,12 @@ class MegatronTrainRayActor(TrainRayActor):
+             RoutingReplay.clear_all()
+ 
+         # update the cpu actor weight to the latest model
++        import time as _time
++        _backup_start = _time.time()
+         self.weights_backuper.backup("actor")
++        _backup_elapsed = _time.time() - _backup_start
++        if is_megatron_main_rank():
++            logger.info(f"[Perf] weights_backuper.backup took {_backup_elapsed:.2f}s")
+ 
+         # Update ref model if needed
+         if (
+diff --git a/slime/backends/megatron_utils/data.py b/slime/backends/megatron_utils/data.py
+index 36ef3dae..27412d8b 100644
+--- a/slime/backends/megatron_utils/data.py
++++ b/slime/backends/megatron_utils/data.py
+@@ -125,7 +125,7 @@ def get_batch(
+         raise ValueError(f"Unsupported qkv_format: {qkv_format}")
+ 
+     batch["tokens"] = tokens
+-    batch["packed_seq_params"] = packed_seq_params
++    batch["packed_seq_params"] = packed_seq_params if qkv_format == "thd" else None
+ 
+     # loss masks
+     loss_masks = []
+@@ -364,6 +364,8 @@ def get_data_iterator(
+             )
+ 
+         num_microbatches = num_microbatches.tolist()
++        if dist.get_rank() == 0:
++            logging.getLogger(__name__).info(f"[DynamicBatch] num_microbatches={num_microbatches}, max_tokens_per_gpu={args.max_tokens_per_gpu}")
+ 
+         # balance the each micro batch
+         samples = rollout_data["total_lengths"]
+diff --git a/slime/backends/sglang_utils/arguments.py b/slime/backends/sglang_utils/arguments.py
+index 71543e02..c20e76be 100644
+--- a/slime/backends/sglang_utils/arguments.py
++++ b/slime/backends/sglang_utils/arguments.py
+@@ -33,6 +33,12 @@ def add_sglang_router_arguments(parser):
+         default=14400,
+         help="Timeout for requests to the SGLang router in seconds",
+     )
++    parser.add_argument(
++        "--sglang-router-api-key",
++        type=str,
++        default=None,
++        help="API key for the SGLang router control plane (used when the router requires authentication)",
++    )
+     return parser
+ 
+ 
+diff --git a/slime/backends/sglang_utils/sglang_engine.py b/slime/backends/sglang_utils/sglang_engine.py
+index 290b1fcd..f86e1ee3 100644
+--- a/slime/backends/sglang_utils/sglang_engine.py
++++ b/slime/backends/sglang_utils/sglang_engine.py
+@@ -70,13 +70,15 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
+     return p
+ 
+ 
+-def _wait_server_healthy(base_url, api_key, is_process_alive):
++def _wait_server_healthy(base_url, api_key, is_process_alive, timeout: float = 1800):
+     headers = {
+         "Content-Type": "application/json; charset=utf-8",
+         "Authorization": f"Bearer {api_key}",
+     }
++    deadline = time.monotonic() + timeout
+ 
+     with requests.Session() as session:
++        session.trust_env = False  # don't route internal traffic through system proxy
+         while True:
+             try:
+                 response = session.get(f"{base_url}/health_generate", headers=headers)
+@@ -88,4 +90,7 @@ def _wait_server_healthy(base_url, api_key, is_process_alive):
+             if not is_process_alive():
+                 raise Exception("Server process terminated unexpectedly.")
+
++            if time.monotonic() > deadline:
++                raise TimeoutError(f"Server at {base_url} did not become healthy within {timeout}s.")
++
+             time.sleep(2)
+@@ -135,6 +143,11 @@ class SGLangEngine(RayActor):
+     ):
+         self.router_ip = router_ip if router_ip is not None else self.args.sglang_router_ip
+         self.router_port = router_port if router_port is not None else self.args.sglang_router_port
++        self.router_api_key = getattr(self.args, "sglang_router_api_key", None)
++        # Use a single session with trust_env=False so all internal requests
++        # (to SGLang server and router) bypass the system HTTP proxy.
++        self._session = requests.Session()
++        self._session.trust_env = False
+ 
+         host = host or get_host_info()[1]
+ 
+@@ -179,7 +192,7 @@ class SGLangEngine(RayActor):
+         logger.info(f"Use external SGLang engine (rank={self.rank}, expect_server_args={expect_server_args})")
+ 
+         def _get_actual_server_args():
+-            response = requests.get(f"http://{self.server_host}:{self.server_port}/get_server_info")
++            response = self._session.get(f"http://{self.server_host}:{self.server_port}/get_server_info")
+             response.raise_for_status()
+             return response.json()
+ 
+@@ -203,19 +220,25 @@ class SGLangEngine(RayActor):
+         if self.node_rank == 0 and self.router_ip and self.router_port:
++            router_headers = {}
++            if self.router_api_key:
++                router_headers["Authorization"] = f"Bearer {self.router_api_key}"
++
+             if parse(sglang_router.__version__) <= parse("0.2.1"):
+                 assert self.worker_type == "regular", "pd disaggregation is not supported in old router."
+-                response = requests.post(
++                response = self._session.post(
+                     f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}",
++                    headers=router_headers,
+                 )
+             else:
+                 payload = {
+                     "url": f"http://{self.server_host}:{self.server_port}",
+                     "worker_type": self.worker_type,
+                 }
+                 if self.worker_type == "prefill":
+                     payload["bootstrap_port"] = server_args_dict["disaggregation_bootstrap_port"]
+-                response = requests.post(
++                response = self._session.post(
+                     f"http://{self.router_ip}:{self.router_port}/workers",
+                     json=payload,
++                    headers=router_headers,
+                 )
+             response.raise_for_status()
+ 
+@@ -238,7 +257,7 @@ class SGLangEngine(RayActor):
+             return
+ 
+         url = f"http://{self.server_host}:{self.server_port}/{endpoint}"
+-        response = requests.post(url, json=payload or {})
++        response = self._session.post(url, json=payload or {})
+         try:
+             response.raise_for_status()
+         except requests.exceptions.HTTPError as e:
+@@ -261,7 +280,7 @@ class SGLangEngine(RayActor):
+         if self.node_rank != 0:
+             return True
+ 
+-        response = requests.get(
++        response = self._session.get(
+             f"http://{self.server_host}:{self.server_port}/health_generate",
+             timeout=timeout,
+         )
+@@ -300,7 +319,7 @@ class SGLangEngine(RayActor):
+         # flush cache will not return status_code 200 when there are pending requests
+         for _ in range(60):
+             try:
+-                response = requests.get(f"http://{self.server_host}:{self.server_port}/flush_cache")
++                response = self._session.get(f"http://{self.server_host}:{self.server_port}/flush_cache")
+                 if response.status_code == 200:
+                     break
+             except NewConnectionError as e:
+@@ -321,19 +340,30 @@ class SGLangEngine(RayActor):
+             worker_url = f"http://{self.server_host}:{self.server_port}"
++            router_headers = {}
++            if self.router_api_key:
++                router_headers["Authorization"] = f"Bearer {self.router_api_key}"
+             response = None
+             if parse(sglang_router.__version__) <= parse("0.2.1"):
+-                response = requests.post(
+-                    f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
++                response = self._session.post(
++                    f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}",
++                    headers=router_headers,
+                 )
+             elif parse(sglang_router.__version__) < parse("0.3.0"):
+                 worker_url = quote(worker_url, safe="")
+-                response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}")
++                response = self._session.delete(
++                    f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}",
++                    headers=router_headers,
++                )
+             else:
+                 try:
+-                    all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
++                    all_workers = self._session.get(
++                        f"http://{self.router_ip}:{self.router_port}/workers",
++                        headers=router_headers,
++                    ).json()["workers"]
+                     for worker in all_workers:
+                         if worker["url"] == worker_url:
+                             worker_id = worker["id"]
+-                            response = requests.delete(
+-                                f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}"
++                            response = self._session.delete(
++                                f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}",
++                                headers=router_headers,
+                             )
+                             break
+@@ -350,7 +369,7 @@ class SGLangEngine(RayActor):
+         if self.node_rank != 0:
+             return
+         url = f"http://{self.server_host}:{self.server_port}/get_weight_version"
+-        response = requests.get(url)
++        response = self._session.get(url)
+         response.raise_for_status()
+         return response.json()["weight_version"]
+ 
+@@ -413,12 +432,12 @@ class SGLangEngine(RayActor):
+         )
+ 
+     def pause_generation(self):
+-        response = requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={})
++        response = self._session.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={})
+         response.raise_for_status()
+         return response
+ 
+     def continue_generation(self):
+-        response = requests.post(f"http://{self.server_host}:{self.server_port}/continue_generation", json={})
++        response = self._session.post(f"http://{self.server_host}:{self.server_port}/continue_generation", json={})
+         response.raise_for_status()
+         return response
+ 
+@@ -455,7 +474,7 @@ class SGLangEngine(RayActor):
+         with_stack: bool | None = None,
+         record_shapes: bool | None = None,
+     ):
+-        response = requests.post(
++        response = self._session.post(
+             f"http://{self.server_host}:{self.server_port}/start_profile",
+             json={
+                 "output_dir": output_dir,
+@@ -471,7 +490,7 @@ class SGLangEngine(RayActor):
+         return response
+ 
+     def stop_profile(self):
+-        response = requests.post(f"http://{self.server_host}:{self.server_port}/stop_profile", json={})
++        response = self._session.post(f"http://{self.server_host}:{self.server_port}/stop_profile", json={})
+         response.raise_for_status()
+         return response
+ 
+diff --git a/slime/rollout/sft_rollout.py b/slime/rollout/sft_rollout.py
+index 6b914a96..2944e998 100644
+--- a/slime/rollout/sft_rollout.py
++++ b/slime/rollout/sft_rollout.py
+@@ -53,7 +53,7 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
+         sample.tokens = token_ids
+         sample.response_length = response_length
+         sample.reward = 0
+-        sample.loss_mask = loss_mask[-response_length:]
++        sample.loss_mask = loss_mask[-response_length:] if response_length > 0 else []
+ 
+         if i == 0 and not SAMPLE_PRINTED:
+             logger.info(
+diff --git a/slime/utils/http_utils.py b/slime/utils/http_utils.py
+index d7807f3b..39d57210 100644
+--- a/slime/utils/http_utils.py
++++ b/slime/utils/http_utils.py
+@@ -115,6 +115,16 @@ def _wrap_ipv6(host):
+ 
+ 
+ def run_router(args):
++    # The router process (Rust sgl-model-gateway) makes outbound HTTP requests to
++    # worker health endpoints. Clear proxy env vars so these internal requests are
++    # not intercepted by a corporate proxy.
++    import os
++
++    for key in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"):
++        os.environ.pop(key, None)
++    os.environ["no_proxy"] = "*"
++    os.environ["NO_PROXY"] = "*"
++
+     try:
+         from sglang_router.launch_router import launch_router
+ 
+diff --git a/slime/utils/memory_utils.py b/slime/utils/memory_utils.py
+index c12f3cd0..0bd50870 100644
+--- a/slime/utils/memory_utils.py
++++ b/slime/utils/memory_utils.py
+@@ -8,6 +8,13 @@ logger = logging.getLogger(__name__)
+ 
+ 
+ def clear_memory(clear_host_memory: bool = False):
++    import os
++    fast_mode = os.environ.get("SLIME_FAST_CLEAR_MEMORY", "0")
++    if fast_mode == "1":
++        # Skip gc.collect() (saves ~1-2s) but keep empty_cache() (needed for NCCL)
++        torch.cuda.synchronize()
++        torch.cuda.empty_cache()
++        return
+     torch.cuda.synchronize()
+     gc.collect()
+     torch.cuda.empty_cache()
+diff --git a/slime/utils/profile_utils.py b/slime/utils/profile_utils.py
+index 504d1ce8..fafeafd4 100644
+--- a/slime/utils/profile_utils.py
++++ b/slime/utils/profile_utils.py
+@@ -71,9 +71,9 @@ def _create_torch_profiler(args, name):
+             worker_name=f"{name}_rank_{torch.distributed.get_rank()}",
+             use_gzip=True,
+         ),
+-        record_shapes=True,
+-        with_stack=True,
+-        profile_memory=True,
++        record_shapes=False,
++        with_stack=False,
++        profile_memory=False,
+         with_flops=True,
+     )
+ 
+diff --git a/slime/utils/train_metric_utils.py b/slime/utils/train_metric_utils.py
+index 9bec049d..6f24d842 100644
+--- a/slime/utils/train_metric_utils.py
++++ b/slime/utils/train_metric_utils.py
+@@ -10,6 +10,26 @@ from slime.utils.timer import Timer
+ logger = logging.getLogger(__name__)
+ 
+ 
++def _format_value(key: str, val: float) -> str:
++    if "tflops" in key:
++        return f"{val:.1f} TFLOPS"
++    if "tok_per_s" in key:
++        return f"{val:.0f} tok/s"
++    if "ratio" in key:
++        return f"{val:.1%}"
++    if "time" in key:
++        return f"{val:.2f}s"
++    return f"{val:.4g}"
++
++
++def _log_perf_summary(rollout_id: int, log_dict: dict) -> None:
++    lines = [f"perf rollout={rollout_id}"]
++    for key, val in log_dict.items():
++        short_key = key.removeprefix("perf/")
++        lines.append(f"  {short_key:<25s} {_format_value(key, val)}")
++    logger.info("\n".join(lines))
++
++
+ def log_perf_data_raw(
+     rollout_id: int, args: Namespace, is_primary_rank: bool, compute_total_fwd_flops: Callable
+ ) -> None:
+@@ -41,7 +61,7 @@ def log_perf_data_raw(
+             log_dict["perf/step_time"] = total_time
+             log_dict["perf/wait_time_ratio"] = log_dict["perf/train_wait_time"] / total_time
+ 
+-    logger.info(f"perf {rollout_id}: {log_dict}")
++    _log_perf_summary(rollout_id, log_dict)
+ 
+     step = compute_rollout_step(args, rollout_id)
+     log_dict["rollout/step"] = step
+diff --git a/slime/backends/megatron_utils/megatron_to_hf/processors/quantizer_fp8.py b/slime/backends/megatron_utils/megatron_to_hf/processors/quantizer_fp8.py
+index 203f60ef..cf362889 100644
+--- a/slime/backends/megatron_utils/megatron_to_hf/processors/quantizer_fp8.py
++++ b/slime/backends/megatron_utils/megatron_to_hf/processors/quantizer_fp8.py
+@@ -91,13 +91,10 @@ def _quantize_param(name, weight, weight_block_size):
+     FP8_MIN = torch.finfo(torch.float8_e4m3fn).min
+     FP8_MAX = torch.finfo(torch.float8_e4m3fn).max
+     if weight_block_size is not None:
+-        if should_deepgemm_weight_requant_ue8m0 and should_deepgemm_weight_requant_ue8m0(
+-            weight_block_size=weight_block_size
+-        ):
+-            qweight, scale = quant_weight_ue8m0(weight, weight_block_size=weight_block_size)
+-            scale = transform_scale_ue8m0(scale, mn=qweight.shape[-2])
+-        else:
+-            qweight, scale = blockwise_cast_to_fp8_triton(weight, weight_block_size)
++        # Always use fp32 block scales (not ue8m0) for weight sync.
++        # SGLang's weight_loader expects fp32 block scale format [ceil(N/128), ceil(K/128)].
++        # The ue8m0 transform is applied by SGLang's process_weights_after_loading.
++        qweight, scale = blockwise_cast_to_fp8_triton(weight, weight_block_size)
+         scale_name = name.replace(".weight", ".weight_scale_inv")
+     else:
+         # per tensor quant
+diff --git a/slime/backends/megatron_utils/update_weight/update_weight_from_distributed.py b/slime/backends/megatron_utils/update_weight/update_weight_from_distributed.py
+index 7b5b7817..eb7856e7 100644
+--- a/slime/backends/megatron_utils/update_weight/update_weight_from_distributed.py
++++ b/slime/backends/megatron_utils/update_weight/update_weight_from_distributed.py
+@@ -20,7 +20,7 @@ from .common import all_gather_param, named_params_and_buffers
+ class UpdateWeightFromDistributed:
+     """
+     Update distributed engines via NCCL. Each PP rank: group "slime-pp_{pp_rank}",
+-    only DP=TP=0 broadcasts. Non-expert (TP) and expert (EP) params separate.
++    only DP=TP=EP=0 broadcasts. Non-expert (TP) and expert (EP) params separate.
+     """
+
+     def __init__(
+@@ -50,7 +50,7 @@ class UpdateWeightFromDistributed:
+         engine_gpu_offsets: Sequence[int] | None = None,
+     ) -> None:
+         """
+-        Create NCCL "slime-pp_{pp_rank}" if PP source (DP=TP=0). Lock prevents concurrent broadcasts.
++        Create NCCL "slime-pp_{pp_rank}" if PP source (DP=TP=EP=0). Lock prevents concurrent broadcasts.
+         """
+         self.rollout_engines = rollout_engines
+         self.rollout_engine_lock = rollout_engine_lock
+@@ -59,8 +59,15 @@ class UpdateWeightFromDistributed:
+         # For TP:
+         #   1. AllGather parameters to rank 0
+         #   2. Broadcast parameters from rank 0 to all sglang engines
++        # EP=0 is required so that only one rank per PP stage creates the NCCL
++        # group with the engines.  Without this, every EP rank (DP=TP=0) would
++        # create a duplicate group under the same name, confusing the engines.
++        # After the EP all-gather in the expert path, EP=0 already holds all
++        # experts and can broadcast the full set.
+         self._is_pp_src_rank = (
+-            mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
++            mpu.get_data_parallel_rank(with_context_parallel=True) == 0
++            and mpu.get_tensor_model_parallel_rank() == 0
++            and mpu.get_expert_model_parallel_rank() == 0
+         )
+         pp_rank = mpu.get_pipeline_model_parallel_rank()
+         if self._is_pp_src_rank:
+@@ -89,8 +96,11 @@ class UpdateWeightFromDistributed:
+             ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
+             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
+
+-            # int4/fp4 pre_process
+-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
++            # pre_process: restore weights before loading (compressed-tensors, fp8 ue8m0)
++            if self.quantization_config and self.quantization_config["quant_method"] in [
++                "compressed-tensors",
++                "fp8",
++            ]:
+                 post_process_weights(
+                     restore_weights_before_load=True,
+                     post_process_quantization=False,
+@@ -129,8 +139,11 @@ class UpdateWeightFromDistributed:
+
+         dist.barrier(group=get_gloo_group())
+         if dist.get_rank() == 0:
+-            # int4/fp4 post_process
+-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
++            # post_process: requantize after loading (compressed-tensors, fp8 ue8m0)
++            if self.quantization_config and self.quantization_config["quant_method"] in [
++                "compressed-tensors",
++                "fp8",
++            ]:
+                 post_process_weights(
+                     restore_weights_before_load=False,
+                     post_process_quantization=True,
+@@ -330,6 +343,8 @@ def update_weights_from_distributed(
+
+     handles = []
+     for _, param in converted_named_tensors:
++        if not param.data.is_contiguous():
++            param.data = param.data.contiguous()
+         handles.append(dist.broadcast(param.data, 0, group=group, async_op=True))
+     for handle in handles:
+         handle.wait()
