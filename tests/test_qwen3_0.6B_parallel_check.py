@@ -9,6 +9,23 @@ MODEL_NAME = "Qwen3-0.6B"
 MODEL_TYPE = "qwen3-0.6B"
 NUM_GPUS = 8
 
+# Cover each dense parallel dimension, their pairwise/all-way interactions,
+# and one size-4 case per dimension without running the full Cartesian product.
+PARALLEL_CONFIGS = (
+    # num_gpus, tp, pp, cp
+    (2, 1, 1, 1),
+    (2, 2, 1, 1),
+    (2, 1, 2, 1),
+    (2, 1, 1, 2),
+    (4, 2, 2, 1),
+    (4, 2, 1, 2),
+    (4, 1, 2, 2),
+    (8, 2, 2, 2),
+    (8, 4, 1, 1),
+    (8, 1, 4, 1),
+    (8, 1, 1, 4),
+)
+
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
@@ -90,42 +107,45 @@ def execute():
         f"{misc_args} "
     )
 
-    for i in range(2):
+    rollout_data_path = "parallel-check-rollout-data.pt"
+    for i, calculate_per_token_loss in enumerate((False, True)):
+        loss_args = "--calculate-per-token-loss " if calculate_per_token_loss else ""
+        rollout_data_args = (
+            f"--save-debug-rollout-data {rollout_data_path} "
+            if i == 0
+            else f"--load-debug-rollout-data {rollout_data_path} "
+        )
         U.execute_train(
-            train_args=train_args
-            + (
-                f"--save-debug-rollout-data data-{i}.pt "
-                f"--ci-save-grad-norm grad_norms-{i}.pt "
-                f"--actor-num-gpus-per-node {NUM_GPUS} "
+            train_args=(
+                train_args
+                + loss_args
+                + rollout_data_args
+                + f"--ci-save-grad-norm grad_norms-{i}.pt "
+                + f"--actor-num-gpus-per-node {NUM_GPUS} "
             ),
             num_gpus_per_node=NUM_GPUS,
             megatron_model_type=MODEL_TYPE,
         )
-        parallel_sizes = [1, 2, 4]
-        for num_gpus in [8, 4, 2]:
-            for tp_size in parallel_sizes:
-                for pp_size in [1, 2, 4]:
-                    for cp_size in parallel_sizes:
-                        if tp_size * pp_size * cp_size > num_gpus:
-                            continue
-                        args = train_args + (
-                            f"--load-debug-rollout-data data-{i}.pt "
-                            f"--ci-load-grad-norm grad_norms-{i}.pt "
-                            f"--context-parallel-size {cp_size} "
-                            f"--tensor-model-parallel-size {tp_size} "
-                            f"--pipeline-model-parallel-size {pp_size} "
-                            "--sequence-parallel "
-                            f"--actor-num-gpus-per-node {num_gpus} "
-                            "--use-dynamic-batch-size "
-                            "--max-tokens-per-gpu 8192 "
-                        )
+        for num_gpus, tp_size, pp_size, cp_size in PARALLEL_CONFIGS:
+            args = (
+                train_args
+                + loss_args
+                + f"--load-debug-rollout-data {rollout_data_path} "
+                + f"--ci-load-grad-norm grad_norms-{i}.pt "
+                + f"--context-parallel-size {cp_size} "
+                + f"--tensor-model-parallel-size {tp_size} "
+                + f"--pipeline-model-parallel-size {pp_size} "
+                + "--sequence-parallel "
+                + f"--actor-num-gpus-per-node {num_gpus} "
+                + "--use-dynamic-batch-size "
+                + "--max-tokens-per-gpu 8192 "
+            )
 
-                        U.execute_train(
-                            train_args=args,
-                            num_gpus_per_node=num_gpus,
-                            megatron_model_type=MODEL_TYPE,
-                        )
-        train_args += "--calculate-per-token-loss "
+            U.execute_train(
+                train_args=args,
+                num_gpus_per_node=num_gpus,
+                megatron_model_type=MODEL_TYPE,
+            )
 
 
 if __name__ == "__main__":
