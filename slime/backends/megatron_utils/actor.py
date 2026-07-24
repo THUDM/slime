@@ -183,9 +183,10 @@ class MegatronTrainRayActor(TrainRayActor):
         # empty cache after initialization
         clear_memory()
 
-        if self.args.offload_train:
-            # recover to actor in the end.
+        if self._active_model_tag != "actor":
             self._switch_model("actor")
+
+        if self.args.offload_train:
             self.sleep()
 
         self.rollout_engines = None
