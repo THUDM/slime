@@ -300,6 +300,28 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=False,
             )
 
+            # Forwarded to the Megatron Bridge provider in bridge mode. Unlike
+            # --freeze-params-name-list, which masks gradients on the slime side,
+            # these are honored by the provider when the model is built.
+            parser.add_argument(
+                "--freeze-language-model",
+                action="store_true",
+                default=None,
+                help="Freeze the language model when building a model via Megatron Bridge.",
+            )
+            parser.add_argument(
+                "--freeze-vision-model",
+                action="store_true",
+                default=None,
+                help="Freeze the vision encoder when building a model via Megatron Bridge.",
+            )
+            parser.add_argument(
+                "--freeze-vision-projection",
+                action="store_true",
+                default=None,
+                help="Freeze the vision projection when building a model via Megatron Bridge.",
+            )
+
             return parser
 
         # rollout

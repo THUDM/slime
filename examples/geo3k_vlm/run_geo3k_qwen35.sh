@@ -4,12 +4,10 @@
 
 pip install -U transformers
 
-# IMPORTANT: This branch is specially modified for slime's current Megatron
-# version and Qwen3.5 from the main Megatron Bridge. Other models are not verified!
-# To restore the original Megatron Bridge, run:
-#   pip install git+https://github.com/fzyzcjy/Megatron-Bridge.git@dev_rl --no-build-isolation
-# TODO: Remove this once Megatron & Megatron Bridge are upgraded upstream.
-pip install git+https://github.com/coding-famer/Megatron-Bridge-slime.git@qwen35 --no-build-isolation
+# Qwen3.5-VL is provided by Megatron Bridge itself since v0.4.0, which the slime
+# image already ships, so no forked Megatron Bridge is needed here.
+# slime_plugins/megatron_bridge/qwen3_5_vl.py adapts its GDN layers to the packed
+# sequences slime feeds the model.
 
 # Configuration
 TRAIN_BACKEND="megatron"
