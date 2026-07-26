@@ -31,9 +31,10 @@ class Sandbox(Protocol):
     ``write_file`` accepts either in-memory content (``str``/``bytes``) or a
     host ``Path`` to stream into the sandbox.
 
-    Retry/idempotency is deliberately *not* part of this contract: whether a
-    severed RPC is safe to re-send is a backend transport concern (see
-    ``E2BSandbox._rpc_retry``), not something abstraction consumers reason about.
+    ``idempotent`` is a hint for the backend's transport-retry policy: callers
+    mark whether re-sending the command after a severed response is safe to
+    replay (see ``E2BSandbox._rpc_retry``). Backends without retries may
+    ignore it.
     """
 
     sandbox_id: str
@@ -50,6 +51,7 @@ class Sandbox(Protocol):
         env: dict[str, str] | None = None,
         timeout: int = 120,
         check: bool = False,
+        idempotent: bool = True,
     ) -> ExecResult: ...
 
     async def write_file(self, sandbox_path: str, content: FileContent, *, user: str = "root") -> None: ...
@@ -110,10 +112,23 @@ async def exec_and_wait(
     launcher_body = f"#!/bin/bash\n{prefix}{cmd}\necho $? > {done_file}\n"
     await sb.write_file(launcher, launcher_body, user=user)
 
+    # Clear the previous invocation's state in its own idempotent RPC, *before*
+    # the guarded spawn. The mkdir guard below exists only to dedupe transport
+    # retries of this one spawn (a severed response replayed by _rpc_retry); it
+    # must not survive into the next logical invocation of the same tag (e.g.
+    # install_npm_cli's retry loop), which would skip the spawn entirely and
+    # read the previous run's stale exit-code marker. Callers must not overlap
+    # two exec_and_wait calls with the same tag.
+    await sb.exec(
+        f"rm -rf {lock_dir}; rm -f {out_file} {done_file}",
+        user=user,
+        timeout=30,
+        check=True,
+        idempotent=True,
+    )
     await sb.exec(
         f"chmod +x {launcher}; "
         f"mkdir {lock_dir} 2>/dev/null || exit 0; "
-        f"rm -f {out_file} {done_file}; "
         f"setsid bash {launcher} < /dev/null > {out_file} 2>&1 &",
         user=user,
         env=env,
