@@ -92,27 +92,33 @@ def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_l
         # Use processor only for samples with actual multimodal content; use batched tokenizer for text-only.
         text_only = []
         multimodal = []
-        for sample in origin_samples:
+        for position, sample in enumerate(origin_samples):
             if sample.multimodal_inputs and any(v is not None for v in sample.multimodal_inputs.values()):
-                multimodal.append(sample)
+                multimodal.append((position, sample))
             else:
-                text_only.append(sample)
-        filtered_samples = []
+                text_only.append((position, sample))
+        kept = []
         if text_only:
-            prompts = [s.prompt for s in text_only]
+            prompts = [s.prompt for _, s in text_only]
             input_ids_list = tokenizer(prompts, add_special_tokens=False)["input_ids"]
-            for sample, input_ids in zip(text_only, input_ids_list, strict=True):
+            for (position, sample), input_ids in zip(text_only, input_ids_list, strict=True):
                 if len(input_ids) <= max_length:
-                    filtered_samples.append(sample)
+                    kept.append((position, sample))
         if multimodal:
             from slime.utils.processing_utils import process_vision_info
 
-            for sample in multimodal:
+            for position, sample in multimodal:
                 multimodal_inputs = process_vision_info(sample.prompt, processor)
                 processor_output = processor(text=sample.prompt, **multimodal_inputs)
                 input_ids = processor_output["input_ids"][0]
                 if len(input_ids) <= max_length:
-                    filtered_samples.append(sample)
+                    kept.append((position, sample))
+        # The two groups are scored separately for throughput, so restore the
+        # dataset order here: without --rollout-shuffle the samples are consumed
+        # in this order, and training should not depend on which of them happen
+        # to carry multimodal content.
+        kept.sort(key=lambda position_and_sample: position_and_sample[0])
+        filtered_samples = [sample for _, sample in kept]
     else:
         prompts = [sample.prompt for sample in origin_samples]
         input_ids_list = tokenizer(prompts, add_special_tokens=False)["input_ids"]
