@@ -628,18 +628,21 @@ class MegatronTrainRayActor(TrainRayActor):
             destroy_process_groups()
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:
-        old_args = self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune
+        old_args = (
+            self.args.load,
+            self.args.no_load_optim,
+            self.args.no_load_rng,
+            self.args.finetune,
+            self.args.ckpt_step,
+        )
         self.args.load = path
         self.args.no_load_optim = True
         self.args.no_load_rng = True
         self.args.finetune = True
 
-        old_ckpt_step = None
         if model_tag == "ref" and self.args.ref_ckpt_step is not None:
-            old_ckpt_step = self.args.ckpt_step
             self.args.ckpt_step = self.args.ref_ckpt_step
         elif model_tag == "teacher" and self.args.opd_teacher_ckpt_step is not None:
-            old_ckpt_step = self.args.ckpt_step
             self.args.ckpt_step = self.args.opd_teacher_ckpt_step
 
         _, _ = load_checkpoint(
@@ -649,10 +652,13 @@ class MegatronTrainRayActor(TrainRayActor):
             checkpointing_context={},
             skip_load_to_model_and_opt=False,
         )
-        self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune = old_args
-
-        if old_ckpt_step is not None:
-            self.args.ckpt_step = old_ckpt_step
+        (
+            self.args.load,
+            self.args.no_load_optim,
+            self.args.no_load_rng,
+            self.args.finetune,
+            self.args.ckpt_step,
+        ) = old_args
 
         self.weights_backuper.backup(model_tag)
         self._active_model_tag = model_tag
