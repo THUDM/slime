@@ -1768,8 +1768,11 @@ def slime_validate_args(args):
         else:
             if args.load is None:
                 args.load = args.ref_load or args.hf_checkpoint
-            # If is a HF checkpoint, set start_rollout_id to 0 here.
-            args.start_rollout_id = 0
+            # If is a HF checkpoint, there is no iteration to resume from, so
+            # default to 0 -- but only when the user did not ask for a specific
+            # starting rollout.
+            if args.start_rollout_id is None:
+                args.start_rollout_id = 0
     else:
         if (
             args.load is None
@@ -1782,7 +1785,10 @@ def slime_validate_args(args):
             args.load = args.ref_load
             if args.ref_ckpt_step is not None:
                 args.ckpt_step = args.ref_ckpt_step
-            args.start_rollout_id = 0
+            # Nothing to resume from, so default to 0 -- but only when the user
+            # did not ask for a specific starting rollout.
+            if args.start_rollout_id is None:
+                args.start_rollout_id = 0
 
     if args.eval_interval is not None:
         assert args.eval_datasets, "Evaluation datasets must be configured when eval_interval is set."

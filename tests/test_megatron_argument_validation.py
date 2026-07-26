@@ -263,6 +263,33 @@ def make_slime_validate_args(**overrides):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("megatron_to_hf_mode", ["raw", "bridge"])
+def test_slime_validate_args_preserves_explicit_start_rollout_id(monkeypatch, megatron_to_hf_mode):
+    """``--start-rollout-id`` is only a fallback when the user did not set it.
+
+    Both the bridge and the raw branch reset it when there is no resumable
+    Megatron checkpoint, which is exactly the case an explicit value is for.
+    """
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(start_rollout_id=100, megatron_to_hf_mode=megatron_to_hf_mode)
+
+    module.slime_validate_args(args)
+
+    assert args.start_rollout_id == 100
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("megatron_to_hf_mode", ["raw", "bridge"])
+def test_slime_validate_args_defaults_start_rollout_id_to_zero(monkeypatch, megatron_to_hf_mode):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(start_rollout_id=None, megatron_to_hf_mode=megatron_to_hf_mode)
+
+    module.slime_validate_args(args)
+
+    assert args.start_rollout_id == 0
+
+
+@pytest.mark.unit
 def test_slime_validate_args_preserves_zero_rollout_gpus_under_colocate(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(colocate=True, rollout_num_gpus=0)
