@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any
 
 _MISSING = object()
@@ -37,6 +37,21 @@ DATASET_RUNTIME_SPECS: dict[str, dict[str, tuple[str, ...]]] = {
         "dataset_keys": ("min_eval_samples",),
         "default_keys": ("min_eval_samples",),
         "arg_attrs": (),
+    },
+    "stop": {
+        "dataset_keys": ("stop",),
+        "default_keys": ("stop",),
+        "arg_attrs": ("rollout_stop",),
+    },
+    "stop_token_ids": {
+        "dataset_keys": ("stop_token_ids",),
+        "default_keys": ("stop_token_ids",),
+        "arg_attrs": ("rollout_stop_token_ids",),
+    },
+    "min_new_tokens": {
+        "dataset_keys": ("min_new_tokens",),
+        "default_keys": ("min_new_tokens",),
+        "arg_attrs": ("eval_min_new_tokens",),
     },
 }
 
@@ -253,11 +268,29 @@ def build_eval_dataset_configs(
     defaults: dict[str, Any],
 ) -> list[EvalDatasetConfig]:
     defaults = defaults or {}
+    combined_specs = {**DATASET_RUNTIME_SPECS, **DATASET_SAMPLE_SPECS}
+
+    # A key that is neither a spec name nor an EvalDatasetConfig field would be
+    # silently ignored below — the same typo inside a dataset entry raises from
+    # the dataclass constructor, so hold `defaults` to the same standard.
+    valid_default_keys = {f.name for f in fields(EvalDatasetConfig)} | {
+        key for spec in combined_specs.values() for key in spec["default_keys"]
+    }
+    unknown_keys = set(defaults) - valid_default_keys
+    if unknown_keys:
+        raise ValueError(
+            f"Unknown key(s) in eval.defaults: {sorted(unknown_keys)}. " f"Valid keys: {sorted(valid_default_keys)}."
+        )
+
     datasets: list[EvalDatasetConfig] = []
     for cfg in raw_config:
         cfg_dict = dict(cfg or {})
-        combined_specs = {**DATASET_RUNTIME_SPECS, **DATASET_SAMPLE_SPECS}
         _apply_dataset_field_overrides(args, cfg_dict, defaults, combined_specs)
+        # Fields without a spec entry (rm_type, repetition_penalty, app_service,
+        # ...) still honor eval.defaults: dataset entry wins, default fills in.
+        for key, value in defaults.items():
+            if key not in combined_specs:
+                cfg_dict.setdefault(key, value)
         dataset = EvalDatasetConfig(**cfg_dict)
         datasets.append(dataset)
     return datasets
