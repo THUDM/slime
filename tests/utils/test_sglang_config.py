@@ -3,6 +3,7 @@
 import sys
 import tempfile
 from argparse import Namespace
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -219,6 +220,51 @@ class TestZeroGpuRolloutConfig:
 
         assert kwargs["pp_size"] == 2
         assert kwargs["tp_size"] == 16
+
+    def test_memory_saver_disables_default_breakable_prefill_cuda_graph(self, monkeypatch):
+        from slime.backends.sglang_utils import sglang_engine
+
+        @dataclass
+        class CurrentServerArgs:
+            enable_memory_saver: bool = False
+            cuda_graph_backend_prefill: str | None = None
+
+        @dataclass
+        class LegacyServerArgs:
+            enable_memory_saver: bool = False
+
+        args = Namespace(
+            hf_checkpoint="/tmp/hf",
+            seed=1,
+            offload_rollout=True,
+            rollout_num_gpus_per_engine=1,
+            num_gpus_per_node=8,
+            sglang_pp_size=1,
+            sglang_dp_size=1,
+            sglang_ep_size=1,
+            use_rollout_routing_replay=False,
+            fp16=False,
+        )
+        compute_kwargs = {
+            "rank": 0,
+            "dist_init_addr": "127.0.0.1:12345",
+            "nccl_port": 12346,
+            "host": "127.0.0.1",
+            "port": 30000,
+            "base_gpu_id": 0,
+        }
+
+        monkeypatch.setattr(sglang_engine, "ServerArgs", CurrentServerArgs)
+        kwargs, _ = sglang_engine._compute_server_args(args, **compute_kwargs)
+        assert kwargs["cuda_graph_backend_prefill"] == "disabled"
+
+        args.sglang_cuda_graph_backend_prefill = "full"
+        kwargs, _ = sglang_engine._compute_server_args(args, **compute_kwargs)
+        assert kwargs["cuda_graph_backend_prefill"] == "full"
+
+        monkeypatch.setattr(sglang_engine, "ServerArgs", LegacyServerArgs)
+        kwargs, _ = sglang_engine._compute_server_args(args, **compute_kwargs)
+        assert "cuda_graph_backend_prefill" not in kwargs
 
     def test_start_rollout_servers_defers_engine_wait(self, monkeypatch):
         from slime.ray import rollout as rollout_module
