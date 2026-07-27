@@ -58,13 +58,21 @@ class MultiTurnLossMaskGenerator:
         all_loss_masks = []
         all_token_ids = []
 
-        for i, message in enumerate(messages):
+        i = 0
+        while i < len(messages):
+            message = messages[i]
+            end = i + 1
+            if message["role"] == "tool":
+                while end < len(messages) and messages[end]["role"] == "tool":
+                    end += 1
+            current_messages = messages[i:end]
+
             if i == 0:
                 message_ids = self.tokenizer.apply_chat_template(
-                    [message], tokenize=True, tools=tools, return_dict=False
+                    current_messages, tokenize=True, tools=tools, return_dict=False
                 )
             else:
-                message_ids = self.tokenizer.apply_chat_template([message], tokenize=True, return_dict=False)
+                message_ids = self.tokenizer.apply_chat_template(current_messages, tokenize=True, return_dict=False)
 
             if message["role"] != "system" and i > 0:
                 message_ids = message_ids[self.system_message_length :]
@@ -79,6 +87,7 @@ class MultiTurnLossMaskGenerator:
 
             all_loss_masks.extend(loss_mask)
             all_token_ids.extend(message_ids)
+            i = end
 
         return all_token_ids, all_loss_masks
 
