@@ -120,12 +120,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Extra environment variables for training process, e.g. PyTorch memory management ones.",
             )
             parser.add_argument(
-                "--train-memory-margin-bytes",
-                type=int,
-                default=1024**3,
-                help="Add margin for train memory allocation. By default we will reserve 1GB as margin.",
-            )
-            parser.add_argument(
                 "--megatron-to-hf-mode",
                 choices=["raw", "bridge"],
                 default="raw",
@@ -1871,9 +1865,6 @@ def slime_validate_args(args):
             args.actor_num_nodes = args.rollout_num_gpus // args.actor_num_gpus_per_node
         args.colocate = False
         args.offload_train = args.offload_rollout = False
-        if args.train_memory_margin_bytes > 0:
-            logger.warning("Force train_memory_margin_bytes=0 since debug_rollout_only does not support it")
-            args.train_memory_margin_bytes = 0
 
     assert not (args.debug_rollout_only and args.debug_train_only), (
         "debug_rollout_only and debug_train_only cannot be set at the same time, " "please set only one of them."

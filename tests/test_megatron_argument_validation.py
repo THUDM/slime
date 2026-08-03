@@ -228,7 +228,6 @@ def make_slime_validate_args(**overrides):
         debug_rollout_only=False,
         colocate=False,
         rollout_num_gpus=8,
-        train_memory_margin_bytes=0,
         eval_function_path=None,
         rollout_function_path="custom.rollout",
         num_steps_per_rollout=None,

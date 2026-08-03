@@ -86,11 +86,6 @@ class MegatronTrainRayActor(TrainRayActor):
 
         dist.barrier(group=get_gloo_group())
 
-        if args.offload_train:
-            if (x := args.train_memory_margin_bytes) > 0:
-                logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
-                torch_memory_saver.memory_margin_bytes = x
-
         self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id = initialize_model_and_optimizer(
             args, role
         )
