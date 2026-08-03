@@ -12,12 +12,7 @@ Note: Please make sure the cudnn version in the environment is 9.16.0.29 to prev
 pip install nvidia-cudnn-cu12==9.16.0.29
 ```
 
-**Important:** We use [Megatron Bridge](https://github.com/NVIDIA-NeMo/Megatron-Bridge) to support multimodal models. However, not all Megatron arguments are passed through to Megatron Bridge — you may need to set some manually [here](https://github.com/THUDM/slime/blob/de84e10d468dcb726e1199fd6bd16aa9538aed09/slime/backends/megatron_utils/model_provider.py#L89) (currently only parallelization-related arguments are passed). For example, for Qwen3-VL-30B-A3B you may need to add:
-```python
-provider.moe_aux_loss_coeff = args.moe_aux_loss_coeff
-provider.freeze_language_model = False
-provider.freeze_vision_model = False
-```
+**Important:** We use [Megatron Bridge](https://github.com/NVIDIA-NeMo/Megatron-Bridge) to support multimodal models. Besides the parallelization arguments, slime forwards `--moe-aux-loss-coeff`, `--freeze-language-model`, `--freeze-vision-model` and `--freeze-vision-projection` to the provider when the provider defines them. Arguments outside that list still need to be set by hand in `slime/backends/megatron_utils/model_provider.py`.
 
 <p align="center">
   <img src="fsdp_vs_megatron.png" alt="Reward Plot" width="800">
@@ -95,7 +90,9 @@ SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-4B-Instruct ./examples/geo3k_vlm/run_geo3k_vlm.
 #### Qwen3.5 Series
 We provide an [example](./run_geo3k_qwen35.sh) for Qwen3.5-35B-A3B. To support other Qwen3.5 models, add a model config file in `scripts/models/` and update the model name and config path in the script accordingly.
 
-For GDN training, use `--micro-batch-size 1` and remove `--use-dynamic-batch-size`.
+For GDN training, use `--micro-batch-size 1` and remove `--use-dynamic-batch-size`. Both are enforced: GDN runs one recurrence over the whole microbatch, so several packed sequences would be fused into one stream. Context parallel is rejected for the same reason.
+
+Keep `--attention-backend flash` as the example sets it. Letting Megatron pick the backend selects Transformer Engine's cuDNN fused attention, whose backward produces non-finite gradients for this model under bf16 with packed sequences and tensor parallel above 1.
 
 ## Notes
 

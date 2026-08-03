@@ -20,6 +20,18 @@ from megatron.training.arguments import core_transformer_config_from_args
 from slime.utils.megatron_bridge_utils import patch_auto_bridge_hf_config
 from slime.utils.misc import load_function
 
+# Args that Megatron Bridge providers accept but that are not part of the
+# parallelism config forwarded above. Previously users had to edit this file by
+# hand to set them (see examples/geo3k_vlm/README.md). Only names present on
+# both the CLI args and the provider are forwarded, so this stays a no-op for
+# providers that do not define them.
+_BRIDGE_PROVIDER_PASSTHROUGH_ARGS = (
+    "moe_aux_loss_coeff",
+    "freeze_language_model",
+    "freeze_vision_model",
+    "freeze_vision_projection",
+)
+
 
 # Adapt from https://github.com/volcengine/verl/blob/c3b20575d2bc815fcccd84bddb4c0401fc4b632b/verl/models/llama/megatron/layers/parallel_linear.py#L82
 class LinearForLastLayer(torch.nn.Linear):
@@ -105,6 +117,10 @@ def _get_model_provider_func(
             provider.num_layers_in_first_pipeline_stage = args.decoder_first_pipeline_num_layers
         if getattr(args, "decoder_last_pipeline_num_layers", None) is not None:
             provider.num_layers_in_last_pipeline_stage = args.decoder_last_pipeline_num_layers
+        for name in _BRIDGE_PROVIDER_PASSTHROUGH_ARGS:
+            value = getattr(args, name, None)
+            if value is not None and hasattr(provider, name):
+                setattr(provider, name, value)
         provider.finalize()
 
         if role == "critic":

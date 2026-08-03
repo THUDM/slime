@@ -599,6 +599,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_qwen3_5_vl_gdn_packed.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_ppo_logprob_entropy.py"
             },
             {
