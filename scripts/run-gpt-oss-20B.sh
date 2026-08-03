@@ -85,8 +85,6 @@ PERF_ARGS=(
    # PP>1 requires seq-length override (PP recv buffer is sized by seq-length).
    # Must be >= max-tokens-per-gpu. Smaller = less memory for FP32 logits.
    --seq-length 1536
-   # Reduce memory margin to avoid excessive CPU↔GPU swapping in colocate mode.
-   --train-memory-margin-bytes 268435456
 )
 
 GRPO_ARGS=(
