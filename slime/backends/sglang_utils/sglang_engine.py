@@ -49,6 +49,13 @@ def _to_local_gpu_id(physical_gpu_id: int) -> int:
 
 
 def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
+    # Expandable segments help the colocated training actor tolerate repeated
+    # cache releases, but SGLang's allocator/sleep path does not support them.
+    # The rollout Ray actor inherits the job environment, so remove the option
+    # before spawning every SGLang server and its children.
+    os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+    os.environ.pop("PYTORCH_ALLOC_CONF", None)
+
     if getattr(server_args, "encoder_only", False):
         from sglang.srt.disaggregation.encode_server import launch_server_process as sglang_launch_server_process
 
