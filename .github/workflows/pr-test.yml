@@ -623,6 +623,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_reward_utils.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_sample.py"
             },
             {
