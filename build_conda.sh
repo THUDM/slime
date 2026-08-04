@@ -49,6 +49,10 @@ micromamba install -n slime -c conda-forge cudnn -y
 # setuptools-rust), so the conda env needs a working rustc + cargo.
 micromamba install -n slime -c conda-forge rust -y
 
+# NVIDIA's conda packages install CUDA headers under targets/x86_64-linux.
+# FA3 downloads a standalone nvcc that cannot discover that directory itself.
+export CPATH="$CONDA_PREFIX/targets/x86_64-linux/include${CPATH:+:$CPATH}"
+
 pip install cuda-python==12.9
 
 # install sglang. The Dockerfile starts FROM slimerl/sglang:v0.5.15.post1-cu129
