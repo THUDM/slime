@@ -3,9 +3,8 @@ FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
 
-ARG PATCH_VERSION=v0.5.15.post1
+ARG PATCH_VERSION=latest
 ARG MEGATRON_COMMIT=1dcf0dafa884ad52ffb243625717a3471643e087
-ARG TMS_COMMIT=8d30c59ca12a68d9deccbc9c6599076a1218cbc5
 
 ARG ENABLE_CUDA_13=0
 ARG TMS_CUDA_MAJOR=
@@ -60,8 +59,8 @@ RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
 
 RUN TMS_CUDA_MAJOR="${TMS_CUDA_MAJOR:-$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')}" && \
     export TMS_CUDA_MAJOR && \
-    pip install git+https://github.com/zhuzilin/torch_memory_saver.git@${TMS_COMMIT} --no-cache-dir --force-reinstall --no-build-isolation
-RUN pip install "nvidia-modelopt[torch]>=0.37.0" --no-build-isolation
+    pip install git+https://github.com/zhuzilin/torch_memory_saver.git --no-cache-dir --force-reinstall
+RUN pip install nvidia-modelopt[torch]>=0.37.0 --no-build-isolation
 
 # This patch from masahi will be included in later Triton releases
 RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
