@@ -24,10 +24,12 @@ export CUDA_HOME="$CONDA_PREFIX"
 #   - SGLANG_IMAGE_TAG (ARG)            -> SGLANG_VERSION below
 #   - MEGATRON_COMMIT (ARG)             -> MEGATRON_COMMIT below
 #   - PATCH_VERSION (ARG, default "latest") -> PATCH_VERSION below
-export SGLANG_VERSION="v0.5.12.post1"
-export SGLANG_COMMIT="5a15cde858ea09b77116212a39356f2fc51b8584"
+#   - TMS_COMMIT (ARG)                   -> TMS_COMMIT below
+export SGLANG_VERSION="v0.5.15.post1"
+export SGLANG_COMMIT="0b3bb0cbe31873994c9f989fddfe2f87ca839fdd"
 export MEGATRON_COMMIT="1dcf0dafa884ad52ffb243625717a3471643e087"
-export PATCH_VERSION="latest"
+export PATCH_VERSION="v0.5.15.post1"
+export TMS_COMMIT="8d30c59ca12a68d9deccbc9c6599076a1218cbc5"
 
 export BASE_DIR=${BASE_DIR:-"/root"}
 cd $BASE_DIR
@@ -49,7 +51,7 @@ micromamba install -n slime -c conda-forge rust -y
 
 pip install cuda-python==12.9
 
-# install sglang. The Dockerfile starts FROM slimerl/sglang:v0.5.12.post1-cu129
+# install sglang. The Dockerfile starts FROM slimerl/sglang:v0.5.15.post1-cu129
 # which already has sglang installed with cu129-built native kernels; we have
 # to install it ourselves here. Two follow-up steps clean up the cu13 spill:
 #   1. force-reinstall torch / sglang-kernel / sgl-deep-gemm to their +cu129
@@ -68,7 +70,7 @@ pip install --force-reinstall --no-deps \
   torch==2.11.0 torchvision torchaudio==2.11.0 \
   --index-url https://download.pytorch.org/whl/cu129
 pip install --force-reinstall --no-deps \
-  sglang-kernel==0.4.2.post2 sgl-deep-gemm==0.1.0 \
+  sglang-kernel==0.4.4 sgl-deep-gemm==0.1.4 \
   --index-url https://docs.sglang.ai/whl/cu129/
 pip uninstall -y \
   nvidia-cublas \
@@ -110,17 +112,28 @@ pip install --force-reinstall --no-deps \
 
 pip install cmake ninja
 
-# flash attn 2 (matches Dockerfile)
-# the newest version megatron supports is v2.7.4.post1
-MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1 --no-build-isolation
+# The SGLang dependency set includes FA4, while the validated TE 2.16 CP stack
+# uses FA2 + FA3.
+pip uninstall -y flash-attn-4 flash_attn_4 || true
+MAX_JOBS=64 pip -v install flash-attn==2.8.3 --no-build-isolation
 
-pip install flash-linear-attention==0.4.1
+if [ ! -d "$BASE_DIR/flash-attention" ]; then
+  cd "$BASE_DIR"
+  git clone https://github.com/Dao-AILab/flash-attention.git
+fi
+cd "$BASE_DIR/flash-attention"
+git checkout 002cce0a1068f8c07dfccb5a1d232b9a3276947c
+git submodule update --init
+cd hopper
+FLASH_ATTENTION_FORCE_BUILD=TRUE MAX_JOBS=96 pip -v install . --no-build-isolation
+
+pip install flash-linear-attention==0.4.2
 # FlashQLA: optional GDN backend for Qwen3.5/Qwen3-Next (--qwen-gdn-backend flashqla; requires SM90+)
 pip install git+https://github.com/QwenLM/FlashQLA.git --no-build-isolation
 # tilelang (matches Dockerfile)
 pip install tilelang -f https://tile-ai.github.io/whl/nightly/cu128/
 
-pip install --no-build-isolation "transformer_engine[pytorch]==2.10.0"
+pip install --no-build-isolation "transformer_engine[pytorch]==2.16.1"
 
 NVCC_APPEND_FLAGS="--threads 4" \
   pip -v install --disable-pip-version-check --no-cache-dir \
@@ -134,10 +147,10 @@ export TMS_CUDA_MAJOR
 # PEP 517 build venv hides them, so the wheel comes out python-only (~46KB)
 # and sglang trips `Only hook_mode=preload supports pauseable CUDA Graph`
 # because the preload .so was never compiled in.
-pip install -v git+https://github.com/fzyzcjy/torch_memory_saver.git@a193d9dd1b877d33c64a41cfb3db9f867df2d926 \
+pip install -v git+https://github.com/zhuzilin/torch_memory_saver.git@${TMS_COMMIT} \
   --no-cache-dir --force-reinstall --no-build-isolation
-pip install nvidia-modelopt[torch]>=0.37.0 --no-build-isolation
-pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-5f8d397/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
+pip install "nvidia-modelopt[torch]>=0.37.0" --no-build-isolation
+pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-9daabcd/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
 python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
 
 # megatron
@@ -176,32 +189,40 @@ pip install . --no-build-isolation
 
 # https://github.com/pytorch/pytorch/issues/168167
 pip install nvidia-cudnn-cu12==9.16.0.29
-pip install "numpy<2"
+pip install "numpy==1.26.4" "scipy==1.17.1"
 # kernels 0.15.x trips a ValueError("Either a revision or a version must be
 # specified") on `transformers.integrations.hub_kernels` import; pin to <0.15
 # so `import sglang` works at runtime.
 pip install "kernels<0.15.0"
 
-# apply patch (matches Dockerfile: --3way + fail on conflicts)
+# apply patches in the same order as Dockerfile
 cd $BASE_DIR/sglang
-if git apply --check $SLIME_DIR/docker/patch/${PATCH_VERSION}/sglang.patch 2>/dev/null; then
-  git update-index --refresh || true
-  git apply $SLIME_DIR/docker/patch/${PATCH_VERSION}/sglang.patch --3way
-  if grep -R -n '^<<<<<<< ' .; then
-    echo "sglang patch failed to apply cleanly. Please resolve conflicts." >&2
+for patch_name in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch; do
+  patch_path="$SLIME_DIR/docker/patch/${PATCH_VERSION}/${patch_name}"
+  if [ ! -f "$patch_path" ]; then
+    continue
+  fi
+  if git apply --check "$patch_path"; then
+    git apply "$patch_path"
+  elif git apply --reverse --check "$patch_path"; then
+    echo "$patch_name already applied, skipping"
+  else
+    echo "$patch_name does not apply cleanly" >&2
     exit 1
   fi
-else
-  echo "sglang patch already applied or not applicable, skipping"
-fi
+done
 cd $BASE_DIR/Megatron-LM
-if git apply --check $SLIME_DIR/docker/patch/${PATCH_VERSION}/megatron.patch 2>/dev/null; then
+megatron_patch="$SLIME_DIR/docker/patch/${PATCH_VERSION}/megatron.patch"
+if git apply --reverse --check "$megatron_patch"; then
+  echo "megatron.patch already applied, skipping"
+else
   git update-index --refresh || true
-  git apply $SLIME_DIR/docker/patch/${PATCH_VERSION}/megatron.patch --3way
-  if grep -R -n '^<<<<<<< ' .; then
+  if ! git apply "$megatron_patch" --3way; then
+    echo "megatron.patch does not apply cleanly" >&2
+    exit 1
+  fi
+  if git grep -n '^<<<<<<< ' -- .; then
     echo "megatron patch failed to apply cleanly. Please resolve conflicts." >&2
     exit 1
   fi
-else
-  echo "megatron patch already applied or not applicable, skipping"
 fi
