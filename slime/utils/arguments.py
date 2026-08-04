@@ -428,7 +428,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "This defines the granularity of the sampling batch in the rollout function. "
                     "When the number of available samples falls below the target, a sampling "
-                    "operation of size over_sampling_batch_size will be triggered."
+                    "operation of size over_sampling_batch_size will be triggered. "
                     "Regardless of whether partial rollout is used or filters are applied, "
                     "the sampling granularity is always determined by this value. "
                     "If this value is None, rollout_batch_size will be used as the default over_sampling_batch_size."
@@ -440,9 +440,11 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "This is the filter function for dynamic sampling. "
-                    "It should be able to judge whether the result of a prompt should be selected or not."
-                    "We will do dynamic filter for sampling as in DAPO. e.g. not all correct or all wrong samples."
-                    "You could use `slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std` as an example."
+                    "It should be able to judge whether the result of a prompt should be selected or not. "
+                    "We will do dynamic filter for sampling as in DAPO. e.g. not all correct or all wrong samples. "
+                    "You could use `slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std` as an example. "
+                    "To avoid another sampling round when the oversampled candidates cannot fill rollout_batch_size, "
+                    "use `slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std_with_fallback`."
                 ),
             )
 
@@ -473,6 +475,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Only substitue the `def generate(args, sample, sampling_params)` function within the example rollout function. "
                     "This should be useful if you need to implement some special rollout logic, e.g. multi-turn, function calling."
+                ),
+            )
+            parser.add_argument(
+                "--rollout-sample-hook-path",
+                action="append",
+                default=[],
+                help=(
+                    "Import path to a hook applied to each generated rollout Sample before reward computation. "
+                    "May be repeated. Hooks may be sync or async and have signature "
+                    "hook(args, sample, *, rollout_id=None, evaluation=False) -> Sample | None."
                 ),
             )
             parser.add_argument(
