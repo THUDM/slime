@@ -16,7 +16,8 @@ from tqdm import tqdm
 
 from slime.backends.sglang_utils.server_control import abort_servers_until_idle
 from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
-from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter
+from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter, should_drop_dynamic_filter_output
+from slime.rollout.sample_hooks import apply_rollout_sample_hooks
 from slime.utils.async_utils import run
 from slime.utils.data import Dataset
 from slime.utils.eval_config import EvalDatasetConfig
@@ -260,6 +261,8 @@ async def generate_and_rm(
             else:
                 sample = await generate(args, sample, sampling_params)
 
+    sample = await apply_rollout_sample_hooks(args, sample, evaluation=evaluation)
+
     # for the rm that need the whole group, we will not do the rm here
     if args.group_rm:
         return sample
@@ -427,7 +430,11 @@ async def generate_rollout_async(
             all_data.append(group)
 
             dynamic_filter_output = call_dynamic_filter(dynamic_filter, args, group)
-            if not dynamic_filter_output.keep:
+            if should_drop_dynamic_filter_output(
+                dynamic_filter_output,
+                remaining_batch_size=state.remaining_batch_size,
+                target_data_size=target_data_size,
+            ):
                 metric_gatherer.on_dynamic_filter_drop(reason=dynamic_filter_output.reason)
                 state.remaining_batch_size -= 1
                 continue
