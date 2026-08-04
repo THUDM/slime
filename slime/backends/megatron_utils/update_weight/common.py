@@ -194,7 +194,7 @@ def _named_params_and_buffers_global(
             if not name.startswith("module.module."):
                 name = "module." + name
 
-            decoder_layers_pattern = r"module\.module\.decoder\.layers\.(\d+)\.(.+)"
+            decoder_layers_pattern = r"module\.module\.(?:language_model\.)?decoder\.layers\.(\d+)\.(.+)"
             match = re.match(decoder_layers_pattern, name)
             if not match:
                 # MTP (Multi-Token Prediction) layers for speculative decoding
@@ -239,7 +239,7 @@ def _named_params_and_buffers_global(
             if not name.startswith("module.module."):
                 name = "module." + name
 
-            decoder_layers_pattern = r"module\.module\.decoder\.layers\.(\d+)\.(.+)"
+            decoder_layers_pattern = r"module\.module\.(?:language_model\.)?decoder\.layers\.(\d+)\.(.+)"
             match = re.match(decoder_layers_pattern, name)
             if not match:
                 yield name, buffer
