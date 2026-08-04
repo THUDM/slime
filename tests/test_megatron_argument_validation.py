@@ -186,7 +186,6 @@ def make_slime_validate_args(**overrides):
         use_opd=False,
         opd_type=None,
         opd_teacher_load=None,
-        megatron_to_hf_mode="raw",
         load=None,
         hf_checkpoint="/tmp/hf",
         ref_ckpt_step=None,

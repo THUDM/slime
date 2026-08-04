@@ -26,7 +26,7 @@ def convert_mimo_mtp_param(args, name, param):
     - Self attention (reuses Qwen2 attention structure)
     - MLP (reuses Qwen2 MLP structure)
 
-    Based on MimoBridge._convert_mtp_param logic (reverse mapping)
+    This is the inverse of MiMo's HuggingFace-to-Megatron MTP mapping.
     """
     mtp_pattern = r"module\.module\.mtp\.layers\.(\d+)\.(.+)"
     match = re.match(mtp_pattern, name)
@@ -37,7 +37,6 @@ def convert_mimo_mtp_param(args, name, param):
     layer_idx, component = match.groups()
 
     # Direct mappings for MTP-specific components (Megatron -> HF)
-    # Based on MimoBridge direct_name_mapping (reversed)
     direct_mappings = {
         "enorm.weight": f"model.mtp_layers.{layer_idx}.token_layernorm.weight",
         "hnorm.weight": f"model.mtp_layers.{layer_idx}.hidden_layernorm.weight",
