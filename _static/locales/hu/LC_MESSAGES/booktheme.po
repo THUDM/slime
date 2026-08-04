@@ -1,0 +1,75 @@
+
+msgid ""
+msgstr ""
+"Project-Id-Version: Sphinx-Book-Theme\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: hu\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "By the"
+msgstr "Szerző:"
+
+msgid "By"
+msgstr "Szerző:"
+
+msgid "Contents"
+msgstr "Tartalom"
+
+msgid "Copyright"
+msgstr "Szerzői jog"
+
+msgid "Download notebook file"
+msgstr "Jegyzettömbfájl letöltése"
+
+msgid "Download source file"
+msgstr "Forrásfájl letöltése"
+
+msgid "Download this page"
+msgstr "Az oldal letöltése"
+
+msgid "Edit this page"
+msgstr "Az oldal szerkesztése"
+
+msgid "Fullscreen mode"
+msgstr "Teljes képernyős mód"
+
+msgid "Last updated on"
+msgstr "Utoljára frissítve:"
+
+msgid "Launch"
+msgstr "Indítás"
+
+msgid "Open an issue"
+msgstr "Problémajegy nyitása"
+
+msgid "Print to PDF"
+msgstr "Nyomtatás PDF-be"
+
+msgid "Source repository"
+msgstr "Forráskódtároló"
+
+msgid "Sphinx Book Theme"
+msgstr "Sphinx könyvsablon"
+
+msgid "Theme by the"
+msgstr "Téma készítője:"
+
+msgid "Toggle navigation"
+msgstr "Navigáció ki- és bekapcsolása"
+
+msgid "next page"
+msgstr "következő oldal"
+
+msgid "open issue"
+msgstr "problémajegy nyitása"
+
+msgid "previous page"
+msgstr "előző oldal"
+
+msgid "repository"
+msgstr "tároló"
+
+msgid "suggest edit"
+msgstr "szerkesztési javaslat"
