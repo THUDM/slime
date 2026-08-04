@@ -2,6 +2,8 @@
 
 set -ex
 
+export SLIME_DIR="${SLIME_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}"
+
 # create conda
 yes '' | "${SHELL}" <(curl -L micro.mamba.pm/install.sh)
 export PS1=tmp
@@ -48,10 +50,6 @@ micromamba install -n slime -c conda-forge cudnn -y
 # sglang's editable install builds a Rust extension (sglang-grpc via
 # setuptools-rust), so the conda env needs a working rustc + cargo.
 micromamba install -n slime -c conda-forge rust -y
-
-# NVIDIA's conda packages install CUDA headers under targets/x86_64-linux.
-# FA3 downloads a standalone nvcc that cannot discover that directory itself.
-export CPATH="$CONDA_PREFIX/targets/x86_64-linux/include${CPATH:+:$CPATH}"
 
 pip install cuda-python==12.9
 
@@ -117,19 +115,13 @@ pip install --force-reinstall --no-deps \
 pip install cmake ninja
 
 # The SGLang dependency set includes FA4, while the validated TE 2.16 CP stack
-# uses FA2 + FA3.
+# uses FA2 2.7.4 through 2.8.3. This wheel targets Python 3.12, PyTorch 2.11,
+# CUDA 12, and the CXX11 ABI used by the conda environment. Upstream does not
+# publish that combination, so pin the community build linked from upstream
+# issue #2425 by its SHA256 digest.
 pip uninstall -y flash-attn-4 flash_attn_4 || true
-MAX_JOBS=64 pip -v install flash-attn==2.8.3 --no-build-isolation
-
-if [ ! -d "$BASE_DIR/flash-attention" ]; then
-  cd "$BASE_DIR"
-  git clone https://github.com/Dao-AILab/flash-attention.git
-fi
-cd "$BASE_DIR/flash-attention"
-git checkout 002cce0a1068f8c07dfccb5a1d232b9a3276947c
-git submodule update --init
-cd hopper
-FLASH_ATTENTION_FORCE_BUILD=TRUE MAX_JOBS=96 pip -v install . --no-build-isolation
+pip install --no-deps \
+  "https://github.com/lesj0610/flash-attention/releases/download/v2.8.3-cu12-torch2.11/flash_attn-2.8.3%2Bcu12torch2.11cxx11abiTRUE-cp312-cp312-linux_x86_64.whl#sha256=3d0c8e60f820321eedd7166e79c33cb816263d8be6e35c3f5ba8fe2df6fea697"
 
 pip install flash-linear-attention==0.4.2
 # FlashQLA: optional GDN backend for Qwen3.5/Qwen3-Next (--qwen-gdn-backend flashqla; requires SM90+)
@@ -172,12 +164,6 @@ cd $BASE_DIR/Megatron-LM && git checkout ${MEGATRON_COMMIT} && pip install -e . 
 
 # install slime and apply patches
 
-# if slime does not exist locally, clone it
-if [ ! -d "$BASE_DIR/slime" ]; then
-  cd $BASE_DIR
-  git clone https://github.com/THUDM/slime.git
-fi
-export SLIME_DIR=$BASE_DIR/slime
 cd $SLIME_DIR
 # Install slime's pure-python runtime deps first (wandb, ray, accelerate,
 # transformers, etc.) from its requirements.txt, then install slime itself
@@ -200,9 +186,15 @@ pip install "numpy==1.26.4" "scipy==1.17.1"
 pip install "kernels<0.15.0"
 
 # apply patches in the same order as Dockerfile
+patch_dir="$SLIME_DIR/docker/patch/${PATCH_VERSION}"
+if [ ! -d "$patch_dir" ]; then
+  echo "Patch directory does not exist: $patch_dir" >&2
+  exit 1
+fi
+
 cd $BASE_DIR/sglang
 for patch_name in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch; do
-  patch_path="$SLIME_DIR/docker/patch/${PATCH_VERSION}/${patch_name}"
+  patch_path="$patch_dir/${patch_name}"
   if [ ! -f "$patch_path" ]; then
     continue
   fi
@@ -216,7 +208,11 @@ for patch_name in sglang.patch sglang-top_p.patch sglang-release_hicache.patch s
   fi
 done
 cd $BASE_DIR/Megatron-LM
-megatron_patch="$SLIME_DIR/docker/patch/${PATCH_VERSION}/megatron.patch"
+megatron_patch="$patch_dir/megatron.patch"
+if [ ! -f "$megatron_patch" ]; then
+  echo "Megatron patch does not exist: $megatron_patch" >&2
+  exit 1
+fi
 if git apply --reverse --check "$megatron_patch"; then
   echo "megatron.patch already applied, skipping"
 else
