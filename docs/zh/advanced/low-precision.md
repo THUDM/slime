@@ -124,6 +124,35 @@ RUNTIME_ENV_JSON="{
 - `128`：`moonlight-16B-A3B`、`qwen3-30B-A3B`、`qwen3-235B-A22B-int4`；
 - `32`：`kimi-k2-Thinking-int4`。
 
+### Qwen3.5 MoE INT4-QAT
+
+Qwen3.5 MoE 已支持 routed experts INT4-QAT 路径。转换器会自动处理 Qwen3.5 的 fused expert 权重，并生成可供 SGLang rollout 使用的 INT4 checkpoint。
+
+当前支持范围：
+
+```text
+INT4：routed experts
+BF16：attention、linear_attn、conv1d、shared_expert、router gate、visual、mtp、embedding、norm、lm_head
+```
+
+转换 Hugging Face checkpoint：
+
+```bash
+python tools/convert_hf_to_int4_direct.py \
+  --model-dir /path/to/Qwen3.5-35B-A3B \
+  --save-dir /path/to/Qwen3.5-35B-A3B-INT4 \
+  --group-size 128 \
+  --is-symmetric
+```
+
+然后启动：
+
+```bash
+bash scripts/low_precision/run-qwen3.5-35B-A3B-int4-qat-rl.sh
+```
+
+当前路径不包含 MTP training 和 visual INT4-QAT。
+
 3. 启动 example：
 
 ```bash
@@ -138,6 +167,9 @@ bash scripts/low_precision/run-qwen3-235B-A22B-int4.sh
 
 # Kimi-k2-Thinking INT4 training (32 nodes)
 bash scripts/low_precision/run-kimi-k2-Thinking-int4.sh
+
+# Qwen3.5-35B-A3B routed experts INT4-QAT training
+bash scripts/low_precision/run-qwen3.5-35B-A3B-int4-qat-rl.sh
 ```
 
 多机环境请根据集群配置启动 Ray 服务。

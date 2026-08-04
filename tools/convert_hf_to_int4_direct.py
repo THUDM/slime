@@ -27,6 +27,32 @@ except ImportError:
     fake_int4_quant_cuda = None
 
 
+DEFAULT_IGNORE_RULES = [
+    "re:.*lm_head.*",
+    "re:.*norm.*",
+    "re:.*embed.*",
+    "re:.*self_attn.*",
+    "re:.*shared_experts.*",
+    "re:.*mlp\\.(gate|up|gate_up|down)_proj.*",
+    "re:.*mlp\\.gate\\.*",
+]
+
+QWEN35_FUSED_EXPERT_IGNORE_RULES = [
+    "re:.*lm_head.*",
+    "re:.*norm.*",
+    "re:.*embed.*",
+    "re:.*self_attn.*",
+    "re:.*linear_attn.*",
+    "re:.*conv1d.*",
+    "re:.*visual.*",
+    "re:.*mlp\\.gate\\..*",
+    "re:.*mlp\\.(gate|up|gate_up|down)_proj.*",
+    "re:.*shared_experts.*",
+    "re:.*shared_expert.*",
+    "re:.*mtp.*",
+]
+
+
 def pack_to_int32(
     value,
     num_bits,
@@ -164,38 +190,117 @@ class ConversionResult:
                 self.param_count += len(v)
 
 
-def process_file(input_path, output_path, filename, group_size, is_symmetric, ignore_rules, result_collector):
+def _matches_ignore_rule(name, ignore_rules):
+    return any(
+        (r.startswith("re:") and re.match(r[3:], name)) or r == name or name.startswith(r) for r in ignore_rules
+    )
+
+
+def _is_qwen35_fused_expert(name, shape):
+    return re.match(r".*\.mlp\.experts\.(gate_up_proj|down_proj)$", name) is not None and len(shape) == 3
+
+
+def _iter_qwen35_fused_expert_weights(name, weight):
+    match = re.match(r"(.*\.mlp\.experts)\.(gate_up_proj|down_proj)$", name)
+    if match is None or weight.dim() != 3:
+        return
+
+    prefix, which = match.groups()
+    for expert_id in range(weight.shape[0]):
+        if which == "gate_up_proj":
+            gate, up = weight[expert_id].chunk(2, dim=0)
+            yield f"{prefix}.{expert_id}.gate_proj.weight", gate.contiguous()
+            yield f"{prefix}.{expert_id}.up_proj.weight", up.contiguous()
+        else:
+            yield f"{prefix}.{expert_id}.down_proj.weight", weight[expert_id].contiguous()
+
+
+def _shape_from_safe_open(reader, key):
+    if hasattr(reader, "get_slice"):
+        return tuple(reader.get_slice(key).get_shape())
+    return tuple(reader.get_tensor(key).shape)
+
+
+def checkpoint_has_qwen35_fused_experts(input_path, safetensors_files):
+    for filename in safetensors_files:
+        with safetensors.safe_open(os.path.join(input_path, filename), framework="pt", device="cpu") as f:
+            for key in f.keys():
+                if _is_qwen35_fused_expert(key, _shape_from_safe_open(f, key)):
+                    return True
+    return False
+
+
+def get_effective_ignore_rules(qwen35_fused_expert_only, ignore_rules=None):
+    if qwen35_fused_expert_only:
+        return list(dict.fromkeys([*(ignore_rules or DEFAULT_IGNORE_RULES), *QWEN35_FUSED_EXPERT_IGNORE_RULES]))
+    return list(ignore_rules or DEFAULT_IGNORE_RULES)
+
+
+def convert_weights(weights, group_size, is_symmetric, ignore_rules, qwen35_fused_expert_only):
+    q_weights = {}
+
+    def _pack_and_store(pname, w):
+        print(f"Packing {pname}, memory usage: {torch.cuda.memory_allocated()}")
+        qw, s, zp = pack_layer(w, group_size, is_symmetric)
+        q_weights[pname.replace(".weight", ".weight_packed")] = qw
+        q_weights[pname.replace(".weight", ".weight_scale")] = s
+        q_weights[pname.replace(".weight", ".weight_shape")] = torch.tensor(
+            w.shape, dtype=torch.int32, device=w.device
+        )
+        if zp is not None:
+            q_weights[pname.replace(".weight", ".weight_zero_point")] = zp
+
+    for name, weight in weights.items():
+        if qwen35_fused_expert_only:
+            split_weights = list(_iter_qwen35_fused_expert_weights(name, weight))
+            if split_weights:
+                for split_name, split_weight in split_weights:
+                    if _matches_ignore_rule(split_name, ignore_rules):
+                        print(f"Ignoring {split_name}, memory usage: {torch.cuda.memory_allocated()}")
+                        q_weights[split_name] = split_weight
+                    else:
+                        _pack_and_store(split_name, split_weight)
+            else:
+                print(f"Ignoring {name}, memory usage: {torch.cuda.memory_allocated()}")
+                q_weights[name] = weight
+            continue
+
+        is_ignored = _matches_ignore_rule(name, ignore_rules)
+        split_weights = list(_iter_qwen35_fused_expert_weights(name, weight))
+        if split_weights and not is_ignored:
+            for split_name, split_weight in split_weights:
+                _pack_and_store(split_name, split_weight)
+            continue
+
+        if is_ignored or not name.endswith(".weight") or weight.dim() != 2:
+            print(f"Ignoring {name}, memory usage: {torch.cuda.memory_allocated()}")
+            q_weights[name] = weight
+            continue
+
+        _pack_and_store(name, weight)
+
+    return q_weights
+
+
+def process_file(
+    input_path,
+    output_path,
+    filename,
+    group_size,
+    is_symmetric,
+    ignore_rules,
+    qwen35_fused_expert_only,
+    result_collector,
+):
 
     print(f"Processing {filename}, memory usage: {torch.cuda.memory_allocated()}")
     weights = {}
-    q_weights = {}
 
     with safetensors.safe_open(os.path.join(input_path, filename), framework="pt", device="cuda") as f:
         for k in f.keys():
             weights[k] = f.get_tensor(k)
 
-    for name, weight in weights.items():
-        is_ignored = any(
-            (r.startswith("re:") and re.match(r[3:], name)) or r == name or name.startswith(r) for r in ignore_rules
-        )
-
-        if is_ignored or not name.endswith(".weight") or weight.dim() < 2:
-            print(f"Ignoring {name}, memory usage: {torch.cuda.memory_allocated()}")
-            q_weights[name] = weight
-            continue
-
-        print(f"Packing {name}, memory usage: {torch.cuda.memory_allocated()}")
-        qw, s, zp = pack_layer(weight, group_size, is_symmetric)
-        qweight_name = name.replace(".weight", ".weight_packed")
-        scale_name = name.replace(".weight", ".weight_scale")
-        weight_shape = torch.tensor(weight.shape, dtype=torch.int32, device="cuda")
-        weight_shape_name = name.replace(".weight", ".weight_shape")
-        if zp is not None:
-            zp_name = name.replace(".weight", ".weight_zero_point")
-            q_weights[zp_name] = zp
-        q_weights[qweight_name] = qw
-        q_weights[scale_name] = s
-        q_weights[weight_shape_name] = weight_shape
+    q_weights = convert_weights(weights, group_size, is_symmetric, ignore_rules, qwen35_fused_expert_only)
 
     safetensors.torch.save_file(q_weights, os.path.join(output_path, filename), metadata={"format": "pt"})
 
@@ -210,6 +315,8 @@ def convert_int4(input_path, output_path, group_size, is_symmetric, ignore_rules
             shutil.copyfile(os.path.join(input_path, filename), os.path.join(output_path, filename))
 
     safetensors_files = [f for f in os.listdir(input_path) if f.endswith(".safetensors")]
+    qwen35_fused_expert_only = checkpoint_has_qwen35_fused_experts(input_path, safetensors_files)
+    effective_ignore_rules = get_effective_ignore_rules(qwen35_fused_expert_only, ignore_rules)
 
     result_collector = ConversionResult()
     # debug in single thread
@@ -227,7 +334,8 @@ def convert_int4(input_path, output_path, group_size, is_symmetric, ignore_rules
                 filename,
                 group_size,
                 is_symmetric,
-                ignore_rules,
+                effective_ignore_rules,
+                qwen35_fused_expert_only,
                 result_collector,
             )
             futures.append(future)
@@ -257,7 +365,7 @@ def convert_int4(input_path, output_path, group_size, is_symmetric, ignore_rules
     quantization_config = {
         "config_groups": quant_group,
         "format": "pack-quantized",
-        "ignore": ignore_rules,
+        "ignore": effective_ignore_rules,
         "kv_cache_scheme": None,
         "quant_method": "compressed-tensors",
         "quantization_status": "compressed",
@@ -287,15 +395,7 @@ def parse_args():
     parser.add_argument(
         "--ignore-rules",
         nargs="+",
-        default=[
-            "re:.*lm_head.*",
-            "re:.*norm.*",
-            "re:.*embed.*",
-            "re:.*self_attn.*",
-            "re:.*shared_experts.*",
-            "re:.*mlp\\.(gate|up|gate_up|down)_proj.*",
-            "re:.*mlp\\.gate\\.*",
-        ],
+        default=DEFAULT_IGNORE_RULES,
         help="Ignore Rules",
     )
     parser.add_argument("--max-workers", type=int, default=1, help="Number of worker threads for parallel processing")

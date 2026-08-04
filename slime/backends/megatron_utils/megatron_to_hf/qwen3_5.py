@@ -31,6 +31,27 @@ def _convert_mtp_layer(args, name, param, layer_idx):
     return None
 
 
+def _split_gate_up(param):
+    return param.chunk(2, dim=0)
+
+
+def _expert_hf_prefix(layer_prefix, expert_id):
+    return f"{layer_prefix}.mlp.experts.{expert_id}"
+
+
+def _emit_expert_gate_up(layer_prefix, expert_id, param):
+    gate, up = _split_gate_up(param)
+    expert_prefix = _expert_hf_prefix(layer_prefix, expert_id)
+    return [
+        (f"{expert_prefix}.gate_proj.weight", gate),
+        (f"{expert_prefix}.up_proj.weight", up),
+    ]
+
+
+def _emit_expert_down(layer_prefix, expert_id, param):
+    return [(f"{_expert_hf_prefix(layer_prefix, expert_id)}.down_proj.weight", param)]
+
+
 def convert_qwen3_5_to_hf(args, name, param):
     """Convert Qwen3.5 model parameters from Megatron to HuggingFace format.
 
@@ -69,11 +90,30 @@ def convert_qwen3_5_to_hf(args, name, param):
         layer_idx, rest = match.groups()
         prefix = f"model.language_model.layers.{layer_idx}"
 
-        # experts (grouped gemm - fused format)
-        if rest == "mlp.experts.linear_fc1":
-            return [(f"{prefix}.mlp.experts.gate_up_proj", param)]
-        elif rest == "mlp.experts.linear_fc2":
-            return [(f"{prefix}.mlp.experts.down_proj", param)]
+        # experts (grouped gemm) -- Megatron stores all experts fused as a 3D
+        # tensor: linear_fc1.weight [num_experts, 2*ffn, hidden] (gate|up) and
+        # linear_fc2.weight [num_experts, hidden, ffn] (down). Split per-expert
+        # into individual 2D Linear weights, matching the llmcompressor
+        # compressed-tensors layout that sglang's wNa16 MoE loader expects.
+        #
+        # EP global expert id: common.py:_named_params_and_buffers_global encodes the
+        # source ep_rank's expert_offset into the name as a ".__ep_offset{N}" suffix
+        # (the source ep_rank is NOT otherwise carried into convert_to_hf, so it must
+        # ride on the name). Strip and parse it FIRST, then split with global ids
+        # (offset + local_i) so EP ranks map to disjoint, non-overlapping id ranges.
+        _ep_match = re.search(r"\.__ep_offset(\d+)$", rest)
+        _expert_offset = int(_ep_match.group(1)) if _ep_match else 0
+        _rest_clean = rest[: _ep_match.start()] if _ep_match else rest
+        if re.match(r"mlp\.experts(?:\.experts)*\.linear_fc1(?:\.weight)?$", _rest_clean) and param.dim() == 3:
+            out = []
+            for _i in range(param.shape[0]):
+                out.extend(_emit_expert_gate_up(prefix, _expert_offset + _i, param[_i]))
+            return out
+        if re.match(r"mlp\.experts(?:\.experts)*\.linear_fc2(?:\.weight)?$", _rest_clean) and param.dim() == 3:
+            out = []
+            for _i in range(param.shape[0]):
+                out.extend(_emit_expert_down(prefix, _expert_offset + _i, param[_i]))
+            return out
 
         # experts (ungrouped - individual expert format)
         expert_pattern = r"mlp.experts\.(.+)\.weight(\d+)"
@@ -81,13 +121,9 @@ def convert_qwen3_5_to_hf(args, name, param):
         if match:
             rest, expert_idx = match.groups()
             if rest == "linear_fc1":
-                gate_weight, up_weight = param.chunk(2, dim=0)
-                return [
-                    (f"{prefix}.mlp.experts.{expert_idx}.gate_proj.weight", gate_weight),
-                    (f"{prefix}.mlp.experts.{expert_idx}.up_proj.weight", up_weight),
-                ]
+                return _emit_expert_gate_up(prefix, expert_idx, param)
             elif rest == "linear_fc2":
-                return [(f"{prefix}.mlp.experts.{expert_idx}.down_proj.weight", param)]
+                return _emit_expert_down(prefix, expert_idx, param)
             else:
                 raise ValueError(f"Unknown expert parameter name: {name}")
 
