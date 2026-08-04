@@ -109,10 +109,8 @@ RUN pip install --no-deps \
         IPython traitlets stack_data executing asttokens pure_eval prompt_toolkit wcwidth \
         orjson hf_transfer modelscope litellm
 
-# SGLang router: zhuzilin's fork ships x86_64-only. Upstream 0.3.2 has an arm64
-# wheel that satisfies slime's version-parse comparisons (`<=0.2.1`, `<0.3.0`).
-# Only loss: the `'slime' in version` check in wandb_utils.py won't match,
-# which is a non-critical logging branch.
+# SGLang router: zhuzilin's fork ships x86_64-only, while upstream 0.3.2 has an
+# arm64 wheel and satisfies slime's minimum supported router version.
 RUN pip install --no-deps sglang-router==0.3.2
 
 # =============================================================================
