@@ -2,6 +2,7 @@ import importlib
 import subprocess
 from collections import defaultdict
 from collections.abc import Callable, Iterable
+from functools import cache
 from typing import Any
 
 import torch
@@ -34,6 +35,7 @@ def decode_int32_meta_array(meta_info: dict[str, Any], keys: str | Iterable[str]
     return torch.as_tensor(value, dtype=torch.int32).reshape(-1)
 
 
+@cache
 def load_function(path):
     """
     Load a function from a module.

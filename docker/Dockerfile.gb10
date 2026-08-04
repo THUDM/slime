@@ -161,10 +161,9 @@ RUN cd /root/src/Megatron-LM \
 ENV PYTHONPATH="/root/src/Megatron-LM"
 
 # =============================================================================
-# Remaining slime deps: bridges, modelopt, FLA, tilelang, antlr, omegaconf chain
+# Remaining slime deps: modelopt, FLA, tilelang, antlr, omegaconf chain
 # =============================================================================
 RUN pip install --no-deps \
-        "git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c" \
         flash-linear-attention==0.4.1 \
         tilelang==0.1.8
 
@@ -180,9 +179,7 @@ RUN if [ "${INSTALL_FLASHQLA}" = "1" ]; then \
       echo "Skipping FlashQLA (INSTALL_FLASHQLA=0; use --qwen-gdn-backend fla on GB10)"; \
     fi
 
-RUN pip install --no-deps --no-build-isolation \
-        "git+https://github.com/fzyzcjy/Megatron-Bridge.git@dev_rl" \
-        "nvidia-modelopt>=0.37.0"
+RUN pip install --no-deps --no-build-isolation "nvidia-modelopt>=0.37.0"
 
 # antlr4-python3-runtime must be pinned to 4.9.3 — omegaconf's bundled grammar
 # was generated with antlr 4.9 serialized format and runtime 4.13 breaks on it

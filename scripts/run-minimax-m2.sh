@@ -37,7 +37,6 @@ CKPT_ARGS=(
    --load ${BASE_DIR}/MiniMax-M2.5_slime/
    --save ${BASE_DIR}/MiniMax-M2.5_slime/
    --save-interval 20
-   --megatron-to-hf-mode raw
    --model-name minimax_m2
 )
 

@@ -49,6 +49,13 @@ def _to_local_gpu_id(physical_gpu_id: int) -> int:
 
 
 def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
+    # Expandable segments help the colocated training actor tolerate repeated
+    # cache releases, but SGLang's allocator/sleep path does not support them.
+    # The rollout Ray actor inherits the job environment, so remove the option
+    # before spawning every SGLang server and its children.
+    os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+    os.environ.pop("PYTORCH_ALLOC_CONF", None)
+
     if getattr(server_args, "encoder_only", False):
         from sglang.srt.disaggregation.encode_server import launch_server_process as sglang_launch_server_process
 
@@ -546,6 +553,9 @@ def _compute_server_args(
     num_gpus_per_engine: int | None = None,
 ):
     _gpus_per_engine = num_gpus_per_engine or args.rollout_num_gpus_per_engine
+    normalized_overrides = {key.replace("-", "_"): value for key, value in (sglang_overrides or {}).items()}
+    pp_size = int(normalized_overrides.get("pp_size", args.sglang_pp_size))
+    tp_size = int(normalized_overrides.get("tp_size", _gpus_per_engine // pp_size))
     nnodes = max(1, _gpus_per_engine // args.num_gpus_per_node)
     node_rank = rank % nnodes
     base = base_gpu_id if base_gpu_id is not None else get_base_gpu_id(args, rank)
@@ -566,9 +576,9 @@ def _compute_server_args(
         "gpu_id_step": 1,
         "base_gpu_id": base,
         # parallel
-        "tp_size": _gpus_per_engine // args.sglang_pp_size,
+        "tp_size": tp_size,
         "dp_size": args.sglang_dp_size,
-        "pp_size": args.sglang_pp_size,
+        "pp_size": pp_size,
         "ep_size": args.sglang_ep_size,
         # always skip warmup to prevent warmup timeout.
         "skip_server_warmup": True,
@@ -627,6 +637,14 @@ def _compute_server_args(
                 unused_keys.discard(normalized_key)
             else:
                 unused_keys.add(normalized_key)
+
+    if (
+        "cuda_graph_backend_prefill" in server_arg_field_names
+        and kwargs.get("enable_memory_saver")
+        and kwargs.get("cuda_graph_backend_prefill") is None
+    ):
+        # Breakable is SGLang's default prefill backend on CUDA, but it is incompatible with memory saver mode.
+        kwargs["cuda_graph_backend_prefill"] = "disabled"
 
     # for compatibility with old args
     if len(unused_keys) > 0:
