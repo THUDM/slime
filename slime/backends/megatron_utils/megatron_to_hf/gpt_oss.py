@@ -2,6 +2,40 @@ import re
 
 import torch
 
+_expert_tensor_cache = {}
+
+
+def _interleave_gate_up(param):
+    gate, up = param.chunk(2, dim=0)
+    return torch.stack([gate, up], dim=1).reshape(-1, *param.shape[1:]).contiguous()
+
+
+def _collect_fused_expert_tensor(args, hf_name, expert_idx, param):
+    num_experts = getattr(args, "num_experts", None)
+    if num_experts is None:
+        raise ValueError("args.num_experts is required to fuse GPT-OSS expert tensors")
+
+    num_experts = int(num_experts)
+    expert_idx = int(expert_idx)
+    if expert_idx < 0 or expert_idx >= num_experts:
+        raise ValueError(f"GPT-OSS expert index {expert_idx} is out of range for {num_experts} experts")
+
+    bucket = _expert_tensor_cache.setdefault(hf_name, {})
+    if expert_idx in bucket:
+        raise ValueError(f"Duplicate GPT-OSS expert tensor for {hf_name} expert {expert_idx}")
+    bucket[expert_idx] = param
+
+    if len(bucket) != num_experts:
+        return []
+
+    missing = [i for i in range(num_experts) if i not in bucket]
+    if missing:
+        raise ValueError(f"Missing GPT-OSS expert tensors for {hf_name}: {missing}")
+
+    fused = torch.stack([bucket[i] for i in range(num_experts)], dim=0).contiguous()
+    del _expert_tensor_cache[hf_name]
+    return [(hf_name, fused)]
+
 
 def convert_gpt_oss_to_hf(args, name, param):
     """Convert Megatron GPT-OSS parameter names to HF format for weight update to SGLang."""
@@ -27,15 +61,20 @@ def convert_gpt_oss_to_hf(args, name, param):
         if match:
             rest, expert_idx = match.groups()
             if rest == "linear_fc1":
-                gate_weight, up_weight = param.chunk(2, dim=0)
-                return [
-                    (f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.gate_proj.weight", gate_weight),
-                    (f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.up_proj.weight", up_weight),
-                ]
+                param = _interleave_gate_up(param).transpose(0, 1).contiguous()
+                return _collect_fused_expert_tensor(
+                    args,
+                    f"model.layers.{layer_idx}.mlp.experts.gate_up_proj",
+                    expert_idx,
+                    param,
+                )
             elif rest == "linear_fc2":
-                return [
-                    (f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.weight", param),
-                ]
+                return _collect_fused_expert_tensor(
+                    args,
+                    f"model.layers.{layer_idx}.mlp.experts.down_proj",
+                    expert_idx,
+                    param.transpose(0, 1).contiguous(),
+                )
             else:
                 raise ValueError(f"Unknown expert parameter name: {name}")
 
@@ -45,15 +84,19 @@ def convert_gpt_oss_to_hf(args, name, param):
         if match:
             rest, expert_idx = match.groups()
             if rest == "linear_fc1":
-                gate_bias, up_bias = param.chunk(2, dim=0)
-                return [
-                    (f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.gate_proj.bias", gate_bias),
-                    (f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.up_proj.bias", up_bias),
-                ]
+                return _collect_fused_expert_tensor(
+                    args,
+                    f"model.layers.{layer_idx}.mlp.experts.gate_up_proj_bias",
+                    expert_idx,
+                    _interleave_gate_up(param),
+                )
             elif rest == "linear_fc2":
-                return [
-                    (f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.bias", param),
-                ]
+                return _collect_fused_expert_tensor(
+                    args,
+                    f"model.layers.{layer_idx}.mlp.experts.down_proj_bias",
+                    expert_idx,
+                    param.contiguous(),
+                )
             else:
                 raise ValueError(f"Unknown expert bias parameter name: {name}")
 
