@@ -57,7 +57,6 @@ class MimoBridge(Qwen2Bridge):
 
     def _convert_mtp_param(self, name: str) -> list[str]:
         """Convert MTP layer parameters from MCore to HF format."""
-        # For now, assume single MTP layer support
         if "mtp.layers." not in name:
             raise NotImplementedError(f"Invalid MTP parameter name: {name}")
 
@@ -77,24 +76,30 @@ class MimoBridge(Qwen2Bridge):
             return [direct_name_mapping[name]]
 
         # Handle transformer components within MTP
-        # Check if this is a transformer_layer component
         if "transformer_layer" in name:
-            # Create a proxy name to use with parent class methods
-            # Convert mtp.layers.{idx}.transformer_layer.* to decoder.layers.{idx}.*
+            # Build proxy name using a consistent layer index mapping
+            # Using mtp_layer_idx for the transformer layer within the MTP block
             proxy_name = name.replace(
                 f"mtp.layers.{mtp_layer_idx}.transformer_layer",
                 f"decoder.layers.{mtp_layer_idx}",
             )
 
-            if "self_attention" in proxy_name or "input_layernorm.weight" in proxy_name:
+            if "self_attention" in proxy_name or "input_layernorm" in proxy_name:
                 convert_names = super()._weight_name_mapping_attention(proxy_name)
             elif "mlp" in proxy_name:
                 convert_names = super()._weight_name_mapping_mlp(proxy_name)
             else:
                 raise NotImplementedError(f"Unsupported transformer component in MTP: {name}")
 
-            # Replace the layer index in converted names to point to mtp_layers
-            convert_names = [
+            # Replace decoder layer index back to mtp_layers index for consistency
+            converted = []
+            for cn in convert_names:
+                # The parent class returns decoder.layers.{idx}, replace with mtp_layers.{idx}
+                cn = cn.replace(f"decoder.layers.{mtp_layer_idx}", f"model.mtp_layers.{mtp_layer_idx}")
+                converted.append(cn)
+            return converted
+
+        raise NotImplementedError(f"Unsupported MTP parameter: {name}")onvert_names = [
                 cn.replace(f"model.layers.{mtp_layer_idx}", f"model.mtp_layers.{mtp_layer_idx}")
                 for cn in convert_names
             ]
