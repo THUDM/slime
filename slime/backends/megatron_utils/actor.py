@@ -115,7 +115,7 @@ class MegatronTrainRayActor(TrainRayActor):
             source_getter=lambda: named_params_and_buffers(
                 self.args,
                 self.model,
-                convert_to_global_name=args.megatron_to_hf_mode == "raw",
+                convert_to_global_name=True,
             ),
             single_tag=None,
         )
@@ -138,7 +138,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.vocab_size is None:
             # Prefer HF config vocab_size (which may include model-native padding)
-            # over tokenizer vocab_size (which may be smaller, e.g. GPT-OSS).
+            # over tokenizer vocab_size, which may be smaller.
             hf_vocab = getattr(self.hf_config, "vocab_size", None)
             self.args.vocab_size = hf_vocab if hf_vocab is not None else self.tokenizer.vocab_size
 

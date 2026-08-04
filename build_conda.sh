@@ -114,7 +114,6 @@ pip install cmake ninja
 # the newest version megatron supports is v2.7.4.post1
 MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1 --no-build-isolation
 
-pip install git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c --no-deps
 pip install flash-linear-attention==0.4.1
 # FlashQLA: optional GDN backend for Qwen3.5/Qwen3-Next (--qwen-gdn-backend flashqla; requires SM90+)
 pip install git+https://github.com/QwenLM/FlashQLA.git --no-build-isolation
@@ -137,8 +136,6 @@ export TMS_CUDA_MAJOR
 # because the preload .so was never compiled in.
 pip install -v git+https://github.com/fzyzcjy/torch_memory_saver.git@a193d9dd1b877d33c64a41cfb3db9f867df2d926 \
   --no-cache-dir --force-reinstall --no-build-isolation
-# matches Dockerfile (different fork/branch from older build_conda.sh)
-pip install git+https://github.com/radixark/Megatron-Bridge.git@bridge --no-deps --no-build-isolation
 pip install nvidia-modelopt[torch]>=0.37.0 --no-build-isolation
 pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-5f8d397/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
 python -c "import sglang_router; assert 'slime' in sglang_router.__version__"

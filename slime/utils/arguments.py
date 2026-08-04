@@ -119,12 +119,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default="{}",
                 help="Extra environment variables for training process, e.g. PyTorch memory management ones.",
             )
-            parser.add_argument(
-                "--megatron-to-hf-mode",
-                choices=["raw", "bridge"],
-                default="raw",
-                help="The method to convert megatron weights to hugging face weights for SGLang.",
-            )
             # Delta weight sync.
             parser.add_argument(
                 "--update-weight-mode",
@@ -866,8 +860,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Path to save the model in HuggingFace format when using Megatron backend. "
                     "The model will be saved to `save_hf.format(rollout_id)`. "
-                    "In raw Megatron-to-HF mode, weights are saved with the same quantization config "
-                    "as `--hf-checkpoint`. "
+                    "Weights are saved with the same quantization config as `--hf-checkpoint`. "
                 ),
             )
             reset_arg(parser, "--seed", type=int, default=1234)
@@ -1411,7 +1404,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--loss-mask-type",
                 type=str,
                 default="qwen",
-                choices=["qwen", "qwen3", "qwen3_5", "gemma4", "distill_qwen"],
+                choices=["qwen", "qwen3", "qwen3_5", "distill_qwen"],
                 help="Loss mask type",
             )
             parser.add_argument(
@@ -1763,32 +1756,27 @@ def slime_validate_args(args):
         if args.opd_teacher_load is not None:
             raise ValueError("--opd-teacher-load is set but --use-opd is not enabled. Please add --use-opd flag.")
 
-    if args.megatron_to_hf_mode == "bridge":
-        if (
-            args.load is not None
-            and os.path.exists(args.load)
-            and os.path.exists(os.path.join(args.load, "latest_checkpointed_iteration.txt"))
-        ):
-            # If is a Megatron checkpoint, won't use bridge to load hf weight.
-            pass
-        else:
-            if args.load is None:
-                args.load = args.ref_load or args.hf_checkpoint
-            # If is a HF checkpoint, set start_rollout_id to 0 here.
-            args.start_rollout_id = 0
-    else:
-        if (
-            args.load is None
-            or not os.path.exists(args.load)
-            or not os.path.exists(os.path.join(args.load, "latest_checkpointed_iteration.txt"))
-        ):
-            args.no_load_optim = True
-            args.no_load_rng = True
-            args.finetune = True
+    load_is_megatron = (
+        args.load is not None
+        and os.path.exists(args.load)
+        and os.path.exists(os.path.join(args.load, "latest_checkpointed_iteration.txt"))
+    )
+    load_is_hf = (
+        args.load is not None and os.path.isdir(args.load) and os.path.exists(os.path.join(args.load, "config.json"))
+    )
+    if load_is_hf:
+        from slime.backends.megatron_utils.hf_to_megatron import supports_hf_weight_loading
+
+        load_is_hf = supports_hf_weight_loading(args.load)
+    if not load_is_megatron:
+        args.no_load_optim = True
+        args.no_load_rng = True
+        args.finetune = True
+        if not load_is_hf:
             args.load = args.ref_load
-            if args.ref_ckpt_step is not None:
-                args.ckpt_step = args.ref_ckpt_step
-            args.start_rollout_id = 0
+        if args.ref_ckpt_step is not None:
+            args.ckpt_step = args.ref_ckpt_step
+        args.start_rollout_id = 0
 
     if args.eval_interval is not None:
         assert args.eval_datasets, "Evaluation datasets must be configured when eval_interval is set."

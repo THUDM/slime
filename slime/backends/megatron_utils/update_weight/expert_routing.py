@@ -116,8 +116,7 @@ def _can_route_experts(
     engine_gpu_counts: Sequence[int],
 ) -> bool:
     return (
-        getattr(args, "megatron_to_hf_mode", "raw") == "raw"
-        and sglang_moe_topology.pp_size == 1
+        sglang_moe_topology.pp_size == 1
         and sglang_moe_topology.ep_size > 1
         and not getattr(args, "sglang_enable_eplb", False)
         and getattr(args, "sglang_ep_num_redundant_experts", 0) == 0
