@@ -12,7 +12,7 @@ from examples.geo3k_vlm_multi_turn.base_env import BaseInteractionEnv
 # When executed as a module: python -m examples.vlm_multi_turn.rollout
 from slime.rollout.sglang_rollout import GenerateState
 from slime.utils.http_utils import post
-from slime.utils.processing_utils import encode_image_for_rollout_engine
+from slime.utils.processing_utils import build_processor_kwargs, encode_image_for_rollout_engine
 from slime.utils.types import Sample
 
 DEFAULT_ENV_MODULE = "examples.vlm_multi_turn.env_geo3k"
@@ -95,7 +95,7 @@ def _encode_observation_for_generation(
 
         images, videos = process_vision_info([message])
         multimodal_inputs = {"images": images, "videos": videos}
-        processor_output = processor(text=formatted_prompt, **multimodal_inputs)
+        processor_output = processor(text=formatted_prompt, **build_processor_kwargs(multimodal_inputs))
         prompt_ids = processor_output["input_ids"][0]
         multimodal_train_inputs = {
             k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]

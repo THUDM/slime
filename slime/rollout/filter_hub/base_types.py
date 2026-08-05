@@ -6,6 +6,22 @@ from dataclasses import dataclass
 class DynamicFilterOutput:
     keep: bool
     reason: str | None = None
+    # Keep a rejected group when dropping it would leave too few candidates to
+    # fill the rollout batch. This avoids launching another oversampling round.
+    keep_when_insufficient: bool = False
+
+
+def should_drop_dynamic_filter_output(
+    output: DynamicFilterOutput,
+    *,
+    remaining_batch_size: int,
+    target_data_size: int,
+) -> bool:
+    if output.keep:
+        return False
+    if output.keep_when_insufficient and remaining_batch_size <= target_data_size:
+        return False
+    return True
 
 
 def call_dynamic_filter(fn, *args, **kwargs):

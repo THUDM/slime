@@ -29,6 +29,9 @@ def add_sglang_router_arguments(parser):
         help="Timeout for requests to the SGLang router in seconds",
     )
     RouterArgs.add_cli_args(parser, use_router_prefix=True, exclude_host_port=True)
+    # Keep driver logs quiet by default while allowing --router-log-level to
+    # expose router dispatch and retry details when needed.
+    parser.set_defaults(router_log_level="warn")
     return parser
 
 
