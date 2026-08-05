@@ -69,7 +69,7 @@ cd $BASE_DIR/sglang
 git checkout ${SGLANG_COMMIT}
 pip install -e "python[all]" --extra-index-url https://download.pytorch.org/whl/cu129
 pip install --force-reinstall --no-deps \
-  torch==2.11.0 torchvision torchaudio==2.11.0 \
+  torch==2.11.0+cu129 torchvision==0.26.0+cu129 torchaudio==2.11.0+cu129 \
   --index-url https://download.pytorch.org/whl/cu129
 pip install --force-reinstall --no-deps \
   sglang-kernel==0.4.4 sgl-deep-gemm==0.1.4 \
@@ -226,3 +226,15 @@ else
     exit 1
   fi
 fi
+
+python - <<'PY'
+import sglang
+import torch
+import torchaudio
+import torchvision
+
+assert torch.__version__ == "2.11.0+cu129"
+assert torchaudio.__version__ == "2.11.0+cu129"
+assert torchvision.__version__ == "0.26.0+cu129"
+assert hasattr(torch.ops.torchvision, "nms")
+PY
