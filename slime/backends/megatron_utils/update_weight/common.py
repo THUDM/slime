@@ -163,7 +163,7 @@ def _named_params_and_buffers_vanilla(model: Sequence[torch.nn.Module]) -> Itera
             yield _compute_fqn(name), param
 
         for name, buffer in model_module.named_buffers():
-            # TODO shall we handle (almost) all buffers like Megatron Bridge
+            # TODO shall we handle (almost) all buffers
             if "expert_bias" not in name:
                 continue
             yield _compute_fqn(name), buffer
@@ -193,12 +193,13 @@ def _named_params_and_buffers_global(
             # for model without ddp wrap
             if not name.startswith("module.module."):
                 name = "module." + name
+            prefix = "module.module.language_model." if ".language_model." in name else "module.module."
 
-            decoder_layers_pattern = r"module\.module\.decoder\.layers\.(\d+)\.(.+)"
+            decoder_layers_pattern = r"module\.module\.(?:language_model\.)?decoder\.layers\.(\d+)\.(.+)"
             match = re.match(decoder_layers_pattern, name)
             if not match:
                 # MTP (Multi-Token Prediction) layers for speculative decoding
-                mtp_layers_pattern = r"module\.module\.mtp\.layers\.(\d+)\.(.+)"
+                mtp_layers_pattern = r"module\.module\.(?:language_model\.)?mtp\.layers\.(\d+)\.(.+)"
                 match = re.match(mtp_layers_pattern, name)
                 if not match:
                     yield name, param
@@ -214,7 +215,7 @@ def _named_params_and_buffers_global(
 
                 rest, param_type, expert_idx = match.groups()
                 expert_idx = int(expert_idx) + expert_offset
-                yield f"module.module.mtp.layers.{layer_idx}.transformer_layer.mlp.experts.{rest}.{param_type}{expert_idx}", param
+                yield f"{prefix}mtp.layers.{layer_idx}.transformer_layer.mlp.experts.{rest}.{param_type}{expert_idx}", param
                 continue
 
             layer_idx, rest = match.groups()
@@ -226,24 +227,25 @@ def _named_params_and_buffers_global(
             if match:
                 rest, param_type, expert_idx = match.groups()
                 expert_idx = int(expert_idx) + expert_offset
-                yield f"module.module.decoder.layers.{layer_idx}.mlp.experts.{rest}.{param_type}{expert_idx}", param
+                yield f"{prefix}decoder.layers.{layer_idx}.mlp.experts.{rest}.{param_type}{expert_idx}", param
             else:
-                yield f"module.module.decoder.layers.{layer_idx}.{rest}", param
+                yield f"{prefix}decoder.layers.{layer_idx}.{rest}", param
 
         # treat expert bias as normal parameters
         for name, buffer in model_module.named_buffers():
-            # TODO shall we handle (almost) all buffers like Megatron Bridge
+            # TODO shall we handle (almost) all buffers
             if "expert_bias" not in name:
                 continue
             # for model without ddp wrap
             if not name.startswith("module.module."):
                 name = "module." + name
+            prefix = "module.module.language_model." if ".language_model." in name else "module.module."
 
-            decoder_layers_pattern = r"module\.module\.decoder\.layers\.(\d+)\.(.+)"
+            decoder_layers_pattern = r"module\.module\.(?:language_model\.)?decoder\.layers\.(\d+)\.(.+)"
             match = re.match(decoder_layers_pattern, name)
             if not match:
                 yield name, buffer
             else:
                 layer_idx, rest = match.groups()
                 layer_idx = int(layer_idx) + layer_offset
-                yield f"module.module.decoder.layers.{layer_idx}.{rest}", buffer
+                yield f"{prefix}decoder.layers.{layer_idx}.{rest}", buffer

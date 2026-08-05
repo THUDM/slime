@@ -37,6 +37,9 @@ def convert_qwen3_5_to_hf(args, name, param):
     Qwen3.5 uses model.language_model.layers prefix and has separate
     in_proj_qkv, in_proj_z, in_proj_b, in_proj_a for linear attention.
     """
+    if name.startswith("module.module.language_model."):
+        name = "module.module." + name.removeprefix("module.module.language_model.")
+
     # Handle MTP layers
     if "mtp.layers" in name:
         parts = name.split(".")

@@ -1047,18 +1047,6 @@ index 3b04422b1..3b810843e 100644
              renormalize=config.norm_topk_prob,
              use_grouped_topk=True,
              num_expert_group=config.n_group,
-diff --git a/python/sglang/srt/models/gpt_oss.py b/python/sglang/srt/models/gpt_oss.py
-index 9474700c4..398d622ff 100644
---- a/python/sglang/srt/models/gpt_oss.py
-+++ b/python/sglang/srt/models/gpt_oss.py
-@@ -113,6 +113,7 @@ class GptOssSparseMoeBlock(nn.Module):
-         self.topk = TopK(
-             top_k=config.num_experts_per_tok,
-             renormalize=True,
-+            layer_id=layer_id,
-         )
- 
-         self.top_k = config.num_experts_per_tok
 diff --git a/python/sglang/srt/models/grok.py b/python/sglang/srt/models/grok.py
 index 1f4a3b443..4eb23cca8 100644
 --- a/python/sglang/srt/models/grok.py

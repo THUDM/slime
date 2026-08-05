@@ -1495,18 +1495,6 @@ index a9689b8f2..bc8538da8 100644
          self.experts = get_moe_impl_class(quant_config)(
              num_experts=config.n_routed_experts + self.num_fused_shared_experts,
              num_fused_shared_experts=self.num_fused_shared_experts,
-diff --git a/python/sglang/srt/models/gpt_oss.py b/python/sglang/srt/models/gpt_oss.py
-index 9474700c4..398d622ff 100644
---- a/python/sglang/srt/models/gpt_oss.py
-+++ b/python/sglang/srt/models/gpt_oss.py
-@@ -113,6 +113,7 @@ class GptOssSparseMoeBlock(nn.Module):
-         self.topk = TopK(
-             top_k=config.num_experts_per_tok,
-             renormalize=True,
-+            layer_id=layer_id,
-         )
- 
-         self.top_k = config.num_experts_per_tok
 diff --git a/python/sglang/srt/models/grok.py b/python/sglang/srt/models/grok.py
 index fd513060a..a089475b7 100644
 --- a/python/sglang/srt/models/grok.py

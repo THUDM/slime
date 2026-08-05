@@ -4,16 +4,9 @@
 
 pip install -U transformers
 
-# IMPORTANT: This branch is specially modified for slime's current Megatron
-# version and Qwen3.5 from the main Megatron Bridge. Other models are not verified!
-# To restore the original Megatron Bridge, run:
-#   pip install git+https://github.com/fzyzcjy/Megatron-Bridge.git@dev_rl --no-build-isolation
-# TODO: Remove this once Megatron & Megatron Bridge are upgraded upstream.
-pip install git+https://github.com/coding-famer/Megatron-Bridge-slime.git@qwen35 --no-build-isolation
-
 # Configuration
 TRAIN_BACKEND="megatron"
-MODEL_NAME="Qwen3_5-35B-A3B"
+MODEL_NAME="Qwen3.5-35B-A3B"
 DATASET_NAME=${SLIME_SCRIPT_DATASET_NAME:-"chenhegu/geo3k_imgurl"}
 NUM_GPUS=${SLIME_SCRIPT_NUM_GPUS:-8}
 DATASET_LOCAL_NAME=$(basename "$DATASET_NAME")
@@ -68,7 +61,6 @@ fi
 CKPT_ARGS=(
    --hf-checkpoint /root/models/${MODEL_NAME}
    --load /root/models/${MODEL_NAME}
-   --megatron-to-hf-mode bridge
 )
 
 ROLLOUT_ARGS=(
@@ -171,7 +163,7 @@ BACKEND_ARGS=(
 )
 
 SLIME_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." &>/dev/null && pwd)"
-source "${SLIME_DIR}/scripts/models/qwen3.5-35B-A3B.sh"
+source "${SLIME_DIR}/scripts/models/qwen3.5-35B-A3B-vl.sh"
 
 # Start Ray if not using external Ray
 if [ "$USE_EXTERNAL_RAY" = "0" ]; then

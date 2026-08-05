@@ -35,8 +35,6 @@ RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
     FLASH_ATTENTION_FORCE_BUILD=TRUE MAX_JOBS=96 pip -v install . --no-build-isolation && \
     cd /root/ && rm -rf flash-attention/
 
-RUN pip install git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c --no-deps
-
 RUN pip install flash-linear-attention==0.4.2
 # FlashQLA: optional GDN backend for Qwen3.5/Qwen3-Next (--qwen-gdn-backend flashqla; requires SM90+)
 RUN pip install git+https://github.com/QwenLM/FlashQLA.git --no-build-isolation
@@ -61,8 +59,7 @@ RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
 
 RUN TMS_CUDA_MAJOR="${TMS_CUDA_MAJOR:-$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')}" && \
     export TMS_CUDA_MAJOR && \
-    pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@a193d9dd1b877d33c64a41cfb3db9f867df2d926 --no-cache-dir --force-reinstall
-RUN pip install git+https://github.com/radixark/Megatron-Bridge.git@bridge --no-deps --no-build-isolation
+    pip install git+https://github.com/zhuzilin/torch_memory_saver.git --no-cache-dir --force-reinstall
 RUN pip install nvidia-modelopt[torch]>=0.37.0 --no-build-isolation
 
 # This patch from masahi will be included in later Triton releases
