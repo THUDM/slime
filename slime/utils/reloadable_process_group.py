@@ -74,19 +74,6 @@ def _new_default_process_group(state: _DefaultProcessGroupState, backend: str) -
     )
 
 
-def _store_barrier(state: _DefaultProcessGroupState, phase: str) -> None:
-    """Synchronize ranks through the rendezvous store while WORLD is unavailable.
-
-    The store deliberately outlives the default process group.  Using it here
-    prevents a fast pipeline rank from initializing the next WORLD or its
-    subgroups while another rank is still shutting down the previous generation.
-    """
-    prefix = f"slime-reloadable-world-{state.generation}-{phase}"
-    keys = [f"{prefix}-{rank}" for rank in range(state.world_size)]
-    state.store.set(keys[state.rank], b"1")
-    state.store.wait(keys, state.timeout)
-
-
 def _destroy_default_nccl_process_group() -> None:
     state = default_process_group_states.get(os.getpid())
     if state is None or state.nccl_world_destroyed or not _uses_nccl(state.backend):
@@ -106,11 +93,9 @@ def _destroy_default_nccl_process_group() -> None:
     dist.destroy_process_group()
     ReloadableProcessGroup.invalidate_process_groups()
     set_gloo_group(None)
-    _store_barrier(state, "default-world-destroyed")
 
     _new_default_process_group(state, backend="gloo")
     set_gloo_group(_get_default_group())
-    _store_barrier(state, "temporary-world-ready")
     state.nccl_world_destroyed = True
     logger.info(
         "Destroyed default %s WORLD process group and initialized a temporary Gloo WORLD (generation %s)",
@@ -129,12 +114,9 @@ def _reload_default_process_group() -> None:
     dist.barrier()
     dist.destroy_process_group()
     set_gloo_group(None)
-    _store_barrier(state, "temporary-world-destroyed")
 
     _new_default_process_group(state, backend=state.backend)
-    _store_barrier(state, "default-world-ready")
     init_gloo_group()
-    _store_barrier(state, "canonical-gloo-ready")
     state.nccl_world_destroyed = False
     logger.info(
         "Reloaded default WORLD process group with backend %s (generation %s)",
@@ -485,12 +467,8 @@ def destroy_process_groups():
 
 def reload_process_groups():
     """Restore NCCL WORLD and recreate all registered subgroups."""
-    state = default_process_group_states.get(os.getpid())
-    reloaded_world_state = state if state is not None and state.nccl_world_destroyed else None
     _reload_default_process_group()
     ReloadableProcessGroup.reload_process_groups()
-    if reloaded_world_state is not None:
-        _store_barrier(reloaded_world_state, "subgroups-ready")
 
 
 @contextmanager

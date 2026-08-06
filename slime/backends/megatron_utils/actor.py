@@ -223,6 +223,15 @@ class MegatronTrainRayActor(TrainRayActor):
 
         clear_memory()
         reload_process_groups()
+
+        if mpu.get_pipeline_model_parallel_world_size() > 2:
+            # Megatron's patched batched pipeline P2P uses the default WORLD
+            # group.  After reload, PP=4 starts with only the first two stages
+            # entering batch_isend_irecv(), but PyTorch requires every rank when
+            # that is the first NCCL operation on a group.  Prime WORLD here,
+            # after the memory saver is resumed, so later stages cannot miss its
+            # lazy initialization.  Sleep still destroys it completely.
+            dist.barrier(device_ids=[torch.cuda.current_device()])
         if self.role == "actor":
             self._switch_model("actor")
         print_memory("after wake_up model")

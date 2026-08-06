@@ -115,11 +115,6 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
     monkeypatch.setattr(rpg, "_get_default_group", lambda: "cpu-world")
     monkeypatch.setattr(rpg, "init_gloo_group", lambda: events.append(("init_canonical_gloo",)))
     monkeypatch.setattr(
-        rpg,
-        "_store_barrier",
-        lambda state, phase: events.append(("store_barrier", state.generation, phase)),
-    )
-    monkeypatch.setattr(
         rpg.ReloadableProcessGroup,
         "invalidate_process_groups",
         staticmethod(lambda: events.append(("invalidate_subgroups",))),
@@ -139,7 +134,6 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
         ("destroy_world",),
         ("invalidate_subgroups",),
         ("set_gloo", None),
-        ("store_barrier", 0, "default-world-destroyed"),
         (
             "init",
             {
@@ -151,7 +145,6 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
             },
         ),
         ("set_gloo", "cpu-world"),
-        ("store_barrier", 1, "temporary-world-ready"),
     ]
 
     events.clear()
@@ -163,7 +156,6 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
         ("barrier", "WORLD"),
         ("destroy_world",),
         ("set_gloo", None),
-        ("store_barrier", 1, "temporary-world-destroyed"),
         (
             "init",
             {
@@ -174,41 +166,8 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
                 "timeout": timeout,
             },
         ),
-        ("store_barrier", 2, "default-world-ready"),
         ("init_canonical_gloo",),
-        ("store_barrier", 2, "canonical-gloo-ready"),
         ("reload_subgroups",),
-        ("store_barrier", 2, "subgroups-ready"),
-    ]
-
-
-@pytest.mark.unit
-def test_store_barrier_waits_for_every_rank():
-    events = []
-
-    class FakeStore:
-        def set(self, key, value):
-            events.append(("set", key, value))
-
-        def wait(self, keys, timeout):
-            events.append(("wait", keys, timeout))
-
-    timeout = timedelta(seconds=30)
-    state = rpg._DefaultProcessGroupState(
-        backend="nccl",
-        timeout=timeout,
-        store=FakeStore(),
-        rank=2,
-        world_size=4,
-        generation=3,
-    )
-
-    rpg._store_barrier(state, "world-ready")
-
-    keys = [f"slime-reloadable-world-3-world-ready-{rank}" for rank in range(4)]
-    assert events == [
-        ("set", keys[2], b"1"),
-        ("wait", keys, timeout),
     ]
 
 
