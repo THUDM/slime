@@ -1,6 +1,6 @@
 # On-Policy Distillation
 
-On-policy distillation (OPD) enables a student model to learn from a larger teacher model by training on its own rollouts while matching the teacher's token-level log-probabilities. OPD is orthogonal to advantage estimators — it works as an additive KL penalty on top of any estimator (GRPO, PPO, REINFORCE++, etc.).
+On-policy distillation (OPD) trains a student on response tokens sampled from the student's current policy. At every visited prefix, a fixed teacher scores the same next token, providing a dense token-level learning signal along the student's own trajectories. In slime, this signal is a sampled reverse-KL penalty applied to the advantage, so it can be combined with an advantage estimator such as GRPO, PPO, or REINFORCE++. With zero task reward, the same mechanism performs pure distillation.
 
 ## Key Arguments
 
@@ -14,15 +14,31 @@ On-policy distillation (OPD) enables a student model to learn from a larger teac
 
 ## How It Works
 
-OPD modifies the advantage computation by subtracting a KL penalty term that encourages the student to match the teacher's output distribution:
+Let $\pi_\theta$ denote the student, $\pi_T$ the teacher, and $h_t$ the history before token $a_t$ on a student-generated trajectory. Following [Thinking Machines Lab's definition](https://thinkingmachines.ai/blog/on-policy-distillation/), the per-token reverse KL is
 
 $$
-\hat{A}_t = A_t - \lambda_{\text{opd}} \cdot D_{\text{KL}}(P_{\text{teacher}} \| P_{\text{student}})_t
+D_{\mathrm{KL}}\!\left(\pi_\theta(\cdot \mid h_t)\,\|\,\pi_T(\cdot \mid h_t)\right)
+= \mathbb{E}_{a_t \sim \pi_\theta(\cdot \mid h_t)}\!\left[
+\log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t)
+\right].
 $$
 
-Where $A_t$ is the original advantage from the base estimator (e.g., GRPO), $\lambda_{\text{opd}}$ is `--opd-kl-coef`, and $D_{\text{KL}}$ is the token-level reverse KL divergence.
+The order is important: the student is the first argument of the KL, and the expectation is also over the student distribution. The teacher does not generate the training trajectory; it evaluates the token that the student actually sampled.
 
-This means OPD can be combined with any advantage estimator, including GRPO, PPO, REINFORCE++, and GSPO.
+slime does not enumerate the full vocabulary to compute this expectation. For each sampled token, it uses the Monte Carlo contribution
+
+$$
+\hat d_t = \log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t),
+\qquad a_t \sim \pi_\theta(\cdot \mid h_t),
+$$
+
+and modifies the base advantage as
+
+$$
+\hat A_t = A_t - \lambda_{\mathrm{opd}}\hat d_t.
+$$
+
+Here, $A_t$ is the advantage from the configured estimator (or zero for pure distillation), and $\lambda_{\mathrm{opd}}$ is `--opd-kl-coef`. An individual $\hat d_t$ may be negative even though the KL is non-negative in expectation. The policy loss uses $\hat A_t$, which makes the OPD term orthogonal to the choice of GRPO, PPO, REINFORCE++, GSPO, or another supported advantage estimator.
 
 ## Two Teacher Modes
 
@@ -30,13 +46,13 @@ This means OPD can be combined with any advantage estimator, including GRPO, PPO
 
 The teacher runs on an external SGLang server. Teacher log-probs are obtained during the rollout phase.
 
-**When to use**: The teacher has a different architecture from the student, or the teacher is too large to load alongside the training model.
+**When to use**: The teacher has a different architecture from the student, or the teacher is too large to load alongside the training model. Because the teacher scores the student's exact token IDs, the teacher and student must still use compatible tokenization and vocabularies.
 
 **How it works**:
 1. An external SGLang server runs the teacher model.
-2. During rollout, the custom reward function (`slime.rollout.on_policy_distillation.reward_func`) sends each sample to the teacher server to obtain token-level log-probs.
+2. During rollout, the custom reward function (`slime.rollout.on_policy_distillation.reward_func`) sends the student's sampled token IDs to the teacher server and obtains the teacher log-probability of those same tokens.
 3. The custom post-processing function (`slime.rollout.on_policy_distillation.post_process_rewards`) trims the teacher log-probs to the response span and stores them in `sample.teacher_log_probs`.
-4. During training, the KL penalty is computed from the stored teacher log-probs and applied to advantages.
+4. During training, slime subtracts the sampled log-probability difference, scaled by `--opd-kl-coef`, from the base advantage.
 
 **Configuration**:
 ```bash
