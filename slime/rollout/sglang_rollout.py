@@ -10,8 +10,6 @@ from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
-import sglang_router
-from packaging.version import parse
 from tqdm import tqdm
 
 from slime.backends.sglang_utils.server_control import abort_servers_until_idle
@@ -343,12 +341,8 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
     assert not state.aborted
     state.aborted = True
 
-    if parse(sglang_router.__version__) <= parse("0.2.1"):
-        response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers")
-        urls = response["urls"]
-    else:
-        response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers")
-        urls = [worker["url"] for worker in response["workers"]]
+    response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers")
+    urls = [worker["url"] for worker in response["workers"]]
 
     await abort_servers_until_idle(urls)
 
