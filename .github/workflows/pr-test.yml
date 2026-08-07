@@ -563,6 +563,14 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_deep_ep_tms_patch.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_stateless_adam.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "utils/test_megatron_server_arguments.py"
             },
             {
@@ -631,6 +639,18 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_rollout_sample_hooks.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_hf_to_megatron.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_qwen3_5_vl_native.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_reloadable_process_group_world.py"
             },
             {
@@ -693,6 +713,8 @@ jobs:
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors psutil
+
+          pip install transformers
 
 
       - name: Install

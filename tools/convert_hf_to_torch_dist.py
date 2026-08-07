@@ -9,9 +9,8 @@ from megatron.training.arguments import parse_args, validate_args
 from megatron.training.checkpointing import get_checkpoint_name, get_checkpoint_tracker_filename, save_checkpoint
 from megatron.training.training import get_model
 
-import slime_plugins.mbridge  # noqa: F401
-from mbridge import AutoBridge
 from slime.backends.megatron_utils.arguments import set_default_megatron_args
+from slime.backends.megatron_utils.hf_to_megatron import load_hf_weights
 from slime.backends.megatron_utils.initialize import init
 from slime.backends.megatron_utils.model_provider import get_model_provider_func
 from slime.utils.logging_utils import configure_logger
@@ -26,12 +25,6 @@ def add_convertion_args(parser):
         type=str,
         default=None,
         help="Path to a custom model provider function.",
-    )
-    parser.add_argument(
-        "--megatron-to-hf-mode",
-        choices=["raw", "bridge"],
-        default="raw",
-        help="The method to convert megatron weights to hugging face weights for SGLang.",
     )
     parser.add_argument("--allgather-cp", action="store_true", default=False)
     try:
@@ -122,8 +115,7 @@ def main():
 
     # Load model
     hf_model_path = args.hf_checkpoint
-    bridge = AutoBridge.from_pretrained(hf_model_path, trust_remote_code=True)
-    bridge.load_weights(model, hf_model_path, memory_efficient=True)
+    load_hf_weights(args, model, hf_model_path)
     print(f"Model loaded: {hf_model_path}")
 
     if args.use_cpu_initialization:

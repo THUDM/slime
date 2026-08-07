@@ -19,7 +19,7 @@ hf download zai-org/GLM-5.2-FP8 --local-dir $BASE_DIR/GLM-5.2-FP8
 ```
 
 The open-source GLM-5.2 config uses `model_type: glm_moe_dsa`, which slime maps onto
-the DeepSeek-V3.2 bridge (`slime_plugins.mbridge.deepseek_v32`) since the two share the
+the native DeepSeek-V3.2 loader since the two share the
 same DSA weight layout.
 
 ### Convert Checkpoint
