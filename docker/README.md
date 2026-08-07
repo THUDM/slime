@@ -32,16 +32,16 @@ is selected via build args (see `docker/justfile`).
 To build a single image directly without publishing:
 
 ```bash
+# CUDA 12
+docker build -f docker/Dockerfile . \
+  --build-arg SGLANG_IMAGE_TAG=v0.5.15.post1-cu129 \
+  -t slimerl/slime:latest-cu129
+
 # CUDA 13 (Blackwell)
 docker build -f docker/Dockerfile . \
   --build-arg DEEPEP_CUDA_ARCH_LIST='10.0 10.3' \
-  -t slimerl/slime:cu130
-
-# CUDA 12
-docker build -f docker/Dockerfile . \
-  --build-arg SGLANG_IMAGE_REPOSITORY=slimerl/sglang \
-  --build-arg SGLANG_IMAGE_TAG=v0.5.15.post1-cu129 \
-  -t slimerl/slime:cu129
+  --build-arg SGLANG_IMAGE_TAG=v0.5.15.post1-cu130 \
+  -t slimerl/slime:latest-cu130
 ```
 
 The following components are pinned and rebuilt in the image:
@@ -56,10 +56,3 @@ The following components are pinned and rebuilt in the image:
 For a non-default GPU architecture list, pass
 `--build-arg DEEPEP_CUDA_ARCH_LIST='<torch arch list>'`.
 
-Before each update, we will test the following models with 64xH100:
-
-- Qwen3-4B sync
-- Qwen3-4B async
-- Qwen3-30B-A3B sync
-- Qwen3-30B-A3B fp8 sync
-- GLM-4.5-355B-A32B sync

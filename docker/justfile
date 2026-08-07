@@ -2,11 +2,7 @@
 # unqualified `latest`, plus the rolling `latest-cu129` and the versioned
 # `<version>-cu129` tags. The tag suffix matches the SGLang base image.
 release-primary:
-    ARG_TAG_POSTFIX="-cu129" ARG_TAG_LATEST=1 ARG_BUILD_EXTRA_ARGS='--build-arg SGLANG_IMAGE_REPOSITORY=slimerl/sglang --build-arg SGLANG_IMAGE_TAG=v0.5.15.post1-cu129' just _release-raw
-
-# Should be executed on ARM machines
-release-cu129-arm64:
-    ARG_TAG_POSTFIX="-cu129-arm64" ARG_BUILD_EXTRA_ARGS='--build-arg SGLANG_IMAGE_REPOSITORY=slimerl/sglang --build-arg SGLANG_IMAGE_TAG=v0.5.5.post3-cu129-arm64 --build-arg ENABLE_SGLANG_PATCH=0' just _release-raw
+    ARG_TAG_POSTFIX="-cu129" ARG_TAG_LATEST=1 ARG_BUILD_EXTRA_ARGS='--build-arg SGLANG_IMAGE_TAG=v0.5.15.post1-cu129' just _release-raw
 
 # B200/B300 (Blackwell, x86) CUDA 13 build on the cu130 SGLang base. Publishes
 # `latest-cu130` and `<version>-cu130` (tag suffix matches the SGLang base
@@ -15,7 +11,7 @@ release-cu129-arm64:
 # spaces by PyTorch's TORCH_CUDA_ARCH_LIST parser and survives the unquoted
 # ARG_BUILD_EXTRA_ARGS expansion as one token.
 release-cu13:
-    ARG_TAG_POSTFIX="-cu130" ARG_BUILD_EXTRA_ARGS="--build-arg DEEPEP_CUDA_ARCH_LIST=10.0;10.3" just _release-raw
+    ARG_TAG_POSTFIX="-cu130" ARG_BUILD_EXTRA_ARGS="--build-arg DEEPEP_CUDA_ARCH_LIST=10.0;10.3 --build-arg SGLANG_IMAGE_TAG=v0.5.15.post1-cu130" just _release-raw
 
 _release-raw:
     #!/bin/bash
