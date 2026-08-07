@@ -17,8 +17,8 @@ On-policy distillation (OPD) trains a student on response tokens sampled from th
 Let $\pi_\theta$ denote the student, $\pi_T$ the teacher, and $h_t$ the history before token $a_t$ on a student-generated trajectory. Following [Thinking Machines Lab's definition](https://thinkingmachines.ai/blog/on-policy-distillation/), the per-token reverse KL is
 
 $$
-D_{\mathrm{KL}}\!\left(\pi_\theta(\cdot \mid h_t)\,\|\,\pi_T(\cdot \mid h_t)\right)
-= \mathbb{E}_{a_t \sim \pi_\theta(\cdot \mid h_t)}\!\left[
+D_{\mathrm{KL}}\left(\pi_\theta(\cdot \mid h_t) \| \pi_T(\cdot \mid h_t)\right)
+= \mathbb{E}_{a_t \sim \pi_\theta(\cdot \mid h_t)}\left[
 \log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t)
 \right].
 $$

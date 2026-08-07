@@ -17,8 +17,8 @@
 记 $\pi_\theta$ 为学生策略，$\pi_T$ 为教师策略，$h_t$ 为学生生成轨迹中采样 token $a_t$ 之前的历史。按照 [Thinking Machines Lab 给出的定义](https://thinkingmachines.ai/blog/on-policy-distillation/)，token 级逆 KL 为
 
 $$
-D_{\mathrm{KL}}\!\left(\pi_\theta(\cdot \mid h_t)\,\|\,\pi_T(\cdot \mid h_t)\right)
-= \mathbb{E}_{a_t \sim \pi_\theta(\cdot \mid h_t)}\!\left[
+D_{\mathrm{KL}}\left(\pi_\theta(\cdot \mid h_t) \| \pi_T(\cdot \mid h_t)\right)
+= \mathbb{E}_{a_t \sim \pi_\theta(\cdot \mid h_t)}\left[
 \log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t)
 \right].
 $$
