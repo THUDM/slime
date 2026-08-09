@@ -179,6 +179,25 @@ def _reinitialize_critic_output_layer(args: Namespace, model: Sequence[DDP]) -> 
             output_layer.bias.data.zero_()
 
 
+@contextmanager
+def _hide_critic_output_layer_during_policy_checkpoint_load(model: Sequence[DDP], enabled: bool):
+    """Omit a policy-incompatible critic value head from a checkpoint load request."""
+    hidden_parameters = []
+    if enabled:
+        for _chunk_id, output_layer in _iter_critic_output_layers(model):
+            for name in ("weight", "bias"):
+                parameter = getattr(output_layer, name, None)
+                if parameter is None:
+                    continue
+                hidden_parameters.append((output_layer, name, parameter))
+                output_layer.register_parameter(name, None)
+    try:
+        yield
+    finally:
+        for output_layer, name, parameter in hidden_parameters:
+            output_layer.register_parameter(name, parameter)
+
+
 def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer) -> OptimizerParamScheduler:
     """Create and configure the optimizer learning-rate/weight-decay scheduler.
 
@@ -991,13 +1010,18 @@ def initialize_model_and_optimizer(
     model[0].role = role
     reinit_critic_output_layer = _critic_output_layer_needs_reinit(args, model, role)
     clear_memory()
-    iteration, _ = load_checkpoint(
-        model,
-        optimizer,
-        opt_param_scheduler,
-        checkpointing_context={},
-        skip_load_to_model_and_opt=False,
-    )
+    # Policy checkpoints can omit an independent output weight when embeddings
+    # are tied, and their language-model head is incompatible with the critic's
+    # scalar value head in either case. Keep strict loading for every shared
+    # tensor while excluding only the value head that will be initialized below.
+    with _hide_critic_output_layer_during_policy_checkpoint_load(model, reinit_critic_output_layer):
+        iteration, _ = load_checkpoint(
+            model,
+            optimizer,
+            opt_param_scheduler,
+            checkpointing_context={},
+            skip_load_to_model_and_opt=False,
+        )
     if reinit_critic_output_layer:
         _reinitialize_critic_output_layer(args, model)
         if (args.fp16 or args.bf16) and optimizer is not None:
