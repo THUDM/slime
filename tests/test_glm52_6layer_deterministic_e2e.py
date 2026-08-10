@@ -437,6 +437,4 @@ def test_glm52_alignment_gate_trains_all_main_model_parameters_without_r3():
 
 
 if __name__ == "__main__":
-    for proxy_var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
-        os.environ.pop(proxy_var, None)
     raise SystemExit(pytest.main([__file__, "-s", "-rs"]))
