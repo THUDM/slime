@@ -7,12 +7,9 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 import torch.distributed as dist
-from megatron.core import mpu
 
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.types import ParamInfo
-
-from .hf_weight_iterator_direct import pack_param_info_buckets
 
 __all__ = ["configure_expert_routing"]
 
@@ -115,6 +112,8 @@ def _can_route_experts(
     sglang_moe_topology: _SGLangMoeTopology,
     engine_gpu_counts: Sequence[int],
 ) -> bool:
+    from megatron.core import mpu
+
     return (
         sglang_moe_topology.pp_size == 1
         and sglang_moe_topology.ep_size > 1
@@ -339,6 +338,10 @@ def configure_expert_routing(
         return None, []
 
     try:
+        from megatron.core import mpu
+
+        from .hf_weight_iterator_direct import pack_param_info_buckets
+
         expert_infos = _resolve_expert_source_ranks(expert_infos, get_local_weight_names)
         target_ranks = _get_expert_target_ranks(
             engine_gpu_counts,
