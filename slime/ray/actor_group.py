@@ -74,6 +74,7 @@ class RayTrainGroup:
             import torch_memory_saver
 
             for path in [
+                "torch_memory_saver_hook_mode_preload_cu13.abi3.so",
                 "torch_memory_saver_hook_mode_preload_cu12.abi3.so",
                 "torch_memory_saver_hook_mode_preload.abi3.so",
             ]:

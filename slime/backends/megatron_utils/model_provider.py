@@ -19,6 +19,38 @@ from megatron.training.arguments import core_transformer_config_from_args
 
 from slime.utils.misc import load_function
 
+_INDEXER_DIRECT_SUBMODULE_NAMES = frozenset(
+    {
+        "wq_b",
+        "wk",
+        "k_norm",
+        "weights_proj",
+        "index_kpool_compress_ape",
+        "index_kpool_compress_gate",
+    }
+)
+
+
+def _is_indexer_parameter(name: str) -> bool:
+    """Return whether *name* belongs to a DSA indexer.
+
+    The GLM plugin exposes indexer projections directly under
+    ``self_attention``. Megatron's upstream DSA implementation instead nests
+    them under ``self_attention.core_attention.indexer``. Keep the ownership
+    check structural so similarly named non-indexer projections stay trainable.
+    """
+
+    parts = name.split(".")
+    for index, part in enumerate(parts):
+        if part != "self_attention" or index + 1 >= len(parts):
+            continue
+        attention_parts = parts[index + 1 :]
+        if attention_parts[0] in _INDEXER_DIRECT_SUBMODULE_NAMES:
+            return True
+        if "indexer" in attention_parts[:-1]:
+            return True
+    return False
+
 
 # Adapt from https://github.com/volcengine/verl/blob/c3b20575d2bc815fcccd84bddb4c0401fc4b632b/verl/models/llama/megatron/layers/parallel_linear.py#L82
 class LinearForLastLayer(torch.nn.Linear):
@@ -100,6 +132,10 @@ def _get_model_provider_func(
 
         # Experimental loading arguments from yaml
         config: TransformerConfig = core_transformer_config_from_args(args)
+        # Older GLM Megatron forks consumed this flag from TransformerConfig.
+        # Preserve that contract for custom specs, while freeze_model_params()
+        # below provides the concrete implementation on current Megatron.
+        config.freeze_indexer = getattr(args, "freeze_indexer", False)
 
         if args.spec is not None:
             transformer_layer_spec = import_module(args.spec)
@@ -245,3 +281,22 @@ def freeze_model_params(model: GPTModel, args: argparse.Namespace):
                 if re.search(pattern, name):
                     param.requires_grad = False
                     break
+
+    if getattr(args, "freeze_indexer", False):
+        frozen_indexer_params = []
+        has_self_attention_params = False
+        for name, param in model.named_parameters():
+            has_self_attention_params |= "self_attention" in name.split(".")
+            if _is_indexer_parameter(name):
+                param.requires_grad = False
+                frozen_indexer_params.append(name)
+
+        if has_self_attention_params and not frozen_indexer_params:
+            raise RuntimeError(
+                "--freeze-indexer was requested, but this model chunk has self-attention "
+                "parameters and no recognized DSA indexer parameters."
+            )
+
+        # Some pipeline stages may legitimately own no indexer weights, so an
+        # empty local tuple is not itself an error.
+        model._slime_frozen_indexer_param_names = tuple(frozen_indexer_params)

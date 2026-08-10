@@ -227,12 +227,12 @@ def _build_expert_transfer_plan(
     if buffer_size <= 0:
         raise ValueError("update_weight_buffer_size must be positive")
 
-    params_by_transfer: dict[tuple[int, tuple[int, ...], int], list[_ExpertParam]] = defaultdict(list)
+    params_by_transfer: dict[tuple[int, int, tuple[int, ...], int], list[_ExpertParam]] = defaultdict(list)
     for param in params:
-        params_by_transfer[(param.layer, param.target_ranks, param.info.src_rank)].append(param)
+        params_by_transfer[(param.layer, param.expert, param.target_ranks, param.info.src_rank)].append(param)
 
     by_layer: dict[int, list[_ExpertTransfer]] = defaultdict(list)
-    for (layer, target_ranks, source_rank), transfer_params in params_by_transfer.items():
+    for (layer, _expert, target_ranks, source_rank), transfer_params in params_by_transfer.items():
         transfer = _ExpertTransfer(
             source_rank=source_rank,
             target_ranks=target_ranks,
