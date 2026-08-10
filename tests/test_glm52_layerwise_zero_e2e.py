@@ -15,4 +15,4 @@ def test_glm52_first_six_layers_match_exactly():
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-s"]))
+    raise SystemExit(pytest.main([__file__, "-s", "-rs"]))

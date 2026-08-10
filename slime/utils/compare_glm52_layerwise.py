@@ -108,7 +108,7 @@ def load_train_sequences(dump_dir: Path, selected_layers: set[int]) -> list[Trai
                 layer_id: _token_rows(layer_values[layer_id], len(tokens), f"{dump_file}:layer{layer_id}")
                 for layer_id in selected_layers
             }
-            for sequence_index, (start, end) in enumerate(zip(cu_seqlens, cu_seqlens[1:], strict=True)):
+            for sequence_index, (start, end) in enumerate(zip(cu_seqlens, cu_seqlens[1:], strict=False)):
                 sequence_tokens = tokens[start:end]
                 if sequence_tokens.numel() == 0 or torch.count_nonzero(sequence_tokens) == 0:
                     continue

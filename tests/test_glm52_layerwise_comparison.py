@@ -5,10 +5,30 @@ from slime.utils.compare_glm52_layerwise import (
     TrainSequence,
     _sglang_layer_token_rows,
     compare_layer_outputs,
+    load_train_sequences,
     map_requests_to_train_sequences,
 )
 
 NUM_GPUS = 0
+
+
+def test_train_sequences_use_adjacent_cumulative_offsets(tmp_path):
+    dump_dir = tmp_path / "megatron"
+    dump_file = dump_dir / "rank00000" / "actor_Pass00000.pt"
+    dump_file.parent.mkdir(parents=True)
+    torch.save(
+        {
+            "input_ids": torch.tensor([7, 8, 9]),
+            "cu_seqlens": torch.tensor([0, 2, 3]),
+            "layers": {0: torch.tensor([[1.0], [2.0], [3.0]], dtype=torch.bfloat16)},
+        },
+        dump_file,
+    )
+
+    sequences = load_train_sequences(dump_dir, {0})
+
+    assert [sequence.tokens.tolist() for sequence in sequences] == [[7, 8], [9]]
+    assert [sequence.layers[0].flatten().tolist() for sequence in sequences] == [[1.0, 2.0], [3.0]]
 
 
 def test_health_check_requests_are_excluded_from_sequence_mapping(tmp_path):

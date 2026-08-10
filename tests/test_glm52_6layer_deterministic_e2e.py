@@ -8,10 +8,10 @@ to better than ``MAX_TRAIN_ROLLOUT_DIFF`` (default ``1e-6``). The bound is
 enforced in-process via ``--ci-test --ci-train-rollout-logprob-abs-diff-threshold``.
 
 This test is self-contained: the model / rollout / deterministic config lives
-here (not in any external experiment directory). It needs the deterministic
-SGLang / DeepGEMM / DeepEP build plus the 6-layer GLM-5.2 checkpoints, so it
-self-skips (exit 0) whenever any prerequisite is missing -- a no-op on runners
-that lack the bespoke stack, a real gate wherever it is installed.
+here (not in any external experiment directory). It self-skips on runners that
+lack the deterministic SGLang / DeepGEMM / DeepEP stack. Model and prompt
+fixtures use public Hugging Face repositories and fail the test if they cannot
+be materialized in the container.
 
 Environment overrides (all optional):
 
@@ -19,9 +19,10 @@ Environment overrides (all optional):
 * ``SGLANG_KV_CACHE_DTYPE``  -- ``fp8_e4m3`` (default) or ``bfloat16``.
 * ``MLP_SOCKET_IFNAME``      -- NIC for Ray/NCCL/GLOO/NVSHMEM (single-node run).
 * ``SGLANG_ROOT``           -- deterministic SGLang checkout (default
-  ``/mnt/zhuzilin/github-sglang``); its ``python`` dir is prepended to PYTHONPATH.
+  ``/sgl-workspace/sglang``); its ``python`` dir is prepended to PYTHONPATH.
 * ``MEGATRON_ROOT``          -- Megatron checkout (default ``/root/Megatron-LM``).
-* ``HF_MODEL`` / ``NATIVE_CKPT`` / ``PROMPT_DATA`` -- checkpoints / dataset.
+* ``HF_MODEL`` / ``PROMPT_DATA`` -- checkpoint / dataset paths. Missing
+  container-default assets are downloaded into the standard ``/root`` mounts.
 * ``NVSHMEM_IBGDA_NIC_HANDLER`` -- pass through for Blackwell RoCE fabrics.
 """
 
@@ -43,14 +44,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # 1e-6 (the H100 reference lands ~2e-7, leaving a comfortable margin).
 DEFAULT_MAX_TRAIN_ROLLOUT_DIFF = "9.999e-7"
 
-# Reference locations on the alignment cluster; every one is overridable via env.
-DEFAULT_HF_MODEL = "/mnt/zhuzilin/slime/train_rollout_diff_exp/artifacts/checkpoints/glm52_6layer_hf_fp8"
-DEFAULT_NATIVE_CKPT = (
-    "/mnt/o1_checkpoints/chat/glm-4.6/700b-moe/"
-    "700b-sft-dsa-indexshare4-512k-260525-glm5p2-v3-rev1-fastdecay/iter_0000500"
-)
-DEFAULT_PROMPT_DATA = "/mnt/o1_alicloud/personal/yc/data/RL/RL_train_prompt/hle-v6_critpt-v2.jsonl"
-DEFAULT_SGLANG_ROOT = "/mnt/zhuzilin/github-sglang"
+# Public fixture with production GLM-5.2 dimensions, truncated to three dense
+# and three MoE layers for the EP8 alignment gate.
+DEFAULT_HF_REPO = "zhuzilin/GLM-5.2-6layer-FP8"
+DEFAULT_HF_MODEL = "/root/models/GLM-5.2-6layer-FP8"
+DEFAULT_PROMPT_REPO = "zhuzilin/dapo-math-17k"
+DEFAULT_PROMPT_DATA = "/root/datasets/dapo-math-17k/dapo-math-17k.jsonl"
+DEFAULT_SGLANG_ROOT = "/sgl-workspace/sglang"
 DEFAULT_MEGATRON_ROOT = "/root/Megatron-LM"
 
 # Probe (run under the gate PYTHONPATH) for the deterministic-inference stack.
@@ -118,7 +118,7 @@ def _deterministic_env(
     return env
 
 
-def _skip_reason(sglang_root, megatron_root, hf_model, native_ckpt, prompt_data) -> str | None:
+def _skip_reason(sglang_root, megatron_root) -> str | None:
     if shutil.which("nvidia-smi") is None:
         return "nvidia-smi not found (no GPUs)"
     visible = subprocess.run(
@@ -141,35 +141,38 @@ def _skip_reason(sglang_root, megatron_root, hf_model, native_ckpt, prompt_data)
     layer_src = Path(f"{megatron_root}/megatron/core/transformer/transformer_layer.py")
     if not (layer_src.exists() and "_use_sglang_fused_residual_rmsnorm" in layer_src.read_text()):
         return f"Megatron root missing megatron-sglang-aligned.patch: {megatron_root}"
-    for label, path in (
-        ("HF checkpoint", f"{hf_model}/config.json"),
-        ("native checkpoint", native_ckpt),
-        ("prompt data", prompt_data),
-    ):
-        if not Path(path).exists():
-            return f"{label} missing: {path}"
     return None
 
 
-def _native_checkpoint_view(native_ckpt: str, root: str) -> str:
-    """Megatron wants a checkpoint root with a tracker file; the production ckpt
-    ships as an ``iter_*`` leaf. Expose a non-copying root view."""
-    leaf = os.path.basename(native_ckpt.rstrip("/"))
-    if not (leaf.startswith("iter_") and leaf[5:].isdigit()):
-        return native_ckpt
-    view = os.path.join(root, "native_checkpoint_view")
-    os.makedirs(view, exist_ok=True)
-    with open(os.path.join(view, "latest_checkpointed_iteration.txt"), "w") as f:
-        f.write(f"{int(leaf[5:])}\n")
-    link = os.path.join(view, leaf)
-    if not os.path.lexists(link):
-        os.symlink(native_ckpt, link)
-    return view
+def _download_ci_asset(repo: str, destination: str, expected_file: str, *, repo_type: str | None = None) -> None:
+    if Path(expected_file).exists():
+        return
+    command = ["hf", "download", repo, "--local-dir", destination]
+    if repo_type is not None:
+        command.extend(("--repo-type", repo_type))
+    subprocess.run(command, check=True)
+    if not Path(expected_file).exists():
+        raise FileNotFoundError(f"Downloaded {repo} but {expected_file} is still missing")
+
+
+def _prepare_ci_assets(hf_model: str, prompt_data: str) -> None:
+    if not Path(hf_model, "config.json").exists():
+        if hf_model != DEFAULT_HF_MODEL:
+            raise FileNotFoundError(f"HF checkpoint missing: {hf_model}")
+        _download_ci_asset(DEFAULT_HF_REPO, hf_model, str(Path(hf_model, "config.json")))
+    if not Path(prompt_data).exists():
+        if prompt_data != DEFAULT_PROMPT_DATA:
+            raise FileNotFoundError(f"prompt data missing: {prompt_data}")
+        _download_ci_asset(
+            DEFAULT_PROMPT_REPO,
+            str(Path(prompt_data).parent),
+            prompt_data,
+            repo_type="dataset",
+        )
 
 
 def _train_args(
     hf_model,
-    ref_load,
     prompt_data,
     threshold,
     rollout_dump,
@@ -198,9 +201,9 @@ def _train_args(
         "--kv-channels 192 --qk-pos-emb-head-dim 64 --vocab-size 154880 --rotary-base 8000000 "
         "--enable-experimental",
         # checkpoints
-        f"--hf-checkpoint {hf_model} --ref-load {ref_load}",
+        f"--hf-checkpoint {hf_model} --load {hf_model} --ref-load {hf_model}",
         # rollout
-        f"--prompt-data {prompt_data} --input-key input_messages --label-key label --apply-chat-template "
+        f"--prompt-data {prompt_data} --input-key prompt --label-key label --apply-chat-template "
         "--rollout-shuffle --rm-type deepscaler --rollout-batch-size 8 --n-samples-per-prompt 1 "
         "--global-batch-size 8 --num-rollout 1 --rollout-max-context-len 4096 "
         f"--rollout-max-response-len {rollout_max_response_len} "
@@ -266,16 +269,18 @@ def run_gate(*, layerwise_zero: bool = False, rollout_max_response_len: int = 40
     sglang_root = os.environ.get("SGLANG_ROOT", DEFAULT_SGLANG_ROOT)
     megatron_root = os.environ.get("MEGATRON_ROOT", DEFAULT_MEGATRON_ROOT)
     hf_model = os.environ.get("HF_MODEL", DEFAULT_HF_MODEL)
-    native_ckpt = os.environ.get("NATIVE_CKPT", DEFAULT_NATIVE_CKPT)
     prompt_data = os.environ.get("PROMPT_DATA", DEFAULT_PROMPT_DATA)
     threshold = os.environ.get("MAX_TRAIN_ROLLOUT_DIFF", DEFAULT_MAX_TRAIN_ROLLOUT_DIFF)
     kv_cache_dtype = os.environ.get("SGLANG_KV_CACHE_DTYPE", "fp8_e4m3")
     if kv_cache_dtype not in {"bfloat16", "fp8_e4m3"}:
         raise ValueError("SGLANG_KV_CACHE_DTYPE must be bfloat16 or fp8_e4m3, " f"got {kv_cache_dtype!r}")
 
-    reason = _skip_reason(sglang_root, megatron_root, hf_model, native_ckpt, prompt_data)
+    reason = _skip_reason(sglang_root, megatron_root)
     if reason is not None:
-        pytest.skip(f"6-layer GLM-5 deterministic gate skipped: {reason}")
+        message = f"6-layer GLM-5 deterministic gate skipped: {reason}"
+        print(message, flush=True)
+        pytest.skip(message)
+    _prepare_ci_assets(hf_model, prompt_data)
 
     master_addr = "127.0.0.1"
     ifname = os.environ.get("MLP_SOCKET_IFNAME")
@@ -308,7 +313,6 @@ def run_gate(*, layerwise_zero: bool = False, rollout_max_response_len: int = 40
         flush=True,
     )
     with tempfile.TemporaryDirectory(prefix="glm52_6layer_gate_") as tmp:
-        ref_load = _native_checkpoint_view(native_ckpt, tmp)
         rollout_dump = os.path.join(tmp, "rollout_data", "{rollout_id}.pt")
         megatron_layerwise_dump = os.path.join(tmp, "megatron_layerwise")
         sglang_layerwise_dump = os.path.join(tmp, "sglang_layerwise")
@@ -322,7 +326,6 @@ def run_gate(*, layerwise_zero: bool = False, rollout_max_response_len: int = 40
             )
         argv = _train_args(
             hf_model,
-            ref_load,
             prompt_data,
             threshold,
             rollout_dump,
@@ -415,7 +418,6 @@ def test_glm52_6layer_deterministic_train_rollout_alignment():
 def test_glm52_alignment_gate_trains_all_main_model_parameters_without_r3():
     argv = _train_args(
         "/tmp/hf",
-        "/tmp/native",
         "/tmp/prompts.jsonl",
         DEFAULT_MAX_TRAIN_ROLLOUT_DIFF,
         "/tmp/rollout/{rollout_id}.pt",
@@ -427,10 +429,14 @@ def test_glm52_alignment_gate_trains_all_main_model_parameters_without_r3():
     assert "--only-train-params-name-list" not in argv
     assert "--freeze-params-name-list" not in argv
     assert "--freeze-indexer" in argv
+    assert argv[argv.index("--hf-checkpoint") + 1] == "/tmp/hf"
+    assert argv[argv.index("--load") + 1] == "/tmp/hf"
+    assert argv[argv.index("--ref-load") + 1] == "/tmp/hf"
+    assert argv[argv.index("--input-key") + 1] == "prompt"
     assert argv[argv.index("--sglang-kv-cache-dtype") + 1] == "fp8_e4m3"
 
 
 if __name__ == "__main__":
     for proxy_var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
         os.environ.pop(proxy_var, None)
-    raise SystemExit(pytest.main([__file__, "-s"]))
+    raise SystemExit(pytest.main([__file__, "-s", "-rs"]))
