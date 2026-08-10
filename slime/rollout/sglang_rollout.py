@@ -163,6 +163,8 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
     prompt_ids = _prepare_prompt_ids(sample, state.tokenizer, state.processor)
 
+    sampling_params["max_new_tokens"] -= sample.response_length
+
     assert (
         sampling_params["max_new_tokens"] >= 0
     ), f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0"
