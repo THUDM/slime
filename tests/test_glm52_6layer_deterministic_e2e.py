@@ -211,8 +211,7 @@ def _train_args(
         f"--save-debug-rollout-data {rollout_dump}",
         # optimizer
         "--optimizer adam --lr 2e-6 --lr-warmup-iters 0 --lr-decay-style constant --weight-decay 0.1 "
-        "--adam-beta1 0.9 --adam-beta2 0.98 --no-load-optim --no-save-optim --optimizer-cpu-offload "
-        "--overlap-cpu-optimizer-d2h-h2d --use-precision-aware-optimizer",
+        "--adam-beta1 0.9 --adam-beta2 0.98 --no-load-optim --no-save-optim --use-stateless-adam",
         # GRPO + TIS (icepop)
         "--advantage-estimator grpo --kl-loss-coef 0 --kl-loss-type low_var_kl --kl-coef 0 --entropy-coef 0 "
         "--eps-clip 0.2 --eps-clip-high 0.28 --use-tis "
@@ -429,6 +428,10 @@ def test_glm52_alignment_gate_trains_all_main_model_parameters_without_r3():
     assert "--only-train-params-name-list" not in argv
     assert "--freeze-params-name-list" not in argv
     assert "--freeze-indexer" in argv
+    assert "--use-stateless-adam" in argv
+    assert "--optimizer-cpu-offload" not in argv
+    assert "--overlap-cpu-optimizer-d2h-h2d" not in argv
+    assert "--use-precision-aware-optimizer" not in argv
     assert argv[argv.index("--hf-checkpoint") + 1] == "/tmp/hf"
     assert argv[argv.index("--load") + 1] == "/tmp/hf"
     assert argv[argv.index("--ref-load") + 1] == "/tmp/hf"
