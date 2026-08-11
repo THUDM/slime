@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Aug 04, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 11, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -143,6 +143,10 @@
     </div>
   
 
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
   
 </div>
 
@@ -468,7 +472,9 @@
 <button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
     <i class="fa-solid fa-magnifying-glass fa-lg"></i>
 </button>
-
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
 </div></div>
       
     </div>
@@ -484,6 +490,14 @@
     <div id="print-main-content">
         <div id="jb-print-toc">
             
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#train-rollout-log-prob-alignment-glm-5">Train/rollout log-prob alignment (GLM-5)</a></li>
+</ul>
+            </nav>
         </div>
     </div>
 </div>
@@ -535,6 +549,30 @@ hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-0.5B-Inst
 </pre></div>
 </div>
 <p>The wandb screenshots are recorded in <a class="reference external" href="https://github.com/THUDM/slime/pull/370">pull#370</a>.</p>
+<section id="train-rollout-log-prob-alignment-glm-5">
+<h2>Train/rollout log-prob alignment (GLM-5)<a class="headerlink" href="#train-rollout-log-prob-alignment-glm-5" title="Link to this heading">#</a></h2>
+<p>Beyond single-side bitwise reproduction, slime can align the training log-probs with the rollout (inference) log-probs. This is currently supported only for the <strong>GLM-5 structure</strong> (MLA + DSA sparse attention), and requires the deterministic SGLang / batch-invariant DeepGEMM / DeepEP build plus the <code class="docutils literal notranslate"><span class="pre">megatron-sglang-aligned.patch</span></code> Megatron.</p>
+<p>Supported in this path:</p>
+<ul class="simple">
+<li><p>DSA sparse attention (<code class="docutils literal notranslate"><span class="pre">flashmla_sparse</span></code> prefill/decode), including deterministic NSA RadixCache/prefix cache;</p></li>
+<li><p>DeepGEMM batch-invariant block-FP8 forward for dense and grouped-MoE layers (with BF16 backward);</p></li>
+<li><p>fp32 MoE router (the LM head stays bf16 on both train and rollout — matching precision, not fp32, is what aligns);</p></li>
+<li><p>SGLang DeepEP low-latency rollout plus Megatron DeepEP normal training. A
+compact second normal dispatch preserves every top-k route, and the token
+owner performs the weighted reduction in slot order and FP32. Ordinary
+Megatron all-to-all is not an alignment backend for this path;</p></li>
+<li><p>bf16 or FP8-E4M3 KV cache. For <code class="docutils literal notranslate"><span class="pre">flashmla_sparse</span></code>, SGLang stores packed FP8
+cache entries and gathers/dequantizes only the selected pages before its BF16
+sparse kernel. The maintained gate defaults to FP8-E4M3 and does not use
+rollout routing replay (R3), so all main-model parameters, including the
+router and experts, execute backward. The auxiliary DSA indexer remains
+frozen through <code class="docutils literal notranslate"><span class="pre">--freeze-indexer</span></code>.</p></li>
+</ul>
+<p>The regression gate is <code class="docutils literal notranslate"><span class="pre">tests/test_glm52_6layer_deterministic_e2e.py</span></code> (6-layer GLM-5.2, single-node EP8): it runs a real Megatron→SGLang online-weight-update rollout, trains all main-model parameters, and asserts <code class="docutils literal notranslate"><span class="pre">train_rollout_logprob_abs_diff</span> <span class="pre">&lt;</span> <span class="pre">1e-6</span></code> (the established DeepEP alignment reference is in the <code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">e-7</span></code> range).</p>
+<p>An additional short EP8 gate, <code class="docutils literal notranslate"><span class="pre">tests/test_glm52_layerwise_zero_e2e.py</span></code>, records
+the visible output of decoder layers 0–5 on both sides and requires every
+matched hidden-state element to have an absolute difference of exactly zero.</p>
+</section>
 </section>
 
 
@@ -573,6 +611,23 @@ hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-0.5B-Inst
             
             
               
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#train-rollout-log-prob-alignment-glm-5">Train/rollout log-prob alignment (GLM-5)</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
             
           </div>
           <footer class="bd-footer-content">
@@ -601,7 +656,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 04, 2026.
+  Last updated on Aug 11, 2026.
   <br/>
 </p>
   </div>

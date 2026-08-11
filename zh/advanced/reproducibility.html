@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 04 日"/>
+    <meta name="docbuild:last-update" content="2026 年 08 月 11 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -143,6 +143,10 @@
     </div>
   
 
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="当前页面">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
   
 </div>
 
@@ -464,7 +468,9 @@
 <button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
     <i class="fa-solid fa-magnifying-glass fa-lg"></i>
 </button>
-
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
 </div></div>
       
     </div>
@@ -480,6 +486,14 @@
     <div id="print-main-content">
         <div id="jb-print-toc">
             
+            <div>
+                <h2> 目录 </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#train-rollout-log-prob-alignment-glm-5">Train/rollout log-prob alignment (GLM-5)</a></li>
+</ul>
+            </nav>
         </div>
     </div>
 </div>
@@ -531,6 +545,31 @@ hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-0.5B-Inst
 </pre></div>
 </div>
 <p>For screen shots of the wandb, please refer to <a class="reference external" href="https://github.com/THUDM/slime/pull/370">pull#370</a>.</p>
+<section id="train-rollout-log-prob-alignment-glm-5">
+<h2>Train/rollout log-prob alignment (GLM-5)<a class="headerlink" href="#train-rollout-log-prob-alignment-glm-5" title="链接到此标题。">#</a></h2>
+<p>Beyond single-side bitwise reproduction, slime can align the training log-probs with the rollout (inference) log-probs. This is currently supported only for the <strong>GLM-5 structure</strong> (MLA + DSA sparse attention), and requires the deterministic SGLang / batch-invariant DeepGEMM / DeepEP build plus the <code class="docutils literal notranslate"><span class="pre">megatron-sglang-aligned.patch</span></code> Megatron.</p>
+<p>Supported in this path:</p>
+<ul class="simple">
+<li><p>DSA sparse attention (<code class="docutils literal notranslate"><span class="pre">flashmla_sparse</span></code> prefill/decode), including deterministic NSA RadixCache/prefix cache;</p></li>
+<li><p>DeepGEMM batch-invariant block-FP8 forward for dense and grouped-MoE layers (with BF16 backward);</p></li>
+<li><p>fp32 MoE router (the LM head stays bf16 on both train and rollout — matching precision, not fp32, is what aligns);</p></li>
+<li><p>SGLang rollout 使用 DeepEP low-latency，Megatron 训练使用 DeepEP normal。
+第二次小 payload normal dispatch 保留每个 top-k route，token owner 按
+slot 顺序做 FP32 加权归约；这条对齐路径不支持普通 Megatron all-to-all；</p></li>
+<li><p>支持 bf16 或 FP8-E4M3 KV cache。<code class="docutils literal notranslate"><span class="pre">flashmla_sparse</span></code> 路径把 KV 以 FP8
+packed 格式保存，只 gather 并反量化被选中的 page，再交给 BF16 sparse
+kernel。维护的 gate 默认使用 FP8-E4M3，不使用 rollout routing replay
+(R3)，因此包括 router 和 experts 在内的主模型参数都会执行 backward；
+辅助 DSA indexer 通过 <code class="docutils literal notranslate"><span class="pre">--freeze-indexer</span></code> 始终保持冻结。</p></li>
+</ul>
+<p>回归 gate 是 <code class="docutils literal notranslate"><span class="pre">tests/test_glm52_6layer_deterministic_e2e.py</span></code>（6-layer GLM-5.2，
+单机 EP8）：它执行真实的 Megatron→SGLang online-weight-update rollout，
+训练全部主模型参数，并断言 <code class="docutils literal notranslate"><span class="pre">train_rollout_logprob_abs_diff</span> <span class="pre">&lt;</span> <span class="pre">1e-6</span></code>（已验证的
+DeepEP 对齐参考结果为 <code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">e-7</span></code> 量级）。</p>
+<p>另有一个较短的 EP8 gate <code class="docutils literal notranslate"><span class="pre">tests/test_glm52_layerwise_zero_e2e.py</span></code>，会同时
+记录训推两侧 decoder layer 0–5 的可见输出，并要求所有匹配 hidden-state
+元素的绝对误差严格等于 0。</p>
+</section>
 </section>
 
 
@@ -569,6 +608,23 @@ hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-0.5B-Inst
             
             
               
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> 目录
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#train-rollout-log-prob-alignment-glm-5">Train/rollout log-prob alignment (GLM-5)</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
             
           </div>
           <footer class="bd-footer-content">
@@ -597,7 +653,7 @@ hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-0.5B-Inst
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 04 日.
+  最后更新于 2026 年 08 月 11 日.
   <br/>
 </p>
   </div>

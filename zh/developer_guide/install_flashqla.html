@@ -57,7 +57,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 04 日"/>
+    <meta name="docbuild:last-update" content="2026 年 08 月 11 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -532,12 +532,17 @@
 </section>
 <section id="docker">
 <h2>Docker 镜像<a class="headerlink" href="#docker" title="链接到此标题。">#</a></h2>
-<p>标准 CUDA Docker 镜像会默认安装 FlashQLA：</p>
+<p>标准 CUDA 12 Docker 镜像会默认安装 FlashQLA：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>docker<span class="w"> </span>build<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-f<span class="w"> </span>docker/Dockerfile<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--build-arg<span class="w"> </span><span class="nv">SGLANG_IMAGE_REPOSITORY</span><span class="o">=</span>slimerl/sglang<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--build-arg<span class="w"> </span><span class="nv">SGLANG_IMAGE_TAG</span><span class="o">=</span>v0.5.15.post1-cu129<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-t<span class="w"> </span>slime:flashqla<span class="w"> </span>.
 </pre></div>
 </div>
+<p>CUDA 13 镜像中的 SGLang 0.5.15.post1 依赖 TileLang 0.1.11，而当前
+FlashQLA 依赖 TileLang 0.1.9，两者的 kernel 行为不兼容。因此 CUDA 13
+镜像不安装 FlashQLA，请使用默认的 FLA 后端。</p>
 </section>
 <section id="gb10">
 <h2>GB10 镜像<a class="headerlink" href="#gb10" title="链接到此标题。">#</a></h2>
@@ -617,7 +622,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 04 日.
+  最后更新于 2026 年 08 月 11 日.
   <br/>
 </p>
   </div>
