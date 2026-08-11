@@ -150,6 +150,7 @@ def validate_args(args):
         ("sglang_dp_size", "sglang_data_parallel_size"),
         ("sglang_pp_size", "sglang_pipeline_parallel_size"),
         ("sglang_ep_size", "sglang_expert_parallel_size"),
+        ("sglang_moe_dp_size", "sglang_moe_data_parallel_size"),
     ):
         value = getattr(args, current_name) if hasattr(args, current_name) else getattr(args, legacy_name)
         setattr(args, current_name, value)

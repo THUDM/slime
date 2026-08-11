@@ -180,6 +180,7 @@ settings.json
 wandb/
 outputs/
 local/
+train_rollout_diff_exp/results/
 **/rollout_data/
 **/buffer_stats/
 *.out

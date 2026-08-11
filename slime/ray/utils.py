@@ -26,6 +26,15 @@ NOSET_VISIBLE_DEVICES_ENV_VARS_LIST = [
 RAY_DEFAULT_ENV_VARS = {
     # Ray's uvloop integration has caused intermittent async actor issues.
     "RAY_USE_UVLOOP": "0",
+    # Let sglang's JIT loader (load_jit) find slime-hosted custom kernel .cuh
+    # sources (e.g. glm5_router_gemm) and try-cache compile them, so they need
+    # not be patched into the sglang source tree.
+    "SGLANG_JIT_KERNEL_EXTRA_PATH": os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "backends",
+        "sglang_utils",
+        "jit_kernels",
+    ),
 }
 
 

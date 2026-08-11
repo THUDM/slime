@@ -115,7 +115,7 @@ RUN rm -rf /root/.cache/pip /root/flash-attention
 
 # ====================================== Patches ============================================
 
-COPY docker/patch/${PATCH_VERSION}/megatron.patch /root/Megatron-LM/
+COPY docker/patch/${PATCH_VERSION}/megatron*.patch /root/Megatron-LM/
 RUN cd Megatron-LM && \
     git update-index --refresh && \
     git apply megatron.patch --3way && \
@@ -123,14 +123,21 @@ RUN cd Megatron-LM && \
       echo "Patch failed to apply cleanly. Please resolve conflicts." && \
       exit 1; \
     fi && \
-    rm megatron.patch
+    if [ -f megatron-sglang-aligned.patch ]; then \
+      git apply megatron-sglang-aligned.patch --3way && \
+      if grep -R -n '^<<<<<<< ' .; then \
+        echo "megatron-sglang-aligned.patch failed to apply cleanly. Please resolve conflicts." && \
+        exit 1; \
+      fi; \
+    fi && \
+    rm -f megatron*.patch
 
 # TODO temporarily skip patching for GB200/GB300 (and require users to bring their own sglang version). should add back later.
 ARG ENABLE_SGLANG_PATCH=1
 COPY docker/patch/${PATCH_VERSION}/sglang*.patch /sgl-workspace/sglang/
 RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
   cd /sgl-workspace/sglang && \
-  for patch in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch; do \
+  for patch in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch sglang-deterministic.patch; do \
     if [ ! -f "$patch" ]; then \
       continue; \
     fi; \

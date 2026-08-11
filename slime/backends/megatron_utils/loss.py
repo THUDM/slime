@@ -1103,7 +1103,7 @@ def policy_loss_function(
         reported_loss["opsm_clipfrac"] = opsm_clipfrac
 
     # Add OPD metrics if available
-    if "opd_reverse_kl" in batch:
+    if batch.get("opd_reverse_kl"):
         opd_reverse_kl = torch.cat(batch["opd_reverse_kl"], dim=0)
         reported_loss["opd_reverse_kl"] = sum_of_sample_mean(opd_reverse_kl).clone().detach()
 

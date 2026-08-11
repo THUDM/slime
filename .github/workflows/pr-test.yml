@@ -161,6 +161,14 @@ jobs:
               "test_file": "test_glm4.7_30B_A3B_pd_mooncake.py"
             },
             {
+              "num_gpus": 8,
+              "test_file": "test_glm52_6layer_deterministic_e2e.py"
+            },
+            {
+              "num_gpus": 8,
+              "test_file": "test_glm52_layerwise_zero_e2e.py"
+            },
+            {
               "enable_eval": "0",
               "num_gpus": 8,
               "test_file": "test_qwen3_30B_A3B.py",
@@ -667,6 +675,26 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_expert_routing.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_glm5_indexer_short_context.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_model_provider_freeze.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_glm52_layerwise_comparison.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_layerwise_alignment.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "utils/test_hf_checkpoint_saver.py"
             },
             {
@@ -855,6 +883,14 @@ jobs:
             {
               "num_gpus": 8,
               "test_file": "test_glm4.7_30B_A3B_pd_mooncake.py"
+            },
+            {
+              "num_gpus": 8,
+              "test_file": "test_glm52_6layer_deterministic_e2e.py"
+            },
+            {
+              "num_gpus": 8,
+              "test_file": "test_glm52_layerwise_zero_e2e.py"
             },
             {
               "enable_eval": "0",
