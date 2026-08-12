@@ -61,7 +61,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 11 日"/>
+    <meta name="docbuild:last-update" content="2026 年 08 月 12 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -519,7 +519,7 @@
                   
   <section class="tex2jax_ignore mathjax_ignore" id="on-policy-distillation">
 <h1>在策略蒸馏 (On-Policy Distillation)<a class="headerlink" href="#on-policy-distillation" title="链接到此标题。">#</a></h1>
-<p>在策略蒸馏 (OPD) 让学生模型在自己的 rollout 数据上训练，同时匹配教师模型的 token 级 log-probability，从而实现从大模型到小模型的知识传递。OPD 与 advantage estimator 正交——它作为 KL 惩罚项叠加在任意 estimator（GRPO、PPO、REINFORCE++ 等）之上。</p>
+<p>在策略蒸馏 (OPD) 使用学生当前策略采样的 response token 来训练学生。对于学生轨迹中访问到的每个前缀，固定的教师模型为同一个 next token 评分，从而沿学生自己的轨迹提供稠密的 token 级学习信号。在 slime 中，这一信号以逆 KL 的采样估计惩罚 advantage，因此可以与 GRPO、PPO、REINFORCE++ 等 advantage estimator 组合；当任务奖励为零时，同一机制就是纯蒸馏。</p>
 <section id="id1">
 <h2>关键参数<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
@@ -550,26 +550,40 @@
 </section>
 <section id="id2">
 <h2>原理<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
-<p>OPD 通过减去一个 KL 惩罚项来修改 advantage 计算，鼓励学生匹配教师的输出分布：</p>
+<p>记 <span class="math notranslate nohighlight">\(\pi_\theta\)</span> 为学生策略，<span class="math notranslate nohighlight">\(\pi_T\)</span> 为教师策略，<span class="math notranslate nohighlight">\(h_t\)</span> 为学生生成轨迹中采样 token <span class="math notranslate nohighlight">\(a_t\)</span> 之前的历史。按照 <a class="reference external" href="https://thinkingmachines.ai/blog/on-policy-distillation/">Thinking Machines Lab 给出的定义</a>，token 级逆 KL 为</p>
 <div class="math notranslate nohighlight">
 \[
-\hat{A}_t = A_t - \lambda_{\text{opd}} \cdot D_{\text{KL}}(P_{\text{teacher}} \| P_{\text{student}})_t
+D_{\mathrm{KL}}\left(\pi_\theta(\cdot \mid h_t) \| \pi_T(\cdot \mid h_t)\right)
+= \mathbb{E}_{a_t \sim \pi_\theta(\cdot \mid h_t)}\left[
+\log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t)
+\right].
 \]</div>
-<p>其中 <span class="math notranslate nohighlight">\(A_t\)</span> 是基础 estimator（如 GRPO）的原始 advantage，<span class="math notranslate nohighlight">\(\lambda_{\text{opd}}\)</span> 是 <code class="docutils literal notranslate"><span class="pre">--opd-kl-coef</span></code>，<span class="math notranslate nohighlight">\(D_{\text{KL}}\)</span> 是 token 级的逆 KL 散度。</p>
-<p>因此 OPD 可以与任何 advantage estimator 组合使用，包括 GRPO、PPO、REINFORCE++ 和 GSPO。</p>
+<p>这里的顺序很重要：KL 的第一个参数是学生分布，期望同样对学生分布取值。教师不生成训练轨迹，而是评估学生实际采样的 token。</p>
+<p>slime 不会遍历完整词表来精确计算这个期望。对于每个采样 token，它使用如下 Monte Carlo 贡献：</p>
+<div class="math notranslate nohighlight">
+\[
+\hat d_t = \log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t),
+\qquad a_t \sim \pi_\theta(\cdot \mid h_t),
+\]</div>
+<p>然后修改基础 advantage：</p>
+<div class="math notranslate nohighlight">
+\[
+\hat A_t = A_t - \lambda_{\mathrm{opd}}\hat d_t.
+\]</div>
+<p>其中 <span class="math notranslate nohighlight">\(A_t\)</span> 来自所配置的 estimator（纯蒸馏时为零），<span class="math notranslate nohighlight">\(\lambda_{\mathrm{opd}}\)</span> 是 <code class="docutils literal notranslate"><span class="pre">--opd-kl-coef</span></code>。尽管 KL 的期望非负，单个样本的 <span class="math notranslate nohighlight">\(\hat d_t\)</span> 仍可能为负。策略损失使用修改后的 <span class="math notranslate nohighlight">\(\hat A_t\)</span>，因此 OPD 项与 GRPO、PPO、REINFORCE++、GSPO 等 advantage estimator 的选择相互独立。</p>
 </section>
 <section id="id3">
 <h2>两种教师模式<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
 <section id="sglang-opd-type-sglang">
 <h3>SGLang 模式 (<code class="docutils literal notranslate"><span class="pre">--opd-type</span> <span class="pre">sglang</span></code>)<a class="headerlink" href="#sglang-opd-type-sglang" title="链接到此标题。">#</a></h3>
 <p>教师模型运行在外部 SGLang 服务器上，教师的 log-probs 在 rollout 阶段获取。</p>
-<p><strong>适用场景</strong>：教师与学生架构不同，或教师模型太大无法与训练模型同时加载。</p>
+<p><strong>适用场景</strong>：教师与学生架构不同，或教师模型太大无法与训练模型同时加载。由于教师需要为学生的原始 token ID 评分，两者仍须使用兼容的 tokenizer 和词表。</p>
 <p><strong>工作流程</strong>：</p>
 <ol class="arabic simple">
 <li><p>外部 SGLang 服务器运行教师模型。</p></li>
-<li><p>在 rollout 阶段，自定义 reward 函数（<code class="docutils literal notranslate"><span class="pre">slime.rollout.on_policy_distillation.reward_func</span></code>）将每个样本发送到教师服务器以获取 token 级 log-probs。</p></li>
+<li><p>在 rollout 阶段，自定义 reward 函数（<code class="docutils literal notranslate"><span class="pre">slime.rollout.on_policy_distillation.reward_func</span></code>）将学生采样的 token ID 发送给教师服务器，并获取教师对这些相同 token 的 log-probability。</p></li>
 <li><p>自定义后处理函数（<code class="docutils literal notranslate"><span class="pre">slime.rollout.on_policy_distillation.post_process_rewards</span></code>）将教师 log-probs 裁剪到 response 范围并存储到 <code class="docutils literal notranslate"><span class="pre">sample.teacher_log_probs</span></code> 中。</p></li>
-<li><p>在训练阶段，从存储的教师 log-probs 计算 KL 惩罚并应用到 advantages 上。</p></li>
+<li><p>在训练阶段，slime 从基础 advantage 中减去按 <code class="docutils literal notranslate"><span class="pre">--opd-kl-coef</span></code> 缩放后的采样 log-probability 差值。</p></li>
 </ol>
 <p><strong>配置</strong>：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--use-opd
@@ -750,7 +764,7 @@ bash<span class="w"> </span>examples/on_policy_distillation/run-qwen3-8B-opd-meg
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 11 日.
+  最后更新于 2026 年 08 月 12 日.
   <br/>
 </p>
   </div>

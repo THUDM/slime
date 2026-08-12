@@ -61,7 +61,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Aug 11, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 12, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -523,7 +523,7 @@
                   
   <section class="tex2jax_ignore mathjax_ignore" id="on-policy-distillation">
 <h1>On-Policy Distillation<a class="headerlink" href="#on-policy-distillation" title="Link to this heading">#</a></h1>
-<p>On-policy distillation (OPD) enables a student model to learn from a larger teacher model by training on its own rollouts while matching the teacher’s token-level log-probabilities. OPD is orthogonal to advantage estimators — it works as an additive KL penalty on top of any estimator (GRPO, PPO, REINFORCE++, etc.).</p>
+<p>On-policy distillation (OPD) trains a student on response tokens sampled from the student’s current policy. At every visited prefix, a fixed teacher scores the same next token, providing a dense token-level learning signal along the student’s own trajectories. In slime, this signal is a sampled reverse-KL penalty applied to the advantage, so it can be combined with an advantage estimator such as GRPO, PPO, or REINFORCE++. With zero task reward, the same mechanism performs pure distillation.</p>
 <section id="key-arguments">
 <h2>Key Arguments<a class="headerlink" href="#key-arguments" title="Link to this heading">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
@@ -554,26 +554,40 @@
 </section>
 <section id="how-it-works">
 <h2>How It Works<a class="headerlink" href="#how-it-works" title="Link to this heading">#</a></h2>
-<p>OPD modifies the advantage computation by subtracting a KL penalty term that encourages the student to match the teacher’s output distribution:</p>
+<p>Let <span class="math notranslate nohighlight">\(\pi_\theta\)</span> denote the student, <span class="math notranslate nohighlight">\(\pi_T\)</span> the teacher, and <span class="math notranslate nohighlight">\(h_t\)</span> the history before token <span class="math notranslate nohighlight">\(a_t\)</span> on a student-generated trajectory. Following <a class="reference external" href="https://thinkingmachines.ai/blog/on-policy-distillation/">Thinking Machines Lab’s definition</a>, the per-token reverse KL is</p>
 <div class="math notranslate nohighlight">
 \[
-\hat{A}_t = A_t - \lambda_{\text{opd}} \cdot D_{\text{KL}}(P_{\text{teacher}} \| P_{\text{student}})_t
+D_{\mathrm{KL}}\left(\pi_\theta(\cdot \mid h_t) \| \pi_T(\cdot \mid h_t)\right)
+= \mathbb{E}_{a_t \sim \pi_\theta(\cdot \mid h_t)}\left[
+\log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t)
+\right].
 \]</div>
-<p>Where <span class="math notranslate nohighlight">\(A_t\)</span> is the original advantage from the base estimator (e.g., GRPO), <span class="math notranslate nohighlight">\(\lambda_{\text{opd}}\)</span> is <code class="docutils literal notranslate"><span class="pre">--opd-kl-coef</span></code>, and <span class="math notranslate nohighlight">\(D_{\text{KL}}\)</span> is the token-level reverse KL divergence.</p>
-<p>This means OPD can be combined with any advantage estimator, including GRPO, PPO, REINFORCE++, and GSPO.</p>
+<p>The order is important: the student is the first argument of the KL, and the expectation is also over the student distribution. The teacher does not generate the training trajectory; it evaluates the token that the student actually sampled.</p>
+<p>slime does not enumerate the full vocabulary to compute this expectation. For each sampled token, it uses the Monte Carlo contribution</p>
+<div class="math notranslate nohighlight">
+\[
+\hat d_t = \log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t),
+\qquad a_t \sim \pi_\theta(\cdot \mid h_t),
+\]</div>
+<p>and modifies the base advantage as</p>
+<div class="math notranslate nohighlight">
+\[
+\hat A_t = A_t - \lambda_{\mathrm{opd}}\hat d_t.
+\]</div>
+<p>Here, <span class="math notranslate nohighlight">\(A_t\)</span> is the advantage from the configured estimator (or zero for pure distillation), and <span class="math notranslate nohighlight">\(\lambda_{\mathrm{opd}}\)</span> is <code class="docutils literal notranslate"><span class="pre">--opd-kl-coef</span></code>. An individual <span class="math notranslate nohighlight">\(\hat d_t\)</span> may be negative even though the KL is non-negative in expectation. The policy loss uses <span class="math notranslate nohighlight">\(\hat A_t\)</span>, which makes the OPD term orthogonal to the choice of GRPO, PPO, REINFORCE++, GSPO, or another supported advantage estimator.</p>
 </section>
 <section id="two-teacher-modes">
 <h2>Two Teacher Modes<a class="headerlink" href="#two-teacher-modes" title="Link to this heading">#</a></h2>
 <section id="sglang-mode-opd-type-sglang">
 <h3>SGLang Mode (<code class="docutils literal notranslate"><span class="pre">--opd-type</span> <span class="pre">sglang</span></code>)<a class="headerlink" href="#sglang-mode-opd-type-sglang" title="Link to this heading">#</a></h3>
 <p>The teacher runs on an external SGLang server. Teacher log-probs are obtained during the rollout phase.</p>
-<p><strong>When to use</strong>: The teacher has a different architecture from the student, or the teacher is too large to load alongside the training model.</p>
+<p><strong>When to use</strong>: The teacher has a different architecture from the student, or the teacher is too large to load alongside the training model. Because the teacher scores the student’s exact token IDs, the teacher and student must still use compatible tokenization and vocabularies.</p>
 <p><strong>How it works</strong>:</p>
 <ol class="arabic simple">
 <li><p>An external SGLang server runs the teacher model.</p></li>
-<li><p>During rollout, the custom reward function (<code class="docutils literal notranslate"><span class="pre">slime.rollout.on_policy_distillation.reward_func</span></code>) sends each sample to the teacher server to obtain token-level log-probs.</p></li>
+<li><p>During rollout, the custom reward function (<code class="docutils literal notranslate"><span class="pre">slime.rollout.on_policy_distillation.reward_func</span></code>) sends the student’s sampled token IDs to the teacher server and obtains the teacher log-probability of those same tokens.</p></li>
 <li><p>The custom post-processing function (<code class="docutils literal notranslate"><span class="pre">slime.rollout.on_policy_distillation.post_process_rewards</span></code>) trims the teacher log-probs to the response span and stores them in <code class="docutils literal notranslate"><span class="pre">sample.teacher_log_probs</span></code>.</p></li>
-<li><p>During training, the KL penalty is computed from the stored teacher log-probs and applied to advantages.</p></li>
+<li><p>During training, slime subtracts the sampled log-probability difference, scaled by <code class="docutils literal notranslate"><span class="pre">--opd-kl-coef</span></code>, from the base advantage.</p></li>
 </ol>
 <p><strong>Configuration</strong>:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--use-opd
@@ -754,7 +768,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 11, 2026.
+  Last updated on Aug 12, 2026.
   <br/>
 </p>
   </div>
