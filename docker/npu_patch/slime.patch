@@ -51,8 +51,25 @@ index a4666fbe..2a07086a 100644
  except ImportError:
      pass
  
+diff --git a/slime/backends/fsdp_utils/update_weight_utils.py b/slime/backends/fsdp_utils/update_weight_utils.py
+index 4c0ce5478..9ef66a02c 100644
+--- a/slime/backends/fsdp_utils/update_weight_utils.py
++++ b/slime/backends/fsdp_utils/update_weight_utils.py
+@@ -18,6 +18,7 @@ except ImportError:
+ from sglang.srt.utils import MultiprocessingSerializer
+
+ from slime.utils.distributed_utils import init_process_group
++from slime.utils.http_utils import _wrap_ipv6
+
+
+ try:
+@@ -214,3 +215,3 @@ class UpdateWeightFromDistributed(UpdateWeight):
+                 backend="nccl",
+-                init_method=f"tcp://{master_address}:{master_port}",
++                init_method=f"tcp://{_wrap_ipv6(master_address)}:{master_port}",
+                 world_size=world_size,
 diff --git a/slime/backends/megatron_utils/actor.py b/slime/backends/megatron_utils/actor.py
-index 7bc4f910..a0b1f63a 100644
+index 7bc4f910..a00c83c51 100644
 --- a/slime/backends/megatron_utils/actor.py
 +++ b/slime/backends/megatron_utils/actor.py
 @@ -8,6 +8,10 @@ from contextlib import nullcontext
@@ -66,7 +83,15 @@ index 7bc4f910..a0b1f63a 100644
  from megatron.core import mpu
  from ray.actor import ActorHandle
  from torch_memory_saver import torch_memory_saver
-@@ -55,6 +59,8 @@ class MegatronTrainRayActor(TrainRayActor):
+@@ -17,6 +21,7 @@ from slime.ray.train_actor import TrainRayActor
+ from slime.utils import train_dump_utils
+ from slime.utils.data import process_rollout_data
+ from slime.utils.distributed_utils import get_gloo_group, init_process_group
++from slime.utils.http_utils import _wrap_ipv6
+ from slime.utils.logging_utils import init_tracking
+ from slime.utils.memory_utils import clear_memory, print_memory
+ from slime.utils.misc import Box
+@@ -55,6 +60,8 @@ class MegatronTrainRayActor(TrainRayActor):
          super().init(args, role, with_ref)
  
          init(args)
@@ -75,7 +100,7 @@ index 7bc4f910..a0b1f63a 100644
  
          if is_megatron_main_rank():
              init_tracking(args, primary=False)
-@@ -596,8 +602,12 @@ class MegatronTrainRayActor(TrainRayActor):
+@@ -596,8 +603,12 @@ class MegatronTrainRayActor(TrainRayActor):
  
          group_name = "actor_critic"
          world_size = 2
@@ -86,7 +111,8 @@ index 7bc4f910..a0b1f63a 100644
          self._actor_critic_groups = init_process_group(
 -            backend="nccl",
 +            backend=backend,
-             init_method=f"tcp://{master_address}:{master_port}",
+-            init_method=f"tcp://{master_address}:{master_port}",
++            init_method=f"tcp://{_wrap_ipv6(master_address)}:{master_port}",
              world_size=world_size,
              rank=0 if self.role == "actor" else 1,
 diff --git a/slime/backends/megatron_utils/megatron_to_hf/__init__.py b/slime/backends/megatron_utils/megatron_to_hf/__init__.py
@@ -395,18 +421,19 @@ index a2e4e129..ce40b446 100644
              if "linear_fc2.weight" in info.name:
                  if partition_dim == 0:
 diff --git a/slime/backends/megatron_utils/update_weight/update_weight_from_distributed.py b/slime/backends/megatron_utils/update_weight/update_weight_from_distributed.py
-index a8e50e0e..b3c6ac24 100644
+index a8e50e0e..4ae469727 100644
 --- a/slime/backends/megatron_utils/update_weight/update_weight_from_distributed.py
 +++ b/slime/backends/megatron_utils/update_weight/update_weight_from_distributed.py
-@@ -12,6 +12,7 @@ from ray.actor import ActorHandle
+@@ -12,6 +12,8 @@ from ray.actor import ActorHandle
  from tqdm import tqdm
  
  from slime.utils.distributed_utils import get_gloo_group, init_process_group
 +from slime.utils.common import is_npu
++from slime.utils.http_utils import _wrap_ipv6
  
  from ..megatron_to_hf import convert_to_hf
  from .common import all_gather_param, named_params_and_buffers
-@@ -253,6 +254,7 @@ def connect_rollout_engines_from_distributed(
+@@ -253,6 +255,7 @@ def connect_rollout_engines_from_distributed(
          master_port = sock.getsockname()[1]
      world_size = len(rollout_engines) * args.rollout_num_gpus_per_engine + 1
  
@@ -414,7 +441,7 @@ index a8e50e0e..b3c6ac24 100644
      refs = [
          engine.init_weights_update_group.remote(
              master_address,
-@@ -260,12 +262,12 @@ def connect_rollout_engines_from_distributed(
+@@ -260,12 +263,12 @@ def connect_rollout_engines_from_distributed(
              i * args.rollout_num_gpus_per_engine + 1,
              world_size,
              group_name,
@@ -426,7 +453,8 @@ index a8e50e0e..b3c6ac24 100644
      model_update_groups = init_process_group(
 -        backend="nccl",
 +        backend=backend,
-         init_method=f"tcp://{master_address}:{master_port}",
+-        init_method=f"tcp://{master_address}:{master_port}",
++        init_method=f"tcp://{_wrap_ipv6(master_address)}:{master_port}",
          world_size=world_size,
          rank=0,
 diff --git a/slime/backends/sglang_utils/sglang_engine.py b/slime/backends/sglang_utils/sglang_engine.py
