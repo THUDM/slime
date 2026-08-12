@@ -48,6 +48,12 @@ slime 支持将训练部分和推理部分分开进行调试，从而实现：
 
    开启后，会从 `args.load_debug_rollout_data.format(rollout_id=rollout_id)` 来加载数据，并且不会初始化 sglang（自动设置 `debug_train_only=True`）。可以以这种方式来固定训练部分的输入，对训练部分进行调优，例如切换各种并行。
 
+4. `--save-debug-train-data /your/saved/debug/train_{rollout_id}.pt`
+
+   每个 rollout 只保存一个训练侧文件。只有 Pipeline Parallel 最后一级和 Tensor Parallel rank 0 参与：跨 Context Parallel rank 逐个还原 `log_probs`、`ref_log_probs`、`values`、`advantages`、`returns`、`kl`、`entropy` 等 response-token tensor；Context Parallel rank 0 会将每个完整 tensor 立即搬到 CPU，避免它们在显存中累计，最后再把不同的 Data Parallel shard 汇总给一个 writer。
+
+   version 2 payload 对标 rollout debug dump：顶层 `samples` 列表每项是一个训练样本的 dict（含 `sample_index`、`data_parallel_rank` 以及 `tokens`、`log_probs`、`advantages` 等 per-sample 字段），并按 `sample_index` 排序，从而和 rollout dump 的 `samples` 一一对齐（用 `sample_index` ↔ rollout 侧的 `index` 来 join）。并列的 `dp_shards` key 保留 DP/micro-batch 排布——每项记录 `rank`、`data_parallel_rank`、该分片的 `sample_indices`，以及 DP-local 调度（`micro_batch_indices`、`num_microbatches`、`global_batch_sizes`）——且不重复存储任何 per-sample tensor。`raw_reward` 等整批字段在顶层只存一份。若某些样本没有 `sample_index`（自定义 rollout 新建 `Sample` 时会是 `None`），则 samples 保持 DP-gather 顺序并打印一条 warning。开启或关闭 CP 时，response-token 字段都是相同的完整 response 格式。在跳过 actor log-prob 单独重算的配置下（`can_reuse_log_probs_in_loss` 或 `--use-rollout-logprobs`），actor 的 `log_probs` 会直接从训练前向里快照下来（按 rollout position 归位，无额外前向），所以 dump 里依然会带上它。
+
 ## INT4 / Compressed-Tensors 量化 Checkpoint 问题
 
 使用 INT4 量化模型（如 `compressed-tensors` 的 `W4A16`）时，checkpoint 的 `config.json` 中有一个 `quantization_config.ignore` 列表，指定哪些参数**不**做量化。在线权重更新（Megatron → SGLang）时，slime 也会读取这个 ignore list 来决定哪些参数需要 INT4 量化。ignore list 不正确会导致静默错误：

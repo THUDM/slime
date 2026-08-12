@@ -306,7 +306,12 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
     assert len(rollout_data_ref) == dp_size
     rollout_data = ray.get(rollout_data_ref[dp_rank].inner)
 
-    partition = rollout_data.pop("partition")
+    # Keep `partition` in rollout_data: each local sample's position in the
+    # flattened rollout batch (== its index in the rollout debug dump's
+    # `samples`). It's a small list of ints, only read by the train debug dump /
+    # log-prob capture, and ignored by training (the data iterator only fetches
+    # requested keys), so there's no need to drop it.
+    partition = rollout_data["partition"]
     total_lengths = rollout_data["total_lengths"]
 
     # save the seqlen of the whole rollout batch

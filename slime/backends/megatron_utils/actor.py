@@ -13,7 +13,6 @@ from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
-from slime.utils import train_dump_utils
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.logging_utils import init_tracking
@@ -31,12 +30,19 @@ from slime.utils.types import RolloutBatch
 
 from ...utils.profile_utils import TrainProfiler
 from ...utils.tensor_backper import TensorBackuper
+from . import train_dump_utils
 from .checkpoint import load_checkpoint
 from .cp_utils import prepare_routed_experts_for_routing_replay, slice_log_prob_with_cp
 from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data
 from .hf_checkpoint_saver import save_hf_model_to_path
 from .initialize import init, is_megatron_main_rank
-from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
+from .loss import (
+    compute_advantages_and_returns,
+    drain_captured_log_probs,
+    enable_log_prob_capture,
+    get_log_probs_and_entropy,
+    get_values,
+)
 from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight.common import named_params_and_buffers
 from .update_weight.update_weight_from_disk import UpdateWeightFromDisk
@@ -508,6 +514,13 @@ class MegatronTrainRayActor(TrainRayActor):
             # Train
             if self.args.use_routing_replay:
                 os.environ["ROUTING_REPLAY_STAGE"] = "replay_backward"
+            # When dumping train debug data but the actor log_probs were not
+            # recomputed separately (can_reuse_log_probs_in_loss / use_rollout_logprobs),
+            # snapshot them from the training forward so the dump still carries
+            # per-sample log_probs — at no extra forward pass.
+            capture_log_probs = self.args.save_debug_train_data is not None and "log_probs" not in rollout_data
+            if capture_log_probs:
+                enable_log_prob_capture()
             with timer("actor_train"):
                 train(
                     rollout_id,
@@ -518,6 +531,14 @@ class MegatronTrainRayActor(TrainRayActor):
                     num_microbatches,
                     global_batch_sizes,
                 )
+            if capture_log_probs:
+                captured = drain_captured_log_probs()
+                # `captured` is non-empty only on the last PP stage running a loss
+                # that snapshots log_probs (policy_loss), and then covers every
+                # local sample. Key it by this rank's `partition` to land in local
+                # sample order; skip otherwise (nothing to place).
+                if captured:
+                    rollout_data["log_probs"] = [captured[pos] for pos in rollout_data["partition"]]
 
             self.prof.step(rollout_id=rollout_id)
 

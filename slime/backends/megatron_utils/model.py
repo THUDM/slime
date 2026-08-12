@@ -593,6 +593,9 @@ def train_one_step(
                     "rollout_log_probs",
                     "teacher_log_probs",
                     "rollout_mask_sums",
+                    # Only present when dumping train debug data; lets the loss
+                    # snapshot each sample's log_probs keyed by rollout position.
+                    *(["partition"] if args.save_debug_train_data is not None else []),
                 ],
             ),
             args.data_pad_size_multiplier,
