@@ -8,6 +8,8 @@ from slime.utils.misc import should_run_periodic_action
 
 def train(args):
     configure_logger()
+    release_train = args.release_train
+
     # allocate the GPUs
     pgs = create_placement_groups(args)
     init_tracking(args)
@@ -16,10 +18,9 @@ def train(args):
     # need to initialize rollout manager first to calculate num_rollout
     rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"])
 
-    # create the actor and critic models
     actor_model, critic_model = create_training_models(args, pgs, rollout_manager)
 
-    if args.offload_rollout:
+    if args.offload_rollout and not release_train:
         ray.get(rollout_manager.onload_weights.remote())
 
     # Always push actor weights to rollout once weights are loaded.
@@ -44,21 +45,6 @@ def train(args):
             else:
                 critic_model.clear_memory()
 
-    def save(rollout_id):
-        actor_trains_this_step = (not args.use_critic) or rollout_id >= args.num_critic_only_steps
-        if actor_trains_this_step:
-            actor_model.save_model(
-                rollout_id,
-                force_sync=rollout_id == args.num_rollout - 1,
-            )
-        if args.use_critic:
-            critic_model.save_model(
-                rollout_id,
-                force_sync=rollout_id == args.num_rollout - 1,
-            )
-        if args.rollout_global_dataset:
-            ray.get(rollout_manager.save.remote(rollout_id))
-
     # train loop.
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
         if args.eval_interval is not None and rollout_id == 0 and not args.skip_eval_before_train:
@@ -69,22 +55,32 @@ def train(args):
         if args.offload_rollout:
             ray.get(rollout_manager.offload.remote())
 
-        actor_trains_this_step = (not args.use_critic) or rollout_id >= args.num_critic_only_steps
+        if release_train:
+            actor_model.create()
 
+        actor_trains = (not args.use_critic) or rollout_id >= args.num_critic_only_steps
         if args.use_critic:
             value_refs = critic_model.async_train(rollout_id, rollout_data_ref)
-            if actor_trains_this_step:
+            if actor_trains:
                 ray.get(actor_model.async_train(rollout_id, rollout_data_ref, external_data=value_refs))
             else:
                 ray.get(value_refs)
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
 
-        if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
-            save(rollout_id)
+        if release_train or should_run_periodic_action(
+            rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout
+        ):
+            force_sync = release_train or rollout_id == args.num_rollout - 1
+            if actor_trains:
+                actor_model.save_model(rollout_id, force_sync=force_sync)
+            if args.use_critic:
+                critic_model.save_model(rollout_id, force_sync=force_sync)
+            if args.rollout_global_dataset:
+                ray.get(rollout_manager.save.remote(rollout_id))
 
-        offload_train(actor_trains_this_step)
-        if args.offload_rollout:
+        offload_train(actor_trains)
+        if args.offload_rollout and not release_train:
             ray.get(rollout_manager.onload_weights.remote())
         actor_model.update_weights()
 

@@ -81,6 +81,7 @@ def _install_fake_deps(monkeypatch):
 
     torch_mod = types.ModuleType("torch")
     torch_mod.Tensor = object
+    torch_mod.dtype = object
     torch_mod.uint8 = "uint8"
     torch_mod.distributed = dist_mod
     torch_mod.empty = lambda size, dtype, device: {"size": size, "dtype": dtype, "device": device}
@@ -101,6 +102,20 @@ def _install_fake_deps(monkeypatch):
     sglang_mod = types.ModuleType("slime.backends.megatron_utils.sglang")
     sglang_mod.FlattenedTensorBucket = _FakeFlattenedTensorBucket
     sglang_mod.MultiprocessingSerializer = _FakeMultiprocessingSerializer
+
+    megatron_to_hf_mod = types.ModuleType("slime.backends.megatron_utils.megatron_to_hf")
+    megatron_to_hf_mod.convert_to_hf = lambda *args, **kwargs: []
+
+    expert_routing_mod = types.ModuleType("slime.backends.megatron_utils.update_weight.expert_routing")
+    expert_routing_mod.configure_expert_routing = lambda *args, **kwargs: (None, [])
+
+    hf_weight_iterator_base_mod = types.ModuleType(
+        "slime.backends.megatron_utils.update_weight.hf_weight_iterator_base"
+    )
+    hf_weight_iterator_base_mod.HfWeightIteratorBase = types.SimpleNamespace(create=lambda *args, **kwargs: None)
+
+    slime_utils_types_mod = types.ModuleType("slime.utils.types")
+    slime_utils_types_mod.ParamInfo = type("ParamInfo", (), {})
 
     distributed_utils_mod = types.ModuleType("slime.utils.distributed_utils")
     distributed_utils_mod.get_gloo_group = lambda: object()
@@ -126,6 +141,14 @@ def _install_fake_deps(monkeypatch):
     monkeypatch.setitem(sys.modules, "megatron.core", megatron_core_mod)
     monkeypatch.setitem(sys.modules, "megatron.core.mpu", mpu_mod)
     monkeypatch.setitem(sys.modules, "slime.backends.megatron_utils.sglang", sglang_mod)
+    monkeypatch.setitem(sys.modules, "slime.backends.megatron_utils.megatron_to_hf", megatron_to_hf_mod)
+    monkeypatch.setitem(sys.modules, "slime.backends.megatron_utils.update_weight.expert_routing", expert_routing_mod)
+    monkeypatch.setitem(
+        sys.modules,
+        "slime.backends.megatron_utils.update_weight.hf_weight_iterator_base",
+        hf_weight_iterator_base_mod,
+    )
+    monkeypatch.setitem(sys.modules, "slime.utils.types", slime_utils_types_mod)
     monkeypatch.setitem(sys.modules, "slime.utils.distributed_utils", distributed_utils_mod)
     monkeypatch.setitem(
         sys.modules,

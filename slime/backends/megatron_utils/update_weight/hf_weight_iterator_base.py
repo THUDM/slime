@@ -1,18 +1,15 @@
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
+
+from slime.utils.types import ParamInfo
 
 
 class HfWeightIteratorBase(ABC):
     @staticmethod
     def create(args, model, **kwargs):
-        from .hf_weight_iterator_bridge import HfWeightIteratorBridge
         from .hf_weight_iterator_direct import HfWeightIteratorDirect
 
-        c = {
-            "raw": HfWeightIteratorDirect,
-            "bridge": HfWeightIteratorBridge,
-        }[args.megatron_to_hf_mode]
-
-        return c(args, model, **kwargs)
+        return HfWeightIteratorDirect(args, model, **kwargs)
 
     def __init__(self, args, model, model_name, quantization_config):
         self.args = args
@@ -21,7 +18,12 @@ class HfWeightIteratorBase(ABC):
         self.quantization_config = quantization_config
 
     @abstractmethod
-    def get_hf_weight_chunks(self, megatron_local_weights, progress_desc: str = "Update weights"):
+    def get_hf_weight_chunks(
+        self,
+        megatron_local_weights,
+        progress_desc: str = "Update weights",
+        param_info_buckets: Sequence[Sequence[ParamInfo]] | None = None,
+    ):
         """
         Mental model of the API:
         megatron_model.to_hf_magically().named_parameters()

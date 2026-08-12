@@ -457,6 +457,25 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 | `--use-routing-replay` | 训练中前向-反向路由一致性。([arXiv:2507.18071](https://arxiv.org/abs/2507.18071)) |
 | `--use-rollout-routing-replay` | R3：在训练时重放 rollout 阶段的路由。slime 默认的 `sglang_router` 路径支持该功能。([arXiv:2510.11370](https://arxiv.org/abs/2510.11370)) |
 
+---
+
+### 19. Disk 权重同步 Post-Write Hook（`--custom-update-weight-post-write-path`）
+
+**签名**：
+```python
+def hook(args, version_dir: str, rollout_engines) -> None
+```
+
+**用途**：在 disk 权重同步（`--update-weight-transport disk`，full 或 delta 模式）的文件写完之后、
+engine 读取之前，在每个训练 rank 上调用。用于在非 POSIX 共享文件系统上发布写入——例如 commit
+一个对象存储挂载——否则其他 host 无法看到这些文件。hook 会在每个 rank 上被调用，需要自行去重
+（例如每个容器只执行一次）。
+
+读取侧的对应 hook 运行在推理引擎内部、engine 覆盖的每个 host 上，因此它是一个 sglang server
+参数而不是 slime hook：传入 `--sglang-custom-pull-weights-pre-read-hook <import.path>`，签名为
+`hook(source_dir: str, target_version: int)`——在 `/pull_weights` 读取已发布权重之前调用
+（例如刷新挂载视图）。完整机制见 [Delta 权重同步](../advanced/delta-weight-sync.md)。
+
 ## 自定义函数路径的测试
 
 slime 现在也提供了一组 CPU 契约测试，用于校验这些 customization 接口。测试会通过字符串形式的导入路径来动态加载组件，因此既能回归仓库内置 hook，也能验证用户通过和训练时完全相同的 CLI 参数传入的自定义实现。

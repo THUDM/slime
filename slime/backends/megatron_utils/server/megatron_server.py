@@ -265,7 +265,7 @@ class SampleManager:
                 sampled_log_probs = output_item.get("sampled_log_probs")
                 label_token_log_probs = output_item.get("label_token_log_probs")
             else:
-                # 兼容旧格式
+                # Keep compatibility with the legacy output format.
                 log_probs = output_item
                 sampled_token_ids = None
                 sampled_log_probs = None

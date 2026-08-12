@@ -119,18 +119,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default="{}",
                 help="Extra environment variables for training process, e.g. PyTorch memory management ones.",
             )
-            parser.add_argument(
-                "--train-memory-margin-bytes",
-                type=int,
-                default=1024**3,
-                help="Add margin for train memory allocation. By default we will reserve 1GB as margin.",
-            )
-            parser.add_argument(
-                "--megatron-to-hf-mode",
-                choices=["raw", "bridge"],
-                default="raw",
-                help="The method to convert megatron weights to hugging face weights for SGLang.",
-            )
             # Delta weight sync.
             parser.add_argument(
                 "--update-weight-mode",
@@ -151,6 +139,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "'disk' writes a complete HF checkpoint under --update-weight-disk-dir "
                     "before engines reload it. Delta mode is 'disk' only: each host applies the "
                     "published deltas into its local checkpoint and reloads via update_weights_from_disk."
+                ),
+            )
+            parser.add_argument(
+                "--release-train",
+                action="store_true",
+                default=False,
+                help=(
+                    "Release Megatron training actors during rollout and recreate them before each train step. "
+                    "Requires disk weight sync and --save for Megatron reload."
                 ),
             )
             parser.add_argument(
@@ -200,25 +197,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--custom-delta-pre-push-path",
+                "--custom-update-weight-post-write-path",
                 type=str,
                 default=None,
                 help=(
-                    "Path to a custom function called on each trainer rank after its delta files "
-                    "are written, before the engines read them — to publish the writes on a "
-                    "non-POSIX filesystem (no cross-host visibility without an explicit sync). "
+                    "Path to a custom function called on each trainer rank after a disk weight "
+                    "sync's files are written (full or delta), before the engines read them — to "
+                    "publish the writes on a non-POSIX filesystem (no cross-host visibility "
+                    "without an explicit sync). "
                     "Signature: ``def hook(args, version_dir: str, rollout_engines) -> None``; the hook gates itself."
-                ),
-            )
-            parser.add_argument(
-                "--custom-delta-pre-read-path",
-                type=str,
-                default=None,
-                help=(
-                    "Path to a custom function called on each rollout host before it reads the "
-                    "published delta directory — refreshes the mount so the just-published version "
-                    "is visible on a non-POSIX filesystem (no cross-host read-after-write consistency). "
-                    "Signature: ``def hook(delta_dir: str, target_version: int) -> None``."
                 ),
             )
             parser.add_argument(
@@ -226,11 +213,14 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
                 help=(
-                    "Rollout-host-local directory (NVMe) holding a full HF checkpoint that "
-                    "disk-delta sync patches in place. Each host materializes it from "
-                    "--hf-checkpoint at engine start, applies each version's delta there, and "
-                    "the engines reload from it. Required for --update-weight-mode=delta "
-                    "--update-weight-transport=disk."
+                    "Rollout-host-local directory (NVMe) holding a full HF checkpoint kept in "
+                    "sync by each engine's /pull_weights: every host copies a published full "
+                    "checkpoint as-is or patches published deltas in place, and the engines "
+                    "reload from it. Required for --update-weight-mode=delta "
+                    "--update-weight-transport=disk; optional for full disk sync (engines then "
+                    "pull to local disk instead of reading the shared dir directly). The "
+                    "read-side counterpart of --custom-update-weight-post-write-path is the engine's "
+                    "--sglang-custom-pull-weights-pre-read-hook."
                 ),
             )
             parser.add_argument(
@@ -258,7 +248,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 nargs="*",
                 default=None,
-                help="""List of regex patterns of parameter names to TRAIN. All other parameters will be FROZEN. 
+                help=r"""List of regex patterns of parameter names to TRAIN. All other parameters will be FROZEN.
                         Supports Python regex syntax (re.search).
 
                         Examples:
@@ -278,7 +268,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 nargs="*",
                 default=None,
-                help="""List of regex patterns of parameter names to FREEZE. Other parameters will remain trainable.
+                help=r"""List of regex patterns of parameter names to FREEZE. Other parameters will remain trainable.
                         Supports Python regex syntax (re.search).
 
                         Examples:
@@ -291,6 +281,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                         3. Freeze specific projection layers (e.g., all Gate/Up projections):
                             --freeze-params-name-list linear_fc1
                         """,
+            )
+            reset_arg(
+                parser,
+                "--freeze-indexer",
+                action="store_true",
+                default=False,
+                help=(
+                    "Freeze DSA indexer parameters while leaving the rest of the model "
+                    "trainable. This supports both the GLM plugin indexer names and "
+                    "Megatron's upstream DSA indexer module."
+                ),
             )
             parser.add_argument(
                 "--allgather-cp",
@@ -432,7 +433,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "This defines the granularity of the sampling batch in the rollout function. "
                     "When the number of available samples falls below the target, a sampling "
-                    "operation of size over_sampling_batch_size will be triggered."
+                    "operation of size over_sampling_batch_size will be triggered. "
                     "Regardless of whether partial rollout is used or filters are applied, "
                     "the sampling granularity is always determined by this value. "
                     "If this value is None, rollout_batch_size will be used as the default over_sampling_batch_size."
@@ -444,9 +445,11 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "This is the filter function for dynamic sampling. "
-                    "It should be able to judge whether the result of a prompt should be selected or not."
-                    "We will do dynamic filter for sampling as in DAPO. e.g. not all correct or all wrong samples."
-                    "You could use `slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std` as an example."
+                    "It should be able to judge whether the result of a prompt should be selected or not. "
+                    "We will do dynamic filter for sampling as in DAPO. e.g. not all correct or all wrong samples. "
+                    "You could use `slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std` as an example. "
+                    "To avoid another sampling round when the oversampled candidates cannot fill rollout_batch_size, "
+                    "use `slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std_with_fallback`."
                 ),
             )
 
@@ -477,6 +480,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Only substitue the `def generate(args, sample, sampling_params)` function within the example rollout function. "
                     "This should be useful if you need to implement some special rollout logic, e.g. multi-turn, function calling."
+                ),
+            )
+            parser.add_argument(
+                "--rollout-sample-hook-path",
+                action="append",
+                default=[],
+                help=(
+                    "Import path to a hook applied to each generated rollout Sample before reward computation. "
+                    "May be repeated. Hooks may be sync or async and have signature "
+                    "hook(args, sample, *, rollout_id=None, evaluation=False) -> Sample | None."
                 ),
             )
             parser.add_argument(
@@ -858,8 +871,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Path to save the model in HuggingFace format when using Megatron backend. "
                     "The model will be saved to `save_hf.format(rollout_id)`. "
-                    "In raw Megatron-to-HF mode, weights are saved with the same quantization config "
-                    "as `--hf-checkpoint`. "
+                    "Weights are saved with the same quantization config as `--hf-checkpoint`. "
                 ),
             )
             reset_arg(parser, "--seed", type=int, default=1234)
@@ -1403,7 +1415,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--loss-mask-type",
                 type=str,
                 default="qwen",
-                choices=["qwen", "qwen3", "qwen3_5", "gemma4", "distill_qwen"],
+                choices=["qwen", "qwen3", "qwen3_5", "distill_qwen"],
                 help="Loss mask type",
             )
             parser.add_argument(
@@ -1456,6 +1468,38 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
             )
+            parser.add_argument(
+                "--megatron-deepgemm-forward-layers",
+                nargs="+",
+                type=int,
+                default=None,
+                help=(
+                    "Global zero-based decoder layers whose selected TE linears use "
+                    "the SGLang-compatible block-FP8 DeepGEMM forward."
+                ),
+            )
+            parser.add_argument(
+                "--megatron-deepgemm-forward-modules",
+                nargs="+",
+                default=None,
+                help="Optional module-name suffixes to replace in the selected dense layers.",
+            )
+            parser.add_argument(
+                "--megatron-deepgemm-moe-forward-layers",
+                nargs="+",
+                type=int,
+                default=None,
+                help=(
+                    "Global zero-based MoE decoder layers whose TEGroupedMLP uses "
+                    "the SGLang-compatible grouped DeepGEMM forward."
+                ),
+            )
+            parser.add_argument(
+                "--megatron-deepgemm-moe-forward-modules",
+                nargs="+",
+                default=None,
+                help="Optional TEGroupedMLP module-name suffixes; defaults to mlp.experts.",
+            )
             return parser
 
         def add_mtp_training_arguments(parser):
@@ -1479,6 +1523,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--ci-disable-kl-checker",
                 action="store_true",
+            )
+            parser.add_argument(
+                "--ci-train-rollout-logprob-abs-diff-threshold",
+                type=float,
+                default=0.1,
+                help=(
+                    "Upper bound asserted on train/train_rollout_logprob_abs_diff when --ci-test is set. "
+                    "Defaults to 0.1; tighten it (e.g. 1e-6) for deterministic train/rollout alignment gates."
+                ),
             )
             parser.add_argument(
                 "--ci-save-grad-norm",
@@ -1667,11 +1720,6 @@ def parse_megatron_role_args(base_args, megatron_config_path, role):
     return role_args
 
 
-def parse_critic_args(actor_args, megatron_config_path):
-    """Backward-compatible wrapper for critic-specific Megatron role parsing."""
-    return parse_megatron_role_args(actor_args, megatron_config_path, role="critic")
-
-
 def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
     """
     Build evaluation dataset configurations from either --eval-config or --eval-prompt-data.
@@ -1760,32 +1808,27 @@ def slime_validate_args(args):
         if args.opd_teacher_load is not None:
             raise ValueError("--opd-teacher-load is set but --use-opd is not enabled. Please add --use-opd flag.")
 
-    if args.megatron_to_hf_mode == "bridge":
-        if (
-            args.load is not None
-            and os.path.exists(args.load)
-            and os.path.exists(os.path.join(args.load, "latest_checkpointed_iteration.txt"))
-        ):
-            # If is a Megatron checkpoint, won't use bridge to load hf weight.
-            pass
-        else:
-            if args.load is None:
-                args.load = args.ref_load or args.hf_checkpoint
-            # If is a HF checkpoint, set start_rollout_id to 0 here.
-            args.start_rollout_id = 0
-    else:
-        if (
-            args.load is None
-            or not os.path.exists(args.load)
-            or not os.path.exists(os.path.join(args.load, "latest_checkpointed_iteration.txt"))
-        ):
-            args.no_load_optim = True
-            args.no_load_rng = True
-            args.finetune = True
+    load_is_megatron = (
+        args.load is not None
+        and os.path.exists(args.load)
+        and os.path.exists(os.path.join(args.load, "latest_checkpointed_iteration.txt"))
+    )
+    load_is_hf = (
+        args.load is not None and os.path.isdir(args.load) and os.path.exists(os.path.join(args.load, "config.json"))
+    )
+    if load_is_hf:
+        from slime.backends.megatron_utils.hf_to_megatron import supports_hf_weight_loading
+
+        load_is_hf = supports_hf_weight_loading(args.load)
+    if not load_is_megatron:
+        args.no_load_optim = True
+        args.no_load_rng = True
+        args.finetune = True
+        if not load_is_hf:
             args.load = args.ref_load
-            if args.ref_ckpt_step is not None:
-                args.ckpt_step = args.ref_ckpt_step
-            args.start_rollout_id = 0
+        if args.ref_ckpt_step is not None:
+            args.ckpt_step = args.ref_ckpt_step
+        args.start_rollout_id = 0
 
     if args.eval_interval is not None:
         assert args.eval_datasets, "Evaluation datasets must be configured when eval_interval is set."
@@ -1876,17 +1919,22 @@ def slime_validate_args(args):
             args.actor_num_nodes = args.rollout_num_gpus // args.actor_num_gpus_per_node
         args.colocate = False
         args.offload_train = args.offload_rollout = False
-        if args.train_memory_margin_bytes > 0:
-            logger.warning("Force train_memory_margin_bytes=0 since debug_rollout_only does not support it")
-            args.train_memory_margin_bytes = 0
 
     assert not (args.debug_rollout_only and args.debug_train_only), (
         "debug_rollout_only and debug_train_only cannot be set at the same time, " "please set only one of them."
     )
 
-    # always true on offload for colocate at the moment.
+    # Colocate normally offloads Megatron between rollout and train.  Release-train mode
+    # releases Megatron actors instead, so only rollout needs memory-saver offload.
     if args.colocate:
-        if args.offload_train is None:
+        if args.release_train:
+            if args.offload_train:
+                logger.info("Ignoring --offload-train because --release-train releases train actors instead.")
+            args.offload_train = False
+            if args.offload_rollout is False:
+                logger.info("Ignoring --no-offload-rollout because colocated --release-train needs rollout offload.")
+            args.offload_rollout = True
+        elif args.offload_train is None:
             args.offload_train = True
         if args.offload_rollout is None:
             args.offload_rollout = True
@@ -1985,6 +2033,19 @@ def slime_validate_args(args):
             "--update-weight-transport=disk requires --update-weight-disk-dir to point at "
             "a filesystem shared between the trainer and the rollout engines."
         )
+    if args.release_train:
+        if args.train_backend != "megatron":
+            raise ValueError("--release-train is only supported with the Megatron train backend.")
+        if args.use_critic:
+            raise ValueError("--release-train does not support critic training yet.")
+        if args.keep_old_actor:
+            raise ValueError("--release-train does not support --keep-old-actor.")
+        if args.save is None:
+            raise ValueError("--release-train requires --save so the next Megatron actor can reload.")
+        if args.save_interval is None:
+            args.save_interval = 1
+        if args.update_weight_mode != "full" or args.update_weight_transport != "disk":
+            raise ValueError("--release-train requires --update-weight-mode=full and --update-weight-transport=disk.")
     if args.update_weight_mode == "delta":
         if args.update_weight_transport != "disk":
             raise ValueError(

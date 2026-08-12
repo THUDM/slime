@@ -183,6 +183,20 @@ sglang 的加载非常简单，只需要：
 请注意，这里的 `step_loss_mask`（默认值为 1）字段为 SFT 阶段提供，若设置为 0，则会将该轮 `loss_mask` 设置为 0；若设置为 1，则使用正常 `loss_mask`。
 另外我们还提供了一个 metadata_key，默认为 `"metadata"`，读取后我们会把数据中的 metadata 加载进 slime，可能会对自定义数据生成或者自定义 reward model 有帮助。
 
+如果同一次训练混合了多个数据 source，可以在 metadata 中写入 `source_name`：
+
+```json
+{
+  "prompt": "...",
+  "label": "...",
+  "metadata": {
+    "source_name": "math"
+  }
+}
+```
+
+推荐把 source 标识放在 `metadata["source_name"]` 中；自定义 data source 如果已经动态设置了 `sample.source`，slime 也会识别。rollout 转换成训练数据时，slime 会为每个样本生成 `source_names` 并传到训练侧。source 的读取优先级为动态 `sample.source`、`metadata["source_name"]`，都不存在时为 `"unknown"`。这可以用于自定义 reward、filter、日志统计，以及后续按 source 路由 OPD teacher 等需要分 source 处理的场景。
+
 ### RL 训练需要的超参
 
 - `--advantage-estimator`: 当前训练需要的 RL 算法，目前支持：
@@ -228,35 +242,17 @@ PPO（Proximal Policy Optimization）是经典的 RL 算法，使用 critic 模�
 --advantage-estimator ppo
 ```
 
-**注意：PPO 的 Critic 和 Actor 是并列申请 GPU 的**，在资源分配时需要考虑这一点。具体来说：
+**注意：当前 PPO 下 Critic 和 Actor 共享同一组训练 GPU**，资源分配时不需要为 critic 额外预留一组独立 GPU。具体来说：
 
-- Critic 模型会独立占用一组 GPU，与 Actor 的 GPU 资源分开；
-- 可以通过 `--critic-num-nodes` 和 `--critic-num-gpus-per-node` 来配置 critic 使用的资源；
-- 如果不配置 critic 的资源参数，默认会使用与 actor 相同的资源配置。
+- PPO 会创建 actor 和 critic 两套训练进程组，但它们会被放到同一组 train placement group 上；
+- critic 的训练规模跟随 actor 配置，当前 actor / critic 的 Megatron 并行拓扑必须保持一致；
+- PPO 会强制开启 train 侧 offload，使 actor 和 critic 在同一批 GPU 上轮流唤醒和释放显存；
+- 当前没有单独配置 critic 训练资源的 CLI 参数，critic 的节点数和每节点 GPU 数会由 actor 配置派生。
 
-集群资源分配示例：
-
-```bash
-# Actor 使用 1 个节点，4 张 GPU
---actor-num-nodes 1
---actor-num-gpus-per-node 4
-
-# Critic 使用 1 个节点，4 张 GPU（与 Actor 并列）
---critic-num-nodes 1
---critic-num-gpus-per-node 4
-
-# Rollout 使用 8 张 GPU
---rollout-num-gpus 8
-```
-
-在上述配置下，总共需要 `4 (actor) + 4 (critic) + 8 (rollout) = 16` 张 GPU。
 
 PPO 相关参数：
 
-- `--critic-load`：critic 模型的 checkpoint 路径；
-- `--critic-save`：critic 模型的保存路径；
-- `--critic-lr`：critic 模型的学习率；
-- `--critic-lr-warmup-iters`：critic 模型的 warmup 步数；
+- `--megatron-config-path`：通过 YAML 对 actor / critic 分别覆盖 Megatron 参数，例如为 critic 单独设置 `load`、`save`、`lr` 或 warmup 参数；
 - `--num-critic-only-steps`：训练开始时只训练 critic 的步数；
 - `--eps-clip`：PPO clip 范围；
 - `--value-clip`：value loss 的 clip 范围；

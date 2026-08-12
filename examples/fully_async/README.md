@@ -57,7 +57,7 @@ work unchanged under fully-async:
 --custom-rm-path                your.module.reward      # (args, sample | list[Sample]) -> float | list[float]
 ```
 
-See `examples/swe_codex/` for a non-trivial example that plugs in a
+See `examples/coding_agent_rl/` for a non-trivial example that plugs in a
 multi-turn agent (Claude Code in a Docker-Proxy sandbox) this way.
 
 ## Worker Internals (Very Short)

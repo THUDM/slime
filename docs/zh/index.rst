@@ -59,7 +59,6 @@ slime 的设计目标，是让这两大能力彼此强化，同时避免把系�
    :caption: Dense
 
    examples/qwen3-4B.md
-   examples/gemma4.md
    examples/glm4-9B.md
 
 .. toctree::

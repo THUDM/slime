@@ -179,6 +179,20 @@ This corresponds to the following configuration:
 Please note that the `step_loss_mask` (default=1) here is for SFT phase. If it is set to 0, the turn will not contibute to the final loss; if it is set to 1, slime will use the normal `loss_mask`.
 Additionally, we provide a `metadata_key`, which defaults to `"metadata"`. When read, slime will load the metadata from the data, which can be helpful for custom data generation or creating custom reward models.
 
+If one run mixes multiple data sources, put `source_name` in the sample metadata:
+
+```json
+{
+  "prompt": "...",
+  "label": "...",
+  "metadata": {
+    "source_name": "math"
+  }
+}
+```
+
+The recommended contract is to put the source identifier in `metadata["source_name"]`; slime also recognizes a dynamically set `sample.source` from custom data sources. When rollout samples are converted to training data, slime carries one `source_names` entry per sample to the training side. The source lookup order is dynamic `sample.source`, then `metadata["source_name"]`; if neither is set, the source is `"unknown"`. This is useful for custom rewards, filters, logging, and future per-source routing such as OPD teacher selection.
+
 ### Hyperparameters for RL Training
 
 - `--advantage-estimator`: Specifies the RL algorithm for the training process. Currently supported algorithms include:
@@ -224,35 +238,17 @@ To use PPO, set:
 --advantage-estimator ppo
 ```
 
-**Note: In PPO, the Critic and Actor request GPUs in parallel**, which should be considered when allocating resources. Specifically:
+**Note: In PPO, the critic and actor share the same training GPU group.** You do not need to reserve a separate set of GPUs for the critic. Specifically:
 
-- The critic model occupies a separate set of GPUs, independent from the actor's GPU resources.
-- You can configure critic resources using `--critic-num-nodes` and `--critic-num-gpus-per-node`.
-- If critic resource parameters are not configured, the same resource configuration as the actor will be used by default.
+- PPO creates separate actor and critic training process groups, but places them on the same train placement group.
+- The critic training scale follows the actor configuration, and the actor / critic Megatron parallel topology must currently stay identical.
+- PPO forces train-side offload so that actor and critic can wake up and release memory on the same GPUs in turn.
+- There are currently no separate CLI arguments for configuring critic training resources; the critic node count and GPUs per node are derived from the actor configuration.
 
-Cluster resource allocation example:
-
-```bash
-# Actor uses 1 node, 4 GPUs
---actor-num-nodes 1
---actor-num-gpus-per-node 4
-
-# Critic uses 1 node, 4 GPUs (parallel to Actor)
---critic-num-nodes 1
---critic-num-gpus-per-node 4
-
-# Rollout uses 8 GPUs
---rollout-num-gpus 8
-```
-
-With the above configuration, a total of `4 (actor) + 4 (critic) + 8 (rollout) = 16` GPUs are required.
 
 PPO-related parameters:
 
-- `--critic-load`: Checkpoint path for the critic model.
-- `--critic-save`: Save path for the critic model.
-- `--critic-lr`: Learning rate for the critic model.
-- `--critic-lr-warmup-iters`: Number of warmup steps for the critic model.
+- `--megatron-config-path`: YAML config for role-specific Megatron overrides, such as setting critic-specific `load`, `save`, `lr`, or warmup parameters.
 - `--num-critic-only-steps`: Number of steps to train only the critic at the beginning of training.
 - `--eps-clip`: PPO clip range.
 - `--value-clip`: Clip range for value loss.

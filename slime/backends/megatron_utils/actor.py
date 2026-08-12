@@ -1,8 +1,8 @@
 import logging
 import os
-import random
 from argparse import Namespace
 from contextlib import nullcontext
+from datetime import timedelta
 from pathlib import Path
 
 import ray
@@ -19,7 +19,12 @@ from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.logging_utils import init_tracking
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.misc import Box
-from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
+from slime.utils.reloadable_process_group import (
+    destroy_process_groups,
+    monkey_patch_torch_dist,
+    register_default_process_group,
+    reload_process_groups,
+)
 from slime.utils.routing_replay import RoutingReplay
 from slime.utils.timer import Timer, inverse_timer, timer, with_defer
 from slime.utils.types import RolloutBatch
@@ -27,7 +32,7 @@ from slime.utils.types import RolloutBatch
 from ...utils.profile_utils import TrainProfiler
 from ...utils.tensor_backper import TensorBackuper
 from .checkpoint import load_checkpoint
-from .cp_utils import slice_log_prob_with_cp, slice_with_cp
+from .cp_utils import prepare_routed_experts_for_routing_replay, slice_log_prob_with_cp
 from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data
 from .hf_checkpoint_saver import save_hf_model_to_path
 from .initialize import init, is_megatron_main_rank
@@ -58,6 +63,12 @@ class MegatronTrainRayActor(TrainRayActor):
 
         monkey_patch_torch_dist()
         super().init(args, role, with_ref, with_opd_teacher)
+        # Destroying and recreating WORLD invalidates raw dist.group.WORLD references cached by external code.
+        # Set SLIME_DESTROY_WORLD_PROCESS_GROUP=0 when such references may outlive a train sleep/wake cycle.
+        if os.getenv("SLIME_DESTROY_WORLD_PROCESS_GROUP", "1").lower() not in {"0", "false", "no"}:
+            register_default_process_group(timeout=timedelta(minutes=args.distributed_timeout_minutes))
+        else:
+            logger.info("Default WORLD process-group destruction is disabled")
 
         init(args)
 
@@ -74,11 +85,6 @@ class MegatronTrainRayActor(TrainRayActor):
             dist.barrier(group=get_gloo_group())
 
         dist.barrier(group=get_gloo_group())
-
-        if args.offload_train:
-            if (x := args.train_memory_margin_bytes) > 0:
-                logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
-                torch_memory_saver.memory_margin_bytes = x
 
         self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id = initialize_model_and_optimizer(
             args, role
@@ -109,7 +115,7 @@ class MegatronTrainRayActor(TrainRayActor):
             source_getter=lambda: named_params_and_buffers(
                 self.args,
                 self.model,
-                convert_to_global_name=args.megatron_to_hf_mode == "raw",
+                convert_to_global_name=True,
             ),
             single_tag=None,
         )
@@ -132,33 +138,34 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.vocab_size is None:
             # Prefer HF config vocab_size (which may include model-native padding)
-            # over tokenizer vocab_size (which may be smaller, e.g. GPT-OSS).
+            # over tokenizer vocab_size, which may be smaller.
             hf_vocab = getattr(self.hf_config, "vocab_size", None)
             self.args.vocab_size = hf_vocab if hf_vocab is not None else self.tokenizer.vocab_size
 
-        if self.args.colocate:
+        update_weight_mode = self.args.update_weight_mode
+        update_weight_transport = self.args.update_weight_transport
+
+        if update_weight_mode == "delta":
+            # Delta sync is disk-transport only: each engine's /pull_weights applies the published
+            # deltas into a host-local checkpoint on every host it spans, and the engines reload
+            # via vanilla update_weights_from_disk.
+            assert not self.args.colocate, "--update-weight-mode=delta is not supported with --colocate"
             assert (
-                self.args.update_weight_mode == "full"
-            ), "--update-weight-mode=delta is not supported with --colocate"
-            update_weight_cls = UpdateWeightFromTensor
-        elif self.args.update_weight_mode == "delta":
-            # Delta sync is disk-transport only: each host applies the published deltas into
-            # its local checkpoint and the engines reload via vanilla update_weights_from_disk.
-            assert (
-                self.args.update_weight_transport == "disk"
+                update_weight_transport == "disk"
             ), "--update-weight-mode=delta requires --update-weight-transport=disk"
             from .update_weight.update_weight_from_disk_delta import UpdateWeightFromDiskDelta
 
             update_weight_cls = UpdateWeightFromDiskDelta
+        elif update_weight_transport == "disk":
+            update_weight_cls = UpdateWeightFromDisk
+        elif self.args.colocate:
+            update_weight_cls = UpdateWeightFromTensor
         else:
-            assert self.args.update_weight_mode == "full"
-            if self.args.update_weight_transport == "disk":
-                update_weight_cls = UpdateWeightFromDisk
-            else:
-                assert (
-                    self.args.update_weight_mode == "full" and self.args.update_weight_transport == "nccl"
-                ), f"unsupported weight sync mode/transport: {self.args.update_weight_mode!r}/{self.args.update_weight_transport!r}"
-                update_weight_cls = UpdateWeightFromDistributed
+            assert update_weight_mode == "full"
+            assert (
+                update_weight_transport == "nccl"
+            ), f"unsupported weight sync mode/transport: {update_weight_mode!r}/{update_weight_transport!r}"
+            update_weight_cls = UpdateWeightFromDistributed
         self.weight_updater = update_weight_cls(
             self.args,
             self.model,
@@ -166,6 +173,7 @@ class MegatronTrainRayActor(TrainRayActor):
             model_name=type(self.hf_config).__name__.lower() if self.args.model_name is None else self.args.model_name,
             quantization_config=getattr(self.hf_config, "quantization_config", None),
         )
+        self.weight_updater.weight_version = getattr(self.args, "update_weight_start_version", 0)
 
         # empty cache after initialization
         clear_memory()
@@ -215,6 +223,15 @@ class MegatronTrainRayActor(TrainRayActor):
 
         clear_memory()
         reload_process_groups()
+
+        if mpu.get_pipeline_model_parallel_world_size() > 2:
+            # Megatron's patched batched pipeline P2P uses the default WORLD
+            # group.  After reload, PP=4 starts with only the first two stages
+            # entering batch_isend_irecv(), but PyTorch requires every rank when
+            # that is the first NCCL operation on a group.  Prime WORLD here,
+            # after the memory saver is resumed, so later stages cannot miss its
+            # lazy initialization.  Sleep still destroys it completely.
+            dist.barrier(device_ids=[torch.cuda.current_device()])
         if self.role == "actor":
             self._switch_model("actor")
         print_memory("after wake_up model")
@@ -295,45 +312,16 @@ class MegatronTrainRayActor(TrainRayActor):
         for iterator in data_iterator:
             iterator.reset()
 
-        tp_rank = mpu.get_tensor_model_parallel_rank()
-        tp_size = mpu.get_tensor_model_parallel_world_size()
-
-        def pad_func(experts, pad):
-            _, num_layers, topk = experts.shape
-            pad = (
-                torch.arange(
-                    pad * num_layers * topk,
-                    device=experts.device,
-                    dtype=experts.dtype,
-                ).reshape((pad, num_layers, topk))
-                % self.args.num_experts
-            )
-            return torch.cat([experts, pad], dim=0)
-
         for _ in range(sum(num_microbatches)):
             batch = data_iterator[0].get_next(["rollout_routed_experts", "tokens"])
-            rollout_routed_experts = batch["rollout_routed_experts"]
-            tokens = batch["tokens"]
-            assert len(rollout_routed_experts) == len(tokens)
-            for a, b in zip(rollout_routed_experts, tokens, strict=False):
-                assert a.shape[0] == b.shape[0] - 1, f"{a.shape}, {b.shape}"
-
-            # We need to pad the experts to the last token. We won't calculate loss on this token so this should be fine.
-            # TODO: fuse this padding with the following slice_with_cp to reduce memory copy.
-            rollout_routed_experts = [pad_func(r, 1) for r in rollout_routed_experts]
-            # TODO: maybe extract a common process function for here and get_batch?
-            rollout_routed_experts = [slice_with_cp(r, pad_func) for r in rollout_routed_experts]
-            rollout_routed_experts = torch.cat(rollout_routed_experts, dim=0)
-            pad_size = mpu.get_tensor_model_parallel_world_size() * self.args.data_pad_size_multiplier
-            pad = (pad_size - rollout_routed_experts.size(0) % pad_size) % pad_size
-            if pad != 0:
-                rollout_routed_experts = pad_func(rollout_routed_experts, pad)
-
-            if self.args.sequence_parallel:
-                seqlen = rollout_routed_experts.size(0)
-                assert seqlen % tp_size == 0
-                start, end = seqlen // tp_size * tp_rank, seqlen // tp_size * (tp_rank + 1)
-                rollout_routed_experts = rollout_routed_experts[start:end]
+            rollout_routed_experts = prepare_routed_experts_for_routing_replay(
+                batch["rollout_routed_experts"],
+                batch["tokens"],
+                num_experts=self.args.num_experts,
+                data_pad_size_multiplier=self.args.data_pad_size_multiplier,
+                sequence_parallel=self.args.sequence_parallel,
+                allgather_cp=self.args.allgather_cp,
+            )
 
             routing_replay_offset = 0
             for vp_stage, model in enumerate(self.model):
@@ -473,7 +461,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     and not self.args.use_critic
                     and not self.args.keep_old_actor
                     and not self.args.use_opd
-                    and not self.args.use_routing_replay
+                    and (not self.args.use_routing_replay or self.args.use_rollout_routing_replay)
                     and self.args.advantage_estimator != "gspo"
                 )
                 if (
@@ -595,7 +583,7 @@ class MegatronTrainRayActor(TrainRayActor):
             num_new_engines,
             engine_gpu_counts,
             engine_gpu_offsets,
-            all_engine_actors,
+            engine_parallel_configs,
         ) = ray.get(self.rollout_manager.get_updatable_engines_and_lock.remote())
 
         reconnect_rollout_engines = self.args.offload_train and self.args.use_critic and not self.args.colocate
@@ -616,7 +604,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 rollout_engine_lock,
                 engine_gpu_counts=engine_gpu_counts,
                 engine_gpu_offsets=engine_gpu_offsets,
-                all_engine_actors=all_engine_actors,
+                engine_parallel_configs=engine_parallel_configs,
             )
             dist.barrier(group=get_gloo_group())
             if dist.get_rank() == 0:
@@ -626,14 +614,6 @@ class MegatronTrainRayActor(TrainRayActor):
             print_memory("before update_weights")
             self.weight_updater.update_weights()
             print_memory("after update_weights")
-
-            if self.args.ci_test and len(rollout_engines) > 0 and self.weight_updater.weight_version > 0:
-                engine = random.choice(rollout_engines)
-                engine_version = ray.get(engine.get_weight_version.remote())
-                if str(engine_version) != str(self.weight_updater.weight_version):
-                    raise RuntimeError(
-                        f"Weight version mismatch! Engine: {engine_version}, Updater: {self.weight_updater.weight_version}"
-                    )
 
             if getattr(self.args, "keep_old_actor", False):
                 if self.args.update_weights_interval == 1:

@@ -59,7 +59,6 @@ Start by Use Case
    :caption: Dense
 
    examples/qwen3-4B.md
-   examples/gemma4.md
    examples/glm4-9B.md
 
 .. toctree::

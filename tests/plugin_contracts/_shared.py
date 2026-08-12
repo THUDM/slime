@@ -29,7 +29,6 @@ def install_stubs(*, with_sglang_router: bool = False, with_transformers: bool =
 
     if with_sglang_router and "sglang_router" not in sys.modules:
         mod = types.ModuleType("sglang_router")
-        mod.__version__ = "0.2.3"
         sys.modules["sglang_router"] = mod
 
     if with_transformers and "transformers" not in sys.modules:

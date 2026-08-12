@@ -84,14 +84,12 @@ python train.py \
   --expert-tensor-parallel-size 1 \
   --actor-num-nodes 1 \
   --actor-num-gpus-per-node 8 \
-  --critic-num-nodes 1 \
-  --critic-num-gpus-per-node 8 \
   ...
 ```
 
 在这个模式下：
 
-- CLI 负责共享的并行策略和资源配置；
+- CLI 负责共享的并行策略和资源配置；当前 PPO 下 critic 的训练资源会跟随 actor 配置；
 - YAML 负责 actor / critic 的差异项，比如 `lr`、`load`、`save`、optimizer 或 scheduler 相关参数。
 
 ### 只覆盖一个角色
@@ -114,6 +112,7 @@ megatron:
 
 - **目前只支持 PPO。** `--megatron-config-path` 当前主要用于 PPO 工作流中的 actor / critic 角色配置。对于 GRPO、REINFORCE++ 等不依赖 critic 的流程，目前不建议使用这套角色配置。
 - **当前 PPO 下，actor 和 critic 的 Megatron 并行配置必须一致。** 特别是 `tensor_model_parallel_size`、`pipeline_model_parallel_size`、`context_parallel_size`、`expert_model_parallel_size`、`expert_tensor_parallel_size`、`sequence_parallel` 等拓扑相关参数，不应在 actor 和 critic 之间配置成不同的值。
+- **当前 PPO 下，actor 和 critic 共享同一组 train placement group。** critic 的节点数和每节点 GPU 数由 actor 配置派生，不能作为独立资源规模配置。
 - **推荐把并行相关参数继续放在 CLI 中。** 当前最稳妥的用法是：并行与资源参数写在公共 CLI 中，只在 YAML 中覆盖角色差异项，例如 `lr`、`load`、`save`、warmup、optimizer / scheduler 参数等。
 
 如果你在 actor 和 critic 之间写入不同的并行拓扑，当前行为不受支持，可能导致初始化或训练过程出错。
@@ -126,6 +125,6 @@ megatron:
 
 可以。缺失角色会自动继承公共 CLI 参数，不需要把所有参数都重复写一遍。
 
-### Q: 可以把 `--actor-num-nodes` 或 `--critic-num-gpus-per-node` 写进 YAML 吗？
+### Q: 可以把资源配置写进 YAML 吗？
 
-不可以。当前资源分配和 placement group 仍由 CLI 参数控制，YAML 中对应字段会被忽略。
+不可以。当前资源分配和 placement group 仍由 CLI 参数控制，YAML 中对应字段会被忽略。其中 `--actor-num-nodes` / `--actor-num-gpus-per-node` 决定 PPO 的 train 资源规模；critic 的节点数和每节点 GPU 数会跟随 actor 配置，不能独立配置。

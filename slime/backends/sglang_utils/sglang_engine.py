@@ -3,13 +3,9 @@ import ipaddress
 import logging
 import multiprocessing
 import os
-import threading
 import time
-from urllib.parse import quote
 
 import requests
-import sglang_router
-from packaging.version import parse
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils import kill_process_tree
 from urllib3.exceptions import NewConnectionError
@@ -50,6 +46,13 @@ def _to_local_gpu_id(physical_gpu_id: int) -> int:
 
 
 def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
+    # Expandable segments help the colocated training actor tolerate repeated
+    # cache releases, but SGLang's allocator/sleep path does not support them.
+    # The rollout Ray actor inherits the job environment, so remove the option
+    # before spawning every SGLang server and its children.
+    os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+    os.environ.pop("PYTORCH_ALLOC_CONF", None)
+
     if getattr(server_args, "encoder_only", False):
         from sglang.srt.disaggregation.encode_server import launch_server_process as sglang_launch_server_process
 
@@ -168,19 +171,6 @@ class SGLangEngine(RayActor):
         else:
             self._init_normal(server_args_dict)
 
-        # Warm the host-local base off the actor's main thread: sglang serves the first rollout from
-        # its init-loaded weights, so the materialize (a full base copy) only has to finish before
-        # the first delta reload. init_local_checkpoint is idempotent and flock-guarded, so the first
-        # sync_local_checkpoint either finds it done or blocks on the same lock — no join needed.
-        if self.args.update_weight_mode == "delta" and self.args.update_weight_transport == "disk":
-            from slime.utils.disk_delta import init_local_checkpoint
-
-            threading.Thread(
-                target=init_local_checkpoint,
-                args=(self.args.update_weight_local_checkpoint_dir, self.args.hf_checkpoint),
-                daemon=True,
-            ).start()
-
     def _init_external(self, expect_server_args, external_engine_need_check_fields):
         logger.info(f"Use external SGLang engine (rank={self.rank}, expect_server_args={expect_server_args})")
 
@@ -207,28 +197,22 @@ class SGLangEngine(RayActor):
 
         if self.node_rank == 0 and self.router_ip and self.router_port:
             worker_url = f"http://{self.server_host}:{self.server_port}"
-            if parse(sglang_router.__version__) <= parse("0.2.1"):
-                assert self.worker_type == "regular", "pd disaggregation is not supported in old router."
-                response = requests.post(
-                    f"http://{self.router_ip}:{self.router_port}/add_worker?url={worker_url}",
-                )
-            else:
-                payload = {
-                    "url": worker_url,
-                    "worker_type": self.worker_type,
-                }
-                if self.worker_type == "prefill":
-                    bootstrap_port = server_args_dict.get("disaggregation_bootstrap_port")
-                    if bootstrap_port is None:
-                        raise RuntimeError(
-                            f"Prefill worker {worker_url} does not have disaggregation_bootstrap_port; "
-                            "cannot register it to the PD router."
-                        )
-                    payload["bootstrap_port"] = bootstrap_port
-                response = requests.post(
-                    f"http://{self.router_ip}:{self.router_port}/workers",
-                    json=payload,
-                )
+            payload = {
+                "url": worker_url,
+                "worker_type": self.worker_type,
+            }
+            if self.worker_type == "prefill":
+                bootstrap_port = server_args_dict.get("disaggregation_bootstrap_port")
+                if bootstrap_port is None:
+                    raise RuntimeError(
+                        f"Prefill worker {worker_url} does not have disaggregation_bootstrap_port; "
+                        "cannot register it to the PD router."
+                    )
+                payload["bootstrap_port"] = bootstrap_port
+            response = requests.post(
+                f"http://{self.router_ip}:{self.router_port}/workers",
+                json=payload,
+            )
             response.raise_for_status()
 
     def _make_request(self, endpoint: str, payload: dict | None = None):
@@ -334,27 +318,17 @@ class SGLangEngine(RayActor):
         if self.worker_type != "encoder" and self.node_rank == 0:
             worker_url = f"http://{self.server_host}:{self.server_port}"
             response = None
-            if parse(sglang_router.__version__) <= parse("0.2.1"):
-                response = requests.post(
-                    f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
-                )
-            elif parse(sglang_router.__version__) < parse("0.3.0"):
-                worker_url = quote(worker_url, safe="")
-                response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}")
-            else:
-                try:
-                    all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
-                    for worker in all_workers:
-                        if worker["url"] == worker_url:
-                            worker_id = worker["id"]
-                            response = requests.delete(
-                                f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}"
-                            )
-                            break
-                    else:
-                        logger.warning(f"Worker {worker_url} not found in router during shutdown.")
-                except Exception as e:
-                    logger.warning(f"Failed to fetch workers list or remove worker: {e}")
+            try:
+                all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
+                for worker in all_workers:
+                    if worker["url"] == worker_url:
+                        worker_id = worker["id"]
+                        response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}")
+                        break
+                else:
+                    logger.warning(f"Worker {worker_url} not found in router during shutdown.")
+            except Exception as e:
+                logger.warning(f"Failed to fetch workers list or remove worker: {e}")
 
             if response is not None:
                 response.raise_for_status()
@@ -367,15 +341,6 @@ class SGLangEngine(RayActor):
         response = requests.get(url)
         response.raise_for_status()
         return response.json()["weight_version"]
-
-    def set_weight_version(self, new_version: str):
-        """Bump the engine's recorded weight version without changing weights.
-
-        Used by the delta-update path when a sync produced no bytes (e.g. an
-        all-zero diff): we still need the engine's version to track the
-        updater's, otherwise the CI version-equality check will trip.
-        """
-        return self._make_request("update_weight_version", {"new_version": str(new_version)})
 
     def release_memory_occupation(self):
         self.flush_cache()
@@ -393,23 +358,18 @@ class SGLangEngine(RayActor):
     def check_weights(self, action: str):
         return self._make_request("weights_checker", {"action": action})
 
-    def sync_local_checkpoint(self, target_version: int):
-        """Apply the published deltas into this host's local checkpoint up to target_version; the
-        engine reloads it afterwards. Assumes this actor shares the checkpoint filesystem with the
-        sglang it drives (true for slime-launched engines)."""
-        from slime.utils.disk_delta import apply_deltas, init_local_checkpoint
-
-        init_local_checkpoint(self.args.update_weight_local_checkpoint_dir, self.args.hf_checkpoint)  # idempotent
-        # non-POSIX filesystems lack cross-host read-after-write consistency, so the trainer's
-        # just-written delta isn't visible on this mount until the hook refreshes it.
-        if self.args.custom_delta_pre_read_path:
-            from slime.utils.misc import load_function
-
-            load_function(self.args.custom_delta_pre_read_path)(self.args.update_weight_disk_dir, target_version)
-        apply_deltas(
-            self.args.update_weight_local_checkpoint_dir,
-            self.args.update_weight_disk_dir,
-            target_version,
+    def pull_weights(self, target_version: int):
+        """Have the engine sync every host it spans to target_version: each host pulls the
+        published weights (a full checkpoint copied as-is, or deltas verified per-tensor and
+        applied onto the local checkpoint) into its local checkpoint dir. The engine reloads
+        it afterwards via update_weights_from_disk."""
+        return self._make_request(
+            "pull_weights",
+            {
+                "local_checkpoint_dir": self.args.update_weight_local_checkpoint_dir,
+                "source_dir": self.args.update_weight_disk_dir,
+                "target_version": target_version,
+            },
         )
 
     def update_weights_from_disk(
@@ -417,23 +377,13 @@ class SGLangEngine(RayActor):
         model_path: str,
         load_format: str | None = None,
         weight_version: str | None = None,
-        files: list[str] | None = None,
     ):
-        """Reload weights from *model_path* without restarting the engine.
-
-        Standard HF reload: ``model_path`` is the checkpoint directory.
-        Delta (``load_format="delta"``): ``model_path`` is the parent of the
-        per-sync version subdir and ``files`` is the basenames within it to read +
-        apply. Each delta call is independent — sender owns batching, sync
-        boundaries, cleanup.
-        """
+        """Reload weights from the checkpoint at *model_path* without restarting the engine."""
         payload: dict = {"model_path": model_path}
         if load_format is not None:
             payload["load_format"] = load_format
         if weight_version is not None:
             payload["weight_version"] = weight_version
-        if files is not None:
-            payload["files"] = files
         return self._make_request("update_weights_from_disk", payload)
 
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
@@ -488,11 +438,15 @@ class SGLangEngine(RayActor):
         )
 
     def pause_generation(self):
+        if self.node_rank != 0:
+            return
         response = requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={})
         response.raise_for_status()
         return response
 
     def continue_generation(self):
+        if self.node_rank != 0:
+            return
         response = requests.post(f"http://{self.server_host}:{self.server_port}/continue_generation", json={})
         response.raise_for_status()
         return response
@@ -503,9 +457,9 @@ class SGLangEngine(RayActor):
         post_process_quantization: bool = False,
     ):
         """
-        Update model weights from tensor data. The HTTP server will only post meta data, and the real weights will be copied directly from GPUs.
-        Note: The model should be on GPUs rather than CPU for this functionality to work properly.
-        If you encounter issues, ensure your model is loaded on GPU devices rather than CPU.
+        Run post-load weight processing on the SGLang server.
+
+        This is used for restore-before-load and post-load quantization hooks.
         """
 
         return self._make_request(
@@ -530,6 +484,8 @@ class SGLangEngine(RayActor):
         with_stack: bool | None = None,
         record_shapes: bool | None = None,
     ):
+        if self.node_rank != 0:
+            return
         response = requests.post(
             f"http://{self.server_host}:{self.server_port}/start_profile",
             json={
@@ -546,6 +502,8 @@ class SGLangEngine(RayActor):
         return response
 
     def stop_profile(self):
+        if self.node_rank != 0:
+            return
         response = requests.post(f"http://{self.server_host}:{self.server_port}/stop_profile", json={})
         response.raise_for_status()
         return response
@@ -576,6 +534,9 @@ def _compute_server_args(
     num_gpus_per_engine: int | None = None,
 ):
     _gpus_per_engine = num_gpus_per_engine or args.rollout_num_gpus_per_engine
+    normalized_overrides = {key.replace("-", "_"): value for key, value in (sglang_overrides or {}).items()}
+    pp_size = int(normalized_overrides.get("pp_size", args.sglang_pp_size))
+    tp_size = int(normalized_overrides.get("tp_size", _gpus_per_engine // pp_size))
     nnodes = max(1, _gpus_per_engine // args.num_gpus_per_node)
     node_rank = rank % nnodes
     base = base_gpu_id if base_gpu_id is not None else get_base_gpu_id(args, rank)
@@ -583,7 +544,7 @@ def _compute_server_args(
     kwargs = {
         "model_path": args.hf_checkpoint,
         "trust_remote_code": True,
-        "random_seed": args.seed + rank,
+        "random_seed": args.seed + rank * args.num_gpus_per_node,
         # memory
         "enable_memory_saver": args.offload_rollout,
         # distributed
@@ -596,9 +557,9 @@ def _compute_server_args(
         "gpu_id_step": 1,
         "base_gpu_id": base,
         # parallel
-        "tp_size": _gpus_per_engine // args.sglang_pp_size,
+        "tp_size": tp_size,
         "dp_size": args.sglang_dp_size,
-        "pp_size": args.sglang_pp_size,
+        "pp_size": pp_size,
         "ep_size": args.sglang_ep_size,
         # always skip warmup to prevent warmup timeout.
         "skip_server_warmup": True,
@@ -657,6 +618,14 @@ def _compute_server_args(
                 unused_keys.discard(normalized_key)
             else:
                 unused_keys.add(normalized_key)
+
+    if (
+        "cuda_graph_backend_prefill" in server_arg_field_names
+        and kwargs.get("enable_memory_saver")
+        and kwargs.get("cuda_graph_backend_prefill") is None
+    ):
+        # Breakable is SGLang's default prefill backend on CUDA, but it is incompatible with memory saver mode.
+        kwargs["cuda_graph_backend_prefill"] = "disabled"
 
     # for compatibility with old args
     if len(unused_keys) > 0:

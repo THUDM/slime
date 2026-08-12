@@ -272,7 +272,6 @@ def _slice_response_rows_for_current_cp_rank(
     args,
     total_lengths: list[int],
     response_lengths: list[int],
-    max_seq_lens: list[int] | None,
 ) -> torch.Tensor:
     cp_size = mpu.get_context_parallel_world_size()
     if cp_size == 1:
@@ -358,7 +357,6 @@ def _get_log_probs_and_optional_samples(
     response_lengths: list[int],
     with_entropy: bool = False,
     non_loss_data: bool = True,
-    max_seq_lens: list[int] | None = None,
     sample_n: int = 0,
     label_token_ids: list[torch.Tensor] | None = None,
 ) -> tuple[torch.Tensor, dict[str, list[torch.Tensor]]]:
@@ -370,9 +368,8 @@ def _get_log_probs_and_optional_samples(
         response_lengths=response_lengths,
         with_entropy=with_entropy,
         non_loss_data=non_loss_data,
-        max_seq_lens=max_seq_lens,
     )
-    logits_local_len = logits.size(1) if args.qkv_format == "thd" else logits.view(-1, logits.size(-1)).size(0)
+    logits_local_len = logits.size(1)
 
     if label_token_ids is not None:
         if len(label_token_ids) != len(unconcat_tokens):
@@ -387,7 +384,6 @@ def _get_log_probs_and_optional_samples(
                     unconcat_tokens=unconcat_tokens,
                     total_lengths=total_lengths,
                     response_lengths=response_lengths,
-                    max_seq_lens=max_seq_lens,
                 ),
                 label_token_ids,
                 strict=True,
@@ -400,7 +396,6 @@ def _get_log_probs_and_optional_samples(
                 args=args,
                 total_lengths=total_lengths,
                 response_lengths=response_lengths,
-                max_seq_lens=max_seq_lens,
             )
             label_token_log_probs.append(
                 get_label_token_log_probs_from_vocab_parallel_logits(
@@ -422,7 +417,6 @@ def _get_log_probs_and_optional_samples(
             unconcat_tokens=unconcat_tokens,
             total_lengths=total_lengths,
             response_lengths=response_lengths,
-            max_seq_lens=max_seq_lens,
         ):
             if logits_chunk.size(0) == 0:
                 sampled_token_ids.append(torch.empty((0, sample_n), dtype=torch.long, device=logits_chunk.device))

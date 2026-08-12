@@ -17,7 +17,7 @@ from slime.utils.types import MultimodalTypes, Sample
 
 from .timer import Timer
 
-__all__ = ["Dataset"]
+__all__ = ["Dataset", "get_source"]
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,14 @@ def read_file(path):
     if row_slice is not None:
 
         logger.info("read_file path=%s applying slice row_slice=%s", path, row_slice)
-        reader = itertools.islice(reader, row_slice.start, row_slice.stop, row_slice.step)
+        if (row_slice.start or 0) < 0 or (row_slice.stop or 0) < 0:
+            # islice forbids negative indices, but the @[...] syntax accepts
+            # them (e.g. "@[-100:]" = the last 100 rows). Resolving a negative
+            # bound needs the total row count, so materialize for this case and
+            # keep the streaming islice for plain non-negative slices.
+            reader = iter(list(reader)[row_slice])
+        else:
+            reader = itertools.islice(reader, row_slice.start, row_slice.stop, row_slice.step)
 
     yield from reader
 
@@ -92,27 +99,33 @@ def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_l
         # Use processor only for samples with actual multimodal content; use batched tokenizer for text-only.
         text_only = []
         multimodal = []
-        for sample in origin_samples:
+        for position, sample in enumerate(origin_samples):
             if sample.multimodal_inputs and any(v is not None for v in sample.multimodal_inputs.values()):
-                multimodal.append(sample)
+                multimodal.append((position, sample))
             else:
-                text_only.append(sample)
-        filtered_samples = []
+                text_only.append((position, sample))
+        kept = []
         if text_only:
-            prompts = [s.prompt for s in text_only]
+            prompts = [s.prompt for _, s in text_only]
             input_ids_list = tokenizer(prompts, add_special_tokens=False)["input_ids"]
-            for sample, input_ids in zip(text_only, input_ids_list, strict=True):
+            for (position, sample), input_ids in zip(text_only, input_ids_list, strict=True):
                 if len(input_ids) <= max_length:
-                    filtered_samples.append(sample)
+                    kept.append((position, sample))
         if multimodal:
             from slime.utils.processing_utils import process_vision_info
 
-            for sample in multimodal:
+            for position, sample in multimodal:
                 multimodal_inputs = process_vision_info(sample.prompt, processor)
                 processor_output = processor(text=sample.prompt, **multimodal_inputs)
                 input_ids = processor_output["input_ids"][0]
                 if len(input_ids) <= max_length:
-                    filtered_samples.append(sample)
+                    kept.append((position, sample))
+        # The two groups are scored separately for throughput, so restore the
+        # dataset order here: without --rollout-shuffle the samples are consumed
+        # in this order, and training should not depend on which of them happen
+        # to carry multimodal content.
+        kept.sort(key=lambda position_and_sample: position_and_sample[0])
+        filtered_samples = [sample for _, sample in kept]
     else:
         prompts = [sample.prompt for sample in origin_samples]
         input_ids_list = tokenizer(prompts, add_special_tokens=False)["input_ids"]
@@ -301,3 +314,12 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
     rollout_data["total_lengths"] = [total_lengths[i] for i in partition]
 
     return rollout_data
+
+
+def get_source(sample: Sample) -> str:
+    metadata = getattr(sample, "metadata", None) or {}
+    if getattr(sample, "source", None):
+        return sample.source
+    if metadata.get("source_name"):
+        return metadata["source_name"]
+    return "unknown"
