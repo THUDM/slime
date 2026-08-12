@@ -307,8 +307,8 @@ def test_build_dump_payload_keeps_gather_order_when_index_missing():
     assert payload["dp_shards"][0]["sample_indices"] is None
 
 
-def test_build_dump_payload_uses_rollout_positions_when_sample_index_missing():
-    # sample_indices all None, but rollout_positions (DP partition) restores the
+def test_build_dump_payload_uses_partition_when_sample_index_missing():
+    # sample_indices all None, but partition (DP positions) restores the
     # exact rollout-dump order regardless of sample.index.
     dp_shards = [
         {
@@ -317,7 +317,7 @@ def test_build_dump_payload_uses_rollout_positions_when_sample_index_missing():
             "rollout_data": {
                 "response_lengths": [1, 1],
                 "sample_indices": [None, None],
-                "rollout_positions": [2, 0],
+                "partition": [2, 0],
                 "log_probs": [torch.tensor([2.0]), torch.tensor([0.0])],
             },
         },
@@ -327,7 +327,7 @@ def test_build_dump_payload_uses_rollout_positions_when_sample_index_missing():
             "rollout_data": {
                 "response_lengths": [1, 1],
                 "sample_indices": [None, None],
-                "rollout_positions": [3, 1],
+                "partition": [3, 1],
                 "log_probs": [torch.tensor([3.0]), torch.tensor([1.0])],
             },
         },
@@ -337,7 +337,41 @@ def test_build_dump_payload_uses_rollout_positions_when_sample_index_missing():
 
     assert [sample["rollout_position"] for sample in payload["samples"]] == [0, 1, 2, 3]
     assert [sample["log_probs"].item() for sample in payload["samples"]] == [0.0, 1.0, 2.0, 3.0]
-    assert [shard["rollout_positions"] for shard in payload["dp_shards"]] == [[2, 0], [3, 1]]
+    assert [shard["partition"] for shard in payload["dp_shards"]] == [[2, 0], [3, 1]]
+
+
+def test_log_prob_capture_reorders_by_rollout_position():
+    from slime.backends.megatron_utils import loss
+
+    loss.enable_log_prob_capture()
+    # Two micro-batches with interleaved global positions, mirroring how the DP
+    # schedule strides samples across micro-batches.
+    loss._maybe_capture_log_probs({"partition": [2, 0]}, [torch.tensor([2.0]), torch.tensor([0.0])])
+    loss._maybe_capture_log_probs({"partition": [3, 1]}, [torch.tensor([3.0]), torch.tensor([1.0])])
+    captured = loss.drain_captured_log_probs()
+
+    assert set(captured) == {0, 1, 2, 3}
+    # Emulate the train_actor reorder into rollout_data's sample order.
+    positions = [0, 1, 2, 3]
+    reordered = [captured[pos] for pos in positions]
+    assert [tensor.item() for tensor in reordered] == [0.0, 1.0, 2.0, 3.0]
+
+    # Draining disables capture: subsequent calls are no-ops.
+    assert loss.drain_captured_log_probs() == {}
+    loss._maybe_capture_log_probs({"partition": [9]}, [torch.tensor([9.0])])
+    assert loss.drain_captured_log_probs() == {}
+
+
+def test_log_prob_capture_first_occurrence_wins():
+    from slime.backends.megatron_utils import loss
+
+    loss.enable_log_prob_capture()
+    loss._maybe_capture_log_probs({"partition": [0]}, [torch.tensor([1.0])])
+    # A later training step recomputes the same position; the initial value wins.
+    loss._maybe_capture_log_probs({"partition": [0]}, [torch.tensor([9.0])])
+    captured = loss.drain_captured_log_probs()
+
+    assert captured[0].item() == 1.0
 
 
 def test_restore_context_parallel_fields_rejects_misaligned_samples():

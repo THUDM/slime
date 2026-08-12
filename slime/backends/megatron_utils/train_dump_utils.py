@@ -115,20 +115,20 @@ def _build_dump_payload(dp_shards, *, rollout_id, writer_rank):
     Mirrors the rollout debug dump: a ``samples`` list (one dict per training
     sample, sorted so it lines up with the rollout dump's ``samples``), plus a
     parallel ``dp_shards`` key that keeps the DP/mbs layout (``sample_indices``,
-    ``rollout_positions`` + ``micro_batch_indices`` / ``num_microbatches`` /
+    ``partition`` + ``micro_batch_indices`` / ``num_microbatches`` /
     ``global_batch_sizes``) without duplicating any per-sample tensor.
 
-    Ordering key preference: ``rollout_positions`` (each sample's index in the
-    rollout debug dump, always available when dumping) restores exact rollout
-    order regardless of ``sample.index``; ``sample_indices`` (``sample.index``,
-    may be ``None``) is the fallback; failing both, DP-gather order is kept.
+    Ordering key preference: ``partition`` (each sample's index in the rollout
+    debug dump, always available when dumping) restores exact rollout order
+    regardless of ``sample.index``; ``sample_indices`` (``sample.index``, may be
+    ``None``) is the fallback; failing both, DP-gather order is kept.
     """
     samples = []
     layout = []
     whole_batch = {}
     # Per-sample id columns handled specially: pulled out of the generic
     # transpose and surfaced as scalar keys on each sample dict.
-    id_columns = {"sample_indices": "sample_index", "rollout_positions": "rollout_position"}
+    id_columns = {"sample_indices": "sample_index", "partition": "rollout_position"}
     for shard in dp_shards:
         rollout_data = shard["rollout_data"]
         dp_rank = shard["data_parallel_rank"]
@@ -175,7 +175,7 @@ def _build_dump_payload(dp_shards, *, rollout_id, writer_rank):
     else:
         logger.warning(
             "Cannot restore global sample order for the train debug dump: samples carry neither "
-            "rollout_positions nor sample_index. Saving samples in DP-gather order instead."
+            "partition nor sample_index. Saving samples in DP-gather order instead."
         )
 
     return {
