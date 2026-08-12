@@ -36,7 +36,7 @@ def sort_key(x):
             # representation that allows for sorting.
             node_ip_parts = [ord(c) for c in node_identifier]
 
-    return (node_ip_parts, gpu_id)
+    return (node_ip_parts, int(gpu_id))
 
 
 def _create_placement_group(num_gpus):
