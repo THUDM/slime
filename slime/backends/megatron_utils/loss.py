@@ -666,7 +666,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
     estimator. Supported methods: "grpo", "gspo", "cispo", "ppo",
     "reinforce_plus_plus", and "reinforce_plus_plus_baseline". When
     `args.normalize_advantages` is True, advantages are whitened across the
-    data-parallel group using masked statistics.
+    data-parallel-with-context-parallel group using masked statistics.
 
     Early returns if both `log_probs` and `values` are None (intermediate
     pipeline stages).
@@ -809,20 +809,30 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
 
             all_masks = torch.cat(mask_chunks)
 
-        if all_masks.numel() > 0:
-            assert (
-                all_advs.size() == all_masks.size()
-            ), f"Shape mismatch before whitening: advantages {all_advs.size()}, masks {all_masks.size()}"
-            dp_group = mpu.get_data_parallel_group()
+        assert (
+            all_advs.size() == all_masks.size()
+        ), f"Shape mismatch before whitening: advantages {all_advs.size()}, masks {all_masks.size()}"
+        # `all_advs` / `all_masks` only cover the tokens this CP rank owns, so the
+        # statistics must be reduced over the DP group *with* context parallel.
+        # The CP-excluding group makes every CP rank whiten its own zigzag slice
+        # with its own mean/var, i.e. the two halves of one sequence get
+        # different affine transforms.
+        #
+        # This has to stay unconditional: a CP rank can legitimately own zero
+        # response tokens (prompt-heavy sequences put both of its chunks inside
+        # the prompt), and skipping the collective on just that rank would
+        # desync the all_reduce. `distributed_masked_whiten` handles an empty
+        # local tensor — it contributes 0 to the reduced sums.
+        dp_cp_group = mpu.get_data_parallel_group(with_context_parallel=True)
 
-            whitened_advs_flat = distributed_masked_whiten(
-                all_advs,
-                all_masks,
-                process_group=dp_group,
-                shift_mean=True,
-            )
-            chunk_lengths = [chunk.size(0) for chunk in advantages]
-            advantages = list(torch.split(whitened_advs_flat, chunk_lengths))
+        whitened_advs_flat = distributed_masked_whiten(
+            all_advs,
+            all_masks,
+            process_group=dp_cp_group,
+            shift_mean=True,
+        )
+        chunk_lengths = [chunk.size(0) for chunk in advantages]
+        advantages = list(torch.split(whitened_advs_flat, chunk_lengths))
 
     rollout_data["advantages"] = advantages
     rollout_data["returns"] = returns
@@ -978,7 +988,13 @@ def policy_loss_function(
     if args.advantage_estimator == "cispo":
         pg_loss, pg_clipfrac = compute_cispo_loss(ppo_kl, log_probs, advantages, args.eps_clip, args.eps_clip_high)
     else:
-        pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
+        pg_loss, pg_clipfrac = compute_policy_loss(
+            ppo_kl,
+            advantages,
+            args.eps_clip,
+            args.eps_clip_high,
+            eps_clip_c=args.eps_clip_c,
+        )
 
     if args.use_opsm:
         pg_loss = pg_loss * opsm_mask
@@ -1103,7 +1119,7 @@ def policy_loss_function(
         reported_loss["opsm_clipfrac"] = opsm_clipfrac
 
     # Add OPD metrics if available
-    if "opd_reverse_kl" in batch:
+    if batch.get("opd_reverse_kl"):
         opd_reverse_kl = torch.cat(batch["opd_reverse_kl"], dim=0)
         reported_loss["opd_reverse_kl"] = sum_of_sample_mean(opd_reverse_kl).clone().detach()
 

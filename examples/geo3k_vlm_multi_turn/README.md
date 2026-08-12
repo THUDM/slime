@@ -28,8 +28,7 @@ The reward model is the default math RM.
 ```bash
 # 1) Set environment variable
 export WANDB_API_KEY=...
-export SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-2B-Instruct
-export SLIME_SCRIPT_NUM_GPUS=4
+export SLIME_SCRIPT_NUM_GPUS=8
 
 # 2) Download the dataset
 hf download --repo-type dataset VeraIsHere/geo3k_imgurl_processed --local-dir /root/datasets/geo3k_imgurl_processed
@@ -40,7 +39,7 @@ python examples/geo3k_vlm_multi_turn/run_geo3k_vlm_multi_turn.py
 ```
 
 ## What each file does
-- `examples/geo3k_vlm_multi_turn/run_geo3k_vlm_multi_turn.py`: downloads model, sets training/rollout args, and launches the run.
+- `examples/geo3k_vlm_multi_turn/run_geo3k_vlm_multi_turn.py`: downloads Qwen3.5-35B-A3B, sets training/rollout args, and launches the run.
 - `examples/geo3k_vlm_multi_turn/geo3k_vlm_multi_turn_config.yaml`: specifies `max_turns` and `rollout_interaction_env_path` for the multi-turn rollout.
 - `examples/geo3k_vlm_multi_turn/rollout.py`: custom multi-turn rollout that calls SGLang for token generation, builds loss masks/log_probs, enforces max_turns, and early-stops on max_new_tokens.
 - `examples/geo3k_vlm_multi_turn/env_geo3k.py`: geo3k tool-calling env that parses <tool_call>{...}</tool_call>, scores math answers, and returns tool feedback per turn.

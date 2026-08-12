@@ -1,13 +1,17 @@
+# Primary release stays on CUDA 12 (the cu129 SGLang base). Publishes the
+# unqualified `latest`, plus the rolling `latest-cu129` and the versioned
+# `<version>-cu129` tags. The tag suffix matches the SGLang base image.
 release-primary:
-    ARG_TAG_POSTFIX="" ARG_BUILD_EXTRA_ARGS="" just _release-raw
+    ARG_TAG_POSTFIX="-cu129" ARG_TAG_LATEST=1 ARG_BUILD_EXTRA_ARGS='--build-arg SGLANG_IMAGE_TAG=v0.5.15.post1-cu129' just _release-raw
 
-# Should be executed on ARM machines
-release-cu129-arm64:
-    ARG_TAG_POSTFIX="-cu129-arm64" ARG_BUILD_EXTRA_ARGS='--build-arg SGLANG_IMAGE_TAG=v0.5.5.post3-cu129-arm64 --build-arg ENABLE_SGLANG_PATCH=0' just _release-raw
-
-# Should be executed on ARM machines
-release-cu13-arm64:
-    ARG_TAG_POSTFIX="-cu13-arm64" ARG_BUILD_EXTRA_ARGS='--build-arg SGLANG_IMAGE_TAG=dev-arm64-cu13-20251122 --build-arg ENABLE_CUDA_13=1 --build-arg ENABLE_SGLANG_PATCH=0' just _release-raw
+# B200/B300 (Blackwell, x86) CUDA 13 build on the cu130 SGLang base. Publishes
+# `latest-cu130` and `<version>-cu130` (tag suffix matches the SGLang base
+# image). DeepEP must be compiled for the Blackwell arch list; the Dockerfile
+# default (9.0) targets Hopper only. The semicolon separator is normalized to
+# spaces by PyTorch's TORCH_CUDA_ARCH_LIST parser and survives the unquoted
+# ARG_BUILD_EXTRA_ARGS expansion as one token.
+release-cu13:
+    ARG_TAG_POSTFIX="-cu130" ARG_BUILD_EXTRA_ARGS="--build-arg DEEPEP_CUDA_ARCH_LIST=10.0;10.3 --build-arg SGLANG_IMAGE_TAG=v0.5.15.post1-cu130" just _release-raw
 
 _release-raw:
     #!/bin/bash
@@ -20,7 +24,14 @@ _release-raw:
     docker build -f docker/Dockerfile . --build-arg HTTP_PROXY="$http_proxy" --build-arg HTTPS_PROXY="$https_proxy" --build-arg NO_PROXY="localhost,127.0.0.1" $ARG_BUILD_EXTRA_ARGS -t slimerl/slime:$IMAGE_TAG
     docker push slimerl/slime:$IMAGE_TAG
 
-    if [ -z "${ARG_TAG_POSTFIX}" ]; then
+    # Rolling per-variant latest tag (e.g. latest-cu129, latest-cu130).
+    if [ -n "${ARG_TAG_POSTFIX}" ]; then
+        docker tag slimerl/slime:$IMAGE_TAG slimerl/slime:latest${ARG_TAG_POSTFIX}
+        docker push slimerl/slime:latest${ARG_TAG_POSTFIX}
+    fi
+
+    # The primary build also owns the unqualified `latest`.
+    if [ "${ARG_TAG_LATEST:-}" = "1" ]; then
         docker tag slimerl/slime:$IMAGE_TAG slimerl/slime:latest
         docker push slimerl/slime:latest
     fi

@@ -397,7 +397,7 @@ def get_reinforce_plus_plus_returns(
 
     cp_size = mpu.get_context_parallel_world_size()
 
-    final_returns_chunks = []
+    token_level_rewards = []
     for i in range(len(rewards)):
         local_kl_chunk = kl[i]
         total_len, response_len = total_lengths[i], response_lengths[i]
@@ -414,21 +414,28 @@ def get_reinforce_plus_plus_returns(
         full_mask = loss_masks[i]
         assert full_mask.sum().item() > 0, f"Sequence at index {i} is fully masked."
         masked_kl = full_kl_response * full_mask
-        token_level_rewards = -kl_coef * masked_kl
+        rewards_for_seq = -kl_coef * masked_kl
         last_idx = full_mask.nonzero(as_tuple=True)[0][-1]
-        token_level_rewards[last_idx] += rewards[i]
+        rewards_for_seq[last_idx] += rewards[i]
+        token_level_rewards.append(rewards_for_seq)
 
-        returns_for_seq = torch.zeros_like(token_level_rewards)
-        running_return = 0.0
-        for t in reversed(range(token_level_rewards.size(0))):
-            # G_t = r_t + gamma * G_{t+1}
-            running_return = token_level_rewards[t] + gamma * running_return
-            returns_for_seq[t] = running_return
+    if not token_level_rewards:
+        return []
 
-        # Step 4: Pick up the results corresponding to our local chunk's parts.
+    max_len = max(rewards_for_seq.size(0) for rewards_for_seq in token_level_rewards)
+    padded_rewards = token_level_rewards[0].new_zeros(len(token_level_rewards), max_len)
+    for i, rewards_for_seq in enumerate(token_level_rewards):
+        padded_rewards[i, : rewards_for_seq.size(0)] = rewards_for_seq
+
+    padded_returns = chunked_discounted_returns(padded_rewards, gamma)
+
+    final_returns_chunks = []
+    for i, returns_for_seq in enumerate(padded_returns):
+        returns_for_seq = returns_for_seq[: token_level_rewards[i].size(0)]
         if cp_size > 1:
             from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
 
+            total_len, response_len = total_lengths[i], response_lengths[i]
             local_returns_chunk = slice_log_prob_with_cp(returns_for_seq, total_len, response_len)
         else:
             local_returns_chunk = returns_for_seq
@@ -600,85 +607,45 @@ def vanilla_gae(
     return full_advantages, full_returns
 
 
-def chunked_gae(
+def chunked_discounted_returns(
     rewards: torch.Tensor,
-    values: torch.Tensor,
-    gamma: float,
-    lambd: float,
+    discount: float,
     chunk_size: int = 128,
-):
+) -> torch.Tensor:
     """
-    Compute Generalized Advantage Estimation (GAE) using a FlashLinearAttention-
-    inspired algorithm: parallel prefix scan within chunks and recurrent state
-    propagation across chunks.
+    Compute discounted returns using a parallel scan within fixed-size chunks.
 
     This reduces the sequential dependency length from O(T) to O(T / chunk_size),
     while keeping chunk computations fully parallelizable (O(C^2) per chunk).
 
     Args:
         rewards (Tensor): [B, T] reward sequence.
-        values (Tensor):  [B, T] value predictions. The next-value of the final
-                          step is assumed to be zero (standard PPO convention).
-        gamma (float): discount factor.
-        lam (float): GAE lambda.
+        discount (float): Discount factor applied at each step.
         chunk_size (int): sequence chunk length for parallel scan.
 
     Returns:
-        advantages (Tensor): [B, T] computed advantages.
-        returns (Tensor):    [B, T] advantages + values.
+        Tensor: [B, T] discounted returns.
     """
-
-    # -------------------------------------------------------------------------
-    # Validate inputs
-    # -------------------------------------------------------------------------
-    assert rewards.ndim == 2 and values.ndim == 2
+    assert rewards.ndim == 2
     B, T = rewards.shape
-    assert values.shape == (B, T)
 
     device = rewards.device
     dtype = rewards.dtype
 
-    # -------------------------------------------------------------------------
-    # Build δ_t = r_t + γ * V_{t+1} - V_t   with V_{T} = 0
-    # -------------------------------------------------------------------------
-    next_values = torch.cat(
-        [values[:, 1:], torch.zeros(B, 1, device=device, dtype=dtype)],
-        dim=1,
-    )
-    deltas = rewards + gamma * next_values - values
+    # Reformulate the backward recurrence as a forward scan on the reversed
+    # sequence: S[i] = rewards[i] + discount * S[i - 1].
+    rewards_rev = torch.flip(rewards, dims=[1])
 
-    # Reformulate backward GAE as a forward scan on the reversed sequence:
-    #   S[i] = Δ[i] + w * S[i - 1],   w = γλ
-    w = gamma * lambd
-    deltas_rev = torch.flip(deltas, dims=[1])  # [B, T]
-
-    # -------------------------------------------------------------------------
-    # Pad to a multiple of chunk_size
-    # -------------------------------------------------------------------------
     if T % chunk_size != 0:
         pad = chunk_size - (T % chunk_size)
-        deltas_rev = F.pad(deltas_rev, (0, pad))
+        rewards_rev = F.pad(rewards_rev, (0, pad))
     else:
         pad = 0
 
-    B, T_pad = deltas_rev.shape
+    B, T_pad = rewards_rev.shape
     n_chunks = T_pad // chunk_size
+    rewards_chunks = rewards_rev.view(B, n_chunks, chunk_size)
 
-    deltas_chunks = deltas_rev.view(B, n_chunks, chunk_size)
-
-    # -------------------------------------------------------------------------
-    # Construct the intra-chunk parallel scan kernel M
-    #
-    # For a chunk Δ[0..C-1], we want:
-    #   S_local[t] = sum_{k=0..t} w^(t-k) * Δ[k]
-    #
-    # This is implemented as:
-    #   S_local = Δ @ M
-    #
-    # where:
-    #   M[i, j] = w^(j - i)    if j >= i
-    #             0            otherwise
-    # -------------------------------------------------------------------------
     idx = torch.arange(chunk_size, device=device)
     row = idx[:, None]
     col = idx[None, :]
@@ -687,39 +654,25 @@ def chunked_gae(
     M = torch.zeros(chunk_size, chunk_size, device=device, dtype=dtype)
     mask = diff >= 0
 
-    if w == 0.0:
+    if discount == 0.0:
         M[mask & (diff == 0)] = 1.0
     else:
-        M[mask] = w ** diff[mask].to(dtype)
+        M[mask] = discount ** diff[mask].to(dtype)
 
-    # pow_vec[t] = w^(t+1), used to inject the recurrent state s_prev
-    if w == 0.0:
+    if discount == 0.0:
         pow_vec = torch.zeros(chunk_size, device=device, dtype=dtype)
     else:
-        pow_vec = w ** torch.arange(1, chunk_size + 1, device=device, dtype=dtype)
+        pow_vec = discount ** torch.arange(1, chunk_size + 1, device=device, dtype=dtype)
 
-    # -------------------------------------------------------------------------
-    # Parallel compute local chunk results (assuming initial state = 0)
-    # -------------------------------------------------------------------------
-    deltas_flat = deltas_chunks.reshape(B * n_chunks, chunk_size)
-    S_local_flat = deltas_flat @ M
+    rewards_flat = rewards_chunks.reshape(B * n_chunks, chunk_size)
+    S_local_flat = rewards_flat @ M
     S_local_chunks = S_local_flat.view(B, n_chunks, chunk_size)
 
-    # Effective length of each chunk (the last chunk may be padded)
     lengths = [chunk_size] * n_chunks
     if pad > 0:
         lengths[-1] = chunk_size - pad
 
-    # -------------------------------------------------------------------------
-    # Recurrent propagation between chunks
-    #
-    # Each chunk contributes:
-    #   S_global[t] = S_local[t] + w^(t+1) * s_prev
-    #
-    # And updates:
-    #   s_prev = S_global[last_t]
-    # -------------------------------------------------------------------------
-    S_rev = deltas_rev.new_zeros(B, T_pad)
+    S_rev = rewards_rev.new_zeros(B, T_pad)
     s_prev = torch.zeros(B, device=device, dtype=dtype)
 
     for c in range(n_chunks):
@@ -731,13 +684,32 @@ def chunked_gae(
         S_global = S_local + s_prev.unsqueeze(1) * pow_vec[:Lc]
 
         S_rev[:, start:end] = S_global
-        s_prev = S_global[:, -1]  # state for next chunk
+        s_prev = S_global[:, -1]
 
-    # Remove padding and flip back to original time order
     if pad > 0:
         S_rev = S_rev[:, :T]
 
-    advantages = torch.flip(S_rev, dims=[1])
+    return torch.flip(S_rev, dims=[1])
+
+
+def chunked_gae(
+    rewards: torch.Tensor,
+    values: torch.Tensor,
+    gamma: float,
+    lambd: float,
+    chunk_size: int = 128,
+):
+    """Compute Generalized Advantage Estimation using a chunked scan."""
+    assert rewards.ndim == 2 and values.ndim == 2
+    B, T = rewards.shape
+    assert values.shape == (B, T)
+
+    next_values = torch.cat(
+        [values[:, 1:], torch.zeros(B, 1, device=values.device, dtype=values.dtype)],
+        dim=1,
+    )
+    deltas = rewards + gamma * next_values - values
+    advantages = chunked_discounted_returns(deltas, gamma * lambd, chunk_size)
     returns = advantages + values
 
     return advantages, returns

@@ -18,6 +18,7 @@ from slime.backends.sglang_utils.external import start_external_rollout_servers
 from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
+from slime.rollout.sample_hooks import set_current_rollout_id
 from slime.utils import logging_utils
 from slime.utils.data import get_source
 from slime.utils.dp_schedule import build_dp_schedule
@@ -101,6 +102,43 @@ def _tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:
             rollout_data["rollout_mask_sums"],
             dtype=torch.float32,
         )
+
+
+def _validate_rollout_routed_experts_for_replay(
+    routed_experts: list[torch.Tensor],
+    args,
+) -> None:
+    """Reject incomplete PP routing captures before R3 consumes them."""
+    if not routed_experts:
+        raise ValueError("R3 is enabled but no rollout routed-experts tensors were returned.")
+
+    num_layers = int(args.num_layers)
+    topk = int(args.moe_router_topk)
+    moe_layer_freq = getattr(args, "moe_layer_freq", None)
+    if isinstance(moe_layer_freq, (list, tuple)):
+        moe_layers = [layer_id for layer_id, freq in enumerate(moe_layer_freq[:num_layers]) if int(freq) != 0]
+    else:
+        moe_layers = list(range(num_layers))
+
+    for sample_idx, experts in enumerate(routed_experts):
+        experts = torch.as_tensor(experts)
+        if experts.ndim != 3 or tuple(experts.shape[1:]) != (num_layers, topk):
+            raise ValueError(
+                "Invalid rollout routed-experts shape for R3: "
+                f"sample={sample_idx}, got={tuple(experts.shape)}, "
+                f"expected=(*, {num_layers}, {topk})."
+            )
+        if experts.shape[0] == 0:
+            raise ValueError(f"R3 sample {sample_idx} has no routed-experts rows.")
+        if topk > 1:
+            missing_layers = [layer_id for layer_id in moe_layers if not torch.count_nonzero(experts[:, layer_id, :])]
+            if missing_layers:
+                raise ValueError(
+                    "R3 routed-experts capture is all zero for MoE layers "
+                    f"{missing_layers} in sample {sample_idx}. This usually means "
+                    "SGLang pipeline stages did not aggregate their disjoint routing "
+                    "captures; refusing to replay expert 0 everywhere."
+                )
 
 
 @dataclasses.dataclass
@@ -202,7 +240,7 @@ class ServerGroup:
             env_vars = {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST} | {
                 key: os.environ.get(key, default_val)
                 for key, default_val in {
-                    "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "true",
+                    "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
                     "SGLANG_JIT_DEEPGEMM_FAST_WARMUP": "true",
                     "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
                     "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
@@ -552,6 +590,7 @@ class RolloutManager:
     def generate(self, rollout_id):
         start_time = time.time()
         self.rollout_id = rollout_id
+        set_current_rollout_id(rollout_id)
         self.health_monitoring_resume()
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
@@ -568,6 +607,7 @@ class RolloutManager:
         if self.args.debug_train_only:
             # if debug train only, we don't generate evaluation data
             return
+        set_current_rollout_id(rollout_id)
         self.health_monitoring_resume()
 
         result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
@@ -806,7 +846,10 @@ class RolloutManager:
             train_data["rollout_top_p_token_offsets"] = [sample.rollout_top_p_token_offsets for sample in samples]
 
         if samples[0].rollout_routed_experts is not None:
-            train_data["rollout_routed_experts"] = [sample.rollout_routed_experts for sample in samples]
+            routed_experts = [torch.as_tensor(sample.rollout_routed_experts) for sample in samples]
+            if getattr(self.args, "use_rollout_routing_replay", False):
+                _validate_rollout_routed_experts_for_replay(routed_experts, self.args)
+            train_data["rollout_routed_experts"] = routed_experts
 
         if samples[0].train_metadata is not None:
             train_data["metadata"] = [sample.train_metadata for sample in samples]
@@ -1042,7 +1085,6 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
     router_args.host = router_ip
     router_args.port = router_port
     router_args.prometheus_port = find_available_port(random.randint(4000, 5000))
-    router_args.log_level = "warn"
     router_args.request_timeout_secs = args.sglang_router_request_timeout_secs
 
     if has_pd_disaggregation:

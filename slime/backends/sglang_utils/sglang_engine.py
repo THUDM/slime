@@ -4,11 +4,8 @@ import logging
 import multiprocessing
 import os
 import time
-from urllib.parse import quote
 
 import requests
-import sglang_router
-from packaging.version import parse
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils import kill_process_tree
 from urllib3.exceptions import NewConnectionError
@@ -49,6 +46,13 @@ def _to_local_gpu_id(physical_gpu_id: int) -> int:
 
 
 def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
+    # Expandable segments help the colocated training actor tolerate repeated
+    # cache releases, but SGLang's allocator/sleep path does not support them.
+    # The rollout Ray actor inherits the job environment, so remove the option
+    # before spawning every SGLang server and its children.
+    os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+    os.environ.pop("PYTORCH_ALLOC_CONF", None)
+
     if getattr(server_args, "encoder_only", False):
         from sglang.srt.disaggregation.encode_server import launch_server_process as sglang_launch_server_process
 
@@ -193,28 +197,22 @@ class SGLangEngine(RayActor):
 
         if self.node_rank == 0 and self.router_ip and self.router_port:
             worker_url = f"http://{self.server_host}:{self.server_port}"
-            if parse(sglang_router.__version__) <= parse("0.2.1"):
-                assert self.worker_type == "regular", "pd disaggregation is not supported in old router."
-                response = requests.post(
-                    f"http://{self.router_ip}:{self.router_port}/add_worker?url={worker_url}",
-                )
-            else:
-                payload = {
-                    "url": worker_url,
-                    "worker_type": self.worker_type,
-                }
-                if self.worker_type == "prefill":
-                    bootstrap_port = server_args_dict.get("disaggregation_bootstrap_port")
-                    if bootstrap_port is None:
-                        raise RuntimeError(
-                            f"Prefill worker {worker_url} does not have disaggregation_bootstrap_port; "
-                            "cannot register it to the PD router."
-                        )
-                    payload["bootstrap_port"] = bootstrap_port
-                response = requests.post(
-                    f"http://{self.router_ip}:{self.router_port}/workers",
-                    json=payload,
-                )
+            payload = {
+                "url": worker_url,
+                "worker_type": self.worker_type,
+            }
+            if self.worker_type == "prefill":
+                bootstrap_port = server_args_dict.get("disaggregation_bootstrap_port")
+                if bootstrap_port is None:
+                    raise RuntimeError(
+                        f"Prefill worker {worker_url} does not have disaggregation_bootstrap_port; "
+                        "cannot register it to the PD router."
+                    )
+                payload["bootstrap_port"] = bootstrap_port
+            response = requests.post(
+                f"http://{self.router_ip}:{self.router_port}/workers",
+                json=payload,
+            )
             response.raise_for_status()
 
     def _make_request(self, endpoint: str, payload: dict | None = None):
@@ -320,27 +318,17 @@ class SGLangEngine(RayActor):
         if self.worker_type != "encoder" and self.node_rank == 0:
             worker_url = f"http://{self.server_host}:{self.server_port}"
             response = None
-            if parse(sglang_router.__version__) <= parse("0.2.1"):
-                response = requests.post(
-                    f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
-                )
-            elif parse(sglang_router.__version__) < parse("0.3.0"):
-                worker_url = quote(worker_url, safe="")
-                response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}")
-            else:
-                try:
-                    all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
-                    for worker in all_workers:
-                        if worker["url"] == worker_url:
-                            worker_id = worker["id"]
-                            response = requests.delete(
-                                f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}"
-                            )
-                            break
-                    else:
-                        logger.warning(f"Worker {worker_url} not found in router during shutdown.")
-                except Exception as e:
-                    logger.warning(f"Failed to fetch workers list or remove worker: {e}")
+            try:
+                all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
+                for worker in all_workers:
+                    if worker["url"] == worker_url:
+                        worker_id = worker["id"]
+                        response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}")
+                        break
+                else:
+                    logger.warning(f"Worker {worker_url} not found in router during shutdown.")
+            except Exception as e:
+                logger.warning(f"Failed to fetch workers list or remove worker: {e}")
 
             if response is not None:
                 response.raise_for_status()
@@ -556,7 +544,7 @@ def _compute_server_args(
     kwargs = {
         "model_path": args.hf_checkpoint,
         "trust_remote_code": True,
-        "random_seed": args.seed + rank,
+        "random_seed": args.seed + rank * args.num_gpus_per_node,
         # memory
         "enable_memory_saver": args.offload_rollout,
         # distributed

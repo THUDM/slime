@@ -161,6 +161,14 @@ jobs:
               "test_file": "test_glm4.7_30B_A3B_pd_mooncake.py"
             },
             {
+              "num_gpus": 8,
+              "test_file": "test_glm52_6layer_deterministic_e2e.py"
+            },
+            {
+              "num_gpus": 8,
+              "test_file": "test_glm52_layerwise_zero_e2e.py"
+            },
+            {
               "enable_eval": "0",
               "num_gpus": 8,
               "test_file": "test_qwen3_30B_A3B.py",
@@ -563,6 +571,14 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_deep_ep_tms_patch.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_stateless_adam.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "utils/test_megatron_server_arguments.py"
             },
             {
@@ -587,6 +603,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_advantage_whiten_cp.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_logprob_response_spans.py"
             },
             {
@@ -599,7 +619,15 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_policy_loss.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_ppo_logprob_entropy.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_discounted_returns.py"
             },
             {
               "num_gpus": 0,
@@ -631,7 +659,35 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_process_rollout_data.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_filter_long_prompt.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_read_file_slicing.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_rollout_validation.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_fully_async_rollout.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_rollout_sample_hooks.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_hf_to_megatron.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_qwen3_5_vl_native.py"
             },
             {
               "num_gpus": 0,
@@ -648,6 +704,26 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_empty_colocated_weight_bucket.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_expert_routing.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_glm5_indexer_short_context.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_model_provider_freeze.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_glm52_layerwise_comparison.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_layerwise_alignment.py"
             },
             {
               "num_gpus": 0,
@@ -697,6 +773,8 @@ jobs:
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors psutil
+
+          pip install transformers
 
 
       - name: Install
@@ -748,6 +826,10 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_agent/test_harness.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_agent/test_sandbox_exec_and_wait.py"
             },
             {
               "num_gpus": 0,
@@ -837,6 +919,14 @@ jobs:
             {
               "num_gpus": 8,
               "test_file": "test_glm4.7_30B_A3B_pd_mooncake.py"
+            },
+            {
+              "num_gpus": 8,
+              "test_file": "test_glm52_6layer_deterministic_e2e.py"
+            },
+            {
+              "num_gpus": 8,
+              "test_file": "test_glm52_layerwise_zero_e2e.py"
             },
             {
               "enable_eval": "0",

@@ -78,7 +78,7 @@ Since slime uses Megatron, and Megatron does not support loading Hugging Face ch
 
 #### HF → Megatron torch\_dist ckpt
 
-Use [mbridge](https://github.com/ISEEKYAN/mbridge.git) or [Megatron-LM-amd_version-amd](https://github.com/yushengsu-thu/Megatron-LM-amd_version.git) for conversion:
+Use slime's built-in HuggingFace-to-Megatron loader for conversion:
 
 ```bash
 cd slime/

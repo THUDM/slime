@@ -29,6 +29,9 @@ def add_sglang_router_arguments(parser):
         help="Timeout for requests to the SGLang router in seconds",
     )
     RouterArgs.add_cli_args(parser, use_router_prefix=True, exclude_host_port=True)
+    # Keep driver logs quiet by default while allowing --router-log-level to
+    # expose router dispatch and retry details when needed.
+    parser.set_defaults(router_log_level="warn")
     return parser
 
 
@@ -147,6 +150,7 @@ def validate_args(args):
         ("sglang_dp_size", "sglang_data_parallel_size"),
         ("sglang_pp_size", "sglang_pipeline_parallel_size"),
         ("sglang_ep_size", "sglang_expert_parallel_size"),
+        ("sglang_moe_dp_size", "sglang_moe_data_parallel_size"),
     ):
         value = getattr(args, current_name) if hasattr(args, current_name) else getattr(args, legacy_name)
         setattr(args, current_name, value)

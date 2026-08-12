@@ -25,6 +25,22 @@ class ExternalEngineInfo:
     def is_pd_worker(self) -> bool:
         return self.worker_type in ("prefill", "decode")
 
+    @property
+    def parallel_config(self) -> dict[str, int]:
+        pp_size = int(self.server_info.get("pp_size") or self.server_info.get("pipeline_parallel_size") or 1)
+        return {
+            "tp_size": int(
+                self.server_info.get("tp_size")
+                or self.server_info.get("tensor_parallel_size")
+                or self.num_gpus // pp_size
+            ),
+            "pp_size": pp_size,
+            "ep_size": int(self.server_info.get("ep_size") or self.server_info.get("expert_parallel_size") or 1),
+            "moe_dp_size": int(
+                self.server_info.get("moe_dp_size") or self.server_info.get("moe_data_parallel_size") or 1
+            ),
+        }
+
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
 
@@ -138,6 +154,7 @@ class ExternalRolloutServer:
     engines: list
     engine_gpu_counts: list[int]
     engine_gpu_offsets: list[int]
+    engine_parallel_configs: list[dict[str, int]]
     router_ip: str | None = None
     router_port: int | None = None
     model_name: str = "default"
@@ -222,6 +239,7 @@ def start_external_rollout_servers(args, *, start_router) -> tuple[dict[str, Ext
             engines=engines,
             engine_gpu_counts=engine_gpu_counts,
             engine_gpu_offsets=engine_gpu_offsets,
+            engine_parallel_configs=[info.parallel_config for info in infos],
             router_ip=router_ip,
             router_port=router_port,
             model_name="default",
