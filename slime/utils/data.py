@@ -313,6 +313,13 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
     Timer().seq_lens = total_lengths
     rollout_data["total_lengths"] = [total_lengths[i] for i in partition]
 
+    # `partition` holds each local sample's position in the flattened rollout
+    # batch, which is exactly its index in the rollout debug dump's `samples`
+    # list. Keep it (only when dumping train debug data) so the train dump can
+    # be sorted back into rollout order even when `sample.index` is unset.
+    if getattr(args, "save_debug_train_data", None) is not None:
+        rollout_data["rollout_positions"] = list(partition)
+
     # `raw_reward` is shipped whole on purpose: log_passrate reshapes it into
     # [rollout_batch_size, n_samples_per_prompt] groups, which only works on the
     # full rollout batch. Metrics that pair a reward with this rank's per-sample

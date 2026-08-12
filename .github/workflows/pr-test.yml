@@ -230,6 +230,10 @@ jobs:
             },
             {
               "num_gpus": 8,
+              "test_file": "test_qwen2.5_0.5B_debug_train_dump_e2e.py"
+            },
+            {
+              "num_gpus": 8,
               "test_file": "test_qwen2.5_0.5B_opd_sglang.py"
             },
             {
@@ -588,6 +592,10 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_cp_utils.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_train_dump.py"
             },
             {
               "num_gpus": 0,
@@ -987,6 +995,10 @@ jobs:
             {
               "num_gpus": 8,
               "test_file": "test_qwen2.5_0.5B_debug_rollout_then_train.py"
+            },
+            {
+              "num_gpus": 8,
+              "test_file": "test_qwen2.5_0.5B_debug_train_dump_e2e.py"
             },
             {
               "num_gpus": 8,
