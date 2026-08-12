@@ -32,7 +32,7 @@ from slime.utils import logging_utils
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
-from .cp_utils import reduce_train_step_metrics
+from .cp_utils import compute_mtp_losses, reduce_train_step_metrics
 from .data import DataIterator, get_batch
 from .loss import ROLLOUT_TOP_P_TOKEN_KEYS, get_rollout_top_p_logprob_kwargs, loss_function
 from .model_provider import get_model_provider_func
@@ -854,15 +854,16 @@ def train(
                     torch.distributed.all_reduce(values, group=tracker.get("reduce_group"))
                 if tracker.get("avg_group") is not None:
                     torch.distributed.all_reduce(values, group=tracker["avg_group"], op=torch.distributed.ReduceOp.AVG)
-                # here we assume only one mtp layer
-                mtp_losses = (tracker["values"] * mtp_loss_scale).item()
+                # one loss value per MTP layer (values has mtp_num_layers elements)
+                mtp_losses = compute_mtp_losses(tracker["values"], mtp_loss_scale)
                 MTPLossLoggingHelper.clean_loss_in_tracker()
 
                 # CI check: verify MTP loss is within expected bounds
                 if args.ci_test:
                     from slime.backends.megatron_utils.ci_utils import check_mtp_loss
 
-                    check_mtp_loss(mtp_losses)
+                    for mtp_loss in mtp_losses:
+                        check_mtp_loss(mtp_loss)
 
         # per train step log.
         if (
@@ -879,7 +880,12 @@ def train(
             }
             log_dict[f"train/{role_tag}grad_norm"] = grad_norm
             if args.enable_mtp_training:
-                log_dict[f"train/{role_tag}mtp_loss"] = mtp_losses
+                # keep the pre-existing single aggregate key for dashboards/alerts that
+                # already depend on it, and add a per-layer breakdown for multi-head MTP.
+                log_dict[f"train/{role_tag}mtp_loss"] = sum(mtp_losses) / len(mtp_losses)
+                if len(mtp_losses) > 1:
+                    for layer_idx, mtp_loss in enumerate(mtp_losses):
+                        log_dict[f"train/{role_tag}mtp_loss_{layer_idx}"] = mtp_loss
 
             for param_group_id, param_group in enumerate(optimizer.param_groups):
                 log_dict[f"train/{role_tag}lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
