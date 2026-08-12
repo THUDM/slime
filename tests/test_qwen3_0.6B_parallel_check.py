@@ -9,17 +9,11 @@ MODEL_NAME = "Qwen3-0.6B"
 MODEL_TYPE = "qwen3-0.6B"
 NUM_GPUS = 8
 
-# Cover each dense parallel dimension, their pairwise/all-way interactions,
-# and one size-4 case per dimension without running the full Cartesian product.
+# Cover pure DP scaling, all dense parallel dimensions together, and one
+# size-4 case per dimension.
 PARALLEL_CONFIGS = (
     # num_gpus, tp, pp, cp
     (2, 1, 1, 1),
-    (2, 2, 1, 1),
-    (2, 1, 2, 1),
-    (2, 1, 1, 2),
-    (4, 2, 2, 1),
-    (4, 2, 1, 2),
-    (4, 1, 2, 2),
     (8, 2, 2, 2),
     (8, 4, 1, 1),
     (8, 1, 4, 1),

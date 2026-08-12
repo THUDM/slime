@@ -29,17 +29,14 @@ def save_hf_model_to_path(
     progress_desc: str = "Save HF checkpoint",
 ) -> None:
     """Save a Megatron model as an HF checkpoint at a concrete directory."""
-    if args.megatron_to_hf_mode == "bridge":
-        save_hf_model_bridge_to_path(args, output_dir, model)
-    else:
-        save_hf_model_direct_to_path(
-            args,
-            output_dir,
-            model,
-            model_name=model_name,
-            quantization_config=quantization_config,
-            progress_desc=progress_desc,
-        )
+    save_hf_model_direct_to_path(
+        args,
+        output_dir,
+        model,
+        model_name=model_name,
+        quantization_config=quantization_config,
+        progress_desc=progress_desc,
+    )
 
 
 def save_hf_model_direct_to_path(
@@ -51,7 +48,7 @@ def save_hf_model_direct_to_path(
     quantization_config: dict[str, Any] | None = None,
     progress_desc: str = "Save HF checkpoint",
 ) -> None:
-    """Save a Megatron model as an HF safetensors checkpoint without Megatron Bridge."""
+    """Save a Megatron model as an HF safetensors checkpoint."""
     path = Path(output_dir)
     hf_checkpoint = Path(args.hf_checkpoint).resolve()
     save_path = path.resolve()
@@ -73,7 +70,7 @@ def save_hf_model_direct_to_path(
     setup_error = None
     if is_save_rank:
         try:
-            logger.info("Saving model in HuggingFace format to %s with raw Megatron-to-HF conversion", path)
+            logger.info("Saving model in HuggingFace format to %s", path)
             path.mkdir(parents=True, exist_ok=True)
             _clear_existing_hf_weights(path)
             _copy_hf_assets(args.hf_checkpoint, path)
@@ -148,37 +145,6 @@ def save_hf_model_direct_to_path(
     _finalize_distributed_shards(path, writer.state())
 
     if is_save_rank:
-        logger.info("Successfully saved HuggingFace model to %s", path)
-
-
-def save_hf_model_bridge_to_path(args, output_dir: str | Path, model) -> None:
-    """Save a Megatron model as an HF checkpoint through Megatron Bridge."""
-    import torch.distributed as dist
-    from megatron.bridge import AutoBridge
-    from megatron.core import mpu
-
-    from slime.utils.megatron_bridge_utils import patch_auto_bridge_hf_config, patch_megatron_model
-
-    path = Path(output_dir)
-    should_log = (
-        mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
-    )
-    if should_log:
-        logger.info("Saving model in HuggingFace format to %s with Megatron Bridge", path)
-
-    path.mkdir(parents=True, exist_ok=True)
-    bridge = patch_auto_bridge_hf_config(AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True))
-
-    with patch_megatron_model(model):
-        bridge.save_hf_pretrained(
-            model,
-            path=path,
-        )
-
-    if dist.is_available() and dist.is_initialized():
-        dist.barrier()
-
-    if should_log:
         logger.info("Successfully saved HuggingFace model to %s", path)
 
 

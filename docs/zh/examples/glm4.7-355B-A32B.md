@@ -136,7 +136,7 @@ MTP_ARGS=(
 - `--enable-mtp-training`：启用 MTP 层的梯度计算；不设置时 MTP 层会被加载但保持冻结。
 - `--mtp-loss-scaling-factor 0.2`：MTP loss 相对主策略 loss 的权重，默认值为 0.2。
 
-> **注意**：GLM-4.7 的 MTP 训练依赖 `GLM4MoEBridge`（位于 `slime_plugins/mbridge/glm4moe.py`）在 HuggingFace 与 Megatron 格式之间正确映射普通层和 MTP 层权重。
+> **注意**：`slime/backends/megatron_utils/hf_to_megatron/glm.py` 中的原生 loader 会同时映射普通层和 MTP 层权重。
 
 #### 多机支持
 

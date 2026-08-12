@@ -34,7 +34,11 @@ NUM_GPUS = 0
 
 from slime.rollout.base_types import RolloutFnEvalOutput, call_rollout_fn
 from slime.rollout.data_source import RolloutDataSourceWithBuffer
-from slime.rollout.filter_hub.base_types import DynamicFilterOutput, call_dynamic_filter
+from slime.rollout.filter_hub.base_types import (
+    DynamicFilterOutput,
+    call_dynamic_filter,
+    should_drop_dynamic_filter_output,
+)
 from slime.rollout.rm_hub import async_rm, batched_async_rm
 from slime.rollout.sglang_rollout import generate_rollout as default_generate_rollout
 from slime.utils.misc import load_function
@@ -196,6 +200,25 @@ def check_dynamic_filter_path(path: str) -> None:
     assert tuple(inspect.signature(fn).parameters)[:2] == ("args", "samples")
     output = call_dynamic_filter(fn, make_args(), [make_sample(0, reward=1.0), make_sample(1, reward=2.0)])
     assert isinstance(output, DynamicFilterOutput)
+
+
+def test_dynamic_filter_can_fall_back_to_zero_std_groups_at_target_capacity():
+    fn = load_function("slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std_with_fallback")
+    output = call_dynamic_filter(fn, make_args(), [make_sample(0, reward=1.0), make_sample(1, reward=1.0)])
+
+    assert not bool(output.keep)
+    assert output.keep_when_insufficient is True
+    assert should_drop_dynamic_filter_output(output, remaining_batch_size=3, target_data_size=2) is True
+    assert should_drop_dynamic_filter_output(output, remaining_batch_size=2, target_data_size=2) is False
+
+
+def test_strict_dynamic_filter_still_drops_at_target_capacity():
+    fn = load_function("slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std")
+    output = call_dynamic_filter(fn, make_args(), [make_sample(0, reward=0.0), make_sample(1, reward=0.0)])
+
+    assert not bool(output.keep)
+    assert output.keep_when_insufficient is False
+    assert should_drop_dynamic_filter_output(output, remaining_batch_size=2, target_data_size=2) is True
 
 
 def check_buffer_filter_default() -> None:

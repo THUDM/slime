@@ -76,7 +76,6 @@ def _common_args(debug_data_dir: str):
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 8 "
         "--colocate "
-        "--megatron-to-hf-mode bridge "
     )
 
     return f"{ckpt_args} " f"{rollout_args} " f"{optimizer_args} " f"{grpo_args} " f"{perf_args} " f"{misc_args} "

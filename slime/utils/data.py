@@ -63,7 +63,14 @@ def read_file(path):
     if row_slice is not None:
 
         logger.info("read_file path=%s applying slice row_slice=%s", path, row_slice)
-        reader = itertools.islice(reader, row_slice.start, row_slice.stop, row_slice.step)
+        if (row_slice.start or 0) < 0 or (row_slice.stop or 0) < 0:
+            # islice forbids negative indices, but the @[...] syntax accepts
+            # them (e.g. "@[-100:]" = the last 100 rows). Resolving a negative
+            # bound needs the total row count, so materialize for this case and
+            # keep the streaming islice for plain non-negative slices.
+            reader = iter(list(reader)[row_slice])
+        else:
+            reader = itertools.islice(reader, row_slice.start, row_slice.stop, row_slice.step)
 
     yield from reader
 

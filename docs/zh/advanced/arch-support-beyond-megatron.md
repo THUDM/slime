@@ -22,8 +22,8 @@ Megatron 的模型实例化分为两步：首先根据配置生成“层规格�
     * **对应文件**: `slime_plugins/models/hf_attention.py`
 
 3.  **对齐模型权重**
-    模型结构跑通后，还需要确保权重能正确加载。我们借助 [mbridge](https://github.com/ISEEKYAN/mbridge) 库，通过 `Qwen3NextBridge` 建立了 HuggingFace Checkpoint 与 Megatron 参数之间的命名映射关系，实现双向互通。
-    * **对应文件**: `slime_plugins/mbridge/qwen3_next.py`
+    模型结构跑通后，还需要确保权重能正确加载。slime 将 HuggingFace 到 Megatron 的名称映射和 tensor 变换直接放在 checkpoint loader 旁。
+    * **对应文件**: `slime/backends/megatron_utils/hf_to_megatron/qwen3_next.py`
 
 通过这三层协同，我们成功地将一个 Megatron 原本不支持的复杂模型结构（以其 HuggingFace 实现为载体），运行在了 Megatron 的并行框架之上，并完整保留了模型并行、MoE 加速、流水线调度等全部关键能力。
 

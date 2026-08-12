@@ -1,12 +1,68 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
+import torch.distributed as dist
+import torch.multiprocessing as mp
 
+from slime.utils import distributed_utils
 from slime.utils import reloadable_process_group as rpg
 
 NUM_GPUS = 0
+
+
+def _run_pp_group_reload_worker(rank: int, world_size: int, rendezvous_path: str) -> None:
+    timeout = timedelta(seconds=30)
+    rpg.monkey_patch_torch_dist()
+    dist.init_process_group(
+        backend="gloo",
+        init_method=f"file://{rendezvous_path}",
+        rank=rank,
+        world_size=world_size,
+        timeout=timeout,
+    )
+    distributed_utils.init_gloo_group()
+    rpg.register_default_process_group(timeout=timeout)
+
+    # Exercise the NCCL lifecycle with Gloo so this remains a CPU test.  The
+    # relevant contract is the global ordering of WORLD and subgroup teardown,
+    # not the backend implementation.
+    rpg._uses_nccl = lambda _backend: True
+
+    group_specs = [
+        ([0], "TP_0"),
+        ([1], "TP_1"),
+        ([2], "TP_2"),
+        ([3], "TP_3"),
+        ([0, 1, 2, 3], "PP"),
+        ([0, 3], "EMBEDDING"),
+        ([0], "POSITION_EMBEDDING"),
+        ([0, 2], "DP_0"),
+        ([1, 3], "DP_1"),
+    ]
+    groups = [
+        dist.new_group(ranks=ranks, backend="gloo", timeout=timeout, group_desc=desc) for ranks, desc in group_specs
+    ]
+    pp_group = groups[4]
+
+    for generation in range(2):
+        rpg.destroy_process_groups()
+        assert all(group.group is None for group in groups)
+
+        rpg.reload_process_groups()
+        assert all(group.group is not None for group in groups)
+
+        # Keep this NUM_GPUS=0 regression independent of CUDA-specific memory
+        # checks while still exercising a real collective on the reloaded PP group.
+        dist.barrier(group=pp_group)
+        assert dist.get_world_size(pp_group) == world_size
+
+        state = rpg.default_process_group_states[rpg.os.getpid()]
+        assert state.generation == 2 * (generation + 1)
+
+    dist.destroy_process_group()
 
 
 @pytest.mark.unit
@@ -60,8 +116,8 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
     monkeypatch.setattr(rpg, "init_gloo_group", lambda: events.append(("init_canonical_gloo",)))
     monkeypatch.setattr(
         rpg.ReloadableProcessGroup,
-        "destroy_process_groups",
-        staticmethod(lambda: events.append(("destroy_subgroups",))),
+        "invalidate_process_groups",
+        staticmethod(lambda: events.append(("invalidate_subgroups",))),
     )
     monkeypatch.setattr(
         rpg.ReloadableProcessGroup,
@@ -75,9 +131,8 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
     assert state.generation == 1
     assert events == [
         ("barrier", "canonical-gloo"),
-        ("destroy_subgroups",),
-        ("barrier", "canonical-gloo"),
         ("destroy_world",),
+        ("invalidate_subgroups",),
         ("set_gloo", None),
         (
             "init",
@@ -114,6 +169,27 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
         ("init_canonical_gloo",),
         ("reload_subgroups",),
     ]
+
+
+@pytest.mark.unit
+def test_invalidating_wrappers_drops_every_stale_group_handle(monkeypatch):
+    groups = [SimpleNamespace(group=object()), SimpleNamespace(group=object())]
+    monkeypatch.setattr(rpg.ReloadableProcessGroup, "GROUPS", {rpg.os.getpid(): groups})
+
+    rpg.ReloadableProcessGroup.invalidate_process_groups()
+
+    assert all(group.group is None for group in groups)
+
+
+@pytest.mark.unit
+def test_pp_topology_survives_repeated_world_and_subgroup_reload(tmp_path):
+    world_size = 4
+    mp.spawn(
+        _run_pp_group_reload_worker,
+        args=(world_size, str(tmp_path / "rendezvous")),
+        nprocs=world_size,
+        join=True,
+    )
 
 
 @pytest.mark.unit
