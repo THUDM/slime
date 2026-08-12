@@ -503,7 +503,7 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">当前限制</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#faq">FAQ</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-actor-critic">Q: 可以只写 actor 或只写 critic 吗？</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-actor-num-nodes-critic-num-gpus-per-node-yaml">Q: 可以把 <code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span></code> 或 <code class="docutils literal notranslate"><span class="pre">--critic-num-gpus-per-node</span></code> 写进 YAML 吗？</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-yaml">Q: 可以把资源配置写进 YAML 吗？</a></li>
 </ul>
 </li>
 </ul>
@@ -621,14 +621,12 @@
 <span class="w">  </span>--expert-tensor-parallel-size<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--actor-num-nodes<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--actor-num-gpus-per-node<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--critic-num-nodes<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--critic-num-gpus-per-node<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>...
 </pre></div>
 </div>
 <p>在这个模式下：</p>
 <ul class="simple">
-<li><p>CLI 负责共享的并行策略和资源配置；</p></li>
+<li><p>CLI 负责共享的并行策略和资源配置；当前 PPO 下 critic 的训练资源会跟随 actor 配置；</p></li>
 <li><p>YAML 负责 actor / critic 的差异项，比如 <code class="docutils literal notranslate"><span class="pre">lr</span></code>、<code class="docutils literal notranslate"><span class="pre">load</span></code>、<code class="docutils literal notranslate"><span class="pre">save</span></code>、optimizer 或 scheduler 相关参数。</p></li>
 </ul>
 <section id="id5">
@@ -650,6 +648,7 @@
 <ul class="simple">
 <li><p><strong>目前只支持 PPO。</strong> <code class="docutils literal notranslate"><span class="pre">--megatron-config-path</span></code> 当前主要用于 PPO 工作流中的 actor / critic 角色配置。对于 GRPO、REINFORCE++ 等不依赖 critic 的流程，目前不建议使用这套角色配置。</p></li>
 <li><p><strong>当前 PPO 下，actor 和 critic 的 Megatron 并行配置必须一致。</strong> 特别是 <code class="docutils literal notranslate"><span class="pre">tensor_model_parallel_size</span></code>、<code class="docutils literal notranslate"><span class="pre">pipeline_model_parallel_size</span></code>、<code class="docutils literal notranslate"><span class="pre">context_parallel_size</span></code>、<code class="docutils literal notranslate"><span class="pre">expert_model_parallel_size</span></code>、<code class="docutils literal notranslate"><span class="pre">expert_tensor_parallel_size</span></code>、<code class="docutils literal notranslate"><span class="pre">sequence_parallel</span></code> 等拓扑相关参数，不应在 actor 和 critic 之间配置成不同的值。</p></li>
+<li><p><strong>当前 PPO 下，actor 和 critic 共享同一组 train placement group。</strong> critic 的节点数和每节点 GPU 数由 actor 配置派生，不能作为独立资源规模配置。</p></li>
 <li><p><strong>推荐把并行相关参数继续放在 CLI 中。</strong> 当前最稳妥的用法是：并行与资源参数写在公共 CLI 中，只在 YAML 中覆盖角色差异项，例如 <code class="docutils literal notranslate"><span class="pre">lr</span></code>、<code class="docutils literal notranslate"><span class="pre">load</span></code>、<code class="docutils literal notranslate"><span class="pre">save</span></code>、warmup、optimizer / scheduler 参数等。</p></li>
 </ul>
 <p>如果你在 actor 和 critic 之间写入不同的并行拓扑，当前行为不受支持，可能导致初始化或训练过程出错。</p>
@@ -661,9 +660,9 @@
 <h3>Q: 可以只写 actor 或只写 critic 吗？<a class="headerlink" href="#q-actor-critic" title="链接到此标题。">#</a></h3>
 <p>可以。缺失角色会自动继承公共 CLI 参数，不需要把所有参数都重复写一遍。</p>
 </section>
-<section id="q-actor-num-nodes-critic-num-gpus-per-node-yaml">
-<h3>Q: 可以把 <code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span></code> 或 <code class="docutils literal notranslate"><span class="pre">--critic-num-gpus-per-node</span></code> 写进 YAML 吗？<a class="headerlink" href="#q-actor-num-nodes-critic-num-gpus-per-node-yaml" title="链接到此标题。">#</a></h3>
-<p>不可以。当前资源分配和 placement group 仍由 CLI 参数控制，YAML 中对应字段会被忽略。</p>
+<section id="q-yaml">
+<h3>Q: 可以把资源配置写进 YAML 吗？<a class="headerlink" href="#q-yaml" title="链接到此标题。">#</a></h3>
+<p>不可以。当前资源分配和 placement group 仍由 CLI 参数控制，YAML 中对应字段会被忽略。其中 <code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span></code> / <code class="docutils literal notranslate"><span class="pre">--actor-num-gpus-per-node</span></code> 决定 PPO 的 train 资源规模；critic 的节点数和每节点 GPU 数会跟随 actor 配置，不能独立配置。</p>
 </section>
 </section>
 </section>
@@ -727,7 +726,7 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">当前限制</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#faq">FAQ</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-actor-critic">Q: 可以只写 actor 或只写 critic 吗？</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-actor-num-nodes-critic-num-gpus-per-node-yaml">Q: 可以把 <code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span></code> 或 <code class="docutils literal notranslate"><span class="pre">--critic-num-gpus-per-node</span></code> 写进 YAML 吗？</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-yaml">Q: 可以把资源配置写进 YAML 吗？</a></li>
 </ul>
 </li>
 </ul>

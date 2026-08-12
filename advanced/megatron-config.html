@@ -507,7 +507,7 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-limitations">Current Limitations</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#faq">FAQ</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-can-i-provide-only-an-actor-entry-or-only-a-critic-entry">Q: Can I provide only an actor entry or only a critic entry?</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-can-i-move-actor-num-nodes-or-critic-num-gpus-per-node-into-yaml">Q: Can I move <code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span></code> or <code class="docutils literal notranslate"><span class="pre">--critic-num-gpus-per-node</span></code> into YAML?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-can-i-move-resource-settings-into-yaml">Q: Can I move resource settings into YAML?</a></li>
 </ul>
 </li>
 </ul>
@@ -625,14 +625,12 @@
 <span class="w">  </span>--expert-tensor-parallel-size<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--actor-num-nodes<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--actor-num-gpus-per-node<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--critic-num-nodes<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--critic-num-gpus-per-node<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>...
 </pre></div>
 </div>
 <p>In this setup:</p>
 <ul class="simple">
-<li><p>CLI defines the shared topology and resource layout.</p></li>
+<li><p>CLI defines the shared topology and resource layout; in current PPO, critic training resources follow the actor configuration.</p></li>
 <li><p>YAML defines the role-specific differences, such as <code class="docutils literal notranslate"><span class="pre">lr</span></code>, <code class="docutils literal notranslate"><span class="pre">load</span></code>, <code class="docutils literal notranslate"><span class="pre">save</span></code>, or optimizer / scheduler parameters.</p></li>
 </ul>
 <section id="overriding-only-one-role">
@@ -654,6 +652,7 @@
 <ul class="simple">
 <li><p><strong>PPO only for now.</strong> <code class="docutils literal notranslate"><span class="pre">--megatron-config-path</span></code> is currently intended for PPO actor / critic role configuration. It is not the recommended interface for GRPO, REINFORCE++, and other critic-free workflows.</p></li>
 <li><p><strong>Actor and critic must use the same Megatron parallel topology in current PPO.</strong> In particular, topology-related settings such as <code class="docutils literal notranslate"><span class="pre">tensor_model_parallel_size</span></code>, <code class="docutils literal notranslate"><span class="pre">pipeline_model_parallel_size</span></code>, <code class="docutils literal notranslate"><span class="pre">context_parallel_size</span></code>, <code class="docutils literal notranslate"><span class="pre">expert_model_parallel_size</span></code>, <code class="docutils literal notranslate"><span class="pre">expert_tensor_parallel_size</span></code>, and <code class="docutils literal notranslate"><span class="pre">sequence_parallel</span></code> should not differ between actor and critic.</p></li>
+<li><p><strong>Actor and critic share the same train placement group in current PPO.</strong> The critic node count and GPUs per node are derived from the actor configuration and cannot be used as an independent resource scale.</p></li>
 <li><p><strong>Keep topology-related settings on CLI.</strong> The safest current pattern is to keep parallelism and resource arguments in the shared CLI configuration, and only put role-specific differences in YAML, such as <code class="docutils literal notranslate"><span class="pre">lr</span></code>, <code class="docutils literal notranslate"><span class="pre">load</span></code>, <code class="docutils literal notranslate"><span class="pre">save</span></code>, warmup, and optimizer / scheduler settings.</p></li>
 </ul>
 <p>If you configure different parallel topologies for actor and critic, the behavior is currently unsupported and may fail during initialization or training.</p>
@@ -665,9 +664,9 @@
 <h3>Q: Can I provide only an actor entry or only a critic entry?<a class="headerlink" href="#q-can-i-provide-only-an-actor-entry-or-only-a-critic-entry" title="Link to this heading">#</a></h3>
 <p>Yes. Missing roles automatically inherit the shared CLI arguments, so you do not need to duplicate everything in YAML.</p>
 </section>
-<section id="q-can-i-move-actor-num-nodes-or-critic-num-gpus-per-node-into-yaml">
-<h3>Q: Can I move <code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span></code> or <code class="docutils literal notranslate"><span class="pre">--critic-num-gpus-per-node</span></code> into YAML?<a class="headerlink" href="#q-can-i-move-actor-num-nodes-or-critic-num-gpus-per-node-into-yaml" title="Link to this heading">#</a></h3>
-<p>No. Resource allocation and placement groups are still controlled by CLI arguments, and the corresponding YAML fields are ignored.</p>
+<section id="q-can-i-move-resource-settings-into-yaml">
+<h3>Q: Can I move resource settings into YAML?<a class="headerlink" href="#q-can-i-move-resource-settings-into-yaml" title="Link to this heading">#</a></h3>
+<p>No. Resource allocation and placement groups are still controlled by CLI arguments, and the corresponding YAML fields are ignored. <code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span></code> / <code class="docutils literal notranslate"><span class="pre">--actor-num-gpus-per-node</span></code> determine the PPO train resource scale; the critic node count and GPUs per node follow the actor configuration and cannot be configured independently.</p>
 </section>
 </section>
 </section>
@@ -731,7 +730,7 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-limitations">Current Limitations</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#faq">FAQ</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-can-i-provide-only-an-actor-entry-or-only-a-critic-entry">Q: Can I provide only an actor entry or only a critic entry?</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-can-i-move-actor-num-nodes-or-critic-num-gpus-per-node-into-yaml">Q: Can I move <code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span></code> or <code class="docutils literal notranslate"><span class="pre">--critic-num-gpus-per-node</span></code> into YAML?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-can-i-move-resource-settings-into-yaml">Q: Can I move resource settings into YAML?</a></li>
 </ul>
 </li>
 </ul>

@@ -766,32 +766,16 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--advantage-estimator<span class="w"> </span>ppo
 </pre></div>
 </div>
-<p><strong>Note: In PPO, the Critic and Actor request GPUs in parallel</strong>, which should be considered when allocating resources. Specifically:</p>
+<p><strong>Note: In PPO, the critic and actor share the same training GPU group.</strong> You do not need to reserve a separate set of GPUs for the critic. Specifically:</p>
 <ul class="simple">
-<li><p>The critic model occupies a separate set of GPUs, independent from the actor’s GPU resources.</p></li>
-<li><p>You can configure critic resources using <code class="docutils literal notranslate"><span class="pre">--critic-num-nodes</span></code> and <code class="docutils literal notranslate"><span class="pre">--critic-num-gpus-per-node</span></code>.</p></li>
-<li><p>If critic resource parameters are not configured, the same resource configuration as the actor will be used by default.</p></li>
+<li><p>PPO creates separate actor and critic training process groups, but places them on the same train placement group.</p></li>
+<li><p>The critic training scale follows the actor configuration, and the actor / critic Megatron parallel topology must currently stay identical.</p></li>
+<li><p>PPO forces train-side offload so that actor and critic can wake up and release memory on the same GPUs in turn.</p></li>
+<li><p>There are currently no separate CLI arguments for configuring critic training resources; the critic node count and GPUs per node are derived from the actor configuration.</p></li>
 </ul>
-<p>Cluster resource allocation example:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Actor uses 1 node, 4 GPUs</span>
---actor-num-nodes<span class="w"> </span><span class="m">1</span>
---actor-num-gpus-per-node<span class="w"> </span><span class="m">4</span>
-
-<span class="c1"># Critic uses 1 node, 4 GPUs (parallel to Actor)</span>
---critic-num-nodes<span class="w"> </span><span class="m">1</span>
---critic-num-gpus-per-node<span class="w"> </span><span class="m">4</span>
-
-<span class="c1"># Rollout uses 8 GPUs</span>
---rollout-num-gpus<span class="w"> </span><span class="m">8</span>
-</pre></div>
-</div>
-<p>With the above configuration, a total of <code class="docutils literal notranslate"><span class="pre">4</span> <span class="pre">(actor)</span> <span class="pre">+</span> <span class="pre">4</span> <span class="pre">(critic)</span> <span class="pre">+</span> <span class="pre">8</span> <span class="pre">(rollout)</span> <span class="pre">=</span> <span class="pre">16</span></code> GPUs are required.</p>
 <p>PPO-related parameters:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--critic-load</span></code>: Checkpoint path for the critic model.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--critic-save</span></code>: Save path for the critic model.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--critic-lr</span></code>: Learning rate for the critic model.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--critic-lr-warmup-iters</span></code>: Number of warmup steps for the critic model.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--megatron-config-path</span></code>: YAML config for role-specific Megatron overrides, such as setting critic-specific <code class="docutils literal notranslate"><span class="pre">load</span></code>, <code class="docutils literal notranslate"><span class="pre">save</span></code>, <code class="docutils literal notranslate"><span class="pre">lr</span></code>, or warmup parameters.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--num-critic-only-steps</span></code>: Number of steps to train only the critic at the beginning of training.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--eps-clip</span></code>: PPO clip range.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--value-clip</span></code>: Clip range for value loss.</p></li>
