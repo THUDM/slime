@@ -1828,7 +1828,8 @@ def slime_validate_args(args):
             args.load = args.ref_load
         if args.ref_ckpt_step is not None:
             args.ckpt_step = args.ref_ckpt_step
-        args.start_rollout_id = 0
+        if args.start_rollout_id is None:
+            args.start_rollout_id = 0
 
     if args.eval_interval is not None:
         assert args.eval_datasets, "Evaluation datasets must be configured when eval_interval is set."
