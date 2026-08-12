@@ -1500,10 +1500,19 @@ def _compute_top_p_kept_vocab_metrics(args, all_samples: list[Sample]):
 def _compute_spec_metrics(args, all_samples: list[Sample]):
     if getattr(args, "sglang_speculative_algorithm", None) is None:
         return {}
-    num_samples = len(all_samples)
+    # Pool the raw counters, like _compute_prefix_cache_metrics below. Averaging
+    # the per-sample ratios weights a 10-token response the same as a 4k-token
+    # one, and counts samples whose spec counters were never populated (aborted /
+    # partial rollout) as hard zeros — both only ever bias the report downward.
+    accept_tokens = sum(sample.spec_info.spec_accept_token_num for sample in all_samples)
+    draft_tokens = sum(sample.spec_info.spec_draft_token_num for sample in all_samples)
+    completion_tokens = sum(sample.spec_info.completion_token_num for sample in all_samples)
+    verify_ct = sum(sample.spec_info.spec_verify_ct for sample in all_samples)
     metrics = {}
-    metrics["spec_accept_rate"] = sum(sample.spec_info.spec_accept_rate for sample in all_samples) / num_samples
-    metrics["spec_accept_length"] = sum(sample.spec_info.spec_accept_length for sample in all_samples) / num_samples
+    if draft_tokens > 0:
+        metrics["spec_accept_rate"] = accept_tokens / draft_tokens
+    if verify_ct > 0:
+        metrics["spec_accept_length"] = completion_tokens / verify_ct
     return metrics
 
 
