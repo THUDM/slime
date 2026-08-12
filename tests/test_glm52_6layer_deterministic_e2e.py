@@ -64,6 +64,9 @@ assert hasattr(deep_gemm, "set_batch_invariant"), "DeepGEMM lacks set_batch_inva
 assert "align_fp8_quantization" in inspect.signature(Buffer.low_latency_dispatch).parameters, (
     "DeepEP lacks align_fp8_quantization"
 )
+assert "fp8_quantization_mode" in inspect.signature(Buffer.low_latency_dispatch).parameters, (
+    "DeepEP lacks fp8_quantization_mode"
+)
 assert "enable_fp32_moe_router" in ServerArgs.__dataclass_fields__, "SGLang lacks enable_fp32_moe_router"
 """
 
@@ -231,7 +234,7 @@ def _train_args(
         "--sglang-mem-fraction-static 0.70 --sglang-enable-dp-attention --sglang-enable-dp-lm-head "
         f"--sglang-ep-size {NUM_GPUS} --sglang-dp-size {NUM_GPUS} --sglang-moe-dp-size 1 "
         "--sglang-moe-dense-tp-size 1 --sglang-moe-a2a-backend deepep --sglang-deepep-mode low_latency "
-        "--sglang-moe-runner-backend deep_gemm --sglang-fp8-gemm-runner-backend deep_gemm "
+        "--sglang-moe-runner-backend deep_gemm --sglang-fp8-gemm-backend deep_gemm "
         f"--sglang-page-size 64 --sglang-kv-cache-dtype {kv_cache_dtype} --sglang-attention-backend dsa "
         "--sglang-dsa-prefill-backend flashmla_sparse --sglang-dsa-decode-backend flashmla_sparse "
         "--sglang-dsa-topk-backend torch --sglang-chunked-prefill-size 4096 --sglang-context-length 8192 "
@@ -407,7 +410,10 @@ def _run(cmd, env=None, cwd=None, check=True, stream=False):
         sys.stdout.write(line)
         sys.stdout.flush()
     proc.wait()
-    return proc.returncode, "".join(lines)
+    output = "".join(lines)
+    if check and proc.returncode != 0:
+        raise RuntimeError(f"{cmd} failed ({proc.returncode}):\n{output}")
+    return proc.returncode, output
 
 
 def test_glm52_6layer_deterministic_train_rollout_alignment():

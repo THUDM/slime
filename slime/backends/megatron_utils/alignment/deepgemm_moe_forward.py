@@ -34,6 +34,7 @@ from slime.backends.megatron_utils.alignment.deepgemm_forward import (
     _should_log_deepgemm_summary,
     _sum_to_parameter_dtype,
 )
+from slime.backends.sglang_utils.compat import import_sglang_module
 
 logger = logging.getLogger(__name__)
 
@@ -1125,10 +1126,17 @@ def _load_deepgemm_ops() -> _DeepGEMMOps:
     import deep_gemm
     from sgl_kernel import silu_and_mul
     from sglang.srt.layers import deep_gemm_wrapper
-    from sglang.srt.layers.moe.ep_moe.kernels import tma_align_input_scale
-    from sglang.srt.layers.quantization.fp8_kernel import sglang_per_token_group_quant_fp8
 
     from slime.backends.megatron_utils.kernels.fp8_kernel import blockwise_cast_to_fp8_triton
+
+    ep_moe_kernels = import_sglang_module(
+        "sglang.kernels.ops.moe.ep_moe_kernels",
+        "sglang.srt.layers.moe.ep_moe.kernels",
+    )
+    fp8_kernel = import_sglang_module(
+        "sglang.kernels.ops.quantization.fp8_kernel",
+        "sglang.srt.layers.quantization.fp8_kernel",
+    )
 
     _configure_batch_invariant(deep_gemm, deep_gemm_wrapper)
     scale_ue8m0 = bool(deep_gemm_wrapper.DEEPGEMM_SCALE_UE8M0)
@@ -1143,8 +1151,8 @@ def _load_deepgemm_ops() -> _DeepGEMMOps:
         # and activation/weight scales TMA-aligned as a separate step. Unchanged.
         return _DeepGEMMOps(
             quantize_weight=blockwise_cast_to_fp8_triton,
-            quantize_activation=sglang_per_token_group_quant_fp8,
-            align_input_scale=tma_align_input_scale,
+            quantize_activation=fp8_kernel.sglang_per_token_group_quant_fp8,
+            align_input_scale=ep_moe_kernels.tma_align_input_scale,
             grouped_gemm=deep_gemm_wrapper.grouped_gemm_nt_f8f8bf16_contig,
             silu_and_mul=silu_and_mul,
             scale_ue8m0=False,
@@ -1166,8 +1174,8 @@ def _load_deepgemm_ops() -> _DeepGEMMOps:
 
     return _DeepGEMMOps(
         quantize_weight=_quantize_weight_ue8m0,
-        quantize_activation=sglang_per_token_group_quant_fp8,
-        align_input_scale=tma_align_input_scale,
+        quantize_activation=fp8_kernel.sglang_per_token_group_quant_fp8,
+        align_input_scale=ep_moe_kernels.tma_align_input_scale,
         grouped_gemm=deep_gemm_wrapper.grouped_gemm_nt_f8f8bf16_contig,
         silu_and_mul=silu_and_mul,
         scale_ue8m0=True,
@@ -2448,7 +2456,10 @@ class _SGLangEPGatherWithBF16Backward(torch.autograd.Function):
             )
         if topk_indices.shape != topk_weights.shape or topk_indices.shape != output_index.shape:
             raise ValueError("DeepEP gather IDs, weights, and output indices must align")
-        from sglang.srt.layers.moe.ep_moe.kernels import ep_gather
+        ep_moe_kernels = import_sglang_module(
+            "sglang.kernels.ops.moe.ep_moe_kernels",
+            "sglang.srt.layers.moe.ep_moe.kernels",
+        )
 
         output_shape = (topk_indices.shape[0], hidden_states.shape[1])
         output = torch.empty(
@@ -2456,7 +2467,7 @@ class _SGLangEPGatherWithBF16Backward(torch.autograd.Function):
             device=hidden_states.device,
             dtype=hidden_states.dtype,
         )
-        ep_gather(
+        ep_moe_kernels.ep_gather(
             hidden_states,
             topk_indices,
             topk_weights,
