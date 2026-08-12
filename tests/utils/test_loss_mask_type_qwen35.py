@@ -234,3 +234,30 @@ def test_qwen3_5_matches_expected_mask_for_tool_call_flow():
         "\n</think>\n\nTOOL_CALL\n\n<tool_call>\n<function=terminal>\n<parameter=command>\nls\n</parameter>\n</function>\n</tool_call><|im_end|>\n",
         "REASONING\n</think>\n\nFINAL<|im_end|>\n",
     ]
+
+
+def test_qwen3_matches_full_template_for_consecutive_tool_responses():
+    tokenizer = FakeQwen35Tokenizer()
+    messages = [
+        {"role": "system", "content": "SYSTEM"},
+        {"role": "user", "content": "USER"},
+        {
+            "role": "assistant",
+            "content": "CALL",
+            "tool_calls": [
+                {"function": {"name": "terminal", "arguments": {"command": "cat a.py"}}},
+                {"function": {"name": "terminal", "arguments": {"command": "cat b.py"}}},
+            ],
+        },
+        {"role": "tool", "content": "CONTENTS_A"},
+        {"role": "tool", "content": "CONTENTS_B"},
+    ]
+
+    expected_text, expected_loss_mask = tokenizer.render_with_expected_mask(messages)
+    expected_token_ids = tokenizer(expected_text, add_special_tokens=False)["input_ids"]
+    generator = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type="qwen3")
+
+    token_ids, loss_mask = generator.get_loss_mask(messages)
+
+    assert token_ids == expected_token_ids
+    assert loss_mask == expected_loss_mask

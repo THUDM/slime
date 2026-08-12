@@ -248,7 +248,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 nargs="*",
                 default=None,
-                help="""List of regex patterns of parameter names to TRAIN. All other parameters will be FROZEN. 
+                help=r"""List of regex patterns of parameter names to TRAIN. All other parameters will be FROZEN.
                         Supports Python regex syntax (re.search).
 
                         Examples:
@@ -268,7 +268,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 nargs="*",
                 default=None,
-                help="""List of regex patterns of parameter names to FREEZE. Other parameters will remain trainable.
+                help=r"""List of regex patterns of parameter names to FREEZE. Other parameters will remain trainable.
                         Supports Python regex syntax (re.search).
 
                         Examples:
@@ -281,6 +281,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                         3. Freeze specific projection layers (e.g., all Gate/Up projections):
                             --freeze-params-name-list linear_fc1
                         """,
+            )
+            reset_arg(
+                parser,
+                "--freeze-indexer",
+                action="store_true",
+                default=False,
+                help=(
+                    "Freeze DSA indexer parameters while leaving the rest of the model "
+                    "trainable. This supports both the GLM plugin indexer names and "
+                    "Megatron's upstream DSA indexer module."
+                ),
             )
             parser.add_argument(
                 "--allgather-cp",
@@ -1457,6 +1468,38 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
             )
+            parser.add_argument(
+                "--megatron-deepgemm-forward-layers",
+                nargs="+",
+                type=int,
+                default=None,
+                help=(
+                    "Global zero-based decoder layers whose selected TE linears use "
+                    "the SGLang-compatible block-FP8 DeepGEMM forward."
+                ),
+            )
+            parser.add_argument(
+                "--megatron-deepgemm-forward-modules",
+                nargs="+",
+                default=None,
+                help="Optional module-name suffixes to replace in the selected dense layers.",
+            )
+            parser.add_argument(
+                "--megatron-deepgemm-moe-forward-layers",
+                nargs="+",
+                type=int,
+                default=None,
+                help=(
+                    "Global zero-based MoE decoder layers whose TEGroupedMLP uses "
+                    "the SGLang-compatible grouped DeepGEMM forward."
+                ),
+            )
+            parser.add_argument(
+                "--megatron-deepgemm-moe-forward-modules",
+                nargs="+",
+                default=None,
+                help="Optional TEGroupedMLP module-name suffixes; defaults to mlp.experts.",
+            )
             return parser
 
         def add_mtp_training_arguments(parser):
@@ -1480,6 +1523,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--ci-disable-kl-checker",
                 action="store_true",
+            )
+            parser.add_argument(
+                "--ci-train-rollout-logprob-abs-diff-threshold",
+                type=float,
+                default=0.1,
+                help=(
+                    "Upper bound asserted on train/train_rollout_logprob_abs_diff when --ci-test is set. "
+                    "Defaults to 0.1; tighten it (e.g. 1e-6) for deterministic train/rollout alignment gates."
+                ),
             )
             parser.add_argument(
                 "--ci-save-grad-norm",
@@ -1776,7 +1828,8 @@ def slime_validate_args(args):
             args.load = args.ref_load
         if args.ref_ckpt_step is not None:
             args.ckpt_step = args.ref_ckpt_step
-        args.start_rollout_id = 0
+        if args.start_rollout_id is None:
+            args.start_rollout_id = 0
 
     if args.eval_interval is not None:
         assert args.eval_datasets, "Evaluation datasets must be configured when eval_interval is set."
@@ -1855,7 +1908,9 @@ def slime_validate_args(args):
     del args.offload
 
     if args.debug_rollout_only:
-        if args.colocate and args.rollout_num_gpus is None:
+        if args.rollout_external:
+            pass
+        elif args.colocate and args.rollout_num_gpus is None:
             args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
         elif args.rollout_num_gpus == 0:
             args.actor_num_gpus_per_node = 0

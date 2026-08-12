@@ -91,10 +91,22 @@ class MultiTurnLossMaskGenerator:
         prefix_message = {"role": "user", "content": "FOR CALCULATING LOSS MASK ONLY"}
         prefix_token_ids = self.tokenizer.apply_chat_template([prefix_message], tokenize=True, return_dict=False)
 
-        for i, message in enumerate(messages):
+        i = 0
+        while i < len(messages):
+            message = messages[i]
+            if message["role"] == "tool":
+                # Qwen templates wrap consecutive tool responses in a single user turn.
+                group_end = i + 1
+                while group_end < len(messages) and messages[group_end]["role"] == "tool":
+                    group_end += 1
+                message_group = messages[i:group_end]
+            else:
+                group_end = i + 1
+                message_group = [message]
+
             if i == 0:
                 tailed_message_ids = self.tokenizer.apply_chat_template(
-                    [message, prefix_message],
+                    message_group + [prefix_message],
                     tokenize=True,
                     tools=tools,
                     return_dict=False,
@@ -102,7 +114,7 @@ class MultiTurnLossMaskGenerator:
                 message_ids = tailed_message_ids[: -len(prefix_token_ids)]
             else:
                 prefixed_message_ids = self.tokenizer.apply_chat_template(
-                    [prefix_message, message],
+                    [prefix_message] + message_group,
                     tokenize=True,
                     return_dict=False,
                 )
@@ -121,6 +133,7 @@ class MultiTurnLossMaskGenerator:
 
             all_loss_masks.extend(loss_mask)
             all_token_ids.extend(message_ids)
+            i = group_end
 
         return all_token_ids, all_loss_masks
 
