@@ -978,7 +978,13 @@ def policy_loss_function(
     if args.advantage_estimator == "cispo":
         pg_loss, pg_clipfrac = compute_cispo_loss(ppo_kl, log_probs, advantages, args.eps_clip, args.eps_clip_high)
     else:
-        pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
+        pg_loss, pg_clipfrac = compute_policy_loss(
+            ppo_kl,
+            advantages,
+            args.eps_clip,
+            args.eps_clip_high,
+            eps_clip_c=args.eps_clip_c,
+        )
 
     if args.use_opsm:
         pg_loss = pg_loss * opsm_mask
@@ -1103,7 +1109,7 @@ def policy_loss_function(
         reported_loss["opsm_clipfrac"] = opsm_clipfrac
 
     # Add OPD metrics if available
-    if "opd_reverse_kl" in batch:
+    if batch.get("opd_reverse_kl"):
         opd_reverse_kl = torch.cat(batch["opd_reverse_kl"], dim=0)
         reported_loss["opd_reverse_kl"] = sum_of_sample_mean(opd_reverse_kl).clone().detach()
 

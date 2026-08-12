@@ -57,7 +57,10 @@ def block_fp8(weight, block_size):
     block_max = torch.max(torch.abs(qweight), dim=1, keepdim=True)[0]
     block_max = torch.max(block_max, dim=3, keepdim=True)[0]
 
-    scale = block_max.to(torch.float32) / FP8_MAX
+    # Clamp the block max away from zero, matching channel_fp8 / tensor_fp8: an
+    # all-zero block (e.g. padding rows or an unused MoE expert) would otherwise
+    # produce scale == 0 and qweight == 0/0 == NaN in the converted checkpoint.
+    scale = block_max.clamp(min=1e-12).to(torch.float32) / FP8_MAX
     qweight = (
         (qweight / scale)
         .clamp(min=FP8_MIN, max=FP8_MAX)

@@ -1,6 +1,6 @@
 # 在策略蒸馏 (On-Policy Distillation)
 
-在策略蒸馏 (OPD) 让学生模型在自己的 rollout 数据上训练，同时匹配教师模型的 token 级 log-probability，从而实现从大模型到小模型的知识传递。OPD 与 advantage estimator 正交——它作为 KL 惩罚项叠加在任意 estimator（GRPO、PPO、REINFORCE++ 等）之上。
+在策略蒸馏 (OPD) 使用学生当前策略采样的 response token 来训练学生。对于学生轨迹中访问到的每个前缀，固定的教师模型为同一个 next token 评分，从而沿学生自己的轨迹提供稠密的 token 级学习信号。在 slime 中，这一信号以逆 KL 的采样估计惩罚 advantage，因此可以与 GRPO、PPO、REINFORCE++ 等 advantage estimator 组合；当任务奖励为零时，同一机制就是纯蒸馏。
 
 ## 关键参数
 
@@ -14,15 +14,31 @@
 
 ## 原理
 
-OPD 通过减去一个 KL 惩罚项来修改 advantage 计算，鼓励学生匹配教师的输出分布：
+记 $\pi_\theta$ 为学生策略，$\pi_T$ 为教师策略，$h_t$ 为学生生成轨迹中采样 token $a_t$ 之前的历史。按照 [Thinking Machines Lab 给出的定义](https://thinkingmachines.ai/blog/on-policy-distillation/)，token 级逆 KL 为
 
 $$
-\hat{A}_t = A_t - \lambda_{\text{opd}} \cdot D_{\text{KL}}(P_{\text{teacher}} \| P_{\text{student}})_t
+D_{\mathrm{KL}}\left(\pi_\theta(\cdot \mid h_t) \| \pi_T(\cdot \mid h_t)\right)
+= \mathbb{E}_{a_t \sim \pi_\theta(\cdot \mid h_t)}\left[
+\log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t)
+\right].
 $$
 
-其中 $A_t$ 是基础 estimator（如 GRPO）的原始 advantage，$\lambda_{\text{opd}}$ 是 `--opd-kl-coef`，$D_{\text{KL}}$ 是 token 级的逆 KL 散度。
+这里的顺序很重要：KL 的第一个参数是学生分布，期望同样对学生分布取值。教师不生成训练轨迹，而是评估学生实际采样的 token。
 
-因此 OPD 可以与任何 advantage estimator 组合使用，包括 GRPO、PPO、REINFORCE++ 和 GSPO。
+slime 不会遍历完整词表来精确计算这个期望。对于每个采样 token，它使用如下 Monte Carlo 贡献：
+
+$$
+\hat d_t = \log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t),
+\qquad a_t \sim \pi_\theta(\cdot \mid h_t),
+$$
+
+然后修改基础 advantage：
+
+$$
+\hat A_t = A_t - \lambda_{\mathrm{opd}}\hat d_t.
+$$
+
+其中 $A_t$ 来自所配置的 estimator（纯蒸馏时为零），$\lambda_{\mathrm{opd}}$ 是 `--opd-kl-coef`。尽管 KL 的期望非负，单个样本的 $\hat d_t$ 仍可能为负。策略损失使用修改后的 $\hat A_t$，因此 OPD 项与 GRPO、PPO、REINFORCE++、GSPO 等 advantage estimator 的选择相互独立。
 
 ## 两种教师模式
 
@@ -30,13 +46,13 @@ $$
 
 教师模型运行在外部 SGLang 服务器上，教师的 log-probs 在 rollout 阶段获取。
 
-**适用场景**：教师与学生架构不同，或教师模型太大无法与训练模型同时加载。
+**适用场景**：教师与学生架构不同，或教师模型太大无法与训练模型同时加载。由于教师需要为学生的原始 token ID 评分，两者仍须使用兼容的 tokenizer 和词表。
 
 **工作流程**：
 1. 外部 SGLang 服务器运行教师模型。
-2. 在 rollout 阶段，自定义 reward 函数（`slime.rollout.on_policy_distillation.reward_func`）将每个样本发送到教师服务器以获取 token 级 log-probs。
+2. 在 rollout 阶段，自定义 reward 函数（`slime.rollout.on_policy_distillation.reward_func`）将学生采样的 token ID 发送给教师服务器，并获取教师对这些相同 token 的 log-probability。
 3. 自定义后处理函数（`slime.rollout.on_policy_distillation.post_process_rewards`）将教师 log-probs 裁剪到 response 范围并存储到 `sample.teacher_log_probs` 中。
-4. 在训练阶段，从存储的教师 log-probs 计算 KL 惩罚并应用到 advantages 上。
+4. 在训练阶段，slime 从基础 advantage 中减去按 `--opd-kl-coef` 缩放后的采样 log-probability 差值。
 
 **配置**：
 ```bash

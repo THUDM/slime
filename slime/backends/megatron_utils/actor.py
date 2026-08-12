@@ -86,11 +86,6 @@ class MegatronTrainRayActor(TrainRayActor):
 
         dist.barrier(group=get_gloo_group())
 
-        if args.offload_train:
-            if (x := args.train_memory_margin_bytes) > 0:
-                logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
-                torch_memory_saver.memory_margin_bytes = x
-
         self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id = initialize_model_and_optimizer(
             args, role
         )
@@ -120,7 +115,7 @@ class MegatronTrainRayActor(TrainRayActor):
             source_getter=lambda: named_params_and_buffers(
                 self.args,
                 self.model,
-                convert_to_global_name=args.megatron_to_hf_mode == "raw",
+                convert_to_global_name=True,
             ),
             single_tag=None,
         )
@@ -143,7 +138,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.vocab_size is None:
             # Prefer HF config vocab_size (which may include model-native padding)
-            # over tokenizer vocab_size (which may be smaller, e.g. GPT-OSS).
+            # over tokenizer vocab_size, which may be smaller.
             hf_vocab = getattr(self.hf_config, "vocab_size", None)
             self.args.vocab_size = hf_vocab if hf_vocab is not None else self.tokenizer.vocab_size
 
@@ -228,6 +223,15 @@ class MegatronTrainRayActor(TrainRayActor):
 
         clear_memory()
         reload_process_groups()
+
+        if mpu.get_pipeline_model_parallel_world_size() > 2:
+            # Megatron's patched batched pipeline P2P uses the default WORLD
+            # group.  After reload, PP=4 starts with only the first two stages
+            # entering batch_isend_irecv(), but PyTorch requires every rank when
+            # that is the first NCCL operation on a group.  Prime WORLD here,
+            # after the memory saver is resumed, so later stages cannot miss its
+            # lazy initialization.  Sleep still destroys it completely.
+            dist.barrier(device_ids=[torch.cuda.current_device()])
         if self.role == "actor":
             self._switch_model("actor")
         print_memory("after wake_up model")
@@ -628,18 +632,21 @@ class MegatronTrainRayActor(TrainRayActor):
             destroy_process_groups()
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:
-        old_args = self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune
+        old_args = (
+            self.args.load,
+            self.args.no_load_optim,
+            self.args.no_load_rng,
+            self.args.finetune,
+            self.args.ckpt_step,
+        )
         self.args.load = path
         self.args.no_load_optim = True
         self.args.no_load_rng = True
         self.args.finetune = True
 
-        old_ckpt_step = None
         if model_tag == "ref" and self.args.ref_ckpt_step is not None:
-            old_ckpt_step = self.args.ckpt_step
             self.args.ckpt_step = self.args.ref_ckpt_step
         elif model_tag == "teacher" and self.args.opd_teacher_ckpt_step is not None:
-            old_ckpt_step = self.args.ckpt_step
             self.args.ckpt_step = self.args.opd_teacher_ckpt_step
 
         _, _ = load_checkpoint(
@@ -649,10 +656,13 @@ class MegatronTrainRayActor(TrainRayActor):
             checkpointing_context={},
             skip_load_to_model_and_opt=False,
         )
-        self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune = old_args
-
-        if old_ckpt_step is not None:
-            self.args.ckpt_step = old_ckpt_step
+        (
+            self.args.load,
+            self.args.no_load_optim,
+            self.args.no_load_rng,
+            self.args.finetune,
+            self.args.ckpt_step,
+        ) = old_args
 
         self.weights_backuper.backup(model_tag)
         self._active_model_tag = model_tag

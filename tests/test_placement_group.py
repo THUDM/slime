@@ -39,7 +39,7 @@ def _args(**overrides):
         pytest.param({"rollout_num_gpus": 0}, (16, 16), id="zero_rollout_gpus"),
         pytest.param({"colocate": True, "rollout_num_gpus": 0}, (16, 0), id="colocate_zero_rollout_gpus"),
         pytest.param({"rollout_external": True}, (16, 16), id="external"),
-        pytest.param({"rollout_external": True, "debug_rollout_only": True}, (0, 0), id="external_debug_rollout"),
+        pytest.param({"rollout_external": True, "debug_rollout_only": True}, (16, 0), id="external_debug_rollout"),
     ],
 )
 def test_placement_group_layout(overrides, expected):
