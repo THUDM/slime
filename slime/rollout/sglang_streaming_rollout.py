@@ -13,15 +13,19 @@ Wire it in as the per-sample generate function::
     --rollout-function-path slime.rollout.sglang_rollout.generate_rollout \\
     --custom-generate-function-path slime.rollout.sglang_streaming_rollout.generate_streaming
 
+This generator selects request abort, so Slime cancels each active streaming
+HTTP request instead of using server-wide abort.
+
+Request cancellation only preserves metadata received before disconnect.
+SGLang emits top-p and routed-expert replay data on its terminal chunk, so use
+server abort when those features must survive a partial rollout.
+
 The outer rollout loop (semaphore, dp_rank balancing, abort orchestration,
 partial-rollout buffer hand-off) is still owned by ``sglang_rollout``; this
 file only replaces the inner HTTP call.
 
-sglang's default streaming output is cumulative — server-side
-``state.output_token_logprobs`` accumulates and every chunk references the
-full list-so-far (see ``tokenizer_manager.py``). If anyone ever flips
-``--incremental-streaming-output`` on the sglang server, the text/output_ids
-deltas will need different handling here.
+Both cumulative and incremental SGLang streams are accepted. The latter is used
+when the server enables incremental streaming output.
 """
 
 import json
@@ -30,6 +34,7 @@ from argparse import Namespace
 from typing import Any
 
 from slime.rollout.sglang_rollout import GenerateState, _prepare_prompt_ids
+from slime.rollout.streaming_utils import SGLangStreamAccumulator
 from slime.utils import http_utils
 from slime.utils.processing_utils import encode_image_for_rollout_engine
 from slime.utils.trace_utils import build_sglang_meta_trace_attrs, trace_span
@@ -43,8 +48,8 @@ logger = logging.getLogger(__name__)
 async def generate_streaming(args: Namespace, sample: Sample, sampling_params: dict[str, Any]) -> Sample:
     """Streaming counterpart to :func:`slime.rollout.sglang_rollout.generate`.
 
-    Writes the cumulative state from each SSE chunk onto ``sample`` so an
-    abort that cuts the stream still leaves a coherent partial sample behind.
+    Applies each SSE chunk onto ``sample`` so an abort that cuts the stream
+    still leaves a coherent partial sample behind.
     """
     if args.ci_test:
         assert isinstance(sample.prompt, str)
@@ -88,78 +93,86 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     if sample.session_id and getattr(args, "router_policy", None) == "consistent_hashing":
         headers = {"X-SMG-Routing-Key": sample.session_id}
 
-    # Snapshot pre-call sample state. sglang's SSE chunks are cumulative
-    # *within this call*; on each chunk we rebuild the post-call view of the
-    # sample = prior state + chunk delta. That way a mid-stream break leaves
-    # the sample exactly at the boundary of the last chunk we observed.
+    # Preserve the pre-call state so both stream formats also work when
+    # resuming a partial rollout. A terminal full top-p snapshot may replay
+    # the current call from this base to keep metadata aligned.
     base_tokens = list(sample.tokens)
     base_response = sample.response or ""
     base_response_length = sample.response_length
     base_log_probs = None if sample.rollout_log_probs is None else list(sample.rollout_log_probs)
     base_top_p_token_ids = sample.rollout_top_p_token_ids
     base_top_p_token_offsets = sample.rollout_top_p_token_offsets
+    base_routed_experts = sample.rollout_routed_experts
     base_loss_mask = list(sample.loss_mask) if sample.loss_mask is not None else None
 
     last_meta_info: dict[str, Any] = {}
-    call_tokens: list[int] = []
-    call_log_probs: list[float] = []
-    call_text: str = ""
+    stream = SGLangStreamAccumulator(
+        output_mode="incremental" if args.sglang_incremental_streaming_output else "cumulative"
+    )
 
     client = http_utils._http_client
     assert client is not None, "http client not initialized; call init_http_client first"
 
-    with trace_span(
-        sample, "sglang_generate_stream", attrs={"max_new_tokens": sampling_params["max_new_tokens"]}
-    ) as span:
-        async with client.stream("POST", url, json=payload, headers=headers) as response:
-            response.raise_for_status()
-            async for raw_line in response.aiter_lines():
-                if not raw_line or not raw_line.startswith("data:"):
-                    continue
-                data_str = raw_line[len("data:") :].strip()
-                if not data_str or data_str == "[DONE]":
-                    continue
-                try:
-                    chunk = json.loads(data_str)
-                except json.JSONDecodeError:
-                    logger.warning("sglang_streaming: skipping non-JSON chunk: %r", data_str[:120])
-                    continue
+    try:
+        with trace_span(
+            sample, "sglang_generate_stream", attrs={"max_new_tokens": sampling_params["max_new_tokens"]}
+        ) as span:
+            async with client.stream("POST", url, json=payload, headers=headers) as response:
+                response.raise_for_status()
+                async for raw_line in response.aiter_lines():
+                    if not raw_line or not raw_line.startswith("data:"):
+                        continue
+                    data_str = raw_line[len("data:") :].strip()
+                    if not data_str or data_str == "[DONE]":
+                        continue
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        logger.warning("sglang_streaming: skipping non-JSON chunk: %r", data_str[:120])
+                        continue
 
-                meta = chunk.get("meta_info") or {}
-                last_meta_info = meta
+                    update = stream.add(chunk)
+                    last_meta_info = update.meta_info
 
-                call_text = chunk.get("text", call_text)
-                if "output_token_logprobs" in meta:
-                    call_tokens = [item[1] for item in meta["output_token_logprobs"]]
-                    call_log_probs = [item[0] for item in meta["output_token_logprobs"]]
+                    if update.replace_call_state:
+                        sample.tokens = list(base_tokens)
+                        sample.response = base_response
+                        sample.response_length = base_response_length
+                        sample.rollout_log_probs = None if base_log_probs is None else list(base_log_probs)
+                        sample.rollout_top_p_token_ids = base_top_p_token_ids
+                        sample.rollout_top_p_token_offsets = base_top_p_token_offsets
+                        sample.rollout_routed_experts = base_routed_experts
+                        sample.loss_mask = None if base_loss_mask is None else list(base_loss_mask)
 
-                # Surface partial state on the sample immediately. If the
-                # outer abort path cuts us, whatever we've written so far is
-                # what survives — no /abort_request round-trip needed.
-                sample.tokens = list(base_tokens)
-                sample.response = base_response
-                sample.response_length = base_response_length
-                sample.rollout_log_probs = None if base_log_probs is None else list(base_log_probs)
-                sample.rollout_top_p_token_ids = base_top_p_token_ids
-                sample.rollout_top_p_token_offsets = base_top_p_token_offsets
-                sample.loss_mask = None if base_loss_mask is None else list(base_loss_mask)
-                sample.append_response_tokens(
-                    args,
-                    tokens=call_tokens,
-                    log_probs=call_log_probs,
-                    trainable=True,
-                    meta_info=meta,
-                    text=call_text,
-                    update_terminal_info=bool(meta.get("finish_reason")),
-                )
+                    sample.append_response_tokens(
+                        args,
+                        tokens=update.tokens,
+                        log_probs=update.log_probs,
+                        trainable=True,
+                        meta_info=last_meta_info,
+                        text=None,
+                        update_terminal_info=bool(last_meta_info.get("finish_reason")),
+                    )
 
-                if state.aborted:
-                    break
+                    if state.aborted:
+                        break
 
-        if last_meta_info.get("finish_reason"):
-            span.update(build_sglang_meta_trace_attrs(last_meta_info))
+            if last_meta_info.get("finish_reason"):
+                span.update(build_sglang_meta_trace_attrs(last_meta_info))
+    finally:
+        sample.response = base_response + stream.response_text(
+            lambda token_ids: state.tokenizer.decode(
+                token_ids,
+                skip_special_tokens=sampling_params.get("skip_special_tokens", True),
+            )
+        )
 
     if state.aborted and not last_meta_info.get("finish_reason"):
         sample.status = Sample.Status.ABORTED
+    elif not last_meta_info.get("finish_reason"):
+        raise RuntimeError("SGLang streaming response ended without a terminal finish_reason.")
 
     return sample
+
+
+generate_streaming.abort_mode = "request"
