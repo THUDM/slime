@@ -281,24 +281,27 @@ def save_tensors(args, model_name, state_dict, output_dir, chunk_size, vocab_siz
     print(f"Total parameters to process: {len(param_list)}")
 
     all_converted_tensors = []
-    lock = threading.Lock()
 
     def process_and_collect(name_param_pair):
         name, param = name_param_pair
-        try:
-            converted = process_param(args, model_name, name, param, vocab_size)
-            return converted
-        except Exception as e:
-            print(f"Error processing {name}: {e}")
-            return []
+        return process_param(args, model_name, name, param, vocab_size)
 
+    conversion_errors = []
     print(f"Processing with {max_workers} workers")
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(process_and_collect, (name, param)): name for name, param in param_list}
         for future in tqdm(as_completed(futures), total=len(futures), desc="Converting parameters"):
-            converted = future.result()
-            with lock:
-                all_converted_tensors.extend(converted)
+            name = futures[future]
+            try:
+                converted = future.result()
+            except Exception as error:
+                conversion_errors.append(f"- {name}: {type(error).__name__}: {error}")
+                continue
+            all_converted_tensors.extend(converted)
+
+    if conversion_errors:
+        details = "\n".join(conversion_errors)
+        raise RuntimeError(f"Failed to convert {len(conversion_errors)} parameter(s):\n{details}")
 
     current_size = 0
     total_size = 0
