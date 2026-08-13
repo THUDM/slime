@@ -354,12 +354,6 @@ def copy_assets(origin_hf_dir, output_dir):
 
 
 def save_missing_tensors(origin_hf_dir, converted_names, output_dir, chunk_size, start_file_index):
-    """Save tensors that exist only in the original HF checkpoint.
-
-    The parallel converter writes temporary ``model-NNNNN.safetensors`` files
-    before adding the final ``-of-NNNNN`` suffix. Missing tensors follow the
-    same convention so they can participate in the existing final rename.
-    """
     safetensors_files = sorted(f for f in os.listdir(origin_hf_dir) if f.endswith(".safetensors"))
     missing_weight_map = {}
     current_tensors = {}
