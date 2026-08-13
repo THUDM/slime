@@ -54,7 +54,14 @@ class HfWeightIteratorDirect(HfWeightIteratorBase):
         hf_named_tensors = []
         for info, param in zip(param_infos, megatron_full_params, strict=False):
             hf_named_tensors.extend(
-                convert_to_hf(self.args, self.model_name, info.name, param, self.quantization_config)
+                convert_to_hf(
+                    self.args,
+                    self.model_name,
+                    info.name,
+                    param,
+                    self.quantization_config,
+                    transform_ue8m0=self.transform_ue8m0,
+                )
             )
         return hf_named_tensors
 
