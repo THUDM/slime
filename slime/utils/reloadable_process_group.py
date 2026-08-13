@@ -10,7 +10,7 @@ import torch.distributed as dist
 from torch.distributed.distributed_c10d import PrefixStore, _get_default_group, _get_default_store
 
 from slime.utils.distributed_utils import get_gloo_group, init_gloo_group, set_gloo_group
-from slime.utils.memory_utils import available_memory, clear_memory, print_memory
+from slime.utils.memory_utils import clear_memory, print_memory
 
 logger = logging.getLogger(__name__)
 
@@ -125,15 +125,47 @@ def _reload_default_process_group() -> None:
     )
 
 
+# Communication ops that skip the pre-call memory probe in _wrap_low_level_call.
+#
+# The probe (available_memory() -> cudaMemGetInfo + torch.cuda.memory_reserved())
+# runs before the collective. It is pure overhead on the hot path:
+#  - cudaMemGetInfo synchronizes the driver, which serializes async collectives
+#    (weight sync issues one dist.broadcast(async_op=True) per parameter);
+#  - the clear_memory() it guards only fires when free < 3GB, which never happens
+#    on real runs (weight sync / training have tens of GB free), so it is inert.
+#
+# Weight sync and training each issue one collective *per parameter / per
+# micro-batch*, so the skip set must cover BOTH the dist.* monkey-patch spellings
+# AND the low-level c10d method names dispatched by ReloadableProcessGroup._fwd
+# (e.g. _allgather_base for sequence-parallel TP all-gather, allreduce for grad
+# sync). See PR/issue: this made weight sync grow to >1500s and every training
+# micro-batch ~2x slower on a large MoE + expandable_segments.
 _COMM_MEMORY_CHECK_SKIP_OPS = {
-    "all_gather_into_tensor",
-    "allgather_into_tensor_coalesced",
+    # point-to-point / barrier
     "barrier",
-    "broadcast_object_list",
-    "reduce_scatter_tensor",
-    "all_to_all_single",
     "isend",
     "irecv",
+    # broadcast (dist.* and c10d spellings)
+    "broadcast",
+    "broadcast_object_list",
+    # all-gather family
+    "all_gather",
+    "allgather",
+    "_allgather_base",
+    "all_gather_into_tensor",
+    "allgather_coalesced",
+    "allgather_into_tensor_coalesced",
+    # all-reduce family
+    "all_reduce",
+    "allreduce",
+    "allreduce_coalesced",
+    # reduce / reduce-scatter
+    "reduce",
+    "reduce_scatter",
+    "reduce_scatter_tensor",
+    # all-to-all
+    "all_to_all",
+    "all_to_all_single",
 }
 
 
@@ -223,15 +255,15 @@ def monkey_patch_torch_dist():
     dist.get_group_rank = get_new_query_function(dist.get_group_rank)
     dist.get_process_group_ranks = get_new_query_function(dist.get_process_group_ranks)
 
-    dist.all_reduce = get_new_comm_function(dist.all_reduce)
-    dist.all_gather = get_new_comm_function(dist.all_gather)
+    dist.all_reduce = get_new_comm_function(dist.all_reduce, "all_reduce")
+    dist.all_gather = get_new_comm_function(dist.all_gather, "all_gather")
     dist.all_gather_into_tensor = get_new_comm_function(dist.all_gather_into_tensor, "all_gather_into_tensor")
     dist.all_gather_object = get_new_comm_function(dist.all_gather_object)
-    dist.all_to_all = get_new_comm_function(dist.all_to_all)
+    dist.all_to_all = get_new_comm_function(dist.all_to_all, "all_to_all")
     dist.all_to_all_single = get_new_comm_function(dist.all_to_all_single, "all_to_all_single")
-    dist.broadcast = get_new_comm_function(dist.broadcast)
+    dist.broadcast = get_new_comm_function(dist.broadcast, "broadcast")
     dist.broadcast_object_list = get_new_comm_function(dist.broadcast_object_list, "broadcast_object_list")
-    dist.reduce = get_new_comm_function(dist.reduce)
+    dist.reduce = get_new_comm_function(dist.reduce, "reduce")
     dist.reduce_scatter = get_new_comm_function(dist.reduce_scatter)
     dist.reduce_scatter_tensor = get_new_comm_function(dist.reduce_scatter_tensor, "reduce_scatter_tensor")
     dist.scatter = get_new_comm_function(dist.scatter)
@@ -475,8 +507,14 @@ def reload_process_groups():
 def _wrap_low_level_call(check_memory=True):
     try:
         if check_memory:
-            mem_info = available_memory()
-            if mem_info["free_GB"] < 3:
+            # Use torch.cuda.mem_get_info() directly rather than available_memory():
+            # the latter also calls torch.cuda.memory_reserved()/memory_allocated(),
+            # which build the full memory_stats() dict -- O(number of allocator
+            # segments). Under expandable_segments the segment count grows across
+            # steps, so this probe gets progressively more expensive. The free/clear
+            # decision only needs the driver-level free byte count.
+            free_bytes, _ = torch.cuda.mem_get_info()
+            if free_bytes < 3 * 1024**3:
                 clear_memory()
         yield
     except Exception as e:
