@@ -353,6 +353,59 @@ def copy_assets(origin_hf_dir, output_dir):
         shutil.copy(src, dst)
 
 
+def save_missing_tensors(origin_hf_dir, converted_names, output_dir, chunk_size, start_file_index):
+    """Save tensors that exist only in the original HF checkpoint.
+
+    The parallel converter writes temporary ``model-NNNNN.safetensors`` files
+    before adding the final ``-of-NNNNN`` suffix. Missing tensors follow the
+    same convention so they can participate in the existing final rename.
+    """
+    safetensors_files = sorted(f for f in os.listdir(origin_hf_dir) if f.endswith(".safetensors"))
+    missing_weight_map = {}
+    current_tensors = {}
+    current_size = 0
+    total_size = 0
+    file_index = start_file_index
+
+    def flush_current_tensors():
+        nonlocal current_tensors, current_size, file_index
+        if not current_tensors:
+            return
+
+        filename = f"model-{file_index:05d}.safetensors"
+        filepath = os.path.join(output_dir, filename)
+        print(f"saving {len(current_tensors)} missing tensors to {filepath}")
+        safetensors.torch.save_file(current_tensors, filepath)
+        for name in current_tensors:
+            missing_weight_map[name] = filename
+        current_tensors = {}
+        current_size = 0
+        file_index += 1
+
+    for filename in safetensors_files:
+        filepath = os.path.join(origin_hf_dir, filename)
+        with safetensors.safe_open(filepath, framework="pt", device="cpu") as f:
+            for name in f.keys():
+                if name in converted_names:
+                    continue
+                if name in missing_weight_map or name in current_tensors:
+                    raise ValueError(f"Duplicate tensor {name} found in origin HF checkpoint")
+
+                tensor = f.get_tensor(name)
+                tensor_size = tensor.numel() * tensor.element_size()
+                if current_tensors and tensor_size + current_size > chunk_size:
+                    flush_current_tensors()
+
+                print(f"add {name} from origin hf checkpoint")
+                current_tensors[name] = tensor
+                current_size += tensor_size
+                total_size += tensor_size
+
+    flush_current_tensors()
+    print(f"Added {len(missing_weight_map)} missing tensors from origin HF checkpoint")
+    return missing_weight_map, total_size, file_index
+
+
 def conversion_worker(
     worker_id,
     keys,
@@ -417,6 +470,9 @@ if __name__ == "__main__":
         "-f", "--force", action="store_true", help="Force overwrite the output directory if it exists."
     )
     parser.add_argument(
+        "-a", "--add-missing-from-origin-hf", action="store_true", help="Add missing weights from origin hf checkpoint"
+    )
+    parser.add_argument(
         "--chunk-size",
         type=int,
         default=5 * 1024**3,
@@ -449,6 +505,8 @@ if __name__ == "__main__":
         raise ValueError(
             "Either --model-name or --origin-hf-dir must be provided, so that we can know the name of the params."
         )
+    if args.add_missing_from_origin_hf and args.origin_hf_dir is None:
+        raise ValueError("--add-missing-from-origin-hf requires --origin-hf-dir")
 
     if args.model_name is None:
         hf_config = AutoConfig.from_pretrained(args.origin_hf_dir, trust_remote_code=True)
@@ -557,6 +615,17 @@ if __name__ == "__main__":
         if os.path.exists(temp_index):
             os.remove(temp_index)
 
+    if args.add_missing_from_origin_hf:
+        missing_weight_map, missing_size, final_file_index = save_missing_tensors(
+            args.origin_hf_dir,
+            set(final_weight_map),
+            args.output_dir,
+            args.chunk_size,
+            final_file_index,
+        )
+        final_weight_map.update(missing_weight_map)
+        total_size += missing_size
+
     total_files = final_file_index - 1
     final_weight_map_fixed = {}
     for i in range(1, total_files + 1):
@@ -569,6 +638,12 @@ if __name__ == "__main__":
         for k, v in final_weight_map.items():
             if v == old_name:
                 final_weight_map_fixed[k] = new_name
+
+    if len(final_weight_map_fixed) != len(final_weight_map):
+        raise RuntimeError(
+            f"Final weight map is incomplete: expected {len(final_weight_map)} tensors, "
+            f"found {len(final_weight_map_fixed)}"
+        )
 
     index_data = {"metadata": {"total_size": total_size}, "weight_map": final_weight_map_fixed}
     json.dump(index_data, open(os.path.join(args.output_dir, "model.safetensors.index.json"), "w"), indent=2)
