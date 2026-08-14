@@ -106,6 +106,7 @@ def save_hf_model_direct_to_path(
         model=model,
         model_name=model_name,
         quantization_config=quantization_config,
+        transform_ue8m0=False,
     )
     megatron_local_weights = dict(named_params_and_buffers(args, model, convert_to_global_name=True))
     num_save_nodes, save_node_rank, is_writer_rank, writer_ranks = _get_node_save_layout(args)

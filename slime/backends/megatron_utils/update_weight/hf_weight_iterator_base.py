@@ -11,11 +11,12 @@ class HfWeightIteratorBase(ABC):
 
         return HfWeightIteratorDirect(args, model, **kwargs)
 
-    def __init__(self, args, model, model_name, quantization_config):
+    def __init__(self, args, model, model_name, quantization_config, transform_ue8m0=True):
         self.args = args
         self.model = model
         self.model_name = model_name
         self.quantization_config = quantization_config
+        self.transform_ue8m0 = transform_ue8m0
 
     @abstractmethod
     def get_hf_weight_chunks(
