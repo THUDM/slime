@@ -562,7 +562,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Transport for rollout data refs sent from rollout manager to trainer. Large rollout "
                     "fields are tensorized on CPU before the refs are stored. Set to nixl to transfer "
-                    "those torch tensors via Ray NIXL."
+                    "those torch tensors via Ray NIXL, or mooncake to transfer the rollout dictionary "
+                    "through Mooncake Store."
                 ),
             )
             parser.add_argument(
