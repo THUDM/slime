@@ -8,8 +8,8 @@ from typing import Any
 from slime.utils.misc import Box
 
 try:
-    from mooncake.structured_object_store import FieldSchema, MooncakeBundleTransfer, export_ref, import_ref
     from mooncake.store import MooncakeDistributedStore
+    from mooncake.structured_object_store import FieldSchema, MooncakeBundleTransfer, export_ref, import_ref
 
     _MOONCAKE_AVAILABLE = True
 except ImportError:
@@ -63,8 +63,7 @@ def check_mooncake_available() -> None:
     """Call during argument parsing to fail fast if mooncake is not installed."""
     if not _MOONCAKE_AVAILABLE:
         raise ImportError(
-            "rollout-data-transport='mooncake' requires the mooncake package. "
-            "Install it with: pip install mooncake"
+            "rollout-data-transport='mooncake' requires the mooncake package. " "Install it with: pip install mooncake"
         )
 
 
