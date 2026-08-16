@@ -27,6 +27,8 @@ from megatron.core.transformer.transformer_block import get_num_layers_to_build
 from megatron.core.transformer.transformer_config import MLATransformerConfig
 from transformers import AutoConfig
 
+from slime.backends.sglang_utils.compat import import_sglang_module
+
 from .ops.indexer import generate_varlen_mask_params, lighting_indexer
 from .ops.sparse_mla import SGLangSparseMLA, SparseMLA
 
@@ -170,7 +172,10 @@ def _apply_sglang_rope_forward(
     cos_sin_cache: torch.Tensor,
     positions: torch.Tensor,
 ) -> torch.Tensor:
-    from sglang.jit_kernel.rope import apply_rope_with_cos_sin_cache_inplace
+    apply_rope_with_cos_sin_cache_inplace = import_sglang_module(
+        "sglang.kernels.ops.attention.rope",
+        "sglang.jit_kernel.rope",
+    ).apply_rope_with_cos_sin_cache_inplace
 
     output = torch.empty_strided(value.size(), value.stride(), dtype=value.dtype, device=value.device)
     output.copy_(value)
@@ -235,8 +240,14 @@ def _get_sglang_rope_cache(
 class _DSAKVFP8QAT(torch.autograd.Function):
     @staticmethod
     def forward(ctx, kv: torch.Tensor):
-        from sglang.srt.layers.attention.dsa.dequant_k_cache import dequantize_k_cache
-        from sglang.srt.layers.attention.dsa.quant_k_cache import quantize_k_cache
+        dequantize_k_cache = import_sglang_module(
+            "sglang.kernels.ops.attention.dsa.dequant_k_cache",
+            "sglang.srt.layers.attention.dsa.dequant_k_cache",
+        ).dequantize_k_cache
+        quantize_k_cache = import_sglang_module(
+            "sglang.kernels.ops.attention.dsa.quant_k_cache",
+            "sglang.srt.layers.attention.dsa.quant_k_cache",
+        ).quantize_k_cache
 
         if kv.dtype != torch.bfloat16 or kv.shape[-2:] != (1, 576):
             raise ValueError(

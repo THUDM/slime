@@ -2,6 +2,8 @@ import os
 
 import torch
 
+from slime.backends.sglang_utils.compat import import_sglang_module
+
 # Bind flashinfer.comm's module-level `cudart = CudaRTLibrary()` to the *real*
 # libcudart before tilelang loads its `libcudart_stub.so`.  On a cu12 box whose
 # flashinfer pulled in cu13 deps, importing flashinfer.comm *after* the stub is
@@ -31,9 +33,16 @@ def _sglang_fp8_indexer_logits(
     if index_q.shape[-1] != 128:
         raise ValueError("SGLang FP8 indexer alignment requires head_dim=128, " f"got {index_q.shape[-1]}")
     import deep_gemm
-    from sglang.jit_kernel.fused_store_index_cache import fused_store_index_k_cache
     from sglang.srt.layers.attention.dsa.dsa_indexer import rotate_activation
-    from sglang.srt.layers.attention.dsa.triton_kernel import act_quant
+
+    fused_store_index_k_cache = import_sglang_module(
+        "sglang.kernels.ops.attention.fused_store_index_cache",
+        "sglang.jit_kernel.fused_store_index_cache",
+    ).fused_store_index_k_cache
+    act_quant = import_sglang_module(
+        "sglang.kernels.ops.attention.dsa.triton_kernel",
+        "sglang.srt.layers.attention.dsa.triton_kernel",
+    ).act_quant
 
     q_rotated = rotate_activation(index_q.contiguous())
     if index_k.ndim == 3:
@@ -150,14 +159,31 @@ class IndexerFunction(torch.autograd.Function):
                 clean_logits=True,
             )
         if topk_indices is None:
-            index_score, topk_indices = pytorch_topk_with_invalid_padding(logits, topk)
-            if os.getenv("MEGATRON_USE_SGLANG_FP8_INDEXER", "0") == "1":
-                invalid_sort_key = torch.iinfo(torch.int32).max
-                topk_indices = torch.sort(
-                    topk_indices.masked_fill(topk_indices < 0, invalid_sort_key),
-                    dim=-1,
-                ).values
-                topk_indices = topk_indices.masked_fill(topk_indices == invalid_sort_key, -1)
+            use_sglang_fp8_indexer = os.getenv("MEGATRON_USE_SGLANG_FP8_INDEXER", "0") == "1"
+            if use_sglang_fp8_indexer and logits.shape[-1] >= topk:
+                from sglang.srt.layers.attention.dsa.dsa_topk_backend import deterministic_flashinfer_topk
+
+                starts = cu_seqlen_ks.to(torch.int32)
+                local_indices = deterministic_flashinfer_topk(
+                    logits,
+                    (cu_seqlen_ke - cu_seqlen_ks).to(torch.int32),
+                    topk,
+                    row_starts=starts,
+                )
+                topk_indices = torch.where(
+                    local_indices >= 0,
+                    local_indices + starts.unsqueeze(-1),
+                    local_indices,
+                )
+            else:
+                _, topk_indices = pytorch_topk_with_invalid_padding(logits, topk)
+                if use_sglang_fp8_indexer:
+                    invalid_sort_key = torch.iinfo(torch.int32).max
+                    topk_indices = torch.sort(
+                        topk_indices.masked_fill(topk_indices < 0, invalid_sort_key),
+                        dim=-1,
+                    ).values
+                    topk_indices = topk_indices.masked_fill(topk_indices == invalid_sort_key, -1)
 
         index_score = pytorch_extract_topk_scores(logits, topk_indices)
 

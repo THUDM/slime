@@ -7,8 +7,53 @@ import torch
 import torch.nn.functional as F
 
 from slime.backends.megatron_utils.alignment import deepgemm_moe_forward
+from slime.backends.sglang_utils import compat as sglang_compat
 
 NUM_GPUS = 1
+
+
+def test_sglang_compat_prefers_current_module(monkeypatch):
+    current_module = object()
+    calls = []
+
+    def fake_import(path):
+        calls.append(path)
+        return current_module
+
+    monkeypatch.setattr(sglang_compat, "import_module", fake_import)
+
+    assert sglang_compat.import_sglang_module("sglang.current", "sglang.legacy") is current_module
+    assert calls == ["sglang.current"]
+
+
+def test_sglang_compat_falls_back_for_moved_namespace(monkeypatch):
+    legacy_module = object()
+    calls = []
+
+    def fake_import(path):
+        calls.append(path)
+        if path == "sglang.current.module":
+            raise ModuleNotFoundError(name="sglang.current")
+        return legacy_module
+
+    monkeypatch.setattr(sglang_compat, "import_module", fake_import)
+
+    assert sglang_compat.import_sglang_module("sglang.current.module", "sglang.legacy.module") is legacy_module
+    assert calls == ["sglang.current.module", "sglang.legacy.module"]
+
+
+def test_sglang_compat_does_not_mask_missing_dependency(monkeypatch):
+    missing_dependency = ModuleNotFoundError(name="triton")
+
+    def fake_import(path):
+        raise missing_dependency
+
+    monkeypatch.setattr(sglang_compat, "import_module", fake_import)
+
+    with pytest.raises(ModuleNotFoundError) as exc_info:
+        sglang_compat.import_sglang_module("sglang.current.module", "sglang.legacy.module")
+
+    assert exc_info.value is missing_dependency
 
 
 @pytest.mark.parametrize("value", ["1", "true", "yes", "on"])
@@ -601,7 +646,12 @@ def test_cuda_fused_static_route_gradient_is_bitwise(monkeypatch):
 
 
 def test_ordered_ep_gather_backward_matches_weighted_route_sum(monkeypatch):
-    import sglang.srt.layers.moe.ep_moe.kernels as kernels
+    kernels = SimpleNamespace(ep_gather=None)
+    monkeypatch.setattr(
+        deepgemm_moe_forward,
+        "import_sglang_module",
+        lambda current_path, legacy_path: kernels,
+    )
 
     def fake_ep_gather(input_tensor, recv_ids, recv_weights, input_index, output):
         output.zero_()
@@ -836,6 +886,89 @@ def test_topk_order_alignment_is_scoped_to_registered_router(monkeypatch):
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
+def test_sglang_fused_sigmoid_topk_forward_and_backward(monkeypatch):
+    from slime.utils import routing_replay
+
+    router = SimpleNamespace()
+    monkeypatch.setattr(routing_replay, "ORDERED_TOPK_CAPTURE_ROUTER", router)
+
+    def fake_fused_topk(logits, expert_bias, topk):
+        scores = torch.sigmoid(logits)
+        indices = torch.topk(scores + expert_bias, topk, dim=1, sorted=False).indices
+        selected = scores.gather(1, indices)
+        return selected / selected.sum(dim=-1, keepdim=True), indices.to(torch.int32)
+
+    monkeypatch.setattr(routing_replay, "_run_sglang_fused_sigmoid_topk", fake_fused_topk)
+    logits = torch.tensor(
+        [[-1.5, 0.25, 1.75, -0.5], [0.75, -2.0, 0.5, 1.25]],
+        dtype=torch.float32,
+        requires_grad=True,
+    )
+    bias = torch.tensor([0.1, -0.2, 0.05, 0.3], dtype=torch.float32)
+    grad_weights = torch.tensor([[0.5, -1.25], [1.5, 0.75]], dtype=torch.float32)
+
+    weights, indices = routing_replay.maybe_sglang_fused_sigmoid_topk(
+        logits,
+        2,
+        use_pre_softmax=True,
+        score_function="sigmoid",
+        expert_bias=bias,
+    )
+    (weights * grad_weights).sum().backward()
+
+    reference_logits = logits.detach().clone().requires_grad_(True)
+    reference_scores = torch.sigmoid(reference_logits)
+    reference_selected = reference_scores.gather(1, indices.long())
+    reference_weights = reference_selected / reference_selected.sum(dim=-1, keepdim=True)
+    (reference_weights * grad_weights).sum().backward()
+
+    torch.testing.assert_close(weights, reference_weights, rtol=0, atol=0)
+    torch.testing.assert_close(logits.grad, reference_logits.grad, rtol=1e-6, atol=1e-7)
+    torch.testing.assert_close(
+        routing_replay.consume_ordered_topk(router),
+        indices,
+        rtol=0,
+        atol=0,
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_sglang_fused_sigmoid_topk_is_bitwise_batch_invariant():
+    try:
+        moe_fused_gate = sglang_compat.import_sglang_module(
+            "sglang.kernels.ops.moe.moe_fused_gate",
+            "sglang.jit_kernel.moe_fused_gate",
+        ).moe_fused_gate
+    except (ImportError, RuntimeError) as exc:
+        pytest.skip(f"SGLang fused router is unavailable: {exc}")
+
+    generator = torch.Generator(device="cuda").manual_seed(1234)
+    logits = torch.randn((73, 256), device="cuda", dtype=torch.float32, generator=generator)
+    bias = torch.randn((256,), device="cuda", dtype=torch.float32, generator=generator) * 0.125
+    expected_weights, expected_indices = moe_fused_gate(
+        logits,
+        bias,
+        8,
+        scoring_func="sigmoid",
+        renormalize=True,
+    )
+
+    for chunk_size in (1, 3, 17, 64):
+        actual_weights = torch.empty_like(expected_weights)
+        actual_indices = torch.empty_like(expected_indices)
+        for start in range(0, logits.shape[0], chunk_size):
+            stop = min(start + chunk_size, logits.shape[0])
+            actual_weights[start:stop], actual_indices[start:stop] = moe_fused_gate(
+                logits[start:stop],
+                bias,
+                8,
+                scoring_func="sigmoid",
+                renormalize=True,
+            )
+        torch.testing.assert_close(actual_indices, expected_indices, rtol=0, atol=0)
+        torch.testing.assert_close(actual_weights, expected_weights, rtol=0, atol=0)
+
+
 def test_static_combine_backward_matches_dynamic_path():
     route_values = _small_bf16((8, 128), offset=3)
     weights = torch.tensor(
@@ -960,7 +1093,12 @@ def test_static_combine_backward_handles_padding_with_reused_storage():
 
 
 def test_low_latency_ep_gather_preserves_order_and_backward(monkeypatch):
-    import sglang.srt.layers.moe.ep_moe.kernels as kernels
+    kernels = SimpleNamespace(ep_gather=None)
+    monkeypatch.setattr(
+        deepgemm_moe_forward,
+        "import_sglang_module",
+        lambda current_path, legacy_path: kernels,
+    )
 
     calls = []
 
@@ -1959,13 +2097,19 @@ def _require_cuda_deepgemm(monkeypatch):
     for module_name in (
         "deep_gemm",
         "sglang.srt.layers.deep_gemm_wrapper",
-        "sglang.srt.layers.quantization.fp8_kernel",
         "sgl_kernel",
     ):
         try:
             importlib.import_module(module_name)
         except Exception as exc:
             pytest.skip(f"{module_name} is unavailable: {exc}")
+    try:
+        sglang_compat.import_sglang_module(
+            "sglang.kernels.ops.quantization.fp8_kernel",
+            "sglang.srt.layers.quantization.fp8_kernel",
+        )
+    except Exception as exc:
+        pytest.skip(f"SGLang FP8 kernel is unavailable: {exc}")
 
 
 def test_cuda_deepgemm_moe_forward_diff_against_bf16_reference_with_expert_m_padding(

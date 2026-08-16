@@ -1,5 +1,8 @@
 import os
+
 import torch
+
+from slime.backends.sglang_utils.compat import import_sglang_module
 
 ROUTING_REPLAY = None
 ORDERED_TOPK_CAPTURE_ROUTER = None
@@ -25,6 +28,87 @@ def _capture_ordered_topk(top_indices):
 def consume_ordered_topk(module):
     """Return and release the current forward's ordered top-k indices."""
     return module.__dict__.pop("_slime_ordered_topk_indices", None)
+
+
+def _run_sglang_fused_sigmoid_topk(logits, expert_bias, topk):
+    moe_fused_gate = import_sglang_module(
+        "sglang.kernels.ops.moe.moe_fused_gate",
+        "sglang.jit_kernel.moe_fused_gate",
+    ).moe_fused_gate
+
+    return moe_fused_gate(
+        logits,
+        expert_bias,
+        topk,
+        scoring_func="sigmoid",
+        renormalize=True,
+    )
+
+
+class _SGLangFusedSigmoidTopK(torch.autograd.Function):
+    """SGLang's fused router forward with the corresponding analytic backward."""
+
+    @staticmethod
+    def forward(ctx, logits, expert_bias, topk):
+        weights, indices = _run_sglang_fused_sigmoid_topk(logits, expert_bias, topk)
+        ctx.save_for_backward(logits, weights, indices)
+        ctx.mark_non_differentiable(indices)
+        return weights, indices
+
+    @staticmethod
+    def backward(ctx, grad_weights, _grad_indices):
+        if not ctx.needs_input_grad[0]:
+            return None, None, None
+
+        logits, weights, indices = ctx.saved_tensors
+        if grad_weights is None:
+            return torch.zeros_like(logits), None, None
+
+        indices_long = indices.to(dtype=torch.long)
+        selected_logits = logits.gather(1, indices_long).float()
+        selected_scores = torch.sigmoid(selected_logits)
+        score_sum = selected_scores.sum(dim=-1, keepdim=True)
+        centered_grad = grad_weights.float() - (grad_weights.float() * weights).sum(dim=-1, keepdim=True)
+        grad_selected = centered_grad * selected_scores * (1.0 - selected_scores) / score_sum
+        grad_logits = torch.zeros_like(logits)
+        grad_logits.scatter_(1, indices_long, grad_selected.to(dtype=logits.dtype))
+        return grad_logits, None, None
+
+
+def maybe_sglang_fused_sigmoid_topk(
+    logits,
+    topk,
+    *,
+    use_pre_softmax=False,
+    num_groups=None,
+    group_topk=None,
+    scaling_factor=None,
+    score_function="softmax",
+    expert_bias=None,
+    replay_active=False,
+):
+    """Use SGLang's batch-invariant GLM router only for an aligned router."""
+    if ORDERED_TOPK_CAPTURE_ROUTER is None or replay_active:
+        return None
+    if (
+        score_function != "sigmoid"
+        or group_topk
+        or num_groups
+        or expert_bias is None
+        or topk <= 1
+        or logits.dtype != torch.float32
+        or (scaling_factor is not None and float(scaling_factor) != 1.0)
+    ):
+        return None
+
+    # Megatron's ``use_pre_softmax`` only changes the softmax branch.  The
+    # sigmoid path always selects from sigmoid(logits) + expert_bias and then
+    # renormalizes the selected unbiased sigmoid scores, matching SGLang.
+    del use_pre_softmax
+
+    weights, indices = _SGLangFusedSigmoidTopK.apply(logits, expert_bias, topk)
+    _capture_ordered_topk(indices)
+    return weights, indices
 
 
 def register_ordered_topk_capture(module):

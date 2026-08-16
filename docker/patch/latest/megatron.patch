@@ -735,14 +735,31 @@ diff --git a/megatron/core/transformer/moe/moe_utils.py b/megatron/core/transfor
 index 75825cd37..445b3fb84 100644
 --- a/megatron/core/transformer/moe/moe_utils.py
 +++ b/megatron/core/transformer/moe/moe_utils.py
-@@ -711,6 +711,9 @@ def topk_routing_with_score_function(
+@@ -711,6 +711,25 @@ def topk_routing_with_score_function(
                  scores, topk, num_groups, group_topk, _compute_topk
              )
 
-+    from slime.utils.routing_replay import get_routing_replay_compute_topk
++    from slime.utils.routing_replay import (
++        get_routing_replay_compute_topk,
++        maybe_sglang_fused_sigmoid_topk,
++    )
 +    compute_topk = get_routing_replay_compute_topk(compute_topk)
 +
-     if score_function == "softmax":
++    aligned_topk = maybe_sglang_fused_sigmoid_topk(
++        logits,
++        topk,
++        use_pre_softmax=use_pre_softmax,
++        num_groups=num_groups,
++        group_topk=group_topk,
++        scaling_factor=scaling_factor,
++        score_function=score_function,
++        expert_bias=expert_bias,
++        replay_active=router_replay is not None,
++    )
++    if aligned_topk is not None:
++        probs, top_indices = aligned_topk
+-    if score_function == "softmax":
++    elif score_function == "softmax":
          if use_pre_softmax:
              scores = torch.softmax(logits, dim=-1, dtype=torch.float32).type_as(logits)
 diff --git a/megatron/core/transformer/moe/router.py b/megatron/core/transformer/moe/router.py

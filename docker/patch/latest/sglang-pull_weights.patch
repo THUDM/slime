@@ -1,8 +1,8 @@
 diff --git a/python/sglang/srt/entrypoints/http_server.py b/python/sglang/srt/entrypoints/http_server.py
-index c74f7666a9972ba7ee5b0c94c805189e640fbbda..107c6eadf6a33e19f4f34d3668c22856ea221e1a 100644
+index 0189493c17a23efb9c81eca2ef3129063f73d40a..00335625112005b5af5ded168cc6d2eea9f69ea9 100644
 --- a/python/sglang/srt/entrypoints/http_server.py
 +++ b/python/sglang/srt/entrypoints/http_server.py
-@@ -129,6 +129,7 @@ from sglang.srt.managers.io_struct import (
+@@ -134,6 +134,7 @@ from sglang.srt.managers.io_struct import (
      PauseGenerationReqInput,
      PostProcessWeightsReqInput,
      ProfileReq,
@@ -10,7 +10,7 @@ index c74f7666a9972ba7ee5b0c94c805189e640fbbda..107c6eadf6a33e19f4f34d3668c22856
      ReleaseMemoryOccupationReqInput,
      ResumeMemoryOccupationReqInput,
      SendWeightsToRemoteInstanceReqInput,
-@@ -1344,6 +1345,21 @@ async def post_process_weights(req: PostProcessWeightsReqInput, request: Request
+@@ -1431,6 +1432,21 @@ async def post_process_weights(req: PostProcessWeightsReqInput, request: Request
      )
  
  
@@ -33,11 +33,11 @@ index c74f7666a9972ba7ee5b0c94c805189e640fbbda..107c6eadf6a33e19f4f34d3668c22856
  @auth_level(AuthLevel.ADMIN_OPTIONAL)
  async def update_weight_version(
 diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
-index e13964675d0dc3bceffa0a7df63e11111c1e416d..9de60810205e1ded3c1a4975c86a887e8c942145 100644
+index 18b27b1b64652245d92107d0dc7e02d11d98a9cd..e14df7ca9cd0fddc488993da5f4ab07de7b411e0 100644
 --- a/python/sglang/srt/managers/io_struct.py
 +++ b/python/sglang/srt/managers/io_struct.py
-@@ -1739,6 +1739,22 @@ class CheckWeightsReqOutput(BaseReq, kw_only=True):
-     payload: Optional[Dict[str, Any]] = None
+@@ -1905,6 +1905,22 @@ class CheckWeightsReqOutput(BaseReq, kw_only=True):
+     payload: Optional[List[ChecksumInfo]] = None
  
  
 +class PullWeightsReqInput(BaseReq, kw_only=True):
@@ -60,10 +60,10 @@ index e13964675d0dc3bceffa0a7df63e11111c1e416d..9de60810205e1ded3c1a4975c86a887e
      forward_sleep_time: Optional[float]
  
 diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
-index d4169bebe0b58fc4f32d04e307e5132e66f364ff..e62eae2d4b613219a6227ba7080d9e89feac6207 100644
+index ecbd9bb4fe6ec40c84262addc1d0265ad8b281d3..947321d742879ff1849c376bd4734ccf3d654dc2 100644
 --- a/python/sglang/srt/managers/scheduler.py
 +++ b/python/sglang/srt/managers/scheduler.py
-@@ -128,6 +128,7 @@ from sglang.srt.managers.io_struct import (
+@@ -143,6 +143,7 @@ from sglang.srt.managers.io_struct import (
      PauseGenerationReqInput,
      PostProcessWeightsReqInput,
      ProfileReq,
@@ -71,7 +71,7 @@ index d4169bebe0b58fc4f32d04e307e5132e66f364ff..e62eae2d4b613219a6227ba7080d9e89
      ReleaseMemoryOccupationReqInput,
      RemoveExternalCorpusReqInput,
      RemoveExternalCorpusReqOutput,
-@@ -1437,6 +1438,10 @@ class Scheduler(
+@@ -1560,6 +1561,10 @@ class Scheduler(
                      CheckWeightsReqInput,
                      self.weight_updater.check_weights,
                  ),
@@ -83,10 +83,10 @@ index d4169bebe0b58fc4f32d04e307e5132e66f364ff..e62eae2d4b613219a6227ba7080d9e89
                  (
                      ProfileReq,
 diff --git a/python/sglang/srt/managers/scheduler_components/weight_updater.py b/python/sglang/srt/managers/scheduler_components/weight_updater.py
-index 505bd2994fbf4812c5069d4391cb80197d42f80c..2ed3b21d75c748a567478686d335184920dcf26b 100644
+index e2aea439e360a29c997f2cbd0ed565db8a0e3167..100a3642deb0698544b696e1009bdcf520803a3c 100644
 --- a/python/sglang/srt/managers/scheduler_components/weight_updater.py
 +++ b/python/sglang/srt/managers/scheduler_components/weight_updater.py
-@@ -28,6 +28,8 @@ from sglang.srt.managers.io_struct import (
+@@ -30,6 +30,8 @@ from sglang.srt.managers.io_struct import (
      InitWeightsUpdateGroupReqOutput,
      PostProcessWeightsReqInput,
      PostProcessWeightsReqOutput,
@@ -95,7 +95,7 @@ index 505bd2994fbf4812c5069d4391cb80197d42f80c..2ed3b21d75c748a567478686d3351849
      ReleaseMemoryOccupationReqInput,
      ReleaseMemoryOccupationReqOutput,
      ResumeMemoryOccupationReqInput,
-@@ -309,6 +311,40 @@ class SchedulerWeightUpdaterManager:
+@@ -333,6 +335,40 @@ class SchedulerWeightUpdaterManager:
  
          return ResumeMemoryOccupationReqOutput()
  
@@ -137,7 +137,7 @@ index 505bd2994fbf4812c5069d4391cb80197d42f80c..2ed3b21d75c748a567478686d3351849
          try:
              payload = self.tp_worker.model_runner.check_weights(
 diff --git a/python/sglang/srt/managers/tokenizer_control_mixin.py b/python/sglang/srt/managers/tokenizer_control_mixin.py
-index b733d20234ea1d3cb8b9bae77259229bea76a059..22495de1cc4f74db5332363dd990cd2b7acab1de 100644
+index efe7ba9d360d7ed5f08274269b0543f8d04af0ba..cb638169f156e96c416a87e0109d07a8c7ff3a3f 100644
 --- a/python/sglang/srt/managers/tokenizer_control_mixin.py
 +++ b/python/sglang/srt/managers/tokenizer_control_mixin.py
 @@ -53,6 +53,8 @@ from sglang.srt.managers.io_struct import (
@@ -149,7 +149,7 @@ index b733d20234ea1d3cb8b9bae77259229bea76a059..22495de1cc4f74db5332363dd990cd2b
      ReleaseMemoryOccupationReqInput,
      ReleaseMemoryOccupationReqOutput,
      RemoveExternalCorpusReqInput,
-@@ -102,6 +104,7 @@ _COMMUNICATOR_SPECS = [
+@@ -104,6 +106,7 @@ _COMMUNICATOR_SPECS = [
      ("update_weights_from_tensor", UpdateWeightsFromTensorReqOutput),
      ("update_weights_from_ipc", UpdateWeightsFromIPCReqOutput),
      ("post_process_weights", PostProcessWeightsReqOutput),
@@ -157,7 +157,7 @@ index b733d20234ea1d3cb8b9bae77259229bea76a059..22495de1cc4f74db5332363dd990cd2b
      ("get_weights_by_name", GetWeightsByNameReqOutput),
      ("release_memory_occupation", ReleaseMemoryOccupationReqOutput),
      ("resume_memory_occupation", ResumeMemoryOccupationReqOutput),
-@@ -760,6 +763,15 @@ class TokenizerControlMixin:
+@@ -810,6 +813,15 @@ class TokenizerControlMixin:
              results = await self.post_process_weights_communicator(obj)
          return FanOutCommunicator.merge_results(results)
  
@@ -174,20 +174,20 @@ index b733d20234ea1d3cb8b9bae77259229bea76a059..22495de1cc4f74db5332363dd990cd2b
          self: TokenizerManager,
          obj: CheckWeightsReqInput,
 diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
-index 5af52950ff182997cf51badc33e53dc45475a93b..bd708d202f110af01d4a2ff583a8f153869a84c5 100644
+index 0361963fd2f5518bc436fc19741d7bd01f74cc80..9363e8c75f7892aed93e6ec8793ddbcda3dbcd7a 100644
 --- a/python/sglang/srt/server_args.py
 +++ b/python/sglang/srt/server_args.py
-@@ -2376,6 +2376,10 @@ class ServerArgs:
-             nargs="*",
+@@ -3096,6 +3096,10 @@ class ServerArgs:
          ),
+         NS("model"),
      ] = None
 +    custom_pull_weights_pre_read_hook: A[
 +        Optional[str],
 +        "Import path of a hook(source_dir, target_version) that /pull_weights calls before reading published weights.",
 +    ] = None
      weight_loader_disable_mmap: A[
-         bool,
-         "Disable mmap while loading weight using safetensors.",
+         bool, "Disable mmap while loading weight using safetensors.", NS("model")
+     ] = False
 diff --git a/python/sglang/srt/weight_sync/local_checkpoint.py b/python/sglang/srt/weight_sync/local_checkpoint.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..2fc0593931940342eebf849751ec518a26585f85

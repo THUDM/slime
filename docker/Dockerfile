@@ -1,12 +1,12 @@
-ARG SGLANG_IMAGE_TAG=v0.5.15.post1-cu129
+ARG SGLANG_IMAGE_TAG=v0.5.17-cu129
 FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
 
 ARG PATCH_VERSION=latest
 ARG MEGATRON_COMMIT=1dcf0dafa884ad52ffb243625717a3471643e087
-ARG DEEPGEMM_COMMIT=b38a77cd193cf38f670caae192310521d24343be
-ARG DEEPEP_COMMIT=6845ffd9d59126ec0030c13e0e155935a61e5b5a
+ARG DEEPGEMM_COMMIT=7ad54cbd80ebe24ad36cb5cd3729f37beed420bb
+ARG DEEPEP_COMMIT=c5c2b0cfa767b1afeb4d237c4ed7e5ff062a550d
 ARG DEEPEP_CUDA_ARCH_LIST=
 ARG FLASH_QLA_COMMIT=821fd9d37ede18fdc2a4e707fefe3770bfc32e58
 ARG TRANSFORMER_ENGINE_COMMIT=c9877beb87ad7e711e1869dd0b5062167ede447a
@@ -39,7 +39,7 @@ RUN if [ "$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')" 
     fi
 
 RUN pip install flash-linear-attention==0.4.2
-# FlashQLA currently requires TileLang 0.1.9, while SGLang 0.5.15.post1 on
+# FlashQLA currently requires TileLang 0.1.9, while SGLang 0.5.17 on
 # CUDA 13 requires 0.1.11.  Keep the existing CUDA 12 installation and use
 # the default FLA backend on CUDA 13 instead of downgrading SGLang's runtime.
 RUN if [ "$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')" = "12" ]; then \
@@ -69,9 +69,9 @@ RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
     cd Megatron-LM && git checkout ${MEGATRON_COMMIT} && \
     pip install -e .
 
-# zhuzilin fork builds, grouped together right after Megatron-LM:
-# torch_memory_saver, plus the GLM-5 train/rollout alignment kernels
-# (DeepGEMM batch-invariant selection and the DeepEP low-latency fork).
+# Alignment builds, grouped together right after Megatron-LM:
+# torch_memory_saver, plus the GLM-5 train/rollout alignment kernels rebased
+# onto the DeepGEMM and DeepEP revisions shipped with SGLang 0.5.17.
 RUN TMS_CUDA_MAJOR="${TMS_CUDA_MAJOR:-$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')}" && \
     export TMS_CUDA_MAJOR && \
     pip install git+https://github.com/zhuzilin/torch_memory_saver.git@${TMS_COMMIT} --no-cache-dir --force-reinstall
@@ -84,7 +84,8 @@ RUN git clone https://github.com/zhuzilin/DeepGEMM.git --recursive && \
     pip install --force-reinstall --no-deps dist/sgl_deep_gemm-*.whl && \
     cd /root/ && rm -rf DeepGEMM
 
-# DeepEP low-latency alignment fork.  CUDA 13 relocated the CCCL/libcu++ headers
+# DeepEP fork with low-latency FP8 alignment for SGLang 0.5.15.post1 and 0.5.17.
+# CUDA 13 relocated the CCCL/libcu++ headers
 # (<cuda/std/*>) under include/cccl, which nvshmem_tensor.h includes, so add that
 # directory to the compile search path (nvcc + host compiler) when it exists.
 RUN git clone https://github.com/zhuzilin/DeepEP.git /root/DeepEP && \

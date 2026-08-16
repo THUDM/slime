@@ -65,7 +65,6 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
     from sglang.srt.entrypoints.http_server import launch_server
 
     multiprocessing.set_start_method("spawn", force=True)
-    server_args.host = server_args.host.strip("[]")
     p = multiprocessing.Process(target=launch_server, args=(server_args,))
     p.start()
 
@@ -188,7 +187,11 @@ class SGLangEngine(RayActor):
 
     def _init_normal(self, server_args_dict):
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
-        self.process = launch_server_process(ServerArgs(**server_args_dict))
+        local_server_args = {
+            **server_args_dict,
+            "host": server_args_dict["host"].strip("[]"),
+        }
+        self.process = launch_server_process(ServerArgs(**local_server_args))
         self._register_to_router(server_args_dict)
 
     def _register_to_router(self, server_args_dict):
