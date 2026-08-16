@@ -410,7 +410,8 @@ async def reward_func(args, sample, **kwargs):
         raise TypeError("Sample must be an instance of Sample class.")
 
     # Build complete solution string
-    solution_str = sample.prompt + sample.response
+    prompt_str = sample.prompt if isinstance(sample.prompt, str) else str(sample.prompt)
+    solution_str = prompt_str + sample.response
 
     # Get ground truth answer - label is a string, not a dict
     ground_truth = sample.label if sample.label is not None else ""
