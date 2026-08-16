@@ -18,9 +18,8 @@ import types
 
 import pytest
 
-from slime.utils.data import filter_long_prompt
+from slime.utils.data import _build_messages, filter_long_prompt
 from slime.utils.types import Sample
-
 
 NUM_GPUS = 0
 
@@ -110,3 +109,30 @@ def test_no_processor_path_still_preserves_order():
     kept = filter_long_prompt(samples, _Tokenizer(), None, max_length=100)
 
     assert [s.prompt for s in kept] == ["p0:5", "p2:5"]
+
+
+@pytest.mark.unit
+def test_text_only_row_keeps_string_content_with_multimodal_config():
+    data = {"prompt": "hello"}
+
+    prompt = _build_messages(data, "prompt", as_conversation=True, multimodal_keys={"image": "images"})
+
+    assert prompt == [{"role": "user", "content": "hello"}]
+
+
+@pytest.mark.unit
+def test_multimodal_placeholder_expansion_is_unchanged():
+    data = {"prompt": "look <image> here", "images": ["image.png"]}
+
+    prompt = _build_messages(data, "prompt", as_conversation=True, multimodal_keys={"image": "images"})
+
+    assert prompt == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "look "},
+                {"type": "image", "image": "image.png"},
+                {"type": "text", "text": " here"},
+            ],
+        }
+    ]
