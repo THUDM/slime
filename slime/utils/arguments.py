@@ -1886,6 +1886,9 @@ def slime_validate_args(args):
         args.save_debug_rollout_data = f"{args.dump_details}/rollout_data/{{rollout_id}}.pt"
         args.save_debug_train_data = f"{args.dump_details}/train_data/{{rollout_id}}.pt"
 
+    if args.save_debug_train_data is not None and args.save_debug_train_data == args.save_debug_rollout_data:
+        raise ValueError("--save-debug-train-data must not be equal to --save-debug-rollout-data.")
+
     if args.load_debug_rollout_data is not None:
         logger.info(
             f"load_debug_rollout_data {args.load_debug_rollout_data} is set, "

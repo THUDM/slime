@@ -288,6 +288,18 @@ def test_slime_validate_args_defaults_start_rollout_id_to_zero(monkeypatch, mega
 
 
 @pytest.mark.unit
+def test_slime_validate_args_rejects_equal_debug_data_paths(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        save_debug_rollout_data="/tmp/debug_{rollout_id}.pt",
+        save_debug_train_data="/tmp/debug_{rollout_id}.pt",
+    )
+
+    with pytest.raises(ValueError, match="--save-debug-train-data must not be equal"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
 def test_slime_validate_args_preserves_zero_rollout_gpus_under_colocate(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(colocate=True, rollout_num_gpus=0)
