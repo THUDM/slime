@@ -306,6 +306,15 @@ def test_slime_validate_args_rejects_non_positive_rollout_temperature(monkeypatc
 
 
 @pytest.mark.unit
+def test_slime_validate_args_rejects_negative_policy_version_lag(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(max_policy_version_lag=-1)
+
+    with pytest.raises(AssertionError, match="max_policy_version_lag must be non-negative"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
 def test_slime_validate_args_preserves_zero_rollout_gpus_under_colocate(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(colocate=True, rollout_num_gpus=0)
