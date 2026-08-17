@@ -1,4 +1,5 @@
 import dataclasses
+import importlib
 import itertools
 import logging
 import multiprocessing
@@ -504,6 +505,8 @@ class RolloutManager:
             runtime_env={"env_vars": add_default_ray_env_vars()},
         ).remote()
         self.rollout_id = -1
+        self.policy_version = 0
+        self.args.policy_version = self.policy_version
 
         self._health_monitors = []
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
@@ -586,6 +589,37 @@ class RolloutManager:
     def get_num_rollout_per_epoch(self):
         assert self.args.rollout_global_dataset
         return len(self.data_source) // self.args.rollout_batch_size
+
+    def _call_generate_rollout_hook(self, hook_name: str, **kwargs):
+        """Call an optional lifecycle hook defined beside the rollout function."""
+
+        module = importlib.import_module(self.generate_rollout.__module__)
+        hook = getattr(module, hook_name, None)
+        if hook is None:
+            return None
+        return hook(**kwargs)
+
+    def before_weight_update(self) -> int:
+        """Notify the rollout implementation before actor weights are updated."""
+
+        self._call_generate_rollout_hook(
+            "before_weight_update",
+            policy_version=self.policy_version,
+        )
+        return self.policy_version
+
+    def after_weight_update(self, succeeded: bool) -> int:
+        """Publish a new policy version only after all weight updates succeed."""
+
+        if succeeded:
+            self.policy_version += 1
+            self.args.policy_version = self.policy_version
+        self._call_generate_rollout_hook(
+            "after_weight_update",
+            policy_version=self.policy_version,
+            succeeded=succeeded,
+        )
+        return self.policy_version
 
     def generate(self, rollout_id):
         start_time = time.time()
