@@ -301,20 +301,27 @@ slime 会自己启动 router，并把这些外部引擎注册进去。
 
 ### 多轮 Agent 的会话亲和路由
 
-对于多轮对话和 agentic 场景，会话亲和确保同一对话的所有请求路由到同一个 backend worker。这可以显著提升 prefix cache 命中率，因为 worker 已经缓存了对话历史。
+对于多轮对话和 agentic 场景，会话亲和会将共享路由身份的请求路由到同一个 backend worker。这是一种 placement 控制，不保证 cache hit 或性能提升。
 
-slime 自动为每个 sample 分配一个唯一的 `session_id`（存储在 `sample.session_id` 中）。当 router 策略为 `consistent_hashing` 时，该 ID 通过 `X-SMG-Routing-Key` header 传递，SGLang Model Gateway 使用它将同一会话的所有轮次确定性地路由到同一个 worker。
+默认情况下，slime 会为每个 sample 自动分配唯一的 `session_id`（存储在 `sample.session_id` 中）。用户也可以选择 group scope，让同一个 rollout group 内的 sibling samples 共享 routing key，适用于 fan-out 和分组的多轮 rollout。调用方仍可直接设置 `Sample.session_id`；显式设置的非空 ID 会被保留。
 
 ```bash
 --router-policy consistent_hashing
+# 默认：每个 sample 生成一个 session ID。
+--rollout-session-id-scope sample
+
+# 显式启用：每个 rollout group 使用一个生成或继承的 session ID。
+--rollout-session-id-scope group
 ```
+
+`--rollout-session-id-scope=group` 要求 `--router-policy consistent_hashing`。在 group scope 下，同一 group 中冲突的显式非空 ID 会被拒绝。group affinity 可能降低跨 worker 的负载均衡，因此需要显式启用。`cache_aware` 和 `consistent_hashing` 是不同的路由策略；group scope 只影响传给 consistent hashing 的 routing key，并不是 KV cache manager。
 
 **工作原理：**
 
-1. 每个 sample 通过 UUID 分配唯一的 `session_id`
+1. 默认每个 sample 通过 UUID 分配唯一的 `session_id`；选择 group scope 时，一个 rollout group 共享一个 UUID
 2. 每次请求时，slime 在 HTTP header 中传递 `X-SMG-Routing-Key: <session_id>`
 3. SGLang Model Gateway 的 consistent hashing 策略将该 key 映射到特定的 worker
-4. 后续轮次复用相同的 `session_id`，确保命中同一个 worker
+4. 后续轮次复用保存的 `session_id`，保持所选的路由身份
 
 ---
 

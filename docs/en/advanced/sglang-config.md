@@ -302,20 +302,27 @@ You can configure the routing policy:
 
 ### Session-Affinity Routing for Multi-Turn Agents
 
-For multi-turn dialogues and agentic workloads, session affinity ensures that all requests belonging to the same conversation are routed to the same backend worker. This significantly improves prefix cache hit rates because the worker already has the conversation history cached.
+For multi-turn dialogues and agentic workloads, session affinity routes requests that share a routing identity to the same backend worker. This is a placement control; it does not guarantee a cache hit or a performance improvement.
 
-slime automatically assigns each sample a unique `session_id` (stored in `sample.session_id`). When the router policy is `consistent_hashing`, this ID is passed as the `X-SMG-Routing-Key` header, and SGLang Model Gateway uses it to deterministically route all turns of the same session to the same worker.
+By default, slime automatically assigns each sample a unique `session_id` (stored in `sample.session_id`). Users can instead choose group scope so sibling samples in one rollout group share a routing key. This can be useful for fan-out and grouped multi-turn rollouts. Callers may always set `Sample.session_id` directly; an explicit non-empty ID is preserved.
 
 ```bash
 --router-policy consistent_hashing
+# Default: one generated session ID per sample.
+--rollout-session-id-scope sample
+
+# Opt in: one generated or inherited session ID per rollout group.
+--rollout-session-id-scope group
 ```
+
+`--rollout-session-id-scope=group` requires `--router-policy consistent_hashing`. With group scope, conflicting explicit non-empty IDs within one group are rejected. Group affinity may reduce cross-worker load balancing, so it is opt-in. `cache_aware` and `consistent_hashing` are distinct routing policies; group scope only affects the routing key passed to consistent hashing and is not a KV cache manager.
 
 **How it works:**
 
-1. Each sample is assigned a unique `session_id` via UUID
+1. Each sample is assigned a UUID by default, or a rollout group shares one UUID when group scope is selected
 2. On each request, slime passes `X-SMG-Routing-Key: <session_id>` in the HTTP header
 3. SGLang Model Gateway's consistent hashing policy maps this key to a specific worker
-4. Subsequent turns reuse the same `session_id`, ensuring they hit the same worker
+4. Subsequent turns reuse the stored `session_id`, preserving the selected routing identity
 
 ---
 
