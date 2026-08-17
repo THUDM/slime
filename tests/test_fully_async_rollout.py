@@ -43,6 +43,7 @@ if "transformers" not in sys.modules:
 import pytest
 
 import slime.rollout.fully_async_rollout as fa
+from slime.rollout.base_types import RolloutFnTrainOutput
 from slime.utils.types import Sample
 
 NUM_GPUS = 0
@@ -154,6 +155,9 @@ def test_stale_groups_are_requeued_and_exact_lag_boundary_is_accepted(monkeypatc
     assert [(record.gid, record.policy_version) for record in records] == [(4, 4)]
     assert data_buffer.requeued == [stale_retry]
     assert data_buffer.requeued[0][0].status is Sample.Status.PENDING
+    metrics = worker.snapshot_metrics(reset=False)
+    assert metrics["fully_async/count/stale_rejected"] == 1
+    assert metrics["fully_async/count/stale_requeued"] == 1
 
 
 @pytest.mark.unit
@@ -275,6 +279,68 @@ def test_done_callback_never_blocks_event_loop_thread(monkeypatch):
 
     assert not pusher.is_alive(), "done-callback blocked on a full output queue"
     assert worker.queue_size() == 1001
+
+
+@pytest.mark.unit
+def test_metrics_use_fixed_lag_buckets_and_reset_counters(monkeypatch):
+    worker = _make_worker(monkeypatch, policy_version=5)
+    groups = [
+        [Sample(index=0, policy_version=5)],
+        [Sample(index=1, policy_version=4)],
+        [Sample(index=2, policy_version=2)],
+        [Sample(index=3, policy_version=0)],
+        [Sample(index=4, policy_version=None)],
+    ]
+
+    worker.record_processed_groups(groups)
+    metrics = worker.snapshot_metrics(reset=True)
+
+    assert metrics == {
+        "fully_async/version_lag/count_0": 1,
+        "fully_async/version_lag/count_1": 1,
+        "fully_async/version_lag/count_2_to_3": 1,
+        "fully_async/version_lag/count_4_plus": 1,
+        "fully_async/version_lag/count_unknown": 1,
+        "fully_async/count/stale_rejected": 0,
+        "fully_async/count/stale_requeued": 0,
+        "fully_async/count/aborted_requeued": 0,
+        "fully_async/queue/completed_groups": 0,
+        "fully_async/policy/current_version": 5,
+    }
+    assert worker.snapshot_metrics(reset=False)["fully_async/version_lag/count_0"] == 0
+
+
+@pytest.mark.unit
+def test_aborted_group_increments_requeue_counter(monkeypatch):
+    worker = _make_worker(monkeypatch)
+    aborted = _make_group(7)
+    aborted[0].status = Sample.Status.ABORTED
+
+    class _DoneTask:
+        def result(self):
+            return aborted
+
+    worker._make_done_cb(gid=7, policy_version=0)(_DoneTask())
+
+    assert worker.queue_size() == 0
+    assert worker.data_buffer.requeued == [aborted]
+    assert worker.snapshot_metrics(reset=False)["fully_async/count/aborted_requeued"] == 1
+
+
+@pytest.mark.unit
+def test_generate_entrypoint_returns_samples_with_metrics(monkeypatch):
+    worker = _make_worker(monkeypatch, policy_version=3)
+    samples = [_make_group(1)]
+    samples[0][0].policy_version = 3
+    worker.record_processed_groups(samples)
+    monkeypatch.setattr(fa, "run", lambda awaitable: (awaitable.close(), samples)[1])
+    monkeypatch.setattr(fa, "_global_worker", worker)
+
+    output = fa.generate_rollout_fully_async(SimpleNamespace(), 0, None)
+
+    assert isinstance(output, RolloutFnTrainOutput)
+    assert output.samples == samples
+    assert output.metrics["fully_async/version_lag/count_0"] == 1
 
 
 @pytest.mark.unit

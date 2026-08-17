@@ -35,6 +35,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+from slime.rollout.base_types import RolloutFnTrainOutput
 from slime.rollout.sglang_rollout import GenerateState, generate_and_rm_group
 from slime.utils.async_utils import run
 from slime.utils.http_utils import get_rollout_num_engines
@@ -53,6 +54,19 @@ logger = logging.getLogger("slime.rollout.fully_async")
 _global_worker: AsyncRolloutWorker | None = None
 _worker_lock = threading.Lock()
 _published_policy_version = 0
+
+
+def _new_metrics_state() -> dict[str, int]:
+    return {
+        "lag_zero": 0,
+        "lag_one": 0,
+        "lag_two_to_three": 0,
+        "lag_four_plus": 0,
+        "lag_unknown": 0,
+        "stale_rejected": 0,
+        "stale_requeued": 0,
+        "aborted_requeued": 0,
+    }
 
 
 @dataclass(frozen=True)
@@ -139,6 +153,8 @@ class AsyncRolloutWorker:
         self.state = GenerateState(args)
         self._policy_version = policy_version
         self._policy_version_lock = threading.Lock()
+        self._metrics_lock = threading.Lock()
+        self._metrics_state = _new_metrics_state()
 
     # -- public --------------------------------------------------------------
 
@@ -192,6 +208,9 @@ class AsyncRolloutWorker:
                 continue
             completed.append(record)
         if stale_count:
+            with self._metrics_lock:
+                self._metrics_state["stale_rejected"] += stale_count
+                self._metrics_state["stale_requeued"] += stale_count
             logger.info(
                 "fully-async: rejected and requeued %d stale group(s) at policy version %d (max lag=%d)",
                 stale_count,
@@ -202,6 +221,50 @@ class AsyncRolloutWorker:
 
     def queue_size(self) -> int:
         return self.output_queue.qsize()
+
+    def _record_version_lag_locked(self, version_lag: int | None) -> None:
+        if version_lag is None or version_lag < 0:
+            self._metrics_state["lag_unknown"] += 1
+        elif version_lag == 0:
+            self._metrics_state["lag_zero"] += 1
+        elif version_lag == 1:
+            self._metrics_state["lag_one"] += 1
+        elif version_lag <= 3:
+            self._metrics_state["lag_two_to_three"] += 1
+        else:
+            self._metrics_state["lag_four_plus"] += 1
+
+    def record_processed_groups(self, groups: list[list[Sample]]) -> None:
+        """Accumulate a fixed-bucket lag histogram for shipped samples."""
+
+        current_policy_version = self.policy_version
+        with self._metrics_lock:
+            for group in groups:
+                for sample in group:
+                    sample_version = sample.policy_version
+                    version_lag = current_policy_version - sample_version if isinstance(sample_version, int) else None
+                    self._record_version_lag_locked(version_lag)
+
+    def snapshot_metrics(self, *, reset: bool) -> dict[str, int]:
+        """Return only bounded-cardinality keys and optionally start a new interval."""
+
+        with self._metrics_lock:
+            state = dict(self._metrics_state)
+            if reset:
+                self._metrics_state = _new_metrics_state()
+
+        return {
+            "fully_async/version_lag/count_0": state["lag_zero"],
+            "fully_async/version_lag/count_1": state["lag_one"],
+            "fully_async/version_lag/count_2_to_3": state["lag_two_to_three"],
+            "fully_async/version_lag/count_4_plus": state["lag_four_plus"],
+            "fully_async/version_lag/count_unknown": state["lag_unknown"],
+            "fully_async/count/stale_rejected": state["stale_rejected"],
+            "fully_async/count/stale_requeued": state["stale_requeued"],
+            "fully_async/count/aborted_requeued": state["aborted_requeued"],
+            "fully_async/queue/completed_groups": self.queue_size(),
+            "fully_async/policy/current_version": self.policy_version,
+        }
 
     @property
     def policy_version(self) -> int:
@@ -315,6 +378,8 @@ class AsyncRolloutWorker:
             if any(getattr(s, "status", None) == Sample.Status.ABORTED for s in result):
                 try:
                     self.data_buffer.add_samples([result])
+                    with self._metrics_lock:
+                        self._metrics_state["aborted_requeued"] += 1
                 except Exception:  # noqa: BLE001
                     logger.exception("fully-async: failed to requeue aborted group")
                 return
@@ -388,6 +453,7 @@ async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> list[li
         time.time() - started,
         worker.queue_size(),
     )
+    worker.record_processed_groups(out)
     return out
 
 
@@ -396,4 +462,8 @@ def generate_rollout_fully_async(args, rollout_id, data_buffer, evaluation: bool
 
     if evaluation:
         raise ValueError("fully-async rollout doesn't support evaluation mode")
-    return run(_generate_rollout_async(args, rollout_id, data_buffer))
+    samples = run(_generate_rollout_async(args, rollout_id, data_buffer))
+    with _worker_lock:
+        worker = _global_worker
+    metrics = worker.snapshot_metrics(reset=True) if worker is not None else None
+    return RolloutFnTrainOutput(samples=samples, metrics=metrics)
