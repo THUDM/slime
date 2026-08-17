@@ -6,6 +6,18 @@ from slime.utils.arguments import parse_args
 from slime.utils.misc import should_run_periodic_action
 
 
+def _update_actor_weights(actor_model, rollout_manager) -> None:
+    """Publish actor weights and advance the rollout policy version only on success."""
+
+    ray.get(rollout_manager.before_weight_update.remote())
+    succeeded = False
+    try:
+        actor_model.update_weights()
+        succeeded = True
+    finally:
+        ray.get(rollout_manager.after_weight_update.remote(succeeded=succeeded))
+
+
 # The framework supports other asynchronous approaches such as fully async (which is shown in examples/full_async).
 def train(args):
     assert not args.colocate, "Colocation is not supported for async training."
@@ -23,7 +35,7 @@ def train(args):
     actor_model, critic_model = create_training_models(args, pgs, rollout_manager)
 
     # Always push actor weights to rollout once weights are loaded.
-    actor_model.update_weights()
+    _update_actor_weights(actor_model, rollout_manager)
 
     if args.check_weight_update_equal:
         ray.get(rollout_manager.check_weights.remote(action="compare"))
@@ -67,7 +79,7 @@ def train(args):
             # sync generate before update weights to prevent update weight in the middle of generation
             rollout_data_curr_ref = ray.get(x) if (x := rollout_data_next_future) is not None else None
             rollout_data_next_future = None
-            actor_model.update_weights()
+            _update_actor_weights(actor_model, rollout_manager)
 
         if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
             ray.get(rollout_manager.eval.remote(rollout_id))
