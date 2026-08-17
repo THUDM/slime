@@ -16,8 +16,10 @@ the number of sglang engines to match the per-sample semaphore cap in
 
 The worker snapshots the current training-side ``policy_version`` when each
 group is admitted and preserves that version on completion, even if a weight
-update finishes while generation is still running. It remains oblivious to
-pause / abort policy: each in-flight generation surfaces
+update finishes while generation is still running. When
+``args.max_policy_version_lag`` is set, queue consumers reject results outside
+that budget and requeue their admission-time inputs for regeneration. It
+remains oblivious to pause / abort policy: each in-flight generation surfaces
 :data:`Sample.Status.ABORTED` on its own, and the worker redirects those groups
 back to ``data_buffer`` instead of shipping them to training.
 """
@@ -26,11 +28,12 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import copy
 import logging
 import queue
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from slime.rollout.sglang_rollout import GenerateState, generate_and_rm_group
 from slime.utils.async_utils import run
@@ -59,6 +62,11 @@ class CompletedSampleRecord:
     gid: int
     group: list[Sample]
     policy_version: int
+    # Generation mutates Sample objects in place and custom generators may
+    # replace them entirely. Keep the admission-time input so a stale result
+    # can be retried instead of accidentally treating a completed response as
+    # a fresh prompt.
+    retry_group: list[Sample] | None = field(default=None, repr=False, compare=False)
 
 
 def _get_global_worker(args, data_buffer) -> AsyncRolloutWorker:
@@ -144,20 +152,52 @@ class AsyncRolloutWorker:
         if self.worker_thread and self.worker_thread.is_alive():
             self.worker_thread.join(timeout=5)
 
-    def get_completed_groups(self, limit: int | None = None) -> list[CompletedSampleRecord]:
-        """Pop up to ``limit`` completed groups (all of them when ``None``).
+    def get_completed_groups(
+        self,
+        limit: int | None = None,
+        *,
+        max_policy_version_lag: int | None = None,
+    ) -> list[CompletedSampleRecord]:
+        """Pop up to ``limit`` trainable completed groups.
 
         Callers that only need a fixed number of groups must pass ``limit`` —
         anything popped beyond it would otherwise have to be thrown away, and
         these groups are fully generated and reward-scored, with their prompts
-        already consumed from ``data_buffer``.
+        already consumed from ``data_buffer``. When a lag budget is configured,
+        records beyond it are deterministically rejected and their admission-
+        time prompt snapshots are requeued for regeneration.
         """
+        if max_policy_version_lag is not None and max_policy_version_lag < 0:
+            raise ValueError(f"max_policy_version_lag must be non-negative, got {max_policy_version_lag}")
+
         completed: list[CompletedSampleRecord] = []
+        stale_count = 0
+        current_policy_version = self.policy_version
         while limit is None or len(completed) < limit:
             try:
-                completed.append(self.output_queue.get_nowait())
+                record = self.output_queue.get_nowait()
             except queue.Empty:
                 break
+            version_lag = current_policy_version - record.policy_version
+            if version_lag < 0:
+                raise ValueError(
+                    "completed record is newer than the worker policy: "
+                    f"current={current_policy_version}, record={record.policy_version}"
+                )
+            if max_policy_version_lag is not None and version_lag > max_policy_version_lag:
+                if record.retry_group is None:
+                    raise RuntimeError(f"stale completed record {record.gid} has no admission snapshot to requeue")
+                self.data_buffer.add_samples([record.retry_group])
+                stale_count += 1
+                continue
+            completed.append(record)
+        if stale_count:
+            logger.info(
+                "fully-async: rejected and requeued %d stale group(s) at policy version %d (max lag=%d)",
+                stale_count,
+                current_policy_version,
+                max_policy_version_lag,
+            )
         return completed
 
     def queue_size(self) -> int:
@@ -214,6 +254,11 @@ class AsyncRolloutWorker:
                     for group in groups:
                         gid = gid_counter
                         gid_counter += 1
+                        retry_group = (
+                            copy.deepcopy(group)
+                            if getattr(self.args, "max_policy_version_lag", None) is not None
+                            else None
+                        )
                         policy_version = self.policy_version
                         for sample in group:
                             sample.policy_version = policy_version
@@ -225,7 +270,7 @@ class AsyncRolloutWorker:
                                 evaluation=False,
                             )
                         )
-                        task.add_done_callback(self._make_done_cb(gid, policy_version))
+                        task.add_done_callback(self._make_done_cb(gid, policy_version, retry_group))
                         active_tasks.add(task)
 
                 await asyncio.sleep(self.poll_interval)
@@ -243,7 +288,12 @@ class AsyncRolloutWorker:
             except Exception:  # noqa: BLE001
                 pass
 
-    def _make_done_cb(self, gid: int, policy_version: int):
+    def _make_done_cb(
+        self,
+        gid: int,
+        policy_version: int,
+        retry_group: list[Sample] | None = None,
+    ):
         def _cb(done_task: asyncio.Task) -> None:
             try:
                 result = done_task.result()
@@ -268,7 +318,14 @@ class AsyncRolloutWorker:
                 except Exception:  # noqa: BLE001
                     logger.exception("fully-async: failed to requeue aborted group")
                 return
-            self.output_queue.put(CompletedSampleRecord(gid=gid, group=result, policy_version=policy_version))
+            self.output_queue.put(
+                CompletedSampleRecord(
+                    gid=gid,
+                    group=result,
+                    policy_version=policy_version,
+                    retry_group=retry_group,
+                )
+            )
 
         return _cb
 
@@ -294,7 +351,10 @@ async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> list[li
         # Pull only what this rollout still needs; the surplus stays queued for
         # the next rollout (that is the "queue stays warm" contract).
         drained = 0
-        for record in worker.get_completed_groups(limit=target - len(collected)):
+        for record in worker.get_completed_groups(
+            limit=target - len(collected),
+            max_policy_version_lag=getattr(args, "max_policy_version_lag", None),
+        ):
             collected[record.gid] = record.group
             drained += 1
 
