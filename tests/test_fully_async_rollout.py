@@ -76,9 +76,19 @@ def _make_group(index: int) -> list[Sample]:
     return [sample]
 
 
-def _make_worker(monkeypatch, data_buffer=None, concurrency=4, policy_version=0) -> fa.AsyncRolloutWorker:
+def _make_worker(
+    monkeypatch,
+    data_buffer=None,
+    concurrency=4,
+    policy_version=0,
+    max_policy_version_lag=None,
+) -> fa.AsyncRolloutWorker:
     monkeypatch.setattr(fa, "GenerateState", _FakeGenerateState)
-    args = SimpleNamespace(rollout_global_dataset=True, rollout_batch_size=4)
+    args = SimpleNamespace(
+        rollout_global_dataset=True,
+        rollout_batch_size=4,
+        max_policy_version_lag=max_policy_version_lag,
+    )
     return fa.AsyncRolloutWorker(
         args,
         data_buffer or _FakeDataBuffer([]),
@@ -114,6 +124,131 @@ def test_get_completed_groups_limit(monkeypatch):
     assert [record.gid for record in worker.get_completed_groups(limit=2)] == [0, 1]
     assert [record.gid for record in worker.get_completed_groups()] == [2, 3, 4]
     assert worker.get_completed_groups(limit=3) == []
+
+
+@pytest.mark.unit
+def test_stale_groups_are_requeued_and_exact_lag_boundary_is_accepted(monkeypatch):
+    data_buffer = _FakeDataBuffer([])
+    worker = _make_worker(monkeypatch, data_buffer=data_buffer, policy_version=5)
+
+    stale_retry = [Sample(index=30, prompt="retry-30")]
+    worker.output_queue.put(
+        fa.CompletedSampleRecord(
+            gid=3,
+            group=_make_group(3),
+            policy_version=3,
+            retry_group=stale_retry,
+        )
+    )
+    worker.output_queue.put(
+        fa.CompletedSampleRecord(
+            gid=4,
+            group=_make_group(4),
+            policy_version=4,
+            retry_group=[Sample(index=40, prompt="retry-40")],
+        )
+    )
+
+    records = worker.get_completed_groups(limit=1, max_policy_version_lag=1)
+
+    assert [(record.gid, record.policy_version) for record in records] == [(4, 4)]
+    assert data_buffer.requeued == [stale_retry]
+    assert data_buffer.requeued[0][0].status is Sample.Status.PENDING
+
+
+@pytest.mark.unit
+def test_unset_staleness_budget_preserves_legacy_queue_behavior(monkeypatch):
+    worker = _make_worker(monkeypatch, policy_version=5)
+    worker.output_queue.put(fa.CompletedSampleRecord(gid=3, group=_make_group(3), policy_version=1))
+
+    records = worker.get_completed_groups(limit=1)
+
+    assert [(record.gid, record.policy_version) for record in records] == [(3, 1)]
+
+
+@pytest.mark.unit
+def test_rollout_never_returns_stale_group_when_budget_is_enabled(monkeypatch):
+    data_buffer = _FakeDataBuffer([])
+    worker = _make_worker(monkeypatch, data_buffer=data_buffer, policy_version=2)
+    stale_retry = [Sample(index=10, prompt="retry-10")]
+    worker.output_queue.put(
+        fa.CompletedSampleRecord(
+            gid=1,
+            group=_make_group(1),
+            policy_version=1,
+            retry_group=stale_retry,
+        )
+    )
+    worker.output_queue.put(
+        fa.CompletedSampleRecord(
+            gid=2,
+            group=_make_group(2),
+            policy_version=2,
+            retry_group=[Sample(index=20, prompt="retry-20")],
+        )
+    )
+    monkeypatch.setattr(fa, "_get_global_worker", lambda args, data_buffer: worker)
+    args = SimpleNamespace(
+        rollout_global_dataset=True,
+        rollout_batch_size=1,
+        max_policy_version_lag=0,
+    )
+
+    out = asyncio.run(fa._generate_rollout_async(args, rollout_id=0, data_buffer=data_buffer))
+
+    assert [group[0].index for group in out] == [2]
+    assert data_buffer.requeued == [stale_retry]
+
+
+@pytest.mark.unit
+def test_stale_retry_uses_pristine_admission_snapshot(monkeypatch):
+    admitted_group = [Sample(index=6, prompt="p6")]
+    data_buffer = _FakeDataBuffer([admitted_group])
+
+    async def _complete_generation(args, group, sampling_params, evaluation):
+        group[0].response = "generated"
+        group[0].response_length = 1
+        group[0].reward = 1.0
+        group[0].status = Sample.Status.COMPLETED
+        return group
+
+    monkeypatch.setattr(fa, "generate_and_rm_group", _complete_generation)
+    worker = _make_worker(
+        monkeypatch,
+        data_buffer=data_buffer,
+        concurrency=1,
+        policy_version=2,
+        max_policy_version_lag=0,
+    )
+    worker.poll_interval = 0.01
+    worker.start()
+    try:
+        deadline = time.time() + 3.0
+        while worker.queue_size() == 0 and time.time() < deadline:
+            time.sleep(0.01)
+        assert worker.queue_size() == 1
+
+        worker.publish_policy_version(3)
+        assert worker.get_completed_groups(limit=1, max_policy_version_lag=0) == []
+    finally:
+        worker.stop()
+
+    assert len(data_buffer.requeued) == 1
+    retry = data_buffer.requeued[0][0]
+    assert retry.prompt == "p6"
+    assert retry.response == ""
+    assert retry.response_length == 0
+    assert retry.reward is None
+    assert retry.status is Sample.Status.PENDING
+    assert retry.policy_version is None
+
+
+@pytest.mark.unit
+def test_negative_staleness_budget_is_rejected(monkeypatch):
+    worker = _make_worker(monkeypatch)
+
+    with pytest.raises(ValueError, match="must be non-negative"):
+        worker.get_completed_groups(max_policy_version_lag=-1)
 
 
 @pytest.mark.unit
