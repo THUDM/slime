@@ -17,7 +17,7 @@ _stubs = {
         "create_training_models": None,
     },
     "slime.utils.arguments": {"parse_args": None},
-    "slime.utils.logging_utils": {
+    "slime.observability.logging_utils": {
         "configure_logger": None,
         "finish_tracking": None,
         "init_tracking": None,
