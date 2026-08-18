@@ -1135,6 +1135,294 @@ def test_3_8_long_mixed_session():
 # ===========================================================================
 
 
+def _tc(name: str, args: dict) -> dict:
+    """An assistant message carrying one tool call, canonical (tool_call_dict) shape."""
+    return {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"type": "function", "function": {"name": name, "arguments": args}}],
+    }
+
+
+# What the model generated: trailing whitespace inside the payload, and no
+# `replace_all` key (it emitted none).
+_EDIT_GEN = _tc("Edit", {"file_path": "/p.py", "old_string": "a  \n", "new_string": "b  \n"})
+# The harness echo of that same call: `replace_all` filled in with the value the
+# schema declares, payload right-stripped per line. Same action, different bytes.
+_EDIT_ECHO = _tc("Edit", {"file_path": "/p.py", "old_string": "a\n", "new_string": "b\n", "replace_all": False})
+
+# Tool schemas as the adapter hands them over. `Edit.replace_all` defaults to
+# False and `Fetch.follow_redirects` to True: a default of either polarity has to
+# work, which is what rules out "treat a False value as the default".
+_SCHEMA = [
+    {
+        "type": "function",
+        "function": {
+            "name": "Edit",
+            "parameters": {
+                "properties": {
+                    "file_path": {"type": "string"},
+                    "old_string": {"type": "string"},
+                    "new_string": {"type": "string"},
+                    "replace_all": {"type": "boolean", "default": False},
+                }
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "Fetch",
+            "parameters": {
+                "properties": {
+                    "url": {"type": "string"},
+                    "follow_redirects": {"type": "boolean", "default": True},
+                }
+            },
+        },
+    },
+]
+
+
+def test_3_9_restore_echo_keeps_turn_trainable():
+    """A harness echo that only fills in a declared default and right-strips string
+    args is the same tool call. Restoring it before the prompt is rendered keeps the
+    turn CLEAN, so its generated tokens still train -- without the restore the
+    routing walk misses the node, `_try_merge_assistant_rewrite` demotes that turn
+    to routing-only, and it trains on nothing."""
+    mgr = TrajectoryManager()
+    sid = "3.9"
+    s, u = sys_msg("S"), usr_msg("u")
+    t1 = tool_msg("t")
+
+    p1 = render_prompt([s, u])
+    r1 = render_response("edit")
+    mgr.record_turn(
+        sid,
+        turn=turn(p1, r1, finish_reason="tool_calls"),
+        prompt_messages=messages([s, u]),
+        response_message=_EDIT_GEN,
+    )
+
+    incoming = [*messages([s, u]), _EDIT_ECHO, t1.message]
+    restored = mgr.restore_generated_messages(sid, incoming, _SCHEMA)
+    assert restored[2] == _EDIT_GEN, "the echoed assistant message is restored"
+    assert incoming[2] == _EDIT_ECHO, "the caller's list is not mutated"
+    assert restored[0] is incoming[0] and restored[3] is incoming[3], "other messages pass through"
+
+    # Rendering the restored history reproduces the tokens we hold -> CLEAN.
+    p2 = p1 + r1 + t1.render() + [_GEN]
+    mgr.record_turn(
+        sid,
+        turn=turn(p2, render_response("done"), finish_reason="stop"),
+        prompt_messages=restored,
+        response_message={"role": "assistant", "content": "done"},
+    )
+
+    leaves = _leaves(mgr, sid)
+    assert len(leaves) == 1, "the restored echo descends the existing chain"
+    edit_node = leaves[0].path_from_root()[2]
+    assert edit_node.turn is not None, "the Edit turn keeps its TurnRecord"
+    assert "merged_rewrite" not in edit_node.metadata
+
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    assert len(samples) == 1
+    # Both generated turns train: the Edit (r:edit) and the follow-up (r:done).
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:edit] [</ast>] <tul> tool:t </tul> <gen> [r:done] [</ast>]",
+    ]
+    _check_invariants(samples)
+    _record("3.9 restored echo keeps the turn trainable", mgr, sid, samples)
+    print("PASS 3.9")
+
+
+def test_3_10_restore_echo_from_whitespace_alone():
+    """The recognition must not depend on a default having been filled in. Write's
+    schema declares none, so its echo differs only by the per-line rstrip of a
+    multi-line payload -- and that alone is enough to lose the turn. Covering Write
+    keeps each kind of client edit under test independently."""
+    body_gen = "def f(x):  \n    return x + 1  \n\nDEFAULTS = {}  \n"
+    body_echo = "def f(x):\n    return x + 1\n\nDEFAULTS = {}\n"
+    write_gen = _tc("Write", {"file_path": "/p.py", "content": body_gen})
+    write_echo = _tc("Write", {"file_path": "/p.py", "content": body_echo})
+    assert "replace_all" not in str(write_echo), "Write's echo carries no schema default"
+
+    mgr = TrajectoryManager()
+    sid = "3.9b"
+    s, u = sys_msg("S"), usr_msg("u")
+    t1 = tool_msg("t")
+
+    p1 = render_prompt([s, u])
+    r1 = render_response("write")
+    mgr.record_turn(
+        sid,
+        turn=turn(p1, r1, finish_reason="tool_calls"),
+        prompt_messages=messages([s, u]),
+        response_message=write_gen,
+    )
+
+    restored = mgr.restore_generated_messages(sid, [*messages([s, u]), write_echo, t1.message], _SCHEMA)
+    assert restored[2] == write_gen, "an rstrip-only echo is still the same call"
+
+    mgr.record_turn(
+        sid,
+        turn=turn(p1 + r1 + t1.render() + [_GEN], render_response("done"), finish_reason="stop"),
+        prompt_messages=restored,
+        response_message={"role": "assistant", "content": "done"},
+    )
+    assert len(_leaves(mgr, sid)) == 1
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    assert goldens(samples) == [
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:write] [</ast>] "
+        "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
+    ]
+    _check_invariants(samples)
+    _record("3.10 Write echo restored from rstrip alone", mgr, sid, samples)
+    print("PASS 3.10")
+
+
+def test_3_11_restore_echo_with_either_default_polarity():
+    """The filled-in value has to be checked against the schema, not assumed to be
+    False. `Fetch.follow_redirects` defaults to True, so an echo that fills in
+    True is the same call, while one that fills in False is a different one --
+    the reverse of `Edit.replace_all`. Treating "a False value" as the default
+    would get both of these wrong."""
+    mgr = TrajectoryManager()
+    sid = "3.9c"
+    s, u = sys_msg("S"), usr_msg("u")
+    t1 = tool_msg("t")
+    gen = _tc("Fetch", {"url": "u"})  # model omitted follow_redirects
+    mgr.record_turn(
+        sid,
+        turn=turn(render_prompt([s, u]), render_response("fetch"), finish_reason="tool_calls"),
+        prompt_messages=messages([s, u]),
+        response_message=gen,
+    )
+
+    filled_default = _tc("Fetch", {"url": "u", "follow_redirects": True})  # == the declared default
+    overridden = _tc("Fetch", {"url": "u", "follow_redirects": False})  # a real change
+
+    out = mgr.restore_generated_messages(sid, [*messages([s, u]), filled_default, t1.message], _SCHEMA)
+    assert out[2] == gen, "filling in the declared default is the same call"
+    out = mgr.restore_generated_messages(sid, [*messages([s, u]), overridden, t1.message], _SCHEMA)
+    assert out[2] == overridden, "the non-default value is a different call"
+    print("PASS 3.14")
+
+
+def test_3_12_no_schema_falls_back_to_stricter_matching():
+    """Without a schema the defaults are unknown, so a filled-in default can no
+    longer be recognized. That must cost a restore, never cause a wrong one: the
+    echo is left as the harness sent it."""
+    mgr = TrajectoryManager()
+    sid = "3.9d"
+    s, u = sys_msg("S"), usr_msg("u")
+    t1 = tool_msg("t")
+    mgr.record_turn(
+        sid,
+        turn=turn(render_prompt([s, u]), render_response("edit-ns"), finish_reason="tool_calls"),
+        prompt_messages=messages([s, u]),
+        response_message=_EDIT_GEN,
+    )
+
+    incoming = [*messages([s, u]), _EDIT_ECHO, t1.message]
+    assert mgr.restore_generated_messages(sid, incoming)[2] == _EDIT_ECHO, "no schema -> no restore"
+    assert mgr.restore_generated_messages(sid, incoming, _SCHEMA)[2] == _EDIT_GEN, "with schema -> restored"
+
+    # An echo differing only by whitespace still works without a schema, since
+    # that projection needs no schema knowledge.
+    ws_only = _tc("Edit", {"file_path": "/p.py", "old_string": "a\n", "new_string": "b\n"})
+    assert mgr.restore_generated_messages(sid, [*messages([s, u]), ws_only, t1.message])[2] == _EDIT_GEN
+    print("PASS 3.12")
+
+
+def test_3_13_restore_declines_anything_but_an_echo():
+    """The restore must not rewrite history it does not recognize: swapping a
+    genuinely different action for the one we generated would silently corrupt
+    the training data. Only tool-call arguments are compared modulo the known
+    client normalizations; everything else must match exactly."""
+    mgr = TrajectoryManager()
+    sid = "3.10"
+    s, u = sys_msg("S"), usr_msg("u")
+    t1 = tool_msg("t")
+    mgr.record_turn(
+        sid,
+        turn=turn(render_prompt([s, u]), render_response("e"), finish_reason="tool_calls"),
+        prompt_messages=messages([s, u]),
+        response_message=_EDIT_GEN,
+    )
+
+    cases = {
+        "the real echo": (_EDIT_ECHO, True),
+        "different old_string": (
+            _tc("Edit", {"file_path": "/p.py", "old_string": "OTHER\n", "new_string": "b\n"}),
+            False,
+        ),
+        "replace_all=True": (
+            _tc("Edit", {"file_path": "/p.py", "old_string": "a\n", "new_string": "b\n", "replace_all": True}),
+            False,
+        ),
+        "different file": (
+            _tc("Edit", {"file_path": "/other.py", "old_string": "a\n", "new_string": "b\n"}),
+            False,
+        ),
+        "different tool": (_tc("Write", {"file_path": "/p.py", "content": "b\n"}), False),
+        "nested payload differs": (
+            _tc("MultiEdit", {"file_path": "/p.py", "edits": [{"old_string": "a\n", "new_string": "OTHER\n"}]}),
+            False,
+        ),
+        "no tool call at all": ({"role": "assistant", "content": "Let me reconsider."}, False),
+        "leading whitespace differs": (
+            _tc("Edit", {"file_path": "/p.py", "old_string": "  a\n", "new_string": "b  \n"}),
+            False,
+        ),
+    }
+    for label, (msg, should_restore) in cases.items():
+        out = mgr.restore_generated_messages(sid, [*messages([s, u]), msg, t1.message], _SCHEMA)
+        assert (out[2] == _EDIT_GEN) is should_restore, f"{label}: restore decision wrong"
+    print(f"PASS 3.10 ({len(cases)} cases)")
+
+
+def test_3_14_restore_across_a_long_rewriting_session():
+    """End-to-end along the adapter's path: every turn's history is restored
+    before rendering, exactly as ``_run_turn`` does, with the harness rewriting
+    each assistant echo. Every generated turn must stay trained and the session
+    must not fork."""
+    mgr = TrajectoryManager()
+    sid = "3.11"
+    s, u = sys_msg("S"), usr_msg("u")
+    n_turns = 5
+
+    hist = messages([s, u])
+    tokens = render_prompt([s, u])
+    for i in range(n_turns):
+        restored = mgr.restore_generated_messages(sid, hist, _SCHEMA)
+        gen = _tc("Edit", {"file_path": f"/f{i}.py", "old_string": f"x{i}  \n", "new_string": f"y{i}  \n"})
+        resp = render_response(f"edit{i}")
+        mgr.record_turn(
+            sid,
+            turn=turn(tokens, resp, finish_reason="tool_calls"),
+            prompt_messages=restored,
+            response_message=gen,
+        )
+        # The harness replays its own rewritten echo of that turn, plus a result.
+        echo = _tc(
+            "Edit",
+            {"file_path": f"/f{i}.py", "old_string": f"x{i}\n", "new_string": f"y{i}\n", "replace_all": False},
+        )
+        tool = tool_msg(f"r{i}")
+        hist = [*restored, echo, tool.message]
+        tokens = tokens + resp + tool.render() + [_GEN]
+
+    assert len(_leaves(mgr, sid)) == 1, "a restored session never forks"
+    samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
+    assert len(samples) == 1
+    trained_turns = sum(1 for i in range(n_turns) if f"[r:edit{i}]" in goldens(samples)[0])
+    assert trained_turns == n_turns, f"all {n_turns} generated turns must train, got {trained_turns}"
+    _check_invariants(samples)
+    _record("3.14 restore across a long rewriting session", mgr, sid, samples)
+    print("PASS 3.14")
+
+
 def test_4_2_logprobs_length_mismatch_raises():
     """output_log_probs whose length != output_ids -> ValueError at record_turn."""
     mgr = TrajectoryManager()
@@ -1367,6 +1655,12 @@ _CASES = [
     test_3_6_tree_fork_plus_token_drift,
     test_3_7_deep_multi_leaf_dedup,
     test_3_8_long_mixed_session,
+    test_3_9_restore_echo_keeps_turn_trainable,
+    test_3_10_restore_echo_from_whitespace_alone,
+    test_3_11_restore_echo_with_either_default_polarity,
+    test_3_12_no_schema_falls_back_to_stricter_matching,
+    test_3_13_restore_declines_anything_but_an_echo,
+    test_3_14_restore_across_a_long_rewriting_session,
     test_4_2_logprobs_length_mismatch_raises,
     test_4_3_empty_prompt_messages_skipped,
     test_4_4_default_base_sample,

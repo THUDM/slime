@@ -403,6 +403,9 @@ class BaseAdapter:
         t0 = time.monotonic()
         try:
             translated, tools_schema = self._translate(body)
+            # A harness may echo a prior assistant turn re-rendered rather than
+            # byte-identical; render from what we generated so the turn stays CLEAN.
+            translated = self.manager.restore_generated_messages(sid, translated, tools_schema)
             prompt_ids = _session_prompt_ids(
                 translated,
                 tok,
