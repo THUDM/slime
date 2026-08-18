@@ -862,10 +862,13 @@ diff --git a/megatron/core/transformer/transformer_config.py b/megatron/core/tra
 index dce438520..de51edaf3 100644
 --- a/megatron/core/transformer/transformer_config.py
 +++ b/megatron/core/transformer/transformer_config.py
-@@ -229,6 +229,9 @@ class TransformerConfig(ModelParallelConfig):
+@@ -229,6 +229,12 @@ class TransformerConfig(ModelParallelConfig):
      attention_output_gate: bool = False
      """Whether to apply output gate to the attention layers."""
 
++    rotary_percent: Optional[float] = None
++    """Percent of rotary dimension to use for rotary position embeddings."""
++
 +    post_self_attn_layernorm: bool = False
 +    post_mlp_layernorm: bool = False
 +
