@@ -13,6 +13,7 @@ protocols handle identically.
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
 import logging
 import time
@@ -31,15 +32,16 @@ __all__ = ["TurnRecord"]
 
 @dataclasses.dataclass
 class Session:
-    """Per-sid adapter state: sampling defaults, context budget, and replay history.
+    """Per-sid adapter state: sampling defaults and context budget.
 
     Trajectory state lives in the shared TrajectoryManager (BaseAdapter.manager),
-    while assistant_history only restores reasoning omitted by protocol clients.
+    not here.
     """
 
     sampling_defaults: dict = dataclasses.field(default_factory=dict)
     max_context_tokens: int = 0
     assistant_history: list[dict] = dataclasses.field(default_factory=list)
+    last_turn_ids: list[int] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -80,51 +82,99 @@ _QWEN_REASONING_HISTORY_BRANCH = "{%- if loop.index0 > ns.last_query_index %}"
 
 
 def _reasoning_preserving_chat_template(tokenizer) -> str:
-    """Return a Qwen chat template that keeps prior assistant reasoning.
+    """Return the Qwen chat template variant needed for append-only RL turns.
 
-    Qwen normally omits reasoning from assistant messages before the latest
-    user/tool turn. That is useful for inference, but it rewrites already
-    sampled token history during a multi-turn RL rollout. The opt-in adapter
-    mode replaces only that history guard and leaves the generation prompt and
-    the rest of the model-provided template unchanged.
+    Qwen3/3.5 normally drops reasoning from assistant messages before the most
+    recent user message. That inference-time compaction rewrites already sampled
+    tokens, which breaks a multi-turn RL trajectory. In this explicit mode all
+    available ``reasoning_content`` is rendered while the normal open ``<think>``
+    generation prompt remains unchanged.
     """
     template = getattr(tokenizer, "chat_template", None)
-    if not isinstance(template, str) or template.count(_QWEN_REASONING_HISTORY_BRANCH) != 1:
+    if not isinstance(template, str) or _QWEN_REASONING_HISTORY_BRANCH not in template:
         raise ValueError(
             "preserve_reasoning_history requires a Qwen chat template containing "
-            f"exactly one {_QWEN_REASONING_HISTORY_BRANCH!r} guard"
+            f"{_QWEN_REASONING_HISTORY_BRANCH!r}"
         )
-    return template.replace(_QWEN_REASONING_HISTORY_BRANCH, "{%- if true %}", 1)
+    replacement = "{%- if true %}"
+    return template.replace(_QWEN_REASONING_HISTORY_BRANCH, replacement, 1)
 
 
 def _assistant_visible_signature(message: dict) -> tuple[Any, Any]:
     return message.get("content"), message.get("tool_calls")
 
 
-def _restore_assistant_reasoning(messages: list[dict], assistant_history: list[dict]) -> int:
-    """Restore reasoning omitted when a client echoes assistant history.
+def _restore_canonical_assistant_history(messages: list[dict], assistant_history: list[dict]) -> int:
+    """Replace client-echoed assistant turns with the server's canonical copy.
 
-    Generated messages are matched in order by visible content and canonical
-    tool calls. A compacted or otherwise changed response does not match, so it
-    remains a genuine trajectory fork.
+    Clients may omit reasoning and normalize text or tool-call arguments when
+    replaying a response. The adapter generated those turns and owns their exact
+    structured form, so align assistant messages from the newest turn backwards
+    and restore them wholesale. User and tool messages remain client-owned.
     """
-    history_pos = 0
+    positions = [i for i, message in enumerate(messages) if message.get("role") == "assistant"]
     restored = 0
-    for message in messages:
-        if message.get("role") != "assistant":
-            continue
-        signature = _assistant_visible_signature(message)
-        for idx in range(history_pos, len(assistant_history)):
-            canonical = assistant_history[idx]
-            if _assistant_visible_signature(canonical) != signature:
-                continue
-            history_pos = idx + 1
-            reasoning = canonical.get("reasoning_content")
-            if reasoning and not message.get("reasoning_content"):
-                message["reasoning_content"] = reasoning
-                restored += 1
-            break
+    for position, canonical in zip(reversed(positions), reversed(assistant_history), strict=False):
+        if messages[position] != canonical:
+            messages[position] = copy.deepcopy(canonical)
+            restored += 1
     return restored
+
+
+def _assert_append_only_prompt(previous_turn_ids: list[int], prompt_ids: list[int]) -> None:
+    """Require a new prompt to preserve every token sampled in the prior turn."""
+    if not previous_turn_ids:
+        return
+    if prompt_ids[: len(previous_turn_ids)] == previous_turn_ids:
+        return
+    common = 0
+    limit = min(len(previous_turn_ids), len(prompt_ids))
+    while common < limit and previous_turn_ids[common] == prompt_ids[common]:
+        common += 1
+    raise RuntimeError(
+        "non-append-only agent prompt: "
+        f"previous_tokens={len(previous_turn_ids)} prompt_tokens={len(prompt_ids)} common_prefix={common}"
+    )
+
+
+def _continue_from_canonical_turn(
+    messages: list[dict],
+    tokenizer,
+    *,
+    tools: list[dict] | None,
+    chat_template: str,
+    rendered_prompt_ids: list[int],
+    previous_turn_ids: list[int],
+    previous_response_message: dict,
+) -> list[int]:
+    """Append only the client messages added after the last sampled response.
+
+    A parsed assistant response is semantically equivalent to the sampled text,
+    but tool parsers and chat templates can normalize whitespace or argument
+    formatting. The sampled token ids are therefore the canonical history. We
+    use message identity only to locate the assistant boundary in the freshly
+    rendered prompt, then append the new suffix to those canonical ids.
+    """
+    assistant_positions = [i for i, message in enumerate(messages) if message.get("role") == "assistant"]
+    if not assistant_positions:
+        raise RuntimeError("append-only agent prompt has no replayed assistant message")
+    boundary = assistant_positions[-1]
+    if _assistant_visible_signature(messages[boundary]) != _assistant_visible_signature(previous_response_message):
+        raise RuntimeError("latest replayed assistant does not match the previous sampled response")
+
+    rendered_through_assistant = _render_token_ids(
+        messages[: boundary + 1],
+        tokenizer,
+        tools=tools,
+        add_generation_prompt=False,
+        chat_template=chat_template,
+    )
+    if rendered_prompt_ids[: len(rendered_through_assistant)] != rendered_through_assistant:
+        raise RuntimeError("chat template rewrote messages before the latest assistant boundary")
+
+    prompt_ids = previous_turn_ids + rendered_prompt_ids[len(rendered_through_assistant) :]
+    _assert_append_only_prompt(previous_turn_ids, prompt_ids)
+    return prompt_ids
 
 
 def flatten_content(c: Any) -> str:
@@ -399,21 +449,33 @@ class BaseAdapter:
         try:
             translated, tools_schema = self._translate(body)
             if self.preserve_reasoning_history:
-                restored = _restore_assistant_reasoning(translated, s.assistant_history)
+                restored = _restore_canonical_assistant_history(translated, s.assistant_history)
                 if restored:
                     self.logger.debug(
-                        "[%s] sid=%s restored reasoning for %d assistant turn(s)",
+                        "[%s] sid=%s restored canonical history for %d assistant turn(s)",
                         self.log_prefix,
                         sid,
                         restored,
                     )
-            prompt_ids = _render_token_ids(
+            rendered_prompt_ids = _render_token_ids(
                 translated,
                 tok,
                 tools=tools_schema,
                 add_generation_prompt=True,
                 chat_template=self.chat_template,
             )
+            if self.preserve_reasoning_history and s.last_turn_ids:
+                prompt_ids = _continue_from_canonical_turn(
+                    translated,
+                    tok,
+                    tools=tools_schema,
+                    chat_template=self.chat_template,
+                    rendered_prompt_ids=rendered_prompt_ids,
+                    previous_turn_ids=s.last_turn_ids,
+                    previous_response_message=s.assistant_history[-1],
+                )
+            else:
+                prompt_ids = rendered_prompt_ids
 
             turn = await call_sglang_generate(prompt_ids, s, body, adapter=self, session_id=sid)
 
@@ -425,9 +487,6 @@ class BaseAdapter:
                 reasoning_parser_name=self.reasoning_parser,
             )
             reply = self._build_reply(parsed, turn.finish_reason, translated, tools_schema)
-            manager_message = reply.manager_message
-            if self.preserve_reasoning_history and parsed.reasoning and not manager_message.get("reasoning_content"):
-                manager_message = {**manager_message, "reasoning_content": parsed.reasoning}
             turn = dataclasses.replace(turn, ill_formed=parsed.ill_formed)
 
             in_tok, out_tok = len(prompt_ids), len(turn.output_ids)
@@ -450,11 +509,14 @@ class BaseAdapter:
                     raise
                 return web.Response(status=499, text="client disconnected")
 
+            s.assistant_history.append(reply.manager_message)
+            s.last_turn_ids = prompt_ids + turn.output_ids
+
             self._run_debug_callback(
                 sid,
                 translated,
                 tools_schema,
-                manager_message,
+                reply.manager_message,
                 turn,
             )
 
@@ -462,10 +524,9 @@ class BaseAdapter:
                 sid,
                 turn=turn,
                 prompt_messages=translated,
-                response_message=manager_message,
+                response_message=reply.manager_message,
                 metadata={"sid": sid},
             )
-            s.assistant_history.append(manager_message)
             return response
         finally:
             self.inflight.get(sid, set()).discard(task)
