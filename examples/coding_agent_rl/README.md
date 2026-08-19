@@ -124,6 +124,7 @@ contract (read inside `slime/agent/`); `SWE_*` are this SWE example's task knobs
 | `SLIME_AGENT_CC_TARBALL` | — | Host path to the Claude Code CLI npm tarball. |
 | `SLIME_AGENT_CC_EXTRA_ARGS` | (see launcher) | Extra flags appended to the `claude` CLI invocation — registers the read-only `investigator` sub-agent, disables `WebFetch`/`WebSearch`, disables slash commands. |
 | `SLIME_AGENT_CC_EXTRA_ENVS` | unset | JSON object of extra env vars exported into the `claude` process — escape hatch for env-only knobs (`MAX_THINKING_TOKENS`, `BASH_MAX_TIMEOUT_MS`, ...). Merged last, so it can also override the built-in defaults. |
+| `SLIME_PRESERVE_REASONING_HISTORY` | `1` | Keep Qwen reasoning in replayed assistant turns so multi-turn token history remains append-only. Disable only when intentional history rewriting should create trajectory forks. |
 | `SWE_AGENT_TIME_BUDGET_SEC` | `1800` | Wallclock budget for the in-sandbox agent CLI itself (think/edit/run). |
 | `SWE_EVAL_TIMEOUT_SEC` | `600` | Wallclock cap on the evaluator sandbox. |
 | `SWE_ROLLOUT_GUARD_SEC` | `agent+eval+180` | Outer safety net wrapping the whole rollout (boot + workspace + agent + diff + eval). Auto-derived if unset. |
@@ -138,6 +139,13 @@ the emitted segments and does not drop them for length.
 The Anthropic adapter reuses `--sglang-tool-call-parser` and
 `--sglang-reasoning-parser` for output parsing, so those flags must match the
 served model.
+
+Qwen chat templates normally omit assistant reasoning before the latest
+user/tool turn. During RL this rewrites previously sampled tokens and can turn
+every agent turn into a false trajectory fork. The example enables
+`SLIME_PRESERVE_REASONING_HISTORY=1`, which uses an append-only Qwen template
+and restores generated reasoning when the client omits thinking blocks from
+replayed history. Real compaction or changed visible responses still fork.
 
 ## String-in, Token-out Trajectories
 

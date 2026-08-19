@@ -26,20 +26,20 @@ from aiohttp import web
 from slime.agent.parsing import parse_model_output
 from slime.agent.trajectory import TrajectoryManager, TurnRecord
 
-
 __all__ = ["TurnRecord"]
 
 
 @dataclasses.dataclass
 class Session:
-    """Per-sid adapter state: sampling defaults and context budget.
+    """Per-sid adapter state: sampling defaults, context budget, and replay history.
 
     Trajectory state lives in the shared TrajectoryManager (BaseAdapter.manager),
-    not here.
+    while assistant_history only restores reasoning omitted by protocol clients.
     """
 
     sampling_defaults: dict = dataclasses.field(default_factory=dict)
     max_context_tokens: int = 0
+    assistant_history: list[dict] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -61,16 +61,70 @@ def _render_token_ids(
     *,
     tools: list[dict] | None,
     add_generation_prompt: bool = True,
+    chat_template: str | None = None,
 ) -> list[int]:
     """Render a chat-message list to token ids with the served chat template."""
-    enc = tokenizer.apply_chat_template(
-        messages,
-        tools=tools,
-        tokenize=True,
-        add_generation_prompt=add_generation_prompt,
-    )
+    kwargs = {
+        "tools": tools,
+        "tokenize": True,
+        "add_generation_prompt": add_generation_prompt,
+    }
+    if chat_template is not None:
+        kwargs["chat_template"] = chat_template
+    enc = tokenizer.apply_chat_template(messages, **kwargs)
     ids = enc["input_ids"] if hasattr(enc, "__getitem__") and "input_ids" in enc else enc
     return list(ids)
+
+
+_QWEN_REASONING_HISTORY_BRANCH = "{%- if loop.index0 > ns.last_query_index %}"
+
+
+def _reasoning_preserving_chat_template(tokenizer) -> str:
+    """Return a Qwen chat template that keeps prior assistant reasoning.
+
+    Qwen normally omits reasoning from assistant messages before the latest
+    user/tool turn. That is useful for inference, but it rewrites already
+    sampled token history during a multi-turn RL rollout. The opt-in adapter
+    mode replaces only that history guard and leaves the generation prompt and
+    the rest of the model-provided template unchanged.
+    """
+    template = getattr(tokenizer, "chat_template", None)
+    if not isinstance(template, str) or template.count(_QWEN_REASONING_HISTORY_BRANCH) != 1:
+        raise ValueError(
+            "preserve_reasoning_history requires a Qwen chat template containing "
+            f"exactly one {_QWEN_REASONING_HISTORY_BRANCH!r} guard"
+        )
+    return template.replace(_QWEN_REASONING_HISTORY_BRANCH, "{%- if true %}", 1)
+
+
+def _assistant_visible_signature(message: dict) -> tuple[Any, Any]:
+    return message.get("content"), message.get("tool_calls")
+
+
+def _restore_assistant_reasoning(messages: list[dict], assistant_history: list[dict]) -> int:
+    """Restore reasoning omitted when a client echoes assistant history.
+
+    Generated messages are matched in order by visible content and canonical
+    tool calls. A compacted or otherwise changed response does not match, so it
+    remains a genuine trajectory fork.
+    """
+    history_pos = 0
+    restored = 0
+    for message in messages:
+        if message.get("role") != "assistant":
+            continue
+        signature = _assistant_visible_signature(message)
+        for idx in range(history_pos, len(assistant_history)):
+            canonical = assistant_history[idx]
+            if _assistant_visible_signature(canonical) != signature:
+                continue
+            history_pos = idx + 1
+            reasoning = canonical.get("reasoning_content")
+            if reasoning and not message.get("reasoning_content"):
+                message["reasoning_content"] = reasoning
+                restored += 1
+            break
+    return restored
 
 
 def flatten_content(c: Any) -> str:
@@ -145,6 +199,7 @@ class BaseAdapter:
         sglang_url,
         tool_parser=None,
         reasoning_parser=None,
+        preserve_reasoning_history: bool = False,
         max_turns_per_sid: int | None = None,
         fork_threshold_tokens: int | None = None,
         debug_callback: Callable[..., None] | None = None,
@@ -153,6 +208,10 @@ class BaseAdapter:
         self.sglang_url = sglang_url.rstrip("/") if isinstance(sglang_url, str) else sglang_url
         self.tool_parser = tool_parser
         self.reasoning_parser = reasoning_parser
+        self.preserve_reasoning_history = bool(preserve_reasoning_history)
+        self.chat_template = (
+            _reasoning_preserving_chat_template(tokenizer) if self.preserve_reasoning_history else None
+        )
         self.store: dict[str, Any] = {}
         self.inflight: dict[str, set[asyncio.Task]] = {}
         self.closed: set[str] = set()
@@ -339,7 +398,22 @@ class BaseAdapter:
         t0 = time.monotonic()
         try:
             translated, tools_schema = self._translate(body)
-            prompt_ids = _render_token_ids(translated, tok, tools=tools_schema, add_generation_prompt=True)
+            if self.preserve_reasoning_history:
+                restored = _restore_assistant_reasoning(translated, s.assistant_history)
+                if restored:
+                    self.logger.debug(
+                        "[%s] sid=%s restored reasoning for %d assistant turn(s)",
+                        self.log_prefix,
+                        sid,
+                        restored,
+                    )
+            prompt_ids = _render_token_ids(
+                translated,
+                tok,
+                tools=tools_schema,
+                add_generation_prompt=True,
+                chat_template=self.chat_template,
+            )
 
             turn = await call_sglang_generate(prompt_ids, s, body, adapter=self, session_id=sid)
 
@@ -351,6 +425,9 @@ class BaseAdapter:
                 reasoning_parser_name=self.reasoning_parser,
             )
             reply = self._build_reply(parsed, turn.finish_reason, translated, tools_schema)
+            manager_message = reply.manager_message
+            if self.preserve_reasoning_history and parsed.reasoning and not manager_message.get("reasoning_content"):
+                manager_message = {**manager_message, "reasoning_content": parsed.reasoning}
             turn = dataclasses.replace(turn, ill_formed=parsed.ill_formed)
 
             in_tok, out_tok = len(prompt_ids), len(turn.output_ids)
@@ -377,7 +454,7 @@ class BaseAdapter:
                 sid,
                 translated,
                 tools_schema,
-                reply.manager_message,
+                manager_message,
                 turn,
             )
 
@@ -385,9 +462,10 @@ class BaseAdapter:
                 sid,
                 turn=turn,
                 prompt_messages=translated,
-                response_message=reply.manager_message,
+                response_message=manager_message,
                 metadata={"sid": sid},
             )
+            s.assistant_history.append(manager_message)
             return response
         finally:
             self.inflight.get(sid, set()).discard(task)

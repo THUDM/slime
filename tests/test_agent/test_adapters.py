@@ -27,8 +27,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from tests.test_agent._fakes import FakeSGLangServer, FakeTokenizer  # noqa: E402
 
-from slime.agent.adapters import anthropic, openai  # noqa: E402
-from slime.agent.parsing import parse_model_output, parse_xml_tool_uses  # noqa: E402
+from slime.agent.adapters import anthropic, common, openai  # noqa: E402
+from slime.agent.adapters.common import _reasoning_preserving_chat_template, _restore_assistant_reasoning  # noqa: E402
+from slime.agent.parsing import ParsedModelOutput, parse_model_output, parse_xml_tool_uses  # noqa: E402
 from slime.utils.types import Sample  # noqa: E402
 
 NUM_GPUS = 0
@@ -42,6 +43,47 @@ NUM_GPUS = 0
 class _Headers:
     def __init__(self, headers: dict[str, str]) -> None:
         self.headers = headers
+
+
+class _QwenHistoryTokenizer(FakeTokenizer):
+    """Small Qwen-like template model for the history-preservation regression."""
+
+    chat_template = "before {%- if loop.index0 > ns.last_query_index %} with-reasoning {%- endif %} after"
+    _ROLE = {"system": 10, "user": 11, "assistant": 12, "tool": 13}
+    _END = 14
+    _THINK_START = 15
+    _THINK_END = 16
+
+    def apply_chat_template(
+        self,
+        messages,
+        tools=None,
+        tokenize=True,
+        add_generation_prompt=True,
+        chat_template=None,
+    ):
+        self.rendered.append((list(messages), tools))
+        preserve_history = chat_template is not None and "{%- if true %}" in chat_template
+        last_query_index = max(
+            (idx for idx, message in enumerate(messages) if message.get("role") in {"user", "tool"}),
+            default=-1,
+        )
+        out: list[int] = []
+        for idx, message in enumerate(messages):
+            role = message.get("role", "user")
+            out.append(self._ROLE.get(role, self._ROLE["user"]))
+            if role == "assistant" and (preserve_history or idx > last_query_index):
+                out.append(self._THINK_START)
+                out.extend(self.encode(message.get("reasoning_content") or ""))
+                out.append(self._THINK_END)
+            out.extend(self.encode(self._content_text({**message, "reasoning_content": ""})))
+            out.append(self._END)
+        if add_generation_prompt:
+            out.extend([self._ROLE["assistant"], self._THINK_START])
+        return out
+
+    def assistant_output(self, reasoning: str, content: str) -> list[int]:
+        return [*self.encode(reasoning), self._THINK_END, *self.encode(content), self._END]
 
 
 def _parse_sse(raw: str) -> list[tuple[str, object]]:
@@ -129,6 +171,100 @@ def test_anthropic_translation_keeps_tool_results_thinking_and_tools():
     assert tools == [
         {"type": "function", "function": {"name": "lookup", "description": "search", "parameters": {"type": "object"}}}
     ]
+
+
+def test_restore_assistant_reasoning_from_canonical_history():
+    tool_calls = [{"type": "function", "function": {"name": "lookup", "arguments": {"q": "slime"}}}]
+    messages = [
+        {"role": "user", "content": "find slime"},
+        {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        {"role": "tool", "content": "found"},
+    ]
+    history = [
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "I should call lookup.",
+            "tool_calls": tool_calls,
+        }
+    ]
+
+    assert _restore_assistant_reasoning(messages, history) == 1
+    assert messages[1]["reasoning_content"] == "I should call lookup."
+
+
+def test_reasoning_preserving_template_only_replaces_qwen_history_guard():
+    class Tokenizer:
+        chat_template = (
+            "before "
+            "{%- if loop.index0 > ns.last_query_index %}history-with-reasoning"
+            "{%- else %}history-without-reasoning{%- endif %} "
+            "generation:<think>\\n"
+        )
+
+    rendered = _reasoning_preserving_chat_template(Tokenizer())
+    assert "if true" in rendered
+    assert "if loop.index0 > ns.last_query_index" not in rendered
+    assert rendered.endswith("generation:<think>\\n")
+
+
+def test_anthropic_preserves_qwen_reasoning_as_one_multiturn_sample(monkeypatch):
+    async def run_case():
+        tok = _QwenHistoryTokenizer()
+        first_output = tok.assistant_output("inspect first", "first answer")
+        second_output = tok.assistant_output("inspect second", "second answer")
+        parsed = [
+            ParsedModelOutput(reasoning="inspect first", text="first answer", tool_uses=[]),
+            ParsedModelOutput(reasoning="inspect second", text="second answer", tool_uses=[]),
+        ]
+
+        def fake_parse(*args, **kwargs):
+            return parsed.pop(0)
+
+        monkeypatch.setattr(common, "parse_model_output", fake_parse)
+        turns = [[(-0.1, token_id) for token_id in first_output], [(-0.2, token_id) for token_id in second_output]]
+        async with FakeSGLangServer(turns) as sglang:
+            adapter = anthropic.AnthropicAdapter(
+                tokenizer=tok,
+                sglang_url=sglang.url,
+                preserve_reasoning_history=True,
+            )
+            adapter.open_session("sid-qwen-history")
+            client = TestClient(TestServer(adapter.app))
+            await client.start_server()
+            try:
+                first = await client.post(
+                    "/v1/messages",
+                    headers={"Authorization": "Bearer sid-qwen-history"},
+                    json={"model": "m", "messages": [{"role": "user", "content": "solve"}]},
+                )
+                first_data = await first.json()
+                # Some clients do not echo thinking blocks in later requests.
+                visible_first = [block for block in first_data["content"] if block["type"] != "thinking"]
+                second = await client.post(
+                    "/v1/messages",
+                    headers={"Authorization": "Bearer sid-qwen-history"},
+                    json={
+                        "model": "m",
+                        "messages": [
+                            {"role": "user", "content": "solve"},
+                            {"role": "assistant", "content": visible_first},
+                            {"role": "user", "content": "continue"},
+                        ],
+                    },
+                )
+                await second.json()
+            finally:
+                await client.close()
+            samples = await _drain(adapter, "sid-qwen-history")
+
+        first_prompt = sglang.requests[0]["input_ids"]
+        second_prompt = sglang.requests[1]["input_ids"]
+        assert second_prompt[: len(first_prompt) + len(first_output)] == first_prompt + first_output
+        assert len(samples) == 1
+        assert sum(samples[0].loss_mask) == len(first_output) + len(second_output)
+
+    asyncio.run(run_case())
 
 
 def test_openai_translation_developer_to_system_and_tool_calls_to_dict():
