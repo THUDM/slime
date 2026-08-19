@@ -110,9 +110,10 @@ Start by Use Case
 
 .. toctree::
    :maxdepth: 1
-   :caption: Hardware Platforms
+   :caption: Platforms
 
    platform_support/amd_tutorial.md
+   platform_support/skypilot_tutorial.md
 
 .. toctree::
    :maxdepth: 1

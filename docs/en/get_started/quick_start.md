@@ -584,6 +584,8 @@ export NCCL_SOCKET_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\\./ {print $2}')
 export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\./ {print $2}')
 ```
 
+For launching the same multi-node setup on Kubernetes or cloud instances, see the [SkyPilot tutorial](../platform_support/skypilot_tutorial.md).
+
 slime has been deeply optimized for distributed training of large-scale Mixture of Experts (MoE) models. We provide some end-to-end training cases for reference:
 
 - [Example: 8xH100 Training GLM-4.7-Flash](../examples/glm4.7-30B-A3B.md)
