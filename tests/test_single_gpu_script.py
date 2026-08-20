@@ -2,7 +2,6 @@ from pathlib import Path
 
 import pytest
 
-
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "run-qwen3-0.6B-single-gpu.sh"
 
 
@@ -13,12 +12,12 @@ def test_single_gpu_script_covers_standard_grpo_train_eval_and_resume_artifacts(
     required_arguments = (
         "--actor-num-gpus-per-node 1",
         "--colocate",
-        "--num-rollout \"$NUM_ROLLOUT\"",
+        '--num-rollout "$NUM_ROLLOUT"',
         "--advantage-estimator grpo",
-        "--eval-prompt-data gsm8k \"$EVAL_DATA\"",
-        "--load \"$LOAD_CHECKPOINT\"",
-        "--save \"$SAVE_DIR\"",
-        "--save-interval \"$SAVE_INTERVAL\"",
+        '--eval-prompt-data gsm8k "$EVAL_DATA"',
+        '--load "$LOAD_CHECKPOINT"',
+        '--save "$SAVE_DIR"',
+        '--save-interval "$SAVE_INTERVAL"',
         "--tensor-model-parallel-size 1",
         "--pipeline-model-parallel-size 1",
         "--rollout-num-gpus-per-engine 1",
