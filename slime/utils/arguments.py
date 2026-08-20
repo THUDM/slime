@@ -1796,9 +1796,7 @@ def slime_validate_args(args):
         and args.rollout_num_gpus != 0
         and args.ray_train_gpu_fraction + args.ray_rollout_gpu_fraction > 1
     ):
-        raise ValueError(
-            "colocated --ray-train-gpu-fraction and --ray-rollout-gpu-fraction must sum to at most 1"
-        )
+        raise ValueError("colocated --ray-train-gpu-fraction and --ray-rollout-gpu-fraction must sum to at most 1")
 
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):
