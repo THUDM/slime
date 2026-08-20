@@ -27,6 +27,7 @@ With the default configuration, we use these parameters to allocate `actor_num_n
 For co-located training and inference, you also need to configure:
 
   - `--colocate`: Enables co-located training and inference. By default, this makes the number of GPUs for training and inference equal. You can explicitly set a different positive `--rollout-num-gpus`, for example to use more rollout GPUs than actor GPUs; the extra GPUs are used as rollout-only resources. If `--rollout-num-gpus 0` is set explicitly, slime launches only the router and no local SGLang servers.
+  - `--ray-train-gpu-fraction` and `--ray-rollout-gpu-fraction`: Fractional Ray resource claims used to place the training and rollout actors on each GPU. These are scheduling values, not limits on CUDA utilization. In colocated mode their sum must not exceed 1.
 
 Additionally, slime supports Prefill and Decode disaggregation (PD Disaggregation). You can set the number of servers used for Prefill by setting the `--prefill-num-servers` argument.
 

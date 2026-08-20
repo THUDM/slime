@@ -227,6 +227,8 @@ def make_slime_validate_args(**overrides):
         debug_rollout_only=False,
         colocate=False,
         rollout_num_gpus=8,
+        ray_train_gpu_fraction=0.4,
+        ray_rollout_gpu_fraction=0.2,
         eval_function_path=None,
         rollout_function_path="custom.rollout",
         num_steps_per_rollout=None,
@@ -340,6 +342,37 @@ def test_slime_validate_args_preserves_zero_rollout_gpus_without_colocate(monkey
     assert args.actor_num_nodes == 1
     assert args.offload_train is False
     assert args.offload_rollout is False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("ray_train_gpu_fraction", 0),
+        ("ray_train_gpu_fraction", 1.1),
+        ("ray_rollout_gpu_fraction", -0.1),
+        ("ray_rollout_gpu_fraction", 1.1),
+    ],
+)
+def test_ray_gpu_fractions_must_be_valid(monkeypatch, name, value):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(**{name: value})
+
+    with pytest.raises(ValueError, match=name.replace("_", "-")):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_colocated_ray_gpu_fractions_must_fit_one_gpu(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        colocate=True,
+        ray_train_gpu_fraction=0.6,
+        ray_rollout_gpu_fraction=0.5,
+    )
+
+    with pytest.raises(ValueError, match="must sum to at most 1"):
+        module.slime_validate_args(args)
 
 
 @pytest.mark.unit

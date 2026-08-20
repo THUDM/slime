@@ -224,7 +224,7 @@ class ServerGroup:
                 continue
 
             global_rank = self.rank_offset + i
-            num_gpus = 0.2
+            num_gpus = self.args.ray_rollout_gpu_fraction
             num_cpus = num_gpus
 
             # Get the base GPU ID from placement group using gpu_offset.

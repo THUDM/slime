@@ -30,6 +30,7 @@
 当需要训推一体的时候，还需要配置上：
 
 - `--colocate`：开启训推一体。开启后默认会让训练和推理的卡数相等；也可以显式设置一个不同的正数，例如让 rollout 卡数多于 actor，多出的 GPU 会作为 rollout-only 资源使用。如果显式设置 `--rollout-num-gpus 0`，则只启动 router，不启动本地 SGLang server。
+- `--ray-train-gpu-fraction` 和 `--ray-rollout-gpu-fraction`：Ray 在每张 GPU 上放置训练与 rollout actor 时使用的分数资源声明。这些值只影响调度，并不会限制 CUDA 利用率；在训推一体模式下，两者之和不能超过 1。
 
 此外，slime 支持 Prefill 和 Decode 的分离部署 (PD Disaggregation)，可以通过设置 `--prefill-num-servers` 参数来指定用于 Prefill 的服务器数量。
 

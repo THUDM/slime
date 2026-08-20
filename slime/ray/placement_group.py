@@ -152,7 +152,7 @@ def allocate_train_group(
         num_nodes=num_nodes,
         num_gpus_per_node=num_gpus_per_node,
         pg=pg,
-        num_gpus_per_actor=0.4,
+        num_gpus_per_actor=args.ray_train_gpu_fraction,
         role=role,
         with_ref=with_ref,
         with_opd_teacher=with_opd_teacher,

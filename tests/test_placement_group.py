@@ -8,6 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from slime.ray import placement_group
 from slime.ray.placement_group import _create_placement_group, _get_placement_group_layout
 
 NUM_GPUS = 0
@@ -48,6 +49,22 @@ def test_placement_group_layout(overrides, expected):
 
 def test_create_zero_gpu_placement_group_is_empty():
     assert _create_placement_group(0) == (None, [], [])
+
+
+def test_allocate_train_group_uses_configured_ray_gpu_fraction(monkeypatch):
+    captured = {}
+
+    def fake_train_group(**kwargs):
+        captured.update(kwargs)
+        return "group"
+
+    monkeypatch.setattr(placement_group, "RayTrainGroup", fake_train_group)
+    args = Namespace(ray_train_gpu_fraction=0.55)
+
+    result = placement_group.allocate_train_group(args, 1, 1, pg="placement")
+
+    assert result == "group"
+    assert captured["num_gpus_per_actor"] == 0.55
 
 
 if __name__ == "__main__":
