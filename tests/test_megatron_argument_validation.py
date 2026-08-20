@@ -197,6 +197,7 @@ def make_slime_validate_args(**overrides):
         eval_interval=None,
         save_interval=None,
         save=None,
+        save_retain_count=None,
         kl_loss_coef=0,
         advantage_estimator="grpo",
         normalize_advantages=False,
@@ -352,6 +353,15 @@ def test_update_weight_delta_requires_disk_transport(monkeypatch):
     )
 
     with pytest.raises(ValueError, match="requires --update-weight-transport=disk"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_save_retain_count_must_be_positive(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(save_retain_count=0)
+
+    with pytest.raises(ValueError, match="save-retain-count.*at least 1"):
         module.slime_validate_args(args)
 
 

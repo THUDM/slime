@@ -134,6 +134,7 @@ torch 格式是 megatron 的老存储格式，里面的结构大约是一些 `mp
 - `--ref-load`：reference model 用的 megatron ckpt；
 - `--load`：actor 用的 megatron ckpt，如果没有设置 `--load`，或者设置的目录不存在，目录中没有 `latest_checkpointed_iteration.txt`，都会直接从 `--ref-load` 的 ckpt 进行初始化；
 - `--save`：actor 保存的路径。
+- `--save-retain-count`：可选，仅保留最近 N 个已完成的 Megatron checkpoint。比 `latest_checkpointed_iteration.txt` 更新的目录会被视为仍在写入，不会被删除。
 
 注意：
 
