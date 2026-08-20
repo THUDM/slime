@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import torch
 
-from slime.ray.rollout import _compute_top_p_kept_vocab_metrics
+from slime.ray.rollout import _compute_top_p_kept_vocab_metrics, _eval_metrics
 from slime.utils.misc import decode_int32_meta_array
 from slime.utils.types import Sample
 
@@ -14,6 +14,16 @@ NUM_GPUS = 0
 
 def _make_args():
     return Namespace(sglang_speculative_algorithm=False, num_layers=2, moe_router_topk=2)
+
+
+@pytest.mark.unit
+def test_eval_metrics_preserve_custom_metrics_and_add_wall_time():
+    original = {"judge/score": 0.75}
+
+    metrics = _eval_metrics(original, eval_time=12.5)
+
+    assert metrics == {"judge/score": 0.75, "perf/eval_time": 12.5}
+    assert original == {"judge/score": 0.75}
 
 
 @pytest.mark.unit
