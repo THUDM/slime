@@ -13,6 +13,7 @@ import numpy as np
 from tqdm import tqdm
 
 from slime.backends.sglang_utils.server_control import abort_servers_until_idle
+from slime.observability.trace_utils import build_sglang_meta_trace_attrs, trace_function, trace_span
 from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter, should_drop_dynamic_filter_output
 from slime.rollout.sample_hooks import apply_rollout_sample_hooks
@@ -27,7 +28,6 @@ from slime.utils.processing_utils import (
     load_processor,
     load_tokenizer,
 )
-from slime.utils.trace_utils import build_sglang_meta_trace_attrs, trace_function, trace_span
 from slime.utils.types import Sample
 
 from .rm_hub import async_rm, batched_async_rm

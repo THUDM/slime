@@ -42,7 +42,7 @@ agentic workflow——multi-turn tool use、sandbox interaction、environment fe
 | 替换整个 rollout 编排（只在 per-sample 自定义不够用时使用） | [`--rollout-function-path`](#1-rollout-函数---rollout-function-path) |
 | 控制任务采样、缓冲、回填，或自定义 prompt / task 数据源 | [`--data-source-path`](#15-数据源---data-source-path) |
 | 给 agentic 输出附加自定义 loss mask、metadata，或转换成训练数据 | [`--rollout-data-postprocess-path`](#8-rollout-数据后处理---rollout-data-postprocess-path)、[`--custom-convert-samples-to-train-data-path`](#13-样本转训练数据---custom-convert-samples-to-train-data-path) |
-| 调试长耗时的 custom generation、verifier、tool call 或 sandbox 调用 | [`slime.utils.trace_utils`](../developer_guide/trace.md) 中的 trace 工具 |
+| 调试长耗时的 custom generation、verifier、tool call 或 sandbox 调用 | [`slime.observability.trace_utils`](../developer_guide/trace.md) 中的 trace 工具 |
 
 这一模式的原生示例是 [`examples/search-r1`](../../../examples/search-r1/)：通过 `--custom-generate-function-path` 接入搜索增强的多轮生成，外层仍然走 slime 默认的 `sglang_rollout`。互补的示例可参考 [`examples/multi_agent`](../../../examples/multi_agent/README.md) 中基于 `--rollout-function-path` 的多 agent 模式，以及 [`examples/fully_async`](../../../examples/fully_async/README.md) 中适合 long-tail agentic 场景的 fully-async rollout。
 

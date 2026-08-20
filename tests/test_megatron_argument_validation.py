@@ -43,7 +43,7 @@ def load_slime_arguments_module(monkeypatch):
     router_launch_mod = types.ModuleType("sglang_router.launch_router")
     sglang_arguments_mod = types.ModuleType("slime.backends.sglang_utils.arguments")
     sglang_external_mod = types.ModuleType("slime.backends.sglang_utils.external")
-    logging_utils_mod = types.ModuleType("slime.utils.logging_utils")
+    logging_utils_mod = types.ModuleType("slime.observability.logging_utils")
 
     router_launch_mod.RouterArgs = object
     sglang_arguments_mod.sglang_parse_args = lambda *args, **kwargs: None
@@ -55,7 +55,7 @@ def load_slime_arguments_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "sglang_router.launch_router", router_launch_mod)
     monkeypatch.setitem(sys.modules, "slime.backends.sglang_utils.arguments", sglang_arguments_mod)
     monkeypatch.setitem(sys.modules, "slime.backends.sglang_utils.external", sglang_external_mod)
-    monkeypatch.setitem(sys.modules, "slime.utils.logging_utils", logging_utils_mod)
+    monkeypatch.setitem(sys.modules, "slime.observability.logging_utils", logging_utils_mod)
 
     module_path = Path(__file__).resolve().parents[1] / "slime" / "utils" / "arguments.py"
     module_name = "test_slime_argument_validation_module"

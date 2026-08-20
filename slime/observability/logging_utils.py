@@ -2,8 +2,8 @@ import logging
 
 import wandb
 
-from . import wandb_utils
-from .tensorboard_utils import _TensorboardAdapter
+from slime.observability import wandb_utils
+from slime.observability.tensorboard_utils import _TensorboardAdapter
 
 _LOGGER_CONFIGURED = False
 

@@ -13,9 +13,8 @@ try:
 except ImportError:
     pq = None
 
+from slime.observability.timer import Timer
 from slime.utils.types import MultimodalTypes, Sample
-
-from .timer import Timer
 
 __all__ = ["Dataset", "get_source"]
 
