@@ -465,6 +465,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--max-policy-version-lag",
+                type=int,
+                default=None,
+                help=(
+                    "Maximum policy-version lag accepted for fully-async rollout samples. "
+                    "Completed groups beyond this lag are rejected and requeued for regeneration. "
+                    "Set to 0 for current-policy-only samples; the default disables stale rejection."
+                ),
+            )
+            parser.add_argument(
                 "--mask-offpolicy-in-partial-rollout",
                 action="store_true",
                 default=False,
@@ -1979,6 +1989,11 @@ def slime_validate_args(args):
 
     if args.over_sampling_batch_size is None:
         args.over_sampling_batch_size = args.rollout_batch_size
+
+    if getattr(args, "max_policy_version_lag", None) is not None:
+        assert (
+            args.max_policy_version_lag >= 0
+        ), f"max_policy_version_lag must be non-negative, got {args.max_policy_version_lag}"
 
     assert args.over_sampling_batch_size >= args.rollout_batch_size, (
         f"over_sampling_batch_size {args.over_sampling_batch_size} should be greater than or equal to "

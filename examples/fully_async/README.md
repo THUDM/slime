@@ -60,6 +60,25 @@ work unchanged under fully-async:
 See `examples/coding_agent_rl/` for a non-trivial example that plugs in a
 multi-turn agent (Claude Code in a Docker-Proxy sandbox) this way.
 
+To bound off-policy staleness, set `--max-policy-version-lag N`. A completed
+group is accepted when `current_policy_version - group_policy_version <= N`;
+older groups are rejected and their admission-time prompt snapshots are
+requeued for regeneration. The default is unset (no stale rejection), while
+`--max-policy-version-lag 0` accepts only the current policy version.
+
+## Metrics
+
+Fully-async rollouts report fixed keys only—policy versions and sample IDs
+never become labels—so metric cardinality stays bounded:
+
+* `fully_async/version_lag/count_{0,1,2_to_3,4_plus,unknown}`
+* `fully_async/count/{stale_rejected,stale_requeued,aborted_requeued}`
+* `fully_async/queue/completed_groups`
+* `fully_async/policy/current_version`
+
+Counters cover the interval since the previous completed rollout; queue size
+and current version are gauges captured when that interval is emitted.
+
 ## Worker Internals (Very Short)
 
 * First call: create a process-wide `AsyncRolloutWorker` (thread + asyncio
@@ -70,6 +89,8 @@ multi-turn agent (Claude Code in a Docker-Proxy sandbox) this way.
 * Completed groups land on an output queue; each `generate_rollout` call
   drains until it has `rollout_batch_size` groups and returns them sorted
   by `sample.index`.
+* When a policy-version lag budget is configured, stale completed groups are
+  replaced by fresh attempts from their admission-time prompt snapshots.
 * Groups containing an `ABORTED` sample are pushed back into
   `data_buffer.add_samples` instead of being shipped to training.
 * Worker is stopped automatically at process exit via `atexit`.
