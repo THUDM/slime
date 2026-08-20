@@ -77,6 +77,24 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--ray-train-gpu-fraction",
+                type=float,
+                default=0.4,
+                help=(
+                    "Fractional GPU resource claimed by each Ray training actor for placement. "
+                    "This is a scheduling claim and does not cap CUDA utilization."
+                ),
+            )
+            parser.add_argument(
+                "--ray-rollout-gpu-fraction",
+                type=float,
+                default=0.2,
+                help=(
+                    "Fractional GPU resource claimed by each Ray rollout actor for placement. "
+                    "This is a scheduling claim and does not cap CUDA utilization."
+                ),
+            )
+            parser.add_argument(
                 "--offload",
                 action="store_true",
                 default=False,
@@ -1766,6 +1784,21 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
 
 def slime_validate_args(args):
     args.eval_datasets = _resolve_eval_datasets(args)
+
+    for name in ("ray_train_gpu_fraction", "ray_rollout_gpu_fraction"):
+        value = getattr(args, name)
+        if not 0 < value <= 1:
+            raise ValueError(f"--{name.replace('_', '-')} must be in (0, 1]")
+    if (
+        args.colocate
+        and not args.debug_train_only
+        and not args.debug_rollout_only
+        and args.rollout_num_gpus != 0
+        and args.ray_train_gpu_fraction + args.ray_rollout_gpu_fraction > 1
+    ):
+        raise ValueError(
+            "colocated --ray-train-gpu-fraction and --ray-rollout-gpu-fraction must sum to at most 1"
+        )
 
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):
