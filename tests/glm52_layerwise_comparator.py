@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare matching Megatron and SGLang decoder-layer outputs."""
+"""Compare matching Megatron and SGLang decoder-layer outputs for tests."""
 
 from __future__ import annotations
 
