@@ -331,6 +331,47 @@ def test_slime_validate_args_preserves_zero_rollout_gpus_without_colocate(monkey
 
 
 @pytest.mark.unit
+def test_debug_train_periodic_eval_requires_explicit_local_function(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        debug_train_only=True,
+        eval_interval=10,
+        eval_prompt_data=["heldout", "/tmp/heldout.jsonl"],
+    )
+
+    with pytest.raises(ValueError, match="eval-function-path.*without SGLang"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_debug_train_periodic_eval_accepts_explicit_local_function(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        debug_train_only=True,
+        eval_interval=10,
+        eval_prompt_data=["heldout", "/tmp/heldout.jsonl"],
+        eval_function_path="custom.local_eval",
+    )
+
+    module.slime_validate_args(args)
+
+    assert args.eval_function_path == "custom.local_eval"
+
+
+@pytest.mark.unit
+def test_debug_rollout_replay_periodic_eval_requires_explicit_local_function(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        eval_interval=10,
+        eval_prompt_data=["heldout", "/tmp/heldout.jsonl"],
+        load_debug_rollout_data="/tmp/rollout_{rollout_id}.pt",
+    )
+
+    with pytest.raises(ValueError, match="eval-function-path.*without SGLang"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
 def test_update_weight_delta_requires_disk_transport(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(
