@@ -607,13 +607,14 @@ class RolloutManager:
         if self.args.debug_train_only:
             # if debug train only, we don't generate evaluation data
             return
+        start_time = time.time()
         set_current_rollout_id(rollout_id)
         self.health_monitoring_resume()
 
         result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
         data = result.data
         self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=True)
-        _log_eval_rollout_data(rollout_id, self.args, data, result.metrics)
+        _log_eval_rollout_data(rollout_id, self.args, data, _eval_metrics(result.metrics, time.time() - start_time))
 
     def save(self, rollout_id):
         self.data_source.save(rollout_id)
@@ -1297,6 +1298,12 @@ def _resolve_sglang_config(args) -> SglangConfig:
             )
         ]
     )
+
+
+def _eval_metrics(extra_metrics: dict[str, Any] | None, eval_time: float) -> dict[str, Any]:
+    metrics = dict(extra_metrics or {})
+    metrics["perf/eval_time"] = eval_time
+    return metrics
 
 
 def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any] | None = None):
