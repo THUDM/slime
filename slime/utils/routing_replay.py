@@ -1,6 +1,9 @@
 import os
 import torch
 
+from slime.utils import accelerator
+
+
 ROUTING_REPLAY = None
 ORDERED_TOPK_CAPTURE_ROUTER = None
 
@@ -118,7 +121,7 @@ class RoutingReplay:
         if hasattr(top_indices, "materialize_for_routing_replay"):
             return top_indices.materialize_for_routing_replay("forward")
         return top_indices.to(
-            torch.cuda.current_device(),
+            accelerator.current_device(),
             dtype=torch.int32,
             non_blocking=top_indices.is_pinned(),
         )
@@ -129,7 +132,7 @@ class RoutingReplay:
         if hasattr(top_indices, "materialize_for_routing_replay"):
             return top_indices.materialize_for_routing_replay("backward")
         return top_indices.to(
-            torch.cuda.current_device(),
+            accelerator.current_device(),
             dtype=torch.int32,
             non_blocking=top_indices.is_pinned(),
         )

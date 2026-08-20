@@ -699,6 +699,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_accelerator.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_reloadable_process_group_world.py"
             },
             {

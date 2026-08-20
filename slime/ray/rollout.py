@@ -1098,8 +1098,6 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
     # We will not use the health check from router.
     if hasattr(router_args, "disable_health_check"):
         router_args.disable_health_check = True
-    else:
-        logger.warning("The installed SGLang does not provide the disable_health_check parameter.")
 
     logger.info(f"Launch router with args: {router_args}")
 
