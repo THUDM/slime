@@ -1096,7 +1096,8 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
     router_args.disable_circuit_breaker = True
 
     # We will not use the health check from router.
-    router_args.disable_health_check = True
+    if hasattr(router_args, "disable_health_check"):
+        router_args.disable_health_check = True
 
     logger.info(f"Launch router with args: {router_args}")
 
