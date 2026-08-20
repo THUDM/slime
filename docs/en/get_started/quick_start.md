@@ -306,6 +306,8 @@ SGLANG_ARGS=(
 
 ### Colocated Actor and Rollout
 
+For a complete one-GPU development run of the standard synchronous GRPO loop, including online rollout, rule-based rewards, optimizer updates, periodic evaluation, and checkpoint saving, use [`scripts/run-qwen3-0.6B-single-gpu.sh`](../../../scripts/run-qwen3-0.6B-single-gpu.sh). The script expects a local Qwen3-0.6B Hugging Face checkpoint, a converted Megatron checkpoint, and the GSM8K train/test parquet files; every path can be overridden through the environment variables documented at the top of the script.
+
 Under the default configuration, training (Actor) and inference (Rollout) resources are specified separately. Ray allocates `actor_num_nodes * actor_num_gpus_per_node` GPUs to the training part and `rollout_num_gpus` GPUs to inference, that is, training and inference are separated. When `--rollout-num-gpus` is explicitly set to `0`, slime still parses SGLang arguments and launches the router, but does not launch local SGLang servers.
 
 **Standard (Disaggregated) Configuration**:
