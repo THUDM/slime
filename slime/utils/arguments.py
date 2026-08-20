@@ -854,6 +854,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             reset_arg(parser, "--save", type=str, default=None)
             reset_arg(parser, "--save-interval", type=int, default=None)
             reset_arg(parser, "--async-save", action="store_true")
+            parser.add_argument(
+                "--save-retain-count",
+                type=int,
+                default=None,
+                help=(
+                    "Keep only this many completed Megatron checkpoints. "
+                    "Incomplete checkpoints newer than the completion marker are never deleted."
+                ),
+            )
             reset_arg(
                 parser,
                 "--no-save-optim",
@@ -1837,6 +1846,8 @@ def slime_validate_args(args):
 
     if args.save_interval is not None:
         assert args.save is not None, "'--save' is required when save_interval is set."
+    if args.save_retain_count is not None and args.save_retain_count < 1:
+        raise ValueError("--save-retain-count must be at least 1")
 
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 

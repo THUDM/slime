@@ -13,6 +13,7 @@ from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
+from slime.utils.checkpoint_retention import prune_megatron_checkpoints
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.logging_utils import init_tracking
@@ -576,17 +577,29 @@ class MegatronTrainRayActor(TrainRayActor):
             from megatron.training.async_utils import maybe_finalize_async_save
 
             maybe_finalize_async_save(blocking=True)
+            self._prune_checkpoint_history()
 
         save(rollout_id, self.model, self.optimizer, self.opt_param_scheduler)
 
         if force_sync and self.args.async_save:
             maybe_finalize_async_save(blocking=True)
 
+        if not self.args.async_save or force_sync:
+            self._prune_checkpoint_history()
+
         if self.args.save_hf is not None and self.role == "actor":
             save_hf_model_to_path(self.args, Path(self.args.save_hf.format(rollout_id=rollout_id)), self.model)
 
         if self.args.offload_train:
             self.sleep()
+
+    def _prune_checkpoint_history(self) -> None:
+        retain_count = self.args.save_retain_count
+        if retain_count is None or not is_megatron_main_rank():
+            return
+        removed = prune_megatron_checkpoints(self.args.save, retain_count)
+        if removed:
+            logger.info("Pruned %d old checkpoints: %s", len(removed), ", ".join(path.name for path in removed))
 
     @timer
     def update_weights(self) -> None:

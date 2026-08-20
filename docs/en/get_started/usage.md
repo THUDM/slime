@@ -130,6 +130,7 @@ When using slime, there are three parameters for loading and saving checkpoints:
   - `--ref-load`: The Megatron checkpoint for the reference model.
   - `--load`: The Megatron checkpoint for the actor. If `--load` is not set, or if the specified directory does not exist or does not contain `latest_checkpointed_iteration.txt`, the actor will be initialized from the `--ref-load` checkpoint.
   - `--save`: The path where the actor's checkpoints are saved.
+  - `--save-retain-count`: Optionally keep only the newest N completed Megatron checkpoints. Directories newer than `latest_checkpointed_iteration.txt` are treated as in-flight and are never deleted.
 
 Note:
 
