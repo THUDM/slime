@@ -1,13 +1,82 @@
+import importlib.util
+import sys
+import types
 from types import SimpleNamespace
 
 import pytest
 import torch
 
-import slime.ray.rollout as rollout_module
-from slime.ray.rollout import RolloutManager
-from slime.utils.rs_refill import run_rs_batch_refill
-from slime.utils.types import Sample
 
+def _stub_module(name, **attrs):
+    module = types.ModuleType(name)
+    for key, value in attrs.items():
+        setattr(module, key, value)
+    sys.modules[name] = module
+    return module
+
+
+def _module_available(name):
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _snapshot_modules(prefixes):
+    return {
+        name: module
+        for name, module in sys.modules.items()
+        if any(name == prefix or name.startswith(prefix + ".") for prefix in prefixes)
+    }
+
+
+def _restore_modules(prefixes, snapshot):
+    for name in list(sys.modules):
+        if any(name == prefix or name.startswith(prefix + ".") for prefix in prefixes):
+            sys.modules.pop(name, None)
+    sys.modules.update(snapshot)
+
+
+# The routine CPU job intentionally omits the SGLang CUDA runtime. These are
+# import-only serving edges; every RolloutManager method under test stays real.
+_STUB_PREFIXES = ("sglang", "slime.backends.sglang_utils", "slime.ray.rollout")
+_STUB_SNAPSHOT = None
+if "sglang.srt.constants" not in sys.modules and not _module_available("sglang"):
+    _STUB_SNAPSHOT = _snapshot_modules(_STUB_PREFIXES)
+    _sglang = _stub_module("sglang")
+    _sglang_srt = _stub_module("sglang.srt")
+    _sglang_constants = _stub_module(
+        "sglang.srt.constants",
+        GPU_MEMORY_TYPE_CUDA_GRAPH="cuda_graph",
+        GPU_MEMORY_TYPE_KV_CACHE="kv_cache",
+        GPU_MEMORY_TYPE_WEIGHTS="weights",
+    )
+    _sglang.srt = _sglang_srt
+    _sglang_srt.constants = _sglang_constants
+    _stub_module(
+        "slime.backends.sglang_utils.sglang_engine",
+        SGLangEngine=type("SGLangEngine", (), {}),
+    )
+
+try:
+    import slime.ray.rollout as rollout_module
+    from slime.ray.rollout import RolloutManager
+    from slime.utils.rs_refill import run_rs_batch_refill
+    from slime.utils.types import Sample
+finally:
+    if _STUB_SNAPSHOT is not None:
+        _restore_modules(_STUB_PREFIXES, _STUB_SNAPSHOT)
+        for _parent_name, _attribute, _module_name in (
+            ("slime.backends", "sglang_utils", "slime.backends.sglang_utils"),
+            ("slime.ray", "rollout", "slime.ray.rollout"),
+        ):
+            _parent = sys.modules.get(_parent_name)
+            if _parent is None:
+                continue
+            if _module_name in _STUB_SNAPSHOT:
+                setattr(_parent, _attribute, _STUB_SNAPSHOT[_module_name])
+            else:
+                _parent.__dict__.pop(_attribute, None)
 
 NUM_GPUS = 0
 
@@ -32,6 +101,8 @@ class _LifecycleActor:
 
     def async_score_rs_candidates(self, rollout_id, candidates):
         self.events.append(("score", rollout_id, candidates))
+        if self.reports and isinstance(self.reports[0], list):
+            return self.reports
         return [self.reports]
 
     def async_take_rs_candidate_log_probs(self, rollout_id, selected):
@@ -56,7 +127,10 @@ class _RoundLifecycleActor:
     def async_score_rs_candidates(self, rollout_id, candidates):
         self.events.append(("score", rollout_id, candidates))
         self.current_cache = self.cache_rounds.pop(0)
-        return [self.report_rounds.pop(0)]
+        reports = self.report_rounds.pop(0)
+        if reports and isinstance(reports[0], list):
+            return reports
+        return [reports]
 
     def async_take_rs_candidate_log_probs(self, rollout_id, selected):
         self.events.append(("take", rollout_id, list(selected)))
@@ -102,13 +176,14 @@ def _reports(groups, *, policy_version="8"):
     ]
 
 
-def _real_lifecycle_manager(groups):
+def _real_lifecycle_manager(groups, *, cache_limit=1 << 20):
     manager = object.__new__(RolloutManager.__ray_actor_class__)
     manager.args = SimpleNamespace(
         rollout_batch_size=len(groups),
         n_samples_per_prompt=len(groups[0]),
         rs_refill_max_rounds=2,
         rs_refill_rpc_timeout_seconds=123.0,
+        rs_refill_max_candidate_cache_bytes=cache_limit,
         save_debug_rollout_data=None,
     )
     manager.train_parallel_config = {
@@ -126,7 +201,9 @@ def _real_lifecycle_manager(groups):
             "seen_group_indices": set(),
             "seen_rollout_ids": {sample.rollout_id for group in groups for sample in group},
             "awaiting_log_prob_indices": None,
+            "awaiting_log_prob_bytes": None,
             "proximal_log_probs_by_sample_index": {},
+            "retained_logprob_cache_bytes": 0,
             "accepted_mask_fingerprints": {},
             "metrics": {"rollout/source_groups": len(groups)},
             "initial_generation_seconds": 0.5,
@@ -166,10 +243,11 @@ def _manager_rpc(manager, events, snapshots):
 
     def abort(rollout_id):
         pending = manager._pending_rs_batches[rollout_id]
+        awaiting = pending["awaiting_log_prob_indices"]
         snapshots.append(
             (
                 "abort",
-                list(pending["awaiting_log_prob_indices"]),
+                None if awaiting is None else list(awaiting),
                 sorted(pending["proximal_log_probs_by_sample_index"]),
             )
         )
@@ -219,6 +297,7 @@ def test_rollout_manager_generates_exact_initial_and_aligned_replacement_counts(
         "unscored": [],
         "round": 0,
         "awaiting_log_prob_indices": None,
+        "awaiting_log_prob_bytes": None,
         "seen_rollout_ids": {"initial"},
         "metrics": {},
     }
@@ -244,7 +323,7 @@ def test_rollout_manager_real_lifecycle_applies_stores_and_finalizes(monkeypatch
         [_sample(0, 0), _sample(1, 0)],
         [_sample(10, 1, loss_mask=[1, 0]), _sample(11, 1, loss_mask=[1, 0])],
     ]
-    manager, conversions, splits, debug_saves = _real_lifecycle_manager(groups)
+    manager, conversions, splits, debug_saves = _real_lifecycle_manager(groups, cache_limit=32)
     cache = {
         sample.index: torch.tensor([sample.index + 0.25, sample.index + 0.5]) for group in groups for sample in group
     }
@@ -327,8 +406,13 @@ def test_rollout_manager_real_lifecycle_applies_stores_and_finalizes(monkeypatch
     assert metrics["rollout/rs_refill/rounds"] == 0
     assert metrics["rollout/rs_refill/accepted_groups"] == 2
     assert metrics["rollout/rs_refill/scored_trainable_tokens"] == 6
-    assert metrics["rollout/rs_refill/candidate_logprob_cache_bytes"] == 32
-    assert metrics["rollout/rs_refill/peak_candidate_logprob_cache_bytes"] == 32
+    assert metrics["rollout/rs_refill/aggregate_candidate_logprob_cache_bytes"] == 32
+    assert metrics["rollout/rs_refill/peak_aggregate_candidate_logprob_cache_bytes"] == 32
+    assert metrics["rollout/rs_refill/peak_actor_candidate_logprob_cache_bytes"] == 32
+    assert metrics["rollout/rs_refill/logprob_cache_limit_bytes"] == 32
+    assert metrics["rollout/rs_refill/selected_logprob_transfer_bytes"] == 32
+    assert metrics["rollout/rs_refill/retained_logprob_cache_bytes"] == 32
+    assert metrics["rollout/rs_refill/peak_retained_logprob_cache_bytes"] == 32
     assert metrics["rollout/rs_refill/effective_trainable_tokens"] == 6
     assert metrics["rollout/rs_refill/gate_acceptance_rate"] == 1
     assert metrics["rollout/rs_refill/selection_utilization"] == 1
@@ -440,8 +524,12 @@ def test_rollout_manager_real_lifecycle_refills_a_rejected_group_and_accepts_ten
     assert metrics["rollout/rs_refill/rejected_groups"] == 1
     assert metrics["rollout/rs_refill/generated_replacement_groups"] == 1
     assert metrics["rollout/rs_refill/effective_trainable_tokens"] == 6
-    assert metrics["rollout/rs_refill/candidate_logprob_cache_bytes"] == 48
-    assert metrics["rollout/rs_refill/peak_candidate_logprob_cache_bytes"] == 32
+    assert metrics["rollout/rs_refill/aggregate_candidate_logprob_cache_bytes"] == 48
+    assert metrics["rollout/rs_refill/peak_aggregate_candidate_logprob_cache_bytes"] == 32
+    assert metrics["rollout/rs_refill/peak_actor_candidate_logprob_cache_bytes"] == 32
+    assert metrics["rollout/rs_refill/selected_logprob_transfer_bytes"] == 32
+    assert metrics["rollout/rs_refill/retained_logprob_cache_bytes"] == 32
+    assert metrics["rollout/rs_refill/peak_retained_logprob_cache_bytes"] == 32
     assert metrics["rollout/rs_refill/replacement_round_1/rollout/replacement_marker"] == 1
     assert 7 not in manager._pending_rs_batches
 
@@ -497,6 +585,175 @@ def test_rollout_manager_real_lifecycle_aborts_after_cache_rpc_failure(monkeypat
     assert conversions == [(True, [0, 1, 10, 11])]
     assert splits == [4]
     assert debug_saves == []
+
+
+def test_rollout_manager_rejects_aggregate_selected_cache_before_actor_transfer(monkeypatch):
+    groups = [
+        [_sample(0, 0), _sample(1, 0)],
+        [_sample(10, 1), _sample(11, 1)],
+    ]
+    manager, _, _, _ = _real_lifecycle_manager(groups, cache_limit=16)
+    reports = _reports(groups)
+    actor = _LifecycleActor([reports[:2], reports[2:]], [{}, {}])
+    rpc_events = []
+    state_snapshots = []
+    manager_rpc = _manager_rpc(manager, rpc_events, state_snapshots)
+    monkeypatch.setattr(rollout_module.ray, "get", lambda value, *, timeout=None: value)
+
+    with pytest.raises(RuntimeError, match=r"before transfer.*required=32, limit=16"):
+        run_rs_batch_refill(
+            actor,
+            manager_rpc,
+            7,
+            resolve=lambda value, **_kwargs: value,
+            clock=iter([0.0, 1.0, 2.0]).__next__,
+        )
+
+    assert [name for name, _ in rpc_events] == ["prepare", "apply", "abort"]
+    assert [event[0] for event in actor.events] == ["score", "discard"]
+    assert state_snapshots == [("abort", None, [])]
+    assert 7 not in manager._pending_rs_batches
+
+
+def test_rollout_manager_rejects_cross_round_retained_cache_before_second_transfer(monkeypatch):
+    initial = [
+        [_sample(0, 0), _sample(1, 0)],
+        [_sample(10, 1), _sample(11, 1)],
+    ]
+    replacement = [[_sample(20, 2, weight_version="8"), _sample(21, 2, weight_version="8")]]
+    initial_reports = _reports(initial)
+    for report in initial_reports:
+        if report["group_index"] == 1:
+            report["gate_passed"] = False
+    cache_rounds = [
+        {sample.index: torch.zeros(sample.response_length) for group in initial for sample in group},
+        {sample.index: torch.zeros(sample.response_length) for group in replacement for sample in group},
+    ]
+    replacement_reports = _reports(replacement)
+    actor = _RoundLifecycleActor(
+        [[initial_reports[:2], initial_reports[2:]], [replacement_reports]],
+        cache_rounds,
+    )
+    manager, _, _, _ = _real_lifecycle_manager(initial, cache_limit=24)
+    manager._call_rollout_for_group_count = lambda *_args, **_kwargs: (replacement, {}, {20, 21})
+    rpc_events = []
+    state_snapshots = []
+    manager_rpc = _manager_rpc(manager, rpc_events, state_snapshots)
+    monkeypatch.setattr(rollout_module.ray, "get", lambda value, *, timeout=None: value)
+
+    with pytest.raises(RuntimeError, match=r"before transfer.*retained=16, incoming=16.*limit=24"):
+        run_rs_batch_refill(
+            actor,
+            manager_rpc,
+            7,
+            resolve=lambda value, **_kwargs: value,
+            clock=iter([0.0, 1.0, 2.0, 3.0, 4.0, 5.0]).__next__,
+        )
+
+    assert [name for name, _ in rpc_events] == ["prepare", "apply", "store", "generate", "prepare", "apply", "abort"]
+    assert [event[0] for event in actor.events] == ["score", "take", "score", "discard"]
+    assert state_snapshots == [("abort", None, [0, 1])]
+    assert 7 not in manager._pending_rs_batches
+
+
+@pytest.mark.parametrize(
+    "invalid_tensor",
+    [
+        torch.zeros(2, dtype=torch.float64),
+        torch.zeros(2, dtype=torch.int32),
+        torch.zeros((2, 1), dtype=torch.float32),
+        torch.zeros(4, dtype=torch.float32)[::2],
+        torch.zeros(1, dtype=torch.float32),
+        torch.zeros(2, dtype=torch.float32, device="meta"),
+        [0.0, 0.0],
+    ],
+    ids=["float64", "int32", "two-dimensional", "non-contiguous", "wrong-length", "non-cpu", "non-tensor"],
+)
+def test_rollout_manager_rejects_invalid_transferred_cache_contract(monkeypatch, invalid_tensor):
+    groups = [[_sample(0, 0), _sample(1, 0)]]
+    manager, _, _, _ = _real_lifecycle_manager(groups)
+    cache = {sample.index: invalid_tensor for sample in groups[0]}
+    actor = _LifecycleActor(_reports(groups), [cache])
+    rpc_events = []
+    state_snapshots = []
+    manager_rpc = _manager_rpc(manager, rpc_events, state_snapshots)
+    monkeypatch.setattr(rollout_module.ray, "get", lambda value, *, timeout=None: value)
+
+    with pytest.raises(RuntimeError, match=r"contiguous one-dimensional CPU float32 tensors"):
+        run_rs_batch_refill(
+            actor,
+            manager_rpc,
+            7,
+            resolve=lambda value, **_kwargs: value,
+            clock=iter([0.0, 1.0, 2.0, 3.0]).__next__,
+        )
+
+    assert [name for name, _ in rpc_events] == ["prepare", "apply", "store", "abort"]
+    assert [event[0] for event in actor.events] == ["score", "take", "discard"]
+    assert state_snapshots == [("abort", [0, 1], [])]
+    assert 7 not in manager._pending_rs_batches
+
+
+def test_rollout_manager_rejects_underreported_cache_before_actor_transfer(monkeypatch):
+    groups = [[_sample(0, 0), _sample(1, 0)]]
+    reports = _reports(groups)
+    reports[0]["candidate_cache_bytes"] = 0
+    manager, _, _, _ = _real_lifecycle_manager(groups)
+    actor = _LifecycleActor(reports, [{sample.index: torch.zeros(2) for sample in groups[0]}])
+    rpc_events = []
+    state_snapshots = []
+    manager_rpc = _manager_rpc(manager, rpc_events, state_snapshots)
+    monkeypatch.setattr(rollout_module.ray, "get", lambda value, *, timeout=None: value)
+
+    with pytest.raises(RuntimeError, match=r"reported=0, expected=8"):
+        run_rs_batch_refill(
+            actor,
+            manager_rpc,
+            7,
+            resolve=lambda value, **_kwargs: value,
+            clock=iter([0.0, 1.0, 2.0]).__next__,
+        )
+
+    assert [name for name, _ in rpc_events] == ["prepare", "apply", "abort"]
+    assert [event[0] for event in actor.events] == ["score", "discard"]
+    assert state_snapshots == [("abort", None, [])]
+    assert 7 not in manager._pending_rs_batches
+
+
+def test_rollout_manager_reports_distinct_aggregate_and_per_actor_cache_peaks(monkeypatch):
+    groups = [
+        [_sample(0, 0), _sample(1, 0)],
+        [_sample(10, 1), _sample(11, 1)],
+    ]
+    reports = _reports(groups)
+    manager, _, _, _ = _real_lifecycle_manager(groups, cache_limit=32)
+    monkeypatch.setattr(rollout_module.ray, "get", lambda value, *, timeout=None: value)
+
+    result = manager.apply_rs_candidate_reports(7, [reports[:2], reports[2:]], 0.5)
+
+    assert result["complete"] is True
+    metrics = manager._pending_rs_batches[7]["metrics"]
+    assert metrics["rollout/rs_refill/aggregate_candidate_logprob_cache_bytes"] == 32
+    assert metrics["rollout/rs_refill/peak_aggregate_candidate_logprob_cache_bytes"] == 32
+    assert metrics["rollout/rs_refill/peak_actor_candidate_logprob_cache_bytes"] == 16
+
+
+@pytest.mark.parametrize("invalid_bytes", [True, -1, 1.5, None])
+def test_rollout_manager_rejects_invalid_candidate_cache_byte_reports(monkeypatch, invalid_bytes):
+    groups = [[_sample(0, 0), _sample(1, 0)]]
+    reports = _reports(groups)
+    reports[0]["candidate_cache_bytes"] = invalid_bytes
+    manager, _, _, _ = _real_lifecycle_manager(groups)
+    monkeypatch.setattr(rollout_module.ray, "get", lambda value, *, timeout=None: value)
+
+    with pytest.raises(RuntimeError, match="non-negative integers"):
+        manager.apply_rs_candidate_reports(7, [reports], 0.5)
+
+    pending = manager._pending_rs_batches[7]
+    assert pending["accepted"] == []
+    assert pending["awaiting_log_prob_indices"] is None
+    assert pending["awaiting_log_prob_bytes"] is None
+    assert pending["proximal_log_probs_by_sample_index"] == {}
 
 
 if __name__ == "__main__":

@@ -1,3 +1,5 @@
+import importlib.util
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +26,12 @@ from slime.utils.rs_refill import (
 )
 
 NUM_GPUS = 0
+
+_MIS_PATH = Path(__file__).resolve().parents[1] / "examples" / "train_infer_mismatch_helper" / "mis.py"
+_MIS_SPEC = importlib.util.spec_from_file_location("test_rs_exact_refill_existing_mis", _MIS_PATH)
+assert _MIS_SPEC is not None and _MIS_SPEC.loader is not None
+_MIS_MODULE = importlib.util.module_from_spec(_MIS_SPEC)
+_MIS_SPEC.loader.exec_module(_MIS_MODULE)
 
 
 def _args(**overrides):
@@ -194,6 +202,47 @@ def test_tis_applies_clipped_weights_and_reuses_the_admission_rule():
     )
     assert metrics["mis_tis_clip_fraction_low"].shape == pg_loss.shape
     assert metrics["mis_is_ratio_mean_final"].shape == pg_loss.shape
+
+
+@pytest.mark.parametrize("tis_level", ["token", "sequence", "geometric"])
+@pytest.mark.parametrize("tis_mode", ["truncate", "clip"])
+@pytest.mark.parametrize("rs_level", ["sequence", "geometric"])
+def test_refill_tis_matches_the_existing_mis_helper_for_supported_math(tis_level, tis_mode, rs_level):
+    args = _args(
+        use_tis=True,
+        use_rs=True,
+        tis_level=tis_level,
+        tis_mode=tis_mode,
+        tis_lower_bound=0.5,
+        tis_upper_bound=1.5,
+        rs_level=rs_level,
+        rs_lower_bound=0.8,
+        rs_upper_bound=1.2,
+        rs_veto_threshold=0.1,
+    )
+    ratios = [torch.tensor([1.02, 0.98, 4.0]), torch.tensor([1.3, 1.3])]
+    train_log_probs = [ratio.log() for ratio in ratios]
+    rollout_log_probs = [torch.zeros_like(ratio) for ratio in ratios]
+    loss_masks = [torch.tensor([1.0, 1.0, 0.0]), torch.ones(2)]
+    pg_loss = torch.tensor([0.5, 1.0, 1.5, 2.0, 2.5])
+
+    baseline_weights, baseline_masks, _ = _MIS_MODULE.compute_mis_weights(
+        args,
+        train_log_probs=train_log_probs,
+        rollout_log_probs=rollout_log_probs,
+        loss_masks=loss_masks,
+    )
+    refill_loss, refill_masks, _ = apply_rs_refill_tis(
+        args,
+        pg_loss=pg_loss,
+        train_log_probs=train_log_probs,
+        rollout_log_probs=rollout_log_probs,
+        loss_masks=loss_masks,
+    )
+
+    torch.testing.assert_close(refill_loss, pg_loss * torch.cat(baseline_weights))
+    for refill_mask, baseline_mask in zip(refill_masks, baseline_masks, strict=True):
+        torch.testing.assert_close(refill_mask, baseline_mask)
 
 
 def test_tis_rejects_unsupported_batch_normalization_and_shape_mismatch():

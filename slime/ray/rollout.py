@@ -587,7 +587,9 @@ class RolloutManager:
             "seen_group_indices": set(),
             "seen_rollout_ids": candidate_rollout_ids,
             "awaiting_log_prob_indices": None,
+            "awaiting_log_prob_bytes": None,
             "proximal_log_probs_by_sample_index": {},
+            "retained_logprob_cache_bytes": 0,
             "accepted_mask_fingerprints": {},
             "metrics": dict(metrics),
             "initial_generation_seconds": time.perf_counter() - start_time,
@@ -598,7 +600,7 @@ class RolloutManager:
         pending = self._pending_rs_batches.get(rollout_id)
         if pending is None:
             raise RuntimeError(f"No pending RS candidate batch for rollout_id={rollout_id}")
-        if pending["awaiting_log_prob_indices"] is not None:
+        if pending["awaiting_log_prob_indices"] is not None or pending["awaiting_log_prob_bytes"] is not None:
             raise RuntimeError(f"RS candidate batch {rollout_id} has selected log probabilities awaiting collection")
         groups = pending["unscored"]
         if not groups:
@@ -614,7 +616,7 @@ class RolloutManager:
         pending = self._pending_rs_batches.get(rollout_id)
         if pending is None:
             raise RuntimeError(f"No pending RS candidate batch for rollout_id={rollout_id}")
-        if pending["awaiting_log_prob_indices"] is not None:
+        if pending["awaiting_log_prob_indices"] is not None or pending["awaiting_log_prob_bytes"] is not None:
             raise RuntimeError(f"RS candidate batch {rollout_id} already has an uncollected preflight result")
 
         report_wait_start = time.perf_counter()
@@ -632,17 +634,70 @@ class RolloutManager:
         )
         if pending["round"] == 0:
             initial_staleness = validate_initial_policy_staleness(groups, reports)
-            pending["metrics"]["rollout/rs_refill/initial_policy_staleness"] = initial_staleness
         else:
             validate_replacement_policy_version(groups, reports)
+
+        samples_by_index = {sample.index: sample for group in groups for sample in group}
+        cache_bytes_by_sample_index = {}
+        actor_cache_bytes = []
+        float32_bytes = torch.finfo(torch.float32).bits // 8
+        for worker_reports in actor_reports:
+            worker_cache_bytes = 0
+            for report in worker_reports or []:
+                sample_index = report["sample_index"]
+                cache_bytes = report.get("candidate_cache_bytes")
+                if isinstance(cache_bytes, bool) or not isinstance(cache_bytes, int) or cache_bytes < 0:
+                    raise RuntimeError(
+                        "RS candidate cache byte reports must be non-negative integers: "
+                        f"sample_index={sample_index}, value={cache_bytes!r}"
+                    )
+                expected_cache_bytes = samples_by_index[sample_index].response_length * float32_bytes
+                if cache_bytes != expected_cache_bytes:
+                    raise RuntimeError(
+                        "RS candidate cache byte report must exactly match the expected float32 payload: "
+                        f"sample_index={sample_index}, reported={cache_bytes}, expected={expected_cache_bytes}"
+                    )
+                cache_bytes_by_sample_index[sample_index] = cache_bytes
+                worker_cache_bytes += cache_bytes
+            actor_cache_bytes.append(worker_cache_bytes)
+
+        accepted_sample_indices = [sample.index for group in selection.accepted_groups for sample in group]
+        incoming_cache_bytes = sum(cache_bytes_by_sample_index[index] for index in accepted_sample_indices)
+        retained_cache_bytes = pending["retained_logprob_cache_bytes"]
+        if (
+            isinstance(retained_cache_bytes, bool)
+            or not isinstance(retained_cache_bytes, int)
+            or retained_cache_bytes < 0
+        ):
+            raise RuntimeError(f"Invalid retained RS proximal-logprob cache size: {retained_cache_bytes!r}")
+        required_cache_bytes = retained_cache_bytes + incoming_cache_bytes
+        cache_limit = self.args.rs_refill_max_candidate_cache_bytes
+        peak_actor_cache_bytes = max(actor_cache_bytes, default=0)
+        if peak_actor_cache_bytes > cache_limit:
+            raise RuntimeError(
+                "RS candidate proximal-logprob cache exceeds the per-actor limit according to actor reports: "
+                f"required={peak_actor_cache_bytes}, limit={cache_limit}. "
+                "Increase --rs-refill-max-candidate-cache-bytes or reduce the candidate batch/response length."
+            )
+        if required_cache_bytes > cache_limit:
+            raise RuntimeError(
+                "RS selected proximal-logprob cache would exceed the RolloutManager retained-payload limit "
+                "before transfer: "
+                f"retained={retained_cache_bytes}, incoming={incoming_cache_bytes}, "
+                f"required={required_cache_bytes}, limit={cache_limit}. "
+                "Increase --rs-refill-max-candidate-cache-bytes or reduce the batch/response length."
+            )
+
         pending["seen_sample_indices"].update(sample.index for group in groups for sample in group)
         pending["seen_group_indices"].update(group[0].group_index for group in groups)
 
         for group in selection.accepted_groups:
             pending["accepted_mask_fingerprints"].update(snapshot_sample_masks(group))
-        accepted_sample_indices = [sample.index for group in selection.accepted_groups for sample in group]
         pending["awaiting_log_prob_indices"] = accepted_sample_indices
+        pending["awaiting_log_prob_bytes"] = incoming_cache_bytes
         pending["accepted"].extend(selection.accepted_groups)
+        if pending["round"] == 0:
+            pending["metrics"]["rollout/rs_refill/initial_policy_staleness"] = initial_staleness
 
         pending["metrics"].update(
             {
@@ -659,16 +714,20 @@ class RolloutManager:
         pending["metrics"]["rollout/rs_refill/scored_trainable_tokens"] = pending["metrics"].get(
             "rollout/rs_refill/scored_trainable_tokens", 0
         ) + sum(int(report["valid_tokens"]) for report in reports)
-        round_cache_bytes = sum(int(report["candidate_cache_bytes"]) for report in reports)
-        if round_cache_bytes < 0:
-            raise RuntimeError("RS candidate cache byte reports must be non-negative")
-        pending["metrics"]["rollout/rs_refill/candidate_logprob_cache_bytes"] = (
-            pending["metrics"].get("rollout/rs_refill/candidate_logprob_cache_bytes", 0) + round_cache_bytes
+        aggregate_cache_bytes = sum(cache_bytes_by_sample_index.values())
+        pending["metrics"]["rollout/rs_refill/aggregate_candidate_logprob_cache_bytes"] = (
+            pending["metrics"].get("rollout/rs_refill/aggregate_candidate_logprob_cache_bytes", 0)
+            + aggregate_cache_bytes
         )
-        pending["metrics"]["rollout/rs_refill/peak_candidate_logprob_cache_bytes"] = max(
-            pending["metrics"].get("rollout/rs_refill/peak_candidate_logprob_cache_bytes", 0),
-            round_cache_bytes,
+        pending["metrics"]["rollout/rs_refill/peak_aggregate_candidate_logprob_cache_bytes"] = max(
+            pending["metrics"].get("rollout/rs_refill/peak_aggregate_candidate_logprob_cache_bytes", 0),
+            aggregate_cache_bytes,
         )
+        pending["metrics"]["rollout/rs_refill/peak_actor_candidate_logprob_cache_bytes"] = max(
+            pending["metrics"].get("rollout/rs_refill/peak_actor_candidate_logprob_cache_bytes", 0),
+            peak_actor_cache_bytes,
+        )
+        pending["metrics"]["rollout/rs_refill/logprob_cache_limit_bytes"] = cache_limit
         pending["metrics"]["rollout/rs_refill/preflight_seconds"] = (
             pending["metrics"].get("rollout/rs_refill/preflight_seconds", 0.0) + preflight_seconds
         )
@@ -691,7 +750,7 @@ class RolloutManager:
         pending = self._pending_rs_batches.get(rollout_id)
         if pending is None:
             raise RuntimeError(f"No pending RS candidate batch for rollout_id={rollout_id}")
-        if pending["awaiting_log_prob_indices"] is not None:
+        if pending["awaiting_log_prob_indices"] is not None or pending["awaiting_log_prob_bytes"] is not None:
             raise RuntimeError(
                 f"Cannot generate RS replacements for batch {rollout_id} before collecting selected caches"
             )
@@ -747,7 +806,8 @@ class RolloutManager:
         if pending is None:
             raise RuntimeError(f"No pending RS candidate batch for rollout_id={rollout_id}")
         expected = pending["awaiting_log_prob_indices"]
-        if expected is None:
+        expected_bytes = pending["awaiting_log_prob_bytes"]
+        if expected is None or expected_bytes is None:
             raise RuntimeError(f"RS candidate batch {rollout_id} has no selected log probabilities to collect")
 
         transfer_start = time.perf_counter()
@@ -760,27 +820,58 @@ class RolloutManager:
         accepted_by_index = {
             sample.index: sample for group in pending["accepted"] for sample in group if sample.index in selected_cache
         }
+        transferred_bytes = 0
         for sample_index, proximal_log_probs in selected_cache.items():
             sample = accepted_by_index[sample_index]
-            if len(proximal_log_probs) != sample.response_length:
+            if (
+                not isinstance(proximal_log_probs, torch.Tensor)
+                or proximal_log_probs.device.type != "cpu"
+                or proximal_log_probs.dtype != torch.float32
+                or proximal_log_probs.ndim != 1
+                or proximal_log_probs.numel() != sample.response_length
+                or not proximal_log_probs.is_contiguous()
+            ):
                 raise RuntimeError(
-                    "RS preflight logprob length mismatch: "
-                    f"sample_index={sample_index}, log_probs={len(proximal_log_probs)}, "
+                    "RS selected proximal-logprob cache must contain contiguous one-dimensional CPU float32 tensors "
+                    "matching each response length: "
+                    f"sample_index={sample_index}, type={type(proximal_log_probs).__name__}, "
+                    f"device={getattr(proximal_log_probs, 'device', None)}, "
+                    f"dtype={getattr(proximal_log_probs, 'dtype', None)}, "
+                    f"shape={getattr(proximal_log_probs, 'shape', None)}, "
                     f"response_length={sample.response_length}"
                 )
+            transferred_bytes += proximal_log_probs.numel() * proximal_log_probs.element_size()
+        if transferred_bytes != expected_bytes:
+            raise RuntimeError(
+                "RS selected proximal-logprob cache byte report does not match the transferred tensors: "
+                f"reported={expected_bytes}, actual={transferred_bytes}"
+            )
+
+        retained_cache_bytes = pending["retained_logprob_cache_bytes"]
+        required_cache_bytes = retained_cache_bytes + transferred_bytes
+        cache_limit = self.args.rs_refill_max_candidate_cache_bytes
+        if required_cache_bytes > cache_limit:
+            raise RuntimeError(
+                "RS selected proximal-logprob cache exceeds the RolloutManager retained-payload limit after transfer: "
+                f"retained={retained_cache_bytes}, incoming={transferred_bytes}, "
+                f"required={required_cache_bytes}, limit={cache_limit}."
+            )
 
         pending["proximal_log_probs_by_sample_index"].update(selected_cache)
-        transferred_bytes = sum(
-            torch.as_tensor(log_probs).numel() * torch.as_tensor(log_probs).element_size()
-            for log_probs in selected_cache.values()
-        )
+        pending["retained_logprob_cache_bytes"] = required_cache_bytes
         pending["metrics"]["rollout/rs_refill/selected_logprob_transfer_bytes"] = (
             pending["metrics"].get("rollout/rs_refill/selected_logprob_transfer_bytes", 0) + transferred_bytes
+        )
+        pending["metrics"]["rollout/rs_refill/retained_logprob_cache_bytes"] = required_cache_bytes
+        pending["metrics"]["rollout/rs_refill/peak_retained_logprob_cache_bytes"] = max(
+            pending["metrics"].get("rollout/rs_refill/peak_retained_logprob_cache_bytes", 0),
+            required_cache_bytes,
         )
         pending["metrics"]["rollout/rs_refill/selected_logprob_transfer_seconds"] = pending["metrics"].get(
             "rollout/rs_refill/selected_logprob_transfer_seconds", 0.0
         ) + (time.perf_counter() - transfer_start)
         pending["awaiting_log_prob_indices"] = None
+        pending["awaiting_log_prob_bytes"] = None
 
     def abort_rs_batch(self, rollout_id: int) -> bool:
         """Discard transient manager state after a fatal coordination error."""
@@ -791,7 +882,7 @@ class RolloutManager:
         pending = self._pending_rs_batches.get(rollout_id)
         if pending is None:
             raise RuntimeError(f"No pending RS candidate batch for rollout_id={rollout_id}")
-        if pending["awaiting_log_prob_indices"] is not None:
+        if pending["awaiting_log_prob_indices"] is not None or pending["awaiting_log_prob_bytes"] is not None:
             raise RuntimeError(f"Cannot finalize RS candidate batch {rollout_id} before collecting selected caches")
         groups = pending["accepted"]
         if len(groups) != self.args.rollout_batch_size:

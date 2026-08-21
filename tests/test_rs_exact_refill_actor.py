@@ -1,15 +1,114 @@
 """CPU contracts for actor-local exact RS refill scoring and cache reuse."""
 
+import importlib.util
+import sys
+import types
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
 
-from slime.backends.megatron_utils import actor as actor_module
-from slime.backends.megatron_utils import loss as loss_module
-from slime.backends.megatron_utils.actor import MegatronTrainRayActor
-from slime.ray.actor_group import RayTrainGroup
+
+def _stub_module(name, **attrs):
+    module = types.ModuleType(name)
+    for key, value in attrs.items():
+        setattr(module, key, value)
+    sys.modules[name] = module
+    return module
+
+
+def _noop(*_args, **_kwargs):
+    return None
+
+
+def _module_available(name):
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _snapshot_modules(prefixes):
+    return {
+        name: module
+        for name, module in sys.modules.items()
+        if any(name == prefix or name.startswith(prefix + ".") for prefix in prefixes)
+    }
+
+
+def _restore_modules(prefixes, snapshot):
+    for name in list(sys.modules):
+        if any(name == prefix or name.startswith(prefix + ".") for prefix in prefixes):
+            sys.modules.pop(name, None)
+    sys.modules.update(snapshot)
+
+
+# The routine CPU job intentionally omits Slime's patched Megatron/TMS
+# runtime. Keep actor.py and loss.py real and stub only unexercised backend
+# edges needed while importing them.
+_STUB_PREFIXES = ("megatron", "torch_memory_saver", "slime.backends.megatron_utils")
+_STUB_SNAPSHOT = None
+if "megatron.core.mpu" not in sys.modules and not _module_available("megatron"):
+    _STUB_SNAPSHOT = _snapshot_modules(_STUB_PREFIXES)
+    _megatron_utils = _stub_module("slime.backends.megatron_utils")
+    _megatron_utils.__path__ = [str(Path(__file__).resolve().parents[1] / "slime" / "backends" / "megatron_utils")]
+    _mpu = _stub_module(
+        "megatron.core.mpu",
+        is_pipeline_last_stage=_noop,
+        get_tensor_model_parallel_rank=_noop,
+    )
+    _megatron_core = _stub_module("megatron.core", mpu=_mpu)
+    _stub_module("megatron", core=_megatron_core)
+    _stub_module(
+        "torch_memory_saver",
+        torch_memory_saver=types.SimpleNamespace(pause=_noop, resume=_noop),
+    )
+    _stub_module(
+        "slime.backends.megatron_utils.cp_utils",
+        all_gather_with_cp=_noop,
+        get_logits_and_tokens_offset_with_cp=_noop,
+        get_sum_of_sample_mean=_noop,
+        prepare_routed_experts_for_routing_replay=_noop,
+        slice_log_prob_with_cp=_noop,
+    )
+    _stub_module("slime.backends.megatron_utils.checkpoint", load_checkpoint=_noop)
+    _stub_module("slime.backends.megatron_utils.data", DataIterator=object, get_data_iterator=_noop)
+    _stub_module("slime.backends.megatron_utils.hf_checkpoint_saver", save_hf_model_to_path=_noop)
+    _stub_module("slime.backends.megatron_utils.initialize", init=_noop, is_megatron_main_rank=lambda: False)
+    _stub_module(
+        "slime.backends.megatron_utils.model",
+        forward_only=_noop,
+        initialize_model_and_optimizer=_noop,
+        save=_noop,
+        train=_noop,
+    )
+    _stub_module("slime.backends.megatron_utils.update_weight.common", named_params_and_buffers=_noop)
+    for _module_name, _class_name in (
+        ("update_weight_from_disk", "UpdateWeightFromDisk"),
+        ("update_weight_from_distributed", "UpdateWeightFromDistributed"),
+        ("update_weight_from_tensor", "UpdateWeightFromTensor"),
+    ):
+        _stub_module(
+            f"slime.backends.megatron_utils.update_weight.{_module_name}",
+            **{_class_name: type(_class_name, (), {})},
+        )
+
+try:
+    from slime.backends.megatron_utils import actor as actor_module
+    from slime.backends.megatron_utils import loss as loss_module
+    from slime.backends.megatron_utils.actor import MegatronTrainRayActor
+    from slime.ray.actor_group import RayTrainGroup
+finally:
+    if _STUB_SNAPSHOT is not None:
+        _restore_modules(_STUB_PREFIXES, _STUB_SNAPSHOT)
+        _backends_package = sys.modules.get("slime.backends")
+        if _backends_package is not None:
+            if "slime.backends.megatron_utils" in _STUB_SNAPSHOT:
+                _backends_package.megatron_utils = _STUB_SNAPSHOT["slime.backends.megatron_utils"]
+            else:
+                _backends_package.__dict__.pop("megatron_utils", None)
 
 NUM_GPUS = 0
 

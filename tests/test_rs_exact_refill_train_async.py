@@ -1,8 +1,14 @@
+import importlib.util
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-import train_async
+_TRAIN_ASYNC_PATH = Path(__file__).resolve().parents[1] / "train_async.py"
+_TRAIN_ASYNC_SPEC = importlib.util.spec_from_file_location("test_train_async_module", _TRAIN_ASYNC_PATH)
+assert _TRAIN_ASYNC_SPEC is not None and _TRAIN_ASYNC_SPEC.loader is not None
+train_async = importlib.util.module_from_spec(_TRAIN_ASYNC_SPEC)
+_TRAIN_ASYNC_SPEC.loader.exec_module(train_async)
 
 NUM_GPUS = 0
 

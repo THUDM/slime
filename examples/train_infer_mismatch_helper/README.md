@@ -32,13 +32,20 @@ Sequence-level RS can leave an optimizer step with fewer independent prompt grou
    geometric RS gate atomically to each complete prompt group.
 3. Keep only the selected groups and their in-memory proximal log-probability cache. Generate the exact deficit,
    rounded only to the smallest DP/VPP scheduling multiple, from the current rollout policy.
-4. Repeat for at most `--rs-refill-max-rounds`. If the target batch is still incomplete, abort without an optimizer
-   step instead of silently training on an underfilled batch.
+4. Repeat for at most `--rs-refill-max-rounds`. If the target batch is still incomplete, fail the job before an
+   optimizer step instead of silently training on an underfilled batch.
 
-Every coordinator and actor wait is bounded by `--rs-refill-rpc-timeout-seconds` (30 minutes by default). Before an
-actor rank allocates pinned CPU memory, it also checks the actual proximal-logprob footprint against
-`--rs-refill-max-candidate-cache-bytes` (1 GiB per actor rank by default). The rollout metrics report both cumulative
-and peak candidate-cache bytes so long-horizon jobs can set a measured limit instead of relying on host OOM behavior.
+After an initial or replacement candidate generation returns, every coordinator and actor wait in the refill loop is
+bounded by `--rs-refill-rpc-timeout-seconds` (30 minutes by default). Candidate generation retains the rollout
+backend's existing timeout and health-monitor behavior. `--rs-refill-max-candidate-cache-bytes` (1 GiB by default)
+bounds the proximal-logprob tensor payload retained by any one process: an actor rank checks its current candidate
+round before allocating pinned CPU memory, and the RolloutManager checks its accumulated accepted cache before pulling
+the selected tensors from Ray. `peak_actor_candidate_logprob_cache_bytes` is the per-actor high-water mark to compare
+with that limit; `aggregate_candidate_logprob_cache_bytes` and
+`peak_aggregate_candidate_logprob_cache_bytes` report cumulative and per-round aggregate payload across reporting
+actors. Selected-transfer and manager-retained metrics cover the coordinator side. Leave headroom for Python
+containers, Ray object-store/transport buffers, and other process memory, which are not included in this tensor-payload
+limit.
 
 The refill path still applies TIS during training; completing the batch does not make stale initial trajectories
 on-policy. Initial candidates are limited to one policy version of staleness and reactive replacements must match the

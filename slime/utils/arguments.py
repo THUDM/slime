@@ -1095,19 +1095,22 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--rs-refill-max-rounds",
                 type=int,
                 default=2,
-                help="Maximum replacement rounds before failing the batch without an optimizer step.",
+                help="Maximum replacement rounds before failing the job without an optimizer step.",
             )
             parser.add_argument(
                 "--rs-refill-rpc-timeout-seconds",
                 type=float,
                 default=1800.0,
-                help="Timeout for each exact-refill coordination or actor RPC before aborting the batch.",
+                help="Timeout for each post-generation exact-refill coordination or actor RPC before aborting the batch.",
             )
             parser.add_argument(
                 "--rs-refill-max-candidate-cache-bytes",
                 type=int,
                 default=1 << 30,
-                help="Maximum pinned-CPU proximal-logprob cache bytes retained by one actor rank per refill round.",
+                help=(
+                    "Maximum proximal-logprob tensor payload retained by one process: each actor rank per candidate "
+                    "round and the RolloutManager across accepted refill rounds."
+                ),
             )
             parser.add_argument(
                 "--custom-pg-loss-reducer-function-path",
