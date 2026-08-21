@@ -339,6 +339,9 @@ class BaseAdapter:
         t0 = time.monotonic()
         try:
             translated, tools_schema = self._translate(body)
+            # A harness may echo a prior assistant turn re-rendered rather than
+            # byte-identical; render from what we generated so the turn stays CLEAN.
+            translated = self.manager.restore_generated_messages(sid, translated, tools_schema)
             prompt_ids = _render_token_ids(translated, tok, tools=tools_schema, add_generation_prompt=True)
 
             turn = await call_sglang_generate(prompt_ids, s, body, adapter=self, session_id=sid)

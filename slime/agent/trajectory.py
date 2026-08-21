@@ -108,6 +108,125 @@ class MessageNode:
             yield from c.leaves()
 
 
+def _tool_defaults(tools_schema: list[dict] | None) -> dict[str, dict[str, Any]]:
+    """``{tool name: {argument: default}}`` from a chat-template tool schema.
+
+    Only properties that actually declare a ``default`` are collected; a tool with
+    none contributes an empty mapping, and an absent schema yields ``{}``.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for entry in tools_schema or []:
+        fn = (entry or {}).get("function") or {}
+        name = fn.get("name")
+        if not name:
+            continue
+        props = ((fn.get("parameters") or {}).get("properties")) or {}
+        if not isinstance(props, dict):
+            continue
+        defaults = {k: v["default"] for k, v in props.items() if isinstance(v, dict) and "default" in v}
+        if defaults:
+            out[name] = defaults
+    return out
+
+
+def _strip_trailing_ws(args: Any) -> Any:
+    """Right-strip every line of every string argument, recursively.
+
+    A client may right-strip a multi-line code payload on replay. How much it
+    removed is unknowable, so instead of trying to put it back, both sides are
+    compared with all trailing whitespace gone.
+    """
+    if isinstance(args, dict):
+        return {k: _strip_trailing_ws(v) for k, v in sorted(args.items())}
+    if isinstance(args, list):
+        return [_strip_trailing_ws(v) for v in args]
+    if isinstance(args, str):
+        return "\n".join(line.rstrip() for line in args.split("\n"))
+    return args
+
+
+def _drop_schema_defaults(args: Any, defaults: dict[str, Any]) -> Any:
+    """Drop top-level arguments whose value equals the tool's declared default.
+
+    Omitting an argument and passing its declared default are the same call, so a
+    client that fills one in on replay has changed nothing the tool can observe.
+    Dropping those on both sides makes the two compare equal, whatever the default
+    happens to be -- ``False``, ``True``, ``0``, or a string.
+
+    ``True is 1`` in Python, so identity rather than ``==`` guards booleans here:
+    an argument of ``1`` must not be mistaken for a declared default of ``True``.
+    """
+    if not isinstance(args, dict) or not defaults:
+        return args
+
+    def is_default(key: str, value: Any) -> bool:
+        if key not in defaults:
+            return False
+        default = defaults[key]
+        if isinstance(default, bool) or isinstance(value, bool):
+            return value is default
+        return value == default
+
+    return {k: v for k, v in args.items() if not is_default(k, v)}
+
+
+def _norm_tool_args(args: Any, defaults: dict[str, Any] | None = None) -> Any:
+    """Project tool-call arguments onto a coarser view, for comparison only.
+
+    A harness may replay a prior assistant tool call re-rendered rather than
+    byte-identical. Keeping arguments a dict in ``tool_call_dict`` already makes
+    the comparison immune to key order; two further client edits are equally free
+    of semantic content but still break equality:
+
+    * an argument filled in with the value the tool schema already declares as its
+      default (``replace_all`` on Edit, for instance), where the model omitted it;
+    * per-line right-stripping of string arguments carrying code payloads.
+
+    Neither edit is reversed -- the original bytes are never reconstructed from the
+    echo, and the caller substitutes the message it stored instead (see
+    ``restore_generated_messages``). Both sides are merely projected onto a view
+    that cannot see the difference.
+
+    ``defaults`` comes from the tool's own schema (see :func:`_tool_defaults`).
+    Without it, only the whitespace projection applies, so a filled-in default
+    still reads as a different call -- a missed restore, never a wrong one.
+    """
+    return _strip_trailing_ws(_drop_schema_defaults(args, defaults or {}))
+
+
+def _is_same_tool_call_echo(
+    held: dict[str, Any] | None,
+    incoming: dict[str, Any],
+    tool_defaults: dict[str, dict[str, Any]] | None = None,
+) -> bool:
+    """Whether ``incoming`` is ``held`` re-rendered by the harness.
+
+    Only tool-call arguments are compared through the coarser view of
+    :func:`_norm_tool_args`; everything else -- role, content, reasoning, tool
+    name, call count, and any other key -- still has to match exactly. A message
+    that differs in any of those is a different action and must not be mistaken
+    for an echo.
+    """
+    if not isinstance(held, dict) or held.get("role") != incoming.get("role"):
+        return False
+    h_tcs, i_tcs = held.get("tool_calls"), incoming.get("tool_calls")
+    if not h_tcs or not i_tcs or len(h_tcs) != len(i_tcs):
+        return False
+    if {k: v for k, v in held.items() if k != "tool_calls"} != {
+        k: v for k, v in incoming.items() if k != "tool_calls"
+    }:
+        return False
+    for h, i in zip(h_tcs, i_tcs, strict=True):  # equal lengths checked above
+        hf, if_ = h.get("function") or {}, i.get("function") or {}
+        name = hf.get("name")
+        if h.get("type") != i.get("type") or name != if_.get("name"):
+            return False
+        defaults = (tool_defaults or {}).get(name, {})
+        if _norm_tool_args(hf.get("arguments"), defaults) != _norm_tool_args(if_.get("arguments"), defaults):
+            return False
+    return True
+
+
 # ===========================================================================
 # drift classification — how an incoming turn's prompt relates to held tokens
 # ===========================================================================
@@ -346,6 +465,62 @@ class TrajectoryManager:
     def drop_session(self, sid: str) -> None:
         self._trees.pop(sid, None)
         self._turn_count.pop(sid, None)
+
+    def restore_generated_messages(
+        self,
+        sid: str,
+        messages: list[dict[str, Any]],
+        tools_schema: list[dict] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Swap a harness's re-rendered assistant echoes back to what we generated.
+
+        A harness that replays a prior assistant turn re-rendered rather than
+        byte-identical makes the next prompt diverge from the tokens we hold on
+        both layers at once: the routing walk misses the node (message
+        inequality, so ``_try_merge_assistant_rewrite`` demotes that turn to
+        routing-only and its generated tokens stop training) and the token prefix
+        drifts (the re-rendered arguments tokenize differently, so the turn
+        classifies REALIGN and ``_align_to_prompt`` zeroes the span). Restoring
+        before the prompt is rendered removes the divergence at its source, so
+        the turn stays CLEAN and keeps its gradient.
+
+        Only an assistant message recognized as the same tool call re-rendered
+        is swapped (see :func:`_is_same_tool_call_echo`); anything else is left
+        as the harness sent it, and the walk stops there. Returns a new list;
+        ``messages`` is not mutated.
+
+        ``tools_schema`` supplies each tool's declared argument defaults, so an
+        argument the client filled in with its default is recognized exactly
+        rather than guessed at. Passing nothing is safe: the comparison just gets
+        stricter, costing a restore rather than making a wrong one.
+        """
+        root = self._trees.get(sid)
+        if root is None:
+            return messages
+
+        defaults = _tool_defaults(tools_schema)
+        out = list(messages)
+        node, depth = root, 0
+        while depth < len(out):
+            msg = out[depth]
+            exact = next((c for c in node.children if c.role == msg.get("role") and c.message == msg), None)
+            if exact is not None:
+                node, depth = exact, depth + 1
+                continue
+            # No exact child: this may be our own generated turn, echoed back
+            # re-rendered. Require a single generated assistant candidate --
+            # with more than one we cannot tell which the echo refers to, the
+            # same ambiguity _try_merge_assistant_rewrite declines to guess at.
+            echoes = [
+                c
+                for c in node.children
+                if c.role == "assistant" and c.turn is not None and _is_same_tool_call_echo(c.message, msg, defaults)
+            ]
+            if len(echoes) != 1:
+                break
+            out[depth] = echoes[0].message
+            node, depth = echoes[0], depth + 1
+        return out
 
     # -------------------- internals ----------------------------------------
 
