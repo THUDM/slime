@@ -7,6 +7,9 @@ from unittest import mock
 
 import pytest
 
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))
+
 _TRAIN_ASYNC_PATH = Path(__file__).resolve().parents[1] / "train_async.py"
 _TRAIN_ASYNC_SPEC = importlib.util.spec_from_file_location("test_train_async_module", _TRAIN_ASYNC_PATH)
 assert _TRAIN_ASYNC_SPEC is not None and _TRAIN_ASYNC_SPEC.loader is not None
@@ -102,7 +105,3 @@ def test_refill_checkpoint_finishes_before_the_next_rollout(monkeypatch):
     next_generate = events.index(("generate", 1))
     updates_before_next = [i for i, event in enumerate(events[:next_generate]) if event[0] == "update_weights"]
     assert manager_save < updates_before_next[-1] < next_generate
-
-
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__]))
