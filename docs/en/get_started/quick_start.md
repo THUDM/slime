@@ -345,7 +345,7 @@ slime supports more complex sampling strategies, such as dynamic sampling used i
      slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
 ```
 
-Here `over_sampling_batch_size` needs to be greater than `rollout_batch_size`, for example, configured as:
+Here `over_sampling_batch_size` must be positive, for example, configured as:
 
 ```bash
    --rollout-batch-size 32 \
