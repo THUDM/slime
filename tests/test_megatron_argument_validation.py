@@ -311,6 +311,24 @@ def test_slime_validate_args_rejects_non_positive_rollout_temperature(monkeypatc
 
 
 @pytest.mark.unit
+def test_slime_validate_args_allows_granular_dynamic_sampling_refill(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(rollout_batch_size=64, over_sampling_batch_size=1)
+
+    module.slime_validate_args(args)
+
+    assert args.over_sampling_batch_size == 1
+
+
+@pytest.mark.unit
+def test_slime_validate_args_rejects_empty_dynamic_sampling_refill(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+
+    with pytest.raises(AssertionError, match="greater than zero"):
+        module.slime_validate_args(make_slime_validate_args(over_sampling_batch_size=0))
+
+
+@pytest.mark.unit
 def test_slime_validate_args_preserves_zero_rollout_gpus_under_colocate(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(colocate=True, rollout_num_gpus=0)

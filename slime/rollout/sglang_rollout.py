@@ -337,38 +337,48 @@ async def generate_and_rm_group(
 
 
 async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
-    aborted_samples = []
-
     state = GenerateState(args)
     assert not state.aborted
     state.aborted = True
 
-    response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers")
-    urls = [worker["url"] for worker in response["workers"]]
+    try:
+        # Custom generate can keep issuing requests during drain. Cancel
+        # non-partial work first so abort_servers_until_idle can reach idle.
+        if not args.partial_rollout:
+            for task in state.pendings:
+                task.cancel()
+            if state.pendings:
+                await asyncio.gather(*state.pendings, return_exceptions=True)
+            state.pendings.clear()
 
-    await abort_servers_until_idle(urls)
-
-    # make sure all the pending tasks are finished
-    count = 0
-    while state.pendings:
-        done, state.pendings = await asyncio.wait(state.pendings, return_when=asyncio.FIRST_COMPLETED)
+        response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers")
+        urls = [worker["url"] for worker in response["workers"]]
+        await abort_servers_until_idle(urls)
 
         if not args.partial_rollout:
-            continue
+            return []
 
-        # for partial rollout, collect the partial samples into the data buffer
-        for task in done:
-            group = task.result()
-            for sample in group:
-                if sample.response and "start_rollout_id" not in sample.metadata:
-                    sample.metadata["start_rollout_id"] = rollout_id
-            aborted_samples.append(group)
-            count += len(group)
+        aborted_samples = []
+        count = 0
+        while state.pendings:
+            done, state.pendings = await asyncio.wait(state.pendings, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                group = task.result()
+                for sample in group:
+                    if sample.response and "start_rollout_id" not in sample.metadata:
+                        sample.metadata["start_rollout_id"] = rollout_id
+                aborted_samples.append(group)
+                count += len(group)
 
-    if args.partial_rollout:
         logger.info(f"Collected {count} partial samples into the data buffer")
-
-    return aborted_samples
+        return aborted_samples
+    except BaseException:
+        for task in state.pendings:
+            task.cancel()
+        if state.pendings:
+            await asyncio.gather(*state.pendings, return_exceptions=True)
+        state.pendings.clear()
+        raise
 
 
 async def generate_rollout_async(
