@@ -37,6 +37,30 @@ ROLLOUT_TOP_P_TOKEN_KEYS = (
 )
 
 
+def apply_rollout_temperature(
+    logits: torch.Tensor,
+    temperature: float,
+) -> torch.Tensor:
+    """Transform logits to match rollout-engine log-prob semantics.
+
+    For temperature > 0, SGLang reports probabilities corresponding to
+    temperature-scaled logits.
+
+    For temperature == 0, SGLang uses greedy token selection but reports
+    finite log-probabilities from the untempered model distribution. Therefore
+    logits must remain unchanged rather than taking the mathematical T -> 0
+    limit.
+
+    ``temperature == 0`` thus affects token selection, not the policy
+    distribution used for log-prob accounting.
+    """
+    if temperature < 0:
+        raise ValueError(f"temperature must be >= 0, got {temperature}")
+    if temperature == 0.0 or temperature == 1.0:
+        return logits
+    return logits / temperature
+
+
 # Optional capture of per-sample policy log-probs computed during the training
 # forward. Used only when dumping train debug data in configs that skip the
 # separate log-prob recompute (can_reuse_log_probs_in_loss / use_rollout_logprobs):
@@ -81,7 +105,9 @@ def _maybe_capture_log_probs(batch: RolloutBatch, log_probs: list[torch.Tensor])
 
 
 def get_rollout_top_p_logprob_kwargs(args: Namespace, batch: dict[str, Any]) -> dict[str, Any]:
-    if args.rollout_top_p == 1.0:
+    # SGLang temperature=0 is greedy (top_k=1) and reports unmasked untempered
+    # model log-probs. Nucleus replay would mismatch those rollout log-probs.
+    if args.rollout_top_p == 1.0 or args.rollout_temperature == 0.0:
         return {}
 
     top_p_token_ids = batch.get("rollout_top_p_token_ids")
@@ -105,20 +131,22 @@ def get_responses(
 ) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
     """Yield response-aligned `(logits_chunk, tokens_chunk)` pairs per sample.
 
-    After squeezing batch dimension and optionally applying temperature scaling, this
-    function extracts the logits and tokens corresponding to response segments
-    for each sample. When context parallelism is disabled, it slices directly
-    from the concatenated sequence. With context parallelism enabled, it
-    handles split sequences across ranks.
+    After squeezing batch dimension and optionally matching rollout-engine
+    log-prob semantics, this function extracts the logits and tokens
+    corresponding to response segments for each sample. When context
+    parallelism is disabled, it slices directly from the concatenated
+    sequence. With context parallelism enabled, it handles split sequences
+    across ranks.
 
     Args:
         logits: Model outputs with shape `[1, T, V]` (policy) or `[1, T, 1]`
             (value). Must be float32.
-        args: Configuration containing `rollout_temperature` for optional scaling.
+        args: Configuration containing `rollout_temperature`.
         unconcat_tokens: List of token tensors (prompt+response) per sample.
         total_lengths: Total sequence lengths (prompt+response) per sample.
         response_lengths: Response segment lengths per sample.
-        apply_temperature: Whether to divide outputs by `rollout_temperature`.
+        apply_temperature: Whether to transform logits with
+            :func:`apply_rollout_temperature`. Value heads pass False.
 
     Yields:
         Tuple of `(logits_chunk, tokens_chunk)` where `logits_chunk` is shape
@@ -130,8 +158,8 @@ def get_responses(
     assert logits.size(0) == 1, f"{logits.shape}"
     logits = logits.squeeze(0)
 
-    if apply_temperature and args.rollout_temperature != 1.0 and args.rollout_temperature != 0:
-        logits = logits.div(args.rollout_temperature)
+    if apply_temperature:
+        logits = apply_rollout_temperature(logits, args.rollout_temperature)
 
     cp_size = mpu.get_context_parallel_world_size()
     end = 0
@@ -537,10 +565,8 @@ def get_log_probs_and_entropy(
     assert logits.size(0) == 1, f"{logits.shape}"
     logits = logits.squeeze(0)
 
-    # Apply rollout temperature scaling to logits to match rollout-time log-probs.
     rollout_temperature = getattr(args, "rollout_temperature", 1.0)
-    if rollout_temperature != 1.0 and rollout_temperature != 0:
-        logits = logits / rollout_temperature
+    logits = apply_rollout_temperature(logits, rollout_temperature)
     logits = logits.contiguous()
     T = logits.size(0)
     device = logits.device

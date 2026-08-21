@@ -246,6 +246,10 @@ jobs:
             },
             {
               "num_gpus": 4,
+              "test_file": "test_qwen2.5_0.5B_greedy_logprob.py"
+            },
+            {
+              "num_gpus": 4,
               "test_file": "test_qwen2.5_0.5B_fanout_short.py"
             },
             {
@@ -620,6 +624,10 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_value_temperature.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_rollout_temperature.py"
             },
             {
               "num_gpus": 0,
@@ -1015,6 +1023,10 @@ jobs:
             {
               "num_gpus": 4,
               "test_file": "test_qwen2.5_0.5B_fully_async_short.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_file": "test_qwen2.5_0.5B_greedy_logprob.py"
             },
             {
               "num_gpus": 4,

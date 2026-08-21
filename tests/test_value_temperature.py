@@ -24,7 +24,7 @@ def test_get_values_does_not_apply_rollout_temperature(monkeypatch):
     monkeypatch.setitem(sys.modules, "megatron.core", core_mod)
 
     try:
-        from slime.backends.megatron_utils.loss import get_responses, get_values
+        from slime.backends.megatron_utils.loss import get_values
 
         args = Namespace(rollout_temperature=0.5, allgather_cp=False)
         logits = torch.tensor([[[1.0], [2.0], [3.0], [4.0]]], dtype=torch.float32)
@@ -39,19 +39,6 @@ def test_get_values_does_not_apply_rollout_temperature(monkeypatch):
         )
 
         torch.testing.assert_close(result["values"][0], torch.tensor([2.0, 3.0]))
-
-        zero_args = Namespace(rollout_temperature=0.0, allgather_cp=False)
-        policy = torch.tensor([[[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8]]], dtype=torch.float32)
-        chunk, _ = next(
-            get_responses(
-                policy,
-                args=zero_args,
-                unconcat_tokens=tokens,
-                total_lengths=[4],
-                response_lengths=[2],
-            )
-        )
-        torch.testing.assert_close(chunk, torch.tensor([[0.3, 0.4], [0.5, 0.6]]))
     finally:
         if previous_loss is None:
             sys.modules.pop("slime.backends.megatron_utils.loss", None)

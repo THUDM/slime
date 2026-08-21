@@ -103,7 +103,8 @@ class GenerateState(metaclass=SingletonMeta):
             no_stop_trim=True,
             spaces_between_special_tokens=False,
         )
-        if args.rollout_top_p != 1.0:
+        # temperature=0 is greedy (SGLang top_k=1); nucleus token ids are unused.
+        if args.rollout_top_p != 1.0 and args.rollout_temperature != 0.0:
             self.sampling_params["custom_params"] = {"return_top_p_token_ids": True}
 
         if getattr(args, "sglang_enable_deterministic_inference", False):

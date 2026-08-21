@@ -343,7 +343,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--rollout-temperature",
                 type=float,
                 default=1.0,
-                help="the temperature for the inference engine during rollout.",
+                help=(
+                    "Temperature for the inference engine during rollout. "
+                    "temperature=0 uses greedy decoding for action selection; "
+                    "log-prob computation follows SGLang and uses the untempered "
+                    "model distribution rather than a delta at the argmax."
+                ),
             )
             parser.add_argument(
                 "--rollout-top-p", type=float, default=1.0, help="the top-p for the inference engine during rollout."

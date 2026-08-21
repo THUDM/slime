@@ -76,7 +76,8 @@ def _wrap_forward_step_with_microbatch_pbar(forward_step_func, pbar):
 
 
 def _with_rollout_top_p_token_keys(args: Namespace, keys: Sequence[str]) -> list[str]:
-    if args.rollout_top_p == 1.0:
+    # temperature=0 is greedy; SGLang reports unmasked model log-probs.
+    if args.rollout_top_p == 1.0 or args.rollout_temperature == 0.0:
         return list(keys)
     return [*keys, *ROLLOUT_TOP_P_TOKEN_KEYS]
 
