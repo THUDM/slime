@@ -458,9 +458,7 @@ async def generate_rollout_async(
 
     # reset the global state to prevent effects on the next rollout or eval.
     state.reset()
-    if args.rollout_sample_filter_path is not None:
-        filter_func = load_function(args.rollout_sample_filter_path)
-        filter_func(args, data)
+    # `--rollout-sample-filter-path` is applied by call_rollout_fn after return.
 
     # There can be circumstances where users want to process all samples including filtered ones.
     if args.rollout_all_samples_process_path is not None:
