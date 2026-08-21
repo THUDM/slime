@@ -209,6 +209,7 @@ sglang 的加载非常简单，只需要：
   注意：在策略蒸馏 (OPD) 现在与 advantage estimator 正交，使用 `--use-opd` 和 `--opd-kl-coef` 可以在任意 estimator 之上启用 OPD。
 - `--calculate-per-token-loss`：slime 中默认的方案是 per sample loss，即 `mean(sum(sample_i) / len(sample_i))`，如果需要计算 per token loss，即 `sum(sum(sample_i)) / sum(len(sample_i))`，可以开启 `--calculate-per-token-loss`；
 - `--use-tis`：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置；
+- `--rs-batch-refill`：在训推分离的 `train_async.py` 中使用 sequence/geometric RS 时，先按完整 prompt group 做 actor preflight，再在 optimizer step 前只生成缺失的 group。`--rs-refill-max-rounds` 限制补齐轮数；超过上限会中止该 step，而不是静默使用缩水后的 effective batch。该选项增加 actor preflight 和补采样延迟，属于 correctness 机制，不保证无条件提速。完整命令与当前限制见 [Rollout Correction Methods](../../../examples/train_infer_mismatch_helper/README.md#effective-batch-refill-after-sequence-rs)。
 
 #### GRPO 算法
 

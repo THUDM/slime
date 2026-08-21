@@ -35,6 +35,11 @@ Sequence-level RS can leave an optimizer step with fewer independent prompt grou
 4. Repeat for at most `--rs-refill-max-rounds`. If the target batch is still incomplete, abort without an optimizer
    step instead of silently training on an underfilled batch.
 
+Every coordinator and actor wait is bounded by `--rs-refill-rpc-timeout-seconds` (30 minutes by default). Before an
+actor rank allocates pinned CPU memory, it also checks the actual proximal-logprob footprint against
+`--rs-refill-max-candidate-cache-bytes` (1 GiB per actor rank by default). The rollout metrics report both cumulative
+and peak candidate-cache bytes so long-horizon jobs can set a measured limit instead of relying on host OOM behavior.
+
 The refill path still applies TIS during training; completing the batch does not make stale initial trajectories
 on-policy. Initial candidates are limited to one policy version of staleness and reactive replacements must match the
 actor version used for preflight.
@@ -44,6 +49,8 @@ python train_async.py \
   ... \
   --rs-batch-refill \
   --rs-refill-max-rounds 2 \
+  --rs-refill-rpc-timeout-seconds 1800 \
+  --rs-refill-max-candidate-cache-bytes 1073741824 \
   --update-weights-interval 1 \
   --use-tis \
   --custom-config-path examples/train_infer_mismatch_helper/mis_refill.yaml

@@ -579,7 +579,19 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_rs_exact_refill_actor.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_rs_exact_refill_rollout_manager.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_rs_exact_refill_sglang_rollout.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_rs_exact_refill_train_async.py"
             },
             {
               "num_gpus": 0,
