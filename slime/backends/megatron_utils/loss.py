@@ -1116,18 +1116,28 @@ def policy_loss_function(
     if args.use_kl_loss:
         ref_log_probs = batch["ref_log_probs"]
         ref_log_probs = torch.cat(ref_log_probs, dim=0)
+        kl_loss_coef = float(args.kl_loss_coef)
+        with_kl_grad = kl_loss_coef != 0.0
+
+        # Keep reference KL metrics when the coefficient is zero, but detach
+        # their inputs so the metric-only path does not retain an actor
+        # backward graph or contaminate policy gradients with non-finite KL.
+        kl_log_probs = log_probs if with_kl_grad else log_probs.detach()
+        kl_old_log_probs = old_log_probs if with_kl_grad else old_log_probs.detach()
+        kl_ref_log_probs = ref_log_probs if with_kl_grad else ref_log_probs.detach()
         importance_ratio = None
         if args.use_unbiased_kl:
-            importance_ratio = torch.exp(log_probs - old_log_probs)
+            importance_ratio = torch.exp(kl_log_probs - kl_old_log_probs)
         kl = compute_approx_kl(
-            log_probs,
-            ref_log_probs,
+            kl_log_probs,
+            kl_ref_log_probs,
             kl_loss_type=args.kl_loss_type,
             importance_ratio=importance_ratio,
         )
         kl_loss = sum_of_sample_mean(kl)
 
-        loss = loss + args.kl_loss_coef * kl_loss
+        if with_kl_grad:
+            loss = loss + kl_loss_coef * kl_loss
 
     # make sure the gradient could backprop correctly.
     if log_probs.numel() == 0:
