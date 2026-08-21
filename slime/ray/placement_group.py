@@ -188,12 +188,14 @@ def create_training_models(args, pgs, rollout_manager, actor_cls=None):
 
     critic_model = None
     if args.use_critic and args.num_rollout != 0:
-        if args.megatron_config_path is not None:
-            from slime.utils.arguments import parse_megatron_role_args
+        from slime.utils.arguments import parse_megatron_role_args
 
-            critic_args = parse_megatron_role_args(args, args.megatron_config_path, role="critic")
-        else:
-            critic_args = copy.deepcopy(args)
+        critic_args = (
+            parse_megatron_role_args(args, args.megatron_config_path, role="critic")
+            if args.megatron_config_path is not None
+            else copy.deepcopy(args)
+        )
+        if args.megatron_config_path is None:
             critic_args.disable_param_buffers_cpu_backup = False
 
         critic_model = allocate_train_group(
