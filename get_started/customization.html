@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Aug 12, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 21, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -647,7 +647,7 @@
 <td class="text-left"><p>–rollout-data-postprocess-path, –custom-convert-samples-to-train-data-path</p></td>
 </tr>
 <tr class="row-odd"><td class="text-left"><p>Debug long-running custom generation, verifier calls, tool calls, or sandbox steps</p></td>
-<td class="text-left"><p>trace utilities in <a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">slime.utils.trace_utils</span></code></span></a></p></td>
+<td class="text-left"><p>trace utilities in <a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">slime.observability.trace_utils</span></code></span></a></p></td>
 </tr>
 </tbody>
 </table>
@@ -903,20 +903,20 @@
 </div>
 <p><strong>Return Type</strong>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nb">dict</span><span class="p">:</span> <span class="p">{</span>
-    <span class="s2">&quot;tokens&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]],</span>           <span class="c1"># Token IDs for each sample</span>
-    <span class="s2">&quot;response_lengths&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>        <span class="c1"># Response lengths</span>
-    <span class="s2">&quot;rewards&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">],</span>               <span class="c1"># Normalized rewards</span>
-    <span class="s2">&quot;raw_reward&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">],</span>            <span class="c1"># Raw rewards</span>
-    <span class="s2">&quot;truncated&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>               <span class="c1"># Truncation flags (0 or 1)</span>
-    <span class="s2">&quot;sample_indices&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>          <span class="c1"># Sample indices</span>
-    <span class="s2">&quot;loss_masks&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]],</span>        <span class="c1"># Loss masks for each sample</span>
+    <span class="s2">"tokens"</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]],</span>           <span class="c1"># Token IDs for each sample</span>
+    <span class="s2">"response_lengths"</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>        <span class="c1"># Response lengths</span>
+    <span class="s2">"rewards"</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">],</span>               <span class="c1"># Normalized rewards</span>
+    <span class="s2">"raw_reward"</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">],</span>            <span class="c1"># Raw rewards</span>
+    <span class="s2">"truncated"</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>               <span class="c1"># Truncation flags (0 or 1)</span>
+    <span class="s2">"sample_indices"</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>          <span class="c1"># Sample indices</span>
+    <span class="s2">"loss_masks"</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]],</span>        <span class="c1"># Loss masks for each sample</span>
     <span class="c1"># Optional fields:</span>
-    <span class="s2">&quot;round_number&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>            <span class="c1"># Round numbers (for rollout buffer)</span>
-    <span class="s2">&quot;rollout_log_probs&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>            <span class="c1"># Log probs (for off-policy correction)</span>
-    <span class="s2">&quot;rollout_routed_experts&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>       <span class="c1"># Routed experts (for MoE)</span>
-    <span class="s2">&quot;metadata&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>                     <span class="c1"># Train metadata</span>
-    <span class="s2">&quot;multimodal_train_inputs&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>      <span class="c1"># Multimodal tensors (for VLM)</span>
-    <span class="s2">&quot;teacher_log_probs&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>            <span class="c1"># Teacher log probs (for distillation)</span>
+    <span class="s2">"round_number"</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>            <span class="c1"># Round numbers (for rollout buffer)</span>
+    <span class="s2">"rollout_log_probs"</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>            <span class="c1"># Log probs (for off-policy correction)</span>
+    <span class="s2">"rollout_routed_experts"</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>       <span class="c1"># Routed experts (for MoE)</span>
+    <span class="s2">"metadata"</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>                     <span class="c1"># Train metadata</span>
+    <span class="s2">"multimodal_train_inputs"</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>      <span class="c1"># Multimodal tensors (for VLM)</span>
+    <span class="s2">"teacher_log_probs"</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>            <span class="c1"># Teacher log probs (for distillation)</span>
 <span class="p">}</span>
 </pre></div>
 </div>
@@ -955,19 +955,19 @@
 <p><strong>Required Methods</strong>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">CustomDataSource</span><span class="p">(</span><span class="n">DataSource</span><span class="p">):</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">get_samples</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return num_samples samples&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Return num_samples samples"""</span>
         
     <span class="k">def</span><span class="w"> </span><span class="nf">add_samples</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Add samples back to the data source&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Add samples back to the data source"""</span>
         
     <span class="k">def</span><span class="w"> </span><span class="nf">save</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Save state for checkpointing&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Save state for checkpointing"""</span>
         
     <span class="k">def</span><span class="w"> </span><span class="nf">load</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rollout_id</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Load state from checkpoint&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Load state from checkpoint"""</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Length of the data source. May change when samples are added/fetched.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Length of the data source. May change when samples are added/fetched."""</span>
 </pre></div>
 </div>
 </section>
@@ -1201,7 +1201,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 12, 2026.
+  Last updated on Aug 21, 2026.
   <br/>
 </p>
   </div>

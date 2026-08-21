@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Aug 12, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 21, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -600,7 +600,7 @@ The reason for not using a parameter like <code class="docutils literal notransl
 <span class="w">   </span>--kv-channels<span class="w"> </span><span class="m">128</span>
 <span class="w">   </span>--qk-layernorm
 <span class="w">   </span><span class="c1"># norm</span>
-<span class="w">   </span>--normalization<span class="w"> </span><span class="s2">&quot;RMSNorm&quot;</span>
+<span class="w">   </span>--normalization<span class="w"> </span><span class="s2">"RMSNorm"</span>
 <span class="w">   </span>--norm-epsilon<span class="w"> </span>1e-6
 <span class="w">   </span><span class="c1"># rope</span>
 <span class="w">   </span>--use-rotary-position-embeddings
@@ -692,14 +692,14 @@ The reason for not using a parameter like <code class="docutils literal notransl
 <h3>Data Format<a class="headerlink" href="#data-format" title="Link to this heading">#</a></h3>
 <p>Currently, slime only supports loading files in <code class="docutils literal notranslate"><span class="pre">.jsonl</span></code> format, where each line of the file is a JSON object. An example of a single data entry (expanded) is as follows:</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="nt">"prompt"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <span class="w">    </span><span class="p">{</span>
-<span class="w">      </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Solve the following math problem step by step. The last line of your response should be of the form Answer: \\boxed{$Answer} where $Answer is the answer to the problem.\n\nIn triangle $ABC$, $\\sin \\angle A = \\frac{4}{5}$ and $\\angle A &lt; 90^\\circ$. Let $D$ be a point outside triangle $ABC$ such that $\\angle BAD = \\angle DAC$ and $\\angle BDC = 90^\\circ$. Suppose that $AD = 1$ and that $\\frac{BD}{CD} = \\frac{3}{2}$. If $AB + AC$ can be expressed in the form $\\frac{a\\sqrt{b}}{c}$ where $a, b, c$ are pairwise relatively prime integers, find $a + b + c$.\n\nRemember to put your answer on its own line after \&quot;Answer:\&quot;.&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;step_loss_mask&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Solve the following math problem step by step. The last line of your response should be of the form Answer: \\boxed{$Answer} where $Answer is the answer to the problem.\n\nIn triangle $ABC$, $\\sin \\angle A = \\frac{4}{5}$ and $\\angle A &lt; 90^\\circ$. Let $D$ be a point outside triangle $ABC$ such that $\\angle BAD = \\angle DAC$ and $\\angle BDC = 90^\\circ$. Suppose that $AD = 1$ and that $\\frac{BD}{CD} = \\frac{3}{2}$. If $AB + AC$ can be expressed in the form $\\frac{a\\sqrt{b}}{c}$ where $a, b, c$ are pairwise relatively prime integers, find $a + b + c$.\n\nRemember to put your answer on its own line after \"Answer:\"."</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"role"</span><span class="p">:</span><span class="w"> </span><span class="s2">"user"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"step_loss_mask"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">  </span><span class="p">],</span>
-<span class="w">  </span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;34&quot;</span>
+<span class="w">  </span><span class="nt">"label"</span><span class="p">:</span><span class="w"> </span><span class="s2">"34"</span>
 <span class="p">}</span>
 </pre></div>
 </div>
@@ -713,10 +713,10 @@ The reason for not using a parameter like <code class="docutils literal notransl
 Additionally, we provide a <code class="docutils literal notranslate"><span class="pre">metadata_key</span></code>, which defaults to <code class="docutils literal notranslate"><span class="pre">&quot;metadata&quot;</span></code>. When read, slime will load the metadata from the data, which can be helpful for custom data generation or creating custom reward models.</p>
 <p>If one run mixes multiple data sources, put <code class="docutils literal notranslate"><span class="pre">source_name</span></code> in the sample metadata:</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;source_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;math&quot;</span>
+<span class="w">  </span><span class="nt">"prompt"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"label"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"metadata"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"source_name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"math"</span>
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </pre></div>
@@ -809,7 +809,7 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <li><p>By default, it uses the <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code> function from <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py">slime/rollout/sglang_rollout.py</a> for data generation. This file implements an asynchronous (asyncio) data generation flow based on SGLang and supports features like dynamic sampling and partial rollout.</p></li>
 <li><p>You can completely replace the <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code> in sglang_example.py by using the <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> parameter. You just need to ensure that the function signature passed via <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> is as follows:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">generate_rollout</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">data_source</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">RolloutFnTrainOutput</span> <span class="o">|</span> <span class="n">RolloutFnEvalOutput</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    Args:</span>
 <span class="sd">        args: the whole args</span>
 <span class="sd">        rollout_id: int, the id of the rollout, used for deterministic data generation</span>
@@ -818,7 +818,7 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <span class="sd">    </span>
 <span class="sd">    Returns:</span>
 <span class="sd">        RolloutFnTrainOutput | RolloutFnEvalOutput: the output of the rollout</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
         <span class="o">...</span>
         <span class="k">return</span> <span class="n">output</span>
 </pre></div>
@@ -851,27 +851,27 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 
     <span class="c1"># send request to router</span>
     <span class="n">output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span>
-        <span class="sa">f</span><span class="s2">&quot;http://</span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">sglang_router_ip</span><span class="si">}</span><span class="s2">:</span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">sglang_router_port</span><span class="si">}</span><span class="s2">/generate&quot;</span><span class="p">,</span>
+        <span class="sa">f</span><span class="s2">"http://</span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">sglang_router_ip</span><span class="si">}</span><span class="s2">:</span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">sglang_router_port</span><span class="si">}</span><span class="s2">/generate"</span><span class="p">,</span>
         <span class="p">{</span>
-            <span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span>
-            <span class="s2">&quot;sampling_params&quot;</span><span class="p">:</span> <span class="n">sampling_params</span><span class="p">,</span>
+            <span class="s2">"text"</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span>
+            <span class="s2">"sampling_params"</span><span class="p">:</span> <span class="n">sampling_params</span><span class="p">,</span>
         <span class="p">}</span>
     <span class="p">)</span>
 
-    <span class="n">prompt_tokens_ids</span> <span class="o">=</span> <span class="n">TOKENIZER</span><span class="p">(</span><span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="n">add_special_tokens</span><span class="o">=</span><span class="kc">False</span><span class="p">)[</span><span class="s2">&quot;input_ids&quot;</span><span class="p">]</span>
-    <span class="n">response_token_ids</span> <span class="o">=</span> <span class="n">TOKENIZER</span><span class="p">(</span><span class="n">output</span><span class="p">[</span><span class="s2">&quot;text&quot;</span><span class="p">],</span> <span class="n">add_special_tokens</span><span class="o">=</span><span class="kc">False</span><span class="p">)[</span><span class="s2">&quot;input_ids&quot;</span><span class="p">]</span>
+    <span class="n">prompt_tokens_ids</span> <span class="o">=</span> <span class="n">TOKENIZER</span><span class="p">(</span><span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="n">add_special_tokens</span><span class="o">=</span><span class="kc">False</span><span class="p">)[</span><span class="s2">"input_ids"</span><span class="p">]</span>
+    <span class="n">response_token_ids</span> <span class="o">=</span> <span class="n">TOKENIZER</span><span class="p">(</span><span class="n">output</span><span class="p">[</span><span class="s2">"text"</span><span class="p">],</span> <span class="n">add_special_tokens</span><span class="o">=</span><span class="kc">False</span><span class="p">)[</span><span class="s2">"input_ids"</span><span class="p">]</span>
 
     <span class="c1"># set sample</span>
     <span class="n">sample</span><span class="o">.</span><span class="n">tokens</span> <span class="o">=</span> <span class="n">prompt_tokens_ids</span> <span class="o">+</span> <span class="n">response_token_ids</span>
     <span class="n">sample</span><span class="o">.</span><span class="n">response_length</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">response_token_ids</span><span class="p">)</span>
-    <span class="n">finish_reason</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="s2">&quot;meta_info&quot;</span><span class="p">][</span><span class="s2">&quot;finish_reason&quot;</span><span class="p">][</span><span class="s2">&quot;type&quot;</span><span class="p">]</span>
-    <span class="k">if</span> <span class="n">finish_reason</span> <span class="o">==</span> <span class="s2">&quot;length&quot;</span><span class="p">:</span>
+    <span class="n">finish_reason</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="s2">"meta_info"</span><span class="p">][</span><span class="s2">"finish_reason"</span><span class="p">][</span><span class="s2">"type"</span><span class="p">]</span>
+    <span class="k">if</span> <span class="n">finish_reason</span> <span class="o">==</span> <span class="s2">"length"</span><span class="p">:</span>
         <span class="n">sample</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">TRUNCATED</span>
-    <span class="k">elif</span> <span class="n">finish_reason</span> <span class="o">==</span> <span class="s2">&quot;abort&quot;</span><span class="p">:</span>
+    <span class="k">elif</span> <span class="n">finish_reason</span> <span class="o">==</span> <span class="s2">"abort"</span><span class="p">:</span>
         <span class="n">sample</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">ABORTED</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="n">sample</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">COMPLETED</span>
-    <span class="n">sample</span><span class="o">.</span><span class="n">response</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="s2">&quot;text&quot;</span><span class="p">]</span>
+    <span class="n">sample</span><span class="o">.</span><span class="n">response</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="s2">"text"</span><span class="p">]</span>
 
     <span class="k">return</span> <span class="n">sample</span>
 </pre></div>
@@ -940,7 +940,7 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <section id="id1">
 <h3>Parameter Configuration<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
 <p>slime directly imports all parameters of the Megatron in the current environment by using <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">megatron.training.arguments</span> <span class="pre">import</span> <span class="pre">parse_args</span></code>. If the version of Megatron you are using has parameters defined outside of <code class="docutils literal notranslate"><span class="pre">parse_args</span></code>, you can configure them by passing them in, similar to how it’s done in <a class="reference external" href="https://github.com/THUDM/slime/blob/main/train.py">train.py</a>, for example:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
     <span class="k">try</span><span class="p">:</span>
         <span class="kn">from</span><span class="w"> </span><span class="nn">pretrain_gpt</span><span class="w"> </span><span class="kn">import</span> <span class="n">extra_args_provider</span>
     <span class="k">except</span><span class="p">:</span>
@@ -1073,7 +1073,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 12, 2026.
+  Last updated on Aug 21, 2026.
   <br/>
 </p>
   </div>

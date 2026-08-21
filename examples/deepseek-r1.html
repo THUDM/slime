@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Aug 12, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 21, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -566,25 +566,25 @@ bash<span class="w"> </span>scripts/run-deepseek-r1.sh
 </pre></div>
 </div>
 <p>On other nodes, you need to join the Ray cluster with the following command:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ray<span class="w"> </span>start<span class="w"> </span>--address<span class="o">=</span><span class="si">${</span><span class="nv">MASTER_ADDR</span><span class="si">}</span>:6379<span class="w"> </span>--num-gpus<span class="w"> </span><span class="m">8</span><span class="w"> </span>--node-ip-address<span class="w"> </span><span class="si">${</span><span class="nv">WORKER_IP</span><span class="si">}</span><span class="w"> </span>--disable-usage-stats<span class="s2">&quot;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ray<span class="w"> </span>start<span class="w"> </span>--address<span class="o">=</span><span class="si">${</span><span class="nv">MASTER_ADDR</span><span class="si">}</span>:6379<span class="w"> </span>--num-gpus<span class="w"> </span><span class="m">8</span><span class="w"> </span>--node-ip-address<span class="w"> </span><span class="si">${</span><span class="nv">WORKER_IP</span><span class="si">}</span><span class="w"> </span>--disable-usage-stats<span class="s2">"</span>
 </pre></div>
 </div>
 <p>Alternatively, if you have a list of all node IPs, for example, an MPI hostfile (where each line is <code class="docutils literal notranslate"><span class="pre">ip</span> <span class="pre">slot=8</span></code>), you can add the following commands after the <code class="docutils literal notranslate"><span class="pre">ray</span> <span class="pre">start</span> <span class="pre">--head</span></code> command in <code class="docutils literal notranslate"><span class="pre">scripts/run-deepseek-r1.sh</span></code>. This allows you to execute the training entirely from node0:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="k">for</span><span class="w"> </span>WORKER_IP<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">$(</span>awk<span class="w"> </span><span class="s1">&#39;{print $1}&#39;</span><span class="w"> </span><span class="nv">$BASE_DIR</span>/mpi_hostfile<span class="k">)</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
-<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$WORKER_IP</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MASTER_ADDR</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="k">for</span><span class="w"> </span>WORKER_IP<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">$(</span>awk<span class="w"> </span><span class="s1">'{print $1}'</span><span class="w"> </span><span class="nv">$BASE_DIR</span>/mpi_hostfile<span class="k">)</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WORKER_IP</span><span class="s2">"</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">"</span><span class="nv">$MASTER_ADDR</span><span class="s2">"</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
 <span class="w">    </span><span class="k">continue</span>
 <span class="w">  </span><span class="k">fi</span>
-<span class="w">  </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Starting Ray worker on </span><span class="si">${</span><span class="nv">WORKER_IP</span><span class="si">}</span><span class="s2">&quot;</span>
-<span class="w">  </span>ssh<span class="w"> </span>root@<span class="s2">&quot;</span><span class="si">${</span><span class="nv">WORKER_IP</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">    </span><span class="s2">&quot;pkill -9 sglang ; ray stop --force ; pkill -9 python ; ray start --address=</span><span class="si">${</span><span class="nv">MASTER_ADDR</span><span class="si">}</span><span class="s2">:6379 --num-gpus 8 --node-ip-address </span><span class="si">${</span><span class="nv">WORKER_IP</span><span class="si">}</span><span class="s2"> --disable-usage-stats&quot;</span><span class="w"> </span><span class="p">&amp;</span>
+<span class="w">  </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"Starting Ray worker on </span><span class="si">${</span><span class="nv">WORKER_IP</span><span class="si">}</span><span class="s2">"</span>
+<span class="w">  </span>ssh<span class="w"> </span>root@<span class="s2">"</span><span class="si">${</span><span class="nv">WORKER_IP</span><span class="si">}</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="s2">"pkill -9 sglang ; ray stop --force ; pkill -9 python ; ray start --address=</span><span class="si">${</span><span class="nv">MASTER_ADDR</span><span class="si">}</span><span class="s2">:6379 --num-gpus 8 --node-ip-address </span><span class="si">${</span><span class="nv">WORKER_IP</span><span class="si">}</span><span class="s2"> --disable-usage-stats"</span><span class="w"> </span><span class="p">&amp;</span>
 <span class="k">done</span>
 <span class="nb">wait</span>
 </pre></div>
 </div>
 <section id="parameter-introduction">
 <h3>Parameter Introduction<a class="headerlink" href="#parameter-introduction" title="Link to this heading">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SCRIPT_DIR</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span>--<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>dirname<span class="w"> </span>--<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">&quot;</span><span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">&amp;</span>&gt;/dev/null<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="k">)</span><span class="s2">&quot;</span>
-<span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/deepseek-v3.sh&quot;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SCRIPT_DIR</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span>--<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>dirname<span class="w"> </span>--<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="p">&amp;</span>&gt;/dev/null<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="k">)</span><span class="s2">"</span>
+<span class="nb">source</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/deepseek-v3.sh"</span>
 </pre></div>
 </div>
 <p>This reads the model’s config from <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/models/deepseek-v3.sh">scripts/models/deepseek-v3.sh</a>. These configs are all Megatron parameters. When training with Megatron, it cannot read the model config from the checkpoint, so we need to configure it ourselves. We provide some examples in <a class="reference external" href="https://github.com/THUDM/slime/tree/main/scripts/models/">scripts/models</a>.</p>
@@ -595,7 +595,7 @@ bash<span class="w"> </span>scripts/run-deepseek-r1.sh
 <span class="w">   </span>--hf-checkpoint<span class="w"> </span><span class="nv">$BASE_DIR</span>/DeepSeek-R1/
 <span class="w">   </span><span class="c1">#--hf-checkpoint $BASE_DIR/DeepSeek-R1-bf16/</span>
 <span class="w">   </span>--ref-load<span class="w"> </span><span class="nv">$BASE_DIR</span>/DeepSeek-R1_torch_dist/
-<span class="w">   </span><span class="c1"># Actor&#39;s load directory, if empty, it will read from `ref_load`</span>
+<span class="w">   </span><span class="c1"># Actor's load directory, if empty, it will read from `ref_load`</span>
 <span class="w">   </span>--load<span class="w"> </span><span class="nv">$BASE_DIR</span>/DeepSeek-R1_slime/
 <span class="w">   </span>--save<span class="w"> </span><span class="nv">$BASE_DIR</span>/DeepSeek-R1_slime/
 <span class="w">   </span>--save-interval<span class="w"> </span><span class="m">20</span>
@@ -794,7 +794,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 12, 2026.
+  Last updated on Aug 21, 2026.
   <br/>
 </p>
   </div>

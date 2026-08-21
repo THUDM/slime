@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Aug 12, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 21, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -519,33 +519,33 @@
 <p>After that, we will process the SFT data. Here, we use the classic <a class="reference external" href="https://huggingface.co/datasets/teknium/OpenHermes-2.5">OpenHermes-2.5</a> as an example. First, we process the data into a format suitable for <code class="docutils literal notranslate"><span class="pre">slime</span></code> to load. You can use the following script to add a column that conforms to the OpenAI message format and save it to <code class="docutils literal notranslate"><span class="pre">/root/openhermes2_5.parquet</span></code>.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">datasets</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_dataset</span>
 
-<span class="n">ds</span> <span class="o">=</span> <span class="n">load_dataset</span><span class="p">(</span><span class="s2">&quot;teknium/OpenHermes-2.5&quot;</span><span class="p">)[</span><span class="s2">&quot;train&quot;</span><span class="p">]</span>
+<span class="n">ds</span> <span class="o">=</span> <span class="n">load_dataset</span><span class="p">(</span><span class="s2">"teknium/OpenHermes-2.5"</span><span class="p">)[</span><span class="s2">"train"</span><span class="p">]</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">convert</span><span class="p">(</span><span class="n">sample</span><span class="p">):</span>
-    <span class="n">conversations</span> <span class="o">=</span> <span class="n">sample</span><span class="p">[</span><span class="s2">&quot;conversations&quot;</span><span class="p">]</span>
+    <span class="n">conversations</span> <span class="o">=</span> <span class="n">sample</span><span class="p">[</span><span class="s2">"conversations"</span><span class="p">]</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">convert_role</span><span class="p">(</span><span class="n">role</span><span class="p">):</span>
-        <span class="k">if</span> <span class="n">role</span> <span class="o">==</span> <span class="s2">&quot;human&quot;</span><span class="p">:</span>
-            <span class="k">return</span> <span class="s2">&quot;user&quot;</span>
-        <span class="k">elif</span> <span class="n">role</span> <span class="o">==</span> <span class="s2">&quot;gpt&quot;</span><span class="p">:</span>
-            <span class="k">return</span> <span class="s2">&quot;assistant&quot;</span>
-        <span class="k">elif</span> <span class="n">role</span> <span class="o">==</span> <span class="s2">&quot;system&quot;</span><span class="p">:</span>
-            <span class="k">return</span> <span class="s2">&quot;system&quot;</span>
+        <span class="k">if</span> <span class="n">role</span> <span class="o">==</span> <span class="s2">"human"</span><span class="p">:</span>
+            <span class="k">return</span> <span class="s2">"user"</span>
+        <span class="k">elif</span> <span class="n">role</span> <span class="o">==</span> <span class="s2">"gpt"</span><span class="p">:</span>
+            <span class="k">return</span> <span class="s2">"assistant"</span>
+        <span class="k">elif</span> <span class="n">role</span> <span class="o">==</span> <span class="s2">"system"</span><span class="p">:</span>
+            <span class="k">return</span> <span class="s2">"system"</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown role: </span><span class="si">{</span><span class="n">role</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unknown role: </span><span class="si">{</span><span class="n">role</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
     <span class="n">messages</span> <span class="o">=</span> <span class="p">[</span>
         <span class="p">{</span>
-            <span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="n">convert_role</span><span class="p">(</span><span class="n">turn</span><span class="p">[</span><span class="s2">&quot;from&quot;</span><span class="p">]),</span>
-            <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="n">turn</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">],</span>
+            <span class="s2">"role"</span><span class="p">:</span> <span class="n">convert_role</span><span class="p">(</span><span class="n">turn</span><span class="p">[</span><span class="s2">"from"</span><span class="p">]),</span>
+            <span class="s2">"content"</span><span class="p">:</span> <span class="n">turn</span><span class="p">[</span><span class="s2">"value"</span><span class="p">],</span>
         <span class="p">}</span>
         <span class="k">for</span> <span class="n">turn</span> <span class="ow">in</span> <span class="n">conversations</span>
     <span class="p">]</span>
 
-    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;messages&quot;</span><span class="p">:</span> <span class="n">messages</span><span class="p">}</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">"messages"</span><span class="p">:</span> <span class="n">messages</span><span class="p">}</span>
 
 <span class="n">ds</span> <span class="o">=</span> <span class="n">ds</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">convert</span><span class="p">)</span>
-<span class="n">ds</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span><span class="s2">&quot;/root/openhermes2_5.parquet&quot;</span><span class="p">)</span>
+<span class="n">ds</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span><span class="s2">"/root/openhermes2_5.parquet"</span><span class="p">)</span>
 </pre></div>
 </div>
 </section>
@@ -675,7 +675,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 12, 2026.
+  Last updated on Aug 21, 2026.
   <br/>
 </p>
   </div>

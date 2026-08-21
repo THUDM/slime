@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 12 日"/>
+    <meta name="docbuild:last-update" content="2026 年 08 月 21 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -652,15 +652,15 @@ bash<span class="w"> </span>scripts/run-glm4-9B.sh
 <p>我们还是以 run-glm4-9B.sh 脚本为例，简单分析主要参数的作用。</p>
 <section id="model-args">
 <h3>MODEL_ARGS: 模型配置参数<a class="headerlink" href="#model-args" title="链接到此标题。">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SCRIPT_DIR</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span>--<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>dirname<span class="w"> </span>--<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">&quot;</span><span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">&amp;</span>&gt;/dev/null<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="k">)</span><span class="s2">&quot;</span>
-<span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/glm4-9B.sh&quot;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SCRIPT_DIR</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span>--<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>dirname<span class="w"> </span>--<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="p">&amp;</span>&gt;/dev/null<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="k">)</span><span class="s2">"</span>
+<span class="nb">source</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/glm4-9B.sh"</span>
 </pre></div>
 </div>
 <p>此部分通过 <code class="docutils literal notranslate"><span class="pre">source</span></code> 命令从 <code class="docutils literal notranslate"><span class="pre">scripts/models/glm4-9B.sh</span></code> 文件中加载模型配置。这些配置均为 Megatron 所需的超参数。由于 Megatron 无法直接从检查点（checkpoint）中读取模型配置，因此需要手动指定。我们在 <code class="docutils literal notranslate"><span class="pre">scripts/models/</span></code> 目录下提供了一些常用模型的配置示例。</p>
 <blockquote>
 <div><p>⚠️ <strong>注意</strong>：
 请务必检查模型配置文件中的参数（如 <code class="docutils literal notranslate"><span class="pre">--rotary-base</span></code>）是否与您当前使用的模型完全匹配。同一模型结构的不同版本可能使用不同的配置值。如果需要修改，您可以在 <code class="docutils literal notranslate"><span class="pre">source</span></code> 之后直接覆盖，例如：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/glm4-9B.sh&quot;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/glm4-9B.sh"</span>
 <span class="nv">MODEL_ARGS</span><span class="o">+=(</span>--rotary-base<span class="w"> </span><span class="m">10000</span><span class="o">)</span>
 </pre></div>
 </div>
@@ -900,7 +900,7 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
     <span class="n">keep</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">rewards</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float</span><span class="p">)</span><span class="o">.</span><span class="n">std</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mf">0.0</span>
     <span class="k">return</span> <span class="n">DynamicFilterOutput</span><span class="p">(</span>
         <span class="n">keep</span><span class="o">=</span><span class="n">keep</span><span class="p">,</span>
-        <span class="n">reason</span><span class="o">=</span><span class="kc">None</span> <span class="k">if</span> <span class="n">keep</span> <span class="k">else</span> <span class="sa">f</span><span class="s2">&quot;zero_std_</span><span class="si">{</span><span class="nb">round</span><span class="p">(</span><span class="n">rewards</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+        <span class="n">reason</span><span class="o">=</span><span class="kc">None</span> <span class="k">if</span> <span class="n">keep</span> <span class="k">else</span> <span class="sa">f</span><span class="s2">"zero_std_</span><span class="si">{</span><span class="nb">round</span><span class="p">(</span><span class="n">rewards</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
     <span class="p">)</span>
 </pre></div>
 </div>
@@ -1007,13 +1007,13 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
 <span class="w">   </span><span class="c1"># 1. 指定预处理后的数据集文件</span>
 <span class="w">   </span>--prompt-data<span class="w"> </span>/root/nq_search/train_processed.json
 
-<span class="w">   </span><span class="c1"># 2. 将 &quot;question&quot; 列映射为输入 prompt</span>
+<span class="w">   </span><span class="c1"># 2. 将 "question" 列映射为输入 prompt</span>
 <span class="w">   </span>--input-key<span class="w"> </span>question
 
-<span class="w">   </span><span class="c1"># 3. 将 &quot;final_answer&quot; 列映射为评估标签</span>
+<span class="w">   </span><span class="c1"># 3. 将 "final_answer" 列映射为评估标签</span>
 <span class="w">   </span>--label-key<span class="w"> </span>final_answer
 
-<span class="w">   </span><span class="c1"># 4. 将预先构造好的 &quot;metadata&quot; 列加载到 Sample.metadata</span>
+<span class="w">   </span><span class="c1"># 4. 将预先构造好的 "metadata" 列加载到 Sample.metadata</span>
 <span class="w">   </span><span class="c1">#    slime 会自动将其解析为 Python 字典</span>
 <span class="w">   </span>--metadata-key<span class="w"> </span>metadata
 <span class="o">)</span>
@@ -1044,7 +1044,7 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
 <p><strong>代码示例（概念）</strong>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Sample</span><span class="p">:</span>
     <span class="c1"># ... 初始化 ...</span>
-    <span class="n">prompt</span><span class="p">,</span> <span class="n">full_response</span><span class="p">,</span> <span class="n">loss_masks</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="p">[]</span>
+    <span class="n">prompt</span><span class="p">,</span> <span class="n">full_response</span><span class="p">,</span> <span class="n">loss_masks</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="s2">""</span><span class="p">,</span> <span class="p">[]</span>
 
     <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">max_turns</span><span class="p">):</span>
         <span class="c1"># 1. 模型生成动作</span>
@@ -1055,14 +1055,14 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
 
         <span class="c1"># 2. 解析并执行动作</span>
         <span class="n">action</span><span class="p">,</span> <span class="n">content</span> <span class="o">=</span> <span class="n">parse_action</span><span class="p">(</span><span class="n">model_output</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">&quot;search&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">"search"</span><span class="p">:</span>
             <span class="c1"># 3 &amp; 4. 获取并追加观察结果</span>
             <span class="n">tool_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">google_search</span><span class="p">(</span><span class="n">content</span><span class="p">)</span>
             <span class="c1"># ... tokenization and appending ...</span>
             <span class="n">loss_masks</span> <span class="o">+=</span> <span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">tool_tokens</span><span class="p">)</span> <span class="c1"># loss_mask = 0</span>
             <span class="n">full_response</span> <span class="o">+=</span> <span class="n">tool_output</span>
 
-        <span class="k">elif</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">&quot;answer&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">"answer"</span><span class="p">:</span>
             <span class="k">break</span> <span class="c1"># 结束循环</span>
 
     <span class="c1"># 7. 填充并返回 Sample 对象</span>
@@ -1105,13 +1105,13 @@ ray<span class="w"> </span>start<span class="w"> </span>--address<span class="o"
 </pre></div>
 </div>
 <p>在 ray 集群启动后，可以在 node 0 提交任务，例如：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>--address<span class="o">=</span><span class="s2">&quot;http://127.0.0.1:8265&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--runtime-env-json<span class="o">=</span><span class="s1">&#39;{</span>
-<span class="s1">     &quot;env_vars&quot;: {</span>
-<span class="s1">        &quot;PYTHONPATH&quot;: &quot;/root/Megatron-LM/&quot;,</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>--address<span class="o">=</span><span class="s2">"http://127.0.0.1:8265"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--runtime-env-json<span class="o">=</span><span class="s1">'{</span>
+<span class="s1">     "env_vars": {</span>
+<span class="s1">        "PYTHONPATH": "/root/Megatron-LM/",</span>
 <span class="s1">        ... # e.g. no_proxy、接口变量等</span>
 <span class="s1">     }</span>
-<span class="s1">   }&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="s1">   }'</span><span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>--<span class="w"> </span>python3<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>--...（其他<span class="w"> </span>Megatron/SGLang/slime<span class="w"> </span>参数）
 </pre></div>
@@ -1247,7 +1247,7 @@ ray<span class="w"> </span>start<span class="w"> </span>--address<span class="o"
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 12 日.
+  最后更新于 2026 年 08 月 21 日.
   <br/>
 </p>
   </div>

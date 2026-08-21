@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 12 日"/>
+    <meta name="docbuild:last-update" content="2026 年 08 月 21 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -594,17 +594,17 @@
 <li><p><strong>其他非 Linear 的 2D 权重</strong></p>
 <p>类似问题可能出现在任何不是真正 Linear 层的 2D <code class="docutils literal notranslate"><span class="pre">.weight</span></code> tensor 上，例如 <code class="docutils literal notranslate"><span class="pre">model.embed_tokens.weight</span></code>。务必检查 ignore list 覆盖了所有非 Linear 权重。</p>
 <p><strong>推荐的 ignore 配置</strong>（以 GLM 系 MoE 模型为例）：</p>
-<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="nt">&quot;ignore&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<span class="w">  </span><span class="s2">&quot;lm_head&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="s2">&quot;model.embed_tokens.weight&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="s2">&quot;re:.*self_attn.*&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.shared_experts.*&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.gate_up_proj.*&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.gate_proj.*&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.up_proj.*&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.down_proj.*&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="s2">&quot;re:.*eh_proj.*&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.gate\\..*&quot;</span>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="nt">"ignore"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="s2">"lm_head"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"model.embed_tokens.weight"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"re:.*self_attn.*"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"re:.*mlp\\.shared_experts.*"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"re:.*mlp\\.gate_up_proj.*"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"re:.*mlp\\.gate_proj.*"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"re:.*mlp\\.up_proj.*"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"re:.*mlp\\.down_proj.*"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"re:.*eh_proj.*"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"re:.*mlp\\.gate\\..*"</span>
 <span class="p">]</span>
 </pre></div>
 </div>
@@ -653,21 +653,21 @@
 <li><p>在启动脚本中启用 <code class="docutils literal notranslate"><span class="pre">RAY_DEBUG_POSTMORTEM</span></code>：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">RAY_DEBUG_POSTMORTEM</span><span class="o">=</span><span class="m">1</span>
 
-<span class="nv">RUNTIME_ENV_JSON</span><span class="o">=</span><span class="s2">&quot;{</span>
-<span class="s2">  \&quot;env_vars\&quot;: {</span>
+<span class="nv">RUNTIME_ENV_JSON</span><span class="o">=</span><span class="s2">"{</span>
+<span class="s2">  \"env_vars\": {</span>
 <span class="s2">    ...</span>
-<span class="s2">    \&quot;RAY_DEBUG_POSTMORTEM\&quot;: \&quot;</span><span class="si">${</span><span class="nv">RAY_DEBUG_POSTMORTEM</span><span class="k">:-</span><span class="nv">0</span><span class="si">}</span><span class="s2">\&quot;</span>
+<span class="s2">    \"RAY_DEBUG_POSTMORTEM\": \"</span><span class="si">${</span><span class="nv">RAY_DEBUG_POSTMORTEM</span><span class="k">:-</span><span class="nv">0</span><span class="si">}</span><span class="s2">\"</span>
 <span class="s2">  }</span>
-<span class="s2">}&quot;</span>
+<span class="s2">}"</span>
 
-ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>--address<span class="o">=</span><span class="s2">&quot;http://127.0.0.1:8265&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--runtime-env-json<span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">RUNTIME_ENV_JSON</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>--address<span class="o">=</span><span class="s2">"http://127.0.0.1:8265"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--runtime-env-json<span class="o">=</span><span class="s2">"</span><span class="si">${</span><span class="nv">RUNTIME_ENV_JSON</span><span class="si">}</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>--<span class="w"> </span>python3<span class="w"> </span>train.py<span class="w"> </span><span class="o">[</span>args...<span class="o">]</span>
 </pre></div>
 </div>
 </li>
 <li><p>在 <code class="docutils literal notranslate"><span class="pre">train.py</span></code> 中的 <code class="docutils literal notranslate"><span class="pre">breakpoint()</span></code> 前添加 <code class="docutils literal notranslate"><span class="pre">ray.init()</span></code>：</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
     <span class="n">ray</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
     <span class="nb">breakpoint</span><span class="p">()</span>
     <span class="n">args</span> <span class="o">=</span> <span class="n">parse_args</span><span class="p">()</span>
@@ -771,7 +771,7 @@ ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </s
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 12 日.
+  最后更新于 2026 年 08 月 21 日.
   <br/>
 </p>
   </div>

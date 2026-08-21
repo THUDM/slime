@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Aug 12, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 21, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -782,15 +782,15 @@
 
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">my_generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">):</span>
     <span class="c1"># Route to the actor model (default)</span>
-    <span class="n">actor_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;actor&quot;</span><span class="p">,</span> <span class="s2">&quot;/generate&quot;</span><span class="p">)</span>
-    <span class="n">output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">actor_url</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="s2">&quot;sampling_params&quot;</span><span class="p">:</span> <span class="n">sampling_params</span><span class="p">})</span>
+    <span class="n">actor_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">"actor"</span><span class="p">,</span> <span class="s2">"/generate"</span><span class="p">)</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">actor_url</span><span class="p">,</span> <span class="p">{</span><span class="s2">"text"</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="s2">"sampling_params"</span><span class="p">:</span> <span class="n">sampling_params</span><span class="p">})</span>
     
     <span class="c1"># Route to the reference model</span>
-    <span class="n">ref_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;ref&quot;</span><span class="p">,</span> <span class="s2">&quot;/generate&quot;</span><span class="p">)</span>
-    <span class="n">ref_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">ref_url</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="s2">&quot;sampling_params&quot;</span><span class="p">:</span> <span class="n">sampling_params</span><span class="p">})</span>
+    <span class="n">ref_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">"ref"</span><span class="p">,</span> <span class="s2">"/generate"</span><span class="p">)</span>
+    <span class="n">ref_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">ref_url</span><span class="p">,</span> <span class="p">{</span><span class="s2">"text"</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="s2">"sampling_params"</span><span class="p">:</span> <span class="n">sampling_params</span><span class="p">})</span>
     
     <span class="c1"># Route to the reward model (e.g., OpenAI-compatible API)</span>
-    <span class="n">reward_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;reward&quot;</span><span class="p">,</span> <span class="s2">&quot;/v1/chat/completions&quot;</span><span class="p">)</span>
+    <span class="n">reward_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">"reward"</span><span class="p">,</span> <span class="s2">"/v1/chat/completions"</span><span class="p">)</span>
     <span class="n">reward_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">reward_url</span><span class="p">,</span> <span class="p">{</span><span class="o">...</span><span class="p">})</span>
     
     <span class="o">...</span>
@@ -1006,29 +1006,29 @@ to it.</p>
 <span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.http_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">post</span>
 
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate_with_models</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Generate using actor, score with reward model, compare with reference.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Generate using actor, score with reward model, compare with reference."""</span>
     
     <span class="c1"># Generate from actor</span>
-    <span class="n">actor_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;actor&quot;</span><span class="p">,</span> <span class="s2">&quot;/generate&quot;</span><span class="p">)</span>
+    <span class="n">actor_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">"actor"</span><span class="p">,</span> <span class="s2">"/generate"</span><span class="p">)</span>
     <span class="n">actor_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">actor_url</span><span class="p">,</span> <span class="p">{</span>
-        <span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span>
-        <span class="s2">&quot;sampling_params&quot;</span><span class="p">:</span> <span class="n">sampling_params</span><span class="p">,</span>
-        <span class="s2">&quot;return_logprob&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="s2">"text"</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span>
+        <span class="s2">"sampling_params"</span><span class="p">:</span> <span class="n">sampling_params</span><span class="p">,</span>
+        <span class="s2">"return_logprob"</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
     <span class="p">})</span>
     
     <span class="c1"># Get reference logprobs for KL penalty</span>
-    <span class="n">ref_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;ref&quot;</span><span class="p">,</span> <span class="s2">&quot;/generate&quot;</span><span class="p">)</span>
+    <span class="n">ref_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">"ref"</span><span class="p">,</span> <span class="s2">"/generate"</span><span class="p">)</span>
     <span class="n">ref_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">ref_url</span><span class="p">,</span> <span class="p">{</span>
-        <span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span> <span class="o">+</span> <span class="n">actor_output</span><span class="p">[</span><span class="s2">&quot;text&quot;</span><span class="p">],</span>
-        <span class="s2">&quot;sampling_params&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;max_new_tokens&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;temperature&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">},</span>
-        <span class="s2">&quot;return_logprob&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="s2">"text"</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span> <span class="o">+</span> <span class="n">actor_output</span><span class="p">[</span><span class="s2">"text"</span><span class="p">],</span>
+        <span class="s2">"sampling_params"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"max_new_tokens"</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">"temperature"</span><span class="p">:</span> <span class="mi">0</span><span class="p">},</span>
+        <span class="s2">"return_logprob"</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
     <span class="p">})</span>
     
     <span class="c1"># Score with reward model</span>
-    <span class="n">reward_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;reward&quot;</span><span class="p">,</span> <span class="s2">&quot;/v1/chat/completions&quot;</span><span class="p">)</span>
+    <span class="n">reward_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">"reward"</span><span class="p">,</span> <span class="s2">"/v1/chat/completions"</span><span class="p">)</span>
     <span class="n">reward_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">reward_url</span><span class="p">,</span> <span class="p">{</span>
-        <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;reward&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;messages&quot;</span><span class="p">:</span> <span class="p">[{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span> <span class="o">+</span> <span class="n">actor_output</span><span class="p">[</span><span class="s2">&quot;text&quot;</span><span class="p">]}],</span>
+        <span class="s2">"model"</span><span class="p">:</span> <span class="s2">"reward"</span><span class="p">,</span>
+        <span class="s2">"messages"</span><span class="p">:</span> <span class="p">[{</span><span class="s2">"role"</span><span class="p">:</span> <span class="s2">"user"</span><span class="p">,</span> <span class="s2">"content"</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span> <span class="o">+</span> <span class="n">actor_output</span><span class="p">[</span><span class="s2">"text"</span><span class="p">]}],</span>
     <span class="p">})</span>
     
     <span class="c1"># ... process outputs and return Sample</span>
@@ -1182,7 +1182,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 12, 2026.
+  Last updated on Aug 21, 2026.
   <br/>
 </p>
   </div>

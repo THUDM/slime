@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 12 日"/>
+    <meta name="docbuild:last-update" content="2026 年 08 月 21 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -551,7 +551,7 @@
 </section>
 <section id="id3">
 <h2>给自定义代码打点<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
-<p>在自定义 rollout 或 reward 逻辑中——包括 agentic workflow 里的 agent step、tool call、sandbox 执行、verifier 调用等——可以直接复用 <code class="docutils literal notranslate"><span class="pre">slime.utils.trace_utils</span></code> 里的工具：</p>
+<p>在自定义 rollout 或 reward 逻辑中——包括 agentic workflow 里的 agent step、tool call、sandbox 执行、verifier 调用等——可以直接复用 <code class="docutils literal notranslate"><span class="pre">slime.observability.trace_utils</span></code> 里的工具：</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">trace_span(target,</span> <span class="pre">name,</span> <span class="pre">attrs=...)</span></code>：记录一段持续时间。</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">trace_event(target,</span> <span class="pre">name,</span> <span class="pre">attrs=...)</span></code>：记录一个瞬时事件。</p></li>
@@ -563,18 +563,18 @@
 <p>如果你只想给函数内部的一小段逻辑打点，或者需要在代码块执行过程中补充 span 结束属性，就用 <code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code>。</p>
 <p>如果整个函数调用都应该对应一个 span，就用 <code class="docutils literal notranslate"><span class="pre">trace_function(...)</span></code>。它本质上会先解析 trace target，然后在函数调用外层自动套一层 <code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code>，因此同步函数和异步函数都能直接用。</p>
 <p>slime 主 rollout 流程里就是这样用的。例如 <code class="docutils literal notranslate"><span class="pre">generate_and_rm(...)</span></code> 按 sample 打点，而 <code class="docutils literal notranslate"><span class="pre">generate_and_rm_group(...)</span></code> 按 group 打点：</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.trace_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">trace_function</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.observability.trace_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">trace_function</span>
 
 
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;generate_and_rm&quot;</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="s2">&quot;sample&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"generate_and_rm"</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="s2">"sample"</span><span class="p">)</span>
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate_and_rm</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
     <span class="o">...</span>
 
 
 <span class="nd">@trace_function</span><span class="p">(</span>
-    <span class="s2">&quot;generate_and_rm_group&quot;</span><span class="p">,</span>
-    <span class="n">target</span><span class="o">=</span><span class="s2">&quot;group&quot;</span><span class="p">,</span>
-    <span class="n">attrs_getter</span><span class="o">=</span><span class="k">lambda</span> <span class="n">args</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;group_size&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">group</span><span class="p">)},</span>
+    <span class="s2">"generate_and_rm_group"</span><span class="p">,</span>
+    <span class="n">target</span><span class="o">=</span><span class="s2">"group"</span><span class="p">,</span>
+    <span class="n">attrs_getter</span><span class="o">=</span><span class="k">lambda</span> <span class="n">args</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">:</span> <span class="p">{</span><span class="s2">"group_size"</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">group</span><span class="p">)},</span>
 <span class="p">)</span>
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate_and_rm_group</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
     <span class="o">...</span>
@@ -594,9 +594,9 @@
 <h3>给 decorator span 增加属性<a class="headerlink" href="#decorator-span" title="链接到此标题。">#</a></h3>
 <p>如果想在 span 开始时附带属性，可以用 <code class="docutils literal notranslate"><span class="pre">attrs_getter=...</span></code>：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@trace_function</span><span class="p">(</span>
-    <span class="s2">&quot;custom_rollout_batch&quot;</span><span class="p">,</span>
-    <span class="n">target</span><span class="o">=</span><span class="s2">&quot;samples&quot;</span><span class="p">,</span>
-    <span class="n">attrs_getter</span><span class="o">=</span><span class="k">lambda</span> <span class="n">samples</span><span class="p">,</span> <span class="o">**</span><span class="n">_</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;batch_size&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">samples</span><span class="p">)},</span>
+    <span class="s2">"custom_rollout_batch"</span><span class="p">,</span>
+    <span class="n">target</span><span class="o">=</span><span class="s2">"samples"</span><span class="p">,</span>
+    <span class="n">attrs_getter</span><span class="o">=</span><span class="k">lambda</span> <span class="n">samples</span><span class="p">,</span> <span class="o">**</span><span class="n">_</span><span class="p">:</span> <span class="p">{</span><span class="s2">"batch_size"</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">samples</span><span class="p">)},</span>
 <span class="p">)</span>
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">custom_rollout_batch</span><span class="p">(</span><span class="n">samples</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
     <span class="o">...</span>
@@ -608,11 +608,11 @@
 <li><p>内层用 <code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code> 标记 generation、RM、filter、post-process 等关键子步骤</p></li>
 </ul>
 <p>如果想统一记录 SGLang 返回的 generation 元信息，可以复用 <code class="docutils literal notranslate"><span class="pre">build_sglang_meta_trace_attrs</span></code>：</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.trace_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_sglang_meta_trace_attrs</span><span class="p">,</span> <span class="n">trace_span</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.observability.trace_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_sglang_meta_trace_attrs</span><span class="p">,</span> <span class="n">trace_span</span>
 
-<span class="k">with</span> <span class="n">trace_span</span><span class="p">(</span><span class="n">sample</span><span class="p">,</span> <span class="s2">&quot;sglang_generate&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">span</span><span class="p">:</span>
+<span class="k">with</span> <span class="n">trace_span</span><span class="p">(</span><span class="n">sample</span><span class="p">,</span> <span class="s2">"sglang_generate"</span><span class="p">)</span> <span class="k">as</span> <span class="n">span</span><span class="p">:</span>
     <span class="n">output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">payload</span><span class="p">)</span>
-    <span class="n">span</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">build_sglang_meta_trace_attrs</span><span class="p">(</span><span class="n">output</span><span class="p">[</span><span class="s2">&quot;meta_info&quot;</span><span class="p">]))</span>
+    <span class="n">span</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">build_sglang_meta_trace_attrs</span><span class="p">(</span><span class="n">output</span><span class="p">[</span><span class="s2">"meta_info"</span><span class="p">]))</span>
 </pre></div>
 </div>
 </section>
@@ -717,7 +717,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 12 日.
+  最后更新于 2026 年 08 月 21 日.
   <br/>
 </p>
   </div>

@@ -57,7 +57,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 12 日"/>
+    <meta name="docbuild:last-update" content="2026 年 08 月 21 日"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -543,23 +543,23 @@
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">datasets</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_dataset</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
 
-<span class="n">ds</span> <span class="o">=</span> <span class="n">load_dataset</span><span class="p">(</span><span class="s2">&quot;chenhegu/geo3k_imgurl&quot;</span><span class="p">,</span> <span class="n">split</span><span class="o">=</span><span class="s2">&quot;train&quot;</span><span class="p">)</span>
+<span class="n">ds</span> <span class="o">=</span> <span class="n">load_dataset</span><span class="p">(</span><span class="s2">"chenhegu/geo3k_imgurl"</span><span class="p">,</span> <span class="n">split</span><span class="o">=</span><span class="s2">"train"</span><span class="p">)</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">format_answer</span><span class="p">(</span><span class="n">answer</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Format answer to include \\boxed{} format.&quot;&quot;&quot;</span>
-    <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Answer: </span><span class="se">\\</span><span class="s2">boxed</span><span class="se">{{</span><span class="si">{</span><span class="n">answer</span><span class="si">}</span><span class="se">}}</span><span class="s2">&quot;</span>
+<span class="w">    </span><span class="sd">"""Format answer to include \\boxed{} format."""</span>
+    <span class="k">return</span> <span class="sa">f</span><span class="s2">"Answer: </span><span class="se">\\</span><span class="s2">boxed</span><span class="se">{{</span><span class="si">{</span><span class="n">answer</span><span class="si">}</span><span class="se">}}</span><span class="s2">"</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">process_sample</span><span class="p">(</span><span class="n">sample</span><span class="p">):</span>
-    <span class="n">formatted_answer</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;Answer: </span><span class="se">\\</span><span class="s2">boxed</span><span class="se">{{</span><span class="si">{</span><span class="n">sample</span><span class="p">[</span><span class="s1">&#39;answer&#39;</span><span class="p">]</span><span class="si">}</span><span class="se">}}</span><span class="s2">&quot;</span>
+    <span class="n">formatted_answer</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"Answer: </span><span class="se">\\</span><span class="s2">boxed</span><span class="se">{{</span><span class="si">{</span><span class="n">sample</span><span class="p">[</span><span class="s1">'answer'</span><span class="p">]</span><span class="si">}</span><span class="se">}}</span><span class="s2">"</span>
     
-    <span class="n">sample</span><span class="p">[</span><span class="s2">&quot;messages&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span>
-        <span class="p">{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="p">[</span><span class="s2">&quot;problem&quot;</span><span class="p">]},</span>
-        <span class="p">{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;assistant&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="n">formatted_answer</span><span class="p">}</span>
+    <span class="n">sample</span><span class="p">[</span><span class="s2">"messages"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="p">{</span><span class="s2">"role"</span><span class="p">:</span> <span class="s2">"user"</span><span class="p">,</span> <span class="s2">"content"</span><span class="p">:</span> <span class="n">sample</span><span class="p">[</span><span class="s2">"problem"</span><span class="p">]},</span>
+        <span class="p">{</span><span class="s2">"role"</span><span class="p">:</span> <span class="s2">"assistant"</span><span class="p">,</span> <span class="s2">"content"</span><span class="p">:</span> <span class="n">formatted_answer</span><span class="p">}</span>
     <span class="p">]</span>
     <span class="k">return</span> <span class="n">sample</span>
 
 <span class="n">ds</span> <span class="o">=</span> <span class="n">ds</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">process_sample</span><span class="p">)</span>
-<span class="n">ds</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span><span class="s2">&quot;/root/datasets/geo3k_imgurl/train_formatted.parquet&quot;</span><span class="p">)</span>
+<span class="n">ds</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span><span class="s2">"/root/datasets/geo3k_imgurl/train_formatted.parquet"</span><span class="p">)</span>
 </pre></div>
 </div>
 </section>
@@ -703,7 +703,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 12 日.
+  最后更新于 2026 年 08 月 21 日.
   <br/>
 </p>
   </div>

@@ -57,7 +57,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 12 日"/>
+    <meta name="docbuild:last-update" content="2026 年 08 月 21 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -548,8 +548,8 @@ Go to the flash-linear-attention folder you just installed, and apply the follow
 <span class="w"> </span>        b_db += tl.sum(b_dkb * b_k, 1)
 <span class="gd">-        b_dk += tl.dot(tl.trans(b_dA), b_kb)</span>
 <span class="gi">+        b_dk += tl.inline_asm_elementwise(</span>
-<span class="gi">+            asm=&quot;mov.f32 $0, $1;&quot;,</span>
-<span class="gi">+            constraints=&quot;=r,r&quot;,</span>
+<span class="gi">+            asm="mov.f32 $0, $1;",</span>
+<span class="gi">+            constraints="=r,r",</span>
 <span class="gi">+            args=[tl.dot(tl.trans(b_dA), b_kb)],</span>
 <span class="gi">+            dtype=tl.float32,</span>
 <span class="gi">+            is_pure=True,</span>
@@ -657,7 +657,7 @@ bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B.sh<span class="w"> </
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 12 日.
+  最后更新于 2026 年 08 月 21 日.
   <br/>
 </p>
   </div>

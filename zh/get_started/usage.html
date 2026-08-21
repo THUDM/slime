@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 12 日"/>
+    <meta name="docbuild:last-update" content="2026 年 08 月 21 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -597,7 +597,7 @@
 <span class="w">   </span>--kv-channels<span class="w"> </span><span class="m">128</span>
 <span class="w">   </span>--qk-layernorm
 <span class="w">   </span><span class="c1"># norm</span>
-<span class="w">   </span>--normalization<span class="w"> </span><span class="s2">&quot;RMSNorm&quot;</span>
+<span class="w">   </span>--normalization<span class="w"> </span><span class="s2">"RMSNorm"</span>
 <span class="w">   </span>--norm-epsilon<span class="w"> </span>1e-6
 <span class="w">   </span><span class="c1"># rope</span>
 <span class="w">   </span>--use-rotary-position-embeddings
@@ -689,14 +689,14 @@
 <h3>数据格式<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h3>
 <p>目前 slime 只支持加载 <code class="docutils literal notranslate"><span class="pre">.jsonl</span></code> 格式文件，即文件的每一行都是一个 json，一行数据的样例（展开后）为：</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="nt">"prompt"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <span class="w">    </span><span class="p">{</span>
-<span class="w">      </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Solve the following math problem step by step. The last line of your response should be of the form Answer: \\boxed{$Answer} where $Answer is the answer to the problem.\n\nIn triangle $ABC$, $\\sin \\angle A = \\frac{4}{5}$ and $\\angle A &lt; 90^\\circ$. Let $D$ be a point outside triangle $ABC$ such that $\\angle BAD = \\angle DAC$ and $\\angle BDC = 90^\\circ$. Suppose that $AD = 1$ and that $\\frac{BD}{CD} = \\frac{3}{2}$. If $AB + AC$ can be expressed in the form $\\frac{a\\sqrt{b}}{c}$ where $a, b, c$ are pairwise relatively prime integers, find $a + b + c$.\n\nRemember to put your answer on its own line after \&quot;Answer:\&quot;.&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;step_loss_mask&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Solve the following math problem step by step. The last line of your response should be of the form Answer: \\boxed{$Answer} where $Answer is the answer to the problem.\n\nIn triangle $ABC$, $\\sin \\angle A = \\frac{4}{5}$ and $\\angle A &lt; 90^\\circ$. Let $D$ be a point outside triangle $ABC$ such that $\\angle BAD = \\angle DAC$ and $\\angle BDC = 90^\\circ$. Suppose that $AD = 1$ and that $\\frac{BD}{CD} = \\frac{3}{2}$. If $AB + AC$ can be expressed in the form $\\frac{a\\sqrt{b}}{c}$ where $a, b, c$ are pairwise relatively prime integers, find $a + b + c$.\n\nRemember to put your answer on its own line after \"Answer:\"."</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"role"</span><span class="p">:</span><span class="w"> </span><span class="s2">"user"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"step_loss_mask"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">  </span><span class="p">],</span>
-<span class="w">  </span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;34&quot;</span>
+<span class="w">  </span><span class="nt">"label"</span><span class="p">:</span><span class="w"> </span><span class="s2">"34"</span>
 <span class="p">}</span>
 </pre></div>
 </div>
@@ -710,10 +710,10 @@
 另外我们还提供了一个 metadata_key，默认为 <code class="docutils literal notranslate"><span class="pre">&quot;metadata&quot;</span></code>，读取后我们会把数据中的 metadata 加载进 slime，可能会对自定义数据生成或者自定义 reward model 有帮助。</p>
 <p>如果同一次训练混合了多个数据 source，可以在 metadata 中写入 <code class="docutils literal notranslate"><span class="pre">source_name</span></code>：</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;metadata&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;source_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;math&quot;</span>
+<span class="w">  </span><span class="nt">"prompt"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"label"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"metadata"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"source_name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"math"</span>
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </pre></div>
@@ -806,7 +806,7 @@
 <li><p>默认会使用 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py">slime/rollout/sglang_rollout.py</a> 中的 <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code> 函数进行数据生成。这个文件中实现了基于 sglang 的异步（asyncio）数据生成流程，并支持了例如 dynamic sampling，partial rollout 等功能；</p></li>
 <li><p>可以通过 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> 参数，完全替换 sglang_rollout.py 中的 <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code>，只需要保证 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> 传入的函数签名满足：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">generate_rollout</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">data_source</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">RolloutFnTrainOutput</span> <span class="o">|</span> <span class="n">RolloutFnEvalOutput</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    Args:</span>
 <span class="sd">        args: the whole args</span>
 <span class="sd">        rollout_id: int, the id of the rollout, used for deterministic data generation</span>
@@ -815,7 +815,7 @@
 <span class="sd">    </span>
 <span class="sd">    Returns:</span>
 <span class="sd">        RolloutFnTrainOutput | RolloutFnEvalOutput: the output of the rollout</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
         <span class="o">...</span>
         <span class="k">return</span> <span class="n">output</span>
 </pre></div>
@@ -848,27 +848,27 @@
 
     <span class="c1"># send request to router</span>
     <span class="n">output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span>
-        <span class="sa">f</span><span class="s2">&quot;http://</span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">sglang_router_ip</span><span class="si">}</span><span class="s2">:</span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">sglang_router_port</span><span class="si">}</span><span class="s2">/generate&quot;</span><span class="p">,</span>
+        <span class="sa">f</span><span class="s2">"http://</span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">sglang_router_ip</span><span class="si">}</span><span class="s2">:</span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">sglang_router_port</span><span class="si">}</span><span class="s2">/generate"</span><span class="p">,</span>
         <span class="p">{</span>
-            <span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span>
-            <span class="s2">&quot;sampling_params&quot;</span><span class="p">:</span> <span class="n">sampling_params</span><span class="p">,</span>
+            <span class="s2">"text"</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span>
+            <span class="s2">"sampling_params"</span><span class="p">:</span> <span class="n">sampling_params</span><span class="p">,</span>
         <span class="p">}</span>
     <span class="p">)</span>
 
-    <span class="n">prompt_tokens_ids</span> <span class="o">=</span> <span class="n">TOKENIZER</span><span class="p">(</span><span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="n">add_special_tokens</span><span class="o">=</span><span class="kc">False</span><span class="p">)[</span><span class="s2">&quot;input_ids&quot;</span><span class="p">]</span>
-    <span class="n">response_token_ids</span> <span class="o">=</span> <span class="n">TOKENIZER</span><span class="p">(</span><span class="n">output</span><span class="p">[</span><span class="s2">&quot;text&quot;</span><span class="p">],</span> <span class="n">add_special_tokens</span><span class="o">=</span><span class="kc">False</span><span class="p">)[</span><span class="s2">&quot;input_ids&quot;</span><span class="p">]</span>
+    <span class="n">prompt_tokens_ids</span> <span class="o">=</span> <span class="n">TOKENIZER</span><span class="p">(</span><span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="n">add_special_tokens</span><span class="o">=</span><span class="kc">False</span><span class="p">)[</span><span class="s2">"input_ids"</span><span class="p">]</span>
+    <span class="n">response_token_ids</span> <span class="o">=</span> <span class="n">TOKENIZER</span><span class="p">(</span><span class="n">output</span><span class="p">[</span><span class="s2">"text"</span><span class="p">],</span> <span class="n">add_special_tokens</span><span class="o">=</span><span class="kc">False</span><span class="p">)[</span><span class="s2">"input_ids"</span><span class="p">]</span>
 
     <span class="c1"># set sample</span>
     <span class="n">sample</span><span class="o">.</span><span class="n">tokens</span> <span class="o">=</span> <span class="n">prompt_tokens_ids</span> <span class="o">+</span> <span class="n">response_token_ids</span>
     <span class="n">sample</span><span class="o">.</span><span class="n">response_length</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">response_token_ids</span><span class="p">)</span>
-    <span class="n">finish_reason</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="s2">&quot;meta_info&quot;</span><span class="p">][</span><span class="s2">&quot;finish_reason&quot;</span><span class="p">][</span><span class="s2">&quot;type&quot;</span><span class="p">]</span>
-    <span class="k">if</span> <span class="n">finish_reason</span> <span class="o">==</span> <span class="s2">&quot;length&quot;</span><span class="p">:</span>
+    <span class="n">finish_reason</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="s2">"meta_info"</span><span class="p">][</span><span class="s2">"finish_reason"</span><span class="p">][</span><span class="s2">"type"</span><span class="p">]</span>
+    <span class="k">if</span> <span class="n">finish_reason</span> <span class="o">==</span> <span class="s2">"length"</span><span class="p">:</span>
         <span class="n">sample</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">TRUNCATED</span>
-    <span class="k">elif</span> <span class="n">finish_reason</span> <span class="o">==</span> <span class="s2">&quot;abort&quot;</span><span class="p">:</span>
+    <span class="k">elif</span> <span class="n">finish_reason</span> <span class="o">==</span> <span class="s2">"abort"</span><span class="p">:</span>
         <span class="n">sample</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">ABORTED</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="n">sample</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">COMPLETED</span>
-    <span class="n">sample</span><span class="o">.</span><span class="n">response</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="s2">&quot;text&quot;</span><span class="p">]</span>
+    <span class="n">sample</span><span class="o">.</span><span class="n">response</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="s2">"text"</span><span class="p">]</span>
 
     <span class="k">return</span> <span class="n">sample</span>
 </pre></div>
@@ -937,7 +937,7 @@
 <section id="id10">
 <h3>参数配置<a class="headerlink" href="#id10" title="链接到此标题。">#</a></h3>
 <p>slime 通过直接引入 <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">megatron.training.arguments</span> <span class="pre">import</span> <span class="pre">parse_args</span></code> 引入了当前环境中 megatron 的所有参数。如果当前使用的 megatron 有在 <code class="docutils literal notranslate"><span class="pre">parse_args</span></code> 之外的参数，可以通过像 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/train.py">train.py</a> 中传入参数来进行配置，例如：</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
     <span class="k">try</span><span class="p">:</span>
         <span class="kn">from</span><span class="w"> </span><span class="nn">pretrain_gpt</span><span class="w"> </span><span class="kn">import</span> <span class="n">extra_args_provider</span>
     <span class="k">except</span><span class="p">:</span>
@@ -1070,7 +1070,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 12 日.
+  最后更新于 2026 年 08 月 21 日.
   <br/>
 </p>
   </div>

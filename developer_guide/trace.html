@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Aug 12, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 21, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -555,7 +555,7 @@
 </section>
 <section id="instrument-custom-code">
 <h2>Instrument custom code<a class="headerlink" href="#instrument-custom-code" title="Link to this heading">#</a></h2>
-<p>For custom rollout or reward code — including custom agent steps, tool calls, sandbox execution, and verifier calls in agentic workflows — reuse helpers from <code class="docutils literal notranslate"><span class="pre">slime.utils.trace_utils</span></code>:</p>
+<p>For custom rollout or reward code — including custom agent steps, tool calls, sandbox execution, and verifier calls in agentic workflows — reuse helpers from <code class="docutils literal notranslate"><span class="pre">slime.observability.trace_utils</span></code>:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">trace_span(target,</span> <span class="pre">name,</span> <span class="pre">attrs=...)</span></code>: record a duration span.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">trace_event(target,</span> <span class="pre">name,</span> <span class="pre">attrs=...)</span></code>: record an instant event.</p></li>
@@ -567,18 +567,18 @@
 <p>Use <code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code> when you only want to trace part of a function body, or when you need to update end-of-span attrs from inside the block.</p>
 <p>Use <code class="docutils literal notranslate"><span class="pre">trace_function(...)</span></code> when the whole function should be represented as one span. Internally it resolves the trace target and then opens a <code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code> around the function call, so it works for both sync and async functions.</p>
 <p>The decorator is what slime uses for the main rollout pipeline. For example, <code class="docutils literal notranslate"><span class="pre">generate_and_rm(...)</span></code> is traced per sample and <code class="docutils literal notranslate"><span class="pre">generate_and_rm_group(...)</span></code> is traced per sample group:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.trace_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">trace_function</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.observability.trace_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">trace_function</span>
 
 
-<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;generate_and_rm&quot;</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="s2">&quot;sample&quot;</span><span class="p">)</span>
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">"generate_and_rm"</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="s2">"sample"</span><span class="p">)</span>
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate_and_rm</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
     <span class="o">...</span>
 
 
 <span class="nd">@trace_function</span><span class="p">(</span>
-    <span class="s2">&quot;generate_and_rm_group&quot;</span><span class="p">,</span>
-    <span class="n">target</span><span class="o">=</span><span class="s2">&quot;group&quot;</span><span class="p">,</span>
-    <span class="n">attrs_getter</span><span class="o">=</span><span class="k">lambda</span> <span class="n">args</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;group_size&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">group</span><span class="p">)},</span>
+    <span class="s2">"generate_and_rm_group"</span><span class="p">,</span>
+    <span class="n">target</span><span class="o">=</span><span class="s2">"group"</span><span class="p">,</span>
+    <span class="n">attrs_getter</span><span class="o">=</span><span class="k">lambda</span> <span class="n">args</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">:</span> <span class="p">{</span><span class="s2">"group_size"</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">group</span><span class="p">)},</span>
 <span class="p">)</span>
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate_and_rm_group</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
     <span class="o">...</span>
@@ -598,9 +598,9 @@
 <h3>Recording attrs on decorated functions<a class="headerlink" href="#recording-attrs-on-decorated-functions" title="Link to this heading">#</a></h3>
 <p>If you want to attach attributes at span start, use <code class="docutils literal notranslate"><span class="pre">attrs_getter=...</span></code>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@trace_function</span><span class="p">(</span>
-    <span class="s2">&quot;custom_rollout_batch&quot;</span><span class="p">,</span>
-    <span class="n">target</span><span class="o">=</span><span class="s2">&quot;samples&quot;</span><span class="p">,</span>
-    <span class="n">attrs_getter</span><span class="o">=</span><span class="k">lambda</span> <span class="n">samples</span><span class="p">,</span> <span class="o">**</span><span class="n">_</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;batch_size&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">samples</span><span class="p">)},</span>
+    <span class="s2">"custom_rollout_batch"</span><span class="p">,</span>
+    <span class="n">target</span><span class="o">=</span><span class="s2">"samples"</span><span class="p">,</span>
+    <span class="n">attrs_getter</span><span class="o">=</span><span class="k">lambda</span> <span class="n">samples</span><span class="p">,</span> <span class="o">**</span><span class="n">_</span><span class="p">:</span> <span class="p">{</span><span class="s2">"batch_size"</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">samples</span><span class="p">)},</span>
 <span class="p">)</span>
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">custom_rollout_batch</span><span class="p">(</span><span class="n">samples</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
     <span class="o">...</span>
@@ -612,11 +612,11 @@
 <li><p>nested <code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code> for important sub-steps such as generation, RM, filtering, or post-processing</p></li>
 </ul>
 <p>If you want to record SGLang generation metadata in a consistent way, reuse <code class="docutils literal notranslate"><span class="pre">build_sglang_meta_trace_attrs</span></code>:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.trace_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_sglang_meta_trace_attrs</span><span class="p">,</span> <span class="n">trace_span</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.observability.trace_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_sglang_meta_trace_attrs</span><span class="p">,</span> <span class="n">trace_span</span>
 
-<span class="k">with</span> <span class="n">trace_span</span><span class="p">(</span><span class="n">sample</span><span class="p">,</span> <span class="s2">&quot;sglang_generate&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">span</span><span class="p">:</span>
+<span class="k">with</span> <span class="n">trace_span</span><span class="p">(</span><span class="n">sample</span><span class="p">,</span> <span class="s2">"sglang_generate"</span><span class="p">)</span> <span class="k">as</span> <span class="n">span</span><span class="p">:</span>
     <span class="n">output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">payload</span><span class="p">)</span>
-    <span class="n">span</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">build_sglang_meta_trace_attrs</span><span class="p">(</span><span class="n">output</span><span class="p">[</span><span class="s2">&quot;meta_info&quot;</span><span class="p">]))</span>
+    <span class="n">span</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">build_sglang_meta_trace_attrs</span><span class="p">(</span><span class="n">output</span><span class="p">[</span><span class="s2">"meta_info"</span><span class="p">]))</span>
 </pre></div>
 </div>
 </section>
@@ -721,7 +721,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 12, 2026.
+  Last updated on Aug 21, 2026.
   <br/>
 </p>
   </div>

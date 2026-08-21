@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Aug 12, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 21, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -656,15 +656,15 @@ bash<span class="w"> </span>scripts/run-glm4-9B.sh
 <p>We still use the run-glm4-9B.sh script as an example to briefly analyze the main parameters.</p>
 <section id="model-args-model-configuration-parameters">
 <h3>MODEL_ARGS: Model Configuration Parameters<a class="headerlink" href="#model-args-model-configuration-parameters" title="Link to this heading">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SCRIPT_DIR</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span>--<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>dirname<span class="w"> </span>--<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">&quot;</span><span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">&amp;</span>&gt;/dev/null<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="k">)</span><span class="s2">&quot;</span>
-<span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/glm4-9B.sh&quot;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SCRIPT_DIR</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span>--<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>dirname<span class="w"> </span>--<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="p">&amp;</span>&gt;/dev/null<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="k">)</span><span class="s2">"</span>
+<span class="nb">source</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/glm4-9B.sh"</span>
 </pre></div>
 </div>
 <p>This part loads model configuration from the <code class="docutils literal notranslate"><span class="pre">scripts/models/glm4-9B.sh</span></code> file through the <code class="docutils literal notranslate"><span class="pre">source</span></code> command. These configurations are all hyperparameters required by Megatron. Since Megatron cannot directly read model configuration from checkpoints, it needs to be manually specified. We provide configuration examples for some commonly used models in the <code class="docutils literal notranslate"><span class="pre">scripts/models/</span></code> directory.</p>
 <blockquote>
 <div><p>⚠️ <strong>Note</strong>:
 Please make sure to check whether the parameters in the model configuration file (such as <code class="docutils literal notranslate"><span class="pre">--rotary-base</span></code>) completely match the model you are currently using. Different versions of the same model structure may use different configuration values. If you need to modify, you can directly override after <code class="docutils literal notranslate"><span class="pre">source</span></code>, for example:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/glm4-9B.sh&quot;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/glm4-9B.sh"</span>
 <span class="nv">MODEL_ARGS</span><span class="o">+=(</span>--rotary-base<span class="w"> </span><span class="m">10000</span><span class="o">)</span>
 </pre></div>
 </div>
@@ -673,12 +673,12 @@ Please make sure to check whether the parameters in the model configuration file
 <section id="ckpt-args-checkpoint-and-path-parameters">
 <h3>CKPT_ARGS: Checkpoint and Path Parameters<a class="headerlink" href="#ckpt-args-checkpoint-and-path-parameters" title="Link to this heading">#</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CKPT_ARGS</span><span class="o">=(</span>
-<span class="w">   </span><span class="c1"># To load tokenizer and other information, won&#39;t actually use model weight parameters from hf path</span>
+<span class="w">   </span><span class="c1"># To load tokenizer and other information, won't actually use model weight parameters from hf path</span>
 <span class="w">   </span>--hf-checkpoint<span class="w"> </span>/root/GLM-Z1-9B-0414
-<span class="w">   </span><span class="c1"># Reference Model&#39;s Megatron format checkpoint</span>
+<span class="w">   </span><span class="c1"># Reference Model's Megatron format checkpoint</span>
 <span class="w">   </span>--ref-load<span class="w"> </span>/root/GLM-Z1-9B-0414_torch_dist
 <span class="w">   </span><span class="c1"># Actor model loading path. Should typically match --save for checkpoint resumption</span>
-<span class="w">   </span><span class="c1"># If empty or doesn&#39;t contain a valid checkpoint, loads from --ref-load instead</span>
+<span class="w">   </span><span class="c1"># If empty or doesn't contain a valid checkpoint, loads from --ref-load instead</span>
 <span class="w">   </span>--load<span class="w"> </span>/root/GLM-Z1-9B-0414_slime/
 <span class="w">   </span><span class="c1"># Model save path during training</span>
 <span class="w">   </span>--save<span class="w"> </span>/root/GLM-Z1-9B-0414_slime/
@@ -902,7 +902,7 @@ In training-inference integration mode, Megatron will occupy a certain amount of
     <span class="n">keep</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">rewards</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float</span><span class="p">)</span><span class="o">.</span><span class="n">std</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mf">0.0</span>
     <span class="k">return</span> <span class="n">DynamicFilterOutput</span><span class="p">(</span>
         <span class="n">keep</span><span class="o">=</span><span class="n">keep</span><span class="p">,</span>
-        <span class="n">reason</span><span class="o">=</span><span class="kc">None</span> <span class="k">if</span> <span class="n">keep</span> <span class="k">else</span> <span class="sa">f</span><span class="s2">&quot;zero_std_</span><span class="si">{</span><span class="nb">round</span><span class="p">(</span><span class="n">rewards</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+        <span class="n">reason</span><span class="o">=</span><span class="kc">None</span> <span class="k">if</span> <span class="n">keep</span> <span class="k">else</span> <span class="sa">f</span><span class="s2">"zero_std_</span><span class="si">{</span><span class="nb">round</span><span class="p">(</span><span class="n">rewards</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
     <span class="p">)</span>
 </pre></div>
 </div>
@@ -932,7 +932,7 @@ The <code class="docutils literal notranslate"><span class="pre">sample.metadata
 </pre></div>
 </div>
 <p>And replace <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> with:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="w">   </span><span class="c1"># Used to load tokenizer and other information, actually won&#39;t use model weight parameters from hf path</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="w">   </span><span class="c1"># Used to load tokenizer and other information, actually won't use model weight parameters from hf path</span>
 <span class="w">   </span>--hf-checkpoint<span class="w"> </span>/root/Qwen3-4B-FP8
 
 <span class="w">   </span><span class="c1"># The megatron checkpoint still needs to be the dist weights converted from bf16 huggingface at the beginning, not modified because of FP8 rollout.</span>
@@ -1009,13 +1009,13 @@ The <code class="docutils literal notranslate"><span class="pre">sample.metadata
 <span class="w">   </span><span class="c1"># 1. Specify the preprocessed dataset file</span>
 <span class="w">   </span>--prompt-data<span class="w"> </span>/root/nq_search/train_processed.json
 
-<span class="w">   </span><span class="c1"># 2. Map &quot;question&quot; column to input prompt</span>
+<span class="w">   </span><span class="c1"># 2. Map "question" column to input prompt</span>
 <span class="w">   </span>--input-key<span class="w"> </span>question
 
-<span class="w">   </span><span class="c1"># 3. Map &quot;final_answer&quot; column to evaluation label</span>
+<span class="w">   </span><span class="c1"># 3. Map "final_answer" column to evaluation label</span>
 <span class="w">   </span>--label-key<span class="w"> </span>final_answer
 
-<span class="w">   </span><span class="c1"># 4. Load the pre-constructed &quot;metadata&quot; column into Sample.metadata</span>
+<span class="w">   </span><span class="c1"># 4. Load the pre-constructed "metadata" column into Sample.metadata</span>
 <span class="w">   </span><span class="c1">#    slime will automatically parse it as a Python dictionary</span>
 <span class="w">   </span>--metadata-key<span class="w"> </span>metadata
 <span class="o">)</span>
@@ -1046,7 +1046,7 @@ The <code class="docutils literal notranslate"><span class="pre">sample.metadata
 <p><strong>Code Example (Pseudocode)</strong>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Sample</span><span class="p">:</span>
     <span class="c1"># ... initialization ...</span>
-    <span class="n">prompt</span><span class="p">,</span> <span class="n">full_response</span><span class="p">,</span> <span class="n">loss_masks</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="p">[]</span>
+    <span class="n">prompt</span><span class="p">,</span> <span class="n">full_response</span><span class="p">,</span> <span class="n">loss_masks</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="s2">""</span><span class="p">,</span> <span class="p">[]</span>
 
     <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">max_turns</span><span class="p">):</span>
         <span class="c1"># 1. Model generates action</span>
@@ -1057,14 +1057,14 @@ The <code class="docutils literal notranslate"><span class="pre">sample.metadata
 
         <span class="c1"># 2. Parse and execute action</span>
         <span class="n">action</span><span class="p">,</span> <span class="n">content</span> <span class="o">=</span> <span class="n">parse_action</span><span class="p">(</span><span class="n">model_output</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">&quot;search&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">"search"</span><span class="p">:</span>
             <span class="c1"># 3 &amp; 4. Get and append observation results</span>
             <span class="n">tool_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">google_search</span><span class="p">(</span><span class="n">content</span><span class="p">)</span>
             <span class="c1"># ... tokenization and appending ...</span>
             <span class="n">loss_masks</span> <span class="o">+=</span> <span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">tool_tokens</span><span class="p">)</span> <span class="c1"># loss_mask = 0</span>
             <span class="n">full_response</span> <span class="o">+=</span> <span class="n">tool_output</span>
 
-        <span class="k">elif</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">&quot;answer&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">"answer"</span><span class="p">:</span>
             <span class="k">break</span> <span class="c1"># end loop</span>
 
     <span class="c1"># 7. Fill and return Sample object</span>
@@ -1107,22 +1107,22 @@ ray<span class="w"> </span>start<span class="w"> </span>--address<span class="o"
 </pre></div>
 </div>
 <p>After the Ray cluster has started, you can submit a job from node 0, for example:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>--address<span class="o">=</span><span class="s2">&quot;http://127.0.0.1:8265&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--runtime-env-json<span class="o">=</span><span class="s1">&#39;{</span>
-<span class="s1">     &quot;env_vars&quot;: {</span>
-<span class="s1">        &quot;PYTHONPATH&quot;: &quot;/root/Megatron-LM/&quot;,</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>--address<span class="o">=</span><span class="s2">"http://127.0.0.1:8265"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--runtime-env-json<span class="o">=</span><span class="s1">'{</span>
+<span class="s1">     "env_vars": {</span>
+<span class="s1">        "PYTHONPATH": "/root/Megatron-LM/",</span>
 <span class="s1">        ... # e.g., no_proxy, API variables, etc.</span>
 <span class="s1">     }</span>
-<span class="s1">   }&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="s1">   }'</span><span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>--<span class="w"> </span>python3<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>--...<span class="w"> </span><span class="c1"># Other Megatron/SGLang/slime arguments</span>
 </pre></div>
 </div>
 <p>Optionally, the following environment variables may be needed based on your environment. For example, when there are multiple IPs and the wrong one is chosen in a Docker or SLURM envionment. We provide an example used in a SLURM + enroot multi-node system as follows:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>export SLIME_HOST_IP=$(hostname -I | awk &#39;{print $1}&#39;)
-export GLOO_SOCKET_IFNAME=$(ip -o -4 addr show | awk &#39;$4 ~ /^10\\./ {print $2}&#39;)
-export NCCL_SOCKET_IFNAME=$(ip -o -4 addr show | awk &#39;$4 ~ /^10\\./ {print $2}&#39;)
-export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=$(ip -o -4 addr show | awk &#39;$4 ~ /^10\./ {print $2}&#39;)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>export SLIME_HOST_IP=$(hostname -I | awk '{print $1}')
+export GLOO_SOCKET_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\\./ {print $2}')
+export NCCL_SOCKET_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\\./ {print $2}')
+export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\./ {print $2}')
 </pre></div>
 </div>
 <p>slime has been deeply optimized for distributed training of large-scale Mixture of Experts (MoE) models. We provide some end-to-end training cases for reference:</p>
@@ -1257,7 +1257,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 12, 2026.
+  Last updated on Aug 21, 2026.
   <br/>
 </p>
   </div>

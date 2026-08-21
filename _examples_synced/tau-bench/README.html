@@ -57,7 +57,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Aug 12, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 21, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -549,17 +549,17 @@ hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-4B-Instruct
 <h2>Running the Script<a class="headerlink" href="#running-the-script" title="Link to this heading">#</a></h2>
 <p>You need to configure your litellm API in <code class="docutils literal notranslate"><span class="pre">generate_with_tau.py</span></code> for user simulation:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">TAU_CONFIGS</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">&quot;env&quot;</span><span class="p">:</span> <span class="s2">&quot;retail&quot;</span><span class="p">,</span>  <span class="c1"># Select between [&quot;retail&quot;, &quot;airline&quot;]</span>
-    <span class="s2">&quot;agent_strategy&quot;</span><span class="p">:</span> <span class="s2">&quot;tool-calling&quot;</span><span class="p">,</span>  <span class="c1"># Select between [&quot;tool-calling&quot;, &quot;act&quot;, &quot;react&quot;, &quot;few-shot&quot;], only tool-calling implemented for now</span>
-    <span class="s2">&quot;user_model&quot;</span><span class="p">:</span> <span class="s2">&quot;gemini-2.0-flash-lite&quot;</span><span class="p">,</span>  <span class="c1"># Cheap Model for user simulator</span>
-    <span class="s2">&quot;user_model_provider&quot;</span><span class="p">:</span> <span class="s2">&quot;gemini&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;task_split&quot;</span><span class="p">:</span> <span class="s2">&quot;train&quot;</span><span class="p">,</span>  <span class="c1"># Select between [&quot;train&quot;, &quot;test&quot;, &quot;dev&quot;] for retail, [&quot;test&quot;] for airline</span>
-    <span class="s2">&quot;user_strategy&quot;</span><span class="p">:</span> <span class="s2">&quot;llm&quot;</span><span class="p">,</span>  <span class="c1"># Select between [&quot;llm&quot;, &quot;react&quot;, &quot;verify&quot;, &quot;reflection&quot;]</span>
-    <span class="s2">&quot;model_provider&quot;</span><span class="p">:</span> <span class="s2">&quot;auto_router&quot;</span><span class="p">,</span> <span class="c1"># Unused, required</span>
-    <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;qwen3-4b&quot;</span><span class="p">,</span> <span class="c1"># Unused, reqired</span>
+    <span class="s2">"env"</span><span class="p">:</span> <span class="s2">"retail"</span><span class="p">,</span>  <span class="c1"># Select between ["retail", "airline"]</span>
+    <span class="s2">"agent_strategy"</span><span class="p">:</span> <span class="s2">"tool-calling"</span><span class="p">,</span>  <span class="c1"># Select between ["tool-calling", "act", "react", "few-shot"], only tool-calling implemented for now</span>
+    <span class="s2">"user_model"</span><span class="p">:</span> <span class="s2">"gemini-2.0-flash-lite"</span><span class="p">,</span>  <span class="c1"># Cheap Model for user simulator</span>
+    <span class="s2">"user_model_provider"</span><span class="p">:</span> <span class="s2">"gemini"</span><span class="p">,</span>
+    <span class="s2">"task_split"</span><span class="p">:</span> <span class="s2">"train"</span><span class="p">,</span>  <span class="c1"># Select between ["train", "test", "dev"] for retail, ["test"] for airline</span>
+    <span class="s2">"user_strategy"</span><span class="p">:</span> <span class="s2">"llm"</span><span class="p">,</span>  <span class="c1"># Select between ["llm", "react", "verify", "reflection"]</span>
+    <span class="s2">"model_provider"</span><span class="p">:</span> <span class="s2">"auto_router"</span><span class="p">,</span> <span class="c1"># Unused, required</span>
+    <span class="s2">"model"</span><span class="p">:</span> <span class="s2">"qwen3-4b"</span><span class="p">,</span> <span class="c1"># Unused, reqired</span>
 <span class="p">}</span>
 <span class="c1"># Replace with your actual API key for user sim    </span>
-<span class="n">GEMINI_API_KEY</span> <span class="o">=</span> <span class="s2">&quot;YOUR KEY&quot;</span> 
+<span class="n">GEMINI_API_KEY</span> <span class="o">=</span> <span class="s2">"YOUR KEY"</span> 
 </pre></div>
 </div>
 <p>And run:</p>
@@ -634,7 +634,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 12, 2026.
+  Last updated on Aug 21, 2026.
   <br/>
 </p>
   </div>

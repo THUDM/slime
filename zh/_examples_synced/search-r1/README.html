@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 12 日"/>
+    <meta name="docbuild:last-update" content="2026 年 08 月 21 日"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -583,33 +583,33 @@ hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-3B<span c
 <p><code class="docutils literal notranslate"><span class="pre">generate_with_search.py</span></code> 文件支持<strong>本地搜索</strong>和 <strong>Google 搜索</strong>两种后端。通过 <code class="docutils literal notranslate"><span class="pre">SEARCH_R1_CONFIGS</span></code> 字典进行配置：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">SEARCH_R1_CONFIGS</span> <span class="o">=</span> <span class="p">{</span>
     <span class="c1"># ============== 通用配置 ==============</span>
-    <span class="s2">&quot;max_turns&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
-    <span class="s2">&quot;topk&quot;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
-    <span class="s2">&quot;search_concurrency&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
+    <span class="s2">"max_turns"</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+    <span class="s2">"topk"</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+    <span class="s2">"search_concurrency"</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
 
     <span class="c1"># ============== 搜索后端选择 ==============</span>
-    <span class="s2">&quot;search_backend&quot;</span><span class="p">:</span> <span class="s2">&quot;local&quot;</span><span class="p">,</span>  <span class="c1"># 选项：&quot;local&quot; 或 &quot;google&quot;</span>
+    <span class="s2">"search_backend"</span><span class="p">:</span> <span class="s2">"local"</span><span class="p">,</span>  <span class="c1"># 选项："local" 或 "google"</span>
 
     <span class="c1"># ============== 本地搜索配置 ==============</span>
-    <span class="c1"># (仅当 search_backend=&quot;local&quot; 时使用)</span>
-    <span class="s2">&quot;local&quot;</span><span class="p">:</span> <span class="p">{</span>
-        <span class="s2">&quot;search_url&quot;</span><span class="p">:</span> <span class="s2">&quot;http://127.0.0.1:8000/retrieve&quot;</span><span class="p">,</span>  <span class="c1"># 本地检索服务器的 URL</span>
-        <span class="s2">&quot;proxy&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="c1"># (仅当 search_backend="local" 时使用)</span>
+    <span class="s2">"local"</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">"search_url"</span><span class="p">:</span> <span class="s2">"http://127.0.0.1:8000/retrieve"</span><span class="p">,</span>  <span class="c1"># 本地检索服务器的 URL</span>
+        <span class="s2">"proxy"</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">},</span>
 
     <span class="c1"># ============== Google 搜索配置 ==============</span>
-    <span class="c1"># (仅当 search_backend=&quot;google&quot; 时使用)</span>
-    <span class="s2">&quot;google&quot;</span><span class="p">:</span> <span class="p">{</span>
-        <span class="s2">&quot;api_key&quot;</span><span class="p">:</span> <span class="s2">&quot;your_api_key_here&quot;</span><span class="p">,</span>  <span class="c1"># 替换为你的 serper.dev API key</span>
-        <span class="s2">&quot;snippet_only&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
-        <span class="s2">&quot;proxy&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="c1"># (仅当 search_backend="google" 时使用)</span>
+    <span class="s2">"google"</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">"api_key"</span><span class="p">:</span> <span class="s2">"your_api_key_here"</span><span class="p">,</span>  <span class="c1"># 替换为你的 serper.dev API key</span>
+        <span class="s2">"snippet_only"</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="s2">"proxy"</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">},</span>
 
     <span class="c1"># ============== 日志概率收集 ==============</span>
-    <span class="s2">&quot;return_logprob&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>  <span class="c1"># 设置为 True 以收集日志概率（TIS 所需）</span>
+    <span class="s2">"return_logprob"</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>  <span class="c1"># 设置为 True 以收集日志概率（TIS 所需）</span>
 
     <span class="c1"># ============== 奖励模型配置 ==============</span>
-    <span class="s2">&quot;format_score&quot;</span><span class="p">:</span> <span class="mf">0.2</span><span class="p">,</span>
+    <span class="s2">"format_score"</span><span class="p">:</span> <span class="mf">0.2</span><span class="p">,</span>
 <span class="p">}</span>
 </pre></div>
 </div>
@@ -636,7 +636,7 @@ hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-3B<span c
 <p><strong>1. 在 <code class="docutils literal notranslate"><span class="pre">generate_with_search.py</span></code> 中：</strong></p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">SEARCH_R1_CONFIGS</span> <span class="o">=</span> <span class="p">{</span>
     <span class="c1"># ... 其他配置</span>
-    <span class="s2">&quot;return_logprob&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>  <span class="c1"># TIS 必须设置为 True</span>
+    <span class="s2">"return_logprob"</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>  <span class="c1"># TIS 必须设置为 True</span>
 <span class="p">}</span>
 </pre></div>
 </div>
@@ -752,7 +752,7 @@ gzip<span class="w"> </span>-d<span class="w"> </span><span class="nv">$save_pat
 </section>
 <section id="id11">
 <h3>步骤 4：启动本地检索服务器<a class="headerlink" href="#id11" title="链接到此标题。">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 如果遇到 &quot;conda not found&quot; 错误，运行：</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 如果遇到 "conda not found" 错误，运行：</span>
 <span class="c1"># source ~/miniconda3/etc/profile.d/conda.sh</span>
 <span class="c1"># conda init</span>
 <span class="c1"># source ~/.bashrc</span>
@@ -792,7 +792,7 @@ python<span class="w"> </span>/root/slime/examples/search-r1/local_dense_retriev
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
 
 <span class="c1"># 设置您的 wandb key（可选）</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">WANDB_KEY</span><span class="o">=</span><span class="s2">&quot;your_wandb_key_here&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">WANDB_KEY</span><span class="o">=</span><span class="s2">"your_wandb_key_here"</span>
 
 <span class="c1"># 如果 ray 进程卡住，尝试：</span>
 <span class="c1"># rm -rf /root/.cache</span>
@@ -928,7 +928,7 @@ rm<span class="w"> </span>-rf<span class="w"> </span>/root/.*
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 12 日.
+  最后更新于 2026 年 08 月 21 日.
   <br/>
 </p>
   </div>

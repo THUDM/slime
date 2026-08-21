@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 12 日"/>
+    <meta name="docbuild:last-update" content="2026 年 08 月 21 日"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -594,12 +594,12 @@ bash<span class="w"> </span>examples/retool/retool_qwen3_4b_sft.sh
 
 <span class="n">You</span> <span class="n">are</span> <span class="n">provided</span> <span class="k">with</span> <span class="n">function</span> <span class="n">signatures</span> <span class="n">within</span> <span class="o">&lt;</span><span class="n">tools</span><span class="o">&gt;&lt;/</span><span class="n">tools</span><span class="o">&gt;</span> <span class="n">XML</span> <span class="n">tags</span><span class="p">:</span>
 <span class="o">&lt;</span><span class="n">tools</span><span class="o">&gt;</span>
-<span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;function&quot;</span><span class="p">,</span> <span class="s2">&quot;function&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;code_interpreter&quot;</span><span class="p">,</span> <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;A tool for executing code.&quot;</span><span class="p">,</span> <span class="s2">&quot;parameters&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;object&quot;</span><span class="p">,</span> <span class="s2">&quot;properties&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;code&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;string&quot;</span><span class="p">,</span> <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;The code to execute.&quot;</span><span class="p">}},</span> <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;code&quot;</span><span class="p">]}}}</span>
+<span class="p">{</span><span class="s2">"type"</span><span class="p">:</span> <span class="s2">"function"</span><span class="p">,</span> <span class="s2">"function"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"name"</span><span class="p">:</span> <span class="s2">"code_interpreter"</span><span class="p">,</span> <span class="s2">"description"</span><span class="p">:</span> <span class="s2">"A tool for executing code."</span><span class="p">,</span> <span class="s2">"parameters"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"type"</span><span class="p">:</span> <span class="s2">"object"</span><span class="p">,</span> <span class="s2">"properties"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"code"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"type"</span><span class="p">:</span> <span class="s2">"string"</span><span class="p">,</span> <span class="s2">"description"</span><span class="p">:</span> <span class="s2">"The code to execute."</span><span class="p">}},</span> <span class="s2">"required"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"code"</span><span class="p">]}}}</span>
 <span class="o">&lt;/</span><span class="n">tools</span><span class="o">&gt;</span>
 
 <span class="n">For</span> <span class="n">each</span> <span class="n">function</span> <span class="n">call</span><span class="p">,</span> <span class="k">return</span> <span class="n">a</span> <span class="n">json</span> <span class="nb">object</span> <span class="k">with</span> <span class="n">function</span> <span class="n">name</span> <span class="ow">and</span> <span class="n">arguments</span> <span class="n">within</span> <span class="o">&lt;</span><span class="n">tool_call</span><span class="o">&gt;&lt;/</span><span class="n">tool_call</span><span class="o">&gt;</span> <span class="n">XML</span> <span class="n">tags</span><span class="p">:</span>
 <span class="o">&lt;</span><span class="n">tool_call</span><span class="o">&gt;</span>
-<span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="o">&lt;</span><span class="n">function</span><span class="o">-</span><span class="n">name</span><span class="o">&gt;</span><span class="p">,</span> <span class="s2">&quot;arguments&quot;</span><span class="p">:</span> <span class="o">&lt;</span><span class="n">args</span><span class="o">-</span><span class="n">json</span><span class="o">-</span><span class="nb">object</span><span class="o">&gt;</span><span class="p">}</span>
+<span class="p">{</span><span class="s2">"name"</span><span class="p">:</span> <span class="o">&lt;</span><span class="n">function</span><span class="o">-</span><span class="n">name</span><span class="o">&gt;</span><span class="p">,</span> <span class="s2">"arguments"</span><span class="p">:</span> <span class="o">&lt;</span><span class="n">args</span><span class="o">-</span><span class="n">json</span><span class="o">-</span><span class="nb">object</span><span class="o">&gt;</span><span class="p">}</span>
 <span class="o">&lt;/</span><span class="n">tool_call</span><span class="o">&gt;</span>
 </pre></div>
 </div>
@@ -700,7 +700,7 @@ bash<span class="w"> </span>examples/retool/retool_qwen3_4b_sft.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 12 日.
+  最后更新于 2026 年 08 月 21 日.
   <br/>
 </p>
   </div>

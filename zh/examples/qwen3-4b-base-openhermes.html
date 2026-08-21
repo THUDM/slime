@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 12 日"/>
+    <meta name="docbuild:last-update" content="2026 年 08 月 21 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -515,33 +515,33 @@
 <p>之后，我们处理 sft 数据。这里我们以经典的 <a class="reference external" href="https://huggingface.co/datasets/teknium/OpenHermes-2.5">OpenHermes-2.5</a> 为例，首先把数据处理成适合 slime 加载的格式，可以用如下的脚本进行处理，增加一个符合 openai message 格式的列，并保存在 <code class="docutils literal notranslate"><span class="pre">/root/openhermes2_5.parquet</span></code>。</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">datasets</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_dataset</span>
 
-<span class="n">ds</span> <span class="o">=</span> <span class="n">load_dataset</span><span class="p">(</span><span class="s2">&quot;teknium/OpenHermes-2.5&quot;</span><span class="p">)[</span><span class="s2">&quot;train&quot;</span><span class="p">]</span>
+<span class="n">ds</span> <span class="o">=</span> <span class="n">load_dataset</span><span class="p">(</span><span class="s2">"teknium/OpenHermes-2.5"</span><span class="p">)[</span><span class="s2">"train"</span><span class="p">]</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">convert</span><span class="p">(</span><span class="n">sample</span><span class="p">):</span>
-    <span class="n">conversations</span> <span class="o">=</span> <span class="n">sample</span><span class="p">[</span><span class="s2">&quot;conversations&quot;</span><span class="p">]</span>
+    <span class="n">conversations</span> <span class="o">=</span> <span class="n">sample</span><span class="p">[</span><span class="s2">"conversations"</span><span class="p">]</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">convert_role</span><span class="p">(</span><span class="n">role</span><span class="p">):</span>
-        <span class="k">if</span> <span class="n">role</span> <span class="o">==</span> <span class="s2">&quot;human&quot;</span><span class="p">:</span>
-            <span class="k">return</span> <span class="s2">&quot;user&quot;</span>
-        <span class="k">elif</span> <span class="n">role</span> <span class="o">==</span> <span class="s2">&quot;gpt&quot;</span><span class="p">:</span>
-            <span class="k">return</span> <span class="s2">&quot;assistant&quot;</span>
-        <span class="k">elif</span> <span class="n">role</span> <span class="o">==</span> <span class="s2">&quot;system&quot;</span><span class="p">:</span>
-            <span class="k">return</span> <span class="s2">&quot;system&quot;</span>
+        <span class="k">if</span> <span class="n">role</span> <span class="o">==</span> <span class="s2">"human"</span><span class="p">:</span>
+            <span class="k">return</span> <span class="s2">"user"</span>
+        <span class="k">elif</span> <span class="n">role</span> <span class="o">==</span> <span class="s2">"gpt"</span><span class="p">:</span>
+            <span class="k">return</span> <span class="s2">"assistant"</span>
+        <span class="k">elif</span> <span class="n">role</span> <span class="o">==</span> <span class="s2">"system"</span><span class="p">:</span>
+            <span class="k">return</span> <span class="s2">"system"</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown role: </span><span class="si">{</span><span class="n">role</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unknown role: </span><span class="si">{</span><span class="n">role</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
     <span class="n">messages</span> <span class="o">=</span> <span class="p">[</span>
         <span class="p">{</span>
-            <span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="n">convert_role</span><span class="p">(</span><span class="n">turn</span><span class="p">[</span><span class="s2">&quot;from&quot;</span><span class="p">]),</span>
-            <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="n">turn</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">],</span>
+            <span class="s2">"role"</span><span class="p">:</span> <span class="n">convert_role</span><span class="p">(</span><span class="n">turn</span><span class="p">[</span><span class="s2">"from"</span><span class="p">]),</span>
+            <span class="s2">"content"</span><span class="p">:</span> <span class="n">turn</span><span class="p">[</span><span class="s2">"value"</span><span class="p">],</span>
         <span class="p">}</span>
         <span class="k">for</span> <span class="n">turn</span> <span class="ow">in</span> <span class="n">conversations</span>
     <span class="p">]</span>
 
-    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;messages&quot;</span><span class="p">:</span> <span class="n">messages</span><span class="p">}</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">"messages"</span><span class="p">:</span> <span class="n">messages</span><span class="p">}</span>
 
 <span class="n">ds</span> <span class="o">=</span> <span class="n">ds</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">convert</span><span class="p">)</span>
-<span class="n">ds</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span><span class="s2">&quot;/root/openhermes2_5.parquet&quot;</span><span class="p">)</span>
+<span class="n">ds</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span><span class="s2">"/root/openhermes2_5.parquet"</span><span class="p">)</span>
 </pre></div>
 </div>
 </section>
@@ -671,7 +671,7 @@ bash<span class="w"> </span>script/run-qwen3-4B-base-sft.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 12 日.
+  最后更新于 2026 年 08 月 21 日.
   <br/>
 </p>
   </div>

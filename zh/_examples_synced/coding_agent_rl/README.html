@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 12 日"/>
+    <meta name="docbuild:last-update" content="2026 年 08 月 21 日"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -543,15 +543,15 @@ the Anthropic-compatible endpoint, and drains trainable <code class="docutils li
 <h2>Dataset Format<a class="headerlink" href="#dataset-format" title="链接到此标题。">#</a></h2>
 <p>Standard slime JSONL with three keys:</p>
 <div class="highlight-jsonc notranslate"><div class="highlight"><pre><span></span>{
-  &quot;prompt&quot;: &quot;&lt;falls back here if metadata.problem_statement is missing&gt;&quot;,
-  &quot;label&quot;: &quot;&lt;instance_id or grader label&gt;&quot;,
-  &quot;metadata&quot;: {
-    &quot;image&quot;: &quot;your-registry/swe-image:&lt;tag&gt;&quot;,  // sandbox image reference
-    &quot;workdir&quot;: &quot;/workspace/&lt;repo&gt;&quot;,            // repo path inside the sandbox
-    &quot;problem_statement&quot;: &quot;&lt;issue body&gt;&quot;,
+  "prompt": "&lt;falls back here if metadata.problem_statement is missing&gt;",
+  "label": "&lt;instance_id or grader label&gt;",
+  "metadata": {
+    "image": "your-registry/swe-image:&lt;tag&gt;",  // sandbox image reference
+    "workdir": "/workspace/&lt;repo&gt;",            // repo path inside the sandbox
+    "problem_statement": "&lt;issue body&gt;",
     // exactly one of the following two graders:
-    &quot;swepro&quot;: { /* SWE-bench Pro test harness — preferred */ },
-    &quot;eval_cmd&quot;: &quot;pytest -x tests/...&quot;          // last-resort: exit 0 = solved
+    "swepro": { /* SWE-bench Pro test harness — preferred */ },
+    "eval_cmd": "pytest -x tests/..."          // last-resort: exit 0 = solved
     // sweb-style rows: metadata.remote_env_info.f2p_script (Python file
     // ending in `sys.exit(pytest.main(...))`) is auto-wrapped into eval_cmd.
   }
@@ -590,7 +590,7 @@ and tees stdout into <code class="docutils literal notranslate"><span class="pre
 <p><code class="docutils literal notranslate"><span class="pre">generate.py</span></code> is wired in through slime's standard custom-generate hook:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">ROLLOUT_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>--custom-generate-function-path<span class="w"> </span>examples.coding_agent_rl.generate.generate
-<span class="w">   </span>--prompt-data<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">PROMPT_DATA</span><span class="si">}</span><span class="s2">&quot;</span>
+<span class="w">   </span>--prompt-data<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">PROMPT_DATA</span><span class="si">}</span><span class="s2">"</span>
 <span class="w">   </span>--input-key<span class="w"> </span>prompt
 <span class="w">   </span>--label-key<span class="w"> </span>label
 <span class="w">   </span>--metadata-key<span class="w"> </span>metadata
@@ -599,7 +599,7 @@ and tees stdout into <code class="docutils literal notranslate"><span class="pre
 <span class="w">   </span>--rollout-max-context-len<span class="w"> </span><span class="m">96000</span>
 <span class="w">   </span>--rollout-max-response-len<span class="w"> </span><span class="m">32768</span>
 <span class="w">   </span>--rollout-stop-token-ids<span class="w"> </span><span class="m">248046</span><span class="w"> </span><span class="m">248044</span>
-<span class="w">   </span>--save-debug-rollout-data<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">RUN_ROOT</span><span class="si">}</span><span class="s2">/rollout_dumps/rollout_{rollout_id}.pt&quot;</span>
+<span class="w">   </span>--save-debug-rollout-data<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">RUN_ROOT</span><span class="si">}</span><span class="s2">/rollout_dumps/rollout_{rollout_id}.pt"</span>
 <span class="o">)</span>
 </pre></div>
 </div>
@@ -840,7 +840,7 @@ prompt-base restarts.</p>
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 12 日.
+  最后更新于 2026 年 08 月 21 日.
   <br/>
 </p>
   </div>
