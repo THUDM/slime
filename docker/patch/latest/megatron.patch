@@ -731,6 +731,23 @@ index ac839c21f..f18309217 100644
          )
          ops.append(recv_next_op)
      if len(ops) > 0:
+diff --git a/megatron/core/transformer/attention.py b/megatron/core/transformer/attention.py
+index bc5e4e2..739450c 100644
+--- a/megatron/core/transformer/attention.py
++++ b/megatron/core/transformer/attention.py
+@@ -1491,4 +1491,12 @@ class SelfAttention(Attention):
+         if output_gate:
+             # Gate [sq, b, ng, np/ng * hn] -> [sq, b, np, hn]
+             gate = gate.reshape(*gate.shape[:2], -1, self.hidden_size_per_attention_head)
++            if self.config.num_query_groups < self.world_size:
++                idx = get_tensor_model_parallel_rank() % (
++                    self.world_size // self.config.num_query_groups
++                )
++                size = self.num_attention_heads_per_partition // (
++                    self.world_size // self.config.num_query_groups
++                )
++                gate = gate[:, :, idx * size : (idx + 1) * size, :]
+             return query, key, value, gate
 diff --git a/megatron/core/transformer/moe/moe_utils.py b/megatron/core/transformer/moe/moe_utils.py
 index 75825cd37..445b3fb84 100644
 --- a/megatron/core/transformer/moe/moe_utils.py
