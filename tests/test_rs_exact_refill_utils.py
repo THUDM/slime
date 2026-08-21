@@ -1,7 +1,9 @@
+import copy
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
 
@@ -10,6 +12,7 @@ from slime.utils.rs_refill import (
     attach_proximal_log_probs,
     clone_rs_masks,
     compute_sequence_rs_masks,
+    fingerprint_rs_train_data,
     get_rs_refill_candidate_group_multiple,
     merge_replacement_metrics,
     merge_selected_log_prob_caches,
@@ -22,6 +25,7 @@ from slime.utils.rs_refill import (
     validate_refill_rollout_ids,
     validate_replacement_policy_version,
     validate_rs_refill_target_batch_alignment,
+    validate_rs_train_data_fingerprint,
     validate_sample_masks,
 )
 
@@ -60,6 +64,92 @@ def _topology(**overrides):
     }
     values.update(overrides)
     return values
+
+
+def test_train_data_fingerprint_covers_ordered_policy_inputs():
+    train_data = {
+        "tokens": [[1, 2, 3], [4, 5]],
+        "sample_indices": [10, 11],
+        "rewards": [1.0, 0.0],
+        "raw_reward": [0.75, -0.25],
+        "loss_masks": [[1, 1], [1]],
+        "rollout_ids": [20, 21],
+        "rollout_log_probs": [torch.tensor([-0.1, -0.2]), torch.tensor([-0.3])],
+        "rollout_top_p_token_ids": [[7], [8]],
+        "rollout_top_p_token_offsets": [[0], [1]],
+        "rollout_routed_experts": [torch.tensor([0, 1]), torch.tensor([1])],
+        "multimodal_train_inputs": [{"pixel_values": torch.arange(4).reshape(2, 2)}, None],
+        "metadata": [{"loss": "policy"}, {"loss": "policy"}],
+    }
+    fingerprint_kwargs = {"group_indices": [0, 1], "weight_versions": [["7"], ["7"]]}
+    expected = fingerprint_rs_train_data(train_data, **fingerprint_kwargs)
+
+    validate_rs_train_data_fingerprint(dict(reversed(train_data.items())), expected, **fingerprint_kwargs)
+    mutators = [
+        lambda value: value["tokens"][0].__setitem__(2, 99),
+        lambda value: value["sample_indices"].reverse(),
+        lambda value: value["rewards"].__setitem__(0, 0.5),
+        lambda value: value["raw_reward"].__setitem__(1, 0.25),
+        lambda value: value["loss_masks"][0].__setitem__(1, 0),
+        lambda value: value["rollout_ids"].__setitem__(0, 99),
+        lambda value: value["rollout_log_probs"][0].add_(1),
+        lambda value: value["rollout_top_p_token_ids"][0].__setitem__(0, 9),
+        lambda value: value["rollout_top_p_token_offsets"][1].__setitem__(0, 0),
+        lambda value: value["rollout_routed_experts"][0].add_(1),
+        lambda value: value["multimodal_train_inputs"][0]["pixel_values"].add_(1),
+        lambda value: value["metadata"][0].__setitem__("loss", "other"),
+    ]
+    for mutate in mutators:
+        candidate = copy.deepcopy(train_data)
+        mutate(candidate)
+        with pytest.raises(RuntimeError, match="rollout observability hooks must be read-only"):
+            validate_rs_train_data_fingerprint(candidate, expected, **fingerprint_kwargs)
+
+    with pytest.raises(RuntimeError, match="rollout observability hooks must be read-only"):
+        validate_rs_train_data_fingerprint(
+            train_data,
+            expected,
+            group_indices=[1, 0],
+            weight_versions=[["7"], ["7"]],
+        )
+    with pytest.raises(RuntimeError, match="rollout observability hooks must be read-only"):
+        validate_rs_train_data_fingerprint(
+            train_data,
+            expected,
+            group_indices=[0, 1],
+            weight_versions=[["8"], ["7"]],
+        )
+
+
+def test_train_data_fingerprint_fails_closed_for_unsupported_values():
+    with pytest.raises(TypeError, match=r"does not support value type builtins\.object"):
+        fingerprint_rs_train_data({"metadata": [object()]}, group_indices=[0], weight_versions=[["7"]])
+
+
+def test_train_data_fingerprint_preserves_numpy_scalar_dtype_and_tensor_layout():
+    kwargs = {"group_indices": [0], "weight_versions": [["7"]]}
+    float32_digest = fingerprint_rs_train_data({"value": np.float32(1)}, **kwargs)
+    float64_digest = fingerprint_rs_train_data({"value": np.float64(1)}, **kwargs)
+    assert float32_digest != float64_digest
+
+    indices = torch.tensor([[0, 1]])
+    values = torch.tensor([1.0, 0.0])
+    sparse = torch.sparse_coo_tensor(indices, values, (2,))
+    dense = sparse.to_dense()
+    assert fingerprint_rs_train_data({"value": sparse}, **kwargs) != fingerprint_rs_train_data(
+        {"value": dense}, **kwargs
+    )
+
+    first_schema = np.zeros(1, dtype=[("a", "<i4"), ("b", "<i4")])
+    second_schema = np.zeros(1, dtype=[("x", "<i4"), ("y", "<i4")])
+    assert first_schema.dtype.str == second_schema.dtype.str == "|V8"
+    assert first_schema.view(np.uint8).tobytes() == second_schema.view(np.uint8).tobytes()
+    assert fingerprint_rs_train_data({"value": first_schema}, **kwargs) != fingerprint_rs_train_data(
+        {"value": second_schema}, **kwargs
+    )
+    assert fingerprint_rs_train_data({"value": first_schema[0]}, **kwargs) != fingerprint_rs_train_data(
+        {"value": second_schema[0]}, **kwargs
+    )
 
 
 def _group(group_index: int, *, size: int = 2, weight_version: str = "7"):

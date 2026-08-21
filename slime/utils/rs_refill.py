@@ -6,10 +6,12 @@ import hashlib
 import logging
 import math
 import operator
+import struct
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import torch
 
 logger = logging.getLogger(__name__)
@@ -432,6 +434,199 @@ def validate_sample_masks(
             "RS-refilled sample masks changed after proximal preflight: "
             f"missing={sorted(expected_ids - actual_ids)}, extra={sorted(actual_ids - expected_ids)}, "
             f"changed={changed}"
+        )
+
+
+def _rs_numpy_dtype_descriptor(dtype: np.dtype) -> dict[str, Any]:
+    subdtype = None
+    if dtype.subdtype is not None:
+        base, shape = dtype.subdtype
+        subdtype = {
+            "base": _rs_numpy_dtype_descriptor(base),
+            "shape": list(shape),
+        }
+    fields = None
+    if dtype.names is not None:
+        fields = []
+        for name in dtype.names:
+            field = dtype.fields[name]
+            fields.append(
+                {
+                    "name": name,
+                    "dtype": _rs_numpy_dtype_descriptor(field[0]),
+                    "offset": field[1],
+                    "title": field[2] if len(field) > 2 else None,
+                }
+            )
+    return {
+        "str": dtype.str,
+        "itemsize": dtype.itemsize,
+        "alignment": dtype.alignment,
+        "isalignedstruct": dtype.isalignedstruct,
+        "subdtype": subdtype,
+        "fields": fields,
+        "metadata": dict(dtype.metadata) if dtype.metadata is not None else None,
+    }
+
+
+def _update_rs_value_fingerprint(
+    digest: Any,
+    value: Any,
+    active_containers: set[int],
+) -> None:
+    """Stream a canonical train-data value into one digest."""
+
+    def add(tag: bytes, payload: Any = b"") -> None:
+        view = memoryview(payload)
+        if not view.contiguous:
+            raise TypeError("RS train-data fingerprint requires contiguous byte payloads")
+        byte_view = view.cast("B")
+        digest.update(len(tag).to_bytes(2, "big"))
+        digest.update(tag)
+        digest.update(byte_view.nbytes.to_bytes(8, "big"))
+        digest.update(byte_view)
+
+    if value is None:
+        add(b"none")
+    elif isinstance(value, bool):
+        add(b"bool", bytes([value]))
+    elif isinstance(value, int):
+        add(b"int", str(value).encode("ascii"))
+    elif isinstance(value, float):
+        add(b"float", struct.pack(">d", value))
+    elif isinstance(value, str):
+        add(b"str", value.encode("utf-8"))
+    elif isinstance(value, bytes):
+        add(b"bytes", value)
+    elif isinstance(value, torch.Tensor):
+        if value.device.type == "meta":
+            raise TypeError("RS train-data fingerprint does not support meta tensors")
+        add(b"tensor-layout", str(value.layout).encode("ascii"))
+        tensor = value.detach()
+        if tensor.layout != torch.strided:
+            tensor = tensor.to_dense()
+        tensor = tensor.to(device="cpu").resolve_conj().resolve_neg().contiguous()
+        add(b"tensor-dtype", str(tensor.dtype).encode("ascii"))
+        add(b"tensor-shape", ",".join(str(size) for size in tensor.shape).encode("ascii"))
+        add(b"tensor-data", tensor.reshape(-1).view(torch.uint8).numpy())
+    elif isinstance(value, np.generic):
+        scalar = np.asarray(value)
+        if scalar.dtype.hasobject:
+            raise TypeError("RS train-data fingerprint does not support object-dtype scalars")
+        add(b"numpy-scalar-dtype")
+        _update_rs_value_fingerprint(digest, _rs_numpy_dtype_descriptor(scalar.dtype), active_containers)
+        add(b"numpy-scalar-data", scalar.reshape(1).view(np.uint8))
+    elif isinstance(value, np.ndarray):
+        if value.dtype.hasobject:
+            raise TypeError("RS train-data fingerprint does not support object-dtype arrays")
+        array = np.ascontiguousarray(value)
+        add(b"ndarray-dtype")
+        _update_rs_value_fingerprint(digest, _rs_numpy_dtype_descriptor(array.dtype), active_containers)
+        add(b"ndarray-shape", ",".join(str(size) for size in array.shape).encode("ascii"))
+        add(b"ndarray-data", array.view(np.uint8).reshape(-1))
+    elif isinstance(value, Mapping):
+        identity = id(value)
+        if identity in active_containers:
+            raise TypeError("RS train-data fingerprint does not support cyclic mappings")
+        active_containers.add(identity)
+        try:
+            items = sorted(
+                ((_rs_value_fingerprint(key, active_containers), key, item) for key, item in value.items()),
+                key=operator.itemgetter(0),
+            )
+            if any(items[index - 1][0] == items[index][0] for index in range(1, len(items))):
+                raise TypeError("RS train-data fingerprint found ambiguous mapping keys")
+            add(b"mapping-size", str(len(items)).encode("ascii"))
+            for _, key, item in items:
+                add(b"mapping-key")
+                _update_rs_value_fingerprint(digest, key, active_containers)
+                add(b"mapping-value")
+                _update_rs_value_fingerprint(digest, item, active_containers)
+        finally:
+            active_containers.remove(identity)
+    elif isinstance(value, (list, tuple)):
+        identity = id(value)
+        if identity in active_containers:
+            raise TypeError("RS train-data fingerprint does not support cyclic sequences")
+        active_containers.add(identity)
+        try:
+            add(b"list" if isinstance(value, list) else b"tuple", str(len(value)).encode("ascii"))
+            primitive_type = type(value[0]) if value else None
+            if primitive_type in {bool, int, float} and all(type(item) is primitive_type for item in value):
+                add({bool: b"bool-sequence", int: b"int-sequence", float: b"float-sequence"}[primitive_type])
+                for offset in range(0, len(value), 4096):
+                    chunk = value[offset : offset + 4096]
+                    add(b"primitive-chunk-size", len(chunk).to_bytes(4, "big"))
+                    if primitive_type is bool:
+                        payload = bytes(chunk)
+                    elif primitive_type is int:
+                        payload = ",".join(map(str, chunk)).encode("ascii")
+                    else:
+                        payload = struct.pack(f">{len(chunk)}d", *chunk)
+                    add(b"primitive-chunk-data", payload)
+            else:
+                for item in value:
+                    add(b"sequence-item")
+                    _update_rs_value_fingerprint(digest, item, active_containers)
+        finally:
+            active_containers.remove(identity)
+    else:
+        value_type = type(value)
+        raise TypeError(
+            "RS train-data fingerprint does not support value type "
+            f"{value_type.__module__}.{value_type.__qualname__}"
+        )
+
+
+def _rs_value_fingerprint(value: Any, active_containers: set[int]) -> bytes:
+    """Hash supported train-data values without retaining their contents."""
+
+    digest = hashlib.sha256()
+    _update_rs_value_fingerprint(digest, value, active_containers)
+    return digest.digest()
+
+
+def fingerprint_rs_train_data(
+    train_data: Mapping[str, Any],
+    *,
+    group_indices: list[Any],
+    weight_versions: list[Any],
+) -> bytes:
+    """Fingerprint the exact ordered payload that will be split for training."""
+
+    if not isinstance(train_data, Mapping):
+        raise TypeError("RS train-data fingerprint requires a mapping")
+    return _rs_value_fingerprint(
+        {
+            "train_data": train_data,
+            "group_indices": group_indices,
+            "weight_versions": weight_versions,
+        },
+        set(),
+    )
+
+
+def validate_rs_train_data_fingerprint(
+    train_data: Mapping[str, Any],
+    expected: bytes,
+    *,
+    group_indices: list[Any],
+    weight_versions: list[Any],
+) -> None:
+    """Require rollout observability hooks to leave final training inputs unchanged."""
+
+    if not isinstance(expected, bytes) or len(expected) != hashlib.sha256().digest_size:
+        raise ValueError("invalid RS train-data fingerprint")
+    if (
+        fingerprint_rs_train_data(
+            train_data,
+            group_indices=group_indices,
+            weight_versions=weight_versions,
+        )
+        != expected
+    ):
+        raise RuntimeError(
+            "RS train data changed after proximal preflight; rollout observability hooks must be read-only."
         )
 
 

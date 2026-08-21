@@ -373,6 +373,13 @@ def test_rs_refill_accepts_explicitly_disabled_fp_quantization(monkeypatch):
 
 
 @pytest.mark.unit
+def test_rs_refill_accepts_a_read_only_custom_rollout_logger(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+
+    module.slime_validate_args(make_rs_refill_args(custom_rollout_log_function_path="custom.log"))
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
@@ -411,7 +418,6 @@ def test_rs_refill_accepts_explicitly_disabled_fp_quantization(monkeypatch):
         ({"context_parallel_size": 2}, "context-parallel-size 1"),
         ({"partial_rollout": True}, "partial-rollout"),
         ({"dynamic_sampling_filter_path": "custom.filter"}, "dynamic-sampling-filter-path"),
-        ({"custom_rollout_log_function_path": "custom.log"}, "custom-rollout-log-function-path"),
         (
             {"rollout_function_path": "slime.rollout.fully_async_rollout.generate_rollout_fully_async"},
             "fully-async rollout queue",

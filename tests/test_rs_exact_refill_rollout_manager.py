@@ -324,6 +324,7 @@ def test_rollout_manager_real_lifecycle_applies_stores_and_finalizes(monkeypatch
         [_sample(10, 1, loss_mask=[1, 0]), _sample(11, 1, loss_mask=[1, 0])],
     ]
     manager, conversions, splits, debug_saves = _real_lifecycle_manager(groups, cache_limit=32)
+    manager.args.custom_rollout_log_function_path = "custom.read_only_log"
     cache = {
         sample.index: torch.tensor([sample.index + 0.25, sample.index + 0.5]) for group in groups for sample in group
     }
@@ -382,6 +383,7 @@ def test_rollout_manager_real_lifecycle_applies_stores_and_finalizes(monkeypatch
     assert conversions == [
         (True, [0, 1, 10, 11]),
         (False, [0, 1, 10, 11]),
+        (False, [0, 1, 10, 11]),
     ]
     assert splits == [4, None]
     assert debug_saves == [(None, 7, False, [0, 1, 10, 11])]
@@ -417,6 +419,92 @@ def test_rollout_manager_real_lifecycle_applies_stores_and_finalizes(monkeypatch
     assert metrics["rollout/rs_refill/gate_acceptance_rate"] == 1
     assert metrics["rollout/rs_refill/selection_utilization"] == 1
     assert manager_timeouts == [123.0, 123.0]
+
+
+def test_rollout_manager_rejects_custom_logger_training_input_mutation(monkeypatch):
+    groups = [[_sample(0, 0), _sample(1, 0)]]
+    manager, _, _, _ = _real_lifecycle_manager(groups)
+    manager.args.custom_rollout_log_function_path = "custom.log"
+    original_convert = manager._convert_samples_to_train_data
+
+    def convert(samples, preflight=False):
+        data = original_convert(samples, preflight=preflight)
+        data["tokens"] = [list(sample.tokens) for sample in samples]
+        return data
+
+    manager._convert_samples_to_train_data = convert
+    actor = _LifecycleActor(
+        _reports(groups),
+        [{sample.index: torch.zeros(sample.response_length) for sample in groups[0]}],
+    )
+    rpc_events = []
+    state_snapshots = []
+    manager_rpc = _manager_rpc(manager, rpc_events, state_snapshots)
+    monkeypatch.setattr(rollout_module.ray, "get", lambda value, *, timeout=None: value)
+    monkeypatch.setattr(rollout_module.time, "perf_counter", lambda: 100.0)
+    monkeypatch.setattr(rollout_module, "save_debug_rollout_data", lambda *_args, **_kwargs: None)
+
+    def mutate_tokens(_rollout_id, _args, samples, _metrics, _elapsed):
+        samples[0].tokens[-1] += 1
+
+    monkeypatch.setattr(rollout_module, "log_rollout_data", mutate_tokens)
+
+    with pytest.raises(RuntimeError, match="rollout observability hooks must be read-only"):
+        run_rs_batch_refill(
+            actor,
+            manager_rpc,
+            7,
+            resolve=lambda value, **_kwargs: value,
+            clock=iter([0.0, 1.0, 2.0, 3.0]).__next__,
+        )
+
+    assert [name for name, _ in rpc_events] == ["prepare", "apply", "store", "finalize", "abort"]
+    assert actor.events[-1] == ("discard", 7)
+    assert state_snapshots[-1] == ("abort", None, [0, 1])
+    assert 7 not in manager._pending_rs_batches
+
+
+def test_rollout_manager_rejects_debug_saver_training_input_mutation(monkeypatch):
+    groups = [[_sample(0, 0), _sample(1, 0)]]
+    manager, _, _, _ = _real_lifecycle_manager(groups)
+    manager.args.save_debug_rollout_data = "/tmp/rollout-{rollout_id}.pt"
+    original_convert = manager._convert_samples_to_train_data
+
+    def convert(samples, preflight=False):
+        data = original_convert(samples, preflight=preflight)
+        data["tokens"] = [list(sample.tokens) for sample in samples]
+        return data
+
+    manager._convert_samples_to_train_data = convert
+    actor = _LifecycleActor(
+        _reports(groups),
+        [{sample.index: torch.zeros(sample.response_length) for sample in groups[0]}],
+    )
+    rpc_events = []
+    state_snapshots = []
+    manager_rpc = _manager_rpc(manager, rpc_events, state_snapshots)
+    monkeypatch.setattr(rollout_module.ray, "get", lambda value, *, timeout=None: value)
+    monkeypatch.setattr(rollout_module.time, "perf_counter", lambda: 100.0)
+
+    def mutate_tokens(_path, samples, *, rollout_id, evaluation):
+        samples[0].tokens[-1] += 1
+
+    monkeypatch.setattr(rollout_module, "save_debug_rollout_data", mutate_tokens)
+    monkeypatch.setattr(rollout_module, "log_rollout_data", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="rollout observability hooks must be read-only"):
+        run_rs_batch_refill(
+            actor,
+            manager_rpc,
+            7,
+            resolve=lambda value, **_kwargs: value,
+            clock=iter([0.0, 1.0, 2.0, 3.0]).__next__,
+        )
+
+    assert [name for name, _ in rpc_events] == ["prepare", "apply", "store", "finalize", "abort"]
+    assert actor.events[-1] == ("discard", 7)
+    assert state_snapshots[-1] == ("abort", None, [0, 1])
+    assert 7 not in manager._pending_rs_batches
 
 
 def test_rollout_manager_real_lifecycle_refills_a_rejected_group_and_accepts_tensor_masks(monkeypatch):

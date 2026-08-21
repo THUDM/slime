@@ -2222,8 +2222,6 @@ def slime_validate_args(args):
             raise ValueError("--rs-batch-refill does not support a custom reward postprocessor yet.")
         if args.rollout_data_postprocess_path is not None:
             raise ValueError("--rs-batch-refill does not support a rollout-data postprocessor yet.")
-        if getattr(args, "custom_rollout_log_function_path", None) is not None:
-            raise ValueError("--rs-batch-refill does not support --custom-rollout-log-function-path yet.")
         if args.load_debug_rollout_data is not None or args.debug_train_only or args.debug_rollout_only:
             raise ValueError("--rs-batch-refill requires both rollout and training backends.")
         if (

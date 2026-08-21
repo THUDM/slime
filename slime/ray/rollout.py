@@ -35,6 +35,7 @@ from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_inf
 from slime.utils.misc import Box, load_function
 from slime.utils.rs_refill import (
     attach_proximal_log_probs,
+    fingerprint_rs_train_data,
     merge_replacement_metrics,
     merge_selected_log_prob_caches,
     plan_topology_aligned_rs_refill,
@@ -44,6 +45,7 @@ from slime.utils.rs_refill import (
     validate_refill_rollout_ids,
     validate_replacement_policy_version,
     validate_rs_refill_target_batch_alignment,
+    validate_rs_train_data_fingerprint,
     validate_sample_masks,
 )
 from slime.utils.types import Sample
@@ -913,6 +915,17 @@ class RolloutManager:
         pending["metrics"]["rollout/rs_refill/effective_tokens_per_refill_path_second"] = (
             effective_tokens / refill_path_seconds if refill_path_seconds > 0 else 0.0
         )
+        data = self._convert_samples_to_train_data(samples)
+        observability_fingerprint = None
+        if (
+            getattr(self.args, "custom_rollout_log_function_path", None) is not None
+            or self.args.save_debug_rollout_data is not None
+        ):
+            observability_fingerprint = fingerprint_rs_train_data(
+                data,
+                group_indices=[sample.group_index for sample in samples],
+                weight_versions=[sample.weight_versions for sample in samples],
+            )
         save_debug_rollout_data(
             self.args.save_debug_rollout_data,
             samples,
@@ -926,7 +939,14 @@ class RolloutManager:
             pending["metrics"],
             refill_path_seconds,
         )
-        data = self._convert_samples_to_train_data(samples)
+        if observability_fingerprint is not None:
+            data = self._convert_samples_to_train_data(samples)
+            validate_rs_train_data_fingerprint(
+                data,
+                observability_fingerprint,
+                group_indices=[sample.group_index for sample in samples],
+                weight_versions=[sample.weight_versions for sample in samples],
+            )
         validate_sample_masks(samples, pending["accepted_mask_fingerprints"])
         attach_proximal_log_probs(
             data,

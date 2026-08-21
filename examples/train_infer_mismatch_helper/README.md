@@ -68,7 +68,9 @@ disaggregated Megatron path, a global rollout dataset, one optimizer step per ro
 engines, full NCCL weight updates, dynamic batching, zero actor dropout, the default model provider, and non-quantized
 Megatron training. Checkpoint resume, fully async rollout, token-level RS, external rollout engines, and custom
 model/loss/data hooks are rejected during argument validation. Dynamic sampling filters and custom rollout logging are
-also rejected because either may change the exact candidate set or mutate policy-relevant samples after preflight.
+handled conservatively: dynamic sampling filters are rejected because they may change the exact candidate set, while a
+custom rollout logger or debug saver is allowed only if a final train-data fingerprint proves that it left policy
+inputs unchanged.
 
 Refill adds actor preflight work and replacement latency, so it is a correctness option rather than an unconditional
 wall-clock speedup. Its cost depends on the observed rejection rate and the rollout/training time balance.
