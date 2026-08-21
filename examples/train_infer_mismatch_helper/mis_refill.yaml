@@ -1,0 +1,22 @@
+# TIS weights correct the policy-gradient loss but do not mask individual tokens.
+# Keep batch normalization disabled: RS refill cannot yet normalize globally
+# across DP-local dynamic microbatches.
+use_tis: true
+tis_level: "token"
+tis_mode: "truncate"
+tis_lower_bound: 0.1
+tis_upper_bound: 10.0
+tis_batch_normalize: false
+
+# Proximal replay also requires rollout_temperature > 0, 0 < rollout_top_p <= 1,
+# rollout_top_k: -1, attention_dropout: 0, and hidden_dropout: 0 in the CLI or
+# surrounding custom configuration.
+attention_dropout: 0.0
+hidden_dropout: 0.0
+
+# RS is a sequence-level gate so a rejected unit maps to an unambiguous batch deficit.
+use_rs: true
+rs_level: "geometric"
+rs_lower_bound: 0.01
+rs_upper_bound: 100.0
+rs_veto_threshold: null

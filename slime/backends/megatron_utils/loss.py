@@ -22,6 +22,7 @@ from slime.utils.ppo_utils import (
     get_reinforce_plus_plus_baseline_advantages,
     get_reinforce_plus_plus_returns,
 )
+from slime.utils.rs_refill import apply_rs_refill_tis, clone_rs_masks, validate_final_rs_masks
 from slime.utils.types import RolloutBatch
 
 from .cp_utils import (
@@ -1071,11 +1072,16 @@ def policy_loss_function(
             "response_lengths": response_lengths,
         }
 
-        if args.custom_tis_function_path is not None:
+        original_rs_masks = clone_rs_masks(batch["loss_masks"]) if getattr(args, "rs_batch_refill", False) else None
+        if getattr(args, "rs_batch_refill", False):
+            tis_func = apply_rs_refill_tis
+        elif args.custom_tis_function_path is not None:
             tis_func = load_function(args.custom_tis_function_path)
         else:
             tis_func = vanilla_tis_function
         pg_loss, modified_response_masks, tis_metrics = tis_func(**tis_kwargs)
+        if getattr(args, "rs_batch_refill", False):
+            validate_final_rs_masks(original_rs_masks, batch["loss_masks"], modified_response_masks)
 
         # [decouple IS and rejection] Rebuild sum_of_sample_mean with
         # modified_response_masks for numerator correction (rejected tokens

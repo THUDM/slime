@@ -2,6 +2,7 @@ import argparse
 import copy
 import json
 import logging
+import math
 import os
 from typing import Any
 
@@ -1082,6 +1083,36 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Path to the custom TIS/RS function (e.g., examples/train_infer_mismatch_helper/mis.py:compute_mis_weights_with_cp).",
             )
             parser.add_argument(
+                "--rs-batch-refill",
+                action="store_true",
+                default=False,
+                help=(
+                    "For disaggregated train_async.py, apply sequence rejection sampling before the optimizer "
+                    "step and generate topology-aligned replacements until the effective batch is complete."
+                ),
+            )
+            parser.add_argument(
+                "--rs-refill-max-rounds",
+                type=int,
+                default=2,
+                help="Maximum replacement rounds before failing the job without an optimizer step.",
+            )
+            parser.add_argument(
+                "--rs-refill-rpc-timeout-seconds",
+                type=float,
+                default=1800.0,
+                help="Timeout for each post-generation exact-refill coordination or actor RPC before aborting the batch.",
+            )
+            parser.add_argument(
+                "--rs-refill-max-candidate-cache-bytes",
+                type=int,
+                default=1 << 30,
+                help=(
+                    "Maximum proximal-logprob tensor payload retained by one process: each actor rank per candidate "
+                    "round and the RolloutManager across accepted refill rounds."
+                ),
+            )
+            parser.add_argument(
                 "--custom-pg-loss-reducer-function-path",
                 type=str,
                 default=None,
@@ -1903,6 +1934,8 @@ def slime_validate_args(args):
 
     args.rollout_external = args.rollout_external_engine_addrs is not None
 
+    if args.rs_batch_refill and args.rollout_external:
+        raise ValueError("--rs-batch-refill does not support external rollout engines yet.")
     if args.rollout_external and not args.debug_train_only:
         apply_external_engine_info_to_args(args, logger=logger)
 
@@ -2010,13 +2043,224 @@ def slime_validate_args(args):
     if args.use_rollout_routing_replay:
         args.use_routing_replay = True
 
+    custom_config_keys = set()
     if args.custom_config_path:
         with open(args.custom_config_path) as f:
             data = yaml.safe_load(f) or {}
+        custom_config_keys = set(data)
         for k, v in data.items():
             if hasattr(args, k):
                 logger.info(f"Warning: Argument {k} is already set to {getattr(args, k)}, will override with {v}.")
             setattr(args, k, v)
+
+    if args.rs_batch_refill:
+        if args.train_backend != "megatron":
+            raise ValueError("--rs-batch-refill currently requires --train-backend megatron.")
+        if args.colocate:
+            raise ValueError("--rs-batch-refill is only supported by disaggregated train_async.py.")
+        if getattr(args, "offload", False):
+            raise ValueError("--rs-batch-refill does not support offload: true in --custom-config-path.")
+        external_config_keys = {
+            "rollout_external",
+            "rollout_external_engine_addrs",
+            "rollout_external_engine_infos",
+        }
+        if custom_config_keys & external_config_keys:
+            raise ValueError(
+                "--rs-batch-refill does not allow external rollout engine settings in --custom-config-path."
+            )
+        if args.rollout_external or args.rollout_external_engine_addrs is not None:
+            raise ValueError("--rs-batch-refill does not support external rollout engines yet.")
+        if not args.rollout_global_dataset:
+            raise ValueError("--rs-batch-refill requires --rollout-global-dataset for stable sample and group IDs.")
+        if args.num_rollout is None or args.num_rollout <= 0:
+            raise ValueError("--rs-batch-refill requires a positive explicit --num-rollout.")
+        if args.update_weights_interval != 1:
+            raise ValueError("--rs-batch-refill requires --update-weights-interval 1.")
+        if not getattr(args, "finetune", False) or args.start_rollout_id != 0:
+            raise ValueError(
+                "--rs-batch-refill currently supports fresh or finetune runs starting at rollout 0; "
+                "checkpoint resume is not implemented yet."
+            )
+        if getattr(args, "update_weight_start_version", 0) != 0:
+            raise ValueError("--rs-batch-refill requires --update-weight-start-version 0.")
+        if getattr(args, "ref_update_interval", None) is not None:
+            raise ValueError("--rs-batch-refill does not support --ref-update-interval yet.")
+        if args.num_steps_per_rollout not in {None, 1}:
+            raise ValueError("--rs-batch-refill requires --num-steps-per-rollout 1 when it is explicitly set.")
+        if args.rollout_batch_size <= 0 or args.n_samples_per_prompt <= 0:
+            raise ValueError("--rs-batch-refill requires positive rollout and per-prompt sample batch sizes.")
+        rollout_sample_count = args.rollout_batch_size * args.n_samples_per_prompt
+        if args.global_batch_size != rollout_sample_count:
+            raise ValueError(
+                "--rs-batch-refill requires exactly one optimizer step per rollout batch: "
+                "--global-batch-size must equal --rollout-batch-size * --n-samples-per-prompt "
+                f"({rollout_sample_count})."
+            )
+        if args.megatron_config_path is not None:
+            raise ValueError("--rs-batch-refill does not support --megatron-config-path yet.")
+        if getattr(args, "custom_model_provider_path", None) is not None:
+            raise ValueError("--rs-batch-refill does not support --custom-model-provider-path yet.")
+        if getattr(args, "custom_megatron_init_path", None) is not None:
+            raise ValueError("--rs-batch-refill does not support --custom-megatron-init-path yet.")
+        if getattr(args, "custom_megatron_before_log_prob_hook_path", None) is not None:
+            raise ValueError(
+                "--rs-batch-refill does not support --custom-megatron-before-log-prob-hook-path because "
+                "preflight and training must observe the same model state."
+            )
+        if getattr(args, "custom_megatron_before_train_step_hook_path", None) is not None:
+            raise ValueError(
+                "--rs-batch-refill does not support --custom-megatron-before-train-step-hook-path because "
+                "preflight and training must observe the same model state."
+            )
+        if args.update_weight_mode != "full" or args.update_weight_transport != "nccl":
+            raise ValueError("--rs-batch-refill currently requires full weight updates over NCCL.")
+        if args.use_rollout_logprobs:
+            raise ValueError("--rs-batch-refill does not support --use-rollout-logprobs with proximal preflight.")
+        if getattr(args, "rollout_top_k", -1) != -1:
+            raise ValueError("--rs-batch-refill currently requires --rollout-top-k -1.")
+        rollout_temperature = getattr(args, "rollout_temperature", 1.0)
+        rollout_top_p = getattr(args, "rollout_top_p", 1.0)
+        if not math.isfinite(rollout_temperature) or rollout_temperature <= 0:
+            raise ValueError("--rs-batch-refill requires a finite positive --rollout-temperature.")
+        if not math.isfinite(rollout_top_p) or not 0 < rollout_top_p <= 1:
+            raise ValueError("--rs-batch-refill requires finite --rollout-top-p in (0, 1].")
+        if not args.use_tis:
+            raise ValueError("--rs-batch-refill requires --use-tis.")
+        if args.custom_tis_function_path is not None:
+            raise ValueError("--rs-batch-refill uses its built-in TIS/RS path; custom TIS functions are unsupported.")
+        if not getattr(args, "use_rs", False):
+            raise ValueError("--rs-batch-refill requires use_rs: true in --custom-config-path.")
+        if getattr(args, "rs_level", None) not in {"sequence", "geometric"}:
+            raise ValueError("--rs-batch-refill requires rs_level: sequence or geometric.")
+        if getattr(args, "tis_mode", None) not in {"truncate", "clip"}:
+            raise ValueError("--rs-batch-refill requires tis_mode: truncate or clip.")
+        if getattr(args, "tis_level", None) not in {"token", "sequence", "geometric"}:
+            raise ValueError("--rs-batch-refill requires tis_level: token, sequence, or geometric.")
+        if getattr(args, "tis_batch_normalize", False):
+            raise ValueError("--rs-batch-refill does not support tis_batch_normalize: true yet.")
+        if getattr(args, "attention_dropout", None) != 0.0 or getattr(args, "hidden_dropout", None) != 0.0:
+            raise ValueError(
+                "--rs-batch-refill requires --attention-dropout 0 and --hidden-dropout 0 so cached "
+                "preflight probabilities remain valid during training."
+            )
+        fp8 = getattr(args, "fp8", None)
+        if fp8 is not None and fp8 is not False:
+            raise ValueError(
+                "--rs-batch-refill currently requires non-FP8 Megatron training because FP8 preflight "
+                "may update quantizer state or depend on candidate microbatch packing."
+            )
+        if getattr(args, "fp8_param_gather", False):
+            raise ValueError("--rs-batch-refill does not support --fp8-param-gather yet.")
+        fp4 = getattr(args, "fp4", None)
+        if fp4 is not None and fp4 is not False:
+            raise ValueError(
+                "--rs-batch-refill currently requires non-FP4 Megatron training because FP4 preflight "
+                "may update quantizer state or depend on candidate microbatch packing."
+            )
+        if getattr(args, "te_precision_config_file", None) is not None:
+            raise ValueError("--rs-batch-refill does not support a custom Transformer Engine precision config yet.")
+        if (
+            getattr(args, "kitchen_config_file", None) is not None
+            or getattr(args, "kitchen_recipe_number", None) is not None
+        ):
+            raise ValueError("--rs-batch-refill does not support Megatron Kitchen quantization yet.")
+        deepgemm_forward_settings = (
+            getattr(args, "megatron_deepgemm_forward_layers", None),
+            getattr(args, "megatron_deepgemm_forward_modules", None),
+            getattr(args, "megatron_deepgemm_moe_forward_layers", None),
+            getattr(args, "megatron_deepgemm_moe_forward_modules", None),
+        )
+        if any(setting is not None for setting in deepgemm_forward_settings):
+            raise ValueError("--rs-batch-refill does not support DeepGEMM FP8 forward overrides yet.")
+        if getattr(args, "moe_input_jitter_eps", None) not in {None, 0}:
+            raise ValueError("--rs-batch-refill requires --moe-input-jitter-eps 0 or unset.")
+        if getattr(args, "moe_router_force_load_balancing", False):
+            raise ValueError("--rs-batch-refill does not support --moe-router-force-load-balancing.")
+        if getattr(args, "moe_expert_capacity_factor", None) is not None:
+            raise ValueError("--rs-batch-refill requires --moe-expert-capacity-factor to be unset.")
+        moe_load_balancing = getattr(args, "moe_router_load_balancing_type", "aux_loss")
+        if moe_load_balancing == "sinkhorn" or (
+            isinstance(moe_load_balancing, (list, tuple)) and "sinkhorn" in moe_load_balancing
+        ):
+            raise ValueError("--rs-batch-refill does not support Sinkhorn MoE routing.")
+        if args.context_parallel_size != 1:
+            raise ValueError("--rs-batch-refill currently requires --context-parallel-size 1.")
+        if not args.use_dynamic_batch_size or args.max_tokens_per_gpu is None:
+            raise ValueError("--rs-batch-refill requires dynamic batching and --max-tokens-per-gpu.")
+        if args.log_probs_max_tokens_per_gpu is None:
+            args.log_probs_max_tokens_per_gpu = args.max_tokens_per_gpu
+        if getattr(args, "use_rollout_entropy", False):
+            raise ValueError("--rs-batch-refill does not support --use-rollout-entropy yet.")
+        if not args.compute_advantages_and_returns:
+            raise ValueError("--rs-batch-refill requires advantage and return computation.")
+        if getattr(args, "custom_advantage_function_path", None) is not None:
+            raise ValueError("--rs-batch-refill does not support --custom-advantage-function-path yet.")
+        if getattr(args, "loss_type", "policy_loss") != "policy_loss":
+            raise ValueError("--rs-batch-refill currently requires --loss-type policy_loss.")
+        if getattr(args, "custom_pg_loss_reducer_function_path", None) is not None:
+            raise ValueError("--rs-batch-refill does not support a custom policy-loss reducer yet.")
+        if getattr(args, "use_opsm", False) or args.use_opd:
+            raise ValueError("--rs-batch-refill does not support OPSM or on-policy distillation yet.")
+        if args.advantage_estimator == "ppo" or args.use_critic:
+            raise ValueError("--rs-batch-refill does not support critic training yet.")
+        if args.offload_train or args.release_train or args.offload_rollout:
+            raise ValueError("--rs-batch-refill requires resident actor and rollout engines.")
+        if args.keep_old_actor:
+            raise ValueError("--rs-batch-refill does not support --keep-old-actor.")
+        if args.partial_rollout:
+            raise ValueError("--rs-batch-refill does not support --partial-rollout yet.")
+        if getattr(args, "dynamic_sampling_filter_path", None) is not None:
+            raise ValueError("--rs-batch-refill does not support --dynamic-sampling-filter-path yet.")
+        if args.use_rollout_routing_replay or args.use_routing_replay:
+            raise ValueError("--rs-batch-refill does not support routing replay yet.")
+        if args.rollout_function_path == "slime.rollout.fully_async_rollout.generate_rollout_fully_async":
+            raise ValueError("--rs-batch-refill does not support the persistent fully-async rollout queue yet.")
+        if args.custom_convert_samples_to_train_data_path is not None:
+            raise ValueError("--rs-batch-refill does not support a custom train-data converter yet.")
+        if args.custom_reward_post_process_path is not None:
+            raise ValueError("--rs-batch-refill does not support a custom reward postprocessor yet.")
+        if args.rollout_data_postprocess_path is not None:
+            raise ValueError("--rs-batch-refill does not support a rollout-data postprocessor yet.")
+        if args.load_debug_rollout_data is not None or args.debug_train_only or args.debug_rollout_only:
+            raise ValueError("--rs-batch-refill requires both rollout and training backends.")
+        if (
+            isinstance(args.rs_refill_max_rounds, bool)
+            or not isinstance(args.rs_refill_max_rounds, int)
+            or args.rs_refill_max_rounds < 0
+        ):
+            raise ValueError("--rs-refill-max-rounds must be a non-negative integer.")
+        if not math.isfinite(args.rs_refill_rpc_timeout_seconds) or args.rs_refill_rpc_timeout_seconds <= 0:
+            raise ValueError("--rs-refill-rpc-timeout-seconds must be finite and positive.")
+        if (
+            isinstance(args.rs_refill_max_candidate_cache_bytes, bool)
+            or not isinstance(args.rs_refill_max_candidate_cache_bytes, int)
+            or args.rs_refill_max_candidate_cache_bytes <= 0
+        ):
+            raise ValueError("--rs-refill-max-candidate-cache-bytes must be a positive integer.")
+
+        tis_upper_bound = getattr(args, "tis_upper_bound", None)
+        tis_lower_bound = getattr(args, "tis_lower_bound", None)
+        rs_lower_bound = getattr(args, "rs_lower_bound", None)
+        rs_upper_bound = getattr(args, "rs_upper_bound", None)
+        if tis_upper_bound is None or not math.isfinite(tis_upper_bound) or tis_upper_bound <= 0:
+            raise ValueError("--rs-batch-refill requires a finite positive tis_upper_bound.")
+        if tis_lower_bound is not None and (not math.isfinite(tis_lower_bound) or tis_lower_bound < 0):
+            raise ValueError("tis_lower_bound must be finite and non-negative for --rs-batch-refill.")
+        effective_tis_lower_bound = tis_lower_bound if tis_lower_bound is not None else 1.0 / tis_upper_bound
+        if args.tis_mode == "clip" and not effective_tis_lower_bound < tis_upper_bound:
+            raise ValueError("--rs-batch-refill requires TIS clip bounds with 0 <= lower < upper.")
+        effective_rs_lower_bound = rs_lower_bound if rs_lower_bound is not None else effective_tis_lower_bound
+        effective_rs_upper_bound = rs_upper_bound if rs_upper_bound is not None else tis_upper_bound
+        if (
+            not math.isfinite(effective_rs_lower_bound)
+            or not math.isfinite(effective_rs_upper_bound)
+            or not 0 <= effective_rs_lower_bound < effective_rs_upper_bound
+        ):
+            raise ValueError("--rs-batch-refill requires finite RS bounds with 0 <= lower < upper.")
+        rs_veto_threshold = getattr(args, "rs_veto_threshold", None)
+        if rs_veto_threshold is not None and (not math.isfinite(rs_veto_threshold) or rs_veto_threshold < 0):
+            raise ValueError("rs_veto_threshold must be finite and non-negative for --rs-batch-refill.")
 
     if args.eval_max_context_len is None:
         logger.info(

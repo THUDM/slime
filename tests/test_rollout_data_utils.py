@@ -50,6 +50,7 @@ def test_tensorize_rollout_data_for_training_normalizes_cpu_tensors():
     rollout_data = {
         "tokens": [readonly_tokens],
         "loss_masks": [[1, 0]],
+        "rs_preflight_log_probs": [torch.tensor([-0.2, -0.3], dtype=torch.float64, requires_grad=True)],
         "multimodal_train_inputs": [
             {
                 "pixel_values": torch.tensor([1.0], requires_grad=True),
@@ -63,6 +64,10 @@ def test_tensorize_rollout_data_for_training_normalizes_cpu_tensors():
 
     assert rollout_data["tokens"][0].dtype == torch.long
     assert rollout_data["loss_masks"][0].dtype == torch.int
+    assert rollout_data["rs_preflight_log_probs"][0].dtype == torch.float32
+    assert rollout_data["rs_preflight_log_probs"][0].device.type == "cpu"
+    assert rollout_data["rs_preflight_log_probs"][0].is_contiguous()
+    assert not rollout_data["rs_preflight_log_probs"][0].requires_grad
     assert rollout_data["multimodal_train_inputs"][0]["metadata"] == "unchanged"
     assert not rollout_data["multimodal_train_inputs"][0]["pixel_values"].requires_grad
     assert rollout_data["rollout_mask_sums"].dtype == torch.float32

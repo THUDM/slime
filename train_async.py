@@ -1,9 +1,12 @@
+import time
+
 import ray
 
 from slime.observability.logging_utils import configure_logger, finish_tracking, init_tracking
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.misc import should_run_periodic_action
+from slime.utils.rs_refill import run_rs_batch_refill
 
 
 # The framework supports other asynchronous approaches such as fully async (which is shown in examples/full_async).
@@ -35,8 +38,29 @@ def train(args):
         if rollout_data_next_future is not None:
             rollout_data_curr_ref = ray.get(rollout_data_next_future)
 
+        if getattr(args, "rs_batch_refill", False):
+            if rollout_data_curr_ref != rollout_id:
+                raise RuntimeError(
+                    f"RS candidate handle mismatch: expected rollout_id={rollout_id}, got {rollout_data_curr_ref}"
+                )
+            rollout_data_curr_ref = run_rs_batch_refill(
+                actor_model,
+                rollout_manager,
+                rollout_id,
+                resolve=ray.get,
+                clock=time.perf_counter,
+                rpc_timeout_seconds=args.rs_refill_rpc_timeout_seconds,
+            )
+
+        save_this_step = release_train or should_run_periodic_action(
+            rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout
+        )
+        # The data-source checkpoint must not include a prefetched batch that
+        # is absent from the corresponding model checkpoint.
+        defer_next_rollout = getattr(args, "rs_batch_refill", False) and save_this_step
+
         # Start the next rollout early.
-        if rollout_id + 1 < args.num_rollout:
+        if rollout_id + 1 < args.num_rollout and not defer_next_rollout:
             rollout_data_next_future = rollout_manager.generate.remote(rollout_id + 1)
 
         if release_train:
@@ -52,9 +76,7 @@ def train(args):
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))
 
-        if release_train or should_run_periodic_action(
-            rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout
-        ):
+        if save_this_step:
             force_sync = release_train or rollout_id == args.num_rollout - 1
             if actor_trains:
                 actor_model.save_model(rollout_id, force_sync=force_sync)
@@ -68,6 +90,9 @@ def train(args):
             rollout_data_curr_ref = ray.get(x) if (x := rollout_data_next_future) is not None else None
             rollout_data_next_future = None
             actor_model.update_weights()
+
+        if defer_next_rollout and rollout_id + 1 < args.num_rollout:
+            rollout_data_next_future = rollout_manager.generate.remote(rollout_id + 1)
 
         if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
             ray.get(rollout_manager.eval.remote(rollout_id))

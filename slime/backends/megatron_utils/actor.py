@@ -29,6 +29,7 @@ from slime.utils.reloadable_process_group import (
     reload_process_groups,
 )
 from slime.utils.routing_replay import RoutingReplay
+from slime.utils.rs_refill import clone_rs_masks, compute_sequence_rs_masks, validate_final_rs_masks
 from slime.utils.types import RolloutBatch
 
 from ...utils.tensor_backper import TensorBackuper
@@ -70,6 +71,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         monkey_patch_torch_dist()
         super().init(args, role, with_ref, with_opd_teacher)
+        self._rs_candidate_log_probs: dict[int, dict[int, torch.Tensor]] = {}
         # Destroying and recreating WORLD invalidates raw dist.group.WORLD references cached by external code.
         # Set SLIME_DESTROY_WORLD_PROCESS_GROUP=0 when such references may outlive a train sleep/wake cycle.
         if os.getenv("SLIME_DESTROY_WORLD_PROCESS_GROUP", "1").lower() not in {"0", "false", "no"}:
@@ -281,7 +283,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 for mm_dict in rollout_data["multimodal_train_inputs"]
             ]
 
-        for key in ["rollout_log_probs", "teacher_log_probs"]:
+        for key in ["rollout_log_probs", "rs_preflight_log_probs", "teacher_log_probs"]:
             if key not in rollout_data:
                 continue
             rollout_data[key] = [
@@ -371,6 +373,152 @@ class MegatronTrainRayActor(TrainRayActor):
                 use_rollout_top_p_replay=True,
             )
 
+    def score_rs_candidates(self, rollout_id: int, rollout_data_ref: Box):
+        """Score candidates with the proximal policy and retain logprobs locally."""
+
+        rollout_data = self._get_rollout_data(rollout_data_ref)
+        data_iterator = get_data_iterator(rollout_data)
+        target_tag = "old_actor" if self.args.keep_old_actor else "actor"
+        previous_tag = self._active_model_tag
+        if previous_tag != target_tag:
+            self._switch_model(target_tag)
+        try:
+            rollout_data.update(
+                self.compute_log_prob(
+                    data_iterator,
+                    rollout_data["num_microbatches"],
+                    store_prefix="",
+                )
+            )
+        finally:
+            if previous_tag is not None and self._active_model_tag != previous_tag:
+                self._switch_model(previous_tag)
+
+        if not mpu.is_pipeline_last_stage():
+            return []
+
+        train_log_probs = rollout_data.get("log_probs")
+        if not train_log_probs:
+            raise RuntimeError("RS refill preflight did not produce training log probabilities")
+        if len(train_log_probs) != len(rollout_data["sample_indices"]):
+            raise RuntimeError(
+                "RS refill preflight logprob/sample count mismatch: "
+                f"{len(train_log_probs)} != {len(rollout_data['sample_indices'])}"
+            )
+        if len(train_log_probs) != len(rollout_data["group_indices"]):
+            raise RuntimeError(
+                "RS refill preflight logprob/group count mismatch: "
+                f"{len(train_log_probs)} != {len(rollout_data['group_indices'])}"
+            )
+
+        original_loss_masks = clone_rs_masks(rollout_data["loss_masks"])
+        modified_masks = compute_sequence_rs_masks(
+            args=self.args,
+            train_log_probs=train_log_probs,
+            rollout_log_probs=rollout_data["rollout_log_probs"],
+            loss_masks=rollout_data["loss_masks"],
+        )
+
+        # Every TP rank executes the gate; only TP rank 0 owns the replicated
+        # report and actor-local cache transferred back through Ray.
+        if mpu.get_tensor_model_parallel_rank() != 0:
+            return []
+        if rollout_id in self._rs_candidate_log_probs:
+            raise RuntimeError(f"RS candidate logprob cache already exists for rollout_id={rollout_id}")
+        if len(original_loss_masks) != len(modified_masks):
+            raise RuntimeError(
+                "RS preflight gate returned a different sample count: "
+                f"original={len(original_loss_masks)}, modified={len(modified_masks)}"
+            )
+        if len(original_loss_masks) != len(rollout_data["loss_masks"]):
+            raise RuntimeError("RS preflight gate mutated the input loss-mask list length")
+        validate_final_rs_masks(original_loss_masks, rollout_data["loss_masks"])
+
+        cache_bytes_by_sample = [train_log_prob.numel() * 4 for train_log_prob in train_log_probs]
+        candidate_cache_bytes = sum(cache_bytes_by_sample)
+        if candidate_cache_bytes > self.args.rs_refill_max_candidate_cache_bytes:
+            raise RuntimeError(
+                "RS candidate proximal-logprob cache exceeds the per-actor limit before pinned-memory allocation: "
+                f"required={candidate_cache_bytes}, limit={self.args.rs_refill_max_candidate_cache_bytes}. "
+                "Increase --rs-refill-max-candidate-cache-bytes or reduce the candidate batch/response length."
+            )
+
+        stats = []
+        for original_mask, modified_mask in zip(original_loss_masks, modified_masks, strict=True):
+            valid_tokens = original_mask.sum().to(torch.long)
+            if modified_mask.shape == original_mask.shape:
+                gate_passed = torch.all(modified_mask.float() == original_mask.float()).to(torch.long)
+            else:
+                gate_passed = original_mask.new_tensor(0, dtype=torch.long)
+            stats.append(torch.stack((valid_tokens, gate_passed)))
+
+        stats = torch.stack(stats)
+        if stats.is_cuda:
+            stats_cpu = torch.empty_like(stats, device="cpu", pin_memory=True)
+            stats_cpu.copy_(stats, non_blocking=True)
+            proximal_log_probs = []
+            for train_log_prob in train_log_probs:
+                cpu_log_prob = torch.empty(
+                    train_log_prob.shape,
+                    dtype=torch.float32,
+                    device="cpu",
+                    pin_memory=True,
+                )
+                cpu_log_prob.copy_(train_log_prob.detach(), non_blocking=True)
+                proximal_log_probs.append(cpu_log_prob)
+            torch.cuda.current_stream(device=stats.device).synchronize()
+        else:
+            stats_cpu = stats.cpu()
+            proximal_log_probs = [
+                train_log_prob.detach().float().cpu().contiguous() for train_log_prob in train_log_probs
+            ]
+
+        stats_rows = stats_cpu.tolist()
+        sample_indices = [int(sample_index) for sample_index in rollout_data["sample_indices"]]
+        if len(sample_indices) != len(set(sample_indices)):
+            raise RuntimeError("RS preflight received duplicate sample indices on one actor rank")
+        self._rs_candidate_log_probs[rollout_id] = dict(zip(sample_indices, proximal_log_probs, strict=True))
+
+        reports = []
+        for sample_index, group_index, stats_row, cache_bytes in zip(
+            sample_indices,
+            rollout_data["group_indices"],
+            stats_rows,
+            cache_bytes_by_sample,
+            strict=True,
+        ):
+            valid_tokens, gate_passed = stats_row
+            reports.append(
+                {
+                    "sample_index": sample_index,
+                    "group_index": int(group_index),
+                    "valid_tokens": valid_tokens,
+                    "gate_passed": bool(gate_passed),
+                    "policy_version": str(self.weight_updater.weight_version),
+                    "candidate_cache_bytes": cache_bytes,
+                }
+            )
+        return reports
+
+    def take_rs_candidate_log_probs(self, rollout_id: int, selected_sample_indices: list[int]):
+        """Return selected local caches once and discard all other candidates."""
+
+        if not mpu.is_pipeline_last_stage() or mpu.get_tensor_model_parallel_rank() != 0:
+            return {}
+
+        selected = [int(sample_index) for sample_index in selected_sample_indices]
+        if len(selected) != len(set(selected)):
+            raise ValueError("Selected RS sample indices must be unique")
+        cache = self._rs_candidate_log_probs.pop(rollout_id, None)
+        if cache is None:
+            raise RuntimeError(f"No RS candidate logprob cache for rollout_id={rollout_id}")
+        return {sample_index: cache[sample_index] for sample_index in selected if sample_index in cache}
+
+    def discard_rs_candidate_log_probs(self, rollout_id: int) -> None:
+        """Idempotently discard a candidate cache after coordination fails."""
+
+        self._rs_candidate_log_probs.pop(rollout_id, None)
+
     def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):
         if self.args.debug_rollout_only:
             return None
@@ -422,6 +570,42 @@ class MegatronTrainRayActor(TrainRayActor):
         return {}
 
     def train_actor(self, rollout_id: int, rollout_data: RolloutBatch, external_data=None) -> None:
+        rs_preflight_log_probs = rollout_data.pop("rs_preflight_log_probs", None)
+        has_rs_preflight_log_probs = rs_preflight_log_probs is not None
+        rs_preflight_response_lengths = None
+        rs_preflight_loss_masks = None
+        if getattr(self.args, "rs_batch_refill", False):
+            if not has_rs_preflight_log_probs:
+                raise RuntimeError("RS-refilled training batch is missing its proximal logprob cache")
+            if "log_probs" in rollout_data:
+                raise RuntimeError("RS-refilled training batch contains conflicting proximal logprob fields")
+            sample_count = len(rollout_data["response_lengths"])
+            if not (len(rs_preflight_log_probs) == len(rollout_data["loss_masks"]) == sample_count):
+                raise RuntimeError(
+                    "RS-refilled proximal cache/sample count mismatch: "
+                    f"log_probs={len(rs_preflight_log_probs)}, masks={len(rollout_data['loss_masks'])}, "
+                    f"response_lengths={sample_count}"
+                )
+            for sample_position, (log_probs, loss_mask, response_length) in enumerate(
+                zip(
+                    rs_preflight_log_probs,
+                    rollout_data["loss_masks"],
+                    rollout_data["response_lengths"],
+                    strict=True,
+                )
+            ):
+                if log_probs.shape != loss_mask.shape or log_probs.numel() != int(response_length):
+                    raise RuntimeError(
+                        "RS-refilled proximal cache shape mismatch: "
+                        f"sample={sample_position}, log_probs={tuple(log_probs.shape)}, "
+                        f"mask={tuple(loss_mask.shape)}, response_length={response_length}"
+                    )
+            rollout_data["log_probs"] = rs_preflight_log_probs
+            rs_preflight_response_lengths = tuple(rollout_data["response_lengths"])
+            rs_preflight_loss_masks = clone_rs_masks(rollout_data["loss_masks"])
+        elif has_rs_preflight_log_probs:
+            raise RuntimeError("Received an RS preflight cache while --rs-batch-refill is disabled")
+
         # Create data iterator for log_probs and train.
         data_iterator = get_data_iterator(rollout_data)
         num_microbatches = rollout_data["num_microbatches"]
@@ -471,8 +655,10 @@ class MegatronTrainRayActor(TrainRayActor):
                     and self.args.advantage_estimator != "gspo"
                 )
                 if (
-                    not self.args.use_rollout_logprobs or self.args.get_mismatch_metrics
-                ) and not can_reuse_log_probs_in_loss:
+                    (not self.args.use_rollout_logprobs or self.args.get_mismatch_metrics)
+                    and not can_reuse_log_probs_in_loss
+                    and not has_rs_preflight_log_probs
+                ):
                     if self.args.use_routing_replay:
                         if self.args.use_rollout_routing_replay:
                             os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
@@ -510,6 +696,11 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.args,
                 rollout_data,
             )
+
+            if has_rs_preflight_log_probs:
+                if tuple(rollout_data["response_lengths"]) != rs_preflight_response_lengths:
+                    raise RuntimeError("RS-refilled response lengths changed after proximal preflight")
+                validate_final_rs_masks(rs_preflight_loss_masks, rollout_data["loss_masks"])
 
             # Train
             if self.args.use_routing_replay:

@@ -205,6 +205,7 @@ The recommended contract is to put the source identifier in `metadata["source_na
   Note: On-policy distillation (OPD) is now orthogonal to the advantage estimator. Use `--use-opd` and `--opd-kl-coef` to enable OPD on top of any estimator.
 - `--calculate-per-token-loss`: By default, slime calculates loss on a per-sample basis, i.e., `mean(sum(sample_i) / len(sample_i))`. Enable this flag to calculate loss on a per-token basis, i.e., `sum(sum(sample_i)) / sum(len(sample_i))`.
 - `--use-tis`: Enable this setting to use TIS (Truncated Importance Sampling) (https://fengyao.notion.site/off-policy-rl).
+- `--rs-batch-refill`: With sequence/geometric RS on disaggregated `train_async.py`, preflight complete prompt groups and reactively generate only the missing groups before an optimizer step. `--rs-refill-max-rounds` bounds retries; exhaustion aborts the step instead of silently using an underfilled effective batch. This is a correctness option with additional actor preflight and rollout latency, not an unconditional speedup. See [Rollout Correction Methods](../../../examples/train_infer_mismatch_helper/README.md#effective-batch-refill-after-sequence-rs) for the current constraints and a complete command.
 
 #### GRPO Algorithm
 

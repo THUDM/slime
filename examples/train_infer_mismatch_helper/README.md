@@ -22,6 +22,61 @@ You may specify the **IS/RS configs** with a config file using `--custom-config-
 `--get-mismatch-metrics`: When you don't want to add TIS/MIS, but still want to monitor the mismatch-related metrics (e.g. rollout-training KL). It will **only return mismatch metrics** but not change the loss in any way.
 
 
+### Effective-batch refill after sequence RS
+
+Sequence-level RS can leave an optimizer step with fewer independent prompt groups than configured. In disaggregated
+`train_async.py`, `--rs-batch-refill` makes that loss of effective batch cardinality fail-safe and explicit:
+
+1. Generate exactly `rollout_batch_size` initial prompt groups; there is no speculative over-generation.
+2. Before `optimizer.step`, recompute proximal log probabilities with the actor and apply the configured sequence or
+   geometric RS gate atomically to each complete prompt group.
+3. Keep only the selected groups and their in-memory proximal log-probability cache. Generate the exact deficit,
+   rounded only to the smallest DP/VPP scheduling multiple, from the current rollout policy.
+4. Repeat for at most `--rs-refill-max-rounds`. If the target batch is still incomplete, fail the job before an
+   optimizer step instead of silently training on an underfilled batch.
+
+After an initial or replacement candidate generation returns, every coordinator and actor wait in the refill loop is
+bounded by `--rs-refill-rpc-timeout-seconds` (30 minutes by default). Candidate generation retains the rollout
+backend's existing timeout and health-monitor behavior. `--rs-refill-max-candidate-cache-bytes` (1 GiB by default)
+bounds the proximal-logprob tensor payload retained by any one process: an actor rank checks its current candidate
+round before allocating pinned CPU memory, and the RolloutManager checks its accumulated accepted cache before pulling
+the selected tensors from Ray. `peak_actor_candidate_logprob_cache_bytes` is the per-actor high-water mark to compare
+with that limit; `aggregate_candidate_logprob_cache_bytes` and
+`peak_aggregate_candidate_logprob_cache_bytes` report cumulative and per-round aggregate payload across reporting
+actors. Selected-transfer and manager-retained metrics cover the coordinator side. Leave headroom for Python
+containers, Ray object-store/transport buffers, and other process memory, which are not included in this tensor-payload
+limit. The limit also does not reserve CUDA allocator headroom: training pipeline ranks that receive a final batch may
+materialize their DP-local proximal-logprob shard on device, so long-response jobs must budget GPU memory for it.
+
+The refill path still applies TIS during training; completing the batch does not make stale initial trajectories
+on-policy. Initial candidates are limited to one policy version of staleness and reactive replacements must match the
+actor version used for preflight.
+
+```bash
+python train_async.py \
+  ... \
+  --rs-batch-refill \
+  --rs-refill-max-rounds 2 \
+  --rs-refill-rpc-timeout-seconds 1800 \
+  --rs-refill-max-candidate-cache-bytes 1073741824 \
+  --update-weights-interval 1 \
+  --use-tis \
+  --custom-config-path examples/train_infer_mismatch_helper/mis_refill.yaml
+```
+
+This first implementation intentionally supports fresh/finetune runs from rollout 0 only. It requires the
+disaggregated Megatron path, a global rollout dataset, one optimizer step per rollout batch, resident actor and rollout
+engines, full NCCL weight updates, dynamic batching, zero actor dropout, the default model provider, and non-quantized
+Megatron training. Checkpoint resume, fully async rollout, token-level RS, external rollout engines, and custom
+model/loss/data hooks are rejected during argument validation. Dynamic sampling filters and custom rollout logging are
+handled conservatively: dynamic sampling filters are rejected because they may change the exact candidate set, while a
+custom rollout logger or debug saver is allowed only if a final train-data fingerprint proves that it left policy
+inputs unchanged.
+
+Refill adds actor preflight work and replacement latency, so it is a correctness option rather than an unconditional
+wall-clock speedup. Its cost depends on the observed rejection rate and the rollout/training time balance.
+
+
 ## Algorithms
 
 We give examples of the algorithms for solving the training-inference mismatch issue.

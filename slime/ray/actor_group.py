@@ -148,6 +148,24 @@ class RayTrainGroup:
             for actor in self._actor_handlers
         ]
 
+    def async_score_rs_candidates(self, rollout_id, rollout_data_ref):
+        """Return ObjectRefs for exact proximal-policy RS reports."""
+
+        return [actor.score_rs_candidates.remote(rollout_id, rollout_data_ref) for actor in self._actor_handlers]
+
+    def async_take_rs_candidate_log_probs(self, rollout_id, selected_sample_indices):
+        """Return ObjectRefs containing only selected actor-local caches."""
+
+        return [
+            actor.take_rs_candidate_log_probs.remote(rollout_id, selected_sample_indices)
+            for actor in self._actor_handlers
+        ]
+
+    def async_discard_rs_candidate_log_probs(self, rollout_id):
+        """Discard one candidate cache on every actor rank."""
+
+        return [actor.discard_rs_candidate_log_probs.remote(rollout_id) for actor in self._actor_handlers]
+
     def save_model(self, rollout_id, force_sync=False):
         """Save actor model"""
         ret = ray.get([actor.save_model.remote(rollout_id, force_sync=force_sync) for actor in self._actor_handlers])
