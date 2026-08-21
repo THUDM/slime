@@ -7,6 +7,8 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
+from slime.utils.types import Sample
+
 
 @torch.compile(dynamic=True)
 def compute_approx_kl(
@@ -366,6 +368,79 @@ def get_grpo_returns(
     for i in range(len(rewards)):
         returns.append(torch.ones_like(kl[i]) * rewards[i])
     return returns
+
+
+def _reward_group_segments(args, samples: list[Sample]) -> list[list[int]]:
+    """Return the flattened row indices for each prompt reward group."""
+    group_indices = [sample.group_index for sample in samples]
+    if all(group_index is not None for group_index in group_indices):
+        segments_by_group_index: dict[int, list[int]] = {}
+        for segment_index, group_index in enumerate(group_indices):
+            segments_by_group_index.setdefault(int(group_index), []).append(segment_index)
+        return list(segments_by_group_index.values())
+
+    expected_samples = args.n_samples_per_prompt * args.rollout_batch_size
+    if len(samples) == expected_samples:
+        return [
+            list(range(start, start + args.n_samples_per_prompt))
+            for start in range(0, len(samples), args.n_samples_per_prompt)
+        ]
+    return [list(range(len(samples)))]
+
+
+def normalize_rewards_by_rollout(args, samples: list[Sample], raw_rewards: list[float]) -> list[float]:
+    """Normalize one shared reward per rollout, then broadcast it to siblings.
+
+    Prompt groups come from ``Sample.group_index`` when every sample has one;
+    otherwise the legacy positional ``n_samples_per_prompt`` layout is used.
+    Within a prompt, samples that share ``rollout_id`` (falling back to
+    ``index``) are one rollout: they must carry the same outcome reward, the
+    baseline counts that rollout once, and every sibling gets the same
+    advantage. That matches ``get_trajectory``, which assigns the trajectory
+    reward in full to every emitted sample rather than splitting it.
+    """
+    if not samples:
+        return []
+
+    std_estimators = ("grpo", "gspo", "cispo")
+    normalized_rewards = torch.empty(len(raw_rewards), dtype=torch.float)
+    for prompt_segments in _reward_group_segments(args, samples):
+        segments_by_rollout_key: dict[int | tuple[str, int], list[int]] = {}
+        for segment_index in prompt_segments:
+            sample = samples[segment_index]
+            if sample.rollout_id is not None:
+                rollout_key = sample.rollout_id
+            elif sample.index is not None:
+                rollout_key = sample.index
+            else:
+                rollout_key = ("row", segment_index)
+            segments_by_rollout_key.setdefault(rollout_key, []).append(segment_index)
+
+        rollout_segment_groups = list(segments_by_rollout_key.items())
+        shared_rewards: list[float] = []
+        for rollout_key, rollout_segments in rollout_segment_groups:
+            sibling_rewards = [raw_rewards[segment_index] for segment_index in rollout_segments]
+            if any(reward != sibling_rewards[0] for reward in sibling_rewards[1:]):
+                raise ValueError(
+                    f"all samples in rollout {rollout_key!r} must share one reward; "
+                    f"rows {rollout_segments} have rewards {sibling_rewards}"
+                )
+            shared_rewards.append(sibling_rewards[0])
+
+        rollout_rewards = torch.tensor(shared_rewards, dtype=torch.float)
+        normalized_rollout_rewards = rollout_rewards - rollout_rewards.mean()
+        if args.advantage_estimator in std_estimators and args.grpo_std_normalization and len(rollout_rewards) > 1:
+            rollout_std = rollout_rewards.std()
+            if rollout_std > 0:
+                normalized_rollout_rewards = normalized_rollout_rewards / (rollout_std + 1e-6)
+
+        for (_, rollout_segments), normalized_reward in zip(
+            rollout_segment_groups, normalized_rollout_rewards.tolist(), strict=True
+        ):
+            for segment_index in rollout_segments:
+                normalized_rewards[segment_index] = normalized_reward
+
+    return normalized_rewards.tolist()
 
 
 def get_reinforce_plus_plus_returns(
