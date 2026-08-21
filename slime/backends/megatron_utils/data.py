@@ -11,7 +11,7 @@ from megatron.core.packed_seq_params import PackedSeqParams
 
 from slime.utils import accelerator, train_metric_utils
 from slime.utils.flops_utils import calculate_fwd_flops
-from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step
+from slime.utils.metric_utils import compute_pass_rate, compute_pass_rate_by_group_index, compute_rollout_step
 from slime.utils.types import RolloutBatch
 
 from ...utils import logging_utils
@@ -291,6 +291,7 @@ def log_rollout_data(
                 "num_microbatches",
                 "micro_batch_indices",
                 "source_names",
+                "group_indices",
                 # DP-local view of `raw_reward`, which this loop already logs;
                 # both reduce to the same mean, so skip the duplicate metric.
                 "local_raw_reward",
@@ -482,8 +483,9 @@ def log_passrate(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -
     """
     Compute pass@k metrics from `raw_reward` groups and log the results.
 
-    `raw_reward` is reshaped to `[group_number, group_size]`, then pass@k is
-    estimated per problem and averaged.
+    When every sample carries a `group_index` (packed parallel to `raw_reward`),
+    pass@k is estimated over complete prompt groups. Otherwise `raw_reward` is
+    reshaped to `[group_number, group_size]` as before.
     """
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
         log_dict = {}
@@ -491,11 +493,19 @@ def log_passrate(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -
             if key != "raw_reward":
                 continue
 
-            log_dict |= compute_pass_rate(
-                flat_rewards=val,
-                group_size=args.n_samples_per_prompt,
-                num_groups=args.rollout_batch_size,
-            )
+            group_indices = rollout_data.get("group_indices")
+            if group_indices is not None and all(idx is not None for idx in group_indices):
+                log_dict |= compute_pass_rate_by_group_index(
+                    val,
+                    group_indices,
+                    args.n_samples_per_prompt,
+                )
+            else:
+                log_dict |= compute_pass_rate(
+                    flat_rewards=val,
+                    group_size=args.n_samples_per_prompt,
+                    num_groups=args.rollout_batch_size,
+                )
 
         gather_log_data("passrate", args, rollout_id, log_dict)
 
