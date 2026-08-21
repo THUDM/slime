@@ -695,6 +695,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_rollout_offload_coordination.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_hf_to_megatron.py"
             },
             {
