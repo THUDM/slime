@@ -7,6 +7,8 @@ from slime.utils.misc import should_run_periodic_action
 
 
 def train(args):
+    if getattr(args, "rs_batch_refill", False):
+        raise ValueError("--rs-batch-refill is only supported by train_async.py.")
     configure_logger()
     release_train = args.release_train
 

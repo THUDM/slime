@@ -90,17 +90,32 @@ class RolloutDataSource(DataSource):
     def get_samples(self, num_samples):
         # TODO further improve code
         if self.dataset is not None:
-            if self.sample_offset + num_samples <= len(self.dataset):
-                prompt_samples = self.dataset.samples[self.sample_offset : self.sample_offset + num_samples]
-                self.sample_offset += num_samples
-            else:
-                prompt_samples = self.dataset.samples[self.sample_offset :]
-                num_samples -= len(prompt_samples)
+            dataset_size = len(self.dataset)
+            if dataset_size == 0 and num_samples:
+                raise RuntimeError("Cannot draw rollout samples from an empty dataset")
+            if not 0 <= self.sample_offset <= dataset_size:
+                raise RuntimeError(
+                    "Rollout data source has an invalid dataset offset: "
+                    f"sample_offset={self.sample_offset}, dataset_size={dataset_size}"
+                )
+
+            prompt_samples = []
+            remaining = num_samples
+            while remaining > 0:
+                available = dataset_size - self.sample_offset
+                take = min(remaining, available)
+                if take:
+                    prompt_samples.extend(self.dataset.samples[self.sample_offset : self.sample_offset + take])
+                    self.sample_offset += take
+                    remaining -= take
+
+                if remaining == 0:
+                    break
+
                 self.epoch_id += 1
                 if self.args.rollout_shuffle:
                     self.dataset.shuffle(self.epoch_id)
-                prompt_samples += self.dataset.samples[:num_samples]
-                self.sample_offset = num_samples
+                self.sample_offset = 0
         else:
             prompt_samples = [Sample() for _ in range(num_samples)]
 

@@ -22,6 +22,43 @@ You may specify the **IS/RS configs** with a config file using `--custom-config-
 `--get-mismatch-metrics`: When you don't want to add TIS/MIS, but still want to monitor the mismatch-related metrics (e.g. rollout-training KL). It will **only return mismatch metrics** but not change the loss in any way.
 
 
+### Effective-batch refill after sequence RS
+
+Sequence-level RS can leave an optimizer step with fewer independent prompt groups than configured. In disaggregated
+`train_async.py`, `--rs-batch-refill` makes that loss of effective batch cardinality fail-safe and explicit:
+
+1. Generate exactly `rollout_batch_size` initial prompt groups; there is no speculative over-generation.
+2. Before `optimizer.step`, recompute proximal log probabilities with the actor and apply the configured sequence or
+   geometric RS gate atomically to each complete prompt group.
+3. Keep only the selected groups and their in-memory proximal log-probability cache. Generate the exact deficit,
+   rounded only to the smallest DP/VPP scheduling multiple, from the current rollout policy.
+4. Repeat for at most `--rs-refill-max-rounds`. If the target batch is still incomplete, abort without an optimizer
+   step instead of silently training on an underfilled batch.
+
+The refill path still applies TIS during training; completing the batch does not make stale initial trajectories
+on-policy. Initial candidates are limited to one policy version of staleness and reactive replacements must match the
+actor version used for preflight.
+
+```bash
+python train_async.py \
+  ... \
+  --rs-batch-refill \
+  --rs-refill-max-rounds 2 \
+  --update-weights-interval 1 \
+  --use-tis \
+  --custom-config-path examples/train_infer_mismatch_helper/mis_refill.yaml
+```
+
+This first implementation intentionally supports fresh/finetune runs from rollout 0 only. It requires the
+disaggregated Megatron path, a global rollout dataset, one optimizer step per rollout batch, resident actor and rollout
+engines, full NCCL weight updates, dynamic batching, zero actor dropout, the default model provider, and non-quantized
+Megatron training. Checkpoint resume, fully async rollout, token-level RS, external rollout engines, and custom
+model/loss/data hooks are rejected during argument validation.
+
+Refill adds actor preflight work and replacement latency, so it is a correctness option rather than an unconditional
+wall-clock speedup. Its cost depends on the observed rejection rate and the rollout/training time balance.
+
+
 ## Algorithms
 
 We give examples of the algorithms for solving the training-inference mismatch issue.

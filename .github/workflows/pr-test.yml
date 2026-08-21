@@ -575,6 +575,18 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_rs_exact_refill_utils.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_rs_exact_refill_sglang_rollout.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_data_source_epoch_wrap.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_deep_ep_tms_patch.py"
             },
             {
