@@ -2210,6 +2210,8 @@ def slime_validate_args(args):
             raise ValueError("--rs-batch-refill does not support --keep-old-actor.")
         if args.partial_rollout:
             raise ValueError("--rs-batch-refill does not support --partial-rollout yet.")
+        if getattr(args, "dynamic_sampling_filter_path", None) is not None:
+            raise ValueError("--rs-batch-refill does not support --dynamic-sampling-filter-path yet.")
         if args.use_rollout_routing_replay or args.use_routing_replay:
             raise ValueError("--rs-batch-refill does not support routing replay yet.")
         if args.rollout_function_path == "slime.rollout.fully_async_rollout.generate_rollout_fully_async":
@@ -2220,6 +2222,8 @@ def slime_validate_args(args):
             raise ValueError("--rs-batch-refill does not support a custom reward postprocessor yet.")
         if args.rollout_data_postprocess_path is not None:
             raise ValueError("--rs-batch-refill does not support a rollout-data postprocessor yet.")
+        if getattr(args, "custom_rollout_log_function_path", None) is not None:
+            raise ValueError("--rs-batch-refill does not support --custom-rollout-log-function-path yet.")
         if args.load_debug_rollout_data is not None or args.debug_train_only or args.debug_rollout_only:
             raise ValueError("--rs-batch-refill requires both rollout and training backends.")
         if (

@@ -291,6 +291,8 @@ def make_slime_validate_args(**overrides):
         custom_convert_samples_to_train_data_path=None,
         custom_reward_post_process_path=None,
         rollout_data_postprocess_path=None,
+        custom_rollout_log_function_path=None,
+        dynamic_sampling_filter_path=None,
         eval_max_context_len=None,
         rollout_max_context_len=None,
         rollout_max_prompt_len=None,
@@ -408,6 +410,8 @@ def test_rs_refill_accepts_explicitly_disabled_fp_quantization(monkeypatch):
         ({"moe_router_load_balancing_type": ["aux_loss", "sinkhorn"]}, "Sinkhorn MoE routing"),
         ({"context_parallel_size": 2}, "context-parallel-size 1"),
         ({"partial_rollout": True}, "partial-rollout"),
+        ({"dynamic_sampling_filter_path": "custom.filter"}, "dynamic-sampling-filter-path"),
+        ({"custom_rollout_log_function_path": "custom.log"}, "custom-rollout-log-function-path"),
         (
             {"rollout_function_path": "slime.rollout.fully_async_rollout.generate_rollout_fully_async"},
             "fully-async rollout queue",

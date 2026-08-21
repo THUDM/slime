@@ -656,7 +656,10 @@ def run_rs_batch_refill(
                     f"accepted={status['accepted_groups']}, target={status['target_groups']}, "
                     f"rounds={status['round']}, remaining={status['deficit']}."
                 )
-            resolve_rpc(rollout_manager.generate_rs_replacement_candidates.remote(rollout_id))
+            # Replacement generation retains the rollout backend's own timeout
+            # and health-monitor semantics.  The coordination timeout applies
+            # only after generation has returned.
+            resolve(rollout_manager.generate_rs_replacement_candidates.remote(rollout_id))
     except Exception:
         actor_cleanup = None
         manager_cleanup = None

@@ -510,10 +510,11 @@ def test_coordinator_runs_exact_replacement_round_and_finalizes():
     )
     actor = _FakeActor()
     clock = iter([0.0, 1.0, 2.0, 3.0, 4.0, 5.0]).__next__
+    no_timeout = object()
     timeouts = []
 
-    def resolve(value, *, timeout):
-        timeouts.append(timeout)
+    def resolve(value, **kwargs):
+        timeouts.append(kwargs.get("timeout", no_timeout))
         return value
 
     result = run_rs_batch_refill(actor, manager, 7, resolve=resolve, clock=clock, rpc_timeout_seconds=17.0)
@@ -531,7 +532,33 @@ def test_coordinator_runs_exact_replacement_round_and_finalizes():
     ]
     assert [event[0] for event in actor.events] == ["score", "take", "score", "take"]
     assert manager.events[-1] == ("finalize", 7, 5.0)
-    assert timeouts == [17.0] * 8
+    assert timeouts == [17.0, 17.0, 17.0, no_timeout, 17.0, 17.0, 17.0, 17.0]
+
+
+def test_coordinator_propagates_rollout_backend_timeout_then_cleans_both_sides():
+    manager = _FakeManager([_status(accepted=[10])])
+    actor = _FakeActor()
+    generation_ref = object()
+    manager.generate_rs_replacement_candidates = _RemoteMethod(lambda _rollout_id: generation_ref)
+
+    def resolve(value, **kwargs):
+        if value is generation_ref:
+            assert kwargs == {}
+            raise TimeoutError("rollout backend timeout")
+        return value
+
+    with pytest.raises(TimeoutError, match="rollout backend timeout"):
+        run_rs_batch_refill(
+            actor,
+            manager,
+            13,
+            resolve=resolve,
+            clock=iter([0.0, 1.0, 2.0]).__next__,
+            rpc_timeout_seconds=17.0,
+        )
+
+    assert actor.events[-1] == ("discard", 13)
+    assert manager.events[-1] == ("abort", 13)
 
 
 def test_coordinator_cleans_actor_and_manager_state_on_report_failure():
