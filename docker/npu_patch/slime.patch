@@ -84,11 +84,11 @@ index 7bc4f910..a00c83c51 100644
  from ray.actor import ActorHandle
  from torch_memory_saver import torch_memory_saver
 @@ -17,6 +21,7 @@ from slime.ray.train_actor import TrainRayActor
- from slime.utils import train_dump_utils
+ from slime.observability import train_data_utils, train_metric_utils
  from slime.utils.data import process_rollout_data
  from slime.utils.distributed_utils import get_gloo_group, init_process_group
 +from slime.utils.http_utils import _wrap_ipv6
- from slime.utils.logging_utils import init_tracking
+ from slime.observability.logging_utils import init_tracking
  from slime.utils.memory_utils import clear_memory, print_memory
  from slime.utils.misc import Box
 @@ -55,6 +60,8 @@ class MegatronTrainRayActor(TrainRayActor):
@@ -586,13 +586,13 @@ diff --git a/slime/ray/rollout.py b/slime/ray/rollout.py
 index 75cb053c..c54a3854 100644
 --- a/slime/ray/rollout.py
 +++ b/slime/ray/rollout.py
-@@ -28,6 +28,7 @@ from slime.utils.metric_utils import (
+@@ -28,6 +28,7 @@ from slime.observability.metric_utils import (
  from slime.utils.misc import Box, group_by, load_function
  from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
  from slime.utils.types import Sample
 +from slime.utils.common import is_npu
  
- from ..utils.metric_utils import has_repetition
+ from slime.observability.metric_utils import has_repetition
  from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
 @@ -76,7 +77,8 @@ class RolloutManager:
              self.all_rollout_engines = [None] * num_engines
@@ -631,7 +631,7 @@ index 2e900ca5..d0a25583 100644
 +++ b/slime/ray/train_actor.py
 @@ -13,16 +13,23 @@ from slime.ray.ray_actor import RayActor
  from slime.utils.distributed_utils import init_gloo_group
- from slime.utils.logging_utils import configure_logger
+ from slime.observability.logging_utils import configure_logger
  from slime.utils.memory_utils import clear_memory, print_memory
 +from slime.utils.common import is_npu
  
@@ -966,4 +966,4 @@ index 01883c47..18faa6d2 100644
 +    import mindspeed.megatron_adaptor
  from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
  from slime.utils.arguments import parse_args
- from slime.utils.logging_utils import configure_logger, init_tracking
+ from slime.observability.logging_utils import configure_logger, init_tracking

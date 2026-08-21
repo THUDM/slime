@@ -28,11 +28,10 @@ try:
     from megatron.core.pipeline_parallel.utils import unwrap_model
 except ImportError:
     from megatron.core.utils import unwrap_model
-from slime.utils import logging_utils
+from slime.observability import logging_utils, train_metric_utils
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
-from .cp_utils import reduce_train_step_metrics
 from .data import DataIterator, get_batch
 from .loss import ROLLOUT_TOP_P_TOKEN_KEYS, get_rollout_top_p_logprob_kwargs, loss_function
 from .model_provider import get_model_provider_func
@@ -692,7 +691,7 @@ def train_one_step(
     optimizer.zero_grad()
 
     if mpu.is_pipeline_last_stage(ignore_virtual=True):
-        loss_reduced = reduce_train_step_metrics(
+        loss_reduced = train_metric_utils.reduce_train_step_metrics(
             losses_reduced,
             calculate_per_token_loss=args.calculate_per_token_loss,
             step_global_batch_size=step_global_batch_size,

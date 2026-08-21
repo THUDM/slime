@@ -13,8 +13,8 @@ from slime.backends.megatron_utils.arguments import set_default_megatron_args
 from slime.backends.megatron_utils.hf_to_megatron import load_hf_weights
 from slime.backends.megatron_utils.initialize import init
 from slime.backends.megatron_utils.model_provider import get_model_provider_func
+from slime.observability.logging_utils import configure_logger
 from slime.utils import accelerator
-from slime.utils.logging_utils import configure_logger
 from slime.utils.memory_utils import print_memory
 
 
@@ -28,7 +28,6 @@ def add_convertion_args(parser):
         help="Path to a custom model provider function.",
     )
     parser.add_argument("--allgather-cp", action="store_true", default=False)
-    parser.add_argument("--use-gated-attention", action="store_true", default=False)
     try:
         parser.add_argument("--padded-vocab-size", type=int, default=None)
     except Exception:

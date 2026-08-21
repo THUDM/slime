@@ -12,7 +12,7 @@ Two helpers:
   - ``compact_generate``: fans one input sample out to N siblings
     sharing the same ``rollout_id``. That's the contract the rest of the
     framework (per-rollout step splitter, per-rollout-mean reducer,
-    ``_validate_rollout_id_annotated`` validator) is built around.
+    ``validate_rollout_id_annotated`` validator) is built around.
 
   - ``grpo_normalize_by_group_index``: replaces the default
     ``_post_process_rewards`` reshape-by-shape logic with a proper
