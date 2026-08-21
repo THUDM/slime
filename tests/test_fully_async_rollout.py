@@ -45,7 +45,6 @@ import pytest
 import slime.rollout.fully_async_rollout as fa
 from slime.utils.types import Sample
 
-
 NUM_GPUS = 0
 
 
@@ -77,17 +76,22 @@ def _make_group(index: int) -> list[Sample]:
     return [sample]
 
 
-def _make_worker(monkeypatch, data_buffer=None, concurrency=4) -> fa.AsyncRolloutWorker:
+def _make_worker(monkeypatch, data_buffer=None, concurrency=4, policy_version=0) -> fa.AsyncRolloutWorker:
     monkeypatch.setattr(fa, "GenerateState", _FakeGenerateState)
     args = SimpleNamespace(rollout_global_dataset=True, rollout_batch_size=4)
-    return fa.AsyncRolloutWorker(args, data_buffer or _FakeDataBuffer([]), concurrency=concurrency)
+    return fa.AsyncRolloutWorker(
+        args,
+        data_buffer or _FakeDataBuffer([]),
+        concurrency=concurrency,
+        policy_version=policy_version,
+    )
 
 
 @pytest.mark.unit
 def test_rollout_takes_target_groups_and_leaves_surplus_queued(monkeypatch):
     worker = _make_worker(monkeypatch)
     for gid in range(10):
-        worker.output_queue.put((gid, _make_group(gid)))
+        worker.output_queue.put(fa.CompletedSampleRecord(gid, _make_group(gid), policy_version=0))
     monkeypatch.setattr(fa, "_get_global_worker", lambda args, data_buffer: worker)
 
     args = SimpleNamespace(rollout_global_dataset=True, rollout_batch_size=4)
@@ -98,17 +102,17 @@ def test_rollout_takes_target_groups_and_leaves_surplus_queued(monkeypatch):
     assert [group[0].index for group in out] == [0, 1, 2, 3]
     # The other six are still queued for the next rollout, not thrown away.
     assert worker.queue_size() == 6
-    assert [gid for gid, _ in worker.get_completed_groups()] == [4, 5, 6, 7, 8, 9]
+    assert [record.gid for record in worker.get_completed_groups()] == [4, 5, 6, 7, 8, 9]
 
 
 @pytest.mark.unit
 def test_get_completed_groups_limit(monkeypatch):
     worker = _make_worker(monkeypatch)
     for gid in range(5):
-        worker.output_queue.put((gid, _make_group(gid)))
+        worker.output_queue.put(fa.CompletedSampleRecord(gid, _make_group(gid), policy_version=0))
 
-    assert [gid for gid, _ in worker.get_completed_groups(limit=2)] == [0, 1]
-    assert [gid for gid, _ in worker.get_completed_groups()] == [2, 3, 4]
+    assert [record.gid for record in worker.get_completed_groups(limit=2)] == [0, 1]
+    assert [record.gid for record in worker.get_completed_groups()] == [2, 3, 4]
     assert worker.get_completed_groups(limit=3) == []
 
 
@@ -128,7 +132,7 @@ def test_done_callback_never_blocks_event_loop_thread(monkeypatch):
 
     def _push_all():
         for gid in range(1001):
-            worker._make_done_cb(gid)(_DoneTask(gid))
+            worker._make_done_cb(gid, worker.policy_version)(_DoneTask(gid))
 
     pusher = threading.Thread(target=_push_all, daemon=True)
     pusher.start()
@@ -169,3 +173,52 @@ def test_loop_backpressure_stops_topping_up_when_queue_is_full(monkeypatch):
     # In-flight tasks may still land after the gate check, so allow one pool
     # beyond the gate — but nothing near the unthrottled fuel size.
     assert 0 < max_seen <= 2 * concurrency, f"queue grew to {max_seen} with concurrency={concurrency}"
+
+
+@pytest.mark.unit
+def test_out_of_order_completion_keeps_each_admission_policy_version(monkeypatch):
+    worker = _make_worker(monkeypatch, policy_version=3)
+
+    class _DoneTask:
+        def __init__(self, index):
+            self.index = index
+
+        def result(self):
+            return _make_group(self.index)
+
+    old_admission_version = worker.policy_version
+    worker.publish_policy_version(4)
+    new_admission_version = worker.policy_version
+
+    # The newer-policy request finishes first. Neither record may consult the
+    # worker's mutable current version when its callback eventually runs.
+    worker._make_done_cb(gid=12, policy_version=new_admission_version)(_DoneTask(8))
+    worker._make_done_cb(gid=11, policy_version=old_admission_version)(_DoneTask(7))
+
+    records = worker.get_completed_groups(limit=2)
+    assert [(record.gid, record.policy_version) for record in records] == [(12, 4), (11, 3)]
+    assert [record.group[0].policy_version for record in records] == [4, 3]
+    assert worker.policy_version == 4
+
+
+@pytest.mark.unit
+def test_failed_weight_update_does_not_publish_policy_version(monkeypatch):
+    worker = _make_worker(monkeypatch, policy_version=5)
+    monkeypatch.setattr(fa, "_global_worker", worker)
+    monkeypatch.setattr(fa, "_published_policy_version", 5)
+
+    fa.after_weight_update(policy_version=5, succeeded=False)
+    assert fa._published_policy_version == 5
+    assert worker.policy_version == 5
+
+    fa.after_weight_update(policy_version=6, succeeded=True)
+    assert fa._published_policy_version == 6
+    assert worker.policy_version == 6
+
+
+@pytest.mark.unit
+def test_policy_version_rejects_regression(monkeypatch):
+    worker = _make_worker(monkeypatch, policy_version=2)
+
+    with pytest.raises(ValueError, match="policy version must be monotonic"):
+        worker.publish_policy_version(1)
