@@ -34,9 +34,10 @@ class _Response:
 
 
 def test_discover_external_engines_reads_server_info(monkeypatch):
-    def fake_get(url, timeout):
+    def fake_get(url, timeout, headers=None):
         assert timeout == 30.0
         assert url == "http://host1:10090/server_info"
+        assert headers is None
         return _Response(
             {
                 "tp_size": 4,
@@ -121,7 +122,7 @@ def test_apply_external_engine_info_handles_pd(monkeypatch):
         },
     }
 
-    def fake_get(url, timeout):
+    def fake_get(url, timeout, headers=None):
         return _Response(payloads[url])
 
     monkeypatch.setattr("slime.backends.sglang_utils.external.requests.get", fake_get)
@@ -151,7 +152,7 @@ def test_apply_external_engine_info_handles_pd(monkeypatch):
 
 
 def test_apply_external_engine_info_preserves_router_pd_flag(monkeypatch):
-    def fake_get(url, timeout):
+    def fake_get(url, timeout, headers=None):
         assert url == "http://regular:10090/server_info"
         return _Response(
             {
@@ -173,6 +174,38 @@ def test_apply_external_engine_info_preserves_router_pd_flag(monkeypatch):
     assert args.rollout_external is True
     assert args.router_pd_disaggregation is True
     assert args.rollout_num_gpus == 2
+    assert args.rollout_num_engines == 1
+
+
+def test_discover_external_engines_sends_bearer_auth(monkeypatch):
+    def fake_get(url, timeout, headers=None):
+        assert headers == {"Authorization": "Bearer worker-secret"}
+        return _Response({"tp_size": 1, "pp_size": 1, "disaggregation_mode": "null"})
+
+    monkeypatch.setattr("slime.backends.sglang_utils.external.requests.get", fake_get)
+
+    infos = discover_external_engines(["host1:10090"], api_key="worker-secret")
+
+    assert len(infos) == 1
+
+
+def test_apply_external_engine_info_forwards_sglang_api_key(monkeypatch):
+    seen = {}
+
+    def fake_get(url, timeout, headers=None):
+        seen["headers"] = headers
+        return _Response({"tp_size": 1, "pp_size": 1, "disaggregation_mode": "null"})
+
+    monkeypatch.setattr("slime.backends.sglang_utils.external.requests.get", fake_get)
+    args = Namespace(
+        rollout_external=True,
+        rollout_external_engine_addrs=["host1:10090"],
+        sglang_api_key="worker-secret",
+    )
+
+    apply_external_engine_info_to_args(args)
+
+    assert seen["headers"] == {"Authorization": "Bearer worker-secret"}
     assert args.rollout_num_engines == 1
 
 
