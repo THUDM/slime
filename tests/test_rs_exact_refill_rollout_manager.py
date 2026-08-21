@@ -325,6 +325,8 @@ def test_rollout_manager_real_lifecycle_applies_stores_and_finalizes(monkeypatch
     ]
     manager, conversions, splits, debug_saves = _real_lifecycle_manager(groups, cache_limit=32)
     manager.args.custom_rollout_log_function_path = "custom.read_only_log"
+    manager.args.global_batch_size = 4
+    manager.args.apply_chat_template_kwargs = {"nested": [1]}
     cache = {
         sample.index: torch.tensor([sample.index + 0.25, sample.index + 0.5]) for group in groups for sample in group
     }
@@ -335,6 +337,7 @@ def test_rollout_manager_real_lifecycle_applies_stores_and_finalizes(monkeypatch
     rpc_events = []
     state_snapshots = []
     rollout_logs = []
+    rollout_log_args = []
     manager_rpc = _manager_rpc(manager, rpc_events, state_snapshots)
 
     manager_timeouts = []
@@ -352,13 +355,15 @@ def test_rollout_manager_real_lifecycle_applies_stores_and_finalizes(monkeypatch
             (path_template, rollout_id, evaluation, [sample.index for sample in samples])
         ),
     )
-    monkeypatch.setattr(
-        rollout_module,
-        "log_rollout_data",
-        lambda rollout_id, args, samples, metrics, elapsed: rollout_logs.append(
-            (rollout_id, [sample.index for sample in samples], dict(metrics), elapsed)
-        ),
-    )
+
+    def log_rollout(rollout_id, args, samples, metrics, elapsed):
+        rollout_log_args.append(args)
+        args.rollout_batch_size = 99
+        args.global_batch_size = 99
+        args.apply_chat_template_kwargs["nested"].append(2)
+        rollout_logs.append((rollout_id, [sample.index for sample in samples], dict(metrics), elapsed))
+
+    monkeypatch.setattr(rollout_module, "log_rollout_data", log_rollout)
 
     result = run_rs_batch_refill(
         actor,
@@ -389,6 +394,11 @@ def test_rollout_manager_real_lifecycle_applies_stores_and_finalizes(monkeypatch
     assert debug_saves == [(None, 7, False, [0, 1, 10, 11])]
     assert result["sample_indices"] == [0, 1, 10, 11]
     assert result["split_global_batch_size"] is None
+    assert len(rollout_log_args) == 1
+    assert rollout_log_args[0] is not manager.args
+    assert manager.args.rollout_batch_size == 2
+    assert manager.args.global_batch_size == 4
+    assert manager.args.apply_chat_template_kwargs == {"nested": [1]}
     for actual, index in zip(result["rs_preflight_log_probs"], [0, 1, 10, 11], strict=True):
         torch.testing.assert_close(actual, cache[index])
 

@@ -932,9 +932,14 @@ class RolloutManager:
             rollout_id=rollout_id,
             evaluation=False,
         )
+        rollout_log_args = (
+            copy.deepcopy(self.args)
+            if getattr(self.args, "custom_rollout_log_function_path", None) is not None
+            else self.args
+        )
         log_rollout_data(
             rollout_id,
-            self.args,
+            rollout_log_args,
             samples,
             pending["metrics"],
             refill_path_seconds,
