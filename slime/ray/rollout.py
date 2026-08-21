@@ -618,7 +618,7 @@ class RolloutManager:
             raise RuntimeError(f"RS candidate batch {rollout_id} already has an uncollected preflight result")
 
         report_wait_start = time.perf_counter()
-        actor_reports = ray.get(actor_report_refs)
+        actor_reports = ray.get(actor_report_refs, timeout=self.args.rs_refill_rpc_timeout_seconds)
         preflight_seconds += time.perf_counter() - report_wait_start
         reports = [report for worker_reports in actor_reports if worker_reports for report in worker_reports]
         groups = pending["unscored"]
@@ -659,6 +659,16 @@ class RolloutManager:
         pending["metrics"]["rollout/rs_refill/scored_trainable_tokens"] = pending["metrics"].get(
             "rollout/rs_refill/scored_trainable_tokens", 0
         ) + sum(int(report["valid_tokens"]) for report in reports)
+        round_cache_bytes = sum(int(report["candidate_cache_bytes"]) for report in reports)
+        if round_cache_bytes < 0:
+            raise RuntimeError("RS candidate cache byte reports must be non-negative")
+        pending["metrics"]["rollout/rs_refill/candidate_logprob_cache_bytes"] = (
+            pending["metrics"].get("rollout/rs_refill/candidate_logprob_cache_bytes", 0) + round_cache_bytes
+        )
+        pending["metrics"]["rollout/rs_refill/peak_candidate_logprob_cache_bytes"] = max(
+            pending["metrics"].get("rollout/rs_refill/peak_candidate_logprob_cache_bytes", 0),
+            round_cache_bytes,
+        )
         pending["metrics"]["rollout/rs_refill/preflight_seconds"] = (
             pending["metrics"].get("rollout/rs_refill/preflight_seconds", 0.0) + preflight_seconds
         )
@@ -741,7 +751,7 @@ class RolloutManager:
             raise RuntimeError(f"RS candidate batch {rollout_id} has no selected log probabilities to collect")
 
         transfer_start = time.perf_counter()
-        worker_caches = ray.get(actor_cache_refs)
+        worker_caches = ray.get(actor_cache_refs, timeout=self.args.rs_refill_rpc_timeout_seconds)
         selected_cache = merge_selected_log_prob_caches(worker_caches, expected)
         overlap = set(selected_cache) & set(pending["proximal_log_probs_by_sample_index"])
         if overlap:
@@ -799,7 +809,10 @@ class RolloutManager:
         ) / scored_groups
         pending["metrics"]["rollout/rs_refill/selection_utilization"] = len(groups) / scored_groups
         pending["metrics"]["rollout/rs_refill/coordinator_seconds"] = coordinator_seconds
-        effective_tokens = sum(sum(sample.loss_mask or []) for sample in samples)
+        effective_tokens = sum(
+            int(torch.as_tensor(sample.loss_mask).sum().item()) if sample.loss_mask is not None else 0
+            for sample in samples
+        )
         pending["metrics"]["rollout/rs_refill/effective_trainable_tokens"] = effective_tokens
         pending["metrics"]["rollout/rs_refill/initial_candidate_generation_seconds"] = pending[
             "initial_generation_seconds"

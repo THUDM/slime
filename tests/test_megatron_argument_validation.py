@@ -1,3 +1,4 @@
+import argparse
 import importlib.util
 import sys
 import types
@@ -83,6 +84,28 @@ def make_qwen3_6_args(**overrides):
     )
     values.update(overrides)
     return types.SimpleNamespace(**values)
+
+
+@pytest.mark.unit
+def test_rs_refill_cli_parser_contract(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    module.get_slime_extra_args_provider()(parser)
+
+    defaults = parser.parse_args(["--rollout-batch-size", "1"])
+    enabled = parser.parse_args(["--rollout-batch-size", "1", "--rs-batch-refill", "--rs-refill-max-rounds", "7"])
+
+    assert defaults.rs_batch_refill is False
+    assert defaults.rs_refill_max_rounds == 2
+    assert defaults.rs_refill_rpc_timeout_seconds == 1800.0
+    assert defaults.rs_refill_max_candidate_cache_bytes == 1 << 30
+    assert enabled.rs_batch_refill is True
+    assert enabled.rs_refill_max_rounds == 7
+    help_text = parser.format_help()
+    assert "--rs-batch-refill" in help_text
+    assert "--rs-refill-max-rounds" in help_text
+    assert "--rs-refill-rpc-timeout-seconds" in help_text
+    assert "--rs-refill-max-candidate-cache-bytes" in help_text
 
 
 def make_qwen3_6_hf_config():
@@ -207,6 +230,8 @@ def make_slime_validate_args(**overrides):
         custom_pg_loss_reducer_function_path=None,
         rs_batch_refill=False,
         rs_refill_max_rounds=2,
+        rs_refill_rpc_timeout_seconds=1800.0,
+        rs_refill_max_candidate_cache_bytes=1 << 30,
         use_rs=False,
         tis_mode="truncate",
         tis_level="token",
@@ -390,6 +415,10 @@ def test_rs_refill_accepts_explicitly_disabled_fp_quantization(monkeypatch):
         ({"rs_refill_max_rounds": -1}, "max-rounds"),
         ({"rs_refill_max_rounds": 1.5}, "max-rounds"),
         ({"rs_refill_max_rounds": False}, "max-rounds"),
+        ({"rs_refill_rpc_timeout_seconds": 0}, "rpc-timeout"),
+        ({"rs_refill_rpc_timeout_seconds": float("inf")}, "rpc-timeout"),
+        ({"rs_refill_max_candidate_cache_bytes": 0}, "candidate-cache"),
+        ({"rs_refill_max_candidate_cache_bytes": False}, "candidate-cache"),
         ({"rs_lower_bound": 2.0, "rs_upper_bound": 1.0}, "finite RS bounds"),
     ],
 )

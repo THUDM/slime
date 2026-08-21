@@ -1,7 +1,8 @@
-"""Pure helpers for bounded, group-atomic RS batch refill."""
+"""Internal coordination and math helpers for bounded, group-atomic RS batch refill."""
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import operator
@@ -392,10 +393,10 @@ def attach_proximal_log_probs(
     train_data["rs_preflight_log_probs"] = [log_probs_by_sample_index[index] for index in sample_indices]
 
 
-def snapshot_sample_masks(samples: list[Any]) -> dict[int, tuple[int, tuple[int, ...]]]:
-    """Snapshot response lengths and masks used by the preflight gate."""
+def snapshot_sample_masks(samples: list[Any]) -> dict[int, tuple[int, bytes]]:
+    """Snapshot response lengths and fixed-size mask digests used by the preflight gate."""
 
-    fingerprints: dict[int, tuple[int, tuple[int, ...]]] = {}
+    fingerprints: dict[int, tuple[int, bytes]] = {}
     for sample in samples:
         sample_index = _require_integer(sample.index, "RS-refilled sample index")
         if sample_index in fingerprints:
@@ -411,13 +412,14 @@ def snapshot_sample_masks(samples: list[Any]) -> dict[int, tuple[int, tuple[int,
             )
         if not torch.logical_or(mask == 0, mask == 1).all().item():
             raise ValueError(f"sample_index={sample_index} has a non-binary loss mask after RS preflight")
-        fingerprints[sample_index] = (response_length, tuple(mask.to(dtype=torch.uint8).tolist()))
+        mask_bytes = mask.to(dtype=torch.uint8, device="cpu").contiguous().numpy().tobytes()
+        fingerprints[sample_index] = (response_length, hashlib.sha256(mask_bytes).digest())
     return fingerprints
 
 
 def validate_sample_masks(
     samples: list[Any],
-    expected: dict[int, tuple[int, tuple[int, ...]]],
+    expected: dict[int, tuple[int, bytes]],
 ) -> None:
     """Reject post-gate mutations that would change the effective batch."""
 
@@ -619,35 +621,42 @@ def run_rs_batch_refill(
     *,
     resolve: Callable[[Any], Any],
     clock: Callable[[], float],
+    rpc_timeout_seconds: float = 1800.0,
 ):
     """Drive bounded refill rounds through Ray-like actor interfaces."""
+
+    if not math.isfinite(rpc_timeout_seconds) or rpc_timeout_seconds <= 0:
+        raise ValueError("rpc_timeout_seconds must be finite and positive")
+
+    def resolve_rpc(value):
+        return resolve(value, timeout=rpc_timeout_seconds)
 
     coordinator_start = clock()
     try:
         while True:
             preflight_start = clock()
-            candidate_refs = resolve(rollout_manager.prepare_rs_candidate_data.remote(rollout_id))
+            candidate_refs = resolve_rpc(rollout_manager.prepare_rs_candidate_data.remote(rollout_id))
             report_refs = actor_model.async_score_rs_candidates(rollout_id, candidate_refs)
             preflight_seconds = clock() - preflight_start
-            status = resolve(
+            status = resolve_rpc(
                 rollout_manager.apply_rs_candidate_reports.remote(rollout_id, report_refs, preflight_seconds)
             )
             selected_cache_refs = actor_model.async_take_rs_candidate_log_probs(
                 rollout_id,
                 status["accepted_sample_indices"],
             )
-            resolve(rollout_manager.store_rs_accepted_log_probs.remote(rollout_id, selected_cache_refs))
+            resolve_rpc(rollout_manager.store_rs_accepted_log_probs.remote(rollout_id, selected_cache_refs))
 
             if status["complete"]:
                 coordinator_seconds = clock() - coordinator_start
-                return resolve(rollout_manager.finalize_rs_batch.remote(rollout_id, coordinator_seconds))
+                return resolve_rpc(rollout_manager.finalize_rs_batch.remote(rollout_id, coordinator_seconds))
             if status["exhausted"]:
                 raise RuntimeError(
                     "RS batch refill exhausted its retry budget before optimizer.step: "
                     f"accepted={status['accepted_groups']}, target={status['target_groups']}, "
                     f"rounds={status['round']}, remaining={status['deficit']}."
                 )
-            resolve(rollout_manager.generate_rs_replacement_candidates.remote(rollout_id))
+            resolve_rpc(rollout_manager.generate_rs_replacement_candidates.remote(rollout_id))
     except Exception:
         actor_cleanup = None
         manager_cleanup = None
@@ -661,12 +670,12 @@ def run_rs_batch_refill(
             logger.exception("Failed to submit manager-local RS pending-state cleanup after a coordination error")
         if actor_cleanup is not None:
             try:
-                resolve(actor_cleanup)
+                resolve_rpc(actor_cleanup)
             except Exception:
                 logger.exception("Failed to discard actor-local RS candidate caches after a coordination error")
         if manager_cleanup is not None:
             try:
-                resolve(manager_cleanup)
+                resolve_rpc(manager_cleanup)
             except Exception:
                 logger.exception("Failed to discard manager-local RS pending state after a coordination error")
         raise

@@ -74,6 +74,7 @@ def test_refill_checkpoint_finishes_before_the_next_rollout(monkeypatch):
         start_rollout_id=0,
         num_rollout=2,
         rs_batch_refill=True,
+        rs_refill_rpc_timeout_seconds=123.0,
         use_critic=False,
         num_critic_only_steps=0,
         save_interval=1,

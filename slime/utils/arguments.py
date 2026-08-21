@@ -1098,6 +1098,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Maximum replacement rounds before failing the batch without an optimizer step.",
             )
             parser.add_argument(
+                "--rs-refill-rpc-timeout-seconds",
+                type=float,
+                default=1800.0,
+                help="Timeout for each exact-refill coordination or actor RPC before aborting the batch.",
+            )
+            parser.add_argument(
+                "--rs-refill-max-candidate-cache-bytes",
+                type=int,
+                default=1 << 30,
+                help="Maximum pinned-CPU proximal-logprob cache bytes retained by one actor rank per refill round.",
+            )
+            parser.add_argument(
                 "--custom-pg-loss-reducer-function-path",
                 type=str,
                 default=None,
@@ -2213,6 +2225,14 @@ def slime_validate_args(args):
             or args.rs_refill_max_rounds < 0
         ):
             raise ValueError("--rs-refill-max-rounds must be a non-negative integer.")
+        if not math.isfinite(args.rs_refill_rpc_timeout_seconds) or args.rs_refill_rpc_timeout_seconds <= 0:
+            raise ValueError("--rs-refill-rpc-timeout-seconds must be finite and positive.")
+        if (
+            isinstance(args.rs_refill_max_candidate_cache_bytes, bool)
+            or not isinstance(args.rs_refill_max_candidate_cache_bytes, int)
+            or args.rs_refill_max_candidate_cache_bytes <= 0
+        ):
+            raise ValueError("--rs-refill-max-candidate-cache-bytes must be a positive integer.")
 
         tis_upper_bound = getattr(args, "tis_upper_bound", None)
         tis_lower_bound = getattr(args, "tis_lower_bound", None)

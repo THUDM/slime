@@ -353,6 +353,16 @@ def test_sample_and_training_mask_snapshots_detect_mutation():
         snapshot_sample_masks(samples)
 
 
+def test_sample_mask_snapshot_has_fixed_size_for_long_responses():
+    sample = SimpleNamespace(index=7, response_length=131_072, loss_mask=[1] * 131_072)
+
+    snapshot = snapshot_sample_masks([sample])
+
+    assert snapshot[7][0] == 131_072
+    assert isinstance(snapshot[7][1], bytes)
+    assert len(snapshot[7][1]) == 32
+
+
 def test_replacement_metrics_sum_only_known_counters():
     metrics = {"rollout/dynamic_filter/drop_zero_std": 2, "custom/rate": 0.25}
 
@@ -451,8 +461,13 @@ def test_coordinator_runs_exact_replacement_round_and_finalizes():
     )
     actor = _FakeActor()
     clock = iter([0.0, 1.0, 2.0, 3.0, 4.0, 5.0]).__next__
+    timeouts = []
 
-    result = run_rs_batch_refill(actor, manager, 7, resolve=lambda value: value, clock=clock)
+    def resolve(value, *, timeout):
+        timeouts.append(timeout)
+        return value
+
+    result = run_rs_batch_refill(actor, manager, 7, resolve=resolve, clock=clock, rpc_timeout_seconds=17.0)
 
     assert result == "train-data"
     assert [event[0] for event in manager.events] == [
@@ -467,6 +482,7 @@ def test_coordinator_runs_exact_replacement_round_and_finalizes():
     ]
     assert [event[0] for event in actor.events] == ["score", "take", "score", "take"]
     assert manager.events[-1] == ("finalize", 7, 5.0)
+    assert timeouts == [17.0] * 8
 
 
 def test_coordinator_cleans_actor_and_manager_state_on_report_failure():
@@ -474,7 +490,7 @@ def test_coordinator_cleans_actor_and_manager_state_on_report_failure():
     actor = _FakeActor()
     resolved = []
 
-    def resolve(value):
+    def resolve(value, **_kwargs):
         resolved.append(value)
         return value
 
@@ -492,7 +508,13 @@ def test_coordinator_releases_selected_cache_before_exhaustion_cleanup():
     actor = _FakeActor()
 
     with pytest.raises(RuntimeError, match="exhausted its retry budget"):
-        run_rs_batch_refill(actor, manager, 5, resolve=lambda value: value, clock=iter([0.0, 1.0, 2.0]).__next__)
+        run_rs_batch_refill(
+            actor,
+            manager,
+            5,
+            resolve=lambda value, **_kwargs: value,
+            clock=iter([0.0, 1.0, 2.0]).__next__,
+        )
 
     assert [event[0] for event in actor.events] == ["score", "take", "discard"]
     assert [event[0] for event in manager.events] == ["prepare", "apply", "store", "abort"]
@@ -522,7 +544,13 @@ def test_coordinator_cleans_both_sides_when_a_late_stage_fails(stage, statuses):
     setattr(manager, method_name, _RemoteMethod(fail))
 
     with pytest.raises(RuntimeError, match=rf"{stage} failed"):
-        run_rs_batch_refill(actor, manager, 9, resolve=lambda value: value, clock=iter(range(10)).__next__)
+        run_rs_batch_refill(
+            actor,
+            manager,
+            9,
+            resolve=lambda value, **_kwargs: value,
+            clock=iter(range(10)).__next__,
+        )
 
     assert actor.events[-1] == ("discard", 9)
     assert manager.events[-1] == ("abort", 9)
@@ -543,10 +571,13 @@ def test_coordinator_preserves_the_primary_error_when_cleanup_fails(cleanup_fail
 
         actor.async_discard_rs_candidate_log_probs = actor_submit_failure
         manager.abort_rs_batch = _RemoteMethod(manager_submit_failure)
-        resolve = lambda value: value
+
+        def resolve(value, **_kwargs):
+            return value
+
     else:
 
-        def resolve(value):
+        def resolve(value, **_kwargs):
             if value in {"actor-cleanup", True}:
                 raise RuntimeError("cleanup resolve failed")
             return value

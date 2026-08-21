@@ -32,6 +32,7 @@ def _make_args(**overrides):
         "ref_update_interval": None,
         "rollout_top_p": 1.0,
         "rs_batch_refill": True,
+        "rs_refill_max_candidate_cache_bytes": 1 << 20,
         "rs_level": "sequence",
         "rs_lower_bound": 0.5,
         "rs_upper_bound": 2.0,
@@ -112,6 +113,7 @@ def test_preflight_scores_and_transfers_only_selected_cache_once(monkeypatch):
             "valid_tokens": 2,
             "gate_passed": True,
             "policy_version": "9",
+            "candidate_cache_bytes": 8,
         },
         {
             "sample_index": 11,
@@ -119,6 +121,7 @@ def test_preflight_scores_and_transfers_only_selected_cache_once(monkeypatch):
             "valid_tokens": 2,
             "gate_passed": False,
             "policy_version": "9",
+            "candidate_cache_bytes": 8,
         },
     ]
     cached = actor._rs_candidate_log_probs[27]
@@ -153,6 +156,26 @@ def test_preflight_metadata_mismatch_does_not_publish_cache(monkeypatch):
         actor.score_rs_candidates(12, object())
 
     assert 12 not in actor._rs_candidate_log_probs
+
+
+def test_preflight_rejects_candidate_cache_before_pinned_allocation(monkeypatch):
+    actor = _make_actor(_make_args(rs_refill_max_candidate_cache_bytes=7))
+    rollout_data = {
+        "group_indices": [3],
+        "loss_masks": [torch.ones(2)],
+        "num_microbatches": [1],
+        "rollout_log_probs": [torch.zeros(2)],
+        "sample_indices": [10],
+    }
+    actor._get_rollout_data = lambda _ref: rollout_data
+    actor.compute_log_prob = lambda *_args, **_kwargs: {"log_probs": [torch.zeros(2)]}
+    monkeypatch.setattr(actor_module, "get_data_iterator", lambda data: data)
+    _patch_last_pipeline_rank(monkeypatch)
+
+    with pytest.raises(RuntimeError, match=r"required=8, limit=7"):
+        actor.score_rs_candidates(27, object())
+
+    assert 27 not in actor._rs_candidate_log_probs
 
 
 def test_duplicate_take_request_preserves_cache_for_cleanup(monkeypatch):

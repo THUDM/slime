@@ -49,6 +49,7 @@ def train(args):
                 rollout_id,
                 resolve=ray.get,
                 clock=time.perf_counter,
+                rpc_timeout_seconds=args.rs_refill_rpc_timeout_seconds,
             )
 
         save_this_step = release_train or should_run_periodic_action(

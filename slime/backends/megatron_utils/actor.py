@@ -434,6 +434,15 @@ class MegatronTrainRayActor(TrainRayActor):
             raise RuntimeError("RS preflight gate mutated the input loss-mask list length")
         validate_final_rs_masks(original_loss_masks, rollout_data["loss_masks"])
 
+        cache_bytes_by_sample = [train_log_prob.numel() * 4 for train_log_prob in train_log_probs]
+        candidate_cache_bytes = sum(cache_bytes_by_sample)
+        if candidate_cache_bytes > self.args.rs_refill_max_candidate_cache_bytes:
+            raise RuntimeError(
+                "RS candidate proximal-logprob cache exceeds the per-actor limit before pinned-memory allocation: "
+                f"required={candidate_cache_bytes}, limit={self.args.rs_refill_max_candidate_cache_bytes}. "
+                "Increase --rs-refill-max-candidate-cache-bytes or reduce the candidate batch/response length."
+            )
+
         stats = []
         for original_mask, modified_mask in zip(original_loss_masks, modified_masks, strict=True):
             valid_tokens = original_mask.sum().to(torch.long)
@@ -471,10 +480,11 @@ class MegatronTrainRayActor(TrainRayActor):
         self._rs_candidate_log_probs[rollout_id] = dict(zip(sample_indices, proximal_log_probs, strict=True))
 
         reports = []
-        for sample_index, group_index, stats_row in zip(
+        for sample_index, group_index, stats_row, cache_bytes in zip(
             sample_indices,
             rollout_data["group_indices"],
             stats_rows,
+            cache_bytes_by_sample,
             strict=True,
         ):
             valid_tokens, gate_passed = stats_row
@@ -485,6 +495,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     "valid_tokens": valid_tokens,
                     "gate_passed": bool(gate_passed),
                     "policy_version": str(self.weight_updater.weight_version),
+                    "candidate_cache_bytes": cache_bytes,
                 }
             )
         return reports
