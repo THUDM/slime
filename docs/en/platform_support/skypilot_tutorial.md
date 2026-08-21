@@ -24,6 +24,9 @@ The examples below use the `slimerl/slime:latest` Docker image from the Quick St
 
 The Quick Start starts a Ray cluster by running `ray start` on every node, then submits training with `ray job submit` from node 0. The following SkyPilot task performs the same steps: it provisions `num_nodes` nodes with GPUs, downloads and converts the model on each node, starts the Ray head and workers, and submits the job. Environment variables like `SKYPILOT_NODE_RANK` and `SKYPILOT_NODE_IPS` are injected by SkyPilot on every node.
 
+<details>
+<summary><code>slime-multinode.yaml</code></summary>
+
 ```yaml
 # slime-multinode.yaml
 resources:
@@ -139,6 +142,8 @@ run: |
     --attention-backend flash
 ```
 
+</details>
+
 The training arguments are the Quick Start's Qwen3-4B recipe; the only adjustments are the topology flags (`--actor-num-nodes`, `--actor-num-gpus-per-node`, and `--num-gpus-per-node`), whose values come from the SkyPilot-injected environment. `--num-gpus-per-node` matters on nodes with fewer than 8 GPUs: slime's colocated engine mapping assumes 8 per node unless told otherwise. Launch it with:
 
 ```bash
@@ -168,6 +173,9 @@ sky volumes apply policy-volume.yaml
 ```
 
 Then launch the Job Group:
+
+<details>
+<summary><code>slime-jobgroup.yaml</code></summary>
 
 ```yaml
 # slime-jobgroup.yaml
@@ -293,6 +301,8 @@ run: |
     --attention-softmax-in-fp32 \
     --attention-backend flash
 ```
+
+</details>
 
 ```bash
 sky jobs launch -n slime-rl slime-jobgroup.yaml
