@@ -285,18 +285,16 @@ def setup_model_and_optimizer(
     Returns:
         tuple[list[DDP], MegatronOptimizer | None, OptimizerParamScheduler | None]:
             - List of model chunks wrapped by ``DDP``.
-            - The constructed ``MegatronOptimizer``, or ``None`` for eval-only.
-            - The LR/WD scheduler, or ``None`` for eval-only.
+            - The constructed ``MegatronOptimizer`` instance.
+            - The learning-rate/weight-decay scheduler tied to the optimizer.
     """
     assert not args.moe_use_upcycling
     assert args.load is not None or args.pretrained_checkpoint is not None
 
     model = get_model(get_model_provider_func(args, role), ModelType.encoder_or_decoder)
 
-    # `--num-rollout 0` still loads actor weights for eval. It does not train, so
-    # do not build Megatron's optimizer or LR scheduler (which asserts
-    # `lr_decay_steps > 0`).
     if args.num_rollout == 0:
+        args.no_load_optim = True
         return model, None, None
 
     # Optimizer
@@ -989,7 +987,6 @@ def initialize_model_and_optimizer(
     Returns:
         tuple[list[DDP], MegatronOptimizer | None, OptimizerParamScheduler | None, int]:
             DDP-wrapped model chunks, optimizer, scheduler, and iteration index.
-            Optimizer and scheduler are ``None`` when ``--num-rollout 0``.
     """
 
     if torch.version.hip:

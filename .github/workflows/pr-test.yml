@@ -711,6 +711,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_eval_only.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_external_sglang_engines.py"
             },
             {
