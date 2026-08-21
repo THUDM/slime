@@ -5,8 +5,10 @@ from pathlib import Path
 import pytest
 import torch
 
-from slime.utils.trace_utils import TRACE_CHILDREN_KEY, build_sglang_meta_trace_attrs, trace_span
+from slime.observability.trace_utils import TRACE_CHILDREN_KEY, build_sglang_meta_trace_attrs, trace_span
 from slime.utils.types import Sample
+
+NUM_GPUS = 0
 
 
 def _load_trace_timeline_viewer_module():
@@ -91,3 +93,7 @@ def test_trace_timeline_viewer_omits_virtual_pd_lanes_without_pd_attrs(tmp_path:
     }
     assert "[P]" not in item["name"]
     assert "[D]" not in item["name"]
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

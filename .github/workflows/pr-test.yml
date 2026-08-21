@@ -595,7 +595,15 @@ jobs:
             },
             {
               "num_gpus": 0,
-              "test_file": "test_train_dump.py"
+              "test_file": "test_train_data_utils.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_rollout_data_utils.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_rollout_metrics.py"
             },
             {
               "num_gpus": 0,
@@ -619,7 +627,15 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "observability/test_trace_utils.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_value_temperature.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_ppo_kl_metric.py"
             },
             {
               "num_gpus": 0,
@@ -696,6 +712,10 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_qwen3_5_vl_native.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_accelerator.py"
             },
             {
               "num_gpus": 0,
@@ -782,7 +802,7 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors psutil
 
-          pip install transformers
+          pip install transformers wandb
 
 
       - name: Install

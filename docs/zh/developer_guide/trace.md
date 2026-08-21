@@ -41,7 +41,7 @@ python tools/trace_timeline_viewer.py /path/to/debug/rollout_0.pt
 
 ## 给自定义代码打点
 
-在自定义 rollout 或 reward 逻辑中——包括 agentic workflow 里的 agent step、tool call、sandbox 执行、verifier 调用等——可以直接复用 `slime.utils.trace_utils` 里的工具：
+在自定义 rollout 或 reward 逻辑中——包括 agentic workflow 里的 agent step、tool call、sandbox 执行、verifier 调用等——可以直接复用 `slime.observability.trace_utils` 里的工具：
 
 - `trace_span(target, name, attrs=...)`：记录一段持续时间。
 - `trace_event(target, name, attrs=...)`：记录一个瞬时事件。
@@ -57,7 +57,7 @@ python tools/trace_timeline_viewer.py /path/to/debug/rollout_0.pt
 slime 主 rollout 流程里就是这样用的。例如 `generate_and_rm(...)` 按 sample 打点，而 `generate_and_rm_group(...)` 按 group 打点：
 
 ```python
-from slime.utils.trace_utils import trace_function
+from slime.observability.trace_utils import trace_function
 
 
 @trace_function("generate_and_rm", target="sample")
@@ -104,7 +104,7 @@ async def custom_rollout_batch(samples, **kwargs):
 如果想统一记录 SGLang 返回的 generation 元信息，可以复用 `build_sglang_meta_trace_attrs`：
 
 ```python
-from slime.utils.trace_utils import build_sglang_meta_trace_attrs, trace_span
+from slime.observability.trace_utils import build_sglang_meta_trace_attrs, trace_span
 
 with trace_span(sample, "sglang_generate") as span:
     output = await post(url, payload)
@@ -116,4 +116,3 @@ with trace_span(sample, "sglang_generate") as span:
 - 先保存少量 rollout；单个 dump 的 sample 数量适中时，viewer 会更容易阅读。
 - viewer 直接基于保存下来的 `.pt` dump 工作，因此可以把文件拷到别的机器离线分析。
 - 如果你想看的是 SGLang 自身的 GPU / kernel 级 profiling trace，请参考 [性能分析](./profiling.md)。
-

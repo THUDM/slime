@@ -1,4 +1,4 @@
-"""Multi-process distributed tests for the cp_utils report helpers.
+"""Multi-process distributed tests for the train metric report helpers.
 
 Spawn ``dp_size * cp_size`` workers with real ``torch.distributed`` (gloo
 backend) and exercise the actual production helpers end-to-end. The
@@ -42,7 +42,6 @@ from _cp_dist_helpers import (
     stub_megatron_in_worker,
 )
 
-
 NUM_GPUS = 0
 
 
@@ -68,7 +67,8 @@ def _train_step_distributed_worker(
         # Import AFTER the megatron stub override so cp_utils still binds
         # against the pre-installed stub (which we've now pinned for this
         # worker's CP rank).
-        from slime.backends.megatron_utils.cp_utils import get_sum_of_sample_mean, reduce_train_step_metrics
+        from slime.backends.megatron_utils.cp_utils import get_sum_of_sample_mean
+        from slime.observability.train_metric_utils import reduce_train_step_metrics
 
         all_total_lengths = FOUR_ROLLOUT_TOTAL_LENGTHS
         all_response_lengths = FOUR_ROLLOUT_RESPONSE_LENGTHS
@@ -197,11 +197,8 @@ def _rollout_log_distributed_worker(
 
     dp_group = init_worker_process_group(rank, world_size, master_port)
     try:
-        from slime.backends.megatron_utils.cp_utils import (
-            gather_and_reduce_log_dict,
-            get_sum_of_sample_mean,
-            rollout_log_metric_contribution,
-        )
+        from slime.backends.megatron_utils.cp_utils import get_sum_of_sample_mean
+        from slime.observability.train_metric_utils import gather_and_reduce_log_dict, rollout_log_metric_contribution
 
         all_total_lengths = FOUR_ROLLOUT_TOTAL_LENGTHS
         all_response_lengths = FOUR_ROLLOUT_RESPONSE_LENGTHS

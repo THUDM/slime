@@ -1,8 +1,11 @@
 import argparse
+import logging
 
 from sglang.srt.server_args import ServerArgs
 from sglang_router.launch_router import RouterArgs
 from slime.utils.http_utils import _wrap_ipv6
+
+logger = logging.getLogger(__name__)
 
 
 # TODO: use all sglang router arguments with `--sglang-router` prefix
@@ -152,7 +155,18 @@ def validate_args(args):
         ("sglang_ep_size", "sglang_expert_parallel_size"),
         ("sglang_moe_dp_size", "sglang_moe_data_parallel_size"),
     ):
-        value = getattr(args, current_name) if hasattr(args, current_name) else getattr(args, legacy_name)
+        if hasattr(args, current_name):
+            value = getattr(args, current_name)
+        elif hasattr(args, legacy_name):
+            value = getattr(args, legacy_name)
+        else:
+            logger.warning(
+                "The installed SGLang registered neither %s nor %s; "
+                "skipping compatibility alias normalization for this parameter.",
+                current_name,
+                legacy_name,
+            )
+            continue
         setattr(args, current_name, value)
         setattr(args, legacy_name, value)
 

@@ -5,10 +5,8 @@ import multiprocessing
 import os
 import random
 import time
-from pathlib import Path
 from typing import Any
 
-import numpy as np
 import ray
 import torch
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
@@ -17,19 +15,25 @@ from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_
 from slime.backends.sglang_utils.external import start_external_rollout_servers
 from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
+from slime.observability import logging_utils
+from slime.observability.logging_utils import configure_logger, init_tracking
+from slime.observability.rollout_data_utils import (
+    load_debug_rollout_data,
+    save_debug_rollout_data,
+    tensorize_rollout_data_for_training,
+    validate_rollout_id_annotated,
+    validate_rollout_routed_experts_for_replay,
+)
+from slime.observability.rollout_metrics import log_eval_rollout_data, log_rollout_data
 from slime.rollout.base_types import call_rollout_fn
 from slime.rollout.sample_hooks import set_current_rollout_id
-from slime.utils import logging_utils
 from slime.utils.data import get_source
 from slime.utils.dp_schedule import build_dp_schedule
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
-from slime.utils.logging_utils import configure_logger, init_tracking
-from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
-from slime.utils.misc import Box, group_by, load_function
+from slime.utils.misc import Box, load_function
 from slime.utils.types import Sample
 
-from ..utils.metric_utils import has_repetition
 from .rollout_validation import validate_server_group_gpu_indices
 from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock, add_default_ray_env_vars
 
@@ -37,108 +41,6 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
-
-_ROLLOUT_DATA_TENSOR_DTYPES = {
-    "tokens": torch.long,
-    "loss_masks": torch.int,
-    "rollout_log_probs": torch.float32,
-    "rollout_top_p_token_ids": torch.int32,
-    "rollout_top_p_token_offsets": torch.int32,
-    "teacher_log_probs": torch.float32,
-    "rollout_routed_experts": None,
-}
-
-_SGLANG_REQUEST_PERF_FIELDS = (
-    ("request/e2e_latency", "e2e_latency"),
-    ("request/queue_time", "queue_time"),
-    ("decode/throughput", "decode_throughput"),
-)
-_SGLANG_PREFILL_PERF_FIELDS = (
-    ("prefill/bootstrap_queue_duration", "pd_prefill_bootstrap_queue_duration"),
-    ("prefill/bootstrap_duration", "pd_prefill_bootstrap_duration"),
-    ("prefill/alloc_wait_duration", "pd_prefill_alloc_wait_duration"),
-    ("prefill/forward_duration", "pd_prefill_forward_duration"),
-    ("prefill/transfer_queue_duration", "pd_prefill_transfer_queue_duration"),
-    ("prefill/transfer_speed_gb_s", "pd_transfer_speed_gb_s"),
-    ("prefill/transfer_total_mb", "pd_transfer_total_mb"),
-    ("prefill/retry_count", "pd_prefill_retry_count"),
-)
-_SGLANG_DECODE_PERF_FIELDS = (
-    ("decode/prealloc_duration", "pd_decode_prealloc_duration"),
-    ("decode/bootstrap_duration", "pd_decode_bootstrap_duration"),
-    ("decode/alloc_wait_duration", "pd_decode_alloc_wait_duration"),
-    ("decode/transfer_duration", "pd_decode_transfer_duration"),
-    ("decode/forward_duration", "pd_decode_forward_duration"),
-)
-
-
-def _cpu_tensor(value, dtype: torch.dtype | None = None) -> torch.Tensor:
-    if isinstance(value, np.ndarray) and not value.flags.writeable:
-        value = value.copy()
-    tensor = torch.as_tensor(value, dtype=dtype) if dtype is not None else torch.as_tensor(value)
-    return tensor.detach().cpu().contiguous()
-
-
-def _tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:
-    for key, dtype in _ROLLOUT_DATA_TENSOR_DTYPES.items():
-        if key in rollout_data:
-            rollout_data[key] = [_cpu_tensor(value, dtype=dtype) for value in rollout_data[key]]
-
-    if "multimodal_train_inputs" in rollout_data:
-        rollout_data["multimodal_train_inputs"] = [
-            (
-                {
-                    key: _cpu_tensor(value) if isinstance(value, (np.ndarray, torch.Tensor)) else value
-                    for key, value in mm_dict.items()
-                }
-                if mm_dict is not None
-                else None
-            )
-            for mm_dict in rollout_data["multimodal_train_inputs"]
-        ]
-
-    if "rollout_mask_sums" in rollout_data:
-        rollout_data["rollout_mask_sums"] = _cpu_tensor(
-            rollout_data["rollout_mask_sums"],
-            dtype=torch.float32,
-        )
-
-
-def _validate_rollout_routed_experts_for_replay(
-    routed_experts: list[torch.Tensor],
-    args,
-) -> None:
-    """Reject incomplete PP routing captures before R3 consumes them."""
-    if not routed_experts:
-        raise ValueError("R3 is enabled but no rollout routed-experts tensors were returned.")
-
-    num_layers = int(args.num_layers)
-    topk = int(args.moe_router_topk)
-    moe_layer_freq = getattr(args, "moe_layer_freq", None)
-    if isinstance(moe_layer_freq, (list, tuple)):
-        moe_layers = [layer_id for layer_id, freq in enumerate(moe_layer_freq[:num_layers]) if int(freq) != 0]
-    else:
-        moe_layers = list(range(num_layers))
-
-    for sample_idx, experts in enumerate(routed_experts):
-        experts = torch.as_tensor(experts)
-        if experts.ndim != 3 or tuple(experts.shape[1:]) != (num_layers, topk):
-            raise ValueError(
-                "Invalid rollout routed-experts shape for R3: "
-                f"sample={sample_idx}, got={tuple(experts.shape)}, "
-                f"expected=(*, {num_layers}, {topk})."
-            )
-        if experts.shape[0] == 0:
-            raise ValueError(f"R3 sample {sample_idx} has no routed-experts rows.")
-        if topk > 1:
-            missing_layers = [layer_id for layer_id in moe_layers if not torch.count_nonzero(experts[:, layer_id, :])]
-            if missing_layers:
-                raise ValueError(
-                    "R3 routed-experts capture is all zero for MoE layers "
-                    f"{missing_layers} in sample {sample_idx}. This usually means "
-                    "SGLang pipeline stages did not aggregate their disjoint routing "
-                    "captures; refusing to replay expert 0 everywhere."
-                )
 
 
 @dataclasses.dataclass
@@ -595,8 +497,13 @@ class RolloutManager:
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
         data, metrics = self._get_rollout_data(rollout_id=rollout_id)
-        self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
-        _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
+        save_debug_rollout_data(
+            self.args.save_debug_rollout_data,
+            data,
+            rollout_id=rollout_id,
+            evaluation=False,
+        )
+        log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
         if self.args.debug_rollout_only:
             # if debug rollout only, we don't convert samples to train data and directly return
             return
@@ -612,8 +519,13 @@ class RolloutManager:
 
         result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
         data = result.data
-        self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=True)
-        _log_eval_rollout_data(rollout_id, self.args, data, result.metrics)
+        save_debug_rollout_data(
+            self.args.save_debug_rollout_data,
+            data,
+            rollout_id=rollout_id,
+            evaluation=True,
+        )
+        log_eval_rollout_data(rollout_id, self.args, data, result.metrics)
 
     def save(self, rollout_id):
         self.data_source.save(rollout_id)
@@ -670,18 +582,11 @@ class RolloutManager:
 
     def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:
-            data = torch.load(
-                self.args.load_debug_rollout_data.format(rollout_id=rollout_id),
-                weights_only=False,
-            )["samples"]
-            data = [Sample.from_dict(sample) for sample in data]
-            if (ratio := self.args.load_debug_rollout_data_subsample) is not None:
-                original_num_rows = len(data)
-                rough_subsample_num_rows = int(original_num_rows * ratio)
-                data = data[: rough_subsample_num_rows // 2] + data[-rough_subsample_num_rows // 2 :]
-                logger.info(
-                    f"Subsample loaded debug rollout data using {ratio=} and change num rows {original_num_rows} -> {len(data)}"
-                )
+            data = load_debug_rollout_data(
+                self.args.load_debug_rollout_data,
+                rollout_id=rollout_id,
+                subsample_ratio=self.args.load_debug_rollout_data_subsample,
+            )
             metrics = None
         else:
             data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
@@ -693,31 +598,12 @@ class RolloutManager:
             # subagent paths that split one rollout into N training samples must
             # set the same rollout_id on every sibling so the loss reducer counts
             # the rollout once instead of N times.
-            _validate_rollout_id_annotated(data)
+            validate_rollout_id_annotated(data)
             # flatten the data if it is a list of lists
             while isinstance(data[0], list):
                 data = list(itertools.chain.from_iterable(data))
 
         return data, metrics
-
-    def _save_debug_rollout_data(self, data, rollout_id, evaluation: bool):
-        # TODO to be refactored (originally Buffer._set_data)
-        if (path_template := self.args.save_debug_rollout_data) is not None:
-            path = Path(path_template.format(rollout_id=("eval_" if evaluation else "") + str(rollout_id)))
-            logger.info(f"Save debug rollout data to {path}")
-            path.parent.mkdir(parents=True, exist_ok=True)
-
-            # TODO may improve the format
-            if evaluation:
-                dump_data = dict(
-                    samples=[sample.to_dict() for dataset_name, info in data.items() for sample in info["samples"]]
-                )
-            else:
-                dump_data = dict(
-                    samples=[sample.to_dict() for sample in data],
-                )
-
-            torch.save(dict(rollout_id=rollout_id, **dump_data), path)
 
     def _post_process_rewards(self, samples: list[Sample] | list[list[Sample]]):
         if self.custom_reward_post_process_func is not None:
@@ -848,7 +734,7 @@ class RolloutManager:
         if samples[0].rollout_routed_experts is not None:
             routed_experts = [torch.as_tensor(sample.rollout_routed_experts) for sample in samples]
             if getattr(self.args, "use_rollout_routing_replay", False):
-                _validate_rollout_routed_experts_for_replay(routed_experts, self.args)
+                validate_rollout_routed_experts_for_replay(routed_experts, self.args)
             train_data["rollout_routed_experts"] = routed_experts
 
         if samples[0].train_metadata is not None:
@@ -927,7 +813,7 @@ class RolloutManager:
             rollout_data["global_batch_sizes"] = global_batch_sizes
             rollout_data["num_microbatches"] = num_microbatches
             rollout_data["micro_batch_indices"] = micro_batch_indices[r]
-            _tensorize_rollout_data_for_training(rollout_data)
+            tensorize_rollout_data_for_training(rollout_data)
             transport = getattr(self.args, "rollout_data_transport", "object-store")
             if transport == "nixl":
                 rollout_data_refs.append(Box(ray.put(rollout_data, _tensor_transport="nixl")))
@@ -936,38 +822,6 @@ class RolloutManager:
             else:
                 raise ValueError(f"Unsupported rollout data transport: {transport!r}")
         return rollout_data_refs
-
-
-def _validate_rollout_id_annotated(node, depth=0):
-    """Walk the rollout function's nested output and validate ``rollout_id`` only
-    when a compact / subagent pattern is detected.
-
-    "Compact" = the rollout function wraps multiple training samples from one
-    rollout execution into a ``list[Sample]``. In slime's convention the
-    default rollout shape is ``list[list[Sample]]`` (depth-2: prompt × rollout)
-    so its leaf ``list[Sample]`` lands at depth 1 and we skip validation,
-    preserving backward compatibility. A compact rollout adds a third level:
-    ``list[list[list[Sample]]]`` (prompt × rollout × samples-from-one-rollout),
-    so the leaf ``list[Sample]`` lands at depth ≥ 2. At that point we require
-    every sibling to carry a non-None ``rollout_id`` and to share the same
-    value, so the loss reducer counts the rollout once instead of N times.
-    """
-    if isinstance(node, Sample):
-        return
-    assert isinstance(node, list), f"unexpected rollout output node type: {type(node).__name__}"
-    if node and isinstance(node[0], Sample):
-        if depth >= 2 and len(node) > 1:
-            rids = [s.rollout_id for s in node]
-            missing = [i for i, r in enumerate(rids) if r is None]
-            assert not missing, (
-                f"Compact rollout returned {len(node)} samples but rollout_id is unset on "
-                f"positions {missing}. Set Sample.rollout_id on every sibling so the loss "
-                "reducer can aggregate them as one rollout instead of N."
-            )
-            assert len(set(rids)) == 1, f"Sibling samples from one compact rollout must share rollout_id; got {rids}."
-        return
-    for item in node:
-        _validate_rollout_id_annotated(item, depth + 1)
 
 
 def _allocate_rollout_engine_addr_and_ports_normal(
@@ -1096,7 +950,8 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
     router_args.disable_circuit_breaker = True
 
     # We will not use the health check from router.
-    router_args.disable_health_check = True
+    if hasattr(router_args, "disable_health_check"):
+        router_args.disable_health_check = True
 
     logger.info(f"Launch router with args: {router_args}")
 
@@ -1296,233 +1151,3 @@ def _resolve_sglang_config(args) -> SglangConfig:
             )
         ]
     )
-
-
-def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any] | None = None):
-    if args.custom_eval_rollout_log_function_path is not None:
-        custom_log_func = load_function(args.custom_eval_rollout_log_function_path)
-        if custom_log_func(rollout_id, args, data, extra_metrics):
-            return
-
-    log_dict = extra_metrics or {}
-    for key in data.keys():
-        rewards = data[key]["rewards"]
-        log_dict[f"eval/{key}"] = sum(rewards) / len(rewards)
-        if (samples := data[key].get("samples")) is not None:
-            log_dict |= dict_add_prefix(compute_metrics_from_samples(args, samples), f"eval/{key}/")
-        if "truncated" in data[key]:
-            truncated = data[key]["truncated"]
-            log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
-        if args.log_passrate:
-            log_dict |= dict_add_prefix(
-                compute_pass_rate(
-                    flat_rewards=rewards,
-                    group_size=args.n_samples_per_eval_prompt,
-                ),
-                f"eval/{key}-",
-            )
-
-    logger.info(f"eval {rollout_id}: {log_dict}")
-
-    step = compute_rollout_step(args, rollout_id)
-    log_dict["eval/step"] = step
-    logging_utils.log(args, log_dict, step_key="eval/step")
-
-    return log_dict
-
-
-def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_time):
-    if args.custom_rollout_log_function_path is not None:
-        custom_log_func = load_function(args.custom_rollout_log_function_path)
-        if custom_log_func(rollout_id, args, samples, rollout_extra_metrics, rollout_time):
-            return
-
-    if args.load_debug_rollout_data:
-        return
-
-    log_dict = {**(rollout_extra_metrics or {})}
-    log_dict |= dict_add_prefix(compute_metrics_from_samples(args, samples), "rollout/")
-    log_dict |= dict_add_prefix(compute_perf_metrics_from_samples(args, samples, rollout_time), "perf/")
-    logger.info(f"perf {rollout_id}: {log_dict}")
-    step = compute_rollout_step(args, rollout_id)
-    log_dict["rollout/step"] = step
-    logging_utils.log(args, log_dict, step_key="rollout/step")
-
-
-def compute_metrics_from_samples(args, samples):
-    response_lengths = [sample.effective_response_length for sample in samples]
-
-    log_dict = {}
-    log_dict |= dict_add_prefix(compute_statistics(response_lengths), "response_len/")
-    log_dict |= _compute_zero_std_metrics(args, samples)
-    log_dict |= _compute_spec_metrics(args, samples)
-    log_dict |= _compute_prefix_cache_metrics(args, samples)
-    log_dict |= _compute_reward_cat_metrics(args, samples)
-    log_dict |= _compute_top_p_kept_vocab_metrics(args, samples)
-    log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
-    log_dict["truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()
-    return log_dict
-
-
-def compute_perf_metrics_from_samples(args, samples, rollout_time):
-    non_generation_time = [sample.non_generation_time for sample in samples]
-
-    log_dict = {}
-    log_dict["rollout_time"] = rollout_time
-    if max(non_generation_time) > 0:
-        log_dict |= dict_add_prefix(compute_statistics(non_generation_time), "non_generation_time/")
-
-    def token_perf(response_lengths, non_generation_time, key=""):
-        max_response_length = max(response_lengths)
-        if args.rollout_num_gpus:
-            log_dict[f"{key}tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
-        log_dict[f"longest_{key}sample_tokens_per_sec"] = max_response_length / rollout_time
-
-        if max(non_generation_time) == 0:
-            return
-
-        non_generation_time = [
-            t for t, length in zip(non_generation_time, response_lengths, strict=True) if length == max_response_length
-        ]
-        mean_non_generation_time = sum(non_generation_time) / len(non_generation_time)
-
-        log_dict[f"longest_{key}sample_non_generation_time"] = mean_non_generation_time
-        log_dict[f"longest_{key}sample_tokens_per_sec_without_non_generation"] = max_response_length / (
-            rollout_time - mean_non_generation_time
-        )
-
-    token_perf([sample.response_length for sample in samples], non_generation_time, key="")
-    token_perf([sample.effective_response_length for sample in samples], non_generation_time, key="effective_")
-    log_dict |= _compute_sglang_request_perf_metrics(samples)
-
-    return log_dict
-
-
-def _compute_sglang_request_perf_metrics(all_samples: list[Sample]):
-    attrs_by_request = list(_iter_sglang_generate_attrs(all_samples))
-    if not attrs_by_request:
-        return {}
-
-    values_by_metric: dict[str, list[float]] = {}
-    profiled_request_count = 0
-
-    def add_value(metric_key: str, source_key: str, attrs: dict) -> bool:
-        value = attrs.get(source_key)
-        if not isinstance(value, (int, float)) or isinstance(value, bool) or not np.isfinite(value):
-            return False
-        values_by_metric.setdefault(metric_key, []).append(float(value))
-        return True
-
-    for attrs in attrs_by_request:
-        request_has_perf = False
-
-        for metric_key, source_key in _SGLANG_REQUEST_PERF_FIELDS:
-            request_has_perf |= add_value(metric_key, source_key, attrs)
-
-        for metric_key, source_key in _SGLANG_PREFILL_PERF_FIELDS:
-            request_has_perf |= add_value(metric_key, source_key, attrs)
-
-        for metric_key, source_key in _SGLANG_DECODE_PERF_FIELDS:
-            request_has_perf |= add_value(metric_key, source_key, attrs)
-
-        if request_has_perf:
-            profiled_request_count += 1
-
-    metrics: dict[str, float] = {}
-    for key, values in values_by_metric.items():
-        if not values:
-            continue
-        metrics |= dict_add_prefix(compute_statistics(values), f"{key}/")
-
-    return metrics
-
-
-def _iter_sglang_generate_attrs(all_samples: list[Sample]):
-    for sample in all_samples:
-        trace = getattr(sample, "trace", None)
-        if not isinstance(trace, dict):
-            continue
-        for event in trace.get("events") or []:
-            if event.get("type") != "span_end" or event.get("name") != "sglang_generate":
-                continue
-            attrs = event.get("attrs")
-            if isinstance(attrs, dict):
-                yield attrs
-
-
-def _compute_zero_std_metrics(args, all_samples: list[Sample]):
-    # only compute in GRPO-like algorithms where one prompt has multiple responses
-    if args.advantage_estimator == "ppo":
-        return {}
-
-    def _is_zero_std(samples: list[Sample]):
-        rewards = [sample.get_reward_value(args) for sample in samples]
-        return len(rewards) == 0 or all(rewards[0] == r for r in rewards)
-
-    all_sample_groups = group_by(all_samples, lambda s: s.group_index)
-    interesting_sample_groups = [g for g in all_sample_groups.values() if _is_zero_std(g)]
-
-    interesting_rewards = [str(round(g[0].get_reward_value(args), 1)) for g in interesting_sample_groups]
-
-    return {f"zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
-
-
-def _compute_top_p_kept_vocab_metrics(args, all_samples: list[Sample]):
-    total_kept = 0
-    total_tokens = 0
-    for sample in all_samples:
-        offsets = sample.rollout_top_p_token_offsets
-        if offsets is None or sample.response_length == 0:
-            continue
-        offsets = torch.as_tensor(offsets, dtype=torch.int64)
-        if offsets.numel() == 0:
-            continue
-        assert (
-            offsets.numel() == sample.response_length + 1
-        ), f"top-p token offsets length {offsets.numel()} != response length + 1 {sample.response_length + 1}"
-        if sample.remove_sample:
-            continue
-        if sample.loss_mask is None:
-            total_kept += int(offsets[-1] - offsets[0])
-            total_tokens += sample.response_length
-            continue
-        loss_mask = torch.as_tensor(sample.loss_mask, dtype=torch.bool, device=offsets.device)
-        assert (
-            loss_mask.numel() == sample.response_length
-        ), f"loss mask length {loss_mask.numel()} != response length {sample.response_length}"
-        total_kept += int(torch.diff(offsets)[loss_mask].sum())
-        total_tokens += int(loss_mask.sum())
-    if total_tokens == 0:
-        return {}
-    return {"top_p_kept_vocab_per_token": total_kept / total_tokens}
-
-
-def _compute_spec_metrics(args, all_samples: list[Sample]):
-    if getattr(args, "sglang_speculative_algorithm", None) is None:
-        return {}
-    num_samples = len(all_samples)
-    metrics = {}
-    metrics["spec_accept_rate"] = sum(sample.spec_info.spec_accept_rate for sample in all_samples) / num_samples
-    metrics["spec_accept_length"] = sum(sample.spec_info.spec_accept_length for sample in all_samples) / num_samples
-    return metrics
-
-
-def _compute_prefix_cache_metrics(args, all_samples: list[Sample]):
-    num_samples = len(all_samples)
-    metrics = {}
-    total_cached_tokens = sum(sample.prefix_cache_info.cached_tokens for sample in all_samples)
-    total_prompt_tokens = sum(sample.prefix_cache_info.total_prompt_tokens for sample in all_samples)
-
-    metrics["prefix_cache_hit_rate"] = total_cached_tokens / total_prompt_tokens if total_prompt_tokens > 0 else 0.0
-    metrics["avg_cached_tokens_per_sample"] = total_cached_tokens / num_samples
-    return metrics
-
-
-def _compute_reward_cat_metrics(args, all_samples: list[Sample]):
-    reward_cat_key = args.log_reward_category
-    if reward_cat_key is None:
-        return {}
-
-    samples_of_reward_cat = group_by(all_samples, lambda s: s.reward[reward_cat_key])
-
-    return {f"error_cat/{reward_cat}": len(s) / len(all_samples) for reward_cat, s in samples_of_reward_cat.items()}

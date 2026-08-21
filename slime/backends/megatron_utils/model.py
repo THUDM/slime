@@ -28,11 +28,10 @@ try:
     from megatron.core.pipeline_parallel.utils import unwrap_model
 except ImportError:
     from megatron.core.utils import unwrap_model
-from slime.utils import logging_utils
+from slime.observability import logging_utils, train_metric_utils
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
-from .cp_utils import reduce_train_step_metrics
 from .data import DataIterator, get_batch
 from .loss import ROLLOUT_TOP_P_TOKEN_KEYS, get_rollout_top_p_logprob_kwargs, loss_function
 from .model_provider import get_model_provider_func
@@ -270,7 +269,7 @@ def _patch_megatron_adam(adam_cls):
 def setup_model_and_optimizer(
     args: Namespace,
     role: str = "actor",
-) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler]:
+) -> tuple[list[DDP], MegatronOptimizer | None, OptimizerParamScheduler | None]:
     """Build model(s), wrap with DDP, and construct optimizer and scheduler.
 
     Args:
@@ -283,7 +282,7 @@ def setup_model_and_optimizer(
         lr_mult (float): Global learning-rate multiplier for the optimizer.
 
     Returns:
-        tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler]:
+        tuple[list[DDP], MegatronOptimizer | None, OptimizerParamScheduler | None]:
             - List of model chunks wrapped by ``DDP``.
             - The constructed ``MegatronOptimizer`` instance.
             - The learning-rate/weight-decay scheduler tied to the optimizer.
@@ -292,6 +291,10 @@ def setup_model_and_optimizer(
     assert args.load is not None or args.pretrained_checkpoint is not None
 
     model = get_model(get_model_provider_func(args, role), ModelType.encoder_or_decoder)
+
+    if args.num_rollout == 0:
+        args.no_load_optim = True
+        return model, None, None
 
     # Optimizer
     kwargs = {}
@@ -688,7 +691,7 @@ def train_one_step(
     optimizer.zero_grad()
 
     if mpu.is_pipeline_last_stage(ignore_virtual=True):
-        loss_reduced = reduce_train_step_metrics(
+        loss_reduced = train_metric_utils.reduce_train_step_metrics(
             losses_reduced,
             calculate_per_token_loss=args.calculate_per_token_loss,
             step_global_batch_size=step_global_batch_size,
@@ -973,7 +976,7 @@ def save(
 
 def initialize_model_and_optimizer(
     args: Namespace, role: str = "actor"
-) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
+) -> tuple[list[DDP], MegatronOptimizer | None, OptimizerParamScheduler | None, int]:
     """Initialize model(s), optimizer, scheduler, and load from checkpoint.
 
     Args:
@@ -981,7 +984,7 @@ def initialize_model_and_optimizer(
         role (str): Logical role of the model (e.g., "actor", "critic").
 
     Returns:
-        tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
+        tuple[list[DDP], MegatronOptimizer | None, OptimizerParamScheduler | None, int]:
             DDP-wrapped model chunks, optimizer, scheduler, and iteration index.
     """
 

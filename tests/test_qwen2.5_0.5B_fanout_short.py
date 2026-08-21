@@ -10,7 +10,7 @@ trip, ``test_cp_utils.py`` for the per-rollout-mean reducer). But until
 this test, **no e2e training run had ever exercised the full chain**:
 
   custom_generate returns list[Sample] sharing rollout_id
-    → _validate_rollout_id_annotated at depth ≥ 2 passes
+    → validate_rollout_id_annotated at depth ≥ 2 passes
     → _split_train_data_by_dp groups by rollout_id and trims to N steps
        using ``rollout_batch_size * n_samples_per_prompt / global_batch_size``
        (NOT total sample count, which would inflate steps once N>1)

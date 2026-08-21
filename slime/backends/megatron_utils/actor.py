@@ -12,10 +12,14 @@ from megatron.core import mpu
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
+from slime.observability import train_data_utils, train_metric_utils
+from slime.observability.logging_utils import init_tracking
+from slime.observability.profile_utils import TrainProfiler
+from slime.observability.timer import Timer, inverse_timer, timer, with_defer
 from slime.ray.train_actor import TrainRayActor
+from slime.utils import accelerator
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.logging_utils import init_tracking
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.misc import Box
 from slime.utils.reloadable_process_group import (
@@ -25,15 +29,12 @@ from slime.utils.reloadable_process_group import (
     reload_process_groups,
 )
 from slime.utils.routing_replay import RoutingReplay
-from slime.utils.timer import Timer, inverse_timer, timer, with_defer
 from slime.utils.types import RolloutBatch
 
-from ...utils.profile_utils import TrainProfiler
 from ...utils.tensor_backper import TensorBackuper
-from . import train_dump_utils
 from .checkpoint import load_checkpoint
 from .cp_utils import prepare_routed_experts_for_routing_replay, slice_log_prob_with_cp
-from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data
+from .data import DataIterator, get_data_iterator
 from .hf_checkpoint_saver import save_hf_model_to_path
 from .initialize import init, is_megatron_main_rank
 from .loss import (
@@ -237,7 +238,7 @@ class MegatronTrainRayActor(TrainRayActor):
             # that is the first NCCL operation on a group.  Prime WORLD here,
             # after the memory saver is resumed, so later stages cannot miss its
             # lazy initialization.  Sleep still destroys it completely.
-            dist.barrier(device_ids=[torch.cuda.current_device()])
+            dist.barrier(device_ids=[accelerator.current_device()])
         if self.role == "actor":
             self._switch_model("actor")
         print_memory("after wake_up model")
@@ -253,7 +254,7 @@ class MegatronTrainRayActor(TrainRayActor):
         )
         # TODO: this is ugly, move to somewhere else?
         # move tokens to GPU in advance
-        device = torch.cuda.current_device()
+        device = accelerator.current_device()
         rollout_data["tokens"] = [
             t.to(device=device, dtype=torch.long, non_blocking=True) for t in rollout_data["tokens"]
         ]
@@ -359,7 +360,6 @@ class MegatronTrainRayActor(TrainRayActor):
         num_microbatches: list[int],
         store_prefix: str = "",
     ) -> dict[str, list[torch.Tensor]]:
-
         with timer(f"{store_prefix}log_probs"):
             return forward_only(
                 get_log_probs_and_entropy,
@@ -505,7 +505,7 @@ class MegatronTrainRayActor(TrainRayActor):
             if self.rollout_data_postprocess is not None:
                 self.rollout_data_postprocess(self.args, rollout_id, rollout_data)
 
-            log_rollout_data(
+            train_metric_utils.log_rollout_data(
                 rollout_id,
                 self.args,
                 rollout_data,
@@ -542,7 +542,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
             self.prof.step(rollout_id=rollout_id)
 
-        train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
+        train_data_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
 
         if self.args.use_routing_replay:
             RoutingReplay.clear_all()
@@ -561,7 +561,11 @@ class MegatronTrainRayActor(TrainRayActor):
                     logger.info(f"Updating ref model at rollout_id {rollout_id}")
                 self.weights_backuper.backup("ref")
 
-        log_perf_data(rollout_id, self.args, extra_metrics=self.weight_updater.pop_metrics())
+        train_metric_utils.log_perf_data(
+            rollout_id,
+            self.args,
+            extra_metrics=self.weight_updater.pop_metrics(),
+        )
 
     @timer
     def save_model(self, rollout_id: int, force_sync: bool = False) -> None:

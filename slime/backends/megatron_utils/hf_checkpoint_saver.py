@@ -8,6 +8,8 @@ from typing import Any
 
 import torch
 
+from slime.utils import accelerator
+
 logger = logging.getLogger(__name__)
 
 _HF_WEIGHT_FILE_NAMES = {
@@ -223,9 +225,10 @@ def _write_pending_chunk(
     if pending_write is not None:
         shard_idx, named_tensors = pending_write
         writer.write(named_tensors, shard_idx=shard_idx)
-        if torch.cuda.is_available():
-            torch.cuda.ipc_collect()
-            torch.cuda.empty_cache()
+        selected_accelerator = accelerator.initialize_accelerator()
+        if selected_accelerator is not None:
+            selected_accelerator.ipc_collect()
+            selected_accelerator.empty_cache()
 
     return None
 
