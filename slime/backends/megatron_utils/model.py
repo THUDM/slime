@@ -270,7 +270,7 @@ def _patch_megatron_adam(adam_cls):
 def setup_model_and_optimizer(
     args: Namespace,
     role: str = "actor",
-) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler]:
+) -> tuple[list[DDP], MegatronOptimizer | None, OptimizerParamScheduler | None]:
     """Build model(s), wrap with DDP, and construct optimizer and scheduler.
 
     Args:
@@ -283,7 +283,7 @@ def setup_model_and_optimizer(
         lr_mult (float): Global learning-rate multiplier for the optimizer.
 
     Returns:
-        tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler]:
+        tuple[list[DDP], MegatronOptimizer | None, OptimizerParamScheduler | None]:
             - List of model chunks wrapped by ``DDP``.
             - The constructed ``MegatronOptimizer`` instance.
             - The learning-rate/weight-decay scheduler tied to the optimizer.
@@ -292,6 +292,10 @@ def setup_model_and_optimizer(
     assert args.load is not None or args.pretrained_checkpoint is not None
 
     model = get_model(get_model_provider_func(args, role), ModelType.encoder_or_decoder)
+
+    if args.num_rollout == 0:
+        args.no_load_optim = True
+        return model, None, None
 
     # Optimizer
     kwargs = {}
@@ -973,7 +977,7 @@ def save(
 
 def initialize_model_and_optimizer(
     args: Namespace, role: str = "actor"
-) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
+) -> tuple[list[DDP], MegatronOptimizer | None, OptimizerParamScheduler | None, int]:
     """Initialize model(s), optimizer, scheduler, and load from checkpoint.
 
     Args:
@@ -981,7 +985,7 @@ def initialize_model_and_optimizer(
         role (str): Logical role of the model (e.g., "actor", "critic").
 
     Returns:
-        tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
+        tuple[list[DDP], MegatronOptimizer | None, OptimizerParamScheduler | None, int]:
             DDP-wrapped model chunks, optimizer, scheduler, and iteration index.
     """
 
