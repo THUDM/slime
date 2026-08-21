@@ -479,7 +479,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "Only substitue the `def generate(args, sample, sampling_params)` function within the example rollout function. "
-                    "This should be useful if you need to implement some special rollout logic, e.g. multi-turn, function calling."
+                    "This should be useful if you need to implement some special rollout logic, e.g. multi-turn, function calling. "
+                    "Set `abort_mode = 'request'` on the function when it implements request-level abort; otherwise "
+                    "Slime uses server-wide abort."
                 ),
             )
             parser.add_argument(
