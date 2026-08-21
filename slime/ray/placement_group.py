@@ -187,7 +187,8 @@ def create_training_models(args, pgs, rollout_manager, actor_cls=None):
     actor_model, actor_start_rollout_ids = create_actor_model(args, pgs, rollout_manager, actor_cls=actor_cls)
 
     critic_model = None
-    if args.use_critic:
+    # Eval-only does not train the critic.
+    if args.use_critic and args.num_rollout != 0:
         from slime.utils.arguments import parse_megatron_role_args
 
         critic_args = (
@@ -208,7 +209,7 @@ def create_training_models(args, pgs, rollout_manager, actor_cls=None):
         critic_start_rollout_ids = critic_model.create(rollout_manager=rollout_manager)
 
     # TODO how to decide rollout start id when critic is involved? For now we just require user to specify it via args.
-    if args.use_critic:
+    if critic_model is not None:
         start_rollout_ids = critic_start_rollout_ids
     else:
         start_rollout_ids = actor_start_rollout_ids
