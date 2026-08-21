@@ -25,7 +25,13 @@ from slime.utils.dp_schedule import build_dp_schedule
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.logging_utils import configure_logger, init_tracking
-from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
+from slime.utils.metric_utils import (
+    compute_pass_rate,
+    compute_pass_rate_by_group_index,
+    compute_rollout_step,
+    compute_statistics,
+    dict_add_prefix,
+)
 from slime.utils.misc import Box, group_by, load_function
 from slime.utils.types import Sample
 
@@ -777,6 +783,7 @@ class RolloutManager:
             "raw_reward": raw_rewards,
             "truncated": [1 if sample.status == Sample.Status.TRUNCATED else 0 for sample in samples],
             "sample_indices": [sample.index for sample in samples],
+            "group_indices": [sample.group_index for sample in samples],
             "rollout_ids": rollout_ids,
         }
 
@@ -920,7 +927,7 @@ class RolloutManager:
                     continue
                 rollout_data[key] = [data[key][j] for j in partition]
             # keys that need to be splited at train side
-            for key in ["raw_reward", "total_lengths"]:
+            for key in ["raw_reward", "group_indices", "total_lengths"]:
                 if key not in data:
                     continue
                 rollout_data[key] = data[key]
@@ -1315,13 +1322,20 @@ def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any]
             truncated = data[key]["truncated"]
             log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
         if args.log_passrate:
-            log_dict |= dict_add_prefix(
-                compute_pass_rate(
+            samples = data[key].get("samples")
+            group_ids = [sample.group_index for sample in samples] if samples else None
+            if group_ids is not None and all(gid is not None for gid in group_ids):
+                passrate = compute_pass_rate_by_group_index(
+                    rewards,
+                    group_ids,
+                    args.n_samples_per_eval_prompt,
+                )
+            else:
+                passrate = compute_pass_rate(
                     flat_rewards=rewards,
                     group_size=args.n_samples_per_eval_prompt,
-                ),
-                f"eval/{key}-",
-            )
+                )
+            log_dict |= dict_add_prefix(passrate, f"eval/{key}-")
 
     logger.info(f"eval {rollout_id}: {log_dict}")
 

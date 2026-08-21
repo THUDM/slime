@@ -40,6 +40,42 @@ def compute_pass_rate(
     return log_dict
 
 
+def compute_pass_rate_by_group_index(
+    flat_rewards: list[float],
+    group_ids: list,
+    group_size: int,
+):
+    """Estimate pass@k over complete prompt groups identified by ``group_ids``.
+
+    Groups whose size is not exactly ``group_size`` are excluded so
+    :func:`compute_pass_rate` keeps its rectangular contract. Incomplete or
+    oversampled groups are dropped rather than crashing the reshape or
+    skewing the estimate.
+    """
+    if group_size <= 1:
+        return {}
+
+    assert len(flat_rewards) == len(group_ids), f"{len(flat_rewards)=} {len(group_ids)=}"
+    grouped: dict = {}
+    for reward, gid in zip(flat_rewards, group_ids, strict=True):
+        grouped.setdefault(gid, []).append(reward)
+
+    completed = [group for group in grouped.values() if len(group) == group_size]
+    n_incomplete = len(grouped) - len(completed)
+    if n_incomplete:
+        logger.warning(
+            "pass@k: excluding %s/%s incomplete groups (size != %s).",
+            n_incomplete,
+            len(grouped),
+            group_size,
+        )
+    if not completed:
+        return {}
+
+    packed = [reward for group in completed for reward in group]
+    return compute_pass_rate(packed, group_size=group_size, num_groups=len(completed))
+
+
 def _estimate_pass_at_k(num_samples, num_correct, k):
     """
     Estimates pass@k of each problem and returns them in an array.
