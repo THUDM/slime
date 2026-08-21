@@ -30,7 +30,6 @@ import copy
 import os
 from collections import defaultdict
 
-
 MAX_FANOUT = 3
 
 # Each invocation appends one line. The test file reads this after train
@@ -84,10 +83,9 @@ def grpo_normalize_by_group_index(args, samples):
     centering is computed across ALL samples in the batch instead of
     per-prompt — that's silently wrong for GRPO.
 
-    This helper groups by ``Sample.group_index`` (the data-source-set
-    per-prompt counter, preserved through deepcopy in
-    ``compact_generate``) and applies the same mean-center + optional
-    std-normalize the default does, just with the correct grouping.
+    This helper groups by ``Sample.group_index`` and then deduplicates by
+    ``rollout_id``. Each trajectory contributes once to the baseline, and its
+    normalized reward is broadcast to all fan-out samples.
 
     Returns ``(raw_rewards, normalized_rewards)`` matching the input
     ``samples`` order — same shape as the default's return contract.
@@ -96,20 +94,35 @@ def grpo_normalize_by_group_index(args, samples):
 
     raw_rewards = [s.get_reward_value(args) for s in samples]
 
-    # group_index → list of (original_position, raw_reward)
-    groups: dict[int, list[tuple[int, float]]] = defaultdict(list)
-    for i, s in enumerate(samples):
-        groups[s.group_index].append((i, raw_rewards[i]))
+    # group_index → rollout_id → (raw_reward, original_positions)
+    groups: dict[int, dict[int, tuple[float, list[int]]]] = defaultdict(dict)
+    for position, (sample, reward) in enumerate(zip(samples, raw_rewards, strict=True)):
+        rollout_id = sample.rollout_id if sample.rollout_id is not None else sample.index
+        if sample.group_index is None or rollout_id is None:
+            raise ValueError("fan-out reward normalization requires group_index and rollout_id/index")
+
+        rollouts = groups[sample.group_index]
+        if rollout_id not in rollouts:
+            rollouts[rollout_id] = (reward, [position])
+            continue
+
+        rollout_reward, positions = rollouts[rollout_id]
+        if reward != rollout_reward:
+            raise ValueError(
+                f"Samples in rollout {rollout_id} of group {sample.group_index} have inconsistent rewards: "
+                f"{rollout_reward} and {reward}"
+            )
+        positions.append(position)
 
     out = [0.0] * len(samples)
     use_std = getattr(args, "grpo_std_normalization", True)
-    for indexed in groups.values():
-        positions = [p for p, _ in indexed]
-        rewards = torch.tensor([r for _, r in indexed], dtype=torch.float)
+    for rollouts in groups.values():
+        rewards = torch.tensor([reward for reward, _ in rollouts.values()], dtype=torch.float)
         rewards = rewards - rewards.mean()
-        if use_std:
+        if use_std and rewards.numel() > 1:
             rewards = rewards / (rewards.std() + 1e-6)
-        for pos, r in zip(positions, rewards.tolist(), strict=True):
-            out[pos] = r
+        for normalized_reward, (_, positions) in zip(rewards.tolist(), rollouts.values(), strict=True):
+            for position in positions:
+                out[position] = normalized_reward
 
     return raw_rewards, out
