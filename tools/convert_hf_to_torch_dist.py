@@ -28,7 +28,6 @@ def add_convertion_args(parser):
         help="Path to a custom model provider function.",
     )
     parser.add_argument("--allgather-cp", action="store_true", default=False)
-    parser.add_argument("--use-gated-attention", action="store_true", default=False)
     try:
         parser.add_argument("--padded-vocab-size", type=int, default=None)
     except Exception:
