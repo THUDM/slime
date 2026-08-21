@@ -836,6 +836,12 @@ def run_rs_batch_refill(
             status = resolve_rpc(
                 rollout_manager.apply_rs_candidate_reports.remote(rollout_id, report_refs, preflight_seconds)
             )
+            if status["exhausted"]:
+                raise RuntimeError(
+                    "RS batch refill exhausted its retry budget before optimizer.step: "
+                    f"accepted={status['accepted_groups']}, target={status['target_groups']}, "
+                    f"rounds={status['round']}, remaining={status['deficit']}."
+                )
             selected_cache_refs = actor_model.async_take_rs_candidate_log_probs(
                 rollout_id,
                 status["accepted_sample_indices"],
@@ -845,12 +851,6 @@ def run_rs_batch_refill(
             if status["complete"]:
                 coordinator_seconds = clock() - coordinator_start
                 return resolve_rpc(rollout_manager.finalize_rs_batch.remote(rollout_id, coordinator_seconds))
-            if status["exhausted"]:
-                raise RuntimeError(
-                    "RS batch refill exhausted its retry budget before optimizer.step: "
-                    f"accepted={status['accepted_groups']}, target={status['target_groups']}, "
-                    f"rounds={status['round']}, remaining={status['deficit']}."
-                )
             # Replacement generation retains the rollout backend's own timeout
             # and health-monitor semantics.  The coordination timeout applies
             # only after generation has returned.

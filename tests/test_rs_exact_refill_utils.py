@@ -669,7 +669,7 @@ def test_coordinator_cleans_actor_and_manager_state_on_report_failure():
     assert True in resolved
 
 
-def test_coordinator_releases_selected_cache_before_exhaustion_cleanup():
+def test_coordinator_skips_selected_cache_transfer_before_exhaustion_cleanup():
     manager = _FakeManager([_status(exhausted=True, round_index=2, accepted=[10])])
     actor = _FakeActor()
 
@@ -682,8 +682,8 @@ def test_coordinator_releases_selected_cache_before_exhaustion_cleanup():
             clock=iter([0.0, 1.0, 2.0]).__next__,
         )
 
-    assert [event[0] for event in actor.events] == ["score", "take", "discard"]
-    assert [event[0] for event in manager.events] == ["prepare", "apply", "store", "abort"]
+    assert [event[0] for event in actor.events] == ["score", "discard"]
+    assert [event[0] for event in manager.events] == ["prepare", "apply", "abort"]
 
 
 @pytest.mark.parametrize(
