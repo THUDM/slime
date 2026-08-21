@@ -45,7 +45,8 @@ with that limit; `aggregate_candidate_logprob_cache_bytes` and
 `peak_aggregate_candidate_logprob_cache_bytes` report cumulative and per-round aggregate payload across reporting
 actors. Selected-transfer and manager-retained metrics cover the coordinator side. Leave headroom for Python
 containers, Ray object-store/transport buffers, and other process memory, which are not included in this tensor-payload
-limit.
+limit. The limit also does not reserve CUDA allocator headroom: training pipeline ranks that receive a final batch may
+materialize their DP-local proximal-logprob shard on device, so long-response jobs must budget GPU memory for it.
 
 The refill path still applies TIS during training; completing the batch does not make stale initial trajectories
 on-policy. Initial candidates are limited to one policy version of staleness and reactive replacements must match the
