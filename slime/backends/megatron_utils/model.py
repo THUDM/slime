@@ -204,7 +204,9 @@ def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer)
     if args.num_rollout == 0:
         args.train_iters = 1
     else:
-        args.train_iters = args.num_rollout * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+        args.train_iters = (
+            args.num_rollout * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+        )
     if args.lr_decay_iters is None:
         args.lr_decay_iters = args.train_iters
     lr_decay_steps = args.lr_decay_iters * args.global_batch_size
