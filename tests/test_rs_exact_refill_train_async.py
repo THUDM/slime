@@ -1,6 +1,9 @@
 import importlib.util
+import sys
+import types
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
@@ -8,7 +11,11 @@ _TRAIN_ASYNC_PATH = Path(__file__).resolve().parents[1] / "train_async.py"
 _TRAIN_ASYNC_SPEC = importlib.util.spec_from_file_location("test_train_async_module", _TRAIN_ASYNC_PATH)
 assert _TRAIN_ASYNC_SPEC is not None and _TRAIN_ASYNC_SPEC.loader is not None
 train_async = importlib.util.module_from_spec(_TRAIN_ASYNC_SPEC)
-_TRAIN_ASYNC_SPEC.loader.exec_module(train_async)
+_ARGUMENTS_STUB = types.ModuleType("slime.utils.arguments")
+_ARGUMENTS_STUB.parse_args = lambda: None
+# This CPU scheduling contract does not need the SGLang-backed CLI parser.
+with mock.patch.dict(sys.modules, {"slime.utils.arguments": _ARGUMENTS_STUB}):
+    _TRAIN_ASYNC_SPEC.loader.exec_module(train_async)
 
 NUM_GPUS = 0
 
