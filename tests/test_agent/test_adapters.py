@@ -28,7 +28,7 @@ if str(REPO_ROOT) not in sys.path:
 from tests.test_agent._fakes import FakeSGLangServer, FakeTokenizer  # noqa: E402
 
 from slime.agent.adapters import anthropic, openai  # noqa: E402
-from slime.agent.parsing import parse_model_output, parse_xml_tool_uses  # noqa: E402
+from slime.agent.parsing import ParsedModelOutput, parse_model_output, parse_xml_tool_uses  # noqa: E402
 from slime.utils.types import Sample  # noqa: E402
 
 NUM_GPUS = 0
@@ -158,6 +158,34 @@ def test_openai_translation_developer_to_system_and_tool_calls_to_dict():
         # tool_call_id dropped.
         {"role": "tool", "content": "found"},
     ]
+
+
+def test_openai_native_parallel_tool_calls_round_trip_into_manager_history():
+    parsed = ParsedModelOutput(
+        reasoning="",
+        text="",
+        tool_uses=[
+            {"name": "lookup", "input": {"q": "slime"}},
+            {"name": "read", "input": {"path": "README.md"}},
+        ],
+    )
+
+    default_wire, default_manager, _ = openai._build_reply_parts(parsed, "stop")
+    assert len(default_wire["tool_calls"]) == 1
+    assert len(default_manager["tool_calls"]) == 1
+
+    wire, manager, finish = openai._build_reply_parts(
+        parsed,
+        "stop",
+        preserve_parallel_tool_calls=True,
+    )
+    assert finish == "tool_calls"
+    assert len(wire["tool_calls"]) == 2
+    assert len(manager["tool_calls"]) == 2
+    # The native Harness echoes every OpenAI tool call on the next request.
+    # Translation drops only wire correlation ids and must reproduce exactly
+    # the manager leaf recorded for the previous model turn.
+    assert openai._translate_messages([wire]) == [manager]
 
 
 # ===========================================================================
