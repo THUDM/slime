@@ -307,6 +307,46 @@ def test_rollout_manager_generates_exact_initial_and_aligned_replacement_counts(
     assert manager._pending_rs_batches[7]["round"] == 1
 
 
+def test_rollout_manager_isolates_custom_rollout_nested_argument_mutation():
+    manager = object.__new__(RolloutManager.__ray_actor_class__)
+    manager.args = SimpleNamespace(
+        rollout_batch_size=2,
+        over_sampling_batch_size=2,
+        n_samples_per_prompt=2,
+        apply_chat_template_kwargs={"nested": [1]},
+        rollout_sample_hook_path=["custom.sample_hook"],
+    )
+    manager.data_source = object()
+    observed_args = []
+
+    def custom_rollout(args, rollout_id, data_source, *, evaluation):
+        assert rollout_id == 7
+        assert data_source is manager.data_source
+        assert evaluation is False
+        assert args.rollout_batch_size == 1
+        assert args.over_sampling_batch_size == 1
+        observed_args.append(args)
+
+        # A custom rollout and the sample hooks it calls share this namespace.
+        args.rollout_batch_size = 99
+        args.apply_chat_template_kwargs["nested"].append(2)
+        args.rollout_sample_hook_path.append("custom.second_hook")
+        return [[_sample(0, 0), _sample(1, 0)]]
+
+    manager.generate_rollout = custom_rollout
+
+    groups, metrics, rollout_ids = manager._call_rollout_for_group_count(7, 1)
+
+    assert [[sample.index for sample in group] for group in groups] == [[0, 1]]
+    assert metrics == {}
+    assert rollout_ids == {0, 1}
+    assert observed_args[0] is not manager.args
+    assert manager.args.rollout_batch_size == 2
+    assert manager.args.over_sampling_batch_size == 2
+    assert manager.args.apply_chat_template_kwargs == {"nested": [1]}
+    assert manager.args.rollout_sample_hook_path == ["custom.sample_hook"]
+
+
 def test_rollout_manager_rejects_an_unaligned_final_effective_batch():
     manager = object.__new__(RolloutManager.__ray_actor_class__)
     manager.args = SimpleNamespace(rs_batch_refill=True, rollout_batch_size=5, n_samples_per_prompt=2)

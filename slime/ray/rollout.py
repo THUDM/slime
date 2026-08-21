@@ -541,7 +541,10 @@ class RolloutManager:
         # pending batch ID before every reactive generation.
         self.rollout_id = rollout_id
         set_current_rollout_id(rollout_id)
-        call_args = copy.copy(self.args)
+        # Custom rollout functions and sample hooks receive this namespace. Keep
+        # their nested mutations local to one candidate-generation call so they
+        # cannot change the topology or batching of later refill rounds.
+        call_args = copy.deepcopy(self.args)
         call_args.rollout_batch_size = group_count
         # A refill should request only the missing groups. The default rollout
         # loop otherwise inherits the original full-batch sampling granularity.
