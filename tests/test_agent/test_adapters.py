@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 from pathlib import Path
 
+import aiohttp
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -28,6 +30,7 @@ if str(REPO_ROOT) not in sys.path:
 from tests.test_agent._fakes import FakeSGLangServer, FakeTokenizer  # noqa: E402
 
 from slime.agent.adapters import anthropic, openai  # noqa: E402
+from slime.agent.adapters.common import SGLANG_CLIENT_KEY, Session, call_sglang_generate  # noqa: E402
 from slime.agent.parsing import parse_model_output, parse_xml_tool_uses  # noqa: E402
 from slime.utils.types import Sample  # noqa: E402
 
@@ -459,6 +462,131 @@ def test_parse_xml_tool_uses_ignores_unknown_tool():
     cleaned, uses = parse_xml_tool_uses(raw, [{"function": {"name": "lookup"}}])
     assert uses == []
     assert "<tool_call>" in cleaned  # left untouched
+
+
+class _FakeConnectionKey:
+    host = "10.0.1.4"
+    port = 4049
+    ssl = True
+
+
+class _FakeSGLangResponse:
+    status = 200
+
+    def __init__(self, token_id: int) -> None:
+        self.token_id = token_id
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def text(self) -> str:
+        return ""
+
+    async def json(self, content_type=None):
+        return {
+            "meta_info": {
+                "output_token_logprobs": [[-0.1, self.token_id]],
+                "finish_reason": {"type": "stop"},
+            }
+        }
+
+
+class _FakeSGLangClient:
+    def __init__(self, generate_outcomes: list[int | Exception]) -> None:
+        self.generate_outcomes = list(generate_outcomes)
+        self.posts: list[dict] = []
+
+    def post(self, url, *, json=None, headers=None, timeout=None):
+        self.posts.append({"url": url, "json": json})
+        if url.endswith("/abort_request"):
+            return _FakeSGLangResponse(0)
+        outcome = self.generate_outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return _FakeSGLangResponse(outcome)
+
+
+class _FakeAdapter:
+    logger = logging.getLogger("test-adapter")
+    log_prefix = "test"
+    max_token_keys = ("max_tokens",)
+    stop_keys = ("stop",)
+
+    def __init__(self, client: _FakeSGLangClient, *, sglang_url: str = "http://router") -> None:
+        self.sglang_url = sglang_url
+        self.app = {SGLANG_CLIENT_KEY: client}
+
+
+def _connector_error() -> aiohttp.ClientConnectorError:
+    return aiohttp.ClientConnectorError(_FakeConnectionKey(), OSError("bad fd"))
+
+
+def test_call_sglang_generate_reuses_app_owned_client():
+    async def run_case():
+        client = _FakeSGLangClient([800, 801])
+        adapter = _FakeAdapter(client)
+        session = Session(sampling_defaults={"max_new_tokens": 9})
+
+        first = await call_sglang_generate([11], session, {"max_tokens": 3}, adapter=adapter, session_id="s")
+        second = await call_sglang_generate([12], session, {"max_tokens": 4}, adapter=adapter, session_id="s")
+
+        assert first.output_ids == [800]
+        assert second.output_ids == [801]
+        assert [p["url"] for p in client.posts] == ["http://router/generate", "http://router/generate"]
+
+    asyncio.run(run_case())
+
+
+def test_call_sglang_generate_retries_connector_error_once_with_same_rid():
+    async def run_case():
+        client = _FakeSGLangClient([_connector_error(), 901])
+        adapter = _FakeAdapter(client)
+        session = Session(sampling_defaults={"max_new_tokens": 9})
+
+        turn = await call_sglang_generate([11], session, {"max_tokens": 3}, adapter=adapter, session_id="s")
+
+        assert turn.output_ids == [901]
+        assert [p["url"] for p in client.posts] == ["http://router/generate", "http://router/generate"]
+        assert client.posts[0]["json"]["rid"] == client.posts[1]["json"]["rid"]
+
+    asyncio.run(run_case())
+
+
+def test_call_sglang_generate_does_not_retry_after_request_reaches_server():
+    async def run_case():
+        client = _FakeSGLangClient([aiohttp.ServerDisconnectedError(), 999])
+        adapter = _FakeAdapter(client)
+        session = Session(sampling_defaults={"max_new_tokens": 9})
+
+        with pytest.raises(aiohttp.ServerDisconnectedError):
+            await call_sglang_generate([11], session, {"max_tokens": 3}, adapter=adapter, session_id="s")
+
+        assert [p["url"] for p in client.posts] == ["http://router/generate", "http://router/abort_request"]
+        assert client.posts[1]["json"]["rid"] == client.posts[0]["json"]["rid"]
+
+    asyncio.run(run_case())
+
+
+def test_call_sglang_generate_retries_connector_error_only_once():
+    async def run_case():
+        client = _FakeSGLangClient([_connector_error(), _connector_error(), 999])
+        adapter = _FakeAdapter(client)
+        session = Session(sampling_defaults={"max_new_tokens": 9})
+
+        with pytest.raises(aiohttp.ClientConnectorError):
+            await call_sglang_generate([11], session, {"max_tokens": 3}, adapter=adapter, session_id="s")
+
+        assert [p["url"] for p in client.posts] == [
+            "http://router/generate",
+            "http://router/generate",
+            "http://router/abort_request",
+        ]
+        assert client.posts[0]["json"]["rid"] == client.posts[1]["json"]["rid"]
+
+    asyncio.run(run_case())
 
 
 if __name__ == "__main__":
