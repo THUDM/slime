@@ -1,0 +1,13 @@
+diff --git a/deep_ep/__init__.py b/deep_ep/__init__.py
+index 2b20d83..d41fd34 100644
+--- a/deep_ep/__init__.py
++++ b/deep_ep/__init__.py
+@@ -1,3 +1,8 @@
++import ctypes
++
++# Load libcuda.so globally so that deep_ep_cpp can resolve driver API symbols
++# (e.g. cuMemAddressFree) that are not exported by PyTorch's RTLD_LOCAL load.
++ctypes.CDLL("libcuda.so", mode=ctypes.RTLD_GLOBAL)
+ import torch
+
+ from .utils import EventOverlap

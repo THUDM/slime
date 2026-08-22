@@ -19,7 +19,18 @@
 - B 卡基本功能稳定，可作为开发和测试参考，但暂无 CI 保护
 - 两种硬件平台使用完全相同的安装和启动流程
 
-- 对于不方便使用 docker 的场景，请参考 [build_conda.sh](https://github.com/THUDM/slime/blob/main/build_conda.sh)；
+- 对于不方便使用 docker 的场景，请参考 [build_conda.sh](https://github.com/THUDM/slime/blob/main/build_conda.sh)。
+  `build_conda.sh` 通过 `PATCH_VERSION` 环境变量支持两种 patch set：
+  - `PATCH_VERSION=v0.5.9`（默认）— upstream 构建（仅应用 sglang + megatron patch）。
+  - `PATCH_VERSION=v0.5.9.a100` — A100 (SM80) 构建。额外编译 DeepEP（禁用 SM90/NVSHMEM 特性），并应用 `deep_ep`、`transformer_engine`、`slime` patch。
+
+  ```bash
+  # 默认 (H 卡)
+  bash build_conda.sh
+
+  # A100
+  PATCH_VERSION=v0.5.9.a100 bash build_conda.sh
+  ```
 - 对于 AMD 支持，请参考 [AMD 使用教程](../../en/platform_support/amd_tutorial.md)。
 
 ### 拉取并启动 Docker 容器
