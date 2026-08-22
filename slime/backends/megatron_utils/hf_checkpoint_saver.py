@@ -8,6 +8,8 @@ from typing import Any
 
 import torch
 
+from slime.utils import accelerator
+
 logger = logging.getLogger(__name__)
 
 _HF_WEIGHT_FILE_NAMES = {
@@ -106,6 +108,7 @@ def save_hf_model_direct_to_path(
         model=model,
         model_name=model_name,
         quantization_config=quantization_config,
+        transform_ue8m0=False,
     )
     megatron_local_weights = dict(named_params_and_buffers(args, model, convert_to_global_name=True))
     num_save_nodes, save_node_rank, is_writer_rank, writer_ranks = _get_node_save_layout(args)
@@ -222,9 +225,10 @@ def _write_pending_chunk(
     if pending_write is not None:
         shard_idx, named_tensors = pending_write
         writer.write(named_tensors, shard_idx=shard_idx)
-        if torch.cuda.is_available():
-            torch.cuda.ipc_collect()
-            torch.cuda.empty_cache()
+        selected_accelerator = accelerator.initialize_accelerator()
+        if selected_accelerator is not None:
+            selected_accelerator.ipc_collect()
+            selected_accelerator.empty_cache()
 
     return None
 

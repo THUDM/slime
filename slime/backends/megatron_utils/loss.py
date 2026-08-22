@@ -37,6 +37,49 @@ ROLLOUT_TOP_P_TOKEN_KEYS = (
 )
 
 
+# Optional capture of per-sample policy log-probs computed during the training
+# forward. Used only when dumping train debug data in configs that skip the
+# separate log-prob recompute (can_reuse_log_probs_in_loss / use_rollout_logprobs):
+# the values are identical to a separate compute_log_prob pass, so we snapshot
+# them here at no extra forward. Keyed by GLOBAL rollout position so the writer
+# can put them back in sample order regardless of pipeline/microbatch order.
+_LOG_PROB_CAPTURE: "dict[int, torch.Tensor] | None" = None
+
+
+def enable_log_prob_capture() -> None:
+    """Start capturing training-forward log-probs (call before ``train``)."""
+    global _LOG_PROB_CAPTURE
+    _LOG_PROB_CAPTURE = {}
+
+
+def drain_captured_log_probs() -> "dict[int, torch.Tensor]":
+    """Return captured ``{rollout_position: cp-local log_probs}`` and stop capturing."""
+    global _LOG_PROB_CAPTURE
+    captured = _LOG_PROB_CAPTURE or {}
+    _LOG_PROB_CAPTURE = None
+    return captured
+
+
+def _maybe_capture_log_probs(batch: RolloutBatch, log_probs: list[torch.Tensor]) -> None:
+    """Snapshot per-sample CP-local ``log_probs`` keyed by global rollout position.
+
+    No-op unless :func:`enable_log_prob_capture` is active and the micro-batch
+    carries ``partition`` (only added to the training keys when dumping). First
+    occurrence per position wins, so multi-step training keeps the initial
+    (old-policy) values. ``log_probs`` here is the per-sample list, in the same
+    order as ``batch['partition']`` (both indexed by this micro-batch's
+    ``micro_batch_indices``).
+    """
+    if _LOG_PROB_CAPTURE is None:
+        return
+    positions = batch.get("partition")
+    if not positions:
+        return
+    for position, log_prob in zip(positions, log_probs, strict=True):
+        if position not in _LOG_PROB_CAPTURE:
+            _LOG_PROB_CAPTURE[position] = log_prob.detach().clone()
+
+
 def get_rollout_top_p_logprob_kwargs(args: Namespace, batch: dict[str, Any]) -> dict[str, Any]:
     if args.rollout_top_p == 1.0:
         return {}
@@ -728,11 +771,11 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         rewards = []
         kl_coef = -args.kl_coef
         cp_rank = mpu.get_context_parallel_rank()
-        for reward, k in zip(old_rewards, kl, strict=False):
-            k *= kl_coef
+        for reward, per_token_kl in zip(old_rewards, kl, strict=False):
+            token_level_rewards = per_token_kl * kl_coef
             if cp_rank == 0:
-                k[-1] += reward
-            rewards.append(k)
+                token_level_rewards[-1] += reward
+            rewards.append(token_level_rewards)
         advantages, returns = get_advantages_and_returns_batch(
             total_lengths, response_lengths, values, rewards, args.gamma, args.lambd
         )
@@ -935,6 +978,10 @@ def policy_loss_function(
     )
 
     log_probs = log_probs_and_entropy["log_probs"]
+    # Snapshot the per-sample policy log-probs for the train debug dump (no-op
+    # unless capture is enabled). Must run before the torch.cat below rebinds
+    # `log_probs` to a single concatenated tensor.
+    _maybe_capture_log_probs(batch, log_probs)
     if not args.use_rollout_logprobs and not old_log_probs:
         old_log_probs = [log_prob.detach() for log_prob in log_probs]
     train_log_probs_for_tis = batch.get("log_probs")

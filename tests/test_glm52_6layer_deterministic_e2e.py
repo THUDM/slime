@@ -365,8 +365,7 @@ def run_gate(*, layerwise_zero: bool = False, rollout_max_response_len: int = 40
                 _run(
                     [
                         sys.executable,
-                        "-m",
-                        "slime.utils.compare_glm52_layerwise",
+                        str(REPO_ROOT / "tests/glm52_layerwise_comparator.py"),
                         "--megatron-dir",
                         megatron_layerwise_dump,
                         "--sglang-dir",

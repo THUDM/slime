@@ -21,6 +21,8 @@ import safetensors.torch
 import torch
 from tqdm import tqdm
 
+from slime.utils import accelerator
+
 try:
     import fake_int4_quant_cuda
 except ImportError:
@@ -166,11 +168,13 @@ class ConversionResult:
 
 def process_file(input_path, output_path, filename, group_size, is_symmetric, ignore_rules, result_collector):
 
-    print(f"Processing {filename}, memory usage: {torch.cuda.memory_allocated()}")
+    print(f"Processing {filename}, memory usage: {accelerator.memory_allocated()}")
     weights = {}
     q_weights = {}
 
-    with safetensors.safe_open(os.path.join(input_path, filename), framework="pt", device="cuda") as f:
+    with safetensors.safe_open(
+        os.path.join(input_path, filename), framework="pt", device=accelerator.device_name()
+    ) as f:
         for k in f.keys():
             weights[k] = f.get_tensor(k)
 
@@ -180,15 +184,15 @@ def process_file(input_path, output_path, filename, group_size, is_symmetric, ig
         )
 
         if is_ignored or not name.endswith(".weight") or weight.dim() < 2:
-            print(f"Ignoring {name}, memory usage: {torch.cuda.memory_allocated()}")
+            print(f"Ignoring {name}, memory usage: {accelerator.memory_allocated()}")
             q_weights[name] = weight
             continue
 
-        print(f"Packing {name}, memory usage: {torch.cuda.memory_allocated()}")
+        print(f"Packing {name}, memory usage: {accelerator.memory_allocated()}")
         qw, s, zp = pack_layer(weight, group_size, is_symmetric)
         qweight_name = name.replace(".weight", ".weight_packed")
         scale_name = name.replace(".weight", ".weight_scale")
-        weight_shape = torch.tensor(weight.shape, dtype=torch.int32, device="cuda")
+        weight_shape = torch.tensor(weight.shape, dtype=torch.int32, device=accelerator.device())
         weight_shape_name = name.replace(".weight", ".weight_shape")
         if zp is not None:
             zp_name = name.replace(".weight", ".weight_zero_point")
@@ -273,7 +277,7 @@ def convert_int4(input_path, output_path, group_size, is_symmetric, ignore_rules
     json.dump(index_dict, open(os.path.join(output_path, "model.safetensors.index.json"), "w"), indent=2)
 
     gc.collect()
-    torch.cuda.empty_cache()
+    accelerator.empty_cache()
 
     return output_path
 

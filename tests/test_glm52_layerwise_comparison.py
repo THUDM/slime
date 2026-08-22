@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from slime.utils.compare_glm52_layerwise import (
+from glm52_layerwise_comparator import (
     TrainSequence,
     _sglang_layer_token_rows,
     compare_layer_outputs,
