@@ -55,8 +55,9 @@ def compute_opsm_mask(
     args: Namespace,
     full_log_probs: list[torch.Tensor],
     full_old_log_probs: list[torch.Tensor],
-    advantages: list[torch.Tensor],
+    full_advantages: list[torch.Tensor],
     loss_masks: list[torch.Tensor],
+    local_advantages: list[torch.Tensor] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute Off-Policy Sequence Masking (OPSM) mask.
 
@@ -64,8 +65,12 @@ def compute_opsm_mask(
         args: Configuration containing `opsm_delta` threshold.
         full_log_probs: Current policy log-probs per sample.
         full_old_log_probs: Old policy log-probs per sample.
-        advantages: Advantage values per sample.
+        full_advantages: Full-response advantage values per sample.
         loss_masks: Loss masks per sample.
+        local_advantages: Optional local advantage chunks used as the returned
+            mask shape. This is needed under context parallelism, where OPSM
+            makes a full-sequence decision but policy loss is computed on the
+            CP-local advantage/log-prob chunk.
 
     Returns:
         Tuple of `(opsm_mask, opsm_clipfrac)` where `opsm_mask` is a
@@ -73,20 +78,42 @@ def compute_opsm_mask(
         `opsm_clipfrac` is the count of masked sequences.
     """
     opsm_mask_list = []
-    device = advantages[0].device
+    device = full_advantages[0].device
     opsm_clipfrac = torch.tensor(0.0, device=device)
 
-    for full_log_prob, full_old_log_prob, advantage, loss_mask in zip(
-        full_log_probs, full_old_log_probs, advantages, loss_masks, strict=False
+    if local_advantages is None:
+        local_advantages = full_advantages
+
+    for full_log_prob, full_old_log_prob, full_advantage, loss_mask, local_advantage in zip(
+        full_log_probs, full_old_log_probs, full_advantages, loss_masks, local_advantages, strict=False
     ):
-        # Calculate sequence-level KL
-        seq_kl = ((full_old_log_prob - full_log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+        if not (full_log_prob.shape == full_old_log_prob.shape == full_advantage.shape == loss_mask.shape):
+            raise ValueError(
+                "OPSM sequence inputs must have matching full-response shapes: "
+                f"full_log_prob={full_log_prob.shape}, "
+                f"full_old_log_prob={full_old_log_prob.shape}, "
+                f"full_advantage={full_advantage.shape}, loss_mask={loss_mask.shape}"
+            )
+        valid_tokens = loss_mask.bool()
+        valid_token_count = torch.clamp_min(loss_mask.sum(), 1)
 
-        # Create mask: 0 if (advantage < 0 and seq_kl > delta), else 1
-        mask = ((advantage < 0) & (seq_kl > args.opsm_delta)).float()
-        opsm_clipfrac += mask.sum() / torch.clamp_min(loss_mask.sum(), 1)
+        # Make OPSM a sequence-level decision, then broadcast it to every token
+        # in that sequence. This avoids training on a positive-advantage token
+        # from the same high-KL sequence that OPSM decided to reject.
+        logprob_delta = torch.where(valid_tokens, full_old_log_prob - full_log_prob, torch.zeros_like(full_log_prob))
+        seq_kl = logprob_delta.sum() / valid_token_count
+        masked_advantage = torch.where(valid_tokens, full_advantage, torch.zeros_like(full_advantage))
+        seq_advantage = masked_advantage.sum() / valid_token_count
+        sequence_rejected = (seq_advantage < 0) & (seq_kl > args.opsm_delta)
 
-        opsm_mask_list.append(1 - mask)
+        mask = torch.where(
+            sequence_rejected,
+            torch.zeros_like(local_advantage, dtype=torch.float32),
+            torch.ones_like(local_advantage, dtype=torch.float32),
+        )
+        opsm_clipfrac += sequence_rejected.float()
+
+        opsm_mask_list.append(mask)
 
     opsm_mask = torch.cat(opsm_mask_list, dim=0)
     return opsm_mask, opsm_clipfrac
