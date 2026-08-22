@@ -86,9 +86,10 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     if not sample.tokens:
         sample.tokens = prompt_ids
 
-    headers = None
+    headers = http_utils.bearer_auth_headers(getattr(args, "router_api_key", None))
     if sample.session_id and getattr(args, "router_policy", None) == "consistent_hashing":
-        headers = {"X-SMG-Routing-Key": sample.session_id}
+        headers["X-SMG-Routing-Key"] = sample.session_id
+    headers = headers or None
 
     # Snapshot pre-call sample state. sglang's SSE chunks are cumulative
     # *within this call*; on each chunk we rebuild the post-call view of the
