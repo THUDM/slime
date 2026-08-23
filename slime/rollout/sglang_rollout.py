@@ -40,6 +40,7 @@ _PROCESSOR_PROMPT_KEYS = {"input_ids", "attention_mask"}
 
 
 def _prepare_prompt_ids(sample: Sample, tokenizer, processor: Any) -> list[int]:
+    cached_prompt_ids = sample.pop_cached_prompt_token_ids()
     raw_multimodal_inputs = sample.multimodal_inputs or {}
     has_multimodal_inputs = any(value is not None for value in raw_multimodal_inputs.values())
     reuse_existing_input_ids = bool(sample.tokens) and (
@@ -57,6 +58,9 @@ def _prepare_prompt_ids(sample: Sample, tokenizer, processor: Any) -> list[int]:
 
     if reuse_existing_input_ids:
         return sample.tokens
+
+    if cached_prompt_ids is not None and isinstance(sample.prompt, str) and not has_multimodal_inputs:
+        return cached_prompt_ids
 
     return tokenizer.encode(sample.prompt, add_special_tokens=False)
 
@@ -511,6 +515,9 @@ async def eval_rollout_single_dataset(
         if dataset_cfg.apply_chat_template_kwargs is not None
         else args.apply_chat_template_kwargs
     )
+    cache_prompt_token_ids = (
+        args.custom_generate_function_path is None and dataset_cfg.custom_generate_function_path is None
+    )
 
     cache_key = dataset_cfg.cache_key + (
         args.hf_checkpoint,
@@ -521,6 +528,7 @@ async def eval_rollout_single_dataset(
             if eval_apply_chat_template_kwargs is not None
             else None
         ),
+        cache_prompt_token_ids,
     )
     if cache_key not in EVAL_PROMPT_DATASET:
         tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
@@ -537,6 +545,7 @@ async def eval_rollout_single_dataset(
             tool_key=dataset_cfg.tool_key,
             apply_chat_template=eval_apply_chat_template,
             apply_chat_template_kwargs=eval_apply_chat_template_kwargs,
+            cache_prompt_token_ids=cache_prompt_token_ids,
         )
     dataset = EVAL_PROMPT_DATASET[cache_key]
 
