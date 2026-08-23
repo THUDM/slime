@@ -19,7 +19,8 @@ def _tp_partition_dim(name: str, param: torch.Tensor) -> int | None:
     if getattr(param, "parallel_mode", None) == "duplicated":
         return None
 
-    if getattr(param, "tensor_model_parallel", False):
+    has_tp_metadata = hasattr(param, "tensor_model_parallel")
+    if has_tp_metadata and param.tensor_model_parallel:
         return param.partition_dim
 
     # Older Megatron-LM revisions explicitly shard expert TEGroupedLinear parameters while
@@ -27,6 +28,7 @@ def _tp_partition_dim(name: str, param: torch.Tensor) -> int | None:
     # exported expert names still identify the column-parallel fc1 and row-parallel fc2 shards.
     match = _TE_GROUPED_LINEAR_EXPERT_PARAM.search(name)
     if match is None:
+        assert has_tp_metadata, f"{name} does not have tensor_model_parallel attribute"
         return None
 
     projection, kind = match.groups()

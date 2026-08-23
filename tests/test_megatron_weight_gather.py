@@ -3,6 +3,7 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
 import torch
 
 NUM_GPUS = 0
@@ -134,7 +135,7 @@ def test_legacy_grouped_row_bias_and_unrecognized_expert_stay_replicated(monkeyp
     module, _, _ = _load_common(monkeypatch)
     calls, _ = _install_fake_all_gather(monkeypatch, module)
     row_bias = _param([1, 2])
-    router = _param([3, 4])
+    router = _param([3, 4], tensor_model_parallel=False)
 
     row_result = module.all_gather_param(
         "module.module.decoder.layers.0.mlp.experts.linear_fc2.bias0",
@@ -148,6 +149,14 @@ def test_legacy_grouped_row_bias_and_unrecognized_expert_stay_replicated(monkeyp
     torch.testing.assert_close(row_result, row_bias)
     torch.testing.assert_close(router_result, router)
     assert calls == []
+
+
+def test_unrecognized_parameter_without_tp_metadata_still_fails_fast(monkeypatch):
+    module, _, _ = _load_common(monkeypatch)
+    param = _param([1, 2])
+
+    with pytest.raises(AssertionError, match="does not have tensor_model_parallel attribute"):
+        module.all_gather_param("module.module.decoder.layers.0.mlp.router.weight", param)
 
 
 def test_existing_tensor_parallel_metadata_keeps_regular_tp_group(monkeypatch):
