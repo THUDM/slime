@@ -144,9 +144,10 @@ PERF_ARGS=(
    --recompute-granularity full
    --recompute-method uniform
    --recompute-num-layers 1
-   # max-tokens-per-gpu is one CP rank's slice of MAX_CONTEXT_LEN; log-probs are
-   # chunked along T to avoid OOM on long single trajectories.
+   # max-tokens-per-gpu is one CP rank's slice of MAX_CONTEXT_LEN. Project only
+   # loss-masked rows, then chunk the remaining log-prob reduction work.
    --max-tokens-per-gpu $((MAX_CONTEXT_LEN / CP_SIZE))
+   --compact-actor-logits
    --log-probs-chunk-size 1024
    --use-dynamic-batch-size
 )

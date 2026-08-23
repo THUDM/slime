@@ -10,7 +10,6 @@ import torch
 
 from slime.utils.ppo_utils import calculate_log_probs_and_entropy
 
-
 NUM_GPUS = 2
 
 # Megatron's JIT fused CE can differ from the same Python-level expression by
@@ -326,6 +325,139 @@ def _tp2_worker(rank: int, world_size: int, master_port: int) -> None:
                 with_entropy=with_entropy,
                 entropy_has_grad=entropy_has_grad,
             )
+
+        from megatron.core import parallel_state
+        from megatron.core.model_parallel_config import ModelParallelConfig
+        from megatron.core.models.gpt import GPTModel
+        from megatron.core.tensor_parallel.layers import ColumnParallelLinear
+
+        from slime.backends.megatron_utils.compact_logits import CompactLogitsGPTModel, compact_actor_logits
+
+        parallel_state.initialize_model_parallel(
+            tensor_model_parallel_size=world_size,
+            create_gloo_process_groups=False,
+        )
+        try:
+            tp_group = parallel_state.get_tensor_model_parallel_group()
+            hidden_size = 4
+            sequence_length = 6
+            vocab_size = 8
+            loss_mask = torch.tensor(
+                [[False, True, True, False, True, False]],
+                dtype=torch.bool,
+                device=device,
+            )
+            global_hidden = torch.linspace(
+                -1.25,
+                1.5,
+                steps=sequence_length * hidden_size,
+                dtype=torch.float32,
+                device=device,
+            ).view(sequence_length, 1, hidden_size)
+
+            def build_projection_model(model_cls, sequence_parallel: bool):
+                config = ModelParallelConfig(
+                    tensor_model_parallel_size=world_size,
+                    sequence_parallel=sequence_parallel,
+                    params_dtype=torch.float32,
+                    perform_initialization=False,
+                    use_cpu_initialization=False,
+                    gradient_accumulation_fusion=False,
+                )
+                config.mtp_num_layers = None
+                config.cuda_graph_impl = "none"
+                config.config_logger_dir = ""
+
+                model = model_cls.__new__(model_cls)
+                torch.nn.Module.__init__(model)
+                model.config = config
+                model.post_process = True
+                model.parallel_output = True
+                model.share_embeddings_and_output_weights = False
+                model.mtp_process = False
+                model.output_layer = ColumnParallelLinear(
+                    hidden_size,
+                    vocab_size,
+                    config=config,
+                    init_method=torch.nn.init.zeros_,
+                    bias=False,
+                    gather_output=False,
+                    tp_group=tp_group,
+                )
+                return model
+
+            def project(model, hidden_states: torch.Tensor, *, compact: bool) -> torch.Tensor:
+                with compact_actor_logits(compact):
+                    return model._postprocess(
+                        hidden_states=hidden_states,
+                        input_ids=None,
+                        position_ids=None,
+                        labels=None,
+                        rotary_pos_emb=None,
+                        rotary_pos_cos=None,
+                        rotary_pos_sin=None,
+                        loss_mask=loss_mask,
+                    )
+
+            for sequence_parallel in (False, True):
+                baseline_model = build_projection_model(GPTModel, sequence_parallel)
+                compact_model = build_projection_model(CompactLogitsGPTModel, sequence_parallel)
+                local_weight = torch.linspace(
+                    -0.8 + rank * 0.15,
+                    1.1 + rank * 0.15,
+                    steps=baseline_model.output_layer.weight.numel(),
+                    dtype=torch.float32,
+                    device=device,
+                ).view_as(baseline_model.output_layer.weight)
+                with torch.no_grad():
+                    baseline_model.output_layer.weight.copy_(local_weight)
+                    compact_model.output_layer.weight.copy_(local_weight)
+
+                local_hidden = global_hidden.chunk(world_size, dim=0)[rank] if sequence_parallel else global_hidden
+                baseline_hidden = local_hidden.detach().clone().requires_grad_()
+                compact_hidden = local_hidden.detach().clone().requires_grad_()
+
+                full_logits = project(baseline_model, baseline_hidden, compact=False)
+                selected_full_logits = full_logits[:, loss_mask[0], :]
+                compact_logits = project(compact_model, compact_hidden, compact=True)
+
+                assert compact_logits.shape == selected_full_logits.shape
+                assert compact_model.output_layer.sequence_parallel is sequence_parallel
+                torch.testing.assert_close(
+                    compact_logits,
+                    selected_full_logits,
+                    rtol=1e-5,
+                    atol=1e-6,
+                )
+
+                output_grad = torch.linspace(
+                    -0.7,
+                    0.9,
+                    steps=compact_logits.numel(),
+                    dtype=torch.float32,
+                    device=device,
+                ).view_as(compact_logits)
+                (selected_full_logits * output_grad).sum().backward()
+                (compact_logits * output_grad).sum().backward()
+
+                assert baseline_hidden.grad is not None
+                assert compact_hidden.grad is not None
+                assert baseline_model.output_layer.weight.grad is not None
+                assert compact_model.output_layer.weight.grad is not None
+                torch.testing.assert_close(
+                    compact_hidden.grad,
+                    baseline_hidden.grad,
+                    rtol=1e-5,
+                    atol=1e-6,
+                )
+                torch.testing.assert_close(
+                    compact_model.output_layer.weight.grad,
+                    baseline_model.output_layer.weight.grad,
+                    rtol=1e-5,
+                    atol=1e-6,
+                )
+        finally:
+            parallel_state.destroy_model_parallel()
     finally:
         dist.destroy_process_group()
 
