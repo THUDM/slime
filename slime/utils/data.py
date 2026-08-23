@@ -84,7 +84,14 @@ def _parse_generalized_path(s: str):
     return s, None
 
 
-def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_length: int | None) -> list[Sample]:
+def filter_long_prompt(
+    origin_samples: list[Sample],
+    tokenizer,
+    processor,
+    max_length: int | None,
+    *,
+    cache_prompt_token_ids: bool = False,
+) -> list[Sample]:
     if max_length is None:
         return origin_samples
 
@@ -109,6 +116,8 @@ def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_l
             input_ids_list = tokenizer(prompts, add_special_tokens=False)["input_ids"]
             for (position, sample), input_ids in zip(text_only, input_ids_list, strict=True):
                 if len(input_ids) <= max_length:
+                    if cache_prompt_token_ids and isinstance(sample.prompt, str):
+                        sample.cache_prompt_token_ids(input_ids)
                     kept.append((position, sample))
         if multimodal:
             from slime.utils.processing_utils import process_vision_info
@@ -128,11 +137,15 @@ def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_l
     else:
         prompts = [sample.prompt for sample in origin_samples]
         input_ids_list = tokenizer(prompts, add_special_tokens=False)["input_ids"]
-        filtered_samples = [
-            sample
-            for sample, input_ids in zip(origin_samples, input_ids_list, strict=True)
-            if len(input_ids) <= max_length
-        ]
+        filtered_samples = []
+        for sample, input_ids in zip(origin_samples, input_ids_list, strict=True):
+            if len(input_ids) <= max_length:
+                has_multimodal_inputs = bool(sample.multimodal_inputs) and any(
+                    value is not None for value in sample.multimodal_inputs.values()
+                )
+                if cache_prompt_token_ids and isinstance(sample.prompt, str) and not has_multimodal_inputs:
+                    sample.cache_prompt_token_ids(input_ids)
+                filtered_samples.append(sample)
 
     logger.info(f"Filtered {len(origin_samples) - len(filtered_samples)} samples longer than max_length={max_length}.")
 
@@ -227,6 +240,7 @@ class Dataset:
         seed=42,
         apply_chat_template=False,
         apply_chat_template_kwargs=None,
+        cache_prompt_token_ids=False,
     ):
         origin_samples = []
         for data in read_file(path):
@@ -276,7 +290,13 @@ class Dataset:
             )
 
         if max_length is not None:
-            self.origin_samples = filter_long_prompt(origin_samples, tokenizer, processor, max_length)
+            self.origin_samples = filter_long_prompt(
+                origin_samples,
+                tokenizer,
+                processor,
+                max_length,
+                cache_prompt_token_ids=cache_prompt_token_ids,
+            )
         else:
             self.origin_samples = origin_samples
 

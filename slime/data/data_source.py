@@ -13,6 +13,18 @@ from slime.utils.types import Sample
 logger = logging.getLogger(__name__)
 
 
+def _should_cache_prompt_token_ids(args) -> bool:
+    return (
+        getattr(args, "rollout_function_path", None) == "slime.rollout.sglang_rollout.generate_rollout"
+        and getattr(args, "custom_generate_function_path", None) is None
+        and getattr(args, "data_source_path", None)
+        in {
+            "slime.data.data_source.RolloutDataSource",
+            "slime.data.data_source.RolloutDataSourceWithBuffer",
+        }
+    )
+
+
 class DataSource(abc.ABC):
     def register_consumer(self, name, consumer):
         if name in self.consumers:
@@ -93,6 +105,7 @@ class RolloutDataSource(DataSource):
                 tool_key=args.tool_key,
                 apply_chat_template=args.apply_chat_template,
                 apply_chat_template_kwargs=args.apply_chat_template_kwargs,
+                cache_prompt_token_ids=_should_cache_prompt_token_ids(args),
                 seed=args.rollout_seed,
             )
             if self.args.rollout_shuffle:
