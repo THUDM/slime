@@ -159,6 +159,9 @@ def _build_messages(data: dict, prompt_key: str, as_conversation: bool, multimod
                 if multimodal_data is not None:
                     multimodals[mt.placeholder] = (mt, list(multimodal_data))
 
+        if not multimodals:
+            return prompt
+
         pattern = "(" + "|".join(re.escape(p) for p in multimodals.keys()) + ")"
 
         for message in prompt:
