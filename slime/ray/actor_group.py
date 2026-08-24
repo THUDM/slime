@@ -70,7 +70,7 @@ class RayTrainGroup:
             **self.args.train_env_vars,
         }
 
-        if self.args.offload_train and self.args.train_backend == "megatron":
+        if self.args.offload_train:
             import torch_memory_saver
 
             for path in [

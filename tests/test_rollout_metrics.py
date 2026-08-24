@@ -31,7 +31,7 @@ def test_top_p_kept_vocab_metric_uses_loss_mask():
         ),
     ]
 
-    metrics = _compute_top_p_kept_vocab_metrics(None, samples)
+    metrics = _compute_top_p_kept_vocab_metrics(samples)
 
     assert metrics["top_p_kept_vocab_per_token"] == pytest.approx(3.5)
 
@@ -47,7 +47,7 @@ def test_top_p_kept_vocab_metric_skips_removed_samples():
         )
     ]
 
-    assert _compute_top_p_kept_vocab_metrics(None, samples) == {}
+    assert _compute_top_p_kept_vocab_metrics(samples) == {}
 
 
 def _b64_int32(values: list[int]) -> str:

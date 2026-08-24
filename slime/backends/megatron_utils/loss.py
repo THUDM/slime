@@ -798,7 +798,6 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         advantages = get_reinforce_plus_plus_baseline_advantages(
             rewards=rewards,
             kl=kl,
-            loss_masks=loss_masks,
             kl_coef=args.kl_coef,
         )
         returns = advantages

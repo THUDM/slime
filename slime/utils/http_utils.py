@@ -2,7 +2,6 @@ import asyncio
 import ipaddress
 import json
 import logging
-import multiprocessing
 import os
 import random
 import socket
@@ -125,23 +124,6 @@ def run_router(args):
     except Exception as e:
         logger.info(e)
         return 1
-
-
-def terminate_process(process: multiprocessing.Process, timeout: float = 1.0) -> None:
-    """Terminate a process gracefully, with forced kill as fallback.
-
-    Args:
-        process: The process to terminate
-        timeout: Seconds to wait for graceful termination before forcing kill
-    """
-    if not process.is_alive():
-        return
-
-    process.terminate()
-    process.join(timeout=timeout)
-    if process.is_alive():
-        process.kill()
-        process.join()
 
 
 _http_client: httpx.AsyncClient | None = None

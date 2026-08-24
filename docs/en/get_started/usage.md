@@ -32,9 +32,8 @@ Additionally, slime supports Prefill and Decode disaggregation (PD Disaggregatio
 
 ### Choosing Training Backend
 
-slime supports multiple training backends, which can be selected via the `--train-backend` parameter:
-
-- `megatron` (default): Uses Megatron-LM as the training backend, supporting efficient training of large-scale models.
+slime currently uses Megatron-LM as its training backend. The compatibility option
+`--train-backend megatron` may still be supplied explicitly.
 
 ### Loading Megatron
 

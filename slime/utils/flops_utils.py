@@ -1,7 +1,3 @@
-def calculate_embedding_flops(seqlen, hidden_size):
-    return 2 * seqlen * hidden_size
-
-
 def calculate_lm_head_flops(seqlen, hidden_size, vocab_size):
     return 2 * seqlen * hidden_size * vocab_size
 
