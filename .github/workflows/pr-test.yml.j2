@@ -35,6 +35,8 @@
     'e2e-test-sglang-config': {
       'label': 'run-ci-sglang-config',
       'tests': [
+        {'test_file': 'utils/test_sglang_arguments.py', 'num_gpus': 0},
+        {'test_file': 'utils/test_sglang_config.py', 'num_gpus': 0},
         {'test_file': 'test_qwen2.5_0.5B_sglang_config.py', 'num_gpus': 8},
         {'test_file': 'test_qwen2.5_0.5B_sglang_config_distributed.py', 'num_gpus': 8},
         {'test_file': 'test_sglang_config_mixed_offload.py', 'num_gpus': 8},
@@ -48,6 +50,7 @@
     'e2e-test-precision': {
       'label': 'run-ci-precision',
       'tests': [
+        {'test_file': 'test_glm5_indexer_q_norm.py', 'num_gpus': 0},
         {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
       ],
     },
@@ -69,6 +72,7 @@
       'extra_pip_deps': 'transformers wandb',
       'tests': [
         {'test_file': 'test_megatron_argument_validation.py', 'num_gpus': 0},
+        {'test_file': 'utils/test_megatron_role_config.py', 'num_gpus': 0},
         {'test_file': 'test_deep_ep_tms_patch.py', 'num_gpus': 0},
         {'test_file': 'test_stateless_adam.py', 'num_gpus': 0},
         {'test_file': 'utils/test_megatron_server_arguments.py', 'num_gpus': 0},
@@ -89,6 +93,7 @@
         {'test_file': 'test_policy_loss.py', 'num_gpus': 0},
         {'test_file': 'test_ppo_logprob_entropy.py', 'num_gpus': 0},
         {'test_file': 'test_discounted_returns.py', 'num_gpus': 0},
+        {'test_file': 'test_block_fp8_zero_block.py', 'num_gpus': 0},
         {'test_file': 'test_rm_f1.py', 'num_gpus': 0},
         {'test_file': 'test_rm_gpqa.py', 'num_gpus': 0},
         {'test_file': 'test_rm_math.py', 'num_gpus': 0},
@@ -104,8 +109,10 @@
         {'test_file': 'test_rollout_sample_hooks.py', 'num_gpus': 0},
         {'test_file': 'test_hf_to_megatron.py', 'num_gpus': 0},
         {'test_file': 'test_qwen3_5_vl_native.py', 'num_gpus': 0},
+        {'test_file': 'test_qwen3_linear_attention_cu_seqlens.py', 'num_gpus': 0},
         {'test_file': 'test_accelerator.py', 'num_gpus': 0},
         {'test_file': 'test_reloadable_process_group_world.py', 'num_gpus': 0},
+        {'test_file': 'test_reloadable_process_group_memory_check.py', 'num_gpus': 0},
         {'test_file': 'test_placement_group.py', 'num_gpus': 0},
         {'test_file': 'test_external_sglang_engines.py', 'num_gpus': 0},
         {'test_file': 'test_empty_colocated_weight_bucket.py', 'num_gpus': 0},
@@ -114,7 +121,9 @@
         {'test_file': 'test_model_provider_freeze.py', 'num_gpus': 0},
         {'test_file': 'test_glm52_layerwise_comparison.py', 'num_gpus': 0},
         {'test_file': 'test_layerwise_alignment.py', 'num_gpus': 0},
+        {'test_file': 'test_tau_bench_token_delta.py', 'num_gpus': 0},
         {'test_file': 'utils/test_hf_checkpoint_saver.py', 'num_gpus': 0},
+        {'test_file': 'utils/test_loss_mask_type_qwen35.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_rollout_contracts.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_runtime_hook_contracts.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_path_loading_contracts.py', 'num_gpus': 0},

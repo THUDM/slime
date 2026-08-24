@@ -4,6 +4,8 @@ import pytest
 
 from slime.utils import reloadable_process_group as rpg
 
+NUM_GPUS = 0
+
 
 @pytest.mark.unit
 def test_selected_comm_ops_skip_memory_check():
@@ -65,3 +67,7 @@ def test_wrap_low_level_call_checks_available_memory_by_default(monkeypatch):
         pass
 
     assert calls == ["available_memory"]
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

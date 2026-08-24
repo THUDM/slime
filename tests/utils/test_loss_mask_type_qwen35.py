@@ -1,4 +1,8 @@
+import pytest
+
 from slime.utils.mask_utils import MultiTurnLossMaskGenerator
+
+NUM_GPUS = 0
 
 
 class FakeQwen35Tokenizer:
@@ -261,3 +265,7 @@ def test_qwen3_matches_full_template_for_consecutive_tool_responses():
 
     assert token_ids == expected_token_ids
     assert loss_mask == expected_loss_mask
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))
