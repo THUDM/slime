@@ -34,7 +34,6 @@ from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_inf
 from slime.utils.misc import Box, load_function
 from slime.utils.types import Sample
 
-from .rollout_validation import validate_server_group_gpu_indices
 from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock, add_default_ray_env_vars
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -107,16 +106,25 @@ class ServerGroup:
         num_gpus_per_engine_on_node = min(self.num_gpus_per_engine, self.args.num_gpus_per_node)
 
         pg, reordered_bundle_indices, reordered_gpu_ids = self.pg
-        validate_server_group_gpu_indices(
-            worker_type=self.worker_type,
-            gpu_offset=self.gpu_offset,
-            num_gpus_per_engine=self.num_gpus_per_engine,
-            num_gpus_per_engine_on_node=num_gpus_per_engine_on_node,
-            num_engines=len(self.all_engines),
-            num_available_gpus=len(reordered_gpu_ids),
-            rollout_num_gpus=self.args.rollout_num_gpus,
-            rollout_num_gpus_per_engine=self.args.rollout_num_gpus_per_engine,
-        )
+        num_engines = len(self.all_engines)
+        required_gpu_slots = self.gpu_offset + num_engines * num_gpus_per_engine_on_node
+        if num_engines and not (
+            self.gpu_offset >= 0 and num_gpus_per_engine_on_node > 0 and required_gpu_slots <= len(reordered_gpu_ids)
+        ):
+            raise ValueError(
+                "Invalid rollout server group GPU placement: "
+                f"worker_type={self.worker_type}, "
+                f"gpu_offset={self.gpu_offset}, "
+                f"num_gpus_per_engine={self.num_gpus_per_engine}, "
+                f"num_gpus_per_engine_on_node={num_gpus_per_engine_on_node}, "
+                f"num_engines={num_engines}, "
+                f"required_gpu_slots={required_gpu_slots}, "
+                f"len(reordered_gpu_ids)={len(reordered_gpu_ids)}, "
+                f"rollout_num_gpus={self.args.rollout_num_gpus}, "
+                f"rollout_num_gpus_per_engine={self.args.rollout_num_gpus_per_engine}. "
+                "Please align --rollout-num-gpus, --rollout-num-gpus-per-engine, "
+                "and --sglang-config server_groups."
+            )
 
         RolloutRayActor = ray.remote(SGLangEngine)
 
