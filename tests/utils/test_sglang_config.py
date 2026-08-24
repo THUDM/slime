@@ -110,11 +110,11 @@ class TestSglangConfigUpdateWeights:
 
 class TestZeroGpuRolloutConfig:
     def test_resolve_default_zero_gpu_config_has_no_server_groups(self):
-        from slime.ray.rollout import _resolve_sglang_config
+        from slime.backends.sglang_utils.sglang_config import resolve_sglang_config
 
         args = Namespace(sglang_config=None, prefill_num_servers=None, rollout_num_gpus=0)
 
-        config = _resolve_sglang_config(args)
+        config = resolve_sglang_config(args)
 
         assert len(config.models) == 1
         assert config.models[0].name == "default"
@@ -122,24 +122,24 @@ class TestZeroGpuRolloutConfig:
         assert config.total_num_gpus == 0
 
     def test_zero_gpu_config_takes_precedence_over_prefill_num_servers(self):
-        from slime.ray.rollout import _resolve_sglang_config
+        from slime.backends.sglang_utils.sglang_config import resolve_sglang_config
 
         args = Namespace(sglang_config=None, prefill_num_servers=1, rollout_num_gpus=0)
 
-        config = _resolve_sglang_config(args)
+        config = resolve_sglang_config(args)
 
         assert config.models[0].server_groups == []
         assert config.total_num_gpus == 0
 
     def test_start_rollout_servers_zero_gpu_starts_router_without_engines(self, monkeypatch):
-        from slime.ray import rollout as rollout_module
+        from slime.backends.sglang_utils import deployment
 
         def fake_start_router(args, *, has_pd_disaggregation=False, force_new=False):
             assert has_pd_disaggregation is False
             assert force_new is False
             return "127.0.0.1", 3456
 
-        monkeypatch.setattr(rollout_module, "_start_router", fake_start_router)
+        monkeypatch.setattr(deployment, "_start_router", fake_start_router)
         args = Namespace(
             rollout_external=False,
             sglang_config=None,
@@ -156,7 +156,7 @@ class TestZeroGpuRolloutConfig:
             hf_checkpoint="/tmp/hf",
         )
 
-        servers, init_handles = rollout_module.start_rollout_servers(args, pg=(None, [], []))
+        servers, init_handles = deployment.start_rollout_servers(args, pg=(None, [], []))
 
         assert list(servers) == ["default"]
         assert init_handles == []
@@ -170,7 +170,7 @@ class TestZeroGpuRolloutConfig:
         assert args.sglang_model_routers == {"default": ("127.0.0.1", 3456)}
 
     def test_server_group_parallel_config_derives_tp_from_overridden_pp(self):
-        from slime.ray.rollout import ServerGroup
+        from slime.backends.sglang_utils.engine_group import ServerGroup
 
         args = Namespace(
             num_gpus_per_node=8,
@@ -269,7 +269,8 @@ class TestZeroGpuRolloutConfig:
         assert "cuda_graph_backend_prefill" not in kwargs
 
     def test_start_rollout_servers_defers_engine_wait(self, monkeypatch):
-        from slime.ray import rollout as rollout_module
+        from slime.backends.sglang_utils import deployment, disaggregation
+        from slime.backends.sglang_utils.engine_group import ServerGroup
 
         def fake_start_router(args, *, has_pd_disaggregation=False, force_new=False):
             assert has_pd_disaggregation is False
@@ -280,14 +281,12 @@ class TestZeroGpuRolloutConfig:
             self.all_engines = [object() for _ in self.all_engines]
             return [f"init-{self.rank_offset}"], port_cursors or {}
 
-        ray_get_calls = []
+        def fail_if_waited(_refs):
+            pytest.fail("regular deployment must not wait for engine initialization")
 
-        def fake_ray_get(refs):
-            ray_get_calls.append(refs)
-
-        monkeypatch.setattr(rollout_module, "_start_router", fake_start_router)
-        monkeypatch.setattr(rollout_module.ServerGroup, "start_engines", fake_start_engines)
-        monkeypatch.setattr(rollout_module.ray, "get", fake_ray_get)
+        monkeypatch.setattr(deployment, "_start_router", fake_start_router)
+        monkeypatch.setattr(ServerGroup, "start_engines", fake_start_engines)
+        monkeypatch.setattr(disaggregation.ray, "get", fail_if_waited)
 
         args = Namespace(
             rollout_external=False,
@@ -305,15 +304,65 @@ class TestZeroGpuRolloutConfig:
             hf_checkpoint="/tmp/hf",
         )
 
-        servers, init_handles = rollout_module.start_rollout_servers(args, pg=(None, [], []))
+        servers, init_handles = deployment.start_rollout_servers(args, pg=(None, [], []))
 
         assert list(servers) == ["default"]
         assert init_handles == ["init-0"]
-        assert ray_get_calls == []
+
+    def test_start_rollout_servers_routes_pd_to_disaggregated_deployment(self, monkeypatch):
+        from slime.backends.sglang_utils import deployment
+        from slime.backends.sglang_utils.engine_group import ServerGroup
+        from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
+
+        def fake_start_router(args, *, has_pd_disaggregation=False, force_new=False):
+            assert has_pd_disaggregation is True
+            assert force_new is False
+            return "127.0.0.1", 3456
+
+        def fake_resolve_sglang_config(args):
+            return SglangConfig(
+                models=[
+                    ModelConfig(
+                        name="default",
+                        server_groups=[
+                            ServerGroupConfig(worker_type="prefill", num_gpus=1),
+                            ServerGroupConfig(worker_type="decode", num_gpus=1),
+                        ],
+                    )
+                ]
+            )
+
+        def fake_start_engines(self, port_cursors=None):
+            self.all_engines = [object() for _ in self.all_engines]
+            return [f"{self.worker_type}-init-{self.rank_offset}"], port_cursors or {}
+
+        monkeypatch.setattr(deployment, "_start_router", fake_start_router)
+        monkeypatch.setattr(deployment, "resolve_sglang_config", fake_resolve_sglang_config)
+        monkeypatch.setattr(ServerGroup, "start_engines", fake_start_engines)
+
+        args = Namespace(
+            rollout_external=False,
+            rollout_num_gpus_per_engine=1,
+            num_gpus_per_node=8,
+            debug_train_only=False,
+            debug_rollout_only=False,
+            colocate=False,
+            actor_num_nodes=1,
+            actor_num_gpus_per_node=8,
+            offload_rollout=False,
+            hf_checkpoint="/tmp/hf",
+        )
+
+        servers, init_handles = deployment.start_rollout_servers(args, pg=(None, [], []))
+
+        groups = servers["default"].server_groups
+        assert [group.worker_type for group in groups] == ["prefill", "decode"]
+        assert init_handles == ["prefill-init-0", "decode-init-1"]
 
     def test_start_rollout_servers_waits_for_epd_encoder_before_non_encoder(self, monkeypatch):
+        from slime.backends.sglang_utils import deployment, disaggregation
+        from slime.backends.sglang_utils.engine_group import ServerGroup
         from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
-        from slime.ray import rollout as rollout_module
 
         class FakeRemoteMethod:
             def __init__(self, value):
@@ -359,10 +408,10 @@ class TestZeroGpuRolloutConfig:
                 return ["http://encoder"]
             return None
 
-        monkeypatch.setattr(rollout_module, "_start_router", fake_start_router)
-        monkeypatch.setattr(rollout_module, "_resolve_sglang_config", fake_resolve_sglang_config)
-        monkeypatch.setattr(rollout_module.ServerGroup, "start_engines", fake_start_engines)
-        monkeypatch.setattr(rollout_module.ray, "get", fake_ray_get)
+        monkeypatch.setattr(deployment, "_start_router", fake_start_router)
+        monkeypatch.setattr(deployment, "resolve_sglang_config", fake_resolve_sglang_config)
+        monkeypatch.setattr(ServerGroup, "start_engines", fake_start_engines)
+        monkeypatch.setattr(disaggregation.ray, "get", fake_ray_get)
 
         args = Namespace(
             rollout_external=False,
@@ -377,7 +426,7 @@ class TestZeroGpuRolloutConfig:
             hf_checkpoint="/tmp/hf",
         )
 
-        servers, init_handles = rollout_module.start_rollout_servers(args, pg=(None, [], []))
+        servers, init_handles = deployment.start_rollout_servers(args, pg=(None, [], []))
 
         groups = servers["default"].server_groups
         assert [group.worker_type for group in groups] == ["encoder", "regular"]
