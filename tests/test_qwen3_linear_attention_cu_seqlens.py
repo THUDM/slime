@@ -9,6 +9,8 @@ import pytest
 import torch
 import torch.nn as nn
 
+NUM_GPUS = 0
+
 
 def install_megatron_stubs() -> None:
     if "megatron" in sys.modules:
@@ -146,7 +148,7 @@ def test_linear_attention_forwards_cu_seqlens_to_chunk_kernel(
 ):
     module = load_module(module_name)
 
-    monkeypatch.setattr(module.torch.cuda, "current_device", lambda: "cpu")
+    monkeypatch.setattr(module.accelerator, "current_device", lambda: "cpu")
     monkeypatch.setattr(module, "ShortConvolution", FakeShortConvolution, raising=False)
     monkeypatch.setattr(module, "FusedRMSNormGated", FakeFusedRMSNormGated, raising=False)
 
@@ -188,3 +190,7 @@ def test_linear_attention_forwards_cu_seqlens_to_chunk_kernel(
     assert output.shape == hidden_states.shape
     assert len(chunk_calls) == 1
     assert torch.equal(chunk_calls[0], cu_seqlens)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

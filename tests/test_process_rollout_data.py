@@ -161,3 +161,7 @@ def test_missing_raw_reward_is_tolerated(unwrap_ray_get):
 
     assert "local_raw_reward" not in rollout_data
     assert rollout_data["total_lengths"] == [201, 200]
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))
