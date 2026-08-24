@@ -771,6 +771,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_glm5_tilelang_sparse_mla_version_guard.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_model_provider_freeze.py"
             },
             {

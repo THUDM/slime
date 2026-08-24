@@ -2,7 +2,28 @@
 # Adapt from https://github.com/tile-ai/tilelang/blob/4ff81c7d40803d269569e157e847623e84553f78/examples/deepseek_v32/sparse_mla_bwd.py
 import tilelang
 import torch
+from packaging.version import InvalidVersion, Version
 from tilelang import language as T
+
+
+# tile-ai/tilelang#2204 fixed this shared-memory liveness regression in 0.1.11.
+_AGGRESSIVE_SHARED_MEMORY_MERGE_REGRESSION_START = Version("0.1.9.dev0")
+_AGGRESSIVE_SHARED_MEMORY_MERGE_FIX = Version("0.1.11")
+
+
+def _enable_aggressive_shared_memory_merge(tilelang_version):
+    # TileLang uses 0.0.dev0 when its package metadata is unavailable.
+    if not isinstance(tilelang_version, str) or tilelang_version == "0.0.dev0":
+        return False
+
+    try:
+        parsed_version = Version(tilelang_version)
+    except InvalidVersion:
+        return False
+
+    return not (
+        _AGGRESSIVE_SHARED_MEMORY_MERGE_REGRESSION_START <= parsed_version < _AGGRESSIVE_SHARED_MEMORY_MERGE_FIX
+    )
 
 
 @tilelang.jit(out_idx=[-1])
@@ -78,7 +99,9 @@ def postprocess(
     pass_configs={
         tilelang.PassConfigKey.TL_DISABLE_TMA_LOWER: True,
         tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True,
-        tilelang.PassConfigKey.TL_ENABLE_AGGRESSIVE_SHARED_MEMORY_MERGE: True,
+        tilelang.PassConfigKey.TL_ENABLE_AGGRESSIVE_SHARED_MEMORY_MERGE: _enable_aggressive_shared_memory_merge(
+            getattr(tilelang, "__version__", None)
+        ),
     },
 )
 def bwd(
