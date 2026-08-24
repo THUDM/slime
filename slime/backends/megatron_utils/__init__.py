@@ -45,5 +45,3 @@ except ImportError:
     logging.warning("deep_ep is not installed, some functionalities may be limited.")
 
 logging.getLogger("megatron").setLevel(logging.WARNING)
-
-from . import megatron_patch  # noqa: F401, E402
