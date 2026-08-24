@@ -5,28 +5,50 @@ from slime.utils.processing_utils import encode_image_for_rollout_engine
 from slime.utils.types import Sample
 
 
-async def reward_func(args, sample, **kwargs):
+def _build_teacher_payload(args, sample):
     payload = {
         # "text": sample.prompt + sample.response,
         "input_ids": sample.tokens,
         "sampling_params": {
-            "temperature": args.rollout_temperature,
+            "temperature": 1.0,
             "max_new_tokens": 0,
             "skip_special_tokens": False,
         },
         "return_logprob": True,
         "logprob_start_len": 0,
     }
+    if args.rollout_temperature != 1.0:
+        payload["sampling_params"]["custom_params"] = {
+            "input_logprob_temperature": args.rollout_temperature,
+        }
 
     if sample.multimodal_inputs and sample.multimodal_inputs.get("images"):
         image_data = sample.multimodal_inputs["images"]
         payload["image_data"] = [encode_image_for_rollout_engine(image) for image in image_data]
 
+    return payload
+
+
+def _validate_teacher_temperature(args, response):
+    expected = args.rollout_temperature
+    actual = response.get("meta_info", {}).get("input_logprob_temperature")
+    if expected != 1.0 and actual != expected:
+        raise RuntimeError(
+            "The SGLang teacher did not confirm temperature-scaled input log-probs. "
+            f"rollout_temperature={expected} requires the SGLang patch bundled with slime."
+        )
+
+
+async def reward_func(args, sample, **kwargs):
+    payload = _build_teacher_payload(args, sample)
+
     session_kwargs = {}
     async with aiohttp.ClientSession(**session_kwargs) as session:
         async with session.post(args.rm_url, json=payload) as resp:
             resp.raise_for_status()
-            return await resp.json()
+            response = await resp.json()
+            _validate_teacher_temperature(args, response)
+            return response
 
 
 def post_process_rewards(args, samples: list[Sample], **kwargs):

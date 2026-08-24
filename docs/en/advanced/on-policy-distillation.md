@@ -40,6 +40,8 @@ $$
 
 Here, $A_t$ is the advantage from the configured estimator (or zero for pure distillation), and $\lambda_{\mathrm{opd}}$ is `--opd-kl-coef`. An individual $\hat d_t$ may be negative even though the KL is non-negative in expectation. The policy loss uses $\hat A_t$, which makes the OPD term orthogonal to the choice of GRPO, PPO, REINFORCE++, GSPO, or another supported advantage estimator.
 
+Both distributions are evaluated at `--rollout-temperature`. Writing $p_T = \operatorname{softmax}(z_\theta / T)$ and $q_T = \operatorname{softmax}(z_{\mathrm{teacher}} / T)$, slime estimates $D_{\mathrm{KL}}(p_T \| q_T)$. Scaling only the student would instead estimate $D_{\mathrm{KL}}(p_T \| q_1)$, which is a different objective.
+
 ## Two Teacher Modes
 
 ### SGLang Mode (`--opd-type sglang`)
@@ -53,6 +55,8 @@ The teacher runs on an external SGLang server. Teacher log-probs are obtained du
 2. During rollout, the custom reward function (`slime.rollout.on_policy_distillation.reward_func`) sends the student's sampled token IDs to the teacher server and obtains the teacher log-probability of those same tokens.
 3. The custom post-processing function (`slime.rollout.on_policy_distillation.post_process_rewards`) trims the teacher log-probs to the response span and stores them in `sample.teacher_log_probs`.
 4. During training, slime subtracts the sampled log-probability difference, scaled by `--opd-kl-coef`, from the base advantage.
+
+For non-unit `--rollout-temperature`, the SGLang teacher must support slime's `input_logprob_temperature` custom parameter. The SGLang version bundled with slime includes this patch. slime rejects responses from an unpatched external server rather than silently mixing $p_T$ with $q_1$; an unpatched server remains compatible when the temperature is `1.0`.
 
 **Configuration**:
 ```bash

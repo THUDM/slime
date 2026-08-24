@@ -34,6 +34,8 @@ This example shows how to run **on-policy distillation (OPD)** using slime. A sm
 - `run-qwen3-8B-opd.sh` launches an SGLang teacher server, then submits a Ray job that runs `train.py`.
 - `run-qwen3-8B-opd-megatron.sh` uses Megatron-loaded teacher model (no external server needed).
 
+At non-unit rollout temperatures, use the SGLang version bundled with slime. It applies the same temperature to teacher input log-probs as slime applies to the student, so OPD estimates the matched objective $D_{\mathrm{KL}}(p_T \| q_T)$. slime rejects unpatched external teachers in this case; vanilla SGLang remains compatible at temperature `1.0`.
+
 ## Running the example
 
 ### Using SGLang Teacher (External Server)
