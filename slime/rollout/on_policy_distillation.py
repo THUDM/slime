@@ -18,9 +18,7 @@ def _build_teacher_payload(args, sample):
         "logprob_start_len": 0,
     }
     if args.rollout_temperature != 1.0:
-        payload["sampling_params"]["custom_params"] = {
-            "input_logprob_temperature": args.rollout_temperature,
-        }
+        payload["input_logprob_temperature"] = args.rollout_temperature
 
     if sample.multimodal_inputs and sample.multimodal_inputs.get("images"):
         image_data = sample.multimodal_inputs["images"]
@@ -35,7 +33,8 @@ def _validate_teacher_temperature(args, response):
     if expected != 1.0 and actual != expected:
         raise RuntimeError(
             "The SGLang teacher did not confirm temperature-scaled input log-probs. "
-            f"rollout_temperature={expected} requires the SGLang patch bundled with slime."
+            f"rollout_temperature={expected} requires an SGLang server with "
+            "input_logprob_temperature support."
         )
 
 

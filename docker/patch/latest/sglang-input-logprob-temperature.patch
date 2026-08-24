@@ -1,11 +1,95 @@
+diff --git a/python/sglang/srt/disaggregation/encode_receiver.py b/python/sglang/srt/disaggregation/encode_receiver.py
+index bbe120c9a..50ad75f7a 100644
+--- a/python/sglang/srt/disaggregation/encode_receiver.py
++++ b/python/sglang/srt/disaggregation/encode_receiver.py
+@@ -1866,6 +1866,7 @@ class MMReceiverBase(ABC):
+             recv_req.sampling_params,
+             return_logprob=recv_req.return_logprob,
+             top_logprobs_num=recv_req.top_logprobs_num,
++            input_logprob_temperature=recv_req.input_logprob_temperature,
+             token_ids_logprob=recv_req.token_ids_logprob,
+             stream=recv_req.stream,
+             lora_id=recv_req.lora_id,
+diff --git a/python/sglang/srt/entrypoints/EngineBase.py b/python/sglang/srt/entrypoints/EngineBase.py
+index c5d1d18ed..ed71de515 100644
+--- a/python/sglang/srt/entrypoints/EngineBase.py
++++ b/python/sglang/srt/entrypoints/EngineBase.py
+@@ -34,6 +34,8 @@ class EngineBase(ABC):
+         rid: Optional[Union[List[str], str]] = None,
+         priority: Optional[int] = None,
+         session_id: Optional[str] = None,
++        *,
++        input_logprob_temperature: Optional[Union[List[float], float]] = None,
+     ) -> Union[Dict, Iterator[Dict]]:
+         """Generate outputs based on given inputs."""
+         pass
+diff --git a/python/sglang/srt/entrypoints/engine.py b/python/sglang/srt/entrypoints/engine.py
+index 4a51574b3..87ac131f0 100644
+--- a/python/sglang/srt/entrypoints/engine.py
++++ b/python/sglang/srt/entrypoints/engine.py
+@@ -359,6 +359,8 @@ class Engine(EngineScoreMixin, EngineBase):
+         session_params: Optional[Dict] = None,
+         priority: Optional[int] = None,
+         session_id: Optional[str] = None,
++        *,
++        input_logprob_temperature: Optional[Union[List[float], float]] = None,
+     ) -> Union[Dict, Iterator[Dict]]:
+         """
+         The arguments of this function is the same as `sglang/srt/managers/io_struct.py::GenerateReqInput`.
+@@ -378,6 +380,7 @@ class Engine(EngineScoreMixin, EngineBase):
+             mm_hashes=mm_hashes,
+             return_logprob=return_logprob,
+             logprob_start_len=logprob_start_len,
++            input_logprob_temperature=input_logprob_temperature,
+             top_logprobs_num=top_logprobs_num,
+             token_ids_logprob=token_ids_logprob,
+             lora_path=lora_path,
+@@ -463,6 +466,8 @@ class Engine(EngineScoreMixin, EngineBase):
+         session_params: Optional[Dict] = None,
+         priority: Optional[int] = None,
+         session_id: Optional[str] = None,
++        *,
++        input_logprob_temperature: Optional[Union[List[float], float]] = None,
+     ) -> Union[Dict, AsyncIterator[Dict]]:
+         """
+         The arguments of this function is the same as `sglang/srt/managers/io_struct.py::GenerateReqInput`.
+@@ -482,6 +487,7 @@ class Engine(EngineScoreMixin, EngineBase):
+             mm_hashes=mm_hashes,
+             return_logprob=return_logprob,
+             logprob_start_len=logprob_start_len,
++            input_logprob_temperature=input_logprob_temperature,
+             top_logprobs_num=top_logprobs_num,
+             token_ids_logprob=token_ids_logprob,
+             lora_path=lora_path,
+diff --git a/python/sglang/srt/entrypoints/http_server_engine.py b/python/sglang/srt/entrypoints/http_server_engine.py
+index 4a4996743..469c34d99 100644
+--- a/python/sglang/srt/entrypoints/http_server_engine.py
++++ b/python/sglang/srt/entrypoints/http_server_engine.py
+@@ -116,6 +116,8 @@ class HttpServerEngineAdapter(EngineBase):
+         custom_logit_processor=None,
+         priority=None,
+         session_id=None,
++        *,
++        input_logprob_temperature=None,
+     ):
+         payload = {
+             "text": prompt,
+@@ -124,6 +126,7 @@ class HttpServerEngineAdapter(EngineBase):
+             "image_data": image_data,
+             "return_logprob": return_logprob,
+             "logprob_start_len": logprob_start_len,
++            "input_logprob_temperature": input_logprob_temperature,
+             "top_logprobs_num": top_logprobs_num,
+             "token_ids_logprob": token_ids_logprob,
+             "lora_path": lora_path,
 diff --git a/python/sglang/srt/layers/logits_processor.py b/python/sglang/srt/layers/logits_processor.py
-index ec107713dd..9d45c94fea 100644
+index ec107713d..0f8463d67 100644
 --- a/python/sglang/srt/layers/logits_processor.py
 +++ b/python/sglang/srt/layers/logits_processor.py
 @@ -68,6 +68,24 @@ _UNQUANTIZED_LM_HEAD_METHODS = {
  }
- 
- 
+
+
 +def _apply_input_logprob_temperature(
 +    input_logits: torch.Tensor,
 +    temperatures: Optional[torch.Tensor],
@@ -26,28 +110,26 @@ index ec107713dd..9d45c94fea 100644
 +
  def _has_lm_head_runtime_attrs(lm_head, attr_names: Tuple[str, ...]) -> bool:
      return all(hasattr(lm_head, attr_name) for attr_name in attr_names)
- 
-@@ -218,6 +236,7 @@ class LogitsMetadata:
+
+@@ -214,6 +232,7 @@ class LogitsMetadata:
+     top_logprobs_nums: Optional[List[int]] = None
+     extend_input_logprob_token_ids_gpu: Optional[torch.Tensor] = None
+     token_ids_logprobs: Optional[List[List[int]]] = None
++    input_logprob_temperatures: Optional[torch.Tensor] = None
+
      # logits and logprobs post processing
      temperature: torch.Tensor = None
-     top_p: torch.Tensor = None
-+    input_logprob_temperatures: torch.Tensor = None
- 
-     # DP attention metadata. Not needed when DP attention is not used.
-     # Number of tokens in the request.
-@@ -280,6 +299,9 @@ class LogitsMetadata:
+@@ -280,6 +299,7 @@ class LogitsMetadata:
              top_logprobs_nums=forward_batch.top_logprobs_nums,
              token_ids_logprobs=forward_batch.token_ids_logprobs,
              extend_input_logprob_token_ids_gpu=forward_batch.extend_input_logprob_token_ids_gpu,
-+            input_logprob_temperatures=getattr(
-+                forward_batch.sampling_info, "input_logprob_temperatures", None
-+            ),
++            input_logprob_temperatures=forward_batch.input_logprob_temperatures,
              padded_static_len=forward_batch.padded_static_len,
              is_prefill_only=forward_batch.is_prefill_only,
              global_num_tokens_gpu=forward_batch.global_num_tokens_gpu,
-@@ -710,6 +732,11 @@ class LogitsProcessor(nn.Module):
+@@ -710,6 +730,11 @@ class LogitsProcessor(nn.Module):
          return hidden_states_to_store
- 
+
      def process_input_logprobs(self, input_logits, logits_metadata: LogitsMetadata):
 +        input_logits = _apply_input_logprob_temperature(
 +            input_logits,
@@ -55,11 +137,11 @@ index ec107713dd..9d45c94fea 100644
 +            logits_metadata.extend_logprob_pruned_lens_cpu,
 +        )
          input_logprobs = torch.nn.functional.log_softmax(input_logits, dim=-1)
- 
+
          # Get the logprob of top-k tokens
-@@ -832,7 +859,12 @@ class LogitsProcessor(nn.Module):
+@@ -832,7 +857,12 @@ class LogitsProcessor(nn.Module):
                  continue
- 
+
              # Compute the logprobs of the chunk
 -            chunk_input_logprobs = chunk_logits[chunk_indices]
 +            chunk_input_logprobs = _apply_input_logprob_temperature(
@@ -71,9 +153,9 @@ index ec107713dd..9d45c94fea 100644
              chunk_input_logprobs = torch.nn.functional.log_softmax(
                  chunk_input_logprobs, dim=-1
              )
-@@ -1127,6 +1159,11 @@ class LogitsProcessor(nn.Module):
+@@ -1127,6 +1157,11 @@ class LogitsProcessor(nn.Module):
          sliced_hidden = hidden_states[multi_item_indices]
- 
+
          sliced_logits = self._get_logits(sliced_hidden, lm_head, logits_metadata)
 +        sliced_logits = _apply_input_logprob_temperature(
 +            sliced_logits,
@@ -81,126 +163,216 @@ index ec107713dd..9d45c94fea 100644
 +            [len(indices) for indices in multi_item_delimiter_indices],
 +        )
          sliced_logprobs = torch.nn.functional.log_softmax(sliced_logits, dim=-1)
- 
+
          # Initialize return values
+diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
+index 9de608102..c82c7190e 100644
+--- a/python/sglang/srt/managers/io_struct.py
++++ b/python/sglang/srt/managers/io_struct.py
+@@ -24,6 +24,7 @@ from __future__ import annotations
+
+ import copy
+ import logging
++import math
+ import pickle
+ import uuid
+ from array import array
+@@ -200,6 +201,11 @@ class GenerateReqInput:
+     # If return logprobs, the start location in the prompt for returning logprobs.
+     # By default, this value is "-1", which means it will only return logprobs for output tokens.
+     logprob_start_len: Optional[Union[List[int], int]] = None
++    # Temperature applied only when computing input-token logprobs. This is
++    # independent of sampling_params.temperature, which controls decoding.
++    input_logprob_temperature: Optional[Union[List[float], float]] = field(
++        default=None, kw_only=True
++    )
+     # If return logprobs, the number of top logprobs to return at each position.
+     top_logprobs_num: Optional[Union[List[int], int]] = None
+     # If return logprobs, the token ids to return logprob for.
+@@ -432,6 +438,9 @@ class GenerateReqInput:
+             self.return_logprob = False
+         if self.logprob_start_len is None:
+             self.logprob_start_len = -1
++        if self.input_logprob_temperature is None:
++            self.input_logprob_temperature = 1.0
++        self._validate_input_logprob_temperatures([self.input_logprob_temperature])
+         if self.top_logprobs_num is None:
+             self.top_logprobs_num = 0
+         if not self.token_ids_logprob:  # covers both None and []
+@@ -597,6 +606,15 @@ class GenerateReqInput:
+         self.logprob_start_len = normalize_param(
+             self.logprob_start_len, -1, "logprob_start_len"
+         )
++        self.input_logprob_temperature = normalize_param(
++            self.input_logprob_temperature, 1.0, "input_logprob_temperature"
++        )
++        if len(self.input_logprob_temperature) != num:
++            raise ValueError(
++                "The length of input_logprob_temperature should be equal to "
++                "the batch size."
++            )
++        self._validate_input_logprob_temperatures(self.input_logprob_temperature)
+         self.top_logprobs_num = normalize_param(
+             self.top_logprobs_num, 0, "top_logprobs_num"
+         )
+@@ -615,6 +633,19 @@ class GenerateReqInput:
+                 "Cannot use list token_ids_logprob with parallel_sample_num > 1"
+             )
+
++    @staticmethod
++    def _validate_input_logprob_temperatures(temperatures):
++        if any(
++            isinstance(temperature, bool)
++            or not isinstance(temperature, (int, float))
++            or not math.isfinite(temperature)
++            or temperature <= 0
++            for temperature in temperatures
++        ):
++            raise ValueError(
++                "input_logprob_temperature must contain positive finite numbers."
++            )
++
+     def _normalize_custom_logit_processor(self, num):
+         """Normalize custom logit processor for batch processing."""
+         if self.custom_logit_processor is None:
+@@ -713,6 +744,7 @@ class GenerateReqInput:
+             sampling_params=self.sampling_params[i],
+             return_logprob=self.return_logprob[i],
+             logprob_start_len=self.logprob_start_len[i],
++            input_logprob_temperature=self.input_logprob_temperature[i],
+             top_logprobs_num=self.top_logprobs_num[i],
+             token_ids_logprob=self.token_ids_logprob[i],
+             return_text_in_logprobs=self.return_text_in_logprobs,
+@@ -798,6 +830,8 @@ class TokenizedGenerateReqInput(BaseReq, kw_only=True):
+     token_ids_logprob: Optional[List[int]]
+     # Whether to stream output
+     stream: bool
++    # Temperature applied only when computing input-token logprobs.
++    input_logprob_temperature: float = 1.0
+
+     # Whether to return hidden states
+     return_hidden_states: bool = False
+diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
+index 986480f0c..ecac58edc 100755
+--- a/python/sglang/srt/managers/schedule_batch.py
++++ b/python/sglang/srt/managers/schedule_batch.py
+@@ -646,6 +646,7 @@ class MultimodalInputs:
+ class ReqLogprob:
+     top_logprobs_num: int
+     token_ids_logprob: Optional[List[int]]
++    input_logprob_temperature: float = 1.0
+     input_token_logprobs_val: Optional[List[float]] = None
+     input_token_logprobs_idx: Optional[List[int]] = None
+     input_top_logprobs_val: Optional[List[List[float]]] = None
+@@ -710,6 +711,7 @@ class Req(ReqDllmMixin):
+         return_pooled_hidden_states: bool = False,
+         multi_item_delimiter_indices: Optional[List[int]] = None,
+         session_id: Optional[str] = None,
++        input_logprob_temperature: float = 1.0,
+     ):
+         # Input and output info
+         self.rid = rid
+@@ -895,6 +897,7 @@ class Req(ReqDllmMixin):
+         self.logprob = ReqLogprob(
+             top_logprobs_num=top_logprobs_num,
+             token_ids_logprob=token_ids_logprob,
++            input_logprob_temperature=input_logprob_temperature,
+         )
+
+         # Logprobs (return values)
+diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
+index e62eae2d4..13fcea26c 100644
+--- a/python/sglang/srt/managers/scheduler.py
++++ b/python/sglang/srt/managers/scheduler.py
+@@ -2082,6 +2082,7 @@ class Scheduler(
+                 recv_req.sampling_params,
+                 return_logprob=recv_req.return_logprob,
+                 top_logprobs_num=recv_req.top_logprobs_num,
++                input_logprob_temperature=recv_req.input_logprob_temperature,
+                 token_ids_logprob=recv_req.token_ids_logprob,
+                 stream=recv_req.stream,
+                 lora_id=recv_req.lora_id,
 diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
-index 44358b3877..6ff5b32d05 100644
+index 44358b387..e5c352d70 100644
 --- a/python/sglang/srt/managers/tokenizer_manager.py
 +++ b/python/sglang/srt/managers/tokenizer_manager.py
-@@ -2182,6 +2182,12 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
-         meta_info["input_token_logprobs"] = state.input_token_logprobs
-         meta_info["output_token_logprobs"] = state.output_token_logprobs
-         meta_info["output_token_logprobs_length"] = len(state.output_token_logprobs)
-+        sampling_params = state.obj.sampling_params or {}
-+        custom_params = sampling_params.get("custom_params") or {}
-+        if "input_logprob_temperature" in custom_params:
-+            meta_info["input_logprob_temperature"] = custom_params[
-+                "input_logprob_temperature"
-+            ]
- 
-         # 2. Handle top logprobs
-         if top_logprobs_num > 0:
-diff --git a/python/sglang/srt/sampling/sampling_batch_info.py b/python/sglang/srt/sampling/sampling_batch_info.py
-index 567bbe5d5d..93b4663058 100644
---- a/python/sglang/srt/sampling/sampling_batch_info.py
-+++ b/python/sglang/srt/sampling/sampling_batch_info.py
-@@ -43,6 +43,10 @@ class SamplingBatchInfo:
-     # Masking tensors for grammar-guided structured outputs
-     vocab_size: int
- 
-+    # Optional temperature for prefill logprob scoring. Sampling temperature
-+    # does not affect input logprobs unless callers opt in through custom_params.
-+    input_logprob_temperatures: Optional[torch.Tensor] = None
-+
-     # Whether to return kept token ids from top-p replay sampling.
-     return_top_p_token_ids: Optional[torch.Tensor] = None
-     need_return_top_p_token_ids: bool = False
-@@ -95,6 +99,25 @@ class SamplingBatchInfo:
-             .to(device, non_blocking=True)
-             .view(-1, 1)
-         )
-+        input_logprob_temperatures = [
-+            (
-+                r.sampling_params.custom_params.get("input_logprob_temperature", 1.0)
-+                if isinstance(r.sampling_params.custom_params, dict)
-+                else 1.0
-+            )
-+            for r in reqs
-+        ]
-+        input_logprob_temperatures = (
-+            torch.tensor(
-+                input_logprob_temperatures,
-+                dtype=torch.float,
-+                pin_memory=_pin,
-+            )
-+            .to(device, non_blocking=True)
-+            .view(-1, 1)
-+            if any(temperature != 1.0 for temperature in input_logprob_temperatures)
-+            else None
-+        )
-         top_ps = torch.tensor(
-             [r.sampling_params.top_p for r in reqs],
-             dtype=torch.float,
-@@ -198,6 +221,7 @@ class SamplingBatchInfo:
- 
-         ret = cls(
-             temperatures=temperatures,
-+            input_logprob_temperatures=input_logprob_temperatures,
-             top_ps=top_ps,
-             top_ks=top_ks,
-             min_ps=min_ps,
-@@ -307,6 +331,7 @@ class SamplingBatchInfo:
- 
-         for item in [
-             "temperatures",
-+            "input_logprob_temperatures",
-             "top_ps",
-             "top_ks",
-             "min_ps",
-@@ -410,6 +435,14 @@ class SamplingBatchInfo:
-         self.logit_bias = merge_bias_tensor(
-             self.logit_bias, other.logit_bias, len(self), len(other), self.device, 0.0
-         )
-+        self.input_logprob_temperatures = merge_bias_tensor(
-+            self.input_logprob_temperatures,
-+            other.input_logprob_temperatures,
-+            len(self),
-+            len(other),
-+            self.device,
-+            1.0,
-+        )
- 
-         # Note: because the __len()__ operator is defined on the temperatures tensor,
-         # please make sure any merge operation with len(self) or len(other) is done before
-diff --git a/python/sglang/srt/sampling/sampling_params.py b/python/sglang/srt/sampling/sampling_params.py
-index ce4a7c2d8c..152803f21c 100644
---- a/python/sglang/srt/sampling/sampling_params.py
-+++ b/python/sglang/srt/sampling/sampling_params.py
-@@ -178,6 +178,18 @@ class SamplingParams(msgspec.Struct, kw_only=True, omit_defaults=True):
-             raise ValueError(
-                 f"temperature must be a non-negative finite number, got {self.temperature}."
-             )
-+        if self.custom_params and "input_logprob_temperature" in self.custom_params:
-+            input_logprob_temperature = self.custom_params["input_logprob_temperature"]
-+            if (
-+                isinstance(input_logprob_temperature, bool)
-+                or not isinstance(input_logprob_temperature, (int, float))
-+                or not math.isfinite(input_logprob_temperature)
-+                or input_logprob_temperature <= 0.0
-+            ):
-+                raise ValueError(
-+                    "input_logprob_temperature must be a positive finite number, "
-+                    f"got {input_logprob_temperature}."
+@@ -1170,6 +1170,7 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
+                 sampling_params=sampling_params,
+                 return_logprob=obj.return_logprob,
+                 logprob_start_len=obj.logprob_start_len,
++                input_logprob_temperature=obj.input_logprob_temperature,
+                 top_logprobs_num=obj.top_logprobs_num,
+                 token_ids_logprob=obj.token_ids_logprob,
+                 stream=obj.stream,
+@@ -1916,6 +1917,9 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
+                     meta_info.update(scheduler_time_stats.convert_to_output_meta_info())
+
+             if getattr(state.obj, "return_logprob", False):
++                meta_info["input_logprob_temperature"] = getattr(
++                    state.obj, "input_logprob_temperature", 1.0
 +                )
-         if not 0.0 < self.top_p <= 1.0:
-             raise ValueError(f"top_p must be in (0, 1], got {self.top_p}.")
-         if not 0.0 <= self.min_p <= 1.0:
+                 self.convert_logprob_style(
+                     meta_info,
+                     state,
+diff --git a/python/sglang/srt/model_executor/forward_batch_info.py b/python/sglang/srt/model_executor/forward_batch_info.py
+index 031ab4fe8..d0f7f8667 100644
+--- a/python/sglang/srt/model_executor/forward_batch_info.py
++++ b/python/sglang/srt/model_executor/forward_batch_info.py
+@@ -420,6 +420,8 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
+     spec_info: Optional[SpecInput] = None
+
+     # === Derived from ScheduleBatch.reqs ===
++    # For input logprobs
++    input_logprob_temperatures: Optional[torch.Tensor] = None
+     # For LoRA
+     lora_ids: Optional[List[str]] = None
+     # For dumper: request IDs for cross-step sequence tracking
+@@ -728,6 +730,25 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
+
+         device = model_runner.device
+
++        if (
++            batch.return_logprob
++            and batch.forward_mode.is_extend()
++            and not batch.forward_mode.is_target_verify()
++        ):
++            input_logprob_temperatures = [
++                req.logprob.input_logprob_temperature for req in batch.reqs
++            ]
++            if any(temperature != 1.0 for temperature in input_logprob_temperatures):
++                ret.input_logprob_temperatures = (
++                    torch.tensor(
++                        input_logprob_temperatures,
++                        dtype=torch.float32,
++                        pin_memory=is_pin_memory_available(device),
++                    )
++                    .to(device, non_blocking=True)
++                    .view(-1, 1)
++                )
++
+         if envs.SGLANG_KV_CANARY_ENABLE_TOKEN_ORACLE.get():
+             hashed = _hash_rids_to_tensor(
+                 rids=[req.rid for req in batch.reqs],
+diff --git a/python/sglang/srt/session/session_controller.py b/python/sglang/srt/session/session_controller.py
+index f0dd9c7f2..44ea92fea 100644
+--- a/python/sglang/srt/session/session_controller.py
++++ b/python/sglang/srt/session/session_controller.py
+@@ -301,6 +301,7 @@ class Session:
+             stream=req.stream,
+             return_logprob=req.return_logprob,
+             top_logprobs_num=req.top_logprobs_num,
++            input_logprob_temperature=req.logprob.input_logprob_temperature,
+             token_ids_logprob=req.token_ids_logprob,
+             vocab_size=vocab_size,
+             eos_token_ids=eos_token_ids,
 diff --git a/test/registered/unit/layers/test_input_logprob_temperature.py b/test/registered/unit/layers/test_input_logprob_temperature.py
 new file mode 100644
-index 0000000000..d406e7dd60
+index 000000000..2e9691020
 --- /dev/null
 +++ b/test/registered/unit/layers/test_input_logprob_temperature.py
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,58 @@
++import unittest
++
 +import torch
 +
 +from sglang.srt.layers.logits_processor import _apply_input_logprob_temperature
@@ -209,117 +381,166 @@ index 0000000000..d406e7dd60
 +register_cpu_ci(est_time=1, suite="base-a-test-cpu")
 +
 +
-+def test_apply_input_logprob_temperature_per_request():
-+    logits = torch.tensor(
-+        [
-+            [2.0, 4.0],
-+            [6.0, 8.0],
-+            [10.0, 12.0],
-+        ]
-+    )
-+    temperatures = torch.tensor([[1.0], [2.0]])
++class TestInputLogprobTemperature(unittest.TestCase):
 +
-+    scaled = _apply_input_logprob_temperature(logits, temperatures, [2, 1])
-+
-+    torch.testing.assert_close(
-+        scaled,
-+        torch.tensor(
++    def test_apply_per_request_temperature(self):
++        logits = torch.tensor(
 +            [
 +                [2.0, 4.0],
 +                [6.0, 8.0],
-+                [5.0, 6.0],
++                [10.0, 12.0],
 +            ]
-+        ),
-+    )
++        )
++        temperatures = torch.tensor([[0.5], [1.0], [2.0]])
 +
-+
-+def test_apply_input_logprob_temperature_selected_rows():
-+    logits = torch.tensor([[2.0, 4.0], [10.0, 12.0]])
-+    temperatures = torch.tensor([[1.0], [2.0]])
-+
-+    scaled = _apply_input_logprob_temperature(
-+        logits,
-+        temperatures,
-+        [2, 1],
-+        torch.tensor([0, 2]),
-+    )
-+
-+    torch.testing.assert_close(scaled, torch.tensor([[2.0, 4.0], [5.0, 6.0]]))
-diff --git a/test/registered/unit/sampling/test_sampling_batch_info.py b/test/registered/unit/sampling/test_sampling_batch_info.py
-index 023bf93bb2..05a32aef90 100644
---- a/test/registered/unit/sampling/test_sampling_batch_info.py
-+++ b/test/registered/unit/sampling/test_sampling_batch_info.py
-@@ -466,6 +466,7 @@ class TestFromScheduleBatch(CustomTestCase):
-         info = SamplingBatchInfo.from_schedule_batch(batch, VOCAB_SIZE)
-         self.assertEqual(len(info), 1)
-         self.assertAlmostEqual(info.temperatures[0, 0].item(), 0.8, places=5)
-+        self.assertIsNone(info.input_logprob_temperatures)
-         self.assertAlmostEqual(info.top_ps[0].item(), 0.9, places=5)
-         self.assertEqual(info.top_ks[0].item(), 50)
- 
-@@ -529,6 +530,40 @@ class TestFromScheduleBatch(CustomTestCase):
-         self.assertTrue(info.need_min_p_sampling)  # 0.1 > 0
-         self.assertFalse(info.is_all_greedy)  # top_k=50 > 1
- 
-+    @patch("sglang.srt.sampling.sampling_batch_info.get_global_server_args")
-+    def test_input_logprob_temperature_is_opt_in(self, mock_server_args):
-+        mock_server_args.return_value.enable_deterministic_inference = False
-+        mock_server_args.return_value.enable_custom_logit_processor = False
-+
-+        scaled = self._make_req(temp=0.8)
-+        scaled.sampling_params.custom_params = {"input_logprob_temperature": 0.8}
-+        unscaled = self._make_req(temp=0.5)
-+
-+        batch = MagicMock()
-+        batch.reqs = [scaled, unscaled]
-+        batch.device = DEVICE
-+
-+        info = SamplingBatchInfo.from_schedule_batch(batch, VOCAB_SIZE)
++        scaled = _apply_input_logprob_temperature(
++            logits,
++            temperatures,
++            [1, 0, 2],
++        )
 +
 +        torch.testing.assert_close(
-+            info.input_logprob_temperatures,
-+            torch.tensor([[0.8], [1.0]]),
++            scaled,
++            torch.tensor(
++                [
++                    [4.0, 8.0],
++                    [3.0, 4.0],
++                    [5.0, 6.0],
++                ]
++            ),
 +        )
 +
-+    def test_input_logprob_temperature_merge_fills_unscaled_requests(self):
-+        scaled = _make_info(
-+            batch_size=1,
-+            input_logprob_temperatures=torch.tensor([[0.8]]),
-+        )
-+        unscaled = _make_info(batch_size=2)
++    def test_apply_temperature_to_selected_rows(self):
++        logits = torch.tensor([[2.0, 4.0], [10.0, 12.0]])
++        temperatures = torch.tensor([[1.0], [2.0]])
 +
-+        scaled.merge_batch(unscaled)
++        scaled = _apply_input_logprob_temperature(
++            logits,
++            temperatures,
++            [2, 1],
++            torch.tensor([0, 2]),
++        )
 +
 +        torch.testing.assert_close(
-+            scaled.input_logprob_temperatures,
-+            torch.tensor([[0.8], [1.0], [1.0]]),
++            scaled,
++            torch.tensor([[2.0, 4.0], [5.0, 6.0]]),
 +        )
 +
-     @patch("sglang.srt.sampling.sampling_batch_info.get_global_server_args")
-     def test_no_logit_bias_when_all_none(self, mock_server_args):
-         """Test that logit_bias stays None when no request has logit_bias set."""
-diff --git a/test/registered/unit/sampling/test_sampling_params.py b/test/registered/unit/sampling/test_sampling_params.py
-index f1985f6f47..ac42d937fe 100644
---- a/test/registered/unit/sampling/test_sampling_params.py
-+++ b/test/registered/unit/sampling/test_sampling_params.py
-@@ -84,6 +84,20 @@ class TestSamplingParamsVerify(CustomTestCase):
-         defaults.update(kwargs)
-         return SamplingParams(**defaults)
- 
-+    def test_input_logprob_temperature(self):
-+        self._make(custom_params={"input_logprob_temperature": 0.8}).verify(
-+            self.VOCAB_SIZE
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/test/registered/unit/managers/test_io_struct.py b/test/registered/unit/managers/test_io_struct.py
+index 371a77d96..2e3c12fd9 100644
+--- a/test/registered/unit/managers/test_io_struct.py
++++ b/test/registered/unit/managers/test_io_struct.py
+@@ -477,12 +477,14 @@ class TestGenerateReqInputNormalization(CustomTestCase):
+             text="Hello",
+             return_logprob=True,
+             logprob_start_len=10,
++            input_logprob_temperature=0.7,
+             top_logprobs_num=5,
+             token_ids_logprob=[7, 8, 9],
+         )
+         req.normalize_batch_and_arguments()
+         self.assertEqual(req.return_logprob, True)
+         self.assertEqual(req.logprob_start_len, 10)
++        self.assertEqual(req.input_logprob_temperature, 0.7)
+         self.assertEqual(req.top_logprobs_num, 5)
+         self.assertEqual(req.token_ids_logprob, [7, 8, 9])
+
+@@ -491,12 +493,14 @@ class TestGenerateReqInputNormalization(CustomTestCase):
+             text=["Hello", "World"],
+             return_logprob=True,
+             logprob_start_len=10,
++            input_logprob_temperature=0.7,
+             top_logprobs_num=5,
+             token_ids_logprob=[7, 8, 9],
+         )
+         req.normalize_batch_and_arguments()
+         self.assertEqual(req.return_logprob, [True, True])
+         self.assertEqual(req.logprob_start_len, [10, 10])
++        self.assertEqual(req.input_logprob_temperature, [0.7, 0.7])
+         self.assertEqual(req.top_logprobs_num, [5, 5])
+         self.assertEqual(req.token_ids_logprob, [[7, 8, 9], [7, 8, 9]])
+
+@@ -505,6 +509,7 @@ class TestGenerateReqInputNormalization(CustomTestCase):
+             text=["Hello", "World"],
+             return_logprob=[True, False],
+             logprob_start_len=[10, 5],
++            input_logprob_temperature=[0.5, 2.0],
+             top_logprobs_num=[5, 3],
+             token_ids_logprob=[[7, 8, 9], [4, 5, 6]],
+             return_hidden_states=[False, False, True],
+@@ -512,10 +517,27 @@ class TestGenerateReqInputNormalization(CustomTestCase):
+         req.normalize_batch_and_arguments()
+         self.assertEqual(req.return_logprob, [True, False])
+         self.assertEqual(req.logprob_start_len, [10, 5])
++        self.assertEqual(req.input_logprob_temperature, [0.5, 2.0])
+         self.assertEqual(req.top_logprobs_num, [5, 3])
+         self.assertEqual(req.token_ids_logprob, [[7, 8, 9], [4, 5, 6]])
+         self.assertEqual(req.return_hidden_states, [False, False, True])
+
++    def test_input_logprob_temperature_validation(self):
++        for temperature in (0, -1, float("inf"), float("nan"), True, "0.7"):
++            with self.subTest(temperature=temperature):
++                req = GenerateReqInput(
++                    text="Hello", input_logprob_temperature=temperature
++                )
++                with self.assertRaisesRegex(ValueError, "positive finite"):
++                    req.normalize_batch_and_arguments()
++
++        req = GenerateReqInput(
++            text=["Hello", "World"],
++            input_logprob_temperature=[0.7],
++        )
++        with self.assertRaisesRegex(ValueError, "batch size"):
++            req.normalize_batch_and_arguments()
++
+     def test_custom_logit_processor_normalization(self):
+         """Test normalization of custom_logit_processor."""
+         # Test single processor
+@@ -579,6 +601,7 @@ class TestGenerateReqInputNormalization(CustomTestCase):
+             rid=["id1", "id2"],
+             return_logprob=[True, False],
+             logprob_start_len=[10, 5],
++            input_logprob_temperature=[0.5, 2.0],
+             top_logprobs_num=[5, 3],
+             token_ids_logprob=[[7, 8, 9], [4, 5, 6]],
+             stream=True,
+@@ -599,6 +622,7 @@ class TestGenerateReqInputNormalization(CustomTestCase):
+         self.assertEqual(item0.rid, "id1")
+         self.assertEqual(item0.return_logprob, True)
+         self.assertEqual(item0.logprob_start_len, 10)
++        self.assertEqual(item0.input_logprob_temperature, 0.5)
+         self.assertEqual(item0.top_logprobs_num, 5)
+         self.assertEqual(item0.token_ids_logprob, [7, 8, 9])
+         self.assertEqual(item0.stream, True)
+diff --git a/test/registered/unit/managers/test_tokenizer_manager_rid_cleanup.py b/test/registered/unit/managers/test_tokenizer_manager_rid_cleanup.py
+index 55249b948..cd06c699e 100644
+--- a/test/registered/unit/managers/test_tokenizer_manager_rid_cleanup.py
++++ b/test/registered/unit/managers/test_tokenizer_manager_rid_cleanup.py
+@@ -294,6 +294,24 @@ class TestRidToStateCleanupOnBatchOutput(CustomTestCase):
+
+         self.assertIn(rid, tm.rid_to_state)
+
++    def test_batch_output_reports_input_logprob_temperature(self):
++        tm = _make_tokenizer_manager()
++        rid = "input_logprob_temperature_rid"
++        state = _make_req_state(rid)
++        state.obj.return_logprob = True
++        state.obj.input_logprob_temperature = 0.7
++        state.obj.top_logprobs_num = 0
++        state.obj.token_ids_logprob = None
++        state.obj.return_text_in_logprobs = False
++        tm.convert_logprob_style = Mock()
++        tm.rid_to_state[rid] = state
++
++        asyncio.run(tm._handle_batch_output(_make_batch_str_output(rid)))
++
++        self.assertEqual(
++            state.out_list[0]["meta_info"]["input_logprob_temperature"], 0.7
 +        )
 +
-+        for invalid in (0.0, -1.0, float("inf"), float("nan"), "0.8", True):
-+            with self.subTest(invalid=invalid):
-+                with self.assertRaisesRegex(
-+                    ValueError, "input_logprob_temperature must be"
-+                ):
-+                    self._make(
-+                        custom_params={"input_logprob_temperature": invalid}
-+                    ).verify(self.VOCAB_SIZE)
-+
-     def test_valid_params_pass(self):
-         """Default valid params should pass verify() without raising."""
-         sp = self._make()
+
+ class TestInitReqStateDuplicateDetection(CustomTestCase):
+     """Test that _init_req_state raises ValueError for duplicate rids."""

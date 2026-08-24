@@ -13,10 +13,10 @@ def test_teacher_payload_requests_temperature_scaled_input_logprobs():
 
     assert payload["sampling_params"] == {
         "temperature": 1.0,
-        "custom_params": {"input_logprob_temperature": 0.8},
         "max_new_tokens": 0,
         "skip_special_tokens": False,
     }
+    assert payload["input_logprob_temperature"] == 0.8
 
 
 def test_teacher_temperature_requires_patched_sglang_for_non_unit_temperature():
@@ -32,7 +32,7 @@ def test_unit_temperature_does_not_require_sglang_extension():
 
     payload = _build_teacher_payload(args, sample)
 
-    assert "custom_params" not in payload["sampling_params"]
+    assert "input_logprob_temperature" not in payload
 
 
 def test_teacher_temperature_accepts_matching_acknowledgement():

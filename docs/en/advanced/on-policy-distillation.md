@@ -56,7 +56,7 @@ The teacher runs on an external SGLang server. Teacher log-probs are obtained du
 3. The custom post-processing function (`slime.rollout.on_policy_distillation.post_process_rewards`) trims the teacher log-probs to the response span and stores them in `sample.teacher_log_probs`.
 4. During training, slime subtracts the sampled log-probability difference, scaled by `--opd-kl-coef`, from the base advantage.
 
-For non-unit `--rollout-temperature`, the SGLang teacher must support slime's `input_logprob_temperature` custom parameter. The SGLang version bundled with slime includes this patch. slime rejects responses from an unpatched external server rather than silently mixing $p_T$ with $q_1$; an unpatched server remains compatible when the temperature is `1.0`.
+For non-unit `--rollout-temperature`, the SGLang teacher must support the `input_logprob_temperature` request option. The SGLang version bundled with slime includes this patch. slime rejects responses from an unsupported external server rather than silently mixing $p_T$ with $q_1$; an unpatched server remains compatible when the temperature is `1.0`.
 
 **Configuration**:
 ```bash

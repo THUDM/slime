@@ -111,9 +111,9 @@ def _verify_teacher_input_logprob_temperature():
             "input_ids": [*prefix, output_token],
             "sampling_params": {
                 "temperature": 1.0,
-                "custom_params": {"input_logprob_temperature": temperature},
                 "max_new_tokens": 0,
             },
+            "input_logprob_temperature": temperature,
             "return_logprob": True,
             "logprob_start_len": 0,
         }
