@@ -118,13 +118,8 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.sleep()
             return start_rollout_id
 
-        self.weights_backuper = TensorBackuper.create(
-            source_getter=lambda: named_params_and_buffers(
-                self.args,
-                self.model,
-                convert_to_global_name=True,
-            ),
-            single_tag=None,
+        self.weights_backuper = TensorBackuper(
+            source_getter=lambda: named_params_and_buffers(self.args, self.model),
         )
         self._active_model_tag: str | None = "actor"
         self.weights_backuper.backup("actor")
@@ -247,7 +242,6 @@ class MegatronTrainRayActor(TrainRayActor):
         # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
         # Both first pp stage and the last pp stage will receive the data.
         rollout_data = process_rollout_data(
-            self.args,
             rollout_data_ref,
             mpu.get_data_parallel_rank(with_context_parallel=False),
             mpu.get_data_parallel_world_size(with_context_parallel=False),
@@ -679,7 +673,6 @@ class MegatronTrainRayActor(TrainRayActor):
             None,
             None,
             checkpointing_context={},
-            skip_load_to_model_and_opt=False,
         )
         (
             self.args.load,

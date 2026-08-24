@@ -17,10 +17,10 @@ class TrainProfiler:
         self._torch_profiler_overall = None
         self._memory_profiler_overall = None
 
-        if args.use_pytorch_profiler and ("train_overall" in args.profile_target):
+        if args.use_pytorch_profiler:
             self._torch_profiler_overall = _create_torch_profiler(args, name="train_overall")
 
-        if args.record_memory_history and ("train_overall" in args.profile_target):
+        if args.record_memory_history:
             self._memory_profiler_overall = _BaseMemoryProfiler.create(args)
             self._memory_profiler_overall.start()
 
@@ -39,24 +39,6 @@ class TrainProfiler:
         ):
             self._memory_profiler_overall.stop()
 
-    def iterate_train_actor(self, iterator):
-        return _profile_simple_loop(iterator, self.args, name="train_actor")
-
-    def iterate_train_log_probs(self, iterator):
-        return _profile_simple_loop(iterator, self.args, name="train_log_probs")
-
-
-def _profile_simple_loop(iterator, args, name):
-    if not (args.use_pytorch_profiler and (name in args.profile_target)):
-        yield from iterator
-        return
-
-    torch_profiler = _create_torch_profiler(args, name=name)
-    torch_profiler.start()
-    for item in iterator:
-        yield item
-        torch_profiler.step()
-
 
 def _create_torch_profiler(args, name):
     activities = [torch.profiler.ProfilerActivity.CPU]
@@ -67,7 +49,6 @@ def _create_torch_profiler(args, name):
     return torch.profiler.profile(
         activities=activities,
         schedule=torch.profiler.schedule(
-            # TODO the train_actor and train_log_probs ones may need to have different args to control step
             wait=max(args.profile_step_start - 1, 0),
             warmup=1 if args.profile_step_start > 0 else 0,
             active=args.profile_step_end - args.profile_step_start,

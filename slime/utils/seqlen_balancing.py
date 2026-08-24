@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import heapq
 
 
@@ -123,26 +122,6 @@ def karmarkar_karp(seqlen_list: list[int], k_partitions: int, equal_size: bool):
     return partitions
 
 
-def greedy_partition(seqlen_list: list[int], k_partitions: int, equal_size: bool):
-    bias = sum(seqlen_list) + 1 if equal_size else 0
-    sorted_seqlen = [(seqlen + bias, i) for i, seqlen in enumerate(seqlen_list)]
-    partitions = [[] for _ in range(k_partitions)]
-    partition_sums = [0 for _ in range(k_partitions)]
-    for seqlen, i in sorted_seqlen:
-        min_idx = None
-        for j in range(k_partitions):
-            if min_idx is None or partition_sums[j] < partition_sums[min_idx]:
-                min_idx = j
-        partitions[min_idx].append(i)
-        partition_sums[min_idx] += seqlen
-    if equal_size:
-        for _i, partition in enumerate(partitions):
-            assert len(partition) * k_partitions == len(
-                seqlen_list
-            ), f"{len(partition)} * {k_partitions} != {len(seqlen_list)}"
-    return partitions
-
-
 def get_seqlen_balanced_partitions(seqlen_list: list[int], k_partitions: int, equal_size: bool):
     """get order of seq lengths to make partitions balanced, this is
         used in balacing sum of seqlength across dp ranks and microbatches
@@ -227,12 +206,3 @@ def expand_bins_by_splitting(bins: list[list[int]], target_count: int, lengths) 
         left, right = _split_bin_by_tokens(bins[idx], lengths)
         bins[idx] = left
         bins.append(right)
-
-
-def get_reverse_idx(idx_map):
-    reverse_idx_map = copy.deepcopy(idx_map)
-
-    for i, idx in enumerate(idx_map):
-        reverse_idx_map[idx] = i
-
-    return reverse_idx_map

@@ -120,10 +120,6 @@ class TrainRayActor(RayActor):
     def update_weights(self):
         raise NotImplementedError
 
-    @abc.abstractmethod
-    def _get_parallel_config(self):
-        raise NotImplementedError
-
     def set_rollout_manager(self, rollout_manager):
         self.rollout_manager = rollout_manager
         if not self.args.debug_rollout_only and self.args.rank == 0:
