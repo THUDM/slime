@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 21 日"/>
+    <meta name="docbuild:last-update" content="2026 年 08 月 24 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -541,15 +541,13 @@
 <tr class="row-odd"><td class="text-left"><p>rollout serving 想使用独立 SGLang 环境，甚至不同型号或不同厂家的 GPU</p></td>
 <td class="text-left"><p>external engine + disk transport</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>想验证 delta wire/apply 逻辑，但仍在同一数据中心内</p></td>
-<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">--update-weight-mode</span> <span class="pre">delta</span> <span class="pre">--update-weight-transport</span> <span class="pre">nccl</span></code></p></td>
-</tr>
-<tr class="row-odd"><td class="text-left"><p>需要 reference、reward、tool-side model 等冻结模型</p></td>
+<tr class="row-even"><td class="text-left"><p>需要 reference、reward、tool-side model 等冻结模型</p></td>
 <td class="text-left"><p>优先用 <a class="reference internal" href="sglang-config.html#id8"><span class="std std-ref">SGLang Config</span></a> 的 <code class="docutils literal notranslate"><span class="pre">update_weights:</span> <span class="pre">false</span></code></p></td>
 </tr>
 </tbody>
 </table>
 </div>
+<p>delta mode 仅支持 disk transport。通过 NCCL 同步权重时请使用 full mode。</p>
 </section>
 <section id="external-engine">
 <h2>External Engine 做了什么<a class="headerlink" href="#external-engine" title="链接到此标题。">#</a></h2>
@@ -717,7 +715,7 @@ python<span class="w"> </span>-m<span class="w"> </span>sglang.launch_server<spa
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 21 日.
+  最后更新于 2026 年 08 月 24 日.
   <br/>
 </p>
   </div>

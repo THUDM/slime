@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Aug 21, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 24, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -545,15 +545,13 @@
 <tr class="row-odd"><td class="text-left"><p>Rollout serving can use an independent SGLang environment, or even different GPU models/vendors</p></td>
 <td class="text-left"><p>external engines + disk transport</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>You want to validate delta wire/apply logic inside one datacenter</p></td>
-<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">--update-weight-mode</span> <span class="pre">delta</span> <span class="pre">--update-weight-transport</span> <span class="pre">nccl</span></code></p></td>
-</tr>
-<tr class="row-odd"><td class="text-left"><p>You need frozen reference, reward, or tool-side models</p></td>
+<tr class="row-even"><td class="text-left"><p>You need frozen reference, reward, or tool-side models</p></td>
 <td class="text-left"><p>Prefer <code class="docutils literal notranslate"><span class="pre">update_weights:</span> <span class="pre">false</span></code> in <a class="reference internal" href="sglang-config.html#multi-model-serving"><span class="std std-ref">SGLang Config</span></a></p></td>
 </tr>
 </tbody>
 </table>
 </div>
+<p>Delta mode supports disk transport only. Use full mode when syncing weights over NCCL.</p>
 </section>
 <section id="what-external-engine-does">
 <h2>What External Engine Does<a class="headerlink" href="#what-external-engine-does" title="Link to this heading">#</a></h2>
@@ -721,7 +719,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 21, 2026.
+  Last updated on Aug 24, 2026.
   <br/>
 </p>
   </div>
