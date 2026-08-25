@@ -22,7 +22,7 @@ this test, **no e2e training run had ever exercised the full chain**:
 
 The fan-out functions live in ``tests/fanout_test_helpers.py``. The
 dedicated helper module gives ``importlib.import_module`` a valid module
-path even though this E2E test's filename contains dots.
+path even though this E2E test's filename itself contains dots.
 
 Test choices
 ------------
