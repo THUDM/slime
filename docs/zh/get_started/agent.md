@@ -56,6 +56,8 @@ segments = await adapter.finish_session(session_id)
 
 **OpenAI manager-message 的 reasoning（`SLIME_AGENT_OPENAI_MANAGER_REASONING`，默认 `off`）。** 近期为增强 agent 的长程任务能力，越来越多大模型公司建议 agent 客户端在后续 prompt 中原样返回 `reasoning_content`。Anthropic adapter 始终会在 manager_message 中带上 `reasoning_content`，而 OpenAI adapter 默认省略（因为部分 OpenAI 客户端不会回传）。置为 `1` 后 OpenAI 也会带上，使回传该字段的客户端仍能 history-match 到已记录的 turn。只对这类回传客户端开启：如果客户端会丢弃 `reasoning_content`，已记录的 manager message 与回传不再匹配，每轮都会 rewrite-merge（或在 `SLIME_AGENT_REASONING_FORK_POLICY` 下 fork）——比不开更糟。
 
+**Reasoning-fork 策略（`SLIME_AGENT_REASONING_FORK_POLICY`，默认 `off`）。** 不同 agent 客户端在后续 prompt 中对 `reasoning_content` 的回传并不一致——多数是原样返回或直接丢弃。当重放的 assistant 消息与已记录的 turn 不再一致时，较短的生成 turn 通常会被 rewrite-merge 降级为 routing-only context、停止训练。`reasoning_dropped` 针对常见的丢弃场景开了特例：只要已记录的 turn 带有 `reasoning_content` 而回传把它丢了，trajectory 就改为 fork，保住该生成 turn 的训练——无论 response 长度、也无论其他字段是否同时有变化。超出丢弃范围的情况（例如客户端改写了 reasoning）不开特例，回退到原有的阈值 merge/fork 逻辑——短响应被 merge 降级、不再训练（改写的 reasoning 视为不期望被训练），长响应照常 fork；`off` 则完全关闭该特例。**成本说明：** 每次 fork 会把一条 rollout 拆成更多训练 sample，启用该策略会增多 sample 数、抬高训练成本——只在客户端的回传行为会静默降级训练 turn 时才开启。OpenAI adapter 上该策略需与 `SLIME_AGENT_OPENAI_MANAGER_REASONING` 同时开启才生效：不开 manager 开关时，manager message 与被丢弃的回传都不带 `reasoning_content`，历史仍然匹配，损失发生在 token 层级，策略无从触发。Anthropic adapter 的 manager message 恒带 `reasoning_content`，只开该策略即可。
+
 ## Agent Serving 与性能配置
 
 agentic rollout 往往比普通单轮 generation 更依赖 serving 配置：上下文更长、多轮请求更多、请求时长分布更重尾，并且可能同时需要 actor、reference、reward 或工具侧模型。
