@@ -10,8 +10,8 @@ import yaml
 from slime.backends.sglang_utils.arguments import sglang_parse_args
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 from slime.backends.sglang_utils.external import apply_external_engine_info_to_args
+from slime.observability.logging_utils import configure_logger
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
-from slime.utils.logging_utils import configure_logger
 
 logger = logging.getLogger(__name__)
 
@@ -1305,13 +1305,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
             )
             parser.add_argument(
-                "--profile-target",
-                type=str,
-                choices=["train_overall", "train_actor", "train_log_probs"],
-                default=["train_overall"],
-                nargs="+",
-            )
-            parser.add_argument(
                 "--memory-recorder",
                 type=str,
                 choices=["torch", "memray"],
@@ -1634,7 +1627,7 @@ def parse_args(add_custom_arguments=None):
 
     slime_validate_args(args)
 
-    if pre.train_backend == "megatron" and not args.debug_rollout_only:
+    if not args.debug_rollout_only:
         megatron_validate_args(args)
 
     if not args.debug_train_only:
@@ -2044,8 +2037,6 @@ def slime_validate_args(args):
             "a filesystem shared between the trainer and the rollout engines."
         )
     if args.release_train:
-        if args.train_backend != "megatron":
-            raise ValueError("--release-train is only supported with the Megatron train backend.")
         if args.use_critic:
             raise ValueError("--release-train does not support critic training yet.")
         if args.keep_old_actor:

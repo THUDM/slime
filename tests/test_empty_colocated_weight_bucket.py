@@ -113,10 +113,10 @@ def _install_fake_deps(monkeypatch):
     expert_routing_mod = types.ModuleType("slime.backends.megatron_utils.update_weight.expert_routing")
     expert_routing_mod.configure_expert_routing = lambda *args, **kwargs: (None, [])
 
-    hf_weight_iterator_base_mod = types.ModuleType(
-        "slime.backends.megatron_utils.update_weight.hf_weight_iterator_base"
+    hf_weight_iterator_direct_mod = types.ModuleType(
+        "slime.backends.megatron_utils.update_weight.hf_weight_iterator_direct"
     )
-    hf_weight_iterator_base_mod.HfWeightIteratorBase = types.SimpleNamespace(create=lambda *args, **kwargs: None)
+    hf_weight_iterator_direct_mod.HfWeightIteratorDirect = lambda *args, **kwargs: None
 
     slime_utils_types_mod = types.ModuleType("slime.utils.types")
     slime_utils_types_mod.ParamInfo = type("ParamInfo", (), {})
@@ -150,8 +150,8 @@ def _install_fake_deps(monkeypatch):
     monkeypatch.setitem(sys.modules, "slime.backends.megatron_utils.update_weight.expert_routing", expert_routing_mod)
     monkeypatch.setitem(
         sys.modules,
-        "slime.backends.megatron_utils.update_weight.hf_weight_iterator_base",
-        hf_weight_iterator_base_mod,
+        "slime.backends.megatron_utils.update_weight.hf_weight_iterator_direct",
+        hf_weight_iterator_direct_mod,
     )
     monkeypatch.setitem(sys.modules, "slime.utils.types", slime_utils_types_mod)
     monkeypatch.setitem(sys.modules, "slime.utils.distributed_utils", distributed_utils_mod)

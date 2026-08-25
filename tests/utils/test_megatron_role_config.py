@@ -1,10 +1,36 @@
 """Unit tests for Megatron role config parsing and application."""
 
+import sys
 import tempfile
+import types
 from argparse import Namespace
 
 import pytest
 import yaml
+
+NUM_GPUS = 0
+
+
+@pytest.fixture(autouse=True)
+def _stub_sglang_argument_dependencies(monkeypatch):
+    """Keep role-config parsing independent of the SGLang runtime package."""
+    sglang = types.ModuleType("sglang")
+    sglang.__path__ = []
+    sglang_srt = types.ModuleType("sglang.srt")
+    sglang_srt.__path__ = []
+    server_args = types.ModuleType("sglang.srt.server_args")
+    server_args.ServerArgs = type("ServerArgs", (), {})
+
+    sglang_router = types.ModuleType("sglang_router")
+    sglang_router.__path__ = []
+    launch_router = types.ModuleType("sglang_router.launch_router")
+    launch_router.RouterArgs = type("RouterArgs", (), {})
+
+    monkeypatch.setitem(sys.modules, "sglang", sglang)
+    monkeypatch.setitem(sys.modules, "sglang.srt", sglang_srt)
+    monkeypatch.setitem(sys.modules, "sglang.srt.server_args", server_args)
+    monkeypatch.setitem(sys.modules, "sglang_router", sglang_router)
+    monkeypatch.setitem(sys.modules, "sglang_router.launch_router", launch_router)
 
 
 def _write_yaml(data: dict) -> str:
@@ -162,3 +188,7 @@ class TestMegatronRoleConfig:
         assert actor_model.args.lr == 1e-6
         assert actor_model.create_calls[0]["args"].lr == 1e-6
         assert args.start_rollout_id == 7
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

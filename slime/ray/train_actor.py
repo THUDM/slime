@@ -9,10 +9,10 @@ import torch
 import torch.distributed as dist
 
 import slime.utils.eval_config
+from slime.observability.logging_utils import configure_logger
 from slime.ray.ray_actor import RayActor
 from slime.utils import accelerator
 from slime.utils.distributed_utils import init_gloo_group
-from slime.utils.logging_utils import configure_logger
 from slime.utils.memory_utils import clear_memory, print_memory
 
 logger = logging.getLogger(__name__)
@@ -118,10 +118,6 @@ class TrainRayActor(RayActor):
 
     @abc.abstractmethod
     def update_weights(self):
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def _get_parallel_config(self):
         raise NotImplementedError
 
     def set_rollout_manager(self, rollout_manager):

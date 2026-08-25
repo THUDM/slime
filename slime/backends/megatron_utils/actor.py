@@ -12,11 +12,14 @@ from megatron.core import mpu
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
+from slime.observability import train_data_utils, train_metric_utils
+from slime.observability.logging_utils import init_tracking
+from slime.observability.profile_utils import TrainProfiler
+from slime.observability.timer import Timer, inverse_timer, timer, with_defer
 from slime.ray.train_actor import TrainRayActor
 from slime.utils import accelerator
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.logging_utils import init_tracking
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.misc import Box
 from slime.utils.reloadable_process_group import (
@@ -26,15 +29,12 @@ from slime.utils.reloadable_process_group import (
     reload_process_groups,
 )
 from slime.utils.routing_replay import RoutingReplay
-from slime.utils.timer import Timer, inverse_timer, timer, with_defer
 from slime.utils.types import RolloutBatch
 
-from ...utils.profile_utils import TrainProfiler
 from ...utils.tensor_backper import TensorBackuper
-from . import train_dump_utils
 from .checkpoint import load_checkpoint
 from .cp_utils import prepare_routed_experts_for_routing_replay, slice_log_prob_with_cp
-from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data
+from .data import DataIterator, get_data_iterator
 from .hf_checkpoint_saver import save_hf_model_to_path
 from .initialize import init, is_megatron_main_rank
 from .loss import (
@@ -45,10 +45,8 @@ from .loss import (
     get_values,
 )
 from .model import forward_only, initialize_model_and_optimizer, save, train
+from .update_weight import create_weight_updater
 from .update_weight.common import named_params_and_buffers
-from .update_weight.update_weight_from_disk import UpdateWeightFromDisk
-from .update_weight.update_weight_from_distributed import UpdateWeightFromDistributed
-from .update_weight.update_weight_from_tensor import UpdateWeightFromTensor
 
 logging.getLogger("megatron").setLevel(logging.WARNING)
 
@@ -118,13 +116,8 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.sleep()
             return start_rollout_id
 
-        self.weights_backuper = TensorBackuper.create(
-            source_getter=lambda: named_params_and_buffers(
-                self.args,
-                self.model,
-                convert_to_global_name=True,
-            ),
-            single_tag=None,
+        self.weights_backuper = TensorBackuper(
+            source_getter=lambda: named_params_and_buffers(self.args, self.model),
         )
         self._active_model_tag: str | None = "actor"
         self.weights_backuper.backup("actor")
@@ -149,38 +142,13 @@ class MegatronTrainRayActor(TrainRayActor):
             hf_vocab = getattr(self.hf_config, "vocab_size", None)
             self.args.vocab_size = hf_vocab if hf_vocab is not None else self.tokenizer.vocab_size
 
-        update_weight_mode = self.args.update_weight_mode
-        update_weight_transport = self.args.update_weight_transport
-
-        if update_weight_mode == "delta":
-            # Delta sync is disk-transport only: each engine's /pull_weights applies the published
-            # deltas into a host-local checkpoint on every host it spans, and the engines reload
-            # via vanilla update_weights_from_disk.
-            assert not self.args.colocate, "--update-weight-mode=delta is not supported with --colocate"
-            assert (
-                update_weight_transport == "disk"
-            ), "--update-weight-mode=delta requires --update-weight-transport=disk"
-            from .update_weight.update_weight_from_disk_delta import UpdateWeightFromDiskDelta
-
-            update_weight_cls = UpdateWeightFromDiskDelta
-        elif update_weight_transport == "disk":
-            update_weight_cls = UpdateWeightFromDisk
-        elif self.args.colocate:
-            update_weight_cls = UpdateWeightFromTensor
-        else:
-            assert update_weight_mode == "full"
-            assert (
-                update_weight_transport == "nccl"
-            ), f"unsupported weight sync mode/transport: {update_weight_mode!r}/{update_weight_transport!r}"
-            update_weight_cls = UpdateWeightFromDistributed
-        self.weight_updater = update_weight_cls(
+        self.weight_updater = create_weight_updater(
             self.args,
             self.model,
             weights_getter=lambda: self.weights_backuper.get("actor"),
             model_name=type(self.hf_config).__name__.lower() if self.args.model_name is None else self.args.model_name,
             quantization_config=getattr(self.hf_config, "quantization_config", None),
         )
-        self.weight_updater.weight_version = getattr(self.args, "update_weight_start_version", 0)
 
         # empty cache after initialization
         clear_memory()
@@ -247,7 +215,6 @@ class MegatronTrainRayActor(TrainRayActor):
         # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
         # Both first pp stage and the last pp stage will receive the data.
         rollout_data = process_rollout_data(
-            self.args,
             rollout_data_ref,
             mpu.get_data_parallel_rank(with_context_parallel=False),
             mpu.get_data_parallel_world_size(with_context_parallel=False),
@@ -505,7 +472,7 @@ class MegatronTrainRayActor(TrainRayActor):
             if self.rollout_data_postprocess is not None:
                 self.rollout_data_postprocess(self.args, rollout_id, rollout_data)
 
-            log_rollout_data(
+            train_metric_utils.log_rollout_data(
                 rollout_id,
                 self.args,
                 rollout_data,
@@ -542,7 +509,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
             self.prof.step(rollout_id=rollout_id)
 
-        train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
+        train_data_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
 
         if self.args.use_routing_replay:
             RoutingReplay.clear_all()
@@ -561,7 +528,11 @@ class MegatronTrainRayActor(TrainRayActor):
                     logger.info(f"Updating ref model at rollout_id {rollout_id}")
                 self.weights_backuper.backup("ref")
 
-        log_perf_data(rollout_id, self.args, extra_metrics=self.weight_updater.pop_metrics())
+        train_metric_utils.log_perf_data(
+            rollout_id,
+            self.args,
+            extra_metrics=self.weight_updater.pop_metrics(),
+        )
 
     @timer
     def save_model(self, rollout_id: int, force_sync: bool = False) -> None:
@@ -675,7 +646,6 @@ class MegatronTrainRayActor(TrainRayActor):
             None,
             None,
             checkpointing_context={},
-            skip_load_to_model_and_opt=False,
         )
         (
             self.args.load,

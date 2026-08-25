@@ -33,7 +33,6 @@ import ray
 
 from slime.utils.data import process_rollout_data
 
-
 NUM_GPUS = 0
 
 
@@ -92,7 +91,7 @@ def test_local_raw_reward_is_dp_local_and_aligned(unwrap_ray_get, partitions):
     refs = _split_train_data_by_dp(partitions, RAW_REWARD, RESPONSE_LENGTHS, TOTAL_LENGTHS)
 
     for dp_rank, partition in enumerate(partitions):
-        rollout_data = process_rollout_data(args=None, rollout_data_ref=refs, dp_rank=dp_rank, dp_size=dp_size)
+        rollout_data = process_rollout_data(rollout_data_ref=refs, dp_rank=dp_rank, dp_size=dp_size)
 
         local_raw_reward = rollout_data["local_raw_reward"]
         assert local_raw_reward == [RAW_REWARD[j] for j in partition]
@@ -117,7 +116,7 @@ def test_correct_sample_selection_matches_owned_samples(unwrap_ray_get, partitio
     refs = _split_train_data_by_dp(partitions, RAW_REWARD, RESPONSE_LENGTHS, TOTAL_LENGTHS)
 
     for dp_rank, partition in enumerate(partitions):
-        rollout_data = process_rollout_data(args=None, rollout_data_ref=refs, dp_rank=dp_rank, dp_size=dp_size)
+        rollout_data = process_rollout_data(rollout_data_ref=refs, dp_rank=dp_rank, dp_size=dp_size)
 
         response_lengths = rollout_data["response_lengths"]
         total_lengths = rollout_data["total_lengths"]
@@ -140,7 +139,7 @@ def test_raw_reward_stays_global(unwrap_ray_get):
     refs = _split_train_data_by_dp(partitions, RAW_REWARD, RESPONSE_LENGTHS, TOTAL_LENGTHS)
 
     for dp_rank in range(len(partitions)):
-        rollout_data = process_rollout_data(args=None, rollout_data_ref=refs, dp_rank=dp_rank, dp_size=len(partitions))
+        rollout_data = process_rollout_data(rollout_data_ref=refs, dp_rank=dp_rank, dp_size=len(partitions))
         assert rollout_data["raw_reward"] == RAW_REWARD
 
 
@@ -157,7 +156,11 @@ def test_missing_raw_reward_is_tolerated(unwrap_ray_get):
         )
     ]
 
-    rollout_data = process_rollout_data(args=None, rollout_data_ref=refs, dp_rank=0, dp_size=1)
+    rollout_data = process_rollout_data(rollout_data_ref=refs, dp_rank=0, dp_size=1)
 
     assert "local_raw_reward" not in rollout_data
     assert rollout_data["total_lengths"] == [201, 200]
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

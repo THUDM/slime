@@ -169,3 +169,7 @@ def test_loop_backpressure_stops_topping_up_when_queue_is_full(monkeypatch):
     # In-flight tasks may still land after the gate check, so allow one pool
     # beyond the gate — but nothing near the unthrottled fuel size.
     assert 0 < max_seen <= 2 * concurrency, f"queue grew to {max_seen} with concurrency={concurrency}"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

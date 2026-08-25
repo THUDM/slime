@@ -5,7 +5,7 @@ from time import time
 
 import torch.distributed
 
-from .misc import SingletonMeta
+from slime.utils.misc import SingletonMeta
 
 __all__ = ["Timer", "timer"]
 

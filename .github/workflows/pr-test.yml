@@ -43,6 +43,14 @@ jobs:
         info:
           [
             {
+              "num_gpus": 0,
+              "test_file": "utils/test_sglang_arguments.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "utils/test_sglang_config.py"
+            },
+            {
               "num_gpus": 8,
               "test_file": "test_qwen2.5_0.5B_sglang_config.py"
             },
@@ -371,6 +379,10 @@ jobs:
         info:
           [
             {
+              "num_gpus": 0,
+              "test_file": "test_glm5_indexer_q_norm.py"
+            },
+            {
               "num_gpus": 8,
               "test_file": "test_qwen3_0.6B_parallel_check.py"
             }
@@ -575,6 +587,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "utils/test_megatron_role_config.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_deep_ep_tms_patch.py"
             },
             {
@@ -595,7 +611,15 @@ jobs:
             },
             {
               "num_gpus": 0,
-              "test_file": "test_train_dump.py"
+              "test_file": "test_train_data_utils.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_rollout_data_utils.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_rollout_metrics.py"
             },
             {
               "num_gpus": 0,
@@ -616,6 +640,10 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_logprob_response_spans.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "observability/test_trace_utils.py"
             },
             {
               "num_gpus": 0,
@@ -640,6 +668,10 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_discounted_returns.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_block_fp8_zero_block.py"
             },
             {
               "num_gpus": 0,
@@ -683,10 +715,6 @@ jobs:
             },
             {
               "num_gpus": 0,
-              "test_file": "test_rollout_validation.py"
-            },
-            {
-              "num_gpus": 0,
               "test_file": "test_fully_async_rollout.py"
             },
             {
@@ -703,11 +731,19 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_qwen3_linear_attention_cu_seqlens.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_accelerator.py"
             },
             {
               "num_gpus": 0,
               "test_file": "test_reloadable_process_group_world.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_reloadable_process_group_memory_check.py"
             },
             {
               "num_gpus": 0,
@@ -743,7 +779,15 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_tau_bench_token_delta.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "utils/test_hf_checkpoint_saver.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "utils/test_loss_mask_type_qwen35.py"
             },
             {
               "num_gpus": 0,
@@ -790,7 +834,7 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors psutil
 
-          pip install transformers
+          pip install transformers wandb
 
 
       - name: Install

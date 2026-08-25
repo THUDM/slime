@@ -14,12 +14,15 @@ from slime.utils.types import ParamInfo
 from ..megatron_to_hf import convert_to_hf
 from ..sglang import monkey_patch_torch_reductions
 from .common import all_gather_params_async, named_params_and_buffers
-from .hf_weight_iterator_base import HfWeightIteratorBase
 
 
-class HfWeightIteratorDirect(HfWeightIteratorBase):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+class HfWeightIteratorDirect:
+    def __init__(self, args, model, model_name, quantization_config, transform_ue8m0=True):
+        self.args = args
+        self.model = model
+        self.model_name = model_name
+        self.quantization_config = quantization_config
+        self.transform_ue8m0 = transform_ue8m0
         self.megatron_local_param_info_buckets = _get_megatron_local_param_info_buckets(self.args, self.model)
 
     def get_hf_weight_chunks(

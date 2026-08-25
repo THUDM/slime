@@ -5,7 +5,7 @@ import pytest
 import torch
 from _cp_dist_helpers import cp_chunk_response_tensor, free_port, init_worker_process_group, stub_megatron_in_worker
 
-from slime.backends.megatron_utils.train_dump_utils import (
+from slime.observability.train_data_utils import (
     _build_dump_payload,
     restore_context_parallel_fields_to_cpu,
     save_debug_train_data,

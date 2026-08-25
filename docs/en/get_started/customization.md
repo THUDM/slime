@@ -42,7 +42,7 @@ For most agentic use cases, **start with `--custom-generate-function-path` plus 
 | Replace the entire rollout orchestration (only when per-sample customization is not enough) | [`--rollout-function-path`](#1-rollout-function---rollout-function-path) |
 | Control task sampling, buffering, requeueing, or custom prompt/task sources | [`--data-source-path`](#15-data-source---data-source-path) |
 | Attach custom loss masks, metadata, or convert agentic outputs into training data | [`--rollout-data-postprocess-path`](#8-rollout-data-postprocess---rollout-data-postprocess-path), [`--custom-convert-samples-to-train-data-path`](#13-samples-to-train-data-conversion---custom-convert-samples-to-train-data-path) |
-| Debug long-running custom generation, verifier calls, tool calls, or sandbox steps | trace utilities in [`slime.utils.trace_utils`](../developer_guide/trace.md) |
+| Debug long-running custom generation, verifier calls, tool calls, or sandbox steps | trace utilities in [`slime.observability.trace_utils`](../developer_guide/trace.md) |
 
 A native example of this pattern is [`examples/search-r1`](../../../examples/search-r1/), which adds search-augmented multi-turn generation via `--custom-generate-function-path` while keeping slime's default `sglang_rollout` outer loop. See also [`examples/multi_agent`](../../../examples/multi_agent/README.md) for a `--rollout-function-path`-based multi-agent pattern and [`examples/fully_async`](../../../examples/fully_async/README.md) for long-tail agentic generation.
 

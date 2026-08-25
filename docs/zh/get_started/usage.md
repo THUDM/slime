@@ -35,9 +35,8 @@
 
 ### 选择训练后端
 
-slime 支持多种训练后端，可以通过 `--train-backend` 参数进行选择：
-
-- `megatron`（默认）：使用 Megatron-LM 作为训练后端，支持大规模模型的高效训练。
+slime 当前使用 Megatron-LM 作为训练后端。为了兼容已有脚本，仍然可以显式传入
+`--train-backend megatron`。
 
 ### 加载 megatron
 

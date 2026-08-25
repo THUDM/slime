@@ -22,7 +22,7 @@ class _TensorboardAdapter(metaclass=SingletonMeta):
     # tb.log({"Loss": 0.1}, step=1)
 
     # In other files:
-    # from tensorboard_utils import _TensorboardAdapter
+    # from slime.observability.tensorboard_utils import _TensorboardAdapter
     # tb = _TensorboardAdapter(args)  # No parameters needed to get existing instance
     # tb.log({"Accuracy": 0.9}, step=1)
     """

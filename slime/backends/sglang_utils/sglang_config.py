@@ -205,3 +205,28 @@ class SglangConfig:
     @property
     def total_num_gpus(self) -> int:
         return sum(m.total_num_gpus for m in self.models)
+
+
+def resolve_sglang_config(args) -> SglangConfig:
+    """Resolve the configured, legacy PD, or default SGLang deployment."""
+    if getattr(args, "sglang_config", None) is not None:
+        config = SglangConfig.from_yaml(args.sglang_config)
+        expected = args.rollout_num_gpus
+        actual = config.total_num_gpus
+        assert actual == expected, f"sglang_config total GPUs ({actual}) != rollout_num_gpus ({expected})"
+        return config
+
+    if args.rollout_num_gpus == 0:
+        return SglangConfig(models=[ModelConfig(name="default", server_groups=[])])
+
+    if args.prefill_num_servers is not None:
+        return SglangConfig.from_prefill_num_servers(args)
+
+    return SglangConfig(
+        models=[
+            ModelConfig(
+                name="default",
+                server_groups=[ServerGroupConfig(worker_type="regular", num_gpus=args.rollout_num_gpus)],
+            )
+        ]
+    )
