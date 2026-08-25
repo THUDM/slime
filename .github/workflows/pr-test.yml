@@ -715,10 +715,6 @@ jobs:
             },
             {
               "num_gpus": 0,
-              "test_file": "test_rollout_validation.py"
-            },
-            {
-              "num_gpus": 0,
               "test_file": "test_fully_async_rollout.py"
             },
             {
