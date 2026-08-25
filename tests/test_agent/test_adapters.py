@@ -25,11 +25,17 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tests.test_agent._fakes import FakeSGLangServer, FakeTokenizer  # noqa: E402
+from tests.test_agent._fakes import (  # noqa: E402
+    THINK_OUTPUT,
+    FakeSGLangServer,
+    FakeTokenizer,
+    ScriptedTokenizer,
+    drain_session,
+    think_split,
+)
 
-from slime.agent.adapters import anthropic, openai  # noqa: E402
-from slime.agent.parsing import parse_model_output, parse_xml_tool_uses  # noqa: E402
-from slime.utils.types import Sample  # noqa: E402
+from slime.agent.adapters import anthropic, common, openai  # noqa: E402
+from slime.agent.parsing import ParsedModelOutput, parse_model_output, parse_xml_tool_uses  # noqa: E402
 
 NUM_GPUS = 0
 
@@ -68,10 +74,6 @@ def _parse_sse(raw: str) -> list[tuple[str, object]]:
             data_lines.append(line.removeprefix("data:").strip())
     flush()
     return events
-
-
-async def _drain(adapter, sid) -> list[Sample]:
-    return await adapter.finish_session(sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
 
 
 # ===========================================================================
@@ -182,7 +184,7 @@ def test_anthropic_messages_nonstream_records_token_segments():
                 data = await resp.json()
             finally:
                 await client.close()
-            samples = await _drain(adapter, "sid-a")
+            samples = await drain_session(adapter, "sid-a")
 
         assert resp.status == 200
         assert data["type"] == "message" and data["stop_reason"] == "end_turn"
@@ -218,7 +220,7 @@ def test_openai_chat_completions_nonstream_records_token_segments():
                 data = await resp.json()
             finally:
                 await client.close()
-            samples = await _drain(adapter, "sid-o")
+            samples = await drain_session(adapter, "sid-o")
 
         assert resp.status == 200
         assert data["object"] == "chat.completion"
@@ -257,7 +259,7 @@ def test_anthropic_messages_streams_blocks():
                 raw = await resp.text()
             finally:
                 await client.close()
-            await _drain(adapter, "sid-as")
+            await drain_session(adapter, "sid-as")
 
         names = [name for name, _ in _parse_sse(raw)]
         assert names[0] == "message_start"
@@ -286,7 +288,7 @@ def test_openai_chat_completions_streams_chunks_until_done():
                 raw = await resp.text()
             finally:
                 await client.close()
-            await _drain(adapter, "sid-os")
+            await drain_session(adapter, "sid-os")
 
         events = _parse_sse(raw)
         chunks = [p for _, p in events if isinstance(p, dict)]
@@ -356,7 +358,7 @@ def test_anthropic_multiturn_wire_roundtrip_and_token_capture():
                 await second.json()
             finally:
                 await client.close()
-            samples = await _drain(adapter, "sid-mt")
+            samples = await drain_session(adapter, "sid-mt")
 
         assert first.status == 200 and second.status == 200
         assert fdata["stop_reason"] == "tool_use"
@@ -395,7 +397,7 @@ def test_max_turns_per_sid_returns_429():
                 second = await client.post("/v1/messages", headers=h, json=body)
             finally:
                 await client.close()
-            await _drain(adapter, "sid-cap")
+            await drain_session(adapter, "sid-cap")
         assert first.status == 200
         assert second.status == 429
 
@@ -445,6 +447,16 @@ def test_parse_model_output_think_split_fallback():
     assert "reason here" in parsed.reasoning
 
 
+def test_think_split_fake_mirrors_tagged_and_untagged_shapes():
+    """The _fakes parse fake: a think-tagged output splits reasoning/text; an
+    untagged one is all text (never misread as all-reasoning)."""
+    kw = {"tools_schema": None, "tool_parser_name": None, "reasoning_parser_name": None}
+    tagged = think_split(THINK_OUTPUT, **kw)
+    assert (tagged.reasoning, tagged.text, tagged.tool_uses) == ("plan", "ok", [])
+    untagged = think_split("done", **kw)
+    assert (untagged.reasoning, untagged.text, untagged.tool_uses) == ("", "done", [])
+
+
 def test_parse_xml_tool_uses_fallback():
     raw = "lead <tool_call><function=lookup><parameter=q>slime</parameter></function></tool_call> tail"
     schema = [{"function": {"name": "lookup"}}]
@@ -459,6 +471,144 @@ def test_parse_xml_tool_uses_ignores_unknown_tool():
     cleaned, uses = parse_xml_tool_uses(raw, [{"function": {"name": "lookup"}}])
     assert uses == []
     assert "<tool_call>" in cleaned  # left untouched
+
+
+# ===========================================================================
+# §8 reasoning_content on the openai manager_message
+# (SLIME_AGENT_OPENAI_MANAGER_REASONING): whether the openai adapter also puts
+# reasoning_content on the manager_message (not just the wire message).
+# ===========================================================================
+
+_OPENAI_MGR_REASONING_ENV = openai._OPENAI_MANAGER_REASONING_ENV
+
+
+def test_build_reply_parts_reasoning_wire_only_by_default(monkeypatch):
+    """Env unset: reasoning stays wire-only; manager_message keeps the historic
+    shape (the tree-level consequences of each switch state are covered by
+    test_trajectory_reasoning_echo)."""
+    monkeypatch.delenv(_OPENAI_MGR_REASONING_ENV, raising=False)
+    parsed = ParsedModelOutput(reasoning="plan", text="ok", tool_uses=[])
+    wire, manager, wire_finish = openai._build_reply_parts(parsed, "stop")
+    assert wire["reasoning_content"] == "plan"
+    assert "reasoning_content" not in manager
+    assert wire_finish == "stop"
+
+
+def test_build_reply_parts_reasoning_in_manager_message_when_enabled(monkeypatch):
+    """Env on: reasoning_content also lands on manager_message (plain and
+    tool-call turns alike), so a client that echoes it back history-matches."""
+    monkeypatch.setenv(_OPENAI_MGR_REASONING_ENV, "1")
+    plain = ParsedModelOutput(reasoning="plan", text="ok", tool_uses=[])
+    _, manager, _ = openai._build_reply_parts(plain, "stop")
+    assert manager == {"role": "assistant", "content": "ok", "reasoning_content": "plan"}
+
+    with_tool = ParsedModelOutput(reasoning="plan", text="ok", tool_uses=[{"name": "lookup", "input": {"q": "slime"}}])
+    wire, manager, wire_finish = openai._build_reply_parts(with_tool, "stop")
+    assert manager["reasoning_content"] == "plan"
+    assert manager["content"] == ""  # mirrors content=null on the wire for tool turns
+    assert manager["tool_calls"] == [{"type": "function", "function": {"name": "lookup", "arguments": {"q": "slime"}}}]
+    assert wire["reasoning_content"] == "plan"
+    assert wire_finish == "tool_calls"
+
+
+def test_build_reply_parts_no_reasoning_unaffected_by_switch(monkeypatch):
+    for value in ("1", None):
+        if value is None:
+            monkeypatch.delenv(_OPENAI_MGR_REASONING_ENV, raising=False)
+        else:
+            monkeypatch.setenv(_OPENAI_MGR_REASONING_ENV, value)
+        wire, manager, _ = openai._build_reply_parts(ParsedModelOutput(reasoning="", text="ok", tool_uses=[]), "stop")
+        assert "reasoning_content" not in wire and "reasoning_content" not in manager
+
+
+def test_openai_translation_keeps_reasoning_content_on_echo():
+    """A client echoing reasoning_content back keeps it through translation --
+    the input side of the history match the switch relies on."""
+    translated = openai._translate_messages([{"role": "assistant", "content": "ok", "reasoning_content": "plan"}])
+    assert translated == [{"role": "assistant", "content": "ok", "reasoning_content": "plan"}]
+
+
+@pytest.mark.parametrize("switch_on", [True, False], ids=["manager-reasoning-on", "manager-reasoning-off"])
+def test_openai_multiturn_reasoning_echo_client(monkeypatch, switch_on):
+    """Two-turn round trip against a client that echoes reasoning_content back.
+
+    SLIME_AGENT_OPENAI_MANAGER_REASONING on: manager_message carries
+    reasoning_content -> the replayed turn history-matches -> ONE sample training
+    BOTH turns.
+    Off (current behaviour): manager_message lacks it while the echo has it ->
+    rewrite-merge demotes turn 1 -> one sample where only turn 2 trains.
+    """
+    if switch_on:
+        monkeypatch.setenv(_OPENAI_MGR_REASONING_ENV, "1")
+    else:
+        monkeypatch.delenv(_OPENAI_MGR_REASONING_ENV, raising=False)
+
+    async def run_case():
+        # p2 extends p1 + r1 exactly: with reasoning_content echoed back, the
+        # replayed assistant re-renders to the same tokens that were generated.
+        p1, r1 = [1, 2, 3], [10, 11]
+        p2, r2 = p1 + r1 + [20, 21], [12, 13]
+        tok = ScriptedTokenizer(prompts=[p1, p2], outputs={tuple(r1): THINK_OUTPUT, tuple(r2): "done"})
+        async with FakeSGLangServer([[(-0.5, t) for t in r1], [(-0.4, t) for t in r2]]) as sglang:
+            adapter = openai.OpenAIAdapter(tokenizer=tok, sglang_url=sglang.url)
+            adapter.open_session("sid-re")
+            client = TestClient(TestServer(adapter.app))
+            await client.start_server()
+            monkeypatch.setattr(common, "parse_model_output", think_split)
+            h = {"Authorization": "Bearer sid-re"}
+            try:
+                first = await client.post(
+                    "/v1/chat/completions",
+                    headers=h,
+                    json={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+                )
+                fdata = await first.json()
+                second = await client.post(
+                    "/v1/chat/completions",
+                    headers=h,
+                    json={
+                        "model": "m",
+                        "messages": [
+                            {"role": "user", "content": "hi"},
+                            # the client echoes reasoning_content back
+                            {"role": "assistant", "content": "ok", "reasoning_content": "plan"},
+                            {"role": "user", "content": "next"},
+                        ],
+                    },
+                )
+                await second.json()
+            finally:
+                await client.close()
+            samples = await drain_session(adapter, "sid-re")
+
+        # wire always carries reasoning_content, in both switch states
+        assert fdata["choices"][0]["message"]["reasoning_content"] == "plan"
+        assert len(samples) == 1, "echo-reasoning client stays on one chain in both states"
+        s = samples[0]
+        if switch_on:
+            # history matched on the reasoning-bearing manager_message: both turns train
+            assert s.tokens == p1 + r1 + [20, 21] + r2
+            assert s.loss_mask == [1, 1, 0, 0, 1, 1]
+        else:
+            # current behaviour: rewrite-merge demoted turn 1; only turn 2 trains
+            assert s.tokens == p2 + r2
+            assert s.loss_mask == [1, 1]
+
+    asyncio.run(run_case())
+
+
+def test_anthropic_build_reply_parts_always_keeps_reasoning_in_manager(monkeypatch):
+    """anthropic's manager_message always carries reasoning_content, independent of
+    the openai-only SLIME_AGENT_OPENAI_MANAGER_REASONING switch (it has no effect
+    on the anthropic adapter)."""
+    parsed = ParsedModelOutput(reasoning="plan", text="ok", tool_uses=[])
+    for value in (None, "1"):
+        if value is None:
+            monkeypatch.delenv(_OPENAI_MGR_REASONING_ENV, raising=False)
+        else:
+            monkeypatch.setenv(_OPENAI_MGR_REASONING_ENV, value)
+        _, _, manager = anthropic._build_reply_parts(parsed, "stop")
+        assert manager["reasoning_content"] == "plan"
 
 
 if __name__ == "__main__":

@@ -54,6 +54,8 @@ segments = await adapter.finish_session(session_id)
 
 For multi-turn agents, use a stable `session_id`. The adapters pass it as `X-SMG-Routing-Key` so SGLang can route one session to the same worker and reuse prefix cache.
 
+**OpenAI manager-message reasoning (`SLIME_AGENT_OPENAI_MANAGER_REASONING`, default `off`).** Recently, to strengthen agents' long-horizon task capability, more model providers recommend that agent clients return `reasoning_content` verbatim in later prompts. The Anthropic adapter always keeps `reasoning_content` on the manager message it records for each assistant turn, but the OpenAI adapter omits it because some OpenAI clients do not echo it back. Set it to `1` to keep `reasoning_content` on the OpenAI manager message too, so a client that echoes it back still history-matches the recorded turn. Enable it only for such echoing clients: with a client that drops `reasoning_content`, the recorded manager message no longer matches the replay, so every turn rewrite-merges (or forks under `SLIME_AGENT_REASONING_FORK_POLICY`) -- strictly worse than leaving it off.
+
 ## Agent Serving And Performance
 
 Agentic rollouts tend to depend more heavily on serving configuration than ordinary single-turn generation: contexts are longer, requests are multi-turn, latency has a heavier tail, and the workflow may need actor, reference, reward, or tool-side models at the same time.

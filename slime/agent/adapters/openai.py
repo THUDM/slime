@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
 import time
 from typing import Any
@@ -33,6 +34,14 @@ from slime.agent.adapters.common import (
 from slime.agent.parsing import ParsedModelOutput
 
 logger = logging.getLogger(__name__)
+
+# default off; when on, manager_message also carries reasoning_content so echoing clients match
+_OPENAI_MANAGER_REASONING_ENV = "SLIME_AGENT_OPENAI_MANAGER_REASONING"
+
+
+def manager_reasoning_enabled() -> bool:
+    """Whether the openai manager_message keeps reasoning_content (default off)."""
+    return os.environ.get(_OPENAI_MANAGER_REASONING_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 class OpenAIAdapter(BaseAdapter):
@@ -257,8 +266,9 @@ def _build_reply_parts(parsed: ParsedModelOutput, finish: str) -> tuple[dict[str
     # manager_message must match what the client echoes on the next request, or
     # the manager's history match (dict equality) diverges and every turn forks.
     # Differences from wire_message, each needed to match the echo:
-    #   * no reasoning_content -- some clients strip it on echo (the reasoning
-    #     token ids are still kept in the trained tokens, only the text drops)
+    #   * no reasoning_content unless SLIME_AGENT_OPENAI_MANAGER_REASONING is on
+    #     -- some clients strip it on echo (the reasoning token ids are still
+    #     kept in the trained tokens, only the text drops)
     #   * only the first tool_call -- some clients drop extra parallel tool_calls
     #   * empty content when tool_calls are present -- mirrors content=null above
     manager_message: dict[str, Any] = {
@@ -267,6 +277,8 @@ def _build_reply_parts(parsed: ParsedModelOutput, finish: str) -> tuple[dict[str
     }
     if parsed.reasoning:
         wire_message["reasoning_content"] = parsed.reasoning
+        if manager_reasoning_enabled():
+            manager_message["reasoning_content"] = parsed.reasoning
     if wire_tool_calls:
         wire_message["tool_calls"] = wire_tool_calls[:1]
         manager_message["tool_calls"] = manager_tool_calls[:1]

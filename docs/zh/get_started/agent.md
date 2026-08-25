@@ -54,6 +54,8 @@ segments = await adapter.finish_session(session_id)
 
 多轮 agent 应使用稳定的 `session_id`。adapter 会把它作为 `X-SMG-Routing-Key` 传给 SGLang，让同一个 session 尽量落到同一个 worker，复用 prefix cache。
 
+**OpenAI manager-message 的 reasoning（`SLIME_AGENT_OPENAI_MANAGER_REASONING`，默认 `off`）。** 近期为增强 agent 的长程任务能力，越来越多大模型公司建议 agent 客户端在后续 prompt 中原样返回 `reasoning_content`。Anthropic adapter 始终会在 manager_message 中带上 `reasoning_content`，而 OpenAI adapter 默认省略（因为部分 OpenAI 客户端不会回传）。置为 `1` 后 OpenAI 也会带上，使回传该字段的客户端仍能 history-match 到已记录的 turn。只对这类回传客户端开启：如果客户端会丢弃 `reasoning_content`，已记录的 manager message 与回传不再匹配，每轮都会 rewrite-merge（或在 `SLIME_AGENT_REASONING_FORK_POLICY` 下 fork）——比不开更糟。
+
 ## Agent Serving 与性能配置
 
 agentic rollout 往往比普通单轮 generation 更依赖 serving 配置：上下文更长、多轮请求更多、请求时长分布更重尾，并且可能同时需要 actor、reference、reward 或工具侧模型。

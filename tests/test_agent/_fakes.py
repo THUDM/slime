@@ -31,6 +31,8 @@ from collections.abc import Awaitable, Callable
 from aiohttp import web
 
 from slime.agent.adapters.common import TurnRecord
+from slime.agent.parsing import ParsedModelOutput
+from slime.utils.types import Sample
 
 # ---------------------------------------------------------------------------
 # Tokenizers
@@ -130,6 +132,29 @@ class ScriptedTokenizer:
 
     def decode(self, ids, skip_special_tokens: bool = False) -> str:
         return self.outputs.get(tuple(ids), "")
+
+
+# ---------------------------------------------------------------------------
+# E2E companions shared by the adapter test files: a think-tag parser for
+# ScriptedTokenizer scripts and a default session drain
+# ---------------------------------------------------------------------------
+
+THINK_OUTPUT = "<" + "think>plan</think" + ">ok"  # split tag built indirectly to keep this source parser-agnostic
+
+
+def think_split(raw_output, *, tools_schema, tool_parser_name, reasoning_parser_name):
+    """``parse_model_output`` fake: split a ``<think>...</think>`` prefix off the raw
+    output; output without the tag is all text, mirroring the real no-parser path."""
+    reasoning, sep, text = raw_output.partition("</" + "think>")
+    if not sep:
+        return ParsedModelOutput(reasoning="", text=raw_output, tool_uses=[])
+    reasoning = reasoning.removeprefix("<" + "think>")
+    return ParsedModelOutput(reasoning=reasoning, text=text, tool_uses=[])
+
+
+async def drain_session(adapter, sid) -> list[Sample]:
+    """``finish_session`` with the default base_sample/reward shared by adapter tests."""
+    return await adapter.finish_session(sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
 
 
 # ---------------------------------------------------------------------------
