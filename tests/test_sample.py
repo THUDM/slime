@@ -21,7 +21,7 @@ import argparse
 
 import pytest
 
-from slime.rollout._fanout_test_helpers import grpo_normalize_by_group_index
+from tests.fanout_test_helpers import grpo_normalize_by_group_index
 from slime.utils.types import Sample
 
 NUM_GPUS = 0
