@@ -74,7 +74,6 @@ megatron:
 ```bash
 python train.py \
   --advantage-estimator ppo \
-  --use-critic \
   --megatron-config-path megatron_ppo.yaml \
   --tensor-model-parallel-size 2 \
   --sequence-parallel \
@@ -89,6 +88,7 @@ python train.py \
 
 In this setup:
 
+- `--advantage-estimator ppo` enables the critic automatically; there is no separate `--use-critic` CLI flag.
 - CLI defines the shared topology and resource layout; in current PPO, critic training resources follow the actor configuration.
 - YAML defines the role-specific differences, such as `lr`, `load`, `save`, or optimizer / scheduler parameters.
 

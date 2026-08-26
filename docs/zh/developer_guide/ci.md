@@ -77,7 +77,7 @@ Agent adapter tests 单独放在一个 CPU job 中，因为它们需要额外 SD
 常用本地命令：
 
 ```bash
-python tests/test_agent_trajectory.py
+python tests/test_agent/test_trajectory_manager_branching.py
 python -m pytest tests/test_megatron_argument_validation.py tests/plugin_contracts/test_plugin_generate_contracts.py
 ```
 

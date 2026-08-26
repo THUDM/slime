@@ -4,9 +4,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, os.path.abspath("../.."))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-__version__ = "0.0.1"
+__version__ = "0.3.1"
 
 project = "slime"
 copyright = f"2025-{datetime.now().year}, slime"
@@ -184,7 +184,7 @@ def _sync_examples(app):
             if not candidate.exists():
                 continue  # skip entirely if nothing suitable
             target_dir = out_dir / d.name
-            target_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(d, target_dir, ignore=shutil.ignore_patterns("README.md", "README_zh.md"))
             shutil.copy2(candidate, target_dir / "README.md")
             entries.append((d.name, f"_examples_synced/{d.name}/README.md"))
 
