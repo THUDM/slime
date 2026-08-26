@@ -707,6 +707,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_docs_consistency.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_process_rollout_data.py"
             },
             {

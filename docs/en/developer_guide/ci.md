@@ -77,7 +77,7 @@ Agent adapter tests are kept in a separate CPU job because they need extra SDK d
 Useful local commands:
 
 ```bash
-python tests/test_agent_trajectory.py
+python tests/test_agent/test_trajectory_manager_branching.py
 python -m pytest tests/test_megatron_argument_validation.py tests/plugin_contracts/test_plugin_generate_contracts.py
 ```
 
