@@ -83,7 +83,7 @@ class UpdateWeightFromDistributed:
         if self._is_pp_src_rank:
             if self._model_update_groups is not None:
                 disconnect_rollout_engines_from_distributed(
-                    self.args, self._group_name, self._model_update_groups, self.rollout_engines
+                    self._group_name, self._model_update_groups, self.rollout_engines
                 )
             self._model_update_groups = connect_rollout_engines_from_distributed(
                 self.args,
@@ -95,9 +95,7 @@ class UpdateWeightFromDistributed:
     def disconnect_rollout_engines(self) -> None:
         if not getattr(self, "_is_pp_src_rank", False) or self._model_update_groups is None:
             return
-        disconnect_rollout_engines_from_distributed(
-            self.args, self._group_name, self._model_update_groups, self.rollout_engines
-        )
+        disconnect_rollout_engines_from_distributed(self._group_name, self._model_update_groups, self.rollout_engines)
         self._model_update_groups = None
 
     @torch.no_grad()
@@ -316,7 +314,7 @@ def connect_rollout_engines_from_distributed(
     return model_update_groups
 
 
-def disconnect_rollout_engines_from_distributed(args, group_name, model_update_groups, rollout_engines):
+def disconnect_rollout_engines_from_distributed(group_name, model_update_groups, rollout_engines):
     """
     Destroy the weight-update process group on training and engines.
     """

@@ -18,7 +18,7 @@ from slime.utils.types import ParamInfo
 from ..megatron_to_hf import convert_to_hf
 from ..sglang import FlattenedTensorBucket, MultiprocessingSerializer
 from .expert_routing import configure_expert_routing
-from .hf_weight_iterator_base import HfWeightIteratorBase
+from .hf_weight_iterator_direct import HfWeightIteratorDirect
 from .update_weight_from_distributed import (
     connect_rollout_engines_from_distributed,
     disconnect_rollout_engines_from_distributed,
@@ -78,7 +78,7 @@ class UpdateWeightFromTensor:
         self.weight_version = 0
         self.update_weight_metrics: dict[str, float] = {}
 
-        self._hf_weight_iterator = HfWeightIteratorBase.create(
+        self._hf_weight_iterator = HfWeightIteratorDirect(
             args=args, model=model, model_name=model_name, quantization_config=quantization_config
         )
         param_info_buckets = getattr(self._hf_weight_iterator, "megatron_local_param_info_buckets", None)
@@ -140,7 +140,7 @@ class UpdateWeightFromTensor:
             if self._is_distributed_src_rank:
                 if self._model_update_groups is not None:
                     disconnect_rollout_engines_from_distributed(
-                        self.args, self._group_name, self._model_update_groups, self.distributed_rollout_engines
+                        self._group_name, self._model_update_groups, self.distributed_rollout_engines
                     )
 
                 self._model_update_groups = connect_rollout_engines_from_distributed(

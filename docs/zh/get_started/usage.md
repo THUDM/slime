@@ -35,9 +35,8 @@
 
 ### 选择训练后端
 
-slime 支持多种训练后端，可以通过 `--train-backend` 参数进行选择：
-
-- `megatron`（默认）：使用 Megatron-LM 作为训练后端，支持大规模模型的高效训练。
+slime 当前使用 Megatron-LM 作为训练后端。为了兼容已有脚本，仍然可以显式传入
+`--train-backend megatron`。
 
 ### 加载 megatron
 
@@ -157,7 +156,7 @@ sglang 的加载非常简单，只需要：
 
 ### 数据格式
 
-目前 slime 只支持加载 `.jsonl` 格式文件，即文件的每一行都是一个 json，一行数据的样例（展开后）为：
+slime 支持加载 `.jsonl` 和 `.parquet` 格式文件；读取 Parquet 需要安装 `pyarrow`。两种格式中的每条记录都应包含 `--input-key` 和 `--label-key` 指定的字段。下面是一条 JSONL 数据展开后的示例：
 
 ```json
 {

@@ -48,9 +48,9 @@ def compute_metrics_from_samples(args, samples):
     log_dict |= dict_add_prefix(compute_statistics(response_lengths), "response_len/")
     log_dict |= _compute_zero_std_metrics(args, samples)
     log_dict |= _compute_spec_metrics(args, samples)
-    log_dict |= _compute_prefix_cache_metrics(args, samples)
+    log_dict |= _compute_prefix_cache_metrics(samples)
     log_dict |= _compute_reward_cat_metrics(args, samples)
-    log_dict |= _compute_top_p_kept_vocab_metrics(args, samples)
+    log_dict |= _compute_top_p_kept_vocab_metrics(samples)
     log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
     log_dict["truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()
     return log_dict
@@ -159,7 +159,7 @@ def _compute_zero_std_metrics(args, all_samples: list[Sample]):
     return {f"zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
 
 
-def _compute_top_p_kept_vocab_metrics(args, all_samples: list[Sample]):
+def _compute_top_p_kept_vocab_metrics(all_samples: list[Sample]):
     total_kept = 0
     total_tokens = 0
     for sample in all_samples:
@@ -199,7 +199,7 @@ def _compute_spec_metrics(args, all_samples: list[Sample]):
     return metrics
 
 
-def _compute_prefix_cache_metrics(args, all_samples: list[Sample]):
+def _compute_prefix_cache_metrics(all_samples: list[Sample]):
     num_samples = len(all_samples)
     metrics = {}
     total_cached_tokens = sum(sample.prefix_cache_info.cached_tokens for sample in all_samples)

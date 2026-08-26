@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+NUM_GPUS = 0
+
 
 TOKEN_DELTA_PATH = Path(__file__).parents[1] / "examples" / "tau-bench" / "token_delta.py"
 
@@ -205,3 +207,7 @@ def test_later_assistant_allows_bpe_merge_across_generation_prefix_boundary():
     generation_prefix_length = len(tokenizer.encode("<assistant>", add_special_tokens=False))
     assert token_ids == expected_ids
     assert loss_mask == [0] * generation_prefix_length + [1] * (len(expected_ids) - generation_prefix_length)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

@@ -1,7 +1,6 @@
 """CI smoke test for the fully-async rollout path.
 
-Mirrors ``test_qwen2.5_0.5B_async_short`` (Qwen2.5-0.5B + dapo-math-17k +
-3 rollouts of GRPO) but flips the rollout function over to
+Uses Qwen2.5-0.5B with dapo-math-17k and GRPO, selecting
 ``slime.rollout.fully_async_rollout.generate_rollout_fully_async`` so the
 fully-async worker path gets exercised end-to-end.
 
@@ -28,8 +27,7 @@ def execute():
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
 
     rollout_args = (
-        # The only line that differs from test_qwen2.5_0.5B_async_short.py:
-        # use the public fully-async rollout function.
+        # Select the public fully-async rollout function.
         "--rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async "
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
         "--input-key prompt "

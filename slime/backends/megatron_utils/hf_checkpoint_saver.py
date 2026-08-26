@@ -30,26 +30,6 @@ def save_hf_model_to_path(
     quantization_config: dict[str, Any] | None = None,
     progress_desc: str = "Save HF checkpoint",
 ) -> None:
-    """Save a Megatron model as an HF checkpoint at a concrete directory."""
-    save_hf_model_direct_to_path(
-        args,
-        output_dir,
-        model,
-        model_name=model_name,
-        quantization_config=quantization_config,
-        progress_desc=progress_desc,
-    )
-
-
-def save_hf_model_direct_to_path(
-    args,
-    output_dir: str | Path,
-    model,
-    *,
-    model_name: str | None = None,
-    quantization_config: dict[str, Any] | None = None,
-    progress_desc: str = "Save HF checkpoint",
-) -> None:
     """Save a Megatron model as an HF safetensors checkpoint."""
     path = Path(output_dir)
     hf_checkpoint = Path(args.hf_checkpoint).resolve()
@@ -110,7 +90,7 @@ def save_hf_model_direct_to_path(
         quantization_config=quantization_config,
         transform_ue8m0=False,
     )
-    megatron_local_weights = dict(named_params_and_buffers(args, model, convert_to_global_name=True))
+    megatron_local_weights = dict(named_params_and_buffers(args, model))
     num_save_nodes, save_node_rank, is_writer_rank, writer_ranks = _get_node_save_layout(args)
     if is_save_rank:
         logger.info(

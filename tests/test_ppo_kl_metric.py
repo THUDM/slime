@@ -2,6 +2,7 @@ import sys
 import types
 from argparse import Namespace
 
+import pytest
 import torch
 
 from slime.utils.ppo_utils import compute_approx_kl
@@ -61,3 +62,7 @@ def test_ppo_estimator_does_not_corrupt_logged_kl(monkeypatch):
             sys.modules.pop("slime.backends.megatron_utils.cp_utils", None)
         else:
             sys.modules["slime.backends.megatron_utils.cp_utils"] = previous_cp_utils
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

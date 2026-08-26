@@ -17,7 +17,7 @@ slime 的设计目标，是让这两大能力彼此强化，同时避免把系�
 
 ## 为什么这个设计重要
 
-- **经过 frontier model 训练验证**：slime 是 [GLM-5.2](https://z.ai/blog/glm-5.2)、[GLM-5.1](https://z.ai/blog/glm-5.1)、[GLM-5](https://z.ai/blog/glm-5)、[GLM-4.7](https://z.ai/blog/glm-4.7)、[GLM-4.6](https://z.ai/blog/glm-4.6)、[GLM-4.5](https://z.ai/blog/glm-4.5) 背后的 RL 训练框架。这验证的是完整 post-training loop，而不是孤立 example。
+- **经过 frontier model 训练验证**：slime 是 [GLM-5.3](https://z.ai/blog/glm-5.3)、[GLM-5.2](https://z.ai/blog/glm-5.2)、[GLM-5.1](https://z.ai/blog/glm-5.1)、[GLM-5](https://z.ai/blog/glm-5)、[GLM-4.7](https://z.ai/blog/glm-4.7)、[GLM-4.6](https://z.ai/blog/glm-4.6)、[GLM-4.5](https://z.ai/blog/glm-4.5) 背后的 RL 训练框架。这验证的是完整 post-training loop，而不是孤立 example。
 - **以正确性为先的基础设施**：RL bug 往往不会立刻报错。slime 保持显式的数据流，支持 rollout-only 和 train-only 分离调试，并把可复现性、容错、trace、profiling 和 CI 作为一等工程问题来维护。
 - **从设计开始就是 native**：slime 直接透传 Megatron 参数，并通过 `--sglang-` 前缀暴露当前安装版本 SGLang 支持的参数。新的上游训练和 serving 优化可以直接使用，不需要在 slime 里再加一层抽象。
 - **最大化的数据生成自由度**：math、code、search、tool、sandbox、verifier、environment、multi-agent system 以及 long-horizon agentic workflow 都可以作为 data generation 或 reward workflow 接入，而不需要 fork training kernel。
@@ -104,7 +104,7 @@ slime 被当作 RL 基础设施来开发，因为“脚本能跑起来”远远�
 
 下面这些 example 通过 customization 接口接入标准的 rollout / Data Buffer 闭环，而不是独立的 framework：
 
-- [`examples/multi_agent`](examples/multi_agent/README.md)：通过自定义 `--rollout-function-path` 实现多 agent 的 rollout。
+- [`examples/multi_agent`](examples/multi_agent/README.md)：在标准 rollout loop 内通过 `--custom-generate-function-path` 实现多 agent 生成。
 - [`examples/search-r1`](examples/search-r1/)：通过 `--custom-generate-function-path` 实现 search/RAG 风格的多轮生成。
 - [`examples/fully_async`](examples/fully_async/README.md)：fully-async rollout，适合不同样本生成耗时差异较大的 long-tail agentic 场景。
 - [`examples/coding_agent_rl`](examples/coding_agent_rl/README.md)：端到端 SWE coding-agent RL，包含 sandboxed tool use、test-based reward，以及通过 `--custom-generate-function-path` 导出的 token-correct trajectory segments。
@@ -170,6 +170,23 @@ slime 被当作 RL 基础设施来开发，因为“脚本能跑起来”远远�
 3. **slime 自身的参数**：请见：[slime/utils/arguments.py](slime/utils/arguments.py)
 
 完整使用说明请查阅 [使用文档](docs/zh/get_started/usage.md)。
+
+## 代码阅读路线
+
+建议从训练主循环出发，再按需求逐层追踪：
+
+```text
+train.py: train
+├─ slime/ray/placement_group.py       Ray 资源和 worker 初始化
+├─ slime/ray/rollout.py              RolloutManager.generate：rollout 编排
+│  └─ slime/rollout/sglang_rollout.py  Sample 生成和 reward 计算
+└─ slime/ray/actor_group.py          RayTrainGroup.async_train：调度训练
+   └─ slime/backends/megatron_utils/actor.py
+      ├─ model.py                    Megatron 模型执行
+      └─ loss.py                     RL loss 和 advantage 计算
+```
+
+首次阅读时，可以先把 `slime/utils/arguments.py` 当作配置入口。`slime/backends/sglang_utils/` 里的部署细节，以及 `slime/backends/megatron_utils/update_weight/` 里的权重同步实现，也可以等需要修改对应功能时再读。
 
 ## 开发指南
 

@@ -32,9 +32,8 @@ Additionally, slime supports Prefill and Decode disaggregation (PD Disaggregatio
 
 ### Choosing Training Backend
 
-slime supports multiple training backends, which can be selected via the `--train-backend` parameter:
-
-- `megatron` (default): Uses Megatron-LM as the training backend, supporting efficient training of large-scale models.
+slime currently uses Megatron-LM as its training backend. The compatibility option
+`--train-backend megatron` may still be supplied explicitly.
 
 ### Loading Megatron
 
@@ -153,7 +152,7 @@ For details on some of SGLang's customizations and the principles behind how sli
 
 ### Data Format
 
-Currently, slime only supports loading files in `.jsonl` format, where each line of the file is a JSON object. An example of a single data entry (expanded) is as follows:
+slime supports `.jsonl` and `.parquet` files; reading Parquet requires `pyarrow`. Each record in either format should contain the fields selected by `--input-key` and `--label-key`. An expanded JSONL record looks like this:
 
 ```json
 {

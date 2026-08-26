@@ -1005,7 +1005,6 @@ def initialize_model_and_optimizer(
         optimizer,
         opt_param_scheduler,
         checkpointing_context={},
-        skip_load_to_model_and_opt=False,
     )
     if reinit_critic_output_layer:
         _reinitialize_critic_output_layer(args, model)
