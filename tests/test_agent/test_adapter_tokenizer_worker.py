@@ -190,7 +190,12 @@ def test_cancel_during_admission_handoff_returns_the_permit():
         second = asyncio.create_task(worker.render(lambda: [2]))
         await _wait_until(lambda: len(worker._acquire_tasks) == 1)
         acquire_task = next(iter(worker._acquire_tasks))
-        acquire_task.add_done_callback(lambda _done: second.cancel())
+
+        def cancel_twice(_done) -> None:
+            second.cancel()
+            asyncio.get_running_loop().call_soon(second.cancel)
+
+        acquire_task.add_done_callback(cancel_twice)
 
         release.set()
         assert await first == [1]
@@ -207,6 +212,41 @@ def test_cancel_during_admission_handoff_returns_the_permit():
     metrics = asyncio.run(run_case())
     assert metrics["worker"]["outstanding"] == 0
     assert metrics["worker"]["admission_waiters"] == 0
+
+
+def test_client_cancellation_stays_cancelled_after_worker_is_marked_closed():
+    async def run_case():
+        worker = TokenizerWorker(max_pending=1)
+        release = threading.Event()
+        started = threading.Event()
+
+        def blocking_render() -> list[int]:
+            started.set()
+            if not release.wait(timeout=5):
+                raise TimeoutError("test render was not released")
+            return [1]
+
+        first = asyncio.create_task(worker.render(blocking_render))
+        await _wait_until(started.is_set)
+        second = asyncio.create_task(worker.render(lambda: [2]))
+        await _wait_until(lambda: len(worker._acquire_tasks) == 1)
+
+        # Python 3.10 has no Task.cancelling(). Cancellation ownership is
+        # determined by the worker's explicit close marker, not its closed flag.
+        worker._closed = True
+        second.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await second
+
+        release.set()
+        assert await first == [1]
+        await worker.close()
+        return worker.snapshot()
+
+    metrics = asyncio.run(run_case())
+    assert metrics["worker"]["outstanding"] == 0
+    assert metrics["worker"]["admission_waiters"] == 0
+    assert metrics["counters"]["render_cancelled_total"] == 1
 
 
 def test_close_is_cancellation_safe_and_drains_admission_waiters():

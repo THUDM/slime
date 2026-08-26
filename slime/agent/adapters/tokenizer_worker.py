@@ -62,6 +62,7 @@ class TokenizerWorker:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._slots: asyncio.BoundedSemaphore | None = None
         self._acquire_tasks: set[asyncio.Task] = set()
+        self._close_cancelled_acquires: set[asyncio.Task] = set()
         self._futures: set[Future] = set()
         self._closed = False
         self._close_task: asyncio.Task | None = None
@@ -114,18 +115,26 @@ class TokenizerWorker:
         acquire_task = asyncio.create_task(self._slots.acquire())
         self._acquire_tasks.add(acquire_task)
         try:
-            await acquire_task
+            await asyncio.shield(acquire_task)
         except asyncio.CancelledError:
+            close_cancelled = acquire_task in self._close_cancelled_acquires
+            if not acquire_task.done():
+                acquire_task.cancel()
+            while not acquire_task.done():
+                try:
+                    await asyncio.shield(acquire_task)
+                except asyncio.CancelledError:
+                    pass
             if acquire_task.done() and not acquire_task.cancelled() and acquire_task.exception() is None:
                 self._slots.release()
-            current_task = asyncio.current_task()
-            if self._closed and current_task is not None and not current_task.cancelling():
+            if close_cancelled:
                 self._request_rejected_after_close()
                 raise RuntimeError("tokenizer worker is closed") from None
             self._request_cancelled_before_submit()
             raise
         finally:
             self._acquire_tasks.discard(acquire_task)
+            self._close_cancelled_acquires.discard(acquire_task)
 
         if self._closed:
             self._slots.release()
@@ -216,6 +225,7 @@ class TokenizerWorker:
         while self._acquire_tasks:
             acquire_tasks = list(self._acquire_tasks)
             for task in acquire_tasks:
+                self._close_cancelled_acquires.add(task)
                 task.cancel()
             await asyncio.gather(*acquire_tasks, return_exceptions=True)
             await asyncio.sleep(0)
