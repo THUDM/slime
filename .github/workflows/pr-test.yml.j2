@@ -72,6 +72,7 @@
       'extra_pip_deps': 'transformers wandb',
       'tests': [
         {'test_file': 'test_megatron_argument_validation.py', 'num_gpus': 0},
+        {'test_file': 'test_weight_update_group_ordering.py', 'num_gpus': 0},
         {'test_file': 'utils/test_megatron_role_config.py', 'num_gpus': 0},
         {'test_file': 'test_deep_ep_tms_patch.py', 'num_gpus': 0},
         {'test_file': 'test_stateless_adam.py', 'num_gpus': 0},

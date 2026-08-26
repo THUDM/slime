@@ -7,6 +7,9 @@ import pytest
 from slime.backends.megatron_utils.update_weight import update_weight_from_distributed as update_module
 
 
+NUM_GPUS = 0
+
+
 class _OppositeArrivalScheduler:
     """Model two serial engine actors choosing opposite first requests."""
 
@@ -248,3 +251,7 @@ def test_failed_reconnect_does_not_retain_destroyed_group(monkeypatch):
 
     assert disconnected == [("slime-pp_0", old_group, ("engine-0",))]
     assert updater._model_update_groups is None
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))
