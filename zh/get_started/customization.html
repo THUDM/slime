@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=30c3115b"></script>
+    <script src="../_static/documentation_options.js?v=eedc492e"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -58,8 +58,8 @@
     <link rel="prev" title="使用文档" href="usage.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-  <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 24 日"/>
+  <meta name="docsearch:version" content="0.3.1" />
+    <meta name="docbuild:last-update" content="2026 年 08 月 26 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -494,30 +494,30 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">自定义接口概览</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#customization-agentic-workflow">通过 customization 接口实现 agentic workflow</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">详细接口参考</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-function-path">1. Rollout 函数 (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-path">2. 自定义生成函数 (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-function-path"><code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-path"><code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#prompt">一个 prompt 产生多个训练样本</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rm-path">3. 奖励模型 (<code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling-filter-path">4. 动态采样过滤器 (<code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#buffer-buffer-filter-path">5. Buffer 过滤器 (<code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-sample-filter-path">6. Rollout 样本过滤器 (<code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-all-samples-process-path">7. Rollout 全样本处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-data-postprocess-path">8. Rollout 数据后处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-loss-function-path">9. 自定义损失函数 (<code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tis-rs-custom-tis-function-path">10. 自定义 TIS/RS 函数 (<code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pg-loss-reducer-custom-pg-loss-reducer-function-path">11. 自定义 pg_loss Reducer (<code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-reward-post-process-path">12. 奖励后处理 (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-convert-samples-to-train-data-path">13. 样本转训练数据 (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">14. 日志函数</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rm-path"><code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling-filter-path"><code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#buffer-filter-path"><code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-sample-filter-path"><code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-all-samples-process-path"><code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-data-postprocess-path"><code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-loss-function-path"><code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-tis-function-path"><code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-pg-loss-reducer-function-path"><code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-reward-post-process-path"><code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-convert-samples-to-train-data-path"><code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logging-functions">Logging functions</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-custom-rollout-log-function-path">训练 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-custom-eval-rollout-log-function-path">评估 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-eval-rollout-log-function-path</span></code>)</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-path">15. 数据源 (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eval-function-path">16. 评估函数 (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hook">17. Megatron Hook</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-path"><code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eval-function-path"><code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hooks">Megatron hooks</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-custom-megatron-init-path">Megatron 初始化 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#log-prob-hook-custom-megatron-before-log-prob-hook-path">Log Prob 前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#hook-custom-megatron-before-train-step-hook-path">训练步骤前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)</a></li>
@@ -527,7 +527,7 @@
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#disk-post-write-hook-custom-update-weight-post-write-path">19. Disk 权重同步 Post-Write Hook（<code class="docutils literal notranslate"><span class="pre">--custom-update-weight-post-write-path</span></code>）</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">自定义函数路径的测试</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">自定义函数路径的测试</a></li>
 </ul>
             </nav>
         </div>
@@ -552,64 +552,64 @@
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td class="text-left"><p>--rollout-function-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#rollout-function-path"><span class="std std-ref">--rollout-function-path</span></a></p></td>
 <td class="text-left"><p>覆盖整个 rollout 生成逻辑。</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>--custom-generate-function-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#custom-generate-function-path"><span class="std std-ref">--custom-generate-function-path</span></a></p></td>
 <td class="text-left"><p>仅覆盖生成步骤（例如用于 RAG 或工具调用）。</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>--custom-rm-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#custom-rm-path"><span class="std std-ref">--custom-rm-path</span></a></p></td>
 <td class="text-left"><p>实现自定义奖励计算逻辑。</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>--dynamic-sampling-filter-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#dynamic-sampling-filter-path"><span class="std std-ref">--dynamic-sampling-filter-path</span></a></p></td>
 <td class="text-left"><p>在动态采样过程中过滤样本（例如 DAPO）。</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>--buffer-filter-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#buffer-filter-path"><span class="std std-ref">--buffer-filter-path</span></a></p></td>
 <td class="text-left"><p>在训练前过滤 rollout buffer 中的样本。</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>--rollout-sample-filter-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#rollout-sample-filter-path"><span class="std std-ref">--rollout-sample-filter-path</span></a></p></td>
 <td class="text-left"><p>决定单个样本是否参与损失计算。</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>--rollout-all-samples-process-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#rollout-all-samples-process-path"><span class="std std-ref">--rollout-all-samples-process-path</span></a></p></td>
 <td class="text-left"><p>在 rollout 后处理所有样本（包括被过滤的样本）。</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>--rollout-data-postprocess-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#rollout-data-postprocess-path"><span class="std std-ref">--rollout-data-postprocess-path</span></a></p></td>
 <td class="text-left"><p>在计算 log probabilities 后对 rollout 数据进行后处理。</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>--custom-loss-function-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#custom-loss-function-path"><span class="std std-ref">--custom-loss-function-path</span></a></p></td>
 <td class="text-left"><p>实现自定义训练损失计算。</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>--custom-tis-function-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#custom-tis-function-path"><span class="std std-ref">--custom-tis-function-path</span></a></p></td>
 <td class="text-left"><p>实现用于离策略（off-policy）校正的自定义重要性采样。</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>--custom-pg-loss-reducer-function-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#custom-pg-loss-reducer-function-path"><span class="std std-ref">--custom-pg-loss-reducer-function-path</span></a></p></td>
 <td class="text-left"><p>自定义 pg_loss 的归约方式（如 Dr.GRPO）。</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>--custom-reward-post-process-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#custom-reward-post-process-path"><span class="std std-ref">--custom-reward-post-process-path</span></a></p></td>
 <td class="text-left"><p>在优势计算前对奖励进行自定义后处理。</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>--custom-convert-samples-to-train-data-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#custom-convert-samples-to-train-data-path"><span class="std std-ref">--custom-convert-samples-to-train-data-path</span></a></p></td>
 <td class="text-left"><p>覆盖样本到训练数据格式的转换逻辑。</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>--custom-rollout-log-function-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#logging-functions"><span class="std std-ref">--custom-rollout-log-function-path</span></a></p></td>
 <td class="text-left"><p>训练 rollout 的自定义日志记录。</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>--custom-eval-rollout-log-function-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#logging-functions"><span class="std std-ref">--custom-eval-rollout-log-function-path</span></a></p></td>
 <td class="text-left"><p>评估 rollout 的自定义日志记录。</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>--data-source-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#data-source-path"><span class="std std-ref">--data-source-path</span></a></p></td>
 <td class="text-left"><p>覆盖 rollout 提示词的数据源。</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>--eval-function-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#eval-function-path"><span class="std std-ref">--eval-function-path</span></a></p></td>
 <td class="text-left"><p>专门为评估覆盖 rollout 函数。</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>--custom-megatron-init-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#megatron-hooks"><span class="std std-ref">--custom-megatron-init-path</span></a></p></td>
 <td class="text-left"><p>Megatron 设置后的自定义初始化。</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>--custom-megatron-before-log-prob-hook-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#megatron-hooks"><span class="std std-ref">--custom-megatron-before-log-prob-hook-path</span></a></p></td>
 <td class="text-left"><p>log probability 计算前的自定义逻辑。</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>--custom-megatron-before-train-step-hook-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#megatron-hooks"><span class="std std-ref">--custom-megatron-before-train-step-hook-path</span></a></p></td>
 <td class="text-left"><p>每个训练步骤前的自定义逻辑。</p></td>
 </tr>
 </tbody>
@@ -628,19 +628,19 @@
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-left"><p>让每条 sample 跑自定义的 agent loop、tool call、RAG、sandbox 执行、browser/terminal 交互或多轮生成，同时复用 slime 默认 rollout loop</p></td>
-<td class="text-left"><p>--custom-generate-function-path</p></td>
+<td class="text-left"><p><a class="reference internal" href="#custom-generate-function-path"><span class="std std-ref">--custom-generate-function-path</span></a></p></td>
 </tr>
 <tr class="row-odd"><td class="text-left"><p>实现 verifier reward、test-based reward、environment 成功判定、rule-based reward 或调用外部 reward 服务</p></td>
-<td class="text-left"><p>--custom-rm-path</p></td>
+<td class="text-left"><p><a class="reference internal" href="#custom-rm-path"><span class="std std-ref">--custom-rm-path</span></a></p></td>
 </tr>
 <tr class="row-even"><td class="text-left"><p>替换整个 rollout 编排（只在 per-sample 自定义不够用时使用）</p></td>
-<td class="text-left"><p>--rollout-function-path</p></td>
+<td class="text-left"><p><a class="reference internal" href="#rollout-function-path"><span class="std std-ref">--rollout-function-path</span></a></p></td>
 </tr>
 <tr class="row-odd"><td class="text-left"><p>控制任务采样、缓冲、回填，或自定义 prompt / task 数据源</p></td>
-<td class="text-left"><p>--data-source-path</p></td>
+<td class="text-left"><p><a class="reference internal" href="#data-source-path"><span class="std std-ref">--data-source-path</span></a></p></td>
 </tr>
 <tr class="row-even"><td class="text-left"><p>给 agentic 输出附加自定义 loss mask、metadata，或转换成训练数据</p></td>
-<td class="text-left"><p>--rollout-data-postprocess-path、--custom-convert-samples-to-train-data-path</p></td>
+<td class="text-left"><p><a class="reference internal" href="#rollout-data-postprocess-path"><span class="std std-ref">--rollout-data-postprocess-path</span></a>、<a class="reference internal" href="#custom-convert-samples-to-train-data-path"><span class="std std-ref">--custom-convert-samples-to-train-data-path</span></a></p></td>
 </tr>
 <tr class="row-odd"><td class="text-left"><p>调试长耗时的 custom generation、verifier、tool call 或 sandbox 调用</p></td>
 <td class="text-left"><p><a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">slime.observability.trace_utils</span></code></span></a> 中的 trace 工具</p></td>
@@ -648,12 +648,12 @@
 </tbody>
 </table>
 </div>
-<p>这一模式的原生示例是 <a class="reference internal" href="#../../../examples/search-r1/"><span class="xref myst"><code class="docutils literal notranslate"><span class="pre">examples/search-r1</span></code></span></a>：通过 <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code> 接入搜索增强的多轮生成，外层仍然走 slime 默认的 <code class="docutils literal notranslate"><span class="pre">sglang_rollout</span></code>。互补的示例可参考 <span class="xref myst"><code class="docutils literal notranslate"><span class="pre">examples/multi_agent</span></code></span> 中基于 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> 的多 agent 模式，以及 <span class="xref myst"><code class="docutils literal notranslate"><span class="pre">examples/fully_async</span></code></span> 中适合 long-tail agentic 场景的 fully-async rollout。</p>
+<p>这一模式的原生示例是 <a class="reference internal" href="../_examples_synced/search-r1/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/search-r1</span></code></span></a>：通过 <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code> 接入搜索增强的多轮生成，外层仍然走 slime 默认的 <code class="docutils literal notranslate"><span class="pre">sglang_rollout</span></code>。<a class="reference internal" href="../_examples_synced/multi_agent/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/multi_agent</span></code></span></a> 也使用同一接口实现 per-sample 多 agent 生成；如果需要替换整个 rollout 编排，可参考 <a class="reference internal" href="../_examples_synced/fully_async/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/fully_async</span></code></span></a>。</p>
 </section>
 <section id="id3">
 <h2>详细接口参考<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
-<section id="rollout-rollout-function-path">
-<h3>1. Rollout 函数 (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)<a class="headerlink" href="#rollout-rollout-function-path" title="链接到此标题。">#</a></h3>
+<section id="rollout-function-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code><a class="headerlink" href="#rollout-function-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.sglang_rollout.generate_rollout</span></code></p>
 <p><strong>用途</strong>: 覆盖整个 rollout 生成逻辑。</p>
 <p><strong>函数签名</strong>:</p>
@@ -666,11 +666,11 @@
 <li><p>添加自定义采样策略</p></li>
 <li><p>在生成过程中集成外部工具或 API</p></li>
 </ul>
-<p><strong>示例</strong>: 参见 <a class="reference download internal" download="" href="../_downloads/fcb74b88a8b414d1a6f967a6f94cdf7b/rollout_with_multi_agents.py"><span class="xref download myst">examples/multi_agent/rollout_with_multi_agents.py</span></a></p>
+<p><strong>示例</strong>: 参见 <a class="reference internal" href="../_examples_synced/fully_async/README.html"><span class="std std-doc">examples/fully_async</span></a></p>
 </section>
 <hr class="docutils" />
 <section id="custom-generate-function-path">
-<h3>2. 自定义生成函数 (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)<a class="headerlink" href="#custom-generate-function-path" title="链接到此标题。">#</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code><a class="headerlink" href="#custom-generate-function-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（使用内置生成函数）</p>
 <p><strong>用途</strong>: 仅覆盖默认 rollout 函数中的生成步骤。</p>
 <p><strong>函数签名</strong>:</p>
@@ -711,12 +711,12 @@
 </pre></div>
 </div>
 <p>如果一个完整 trajectory 只有一个总奖励、但被拆成了 <code class="docutils literal notranslate"><span class="pre">K</span></code> 个训练片段，常见做法是在这些片段之间分配这个奖励（例如每个片段写入 <code class="docutils literal notranslate"><span class="pre">reward</span> <span class="pre">/</span> <span class="pre">K</span></code>），避免把同一次 rollout 的奖励重复放大。</p>
-<p><strong>示例</strong>: 参见 <a class="reference download internal" download="" href="../_downloads/bee5a872ccae7eb6b44c1ed0e0f6eb4a/generate_with_search.py"><span class="xref download myst">examples/search-r1/generate_with_search.py</span></a></p>
+<p><strong>示例</strong>: 参见 <a class="reference download internal" download="" href="../_downloads/bee5a872ccae7eb6b44c1ed0e0f6eb4a/generate_with_search.py"><span class="xref download myst">examples/search-r1/generate_with_search.py</span></a> 和 <a class="reference download internal" download="" href="../_downloads/fcb74b88a8b414d1a6f967a6f94cdf7b/rollout_with_multi_agents.py"><span class="xref download myst">examples/multi_agent/rollout_with_multi_agents.py</span></a></p>
 </section>
 </section>
 <hr class="docutils" />
 <section id="custom-rm-path">
-<h3>3. 奖励模型 (<code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>)<a class="headerlink" href="#custom-rm-path" title="链接到此标题。">#</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code><a class="headerlink" href="#custom-rm-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（基于 <code class="docutils literal notranslate"><span class="pre">--rm-type</span></code> 使用内置奖励模型）</p>
 <p><strong>用途</strong>: 实现自定义奖励计算逻辑。</p>
 <p><strong>函数签名</strong>（单样本模式）:</p>
@@ -746,7 +746,7 @@
 </section>
 <hr class="docutils" />
 <section id="dynamic-sampling-filter-path">
-<h3>4. 动态采样过滤器 (<code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>)<a class="headerlink" href="#dynamic-sampling-filter-path" title="链接到此标题。">#</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code><a class="headerlink" href="#dynamic-sampling-filter-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>用途</strong>: 在动态采样过程中过滤样本（例如 DAPO 风格的过滤）。</p>
 <p><strong>函数签名</strong>:</p>
@@ -769,8 +769,8 @@
 <p><strong>示例</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std</span></code></p>
 </section>
 <hr class="docutils" />
-<section id="buffer-buffer-filter-path">
-<h3>5. Buffer 过滤器 (<code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>)<a class="headerlink" href="#buffer-buffer-filter-path" title="链接到此标题。">#</a></h3>
+<section id="buffer-filter-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code><a class="headerlink" href="#buffer-filter-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>用途</strong>: 在训练前过滤 rollout buffer 中的样本。</p>
 <p><strong>函数签名</strong>:</p>
@@ -785,8 +785,8 @@
 </ul>
 </section>
 <hr class="docutils" />
-<section id="rollout-rollout-sample-filter-path">
-<h3>6. Rollout 样本过滤器 (<code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code>)<a class="headerlink" href="#rollout-rollout-sample-filter-path" title="链接到此标题。">#</a></h3>
+<section id="rollout-sample-filter-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code><a class="headerlink" href="#rollout-sample-filter-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>用途</strong>: 决定单个样本是否参与损失计算。</p>
 <p><strong>函数签名</strong>:</p>
@@ -801,8 +801,8 @@
 </ul>
 </section>
 <hr class="docutils" />
-<section id="rollout-rollout-all-samples-process-path">
-<h3>7. Rollout 全样本处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>)<a class="headerlink" href="#rollout-rollout-all-samples-process-path" title="链接到此标题。">#</a></h3>
+<section id="rollout-all-samples-process-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code><a class="headerlink" href="#rollout-all-samples-process-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>用途</strong>: 在 rollout 后处理所有样本（包括被过滤的样本）。</p>
 <p><strong>函数签名</strong>:</p>
@@ -816,8 +816,8 @@
 </ul>
 </section>
 <hr class="docutils" />
-<section id="rollout-rollout-data-postprocess-path">
-<h3>8. Rollout 数据后处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code>)<a class="headerlink" href="#rollout-rollout-data-postprocess-path" title="链接到此标题。">#</a></h3>
+<section id="rollout-data-postprocess-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code><a class="headerlink" href="#rollout-data-postprocess-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>用途</strong>: 在计算 log probabilities 后对 rollout 数据进行后处理。</p>
 <p><strong>函数签名</strong>:</p>
@@ -832,7 +832,7 @@
 </section>
 <hr class="docutils" />
 <section id="custom-loss-function-path">
-<h3>9. 自定义损失函数 (<code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code>)<a class="headerlink" href="#custom-loss-function-path" title="链接到此标题。">#</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code><a class="headerlink" href="#custom-loss-function-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（需要 <code class="docutils literal notranslate"><span class="pre">--loss-type</span> <span class="pre">custom_loss</span></code>）</p>
 <p><strong>用途</strong>: 实现自定义训练损失计算。</p>
 <p><strong>使用场景</strong>:</p>
@@ -843,8 +843,8 @@
 </ul>
 </section>
 <hr class="docutils" />
-<section id="tis-rs-custom-tis-function-path">
-<h3>10. 自定义 TIS/RS 函数 (<code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code>)<a class="headerlink" href="#tis-rs-custom-tis-function-path" title="链接到此标题。">#</a></h3>
+<section id="custom-tis-function-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code><a class="headerlink" href="#custom-tis-function-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>用途</strong>: 实现用于离策略（off-policy）校正的自定义重要性采样。</p>
 <p><strong>使用场景</strong>:</p>
@@ -855,8 +855,8 @@
 <p><strong>示例</strong>: <code class="docutils literal notranslate"><span class="pre">examples/train_infer_mismatch_helper/mis.py:compute_mis_weights_with_cp</span></code></p>
 </section>
 <hr class="docutils" />
-<section id="pg-loss-reducer-custom-pg-loss-reducer-function-path">
-<h3>11. 自定义 pg_loss Reducer (<code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code>)<a class="headerlink" href="#pg-loss-reducer-custom-pg-loss-reducer-function-path" title="链接到此标题。">#</a></h3>
+<section id="custom-pg-loss-reducer-function-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code><a class="headerlink" href="#custom-pg-loss-reducer-function-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>用途</strong>: 自定义 pg_loss 的归约方式，其他指标（pg_clipfrac、ppo_kl、entropy_loss 等）仍使用默认的 sum_of_sample_mean。</p>
 <p><strong>函数签名</strong>:</p>
@@ -876,7 +876,7 @@
 </section>
 <hr class="docutils" />
 <section id="custom-reward-post-process-path">
-<h3>12. 奖励后处理 (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)<a class="headerlink" href="#custom-reward-post-process-path" title="链接到此标题。">#</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code><a class="headerlink" href="#custom-reward-post-process-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（使用默认的 GRPO 归一化）</p>
 <p><strong>用途</strong>: 在优势计算前对奖励进行自定义后处理。</p>
 <p><strong>使用场景</strong>:</p>
@@ -887,7 +887,7 @@
 </section>
 <hr class="docutils" />
 <section id="custom-convert-samples-to-train-data-path">
-<h3>13. 样本转训练数据 (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)<a class="headerlink" href="#custom-convert-samples-to-train-data-path" title="链接到此标题。">#</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code><a class="headerlink" href="#custom-convert-samples-to-train-data-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（使用内置转换逻辑）</p>
 <p><strong>用途</strong>: 覆盖样本到训练数据格式的转换逻辑。</p>
 <p><strong>函数签名</strong>:</p>
@@ -923,8 +923,8 @@
 </ul>
 </section>
 <hr class="docutils" />
-<section id="id4">
-<h3>14. 日志函数<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h3>
+<section id="logging-functions">
+<h3>Logging functions<a class="headerlink" href="#logging-functions" title="链接到此标题。">#</a></h3>
 <section id="rollout-custom-rollout-log-function-path">
 <h4>训练 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)<a class="headerlink" href="#rollout-custom-rollout-log-function-path" title="链接到此标题。">#</a></h4>
 <p><strong>函数签名</strong>:</p>
@@ -944,7 +944,7 @@
 </section>
 <hr class="docutils" />
 <section id="data-source-path">
-<h3>15. 数据源 (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)<a class="headerlink" href="#data-source-path" title="链接到此标题。">#</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code><a class="headerlink" href="#data-source-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.data_source.RolloutDataSourceWithBuffer</span></code></p>
 <p><strong>用途</strong>: 覆盖 rollout 提示词的数据源。</p>
 <p><strong>基类</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.data_source.DataSource</span></code></p>
@@ -971,7 +971,7 @@
 </section>
 <hr class="docutils" />
 <section id="eval-function-path">
-<h3>16. 评估函数 (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)<a class="headerlink" href="#eval-function-path" title="链接到此标题。">#</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code><a class="headerlink" href="#eval-function-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: 与 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> 相同</p>
 <p><strong>用途</strong>: 专门为评估覆盖 rollout 函数。</p>
 <p><strong>使用场景</strong>:</p>
@@ -981,8 +981,8 @@
 </ul>
 </section>
 <hr class="docutils" />
-<section id="megatron-hook">
-<h3>17. Megatron Hook<a class="headerlink" href="#megatron-hook" title="链接到此标题。">#</a></h3>
+<section id="megatron-hooks">
+<h3>Megatron hooks<a class="headerlink" href="#megatron-hooks" title="链接到此标题。">#</a></h3>
 <section id="megatron-custom-megatron-init-path">
 <h4>Megatron 初始化 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)<a class="headerlink" href="#megatron-custom-megatron-init-path" title="链接到此标题。">#</a></h4>
 <p><strong>函数签名</strong>:</p>
@@ -1046,8 +1046,8 @@ engine 读取之前，在每个训练 rank 上调用。用于在非 POSIX 共享
 （例如刷新挂载视图）。完整机制见 <a class="reference internal" href="../advanced/delta-weight-sync.html"><span class="std std-doc">Delta 权重同步</span></a>。</p>
 </section>
 </section>
-<section id="id5">
-<h2>自定义函数路径的测试<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h2>
+<section id="id4">
+<h2>自定义函数路径的测试<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
 <p>slime 现在也提供了一组 CPU 契约测试，用于校验这些 customization 接口。测试会通过字符串形式的导入路径来动态加载组件，因此既能回归仓库内置 hook，也能验证用户通过和训练时完全相同的 CLI 参数传入的自定义实现。</p>
 <p>这些测试统一放在 <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/</span></code> 目录下，并按 hook 形态归并成少数几个文件：</p>
 <ul class="simple">
@@ -1129,30 +1129,30 @@ engine 读取之前，在每个训练 rank 上调用。用于在非 POSIX 共享
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">自定义接口概览</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#customization-agentic-workflow">通过 customization 接口实现 agentic workflow</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">详细接口参考</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-function-path">1. Rollout 函数 (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-path">2. 自定义生成函数 (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-function-path"><code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-path"><code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#prompt">一个 prompt 产生多个训练样本</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rm-path">3. 奖励模型 (<code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling-filter-path">4. 动态采样过滤器 (<code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#buffer-buffer-filter-path">5. Buffer 过滤器 (<code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-sample-filter-path">6. Rollout 样本过滤器 (<code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-all-samples-process-path">7. Rollout 全样本处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-data-postprocess-path">8. Rollout 数据后处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-loss-function-path">9. 自定义损失函数 (<code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tis-rs-custom-tis-function-path">10. 自定义 TIS/RS 函数 (<code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pg-loss-reducer-custom-pg-loss-reducer-function-path">11. 自定义 pg_loss Reducer (<code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-reward-post-process-path">12. 奖励后处理 (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-convert-samples-to-train-data-path">13. 样本转训练数据 (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">14. 日志函数</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rm-path"><code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling-filter-path"><code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#buffer-filter-path"><code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-sample-filter-path"><code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-all-samples-process-path"><code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-data-postprocess-path"><code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-loss-function-path"><code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-tis-function-path"><code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-pg-loss-reducer-function-path"><code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-reward-post-process-path"><code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-convert-samples-to-train-data-path"><code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logging-functions">Logging functions</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-custom-rollout-log-function-path">训练 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-custom-eval-rollout-log-function-path">评估 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-eval-rollout-log-function-path</span></code>)</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-path">15. 数据源 (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eval-function-path">16. 评估函数 (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hook">17. Megatron Hook</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-path"><code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eval-function-path"><code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hooks">Megatron hooks</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-custom-megatron-init-path">Megatron 初始化 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#log-prob-hook-custom-megatron-before-log-prob-hook-path">Log Prob 前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#hook-custom-megatron-before-train-step-hook-path">训练步骤前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)</a></li>
@@ -1162,7 +1162,7 @@ engine 读取之前，在每个训练 rank 上调用。用于在非 POSIX 共享
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#disk-post-write-hook-custom-update-weight-post-write-path">19. Disk 权重同步 Post-Write Hook（<code class="docutils literal notranslate"><span class="pre">--custom-update-weight-post-write-path</span></code>）</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">自定义函数路径的测试</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">自定义函数路径的测试</a></li>
 </ul>
   </nav></div>
 
@@ -1196,7 +1196,7 @@ engine 读取之前，在每个训练 rank 上调用。用于在非 POSIX 共享
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 24 日.
+  最后更新于 2026 年 08 月 26 日.
   <br/>
 </p>
   </div>

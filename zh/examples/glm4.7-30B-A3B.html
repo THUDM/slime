@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=30c3115b"></script>
+    <script src="../_static/documentation_options.js?v=eedc492e"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -58,8 +58,8 @@
     <link rel="prev" title="8xH100 训练 GLM4-9B" href="glm4-9B.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-  <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 24 日"/>
+  <meta name="docsearch:version" content="0.3.1" />
+    <meta name="docbuild:last-update" content="2026 年 08 月 26 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -503,7 +503,7 @@
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">MTP 训练</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">多机支持</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">多机适配</a></li>
 </ul>
 </li>
 </ul>
@@ -547,12 +547,12 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <h2>执行训练<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
 <p>执行训练：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
-bash<span class="w"> </span>scripts/run-glm4.7-30B-A3B-8gpus.sh
+bash<span class="w"> </span>scripts/run-glm4.7-30B-A3B.sh
 </pre></div>
 </div>
 <section id="id4">
 <h3>参数简介<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h3>
-<p>这里我们简单介绍一下脚本 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-30B-A3B-8gpus.sh">run-glm4.7-30B-A3B-8gpus.sh</a> 中的关键部分。</p>
+<p>这里我们简单介绍一下脚本 <a class="reference download internal" download="" href="../_downloads/d416c356d14851bfdd94e5128217aa1a/run-glm4.7-30B-A3B.sh"><span class="xref download myst">run-glm4.7-30B-A3B.sh</span></a> 中的关键部分。</p>
 <section id="moe">
 <h4>MoE 配置<a class="headerlink" href="#moe" title="链接到此标题。">#</a></h4>
 <p>GLM-4.7-Flash 是一个 MoE（混合专家）模型，包含 64 个路由专家（top-4 激活）和 1 个共享专家。共 47 层：1 层 dense 层 + 46 层 MoE 层。</p>
@@ -637,17 +637,13 @@ bash<span class="w"> </span>scripts/run-glm4.7-30B-A3B-8gpus.sh
 </section>
 </section>
 <section id="id6">
-<h3>多机支持<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h3>
-<p>对于多机训练（例如 2×8 H100），使用多机脚本：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
-<span class="nb">export</span><span class="w"> </span><span class="nv">BASE_DIR</span><span class="o">=</span>/shared/path<span class="w">  </span><span class="c1"># 所有节点都可以访问的路径</span>
-bash<span class="w"> </span>scripts/run-glm4.7-30B-A3B.sh
-</pre></div>
-</div>
+<h3>多机适配<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h3>
+<p>仓库中的 <code class="docutils literal notranslate"><span class="pre">scripts/run-glm4.7-30B-A3B.sh</span></code> 会启动本地单节点 Ray，并固定传入 <code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span> <span class="pre">1</span></code>，不能直接作为多机启动器。要把这份配置适配到多机训练（例如 2×8 H100），需要先让所有 worker 加入同一个 Ray 集群，并修改启动脚本：</p>
 <p>对于多机环境，需要进行如下修改：</p>
 <ul class="simple">
 <li><p>将训练模型、数据放在所有机器都可以访问到的路径上；</p></li>
 <li><p>设置各台机器都可以访问到的 <code class="docutils literal notranslate"><span class="pre">MASTER_ADDR</span></code>；</p></li>
+<li><p>把 <code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span></code> 从 <code class="docutils literal notranslate"><span class="pre">1</span></code> 改为训练节点数；</p></li>
 <li><p>去掉 CPU Adam 相关的配置，因为使用了 distributed optimizer，多机环境下 optimizer 的显存占比会明显下降。</p></li>
 <li><p>调整并行度：例如 TP=4, PP=2, EP=8, CP=2。</p></li>
 </ul>
@@ -727,7 +723,7 @@ bash<span class="w"> </span>scripts/run-glm4.7-30B-A3B.sh
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">MTP 训练</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">多机支持</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">多机适配</a></li>
 </ul>
 </li>
 </ul>
@@ -763,7 +759,7 @@ bash<span class="w"> </span>scripts/run-glm4.7-30B-A3B.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 24 日.
+  最后更新于 2026 年 08 月 26 日.
   <br/>
 </p>
   </div>

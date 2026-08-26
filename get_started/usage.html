@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=e645c8fa"></script>
+    <script src="../_static/documentation_options.js?v=385a908f"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -58,8 +58,8 @@
     <link rel="prev" title="Quick Start" href="quick_start.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Aug 24, 2026"/>
+  <meta name="docsearch:version" content="0.3.1" />
+    <meta name="docbuild:last-update" content="Aug 26, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -688,7 +688,7 @@ The reason for not using a parameter like <code class="docutils literal notransl
 </section>
 <section id="data-format">
 <h3>Data Format<a class="headerlink" href="#data-format" title="Link to this heading">#</a></h3>
-<p>Currently, slime only supports loading files in <code class="docutils literal notranslate"><span class="pre">.jsonl</span></code> format, where each line of the file is a JSON object. An example of a single data entry (expanded) is as follows:</p>
+<p>slime supports <code class="docutils literal notranslate"><span class="pre">.jsonl</span></code> and <code class="docutils literal notranslate"><span class="pre">.parquet</span></code> files; reading Parquet requires <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code>. Each record in either format should contain the fields selected by <code class="docutils literal notranslate"><span class="pre">--input-key</span></code> and <code class="docutils literal notranslate"><span class="pre">--label-key</span></code>. An expanded JSONL record looks like this:</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
 <span class="w">  </span><span class="nt">"prompt"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <span class="w">    </span><span class="p">{</span>
@@ -1071,7 +1071,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 24, 2026.
+  Last updated on Aug 26, 2026.
   <br/>
 </p>
   </div>

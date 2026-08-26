@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=30c3115b"></script>
+    <script src="../_static/documentation_options.js?v=eedc492e"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -58,8 +58,8 @@
     <link rel="prev" title="快速使用" href="quick_start.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-  <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 24 日"/>
+  <meta name="docsearch:version" content="0.3.1" />
+    <meta name="docbuild:last-update" content="2026 年 08 月 26 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -685,7 +685,7 @@
 </section>
 <section id="id6">
 <h3>数据格式<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h3>
-<p>目前 slime 只支持加载 <code class="docutils literal notranslate"><span class="pre">.jsonl</span></code> 格式文件，即文件的每一行都是一个 json，一行数据的样例（展开后）为：</p>
+<p>slime 支持加载 <code class="docutils literal notranslate"><span class="pre">.jsonl</span></code> 和 <code class="docutils literal notranslate"><span class="pre">.parquet</span></code> 格式文件；读取 Parquet 需要安装 <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code>。两种格式中的每条记录都应包含 <code class="docutils literal notranslate"><span class="pre">--input-key</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--label-key</span></code> 指定的字段。下面是一条 JSONL 数据展开后的示例：</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
 <span class="w">  </span><span class="nt">"prompt"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <span class="w">    </span><span class="p">{</span>
@@ -1068,7 +1068,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 24 日.
+  最后更新于 2026 年 08 月 26 日.
   <br/>
 </p>
   </div>

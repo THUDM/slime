@@ -74,7 +74,6 @@ megatron:
 ```bash
 python train.py \
   --advantage-estimator ppo \
-  --use-critic \
   --megatron-config-path megatron_ppo.yaml \
   --tensor-model-parallel-size 2 \
   --sequence-parallel \
@@ -89,6 +88,7 @@ python train.py \
 
 在这个模式下：
 
+- `--advantage-estimator ppo` 会自动启用 critic，不需要额外的 `--use-critic` 参数；
 - CLI 负责共享的并行策略和资源配置；当前 PPO 下 critic 的训练资源会跟随 actor 配置；
 - YAML 负责 actor / critic 的差异项，比如 `lr`、`load`、`save`、optimizer 或 scheduler 相关参数。
 

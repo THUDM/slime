@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=e645c8fa"></script>
+    <script src="../_static/documentation_options.js?v=385a908f"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -58,8 +58,8 @@
     <link rel="prev" title="GLM4-9B with 8xH100" href="glm4-9B.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Aug 24, 2026"/>
+  <meta name="docsearch:version" content="0.3.1" />
+    <meta name="docbuild:last-update" content="Aug 26, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -507,7 +507,7 @@
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#mtp-training">MTP Training</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#multi-node-support">Multi-Node Support</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#multi-node-adaptation">Multi-Node Adaptation</a></li>
 </ul>
 </li>
 </ul>
@@ -551,12 +551,12 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <h2>Run Training<a class="headerlink" href="#run-training" title="Link to this heading">#</a></h2>
 <p>Execute the training script:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
-bash<span class="w"> </span>scripts/run-glm4.7-30B-A3B-8gpus.sh
+bash<span class="w"> </span>scripts/run-glm4.7-30B-A3B.sh
 </pre></div>
 </div>
 <section id="parameter-introduction">
 <h3>Parameter Introduction<a class="headerlink" href="#parameter-introduction" title="Link to this heading">#</a></h3>
-<p>Here, we will briefly introduce the key parts in the <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-30B-A3B-8gpus.sh">run-glm4.7-30B-A3B-8gpus.sh</a> script.</p>
+<p>Here, we will briefly introduce the key parts in <a class="reference download internal" download="" href="../_downloads/d416c356d14851bfdd94e5128217aa1a/run-glm4.7-30B-A3B.sh"><span class="xref download myst">run-glm4.7-30B-A3B.sh</span></a>.</p>
 <section id="moe-configuration">
 <h4>MoE Configuration<a class="headerlink" href="#moe-configuration" title="Link to this heading">#</a></h4>
 <p>GLM-4.7-Flash is a Mixture-of-Experts (MoE) model with 64 routed experts (top-4 activation) and 1 shared expert. It has 47 layers: 1 dense layer + 46 MoE layers.</p>
@@ -640,18 +640,14 @@ bash<span class="w"> </span>scripts/run-glm4.7-30B-A3B-8gpus.sh
 </div></blockquote>
 </section>
 </section>
-<section id="multi-node-support">
-<h3>Multi-Node Support<a class="headerlink" href="#multi-node-support" title="Link to this heading">#</a></h3>
-<p>For multi-node training (e.g., 2×8 H100), use the multi-node script:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
-<span class="nb">export</span><span class="w"> </span><span class="nv">BASE_DIR</span><span class="o">=</span>/shared/path<span class="w">  </span><span class="c1"># accessible by all nodes</span>
-bash<span class="w"> </span>scripts/run-glm4.7-30B-A3B.sh
-</pre></div>
-</div>
+<section id="multi-node-adaptation">
+<h3>Multi-Node Adaptation<a class="headerlink" href="#multi-node-adaptation" title="Link to this heading">#</a></h3>
+<p>The checked-in <code class="docutils literal notranslate"><span class="pre">scripts/run-glm4.7-30B-A3B.sh</span></code> launcher starts a local, single-node Ray cluster and passes <code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span> <span class="pre">1</span></code>; it is not a drop-in multi-node launcher. To adapt this recipe for multi-node training (for example, 2×8 H100), start or connect all workers to the same Ray cluster and update the launcher as follows:</p>
 <p>Key modifications for multi-node:</p>
 <ul class="simple">
 <li><p>Place the model and data on a path accessible by all nodes.</p></li>
 <li><p>Set <code class="docutils literal notranslate"><span class="pre">MASTER_ADDR</span></code> to an address accessible by all nodes.</p></li>
+<li><p>Set <code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span></code> to the number of training nodes instead of <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p></li>
 <li><p>Remove CPU Adam configurations (distributed optimizer reduces per-GPU memory usage).</p></li>
 <li><p>Adjust parallelism: e.g., TP=4, PP=2, EP=8, CP=2.</p></li>
 </ul>
@@ -731,7 +727,7 @@ bash<span class="w"> </span>scripts/run-glm4.7-30B-A3B.sh
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#mtp-training">MTP Training</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#multi-node-support">Multi-Node Support</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#multi-node-adaptation">Multi-Node Adaptation</a></li>
 </ul>
 </li>
 </ul>
@@ -767,7 +763,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 24, 2026.
+  Last updated on Aug 26, 2026.
   <br/>
 </p>
   </div>

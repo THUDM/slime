@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../../_static/documentation_options.js?v=e645c8fa"></script>
+    <script src="../../_static/documentation_options.js?v=385a908f"></script>
     <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -56,8 +56,8 @@
     <link rel="search" title="Search" href="../../search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Aug 24, 2026"/>
+  <meta name="docsearch:version" content="0.3.1" />
+    <meta name="docbuild:last-update" content="Aug 26, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -601,7 +601,7 @@
 </div>
 <section id="qwen3-5-series">
 <h4>Qwen3.5 Series<a class="headerlink" href="#qwen3-5-series" title="Link to this heading">#</a></h4>
-<p>We provide a native <a class="reference internal" href="#./run_geo3k_qwen35.sh"><span class="xref myst">example</span></a> for Qwen3.5-35B-A3B. It loads the Transformers ViT directly and converts only the Megatron language-model parameters. To support another Qwen3.5 model, add its model config under <code class="docutils literal notranslate"><span class="pre">scripts/models/</span></code> and update the example.</p>
+<p>We provide a native <a class="reference download internal" download="" href="../../_downloads/0f13019d14c4d0a78490d2da1f138af5/run_geo3k_qwen35.sh"><span class="xref download myst">example</span></a> for Qwen3.5-35B-A3B. It loads the Transformers ViT directly and converts only the Megatron language-model parameters. To support another Qwen3.5 model, add its model config under <code class="docutils literal notranslate"><span class="pre">scripts/models/</span></code> and update the example.</p>
 <p>The native path supports tensor, pipeline, context, sequence, and expert parallelism. Context parallelism follows Megatron’s packed THD zigzag layout.</p>
 <p>For GDN training, use <code class="docutils literal notranslate"><span class="pre">--micro-batch-size</span> <span class="pre">1</span></code> and remove <code class="docutils literal notranslate"><span class="pre">--use-dynamic-batch-size</span></code>.</p>
 </section>
@@ -707,7 +707,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 24, 2026.
+  Last updated on Aug 26, 2026.
   <br/>
 </p>
   </div>

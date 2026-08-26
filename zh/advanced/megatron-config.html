@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=30c3115b"></script>
+    <script src="../_static/documentation_options.js?v=eedc492e"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -58,8 +58,8 @@
     <link rel="prev" title="SGLang Config：高级引擎部署" href="sglang-config.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-  <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 24 日"/>
+  <meta name="docsearch:version" content="0.3.1" />
+    <meta name="docbuild:last-update" content="2026 年 08 月 26 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -611,7 +611,6 @@
 </div>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--advantage-estimator<span class="w"> </span>ppo<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--use-critic<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--megatron-config-path<span class="w"> </span>megatron_ppo.yaml<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--tensor-model-parallel-size<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--sequence-parallel<span class="w"> </span><span class="se">\</span>
@@ -626,6 +625,7 @@
 </div>
 <p>在这个模式下：</p>
 <ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span> <span class="pre">ppo</span></code> 会自动启用 critic，不需要额外的 <code class="docutils literal notranslate"><span class="pre">--use-critic</span></code> 参数；</p></li>
 <li><p>CLI 负责共享的并行策略和资源配置；当前 PPO 下 critic 的训练资源会跟随 actor 配置；</p></li>
 <li><p>YAML 负责 actor / critic 的差异项，比如 <code class="docutils literal notranslate"><span class="pre">lr</span></code>、<code class="docutils literal notranslate"><span class="pre">load</span></code>、<code class="docutils literal notranslate"><span class="pre">save</span></code>、optimizer 或 scheduler 相关参数。</p></li>
 </ul>
@@ -762,7 +762,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 24 日.
+  最后更新于 2026 年 08 月 26 日.
   <br/>
 </p>
   </div>

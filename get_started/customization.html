@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=e645c8fa"></script>
+    <script src="../_static/documentation_options.js?v=385a908f"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -58,8 +58,8 @@
     <link rel="prev" title="Usage Guide" href="usage.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Aug 24, 2026"/>
+  <meta name="docsearch:version" content="0.3.1" />
+    <meta name="docbuild:last-update" content="Aug 26, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -498,30 +498,30 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#overview-of-customization-interfaces">Overview of Customization Interfaces</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agentic-workflows-through-customization-interfaces">Agentic workflows through customization interfaces</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#detailed-interface-reference">Detailed Interface Reference</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-function-rollout-function-path">1. Rollout Function (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-custom-generate-function-path">2. Custom Generate Function (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-function-path"><code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-path"><code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#returning-multiple-training-samples-for-one-prompt">Returning multiple training samples for one prompt</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reward-model-custom-rm-path">3. Reward Model (<code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling-filter-dynamic-sampling-filter-path">4. Dynamic Sampling Filter (<code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#buffer-filter-buffer-filter-path">5. Buffer Filter (<code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-sample-filter-rollout-sample-filter-path">6. Rollout Sample Filter (<code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-all-samples-process-rollout-all-samples-process-path">7. Rollout All Samples Process (<code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-data-postprocess-rollout-data-postprocess-path">8. Rollout Data Postprocess (<code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-loss-function-custom-loss-function-path">9. Custom Loss Function (<code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-tis-rs-function-custom-tis-function-path">10. Custom TIS/RS Function (<code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-pg-loss-reducer-custom-pg-loss-reducer-function-path">11. Custom pg_loss Reducer (<code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reward-post-processing-custom-reward-post-process-path">12. Reward Post-Processing (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#samples-to-train-data-conversion-custom-convert-samples-to-train-data-path">13. Samples to Train Data Conversion (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logging-functions">14. Logging Functions</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rm-path"><code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling-filter-path"><code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#buffer-filter-path"><code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-sample-filter-path"><code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-all-samples-process-path"><code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-data-postprocess-path"><code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-loss-function-path"><code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-tis-function-path"><code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-pg-loss-reducer-function-path"><code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-reward-post-process-path"><code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-convert-samples-to-train-data-path"><code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logging-functions">Logging functions</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#training-rollout-logging-custom-rollout-log-function-path">Training Rollout Logging (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#evaluation-rollout-logging-custom-eval-rollout-log-function-path">Evaluation Rollout Logging (<code class="docutils literal notranslate"><span class="pre">--custom-eval-rollout-log-function-path</span></code>)</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-data-source-path">15. Data Source (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#evaluation-function-eval-function-path">16. Evaluation Function (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hooks">17. Megatron Hooks</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-path"><code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eval-function-path"><code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hooks">Megatron hooks</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-initialization-custom-megatron-init-path">Megatron Initialization (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#before-log-prob-hook-custom-megatron-before-log-prob-hook-path">Before Log Prob Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#before-train-step-hook-custom-megatron-before-train-step-hook-path">Before Train Step Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)</a></li>
@@ -556,64 +556,64 @@
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td class="text-left"><p>–rollout-function-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#rollout-function-path"><span class="std std-ref">–rollout-function-path</span></a></p></td>
 <td class="text-left"><p>Override the entire rollout generation logic.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>–custom-generate-function-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#custom-generate-function-path"><span class="std std-ref">–custom-generate-function-path</span></a></p></td>
 <td class="text-left"><p>Override only the generation step (e.g., for RAG or tool use).</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>–custom-rm-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#custom-rm-path"><span class="std std-ref">–custom-rm-path</span></a></p></td>
 <td class="text-left"><p>Implement custom reward computation logic.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>–dynamic-sampling-filter-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#dynamic-sampling-filter-path"><span class="std std-ref">–dynamic-sampling-filter-path</span></a></p></td>
 <td class="text-left"><p>Filter samples during dynamic sampling (e.g., DAPO).</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>–buffer-filter-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#buffer-filter-path"><span class="std std-ref">–buffer-filter-path</span></a></p></td>
 <td class="text-left"><p>Filter samples in the rollout buffer before training.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>–rollout-sample-filter-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#rollout-sample-filter-path"><span class="std std-ref">–rollout-sample-filter-path</span></a></p></td>
 <td class="text-left"><p>Determine if individual samples participate in loss calculation.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>–rollout-all-samples-process-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#rollout-all-samples-process-path"><span class="std std-ref">–rollout-all-samples-process-path</span></a></p></td>
 <td class="text-left"><p>Process all samples (including filtered ones) after rollout.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>–rollout-data-postprocess-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#rollout-data-postprocess-path"><span class="std std-ref">–rollout-data-postprocess-path</span></a></p></td>
 <td class="text-left"><p>Post-process rollout data after log probs are computed.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>–custom-loss-function-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#custom-loss-function-path"><span class="std std-ref">–custom-loss-function-path</span></a></p></td>
 <td class="text-left"><p>Implement custom training loss computation.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>–custom-tis-function-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#custom-tis-function-path"><span class="std std-ref">–custom-tis-function-path</span></a></p></td>
 <td class="text-left"><p>Implement custom importance sampling for off-policy correction.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>–custom-pg-loss-reducer-function-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#custom-pg-loss-reducer-function-path"><span class="std std-ref">–custom-pg-loss-reducer-function-path</span></a></p></td>
 <td class="text-left"><p>Customize pg_loss reduction (e.g., for Dr.GRPO).</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>–custom-reward-post-process-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#custom-reward-post-process-path"><span class="std std-ref">–custom-reward-post-process-path</span></a></p></td>
 <td class="text-left"><p>Custom post-processing of rewards before advantage computation.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>–custom-convert-samples-to-train-data-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#custom-convert-samples-to-train-data-path"><span class="std std-ref">–custom-convert-samples-to-train-data-path</span></a></p></td>
 <td class="text-left"><p>Override the conversion of samples to training data format.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>–custom-rollout-log-function-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#logging-functions"><span class="std std-ref">–custom-rollout-log-function-path</span></a></p></td>
 <td class="text-left"><p>Custom logging for training rollouts.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>–custom-eval-rollout-log-function-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#logging-functions"><span class="std std-ref">–custom-eval-rollout-log-function-path</span></a></p></td>
 <td class="text-left"><p>Custom logging for evaluation rollouts.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>–data-source-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#data-source-path"><span class="std std-ref">–data-source-path</span></a></p></td>
 <td class="text-left"><p>Override the data source for rollout prompts.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>–eval-function-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#eval-function-path"><span class="std std-ref">–eval-function-path</span></a></p></td>
 <td class="text-left"><p>Override the rollout function specifically for evaluation.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>–custom-megatron-init-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#megatron-hooks"><span class="std std-ref">–custom-megatron-init-path</span></a></p></td>
 <td class="text-left"><p>Custom initialization after Megatron setup.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>–custom-megatron-before-log-prob-hook-path</p></td>
+<tr class="row-even"><td class="text-left"><p><a class="reference internal" href="#megatron-hooks"><span class="std std-ref">–custom-megatron-before-log-prob-hook-path</span></a></p></td>
 <td class="text-left"><p>Custom logic before log probability computation.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>–custom-megatron-before-train-step-hook-path</p></td>
+<tr class="row-odd"><td class="text-left"><p><a class="reference internal" href="#megatron-hooks"><span class="std std-ref">–custom-megatron-before-train-step-hook-path</span></a></p></td>
 <td class="text-left"><p>Custom logic before each training step.</p></td>
 </tr>
 </tbody>
@@ -632,19 +632,19 @@
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-left"><p>Run a custom agent loop, tool calls, RAG, sandbox execution, browser/terminal interaction, or multi-turn generation for each sample, while reusing slime’s default rollout loop</p></td>
-<td class="text-left"><p>–custom-generate-function-path</p></td>
+<td class="text-left"><p><a class="reference internal" href="#custom-generate-function-path"><span class="std std-ref">–custom-generate-function-path</span></a></p></td>
 </tr>
 <tr class="row-odd"><td class="text-left"><p>Compute verifier rewards, test-based rewards, environment success checks, rule-based rewards, or call an external reward service</p></td>
-<td class="text-left"><p>–custom-rm-path</p></td>
+<td class="text-left"><p><a class="reference internal" href="#custom-rm-path"><span class="std std-ref">–custom-rm-path</span></a></p></td>
 </tr>
 <tr class="row-even"><td class="text-left"><p>Replace the entire rollout orchestration (only when per-sample customization is not enough)</p></td>
-<td class="text-left"><p>–rollout-function-path</p></td>
+<td class="text-left"><p><a class="reference internal" href="#rollout-function-path"><span class="std std-ref">–rollout-function-path</span></a></p></td>
 </tr>
 <tr class="row-odd"><td class="text-left"><p>Control task sampling, buffering, requeueing, or custom prompt/task sources</p></td>
-<td class="text-left"><p>–data-source-path</p></td>
+<td class="text-left"><p><a class="reference internal" href="#data-source-path"><span class="std std-ref">–data-source-path</span></a></p></td>
 </tr>
 <tr class="row-even"><td class="text-left"><p>Attach custom loss masks, metadata, or convert agentic outputs into training data</p></td>
-<td class="text-left"><p>–rollout-data-postprocess-path, –custom-convert-samples-to-train-data-path</p></td>
+<td class="text-left"><p><a class="reference internal" href="#rollout-data-postprocess-path"><span class="std std-ref">–rollout-data-postprocess-path</span></a>, <a class="reference internal" href="#custom-convert-samples-to-train-data-path"><span class="std std-ref">–custom-convert-samples-to-train-data-path</span></a></p></td>
 </tr>
 <tr class="row-odd"><td class="text-left"><p>Debug long-running custom generation, verifier calls, tool calls, or sandbox steps</p></td>
 <td class="text-left"><p>trace utilities in <a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">slime.observability.trace_utils</span></code></span></a></p></td>
@@ -652,12 +652,12 @@
 </tbody>
 </table>
 </div>
-<p>A native example of this pattern is <a class="reference internal" href="#../../../examples/search-r1/"><span class="xref myst"><code class="docutils literal notranslate"><span class="pre">examples/search-r1</span></code></span></a>, which adds search-augmented multi-turn generation via <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code> while keeping slime’s default <code class="docutils literal notranslate"><span class="pre">sglang_rollout</span></code> outer loop. See also <span class="xref myst"><code class="docutils literal notranslate"><span class="pre">examples/multi_agent</span></code></span> for a <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>-based multi-agent pattern and <span class="xref myst"><code class="docutils literal notranslate"><span class="pre">examples/fully_async</span></code></span> for long-tail agentic generation.</p>
+<p>A native example of this pattern is <a class="reference internal" href="../_examples_synced/search-r1/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/search-r1</span></code></span></a>, which adds search-augmented multi-turn generation via <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code> while keeping slime’s default <code class="docutils literal notranslate"><span class="pre">sglang_rollout</span></code> outer loop. <a class="reference internal" href="../_examples_synced/multi_agent/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/multi_agent</span></code></span></a> uses the same interface for per-sample multi-agent generation; when the entire rollout orchestration must be replaced, see <a class="reference internal" href="../_examples_synced/fully_async/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/fully_async</span></code></span></a>.</p>
 </section>
 <section id="detailed-interface-reference">
 <h2>Detailed Interface Reference<a class="headerlink" href="#detailed-interface-reference" title="Link to this heading">#</a></h2>
-<section id="rollout-function-rollout-function-path">
-<h3>1. Rollout Function (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)<a class="headerlink" href="#rollout-function-rollout-function-path" title="Link to this heading">#</a></h3>
+<section id="rollout-function-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code><a class="headerlink" href="#rollout-function-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.sglang_rollout.generate_rollout</span></code></p>
 <p><strong>Purpose</strong>: Override the entire rollout generation logic.</p>
 <p><strong>Signature</strong>:</p>
@@ -670,11 +670,11 @@
 <li><p>Adding custom sampling strategies</p></li>
 <li><p>Integrating external tools or APIs during generation</p></li>
 </ul>
-<p><strong>Example</strong>: See <a class="reference download internal" download="" href="../_downloads/fcb74b88a8b414d1a6f967a6f94cdf7b/rollout_with_multi_agents.py"><span class="xref download myst">examples/multi_agent/rollout_with_multi_agents.py</span></a></p>
+<p><strong>Example</strong>: See <a class="reference internal" href="../_examples_synced/fully_async/README.html"><span class="std std-doc">examples/fully_async</span></a></p>
 </section>
 <hr class="docutils" />
-<section id="custom-generate-function-custom-generate-function-path">
-<h3>2. Custom Generate Function (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)<a class="headerlink" href="#custom-generate-function-custom-generate-function-path" title="Link to this heading">#</a></h3>
+<section id="custom-generate-function-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code><a class="headerlink" href="#custom-generate-function-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code> (uses built-in generate function)</p>
 <p><strong>Purpose</strong>: Override only the generation step within the default rollout function.</p>
 <p><strong>Signature</strong>:</p>
@@ -715,12 +715,12 @@
 </pre></div>
 </div>
 <p>If one full trajectory has a single total reward but is split into <code class="docutils literal notranslate"><span class="pre">K</span></code> training segments, a common pattern is to distribute that reward across the segments, for example by assigning <code class="docutils literal notranslate"><span class="pre">reward</span> <span class="pre">/</span> <span class="pre">K</span></code> to each segment, so the same rollout reward is not amplified.</p>
-<p><strong>Example</strong>: See <a class="reference download internal" download="" href="../_downloads/bee5a872ccae7eb6b44c1ed0e0f6eb4a/generate_with_search.py"><span class="xref download myst">examples/search-r1/generate_with_search.py</span></a></p>
+<p><strong>Example</strong>: See <a class="reference download internal" download="" href="../_downloads/bee5a872ccae7eb6b44c1ed0e0f6eb4a/generate_with_search.py"><span class="xref download myst">examples/search-r1/generate_with_search.py</span></a> and <a class="reference download internal" download="" href="../_downloads/fcb74b88a8b414d1a6f967a6f94cdf7b/rollout_with_multi_agents.py"><span class="xref download myst">examples/multi_agent/rollout_with_multi_agents.py</span></a></p>
 </section>
 </section>
 <hr class="docutils" />
-<section id="reward-model-custom-rm-path">
-<h3>3. Reward Model (<code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>)<a class="headerlink" href="#reward-model-custom-rm-path" title="Link to this heading">#</a></h3>
+<section id="custom-rm-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code><a class="headerlink" href="#custom-rm-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code> (uses built-in reward models based on <code class="docutils literal notranslate"><span class="pre">--rm-type</span></code>)</p>
 <p><strong>Purpose</strong>: Implement custom reward computation logic.</p>
 <p><strong>Signature</strong> (single sample mode):</p>
@@ -749,8 +749,8 @@
 </ul>
 </section>
 <hr class="docutils" />
-<section id="dynamic-sampling-filter-dynamic-sampling-filter-path">
-<h3>4. Dynamic Sampling Filter (<code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>)<a class="headerlink" href="#dynamic-sampling-filter-dynamic-sampling-filter-path" title="Link to this heading">#</a></h3>
+<section id="dynamic-sampling-filter-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code><a class="headerlink" href="#dynamic-sampling-filter-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>Purpose</strong>: Filter samples during dynamic sampling (e.g., DAPO-style filtering).</p>
 <p><strong>Signature</strong>:</p>
@@ -773,8 +773,8 @@
 <p><strong>Example</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std</span></code></p>
 </section>
 <hr class="docutils" />
-<section id="buffer-filter-buffer-filter-path">
-<h3>5. Buffer Filter (<code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>)<a class="headerlink" href="#buffer-filter-buffer-filter-path" title="Link to this heading">#</a></h3>
+<section id="buffer-filter-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code><a class="headerlink" href="#buffer-filter-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>Purpose</strong>: Filter samples in the rollout buffer before training.</p>
 <p><strong>Signature</strong>:</p>
@@ -789,8 +789,8 @@
 </ul>
 </section>
 <hr class="docutils" />
-<section id="rollout-sample-filter-rollout-sample-filter-path">
-<h3>6. Rollout Sample Filter (<code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code>)<a class="headerlink" href="#rollout-sample-filter-rollout-sample-filter-path" title="Link to this heading">#</a></h3>
+<section id="rollout-sample-filter-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code><a class="headerlink" href="#rollout-sample-filter-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>Purpose</strong>: Determine whether individual samples participate in loss calculation.</p>
 <p><strong>Signature</strong>:</p>
@@ -805,8 +805,8 @@
 </ul>
 </section>
 <hr class="docutils" />
-<section id="rollout-all-samples-process-rollout-all-samples-process-path">
-<h3>7. Rollout All Samples Process (<code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>)<a class="headerlink" href="#rollout-all-samples-process-rollout-all-samples-process-path" title="Link to this heading">#</a></h3>
+<section id="rollout-all-samples-process-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code><a class="headerlink" href="#rollout-all-samples-process-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>Purpose</strong>: Process all samples (including filtered ones) after rollout.</p>
 <p><strong>Signature</strong>:</p>
@@ -820,8 +820,8 @@
 </ul>
 </section>
 <hr class="docutils" />
-<section id="rollout-data-postprocess-rollout-data-postprocess-path">
-<h3>8. Rollout Data Postprocess (<code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code>)<a class="headerlink" href="#rollout-data-postprocess-rollout-data-postprocess-path" title="Link to this heading">#</a></h3>
+<section id="rollout-data-postprocess-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code><a class="headerlink" href="#rollout-data-postprocess-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>Purpose</strong>: Post-process rollout data after log probabilities are computed.</p>
 <p><strong>Signature</strong>:</p>
@@ -835,8 +835,8 @@
 </ul>
 </section>
 <hr class="docutils" />
-<section id="custom-loss-function-custom-loss-function-path">
-<h3>9. Custom Loss Function (<code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code>)<a class="headerlink" href="#custom-loss-function-custom-loss-function-path" title="Link to this heading">#</a></h3>
+<section id="custom-loss-function-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code><a class="headerlink" href="#custom-loss-function-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code> (requires <code class="docutils literal notranslate"><span class="pre">--loss-type</span> <span class="pre">custom_loss</span></code>)</p>
 <p><strong>Purpose</strong>: Implement custom training loss computation.</p>
 <p><strong>Use Cases</strong>:</p>
@@ -847,8 +847,8 @@
 </ul>
 </section>
 <hr class="docutils" />
-<section id="custom-tis-rs-function-custom-tis-function-path">
-<h3>10. Custom TIS/RS Function (<code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code>)<a class="headerlink" href="#custom-tis-rs-function-custom-tis-function-path" title="Link to this heading">#</a></h3>
+<section id="custom-tis-function-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code><a class="headerlink" href="#custom-tis-function-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>Purpose</strong>: Implement custom importance sampling for off-policy correction.</p>
 <p><strong>Use Cases</strong>:</p>
@@ -859,8 +859,8 @@
 <p><strong>Example</strong>: <code class="docutils literal notranslate"><span class="pre">examples/train_infer_mismatch_helper/mis.py:compute_mis_weights_with_cp</span></code></p>
 </section>
 <hr class="docutils" />
-<section id="custom-pg-loss-reducer-custom-pg-loss-reducer-function-path">
-<h3>11. Custom pg_loss Reducer (<code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code>)<a class="headerlink" href="#custom-pg-loss-reducer-custom-pg-loss-reducer-function-path" title="Link to this heading">#</a></h3>
+<section id="custom-pg-loss-reducer-function-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code><a class="headerlink" href="#custom-pg-loss-reducer-function-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>Purpose</strong>: Customize the reduction of pg_loss while other metrics (pg_clipfrac, ppo_kl, entropy_loss, etc.) still use the default sum_of_sample_mean.</p>
 <p><strong>Signature</strong>:</p>
@@ -879,8 +879,8 @@
 </ul>
 </section>
 <hr class="docutils" />
-<section id="reward-post-processing-custom-reward-post-process-path">
-<h3>12. Reward Post-Processing (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)<a class="headerlink" href="#reward-post-processing-custom-reward-post-process-path" title="Link to this heading">#</a></h3>
+<section id="custom-reward-post-process-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code><a class="headerlink" href="#custom-reward-post-process-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code> (uses default GRPO normalization)</p>
 <p><strong>Purpose</strong>: Custom post-processing of rewards before advantage computation.</p>
 <p><strong>Use Cases</strong>:</p>
@@ -890,8 +890,8 @@
 </ul>
 </section>
 <hr class="docutils" />
-<section id="samples-to-train-data-conversion-custom-convert-samples-to-train-data-path">
-<h3>13. Samples to Train Data Conversion (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)<a class="headerlink" href="#samples-to-train-data-conversion-custom-convert-samples-to-train-data-path" title="Link to this heading">#</a></h3>
+<section id="custom-convert-samples-to-train-data-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code><a class="headerlink" href="#custom-convert-samples-to-train-data-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code> (uses built-in conversion logic)</p>
 <p><strong>Purpose</strong>: Override the conversion of samples to training data format.</p>
 <p><strong>Signature</strong>:</p>
@@ -928,7 +928,7 @@
 </section>
 <hr class="docutils" />
 <section id="logging-functions">
-<h3>14. Logging Functions<a class="headerlink" href="#logging-functions" title="Link to this heading">#</a></h3>
+<h3>Logging functions<a class="headerlink" href="#logging-functions" title="Link to this heading">#</a></h3>
 <section id="training-rollout-logging-custom-rollout-log-function-path">
 <h4>Training Rollout Logging (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)<a class="headerlink" href="#training-rollout-logging-custom-rollout-log-function-path" title="Link to this heading">#</a></h4>
 <p><strong>Signature</strong>:</p>
@@ -947,8 +947,8 @@
 </section>
 </section>
 <hr class="docutils" />
-<section id="data-source-data-source-path">
-<h3>15. Data Source (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)<a class="headerlink" href="#data-source-data-source-path" title="Link to this heading">#</a></h3>
+<section id="data-source-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code><a class="headerlink" href="#data-source-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.data_source.RolloutDataSourceWithBuffer</span></code></p>
 <p><strong>Purpose</strong>: Override the data source for rollout prompts.</p>
 <p><strong>Base Class</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.data_source.DataSource</span></code></p>
@@ -972,8 +972,8 @@
 </div>
 </section>
 <hr class="docutils" />
-<section id="evaluation-function-eval-function-path">
-<h3>16. Evaluation Function (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)<a class="headerlink" href="#evaluation-function-eval-function-path" title="Link to this heading">#</a></h3>
+<section id="eval-function-path">
+<h3><code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code><a class="headerlink" href="#eval-function-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: Same as <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code></p>
 <p><strong>Purpose</strong>: Override the rollout function specifically for evaluation.</p>
 <p><strong>Use Cases</strong>:</p>
@@ -984,7 +984,7 @@
 </section>
 <hr class="docutils" />
 <section id="megatron-hooks">
-<h3>17. Megatron Hooks<a class="headerlink" href="#megatron-hooks" title="Link to this heading">#</a></h3>
+<h3>Megatron hooks<a class="headerlink" href="#megatron-hooks" title="Link to this heading">#</a></h3>
 <section id="megatron-initialization-custom-megatron-init-path">
 <h4>Megatron Initialization (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)<a class="headerlink" href="#megatron-initialization-custom-megatron-init-path" title="Link to this heading">#</a></h4>
 <p><strong>Signature</strong>:</p>
@@ -1134,30 +1134,30 @@ Covers <code class="docutils literal notranslate"><span class="pre">--custom-rol
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#overview-of-customization-interfaces">Overview of Customization Interfaces</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agentic-workflows-through-customization-interfaces">Agentic workflows through customization interfaces</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#detailed-interface-reference">Detailed Interface Reference</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-function-rollout-function-path">1. Rollout Function (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-custom-generate-function-path">2. Custom Generate Function (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-function-path"><code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-path"><code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#returning-multiple-training-samples-for-one-prompt">Returning multiple training samples for one prompt</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reward-model-custom-rm-path">3. Reward Model (<code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling-filter-dynamic-sampling-filter-path">4. Dynamic Sampling Filter (<code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#buffer-filter-buffer-filter-path">5. Buffer Filter (<code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-sample-filter-rollout-sample-filter-path">6. Rollout Sample Filter (<code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-all-samples-process-rollout-all-samples-process-path">7. Rollout All Samples Process (<code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-data-postprocess-rollout-data-postprocess-path">8. Rollout Data Postprocess (<code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-loss-function-custom-loss-function-path">9. Custom Loss Function (<code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-tis-rs-function-custom-tis-function-path">10. Custom TIS/RS Function (<code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-pg-loss-reducer-custom-pg-loss-reducer-function-path">11. Custom pg_loss Reducer (<code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reward-post-processing-custom-reward-post-process-path">12. Reward Post-Processing (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#samples-to-train-data-conversion-custom-convert-samples-to-train-data-path">13. Samples to Train Data Conversion (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logging-functions">14. Logging Functions</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rm-path"><code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling-filter-path"><code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#buffer-filter-path"><code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-sample-filter-path"><code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-all-samples-process-path"><code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-data-postprocess-path"><code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-loss-function-path"><code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-tis-function-path"><code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-pg-loss-reducer-function-path"><code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-reward-post-process-path"><code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-convert-samples-to-train-data-path"><code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logging-functions">Logging functions</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#training-rollout-logging-custom-rollout-log-function-path">Training Rollout Logging (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#evaluation-rollout-logging-custom-eval-rollout-log-function-path">Evaluation Rollout Logging (<code class="docutils literal notranslate"><span class="pre">--custom-eval-rollout-log-function-path</span></code>)</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-data-source-path">15. Data Source (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#evaluation-function-eval-function-path">16. Evaluation Function (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hooks">17. Megatron Hooks</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-path"><code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eval-function-path"><code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hooks">Megatron hooks</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-initialization-custom-megatron-init-path">Megatron Initialization (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#before-log-prob-hook-custom-megatron-before-log-prob-hook-path">Before Log Prob Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#before-train-step-hook-custom-megatron-before-train-step-hook-path">Before Train Step Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)</a></li>
@@ -1201,7 +1201,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 24, 2026.
+  Last updated on Aug 26, 2026.
   <br/>
 </p>
   </div>

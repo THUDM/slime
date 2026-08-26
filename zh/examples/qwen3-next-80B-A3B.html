@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>8xH100 训练 Qwen3-30B-A3B &#8212; slime</title>
+    <title>Qwen3-Next-80B-A3B 训练示例 &#8212; slime</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=30c3115b"></script>
+    <script src="../_static/documentation_options.js?v=eedc492e"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -56,8 +56,8 @@
     <link rel="search" title="搜索" href="../search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-  <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 24 日"/>
+  <meta name="docsearch:version" content="0.3.1" />
+    <meta name="docbuild:last-update" content="2026 年 08 月 26 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -481,7 +481,7 @@
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>8xH100 训练 Qwen3-30B-A3B</h1>
+    <h1>Qwen3-Next-80B-A3B 训练示例</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -505,8 +505,8 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section class="tex2jax_ignore mathjax_ignore" id="xh100-qwen3-30b-a3b">
-<h1>8xH100 训练 Qwen3-30B-A3B<a class="headerlink" href="#xh100-qwen3-30b-a3b" title="链接到此标题。">#</a></h1>
+  <section class="tex2jax_ignore mathjax_ignore" id="qwen3-next-80b-a3b">
+<h1>Qwen3-Next-80B-A3B 训练示例<a class="headerlink" href="#qwen3-next-80b-a3b" title="链接到此标题。">#</a></h1>
 <section id="id1">
 <h2>环境准备<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
 <p>搭建环境、下载模型、数据与 ckpt 转换均与 Qwen3-4B 模型相同，可以参考 <a class="reference internal" href="qwen3-4B.html"><span class="std std-doc">示例：Qwen3-4B</span></a>，将文中 Qwen3-4B 的部分转换为
@@ -578,7 +578,7 @@ Go to the flash-linear-attention folder you just installed, and apply the follow
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
 <span class="nb">export</span><span class="w"> </span><span class="nv">BASE_FOLDER</span><span class="o">=</span>/root
 <span class="nb">export</span><span class="w"> </span><span class="nv">MASTER_ADDR</span><span class="o">=</span><span class="m">127</span>.0.0.1
-bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B-8gpus.sh<span class="w"> </span>
+<span class="nv">ACTOR_NUM_NODES</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="nv">CP_SIZE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B.sh
 </pre></div>
 </div>
 <p>如果显存不够，考虑disable <code class="docutils literal notranslate"><span class="pre">--accumulate-allreduce-grads-in-fp32</span></code>，enable <code class="docutils literal notranslate"><span class="pre">--grad-reduce-in-bf16</span></code></p>
@@ -586,7 +586,8 @@ bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B-8gpus.sh<span class="
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
 <span class="nb">export</span><span class="w"> </span><span class="nv">BASE_FOLDER</span><span class="o">=</span>/root
 <span class="nb">export</span><span class="w"> </span><span class="nv">MASTER_ADDR</span><span class="o">=</span>your_master_addr
-bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B.sh<span class="w"> </span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">HOSTFILE</span><span class="o">=</span>/path/to/hostfile
+bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B.sh
 </pre></div>
 </div>
 </section>
@@ -657,7 +658,7 @@ bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B.sh<span class="w"> </
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 24 日.
+  最后更新于 2026 年 08 月 26 日.
   <br/>
 </p>
   </div>
