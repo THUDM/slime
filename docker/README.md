@@ -26,7 +26,7 @@ just release-cu13      # CUDA 13 (cu130 base, Blackwell): publishes `latest-cu13
 
 `slimerl/slime:latest` tracks the CUDA 12 build. The tag suffixes (`-cu129` /
 `-cu130`) match the SGLang base image. `docker/Dockerfile` branches on the base
-image's CUDA version; it defaults to the cu130 SGLang base, and the cu129 base
+image's CUDA version; it defaults to the cu129 SGLang base, while the cu130 base
 is selected via build args (see `docker/justfile`).
 
 To build a single image directly without publishing:
@@ -55,4 +55,3 @@ The following components are pinned and rebuilt in the image:
 
 For a non-default GPU architecture list, pass
 `--build-arg DEEPEP_CUDA_ARCH_LIST='<torch arch list>'`.
-
