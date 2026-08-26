@@ -110,3 +110,7 @@ def test_spec_fields_still_fall_back_to_args():
     )
 
     assert datasets[0].temperature == 0.9
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

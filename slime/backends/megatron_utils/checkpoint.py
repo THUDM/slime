@@ -92,7 +92,7 @@ logger = logging.getLogger(__name__)
 __all__ = ["save_checkpoint"]
 
 
-def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_context, skip_load_to_model_and_opt):
+def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_context):
     # ref: how megatron `load_checkpoint` gets directory
     args = get_args()
     load_path = args.load
@@ -107,7 +107,7 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
             optimizer=optimizer,
             opt_param_scheduler=opt_param_scheduler,
             checkpointing_context=checkpointing_context,
-            skip_load_to_model_and_opt=skip_load_to_model_and_opt,
+            skip_load_to_model_and_opt=False,
         )
     else:
         return _load_checkpoint_hf(

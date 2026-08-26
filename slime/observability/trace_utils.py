@@ -94,12 +94,6 @@ class TraceSpanContext:
             _log_trace_error("update", exc)
         return self
 
-    def set_attr(self, key: str, value: Any) -> TraceSpanContext:
-        return self.set(key, value)
-
-    def update_attrs(self, attrs: dict[str, Any] | None) -> TraceSpanContext:
-        return self.update(attrs)
-
     def build_end_attrs(self) -> dict[str, Any] | None:
         return dict(self.end_attrs) or None
 

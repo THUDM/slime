@@ -3,6 +3,13 @@ from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 import torch
 
+# A ROCm PyTorch build makes CUDAExtension hipify the sources and call hipcc,
+# which rejects the nvcc-only flags below. The gfx target is passed through
+# PYTORCH_ROCM_ARCH instead of -gencode.
+IS_ROCM = torch.version.hip is not None
+if IS_ROCM:
+    os.environ.setdefault("PYTORCH_ROCM_ARCH", "gfx950")
+
 # Get CUDA arch list
 arch_list = []
 if torch.cuda.is_available():
@@ -32,18 +39,22 @@ setup(
                     "-O3",
                     "-std=c++17",
                 ],
-                "nvcc": [
-                    "-O3",
-                    "-std=c++17",
-                    "--expt-relaxed-constexpr",
-                    "-Xcompiler",
-                    "-fPIC",
-                ]
-                + [
-                    f'-gencode=arch=compute_{arch.replace(".", "")},code=sm_{arch.replace(".", "")}'
-                    for arch in arch_list
-                ]
-                + ["-gencode=arch=compute_90a,code=sm_90a"],
+                "nvcc": (
+                    ["-O3", "-std=c++17"]
+                    if IS_ROCM
+                    else [
+                        "-O3",
+                        "-std=c++17",
+                        "--expt-relaxed-constexpr",
+                        "-Xcompiler",
+                        "-fPIC",
+                    ]
+                    + [
+                        f'-gencode=arch=compute_{arch.replace(".", "")},code=sm_{arch.replace(".", "")}'
+                        for arch in arch_list
+                    ]
+                    + ["-gencode=arch=compute_90a,code=sm_90a"]
+                ),
             },
         )
     ],

@@ -448,7 +448,6 @@ def get_reinforce_plus_plus_returns(
 def get_reinforce_plus_plus_baseline_advantages(
     rewards: torch.Tensor,
     kl: list[torch.Tensor],
-    loss_masks: list[torch.Tensor],
     kl_coef: float,
 ) -> list[torch.Tensor]:
     """
@@ -460,7 +459,6 @@ def get_reinforce_plus_plus_baseline_advantages(
                                 baseline has already been subtracted.
         kl (list[Tensor]): A list of per-token KL divergence tensors. Used to
                                  get the shape for broadcasting.
-        loss_masks (list[Tensor]): A list of per-token loss masks.
         kl_coef (float): Coefficient for the KL penalty.
 
     Returns:

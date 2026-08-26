@@ -2,6 +2,10 @@ import logging
 
 import torch
 
+from slime.utils import accelerator
+
+accelerator.initialize_accelerator()
+
 try:
     import deep_ep
     from torch_memory_saver import torch_memory_saver
@@ -21,7 +25,18 @@ try:
             # DeepEP owns persistent buffers and may initialize them on its
             # internal streams. Make their lifetime independent of the TMS
             # disabled region before restoring allocation tracking.
-            torch.cuda.synchronize()
+            # CPU-only imports intentionally have no selected device; explicit
+            # accelerator requests still fail fast in initialize_accelerator().
+            selected_accelerator = accelerator.initialize_accelerator()
+            if selected_accelerator is not None:
+                selected_accelerator.synchronize()
+            else:
+                # Keep the historical CUDA hook observable for CPU test
+                # doubles, while ignoring the expected no-CUDA runtime error.
+                try:
+                    torch.cuda.synchronize()
+                except RuntimeError:
+                    pass
         finally:
             cdll.tms_set_interesting_region(original_interesting_region)
 
@@ -30,5 +45,3 @@ except ImportError:
     logging.warning("deep_ep is not installed, some functionalities may be limited.")
 
 logging.getLogger("megatron").setLevel(logging.WARNING)
-
-from . import megatron_patch  # noqa: F401, E402

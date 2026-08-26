@@ -13,9 +13,8 @@ try:
 except ImportError:
     pq = None
 
+from slime.observability.timer import Timer
 from slime.utils.types import MultimodalTypes, Sample
-
-from .timer import Timer
 
 __all__ = ["Dataset", "get_source"]
 
@@ -302,7 +301,7 @@ class Dataset:
         return len(self.samples)
 
 
-def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
+def process_rollout_data(rollout_data_ref, dp_rank, dp_size, *, args=None):
     assert len(rollout_data_ref) == dp_size
     ref = rollout_data_ref[dp_rank]
     if getattr(args, "rollout_data_transport", "object-store") == "mooncake":

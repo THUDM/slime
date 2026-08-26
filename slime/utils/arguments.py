@@ -10,8 +10,8 @@ import yaml
 from slime.backends.sglang_utils.arguments import sglang_parse_args
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 from slime.backends.sglang_utils.external import apply_external_engine_info_to_args
+from slime.observability.logging_utils import configure_logger
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
-from slime.utils.logging_utils import configure_logger
 
 logger = logging.getLogger(__name__)
 
@@ -343,7 +343,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--rollout-temperature",
                 type=float,
                 default=1.0,
-                help="the temperature for the inference engine during rollout.",
+                help="the temperature for the inference engine during rollout. Must be > 0.",
             )
             parser.add_argument(
                 "--rollout-top-p", type=float, default=1.0, help="the top-p for the inference engine during rollout."
@@ -1306,13 +1306,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
             )
             parser.add_argument(
-                "--profile-target",
-                type=str,
-                choices=["train_overall", "train_actor", "train_log_probs"],
-                default=["train_overall"],
-                nargs="+",
-            )
-            parser.add_argument(
                 "--memory-recorder",
                 type=str,
                 choices=["torch", "memray"],
@@ -1635,7 +1628,7 @@ def parse_args(add_custom_arguments=None):
 
     slime_validate_args(args)
 
-    if pre.train_backend == "megatron" and not args.debug_rollout_only:
+    if not args.debug_rollout_only:
         megatron_validate_args(args)
 
     if not args.debug_train_only:
@@ -1768,6 +1761,11 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
 def slime_validate_args(args):
     args.eval_datasets = _resolve_eval_datasets(args)
 
+    if args.rollout_temperature <= 0:
+        raise ValueError(
+            "--rollout-temperature must be > 0; temperature 0 is greedy decoding and is not a valid RL policy."
+        )
+
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):
             raise FileNotFoundError(f"ref_load {args.ref_load} does not exist, please check the path.")
@@ -1886,6 +1884,9 @@ def slime_validate_args(args):
     if args.dump_details is not None:
         args.save_debug_rollout_data = f"{args.dump_details}/rollout_data/{{rollout_id}}.pt"
         args.save_debug_train_data = f"{args.dump_details}/train_data/{{rollout_id}}.pt"
+
+    if args.save_debug_train_data is not None and args.save_debug_train_data == args.save_debug_rollout_data:
+        raise ValueError("--save-debug-train-data must not be equal to --save-debug-rollout-data.")
 
     if args.load_debug_rollout_data is not None:
         logger.info(
@@ -2037,8 +2038,6 @@ def slime_validate_args(args):
             "a filesystem shared between the trainer and the rollout engines."
         )
     if args.release_train:
-        if args.train_backend != "megatron":
-            raise ValueError("--release-train is only supported with the Megatron train backend.")
         if args.use_critic:
             raise ValueError("--release-train does not support critic training yet.")
         if args.keep_old_actor:

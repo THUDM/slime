@@ -14,8 +14,9 @@ External rollout engine 指的是：SGLang engine 不由 slime 训练任务启�
 | 训练器和 external engine 不能建立 NCCL group，但能共享同一路径的文件系统 | `--update-weight-mode full --update-weight-transport disk` |
 | 大模型跨集群或跨数据中心同步，full checkpoint 太重 | `--update-weight-mode delta --update-weight-transport disk` |
 | rollout serving 想使用独立 SGLang 环境，甚至不同型号或不同厂家的 GPU | external engine + disk transport |
-| 想验证 delta wire/apply 逻辑，但仍在同一数据中心内 | `--update-weight-mode delta --update-weight-transport nccl` |
 | 需要 reference、reward、tool-side model 等冻结模型 | 优先用 [SGLang Config](sglang-config.md#3-多模型服务) 的 `update_weights: false` |
+
+delta mode 仅支持 disk transport。通过 NCCL 同步权重时请使用 full mode。
 
 ## External Engine 做了什么
 

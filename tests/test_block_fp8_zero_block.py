@@ -73,3 +73,7 @@ def test_block_fp8_nonzero_blocks_unaffected(converter):
     # FP8 e4m3 relative error is ~2^-3, so a tolerance of 0.5 is generous
     # for randn-scale values and only guards against gross corruption.
     assert max_err < 0.5
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

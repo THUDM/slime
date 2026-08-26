@@ -1,18 +1,15 @@
-"""Test-internal compact-rollout helpers used by ``test_qwen2.5_0.5B_fanout_short.py``.
+"""Compact-rollout helpers for ``test_qwen2.5_0.5B_fanout_short.py``.
 
-The underscore prefix marks this as test infrastructure — it is not part
-of the user-facing slime API and is not re-exported anywhere. It lives
-in ``slime/`` only so the test can reference it by a dotted module path
-(``--custom-generate-function-path`` / ``--custom-reward-post-process-path``
-resolve a string via ``importlib.import_module``, which can't handle the
-dots in the e2e test's filename).
+These helpers are imported by module path from the Ray job started by the E2E
+test. They live on the test-only portion of ``PYTHONPATH`` because they are
+test fixtures, not part of slime's public or internal runtime API.
 
 Two helpers:
 
   - ``compact_generate``: fans one input sample out to N siblings
     sharing the same ``rollout_id``. That's the contract the rest of the
     framework (per-rollout step splitter, per-rollout-mean reducer,
-    ``_validate_rollout_id_annotated`` validator) is built around.
+    ``validate_rollout_id_annotated`` validator) is built around.
 
   - ``grpo_normalize_by_group_index``: replaces the default
     ``_post_process_rewards`` reshape-by-shape logic with a proper
