@@ -13,6 +13,7 @@ def quantize_params_fp8(args, megatron_name, converted_named_params, quantizatio
     assert fmt == "e4m3", f"Unsupported FP8 format: {fmt}"
     assert quantization_config["activation_scheme"] == "dynamic"
     weight_block_size = quantization_config.get("weight_block_size", None)
+    force_ue8m0_scale = getattr(args, "force_fp8_ue8m0_scale", False)
 
     decoder_layers_pattern = r"module\.module\.decoder\.layers\.(\d+)\.(.+)"
     match = re.match(decoder_layers_pattern, megatron_name)
@@ -44,7 +45,13 @@ def quantize_params_fp8(args, megatron_name, converted_named_params, quantizatio
                 if converted_name.endswith("_scale"):
                     continue
                 quantize_named_params.extend(
-                    _quantize_param(converted_name, param, weight_block_size, transform_ue8m0)
+                    _quantize_param(
+                        converted_name,
+                        param,
+                        weight_block_size,
+                        transform_ue8m0,
+                        force_ue8m0_scale=force_ue8m0_scale,
+                    )
                 )
 
             return quantize_named_params
@@ -61,7 +68,13 @@ def quantize_params_fp8(args, megatron_name, converted_named_params, quantizatio
             quantize_named_params = []
             for converted_name, param in converted_named_params:
                 quantize_named_params.extend(
-                    _quantize_param(converted_name, param, weight_block_size, transform_ue8m0)
+                    _quantize_param(
+                        converted_name,
+                        param,
+                        weight_block_size,
+                        transform_ue8m0,
+                        force_ue8m0_scale=force_ue8m0_scale,
+                    )
                 )
 
             return quantize_named_params
@@ -87,7 +100,15 @@ def quantize_params_fp8(args, megatron_name, converted_named_params, quantizatio
     ]:
         quantize_named_params = []
         for converted_name, param in converted_named_params:
-            quantize_named_params.extend(_quantize_param(converted_name, param, weight_block_size, transform_ue8m0))
+            quantize_named_params.extend(
+                _quantize_param(
+                    converted_name,
+                    param,
+                    weight_block_size,
+                    transform_ue8m0,
+                    force_ue8m0_scale=force_ue8m0_scale,
+                )
+            )
 
         return quantize_named_params
 
@@ -95,16 +116,26 @@ def quantize_params_fp8(args, megatron_name, converted_named_params, quantizatio
     return converted_named_params
 
 
-def _quantize_param(name, weight, weight_block_size, transform_ue8m0=True):
+def _quantize_param(
+    name,
+    weight,
+    weight_block_size,
+    transform_ue8m0=True,
+    force_ue8m0_scale=False,
+):
     assert name.endswith(".weight"), f"Expected weight parameter, got {name}"
     FP8_MIN = torch.finfo(torch.float8_e4m3fn).min
     FP8_MAX = torch.finfo(torch.float8_e4m3fn).max
     if weight_block_size is not None:
-        if should_deepgemm_weight_requant_ue8m0 and should_deepgemm_weight_requant_ue8m0(
-            weight_block_size=weight_block_size
-        ):
+        runtime_requires_ue8m0 = bool(
+            should_deepgemm_weight_requant_ue8m0
+            and should_deepgemm_weight_requant_ue8m0(weight_block_size=weight_block_size)
+        )
+        if force_ue8m0_scale or runtime_requires_ue8m0:
             qweight, scale = quant_weight_ue8m0(weight, weight_block_size=weight_block_size)
-            if transform_ue8m0:
+            # Hopper keeps the power-of-two scales in the canonical FP32 block
+            # layout. Only the Blackwell DeepGEMM runtime consumes packed UE8M0.
+            if runtime_requires_ue8m0 and transform_ue8m0:
                 scale = transform_scale_ue8m0(scale, mn=qweight.shape[-2])
         else:
             qweight, scale = blockwise_cast_to_fp8_triton(weight, weight_block_size)

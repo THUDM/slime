@@ -119,6 +119,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default="{}",
                 help="Extra environment variables for training process, e.g. PyTorch memory management ones.",
             )
+            parser.add_argument(
+                "--force-fp8-ue8m0-scale",
+                action="store_true",
+                default=False,
+                help=(
+                    "Quantize block-FP8 rollout weights with power-of-two FP32 scales, "
+                    "independent of the training GPU architecture. Blackwell-only scale "
+                    "packing remains controlled by the rollout runtime requirements."
+                ),
+            )
             # Delta weight sync.
             parser.add_argument(
                 "--update-weight-mode",
