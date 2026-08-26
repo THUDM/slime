@@ -643,6 +643,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_on_policy_distillation.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "observability/test_trace_utils.py"
             },
             {

@@ -40,6 +40,8 @@ $$
 
 其中 $A_t$ 来自所配置的 estimator（纯蒸馏时为零），$\lambda_{\mathrm{opd}}$ 是 `--opd-kl-coef`。尽管 KL 的期望非负，单个样本的 $\hat d_t$ 仍可能为负。策略损失使用修改后的 $\hat A_t$，因此 OPD 项与 GRPO、PPO、REINFORCE++、GSPO 等 advantage estimator 的选择相互独立。
 
+学生和教师分布都在 `--rollout-temperature` 下计算。记 $p_T = \operatorname{softmax}(z_\theta / T)$、$q_T = \operatorname{softmax}(z_{\mathrm{teacher}} / T)$，slime 估计的是 $D_{\mathrm{KL}}(p_T \| q_T)$。如果只缩放学生 logits，则会变成另一个目标 $D_{\mathrm{KL}}(p_T \| q_1)$。
+
 ## 两种教师模式
 
 ### SGLang 模式 (`--opd-type sglang`)
@@ -53,6 +55,8 @@ $$
 2. 在 rollout 阶段，自定义 reward 函数（`slime.rollout.on_policy_distillation.reward_func`）将学生采样的 token ID 发送给教师服务器，并获取教师对这些相同 token 的 log-probability。
 3. 自定义后处理函数（`slime.rollout.on_policy_distillation.post_process_rewards`）将教师 log-probs 裁剪到 response 范围并存储到 `sample.teacher_log_probs` 中。
 4. 在训练阶段，slime 从基础 advantage 中减去按 `--opd-kl-coef` 缩放后的采样 log-probability 差值。
+
+当 `--rollout-temperature` 不为 `1.0` 时，SGLang 教师必须支持 `input_logprob_temperature` 请求选项；slime 自带的 SGLang 版本已包含该补丁。对于不支持该选项的外部服务器，slime 会拒绝其响应，避免静默地混用 $p_T$ 与 $q_1$；温度为 `1.0` 时仍兼容原版 SGLang。
 
 **配置**：
 ```bash

@@ -1,3 +1,5 @@
+import json
+import math
 import os
 import subprocess
 import time
@@ -33,6 +35,7 @@ def _launch_teacher_server(teacher_gpu: str):
     """Launch an sglang teacher server on the specified GPU."""
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = teacher_gpu
+    env["SGLANG_RETURN_ORIGINAL_LOGPROB"] = "0"
 
     log_path = "/tmp/sglang_teacher.log"
     log_file = open(log_path, "w")
@@ -65,15 +68,63 @@ def _launch_teacher_server(teacher_gpu: str):
             raise RuntimeError(f"Teacher server process exited with code {process.returncode}. Check {log_path}")
         try:
             req = urllib.request.urlopen(f"http://{TEACHER_HOST}:{TEACHER_PORT}/health_generate", timeout=2)
-            if req.status == 200:
-                print(f"Teacher sglang server is ready on GPU {teacher_gpu}")
-                return process
         except Exception:
             pass
+        else:
+            if req.status == 200:
+                print(f"Teacher sglang server is ready on GPU {teacher_gpu}")
+                _verify_teacher_input_logprob_temperature()
+                return process
         time.sleep(5)
 
     process.kill()
     raise RuntimeError(f"Teacher server failed to start within timeout. Check {log_path}")
+
+
+def _post_teacher(payload):
+    request = urllib.request.Request(
+        f"http://{TEACHER_HOST}:{TEACHER_PORT}/generate",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.load(response)
+
+
+def _verify_teacher_input_logprob_temperature():
+    temperature = 0.8
+    prefix = [3838, 374, 279, 6722, 315, 9625]
+
+    generated = _post_teacher(
+        {
+            "input_ids": prefix,
+            "sampling_params": {"temperature": temperature, "max_new_tokens": 1},
+            "return_logprob": True,
+            "logprob_start_len": 0,
+        }
+    )
+    output_token = generated["output_ids"][0]
+    output_logprob = generated["meta_info"]["output_token_logprobs"][0][0]
+
+    scored = _post_teacher(
+        {
+            "input_ids": [*prefix, output_token],
+            "sampling_params": {
+                "temperature": 1.0,
+                "max_new_tokens": 0,
+            },
+            "input_logprob_temperature": temperature,
+            "return_logprob": True,
+            "logprob_start_len": 0,
+        }
+    )
+    input_logprob = scored["meta_info"]["input_token_logprobs"][-1][0]
+
+    assert scored["meta_info"]["input_logprob_temperature"] == temperature
+    assert math.isclose(input_logprob, output_logprob, rel_tol=2e-3, abs_tol=2e-3), (
+        input_logprob,
+        output_logprob,
+    )
 
 
 def execute():
