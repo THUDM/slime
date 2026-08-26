@@ -1,13 +1,54 @@
+import importlib.util
+import sys
 import threading
+import types
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from slime.backends.megatron_utils.update_weight import update_weight_from_distributed as update_module
-
-
 NUM_GPUS = 0
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+
+@pytest.fixture
+def update_module(monkeypatch):
+    """Load the orchestration module without requiring Megatron in CPU CI."""
+    megatron_mod = types.ModuleType("megatron")
+    megatron_core_mod = types.ModuleType("megatron.core")
+    mpu_mod = types.ModuleType("megatron.core.mpu")
+    mpu_mod.get_data_parallel_rank = lambda with_context_parallel=True: 0
+    mpu_mod.get_tensor_model_parallel_rank = lambda: 0
+    mpu_mod.get_pipeline_model_parallel_rank = lambda: 0
+    mpu_mod.get_pipeline_model_parallel_world_size = lambda: 1
+    megatron_core_mod.mpu = mpu_mod
+    megatron_mod.core = megatron_core_mod
+
+    megatron_to_hf_mod = types.ModuleType("slime.backends.megatron_utils.megatron_to_hf")
+    megatron_to_hf_mod.convert_to_hf = lambda *args, **kwargs: []
+    common_mod = types.ModuleType("slime.backends.megatron_utils.update_weight.common")
+    common_mod.all_gather_param = lambda _name, param: param
+    common_mod.named_params_and_buffers = lambda _args, _model: ()
+
+    monkeypatch.setitem(sys.modules, "megatron", megatron_mod)
+    monkeypatch.setitem(sys.modules, "megatron.core", megatron_core_mod)
+    monkeypatch.setitem(sys.modules, "megatron.core.mpu", mpu_mod)
+    monkeypatch.setitem(sys.modules, "slime.backends.megatron_utils.megatron_to_hf", megatron_to_hf_mod)
+    monkeypatch.setitem(sys.modules, "slime.backends.megatron_utils.update_weight.common", common_mod)
+
+    module_name = "slime.backends.megatron_utils.update_weight.update_weight_from_distributed_cpu_test"
+    module_path = (
+        REPO_ROOT / "slime" / "backends" / "megatron_utils" / "update_weight" / "update_weight_from_distributed.py"
+    )
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, module_name, module)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 class _OppositeArrivalScheduler:
@@ -49,7 +90,7 @@ class _OppositeArrivalScheduler:
         self._release_deadlock.set()
 
 
-def test_pp_weight_update_groups_are_connected_in_global_order(monkeypatch):
+def test_pp_weight_update_groups_are_connected_in_global_order(monkeypatch, update_module):
     scheduler = _OppositeArrivalScheduler()
     train_barrier = threading.Barrier(2)
     rank_context = threading.local()
@@ -133,7 +174,7 @@ class _Lock:
         self.release = _RemoteMethod(None)
 
 
-def test_failed_group_join_cancels_refs_and_kills_associated_engines(monkeypatch):
+def test_failed_group_join_cancels_refs_and_kills_associated_engines(monkeypatch, update_module):
     engines = [_Engine("ref-0"), _Engine("ref-1")]
     cancelled = []
     killed = []
@@ -183,7 +224,7 @@ def test_failed_group_join_cancels_refs_and_kills_associated_engines(monkeypatch
     assert killed == [(engines[0], True), (engines[1], True)]
 
 
-def test_transfer_failure_releases_rollout_engine_lock(monkeypatch):
+def test_transfer_failure_releases_rollout_engine_lock(monkeypatch, update_module):
     released = []
     lock = _Lock()
     lock.release.remote = lambda: released.append(True)
@@ -213,7 +254,7 @@ def test_transfer_failure_releases_rollout_engine_lock(monkeypatch):
     assert released == [True]
 
 
-def test_failed_reconnect_does_not_retain_destroyed_group(monkeypatch):
+def test_failed_reconnect_does_not_retain_destroyed_group(monkeypatch, update_module):
     old_group = object()
     disconnected = []
 
