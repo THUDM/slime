@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 project = "slime"
 copyright = f"2025-{datetime.now().year}, slime"

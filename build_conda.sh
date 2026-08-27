@@ -27,11 +27,13 @@ export CUDA_HOME="$CONDA_PREFIX"
 #   - MEGATRON_COMMIT (ARG)             -> MEGATRON_COMMIT below
 #   - PATCH_VERSION (ARG, default "latest") -> PATCH_VERSION below
 #   - TMS_COMMIT (ARG)                   -> TMS_COMMIT below
+#   - FLASH_QLA_COMMIT (ARG)             -> FLASH_QLA_COMMIT below
 export SGLANG_VERSION="v0.5.15.post1"
 export SGLANG_COMMIT="0b3bb0cbe31873994c9f989fddfe2f87ca839fdd"
 export MEGATRON_COMMIT="1dcf0dafa884ad52ffb243625717a3471643e087"
 export PATCH_VERSION="v0.5.15.post1"
 export TMS_COMMIT="8d30c59ca12a68d9deccbc9c6599076a1218cbc5"
+export FLASH_QLA_COMMIT="821fd9d37ede18fdc2a4e707fefe3770bfc32e58"
 
 export BASE_DIR=${BASE_DIR:-"/root"}
 cd $BASE_DIR
@@ -51,14 +53,13 @@ micromamba install -n slime -c conda-forge cudnn -y
 # setuptools-rust), so the conda env needs a working rustc + cargo.
 micromamba install -n slime -c conda-forge rust -y
 
-pip install cuda-python==12.9
-
 # install sglang. The Dockerfile starts FROM slimerl/sglang:v0.5.15.post1-cu129
 # which already has sglang installed with cu129-built native kernels; we have
-# to install it ourselves here. Two follow-up steps clean up the cu13 spill:
-#   1. force-reinstall torch / sglang-kernel / sgl-deep-gemm to their +cu129
+# to install it ourselves here. Three follow-up steps clean up the cu13 spill:
+#   1. restore cuda-python 12.9 after SGLang's >=13 dependency upgrades it;
+#   2. force-reinstall torch / sglang-kernel / sgl-deep-gemm to their +cu129
 #      wheels (pypi defaults are cu13);
-#   2. uninstall the cu13 nvidia-* runtime libs sglang dragged in, then
+#   3. uninstall the cu13 nvidia-* runtime libs sglang dragged in, then
 #      reinstall the cu12 equivalents to repair the `site-packages/nvidia/*`
 #      shared dirs (pip uninstall stomps libs co-owned across cu12/cu13).
 if [ ! -d "$BASE_DIR/sglang" ]; then
@@ -68,6 +69,7 @@ fi
 cd $BASE_DIR/sglang
 git checkout ${SGLANG_COMMIT}
 pip install -e "python[all]" --extra-index-url https://download.pytorch.org/whl/cu129
+pip install --force-reinstall "cuda-python==12.9"
 pip install --force-reinstall --no-deps \
   torch==2.11.0+cu129 torchvision==0.26.0+cu129 torchaudio==2.11.0+cu129 \
   --index-url https://download.pytorch.org/whl/cu129
@@ -125,7 +127,7 @@ pip install --no-deps \
 
 pip install flash-linear-attention==0.4.2
 # FlashQLA: optional GDN backend for Qwen3.5/Qwen3-Next (--qwen-gdn-backend flashqla; requires SM90+)
-pip install git+https://github.com/QwenLM/FlashQLA.git --no-build-isolation
+pip install git+https://github.com/QwenLM/FlashQLA.git@${FLASH_QLA_COMMIT} --no-build-isolation
 # tilelang (matches Dockerfile)
 pip install tilelang -f https://tile-ai.github.io/whl/nightly/cu128/
 
@@ -193,7 +195,7 @@ if [ ! -d "$patch_dir" ]; then
 fi
 
 cd $BASE_DIR/sglang
-for patch_name in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch; do
+for patch_name in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch sglang-deterministic.patch; do
   patch_path="$patch_dir/${patch_name}"
   if [ ! -f "$patch_path" ]; then
     continue
@@ -208,33 +210,45 @@ for patch_name in sglang.patch sglang-top_p.patch sglang-release_hicache.patch s
   fi
 done
 cd $BASE_DIR/Megatron-LM
-megatron_patch="$patch_dir/megatron.patch"
-if [ ! -f "$megatron_patch" ]; then
-  echo "Megatron patch does not exist: $megatron_patch" >&2
-  exit 1
-fi
-if git apply --reverse --check "$megatron_patch"; then
-  echo "megatron.patch already applied, skipping"
-else
-  git update-index --refresh || true
-  if ! git apply "$megatron_patch" --3way; then
-    echo "megatron.patch does not apply cleanly" >&2
-    exit 1
+for patch_name in megatron.patch megatron-sglang-aligned.patch; do
+  patch_path="$patch_dir/${patch_name}"
+  if [ ! -f "$patch_path" ]; then
+    if [ "$patch_name" = "megatron.patch" ]; then
+      echo "Megatron patch does not exist: $patch_path" >&2
+      exit 1
+    fi
+    continue
   fi
-  if git grep -n '^<<<<<<< ' -- .; then
-    echo "megatron patch failed to apply cleanly. Please resolve conflicts." >&2
-    exit 1
+
+  if git apply --reverse --check "$patch_path"; then
+    echo "$patch_name already applied, skipping"
+  else
+    git update-index --refresh || true
+    if ! git apply "$patch_path" --3way; then
+      echo "$patch_name does not apply cleanly" >&2
+      exit 1
+    fi
+    if git grep -n '^<<<<<<< ' -- .; then
+      echo "$patch_name failed to apply cleanly. Please resolve conflicts." >&2
+      exit 1
+    fi
   fi
-fi
+done
 
 python - <<'PY'
+from importlib.metadata import version
+
 import sglang
 import torch
 import torchaudio
 import torchvision
+from packaging.version import Version
 
 assert torch.__version__ == "2.11.0+cu129"
 assert torchaudio.__version__ == "2.11.0+cu129"
 assert torchvision.__version__ == "0.26.0+cu129"
+assert Version(version("cuda-python")).release[:2] == (12, 9)
+assert version("sglang-kernel") == "0.4.4"
+assert version("sgl-deep-gemm") == "0.1.4"
 assert hasattr(torch.ops.torchvision, "nms")
 PY
