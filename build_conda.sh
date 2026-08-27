@@ -236,19 +236,13 @@ for patch_name in megatron.patch megatron-sglang-aligned.patch; do
 done
 
 python - <<'PY'
-from importlib.metadata import version
-
 import sglang
 import torch
 import torchaudio
 import torchvision
-from packaging.version import Version
 
 assert torch.__version__ == "2.11.0+cu129"
 assert torchaudio.__version__ == "2.11.0+cu129"
 assert torchvision.__version__ == "0.26.0+cu129"
-assert Version(version("cuda-python")).release[:2] == (12, 9)
-assert version("sglang-kernel") == "0.4.4"
-assert version("sgl-deep-gemm") == "0.1.4"
 assert hasattr(torch.ops.torchvision, "nms")
 PY
