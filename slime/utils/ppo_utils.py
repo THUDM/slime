@@ -2,6 +2,7 @@
 # and https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/trainer/ppo_utils/experience_maker.py
 
 from argparse import Namespace
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -169,6 +170,42 @@ def compute_cispo_loss(
     pg_losses = -ratio_truncated.detach() * advantages * log_probs
     clipfrac = (ratio_truncated != ratio).float()
     return pg_losses, clipfrac
+
+
+def off_policy_is_function(
+    args: Namespace,
+    *,
+    pg_loss: torch.Tensor,
+    cur_log_probs: list[torch.Tensor],
+    rollout_log_probs: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    **kwargs: Any,
+) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
+    """Truncated IS with the *current* policy in the numerator.
+
+    Same contract as ``vanilla_tis_function``: clip with ``--tis-clip-low`` /
+    ``--tis-clip`` and return ``(pg_loss, loss_masks, metrics)`` with
+    ``tis`` / ``tis_clipfrac`` / ``tis_abs``. The (detached) weight is
+    ``clip(pi_theta / pi_rollout)`` against the actual rollout logprob, so one
+    weight corrects both train/inference mismatch and async staleness. Vanilla
+    TIS uses frozen ``pi_theta_old / pi_rollout``, which matches this only in
+    the single-update-per-rollout limit. ``loss_masks`` are unchanged.
+
+    Select with ``--use-tis --custom-tis-function-path slime.utils.ppo_utils.off_policy_is_function``.
+    """
+    cur = torch.cat([lp.detach() for lp in cur_log_probs], dim=0)
+    rollout = torch.cat(rollout_log_probs, dim=0)
+    tis = torch.exp(cur - rollout)
+    tis_abs = (tis - 1).abs()
+    tis_weights = torch.clamp(tis, min=args.tis_clip_low, max=args.tis_clip)
+    tis_clipfrac = (tis_weights != tis).float()
+    metrics = {
+        "tis": tis.clone().detach(),
+        "tis_clipfrac": tis_clipfrac.clone().detach(),
+        "tis_abs": tis_abs.clone().detach(),
+    }
+    pg_loss = pg_loss * tis_weights
+    return pg_loss, loss_masks, metrics
 
 
 def _maybe_all_reduce(tensor: torch.Tensor, op: dist.ReduceOp, process_group) -> None:
