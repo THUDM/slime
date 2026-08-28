@@ -1,8 +1,10 @@
+import logging
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
-from slime.utils import accelerator
+from slime.utils import accelerator, memory_utils
 
 NUM_GPUS = 0
 
@@ -69,6 +71,56 @@ def reset_accelerator_selection(monkeypatch):
     accelerator._MUSA_BOOTSTRAP_CHECKED = bootstrap_checked
 
 
+@pytest.fixture
+def peak_memory_module(monkeypatch):
+    module = SimpleNamespace(
+        reset_peak_memory_stats=Mock(),
+        max_memory_allocated=Mock(return_value=25 * 1024**3),
+        max_memory_reserved=Mock(return_value=30 * 1024**3),
+    )
+    backend = SimpleNamespace(
+        supports=lambda capability: capability == "peak_memory",
+        accelerator_module=lambda: module,
+    )
+    monkeypatch.setattr(accelerator, "get_accelerator", lambda: backend)
+    monkeypatch.setattr(memory_utils.dist, "get_rank", lambda: 3)
+    return module
+
+
+@pytest.mark.unit
+def test_peak_memory_report_uses_selected_accelerator(peak_memory_module, caplog):
+    with caplog.at_level(logging.INFO, logger="slime.utils.memory_utils"):
+        with memory_utils.report_peak_memory("actor_train"):
+            peak_memory_module.reset_peak_memory_stats.assert_called_once()
+
+    assert caplog.messages[-1] == ("[Rank 3] Peak-Memory actor_train: max_allocated_GB=25.0, max_reserved_GB=30.0")
+
+
+@pytest.mark.unit
+def test_peak_memory_report_runs_when_body_raises(peak_memory_module, caplog):
+    error = RuntimeError("device out of memory")
+
+    with caplog.at_level(logging.INFO, logger="slime.utils.memory_utils"):
+        with pytest.raises(RuntimeError) as exc_info:
+            with memory_utils.report_peak_memory("log_probs"):
+                raise error
+
+    assert exc_info.value is error
+    assert caplog.messages[-1].startswith("[Rank 3] Peak-Memory log_probs:")
+
+
+@pytest.mark.unit
+def test_peak_memory_report_skips_unsupported_accelerator(monkeypatch, caplog):
+    backend = SimpleNamespace(supports=lambda _capability: False)
+    monkeypatch.setattr(accelerator, "get_accelerator", lambda: backend)
+
+    with caplog.at_level(logging.INFO, logger="slime.utils.memory_utils"):
+        with memory_utils.report_peak_memory("actor_train"):
+            pass
+
+    assert "Peak-Memory" not in caplog.text
+
+
 @pytest.mark.unit
 def test_cuda_selection_does_not_bootstrap_musa(monkeypatch):
     monkeypatch.setenv("SLIME_ACCELERATOR", "cuda")
@@ -89,7 +141,12 @@ def test_cuda_selection_does_not_bootstrap_musa(monkeypatch):
 @pytest.mark.unit
 def test_selected_musa_bootstraps_patch_once(monkeypatch):
     imports = []
-    fake_musa = SimpleNamespace(is_available=lambda: True)
+    fake_musa = SimpleNamespace(
+        is_available=lambda: True,
+        reset_peak_memory_stats=lambda: None,
+        max_memory_allocated=lambda: 0,
+        max_memory_reserved=lambda: 0,
+    )
 
     def import_musa_patch():
         imports.append("musa_patch")
@@ -102,6 +159,7 @@ def test_selected_musa_bootstraps_patch_once(monkeypatch):
     assert imports == []
     assert accelerator.initialize_accelerator().name == "musa"
     assert accelerator.initialize_accelerator().name == "musa"
+    assert accelerator.initialize_accelerator().supports("peak_memory")
     assert imports == ["musa_patch"]
 
 
@@ -163,6 +221,7 @@ def test_cuda_backend_uses_torch_cuda_namespace(monkeypatch):
     assert backend.is_available()
     assert backend.device_name() == "cuda:1"
     assert backend.memory_allocated() == 123
+    assert backend.supports("peak_memory")
 
 
 @pytest.mark.unit
