@@ -347,7 +347,7 @@ slime 支持更复杂的采样策略，例如 [DAPO](https://dapo-sia.github.io/
      slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
 ```
 
-这里 `over_sampling_batch_size` 需要大于 `rollout_batch_size`，例如配置为：
+这里 `over_sampling_batch_size` 必须为正数，例如配置为：
 
 ```bash
    --rollout-batch-size 32 \
