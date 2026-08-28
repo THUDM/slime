@@ -5,7 +5,7 @@ This directory provides an example of running end-to-end **SWE (Software-Enginee
 Two example files, the shared harness package, and one shared adapter implement the loop:
 
 - `generate.py` — per-sample `generate()` registered via `--custom-generate-function-path`. Boots the sandbox, prepares the SWE workspace, runs the coding harness (claude-code), captures the diff, scores it, and emits one or more `Sample`s back to slime.
-- `slime.agent.adapters.AnthropicAdapter` — the shared Anthropic Messages adapter. claude-code talks to it as if it were Anthropic; the adapter tokenizes the current message history each turn, records prompt/output token snapshots, preserves model-generated tokens (`loss_mask=1`) only while later prompts stitch onto them, and masks template/observation tokens (`0`). Each turn is routed into a per-session message tree inside `slime.agent.trajectory.TrajectoryManager`; any divergence in the prompt prefix forks a new branch, so sub-agent dispatches and auto-compaction are handled as separate root-to-leaf chains. `get_trajectory` linearizes each leaf chain into one `Sample`.
+- `slime.agent.adapters.AnthropicAdapter` — the shared Anthropic Messages adapter. claude-code talks to it as if it were Anthropic; the adapter tokenizes the current message history each turn, records prompt/output token snapshots, preserves model-generated tokens (`loss_mask=1`) only while later prompts stitch onto them, and masks template/observation tokens (`0`). Each turn is routed into a per-session message tree inside `slime.agent.trajectory.TrajectoryManager`; any divergence in the prompt prefix forks a new branch, so sub-agent dispatches and auto-compaction are handled as separate root-to-leaf chains. `get_trajectory` linearizes each leaf chain into one or more `Sample`s.
 - `slime.agent.harness` — harness-agnostic coding-agent lifecycle (install CLI, write config, spawn detached, poll done-marker). `BaseHarness` defines the contract; `CLAUDE_CODE` / `CODEX` are the shipped implementations. Adding a harness is one new file. The shared sandbox contract lives in `slime.agent.sandbox.Sandbox`.
 - `swe.py` — harness-agnostic SWE task layer built on `slime.agent.sandbox`: `prepare_workspace` (pre_commands + PROBLEM_STATEMENT.md), `git_diff` (patch capture), and `evaluate` (fresh-sandbox grading). `SWE_PROMPT` is the task instruction handed to whichever harness runs.
 
@@ -181,9 +181,9 @@ prompt-base restarts.
 
 ## Fan-out Semantics
 
-- `generate()` returns `list[Sample]` — one Sample per root-to-leaf chain in the per-session message tree.
-- Per-trajectory reward is split as `reward / K` across chains; `rollout_id` is shared so the per-rollout-mean loss reducer still counts the trajectory once.
-- Sub-agent dispatch and auto-compaction increase `K` (each prompt-prefix divergence forks a new branch), so the effective batch after flatten can be much larger than `rollout_batch_size * n_samples_per_prompt`.
+- `generate()` returns `list[Sample]` — at least one per root-to-leaf chain in the per-session message tree. Fan-out happens at two levels: the tree branches when a later prompt's message history diverges (sub-agent dispatch, auto-compaction, or a long rewritten assistant turn each forks a chain), and token-level drift inside one chain splits it into multiple Samples (see String-in, Token-out Trajectories).
+- Reward is per trajectory: the grader returns one scalar outcome (1.0 solved, 0.0 otherwise), assigned in full to every emitted Sample — not split — so each trained turn carries the trajectory's outcome. All Samples from one trajectory share `rollout_id`, so the per-rollout-mean loss reducer counts the trajectory once instead of N times: fan-out adds training tokens, not reward weight.
+- The flattened batch can therefore be much larger than `rollout_batch_size * n_samples_per_prompt`; the multiplier is driven by how often the two fan-out paths fire, not by the rollout batch shape. Note: with the launcher's GRPO estimator, reward normalization assumes each prompt contributes exactly `n_samples_per_prompt` samples; once fan-out breaks that, the baseline is computed over the whole batch instead of within each prompt's group.
 
 ## Porting to a New Sandbox Backend
 
