@@ -21,8 +21,8 @@ import argparse
 
 import pytest
 
+from fanout_test_helpers import grpo_normalize_by_group_index
 from slime.utils.types import Sample
-
 
 NUM_GPUS = 0
 
@@ -170,6 +170,22 @@ def test_round_trip_through_default_constructed_sample():
     assert restored.status is Sample.Status.PENDING
     assert restored.tokens == []
     assert restored.metadata == {}
+
+
+@pytest.mark.unit
+def test_fanout_reward_normalization_counts_each_rollout_once():
+    args = argparse.Namespace(reward_key=None, grpo_std_normalization=False)
+    samples = [
+        Sample(group_index=0, index=0, rollout_id=10, reward=1.0),
+        Sample(group_index=0, index=0, rollout_id=10, reward=1.0),
+        Sample(group_index=0, index=0, rollout_id=10, reward=1.0),
+        Sample(group_index=0, index=1, rollout_id=11, reward=0.0),
+    ]
+
+    raw_rewards, rewards = grpo_normalize_by_group_index(args, samples)
+
+    assert raw_rewards == [1.0, 1.0, 1.0, 0.0]
+    assert rewards == pytest.approx([0.5, 0.5, 0.5, -0.5])
 
 
 # ---------------------------------------------------------------------------
