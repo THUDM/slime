@@ -40,6 +40,8 @@ slime 支持将训练部分和推理部分分开进行调试，从而实现：
 
    开启后，slime 将不会加载 sglang，只初始化 megatron ，可以用这个方法来进行训练部分的调试。
 
+   如果 `--eval-function-path` 显式指定了一个不依赖 SGLang 的自定义评测函数，仍可使用周期性评测。训练单独调试模式下设置 `--eval-interval` 却未提供该函数时，slime 会直接报错，而不是静默跳过所有评测。
+
 2. `--save-debug-rollout-data /your/saved/debug/data_{rollout_id}.pt`
 
    开启后，会保存每次 rollout 的结果，可以和 `--debug-rollout-only` 配合使用。注意保存的方式为 `args.save_debug_rollout_data.format(rollout_id=rollout_id)`。
