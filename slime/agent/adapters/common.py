@@ -29,6 +29,9 @@ from slime.agent.trajectory import TrajectoryManager, TurnRecord
 
 __all__ = ["TurnRecord"]
 
+# Pooled per-app SGLang client, created on the app event loop by cleanup_ctx.
+SGLANG_CLIENT_KEY = web.AppKey("sglang_client", aiohttp.ClientSession)
+
 
 @dataclasses.dataclass
 class Session:
@@ -169,6 +172,8 @@ class BaseAdapter:
         # per-sid turn cap: return 429 to kill the run once exceeded
         self.max_turns_per_sid: int | None = max_turns_per_sid
         self._sid_turn_count: dict[str, int] = {}
+
+        self.app.cleanup_ctx.append(_sglang_client_ctx)
 
         self.app.router.add_get("/healthz", _health)
         self.app.router.add_get("/v1/models", _health)
@@ -439,6 +444,52 @@ def _sampling_params(session: Any, body: dict, *, max_token_keys: tuple[str, ...
     return sp
 
 
+async def _sglang_client_ctx(app: web.Application):
+    connector = aiohttp.TCPConnector(limit=0, ttl_dns_cache=300, keepalive_timeout=60)
+    timeout = aiohttp.ClientTimeout(total=None, sock_read=900)
+    app[SGLANG_CLIENT_KEY] = aiohttp.ClientSession(timeout=timeout, connector=connector)
+    try:
+        yield
+    finally:
+        await app[SGLANG_CLIENT_KEY].close()
+
+
+async def _post_sglang_generate(
+    client: aiohttp.ClientSession,
+    sglang_url: str,
+    *,
+    rid: str,
+    prompt_ids: list[int],
+    sampling_params: dict,
+    headers: dict[str, str] | None,
+    logger: logging.Logger,
+    log_prefix: str,
+    session_id: str | None,
+) -> dict:
+    async with client.post(
+        f"{sglang_url}/generate",
+        json={
+            "rid": rid,
+            "input_ids": prompt_ids,
+            "sampling_params": sampling_params,
+            "return_logprob": True,
+        },
+        headers=headers,
+    ) as r:
+        if r.status >= 400:
+            text = await r.text()
+            logger.warning(
+                "[%s] sid=%s rid=%s sglang upstream %d: %.200s",
+                log_prefix,
+                session_id,
+                rid,
+                r.status,
+                text,
+            )
+            raise RuntimeError(f"sglang upstream {r.status}: {text[:400]}")
+        return await r.json(content_type=None)
+
+
 async def call_sglang_generate(
     prompt_ids: list[int],
     session: Any,
@@ -468,32 +519,41 @@ async def call_sglang_generate(
         sp["max_new_tokens"] = min(int(sp.get("max_new_tokens", remaining_context)), remaining_context)
 
     sglang_url = adapter.sglang_url
+    client = adapter.app[SGLANG_CLIENT_KEY]
     rid = uuid.uuid4().hex
     headers = {"X-SMG-Routing-Key": session_id} if session_id and session_id != "default" else None
-    timeout = aiohttp.ClientTimeout(total=None, sock_read=900)
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as sess, sess.post(
-            f"{sglang_url}/generate",
-            json={
-                "rid": rid,
-                "input_ids": prompt_ids,
-                "sampling_params": sp,
-                "return_logprob": True,
-            },
-            headers=headers,
-        ) as r:
-            if r.status >= 400:
-                text = await r.text()
-                logger.warning(
-                    "[%s] sid=%s rid=%s sglang upstream %d: %.200s",
-                    adapter.log_prefix,
-                    session_id,
-                    rid,
-                    r.status,
-                    text,
-                )
-                raise RuntimeError(f"sglang upstream {r.status}: {text[:400]}")
-            data = await r.json(content_type=None)
+        try:
+            data = await _post_sglang_generate(
+                client,
+                sglang_url,
+                rid=rid,
+                prompt_ids=prompt_ids,
+                sampling_params=sp,
+                headers=headers,
+                logger=logger,
+                log_prefix=adapter.log_prefix,
+                session_id=session_id,
+            )
+        except aiohttp.ClientConnectorError:
+            # Connector errors occur before request bytes reach SGLang.
+            logger.warning(
+                "[%s] sid=%s rid=%s retrying SGLang generate after connector failure",
+                adapter.log_prefix,
+                session_id,
+                rid,
+            )
+            data = await _post_sglang_generate(
+                client,
+                sglang_url,
+                rid=rid,
+                prompt_ids=prompt_ids,
+                sampling_params=sp,
+                headers=headers,
+                logger=logger,
+                log_prefix=adapter.log_prefix,
+                session_id=session_id,
+            )
         meta = data.get("meta_info") or {}
         output_token_logprobs = meta.get("output_token_logprobs") or []
         output_ids = [x[1] for x in output_token_logprobs]
@@ -504,8 +564,10 @@ async def call_sglang_generate(
         # orphaned generation keeps occupying KV until its own length cap
         logger.debug("[%s] sid=%s rid=%s turn aborted: %s", adapter.log_prefix, session_id, rid, type(e).__name__)
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as s2:
-                await s2.post(f"{sglang_url}/abort_request", json={"rid": rid})
+            async with client.post(
+                f"{sglang_url}/abort_request", json={"rid": rid}, timeout=aiohttp.ClientTimeout(total=5)
+            ):
+                pass
         except Exception:
             pass
         raise
