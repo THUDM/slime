@@ -1,12 +1,17 @@
 from .math_utils import extract_answer, grade_answer_mathd, grade_answer_sympy
 
 
-def get_deepscaler_rule_based_reward(response, label):
+def _extract_solution_text(response: str) -> str | None:
     if "</think>" in response:
-        model_solution = response.split("</think>")[-1]
-    elif "###Response" in response:
-        model_solution = response.split("###Response")[1]
-    else:
+        return response.split("</think>")[-1]
+    if "###Response" in response:
+        return response.split("###Response")[1]
+    return response
+
+
+def get_deepscaler_rule_based_reward(response, label):
+    model_solution = _extract_solution_text(response)
+    if not model_solution:
         return 0
 
     model_answer = extract_answer(model_solution)
