@@ -20,7 +20,7 @@ from slime.rollout.sample_hooks import apply_rollout_sample_hooks
 from slime.utils.async_utils import run
 from slime.utils.data import Dataset
 from slime.utils.eval_config import EvalDatasetConfig
-from slime.utils.http_utils import get, get_rollout_num_engines, post
+from slime.utils.http_utils import bearer_auth_headers, get, get_rollout_num_engines, post
 from slime.utils.misc import SingletonMeta, load_function
 from slime.utils.processing_utils import (
     build_processor_kwargs,
@@ -193,11 +193,10 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if not sample.tokens:
         sample.tokens = prompt_ids
 
-    # Use session_id for consistent hashing routing (SGLang Model Gateway)
-    headers = None
-    if sample.session_id:
-        if getattr(args, "router_policy", None) == "consistent_hashing":
-            headers = {"X-SMG-Routing-Key": sample.session_id}
+    headers = bearer_auth_headers(getattr(args, "router_api_key", None))
+    if sample.session_id and getattr(args, "router_policy", None) == "consistent_hashing":
+        headers["X-SMG-Routing-Key"] = sample.session_id
+    headers = headers or None
 
     with trace_span(sample, "sglang_generate", attrs={"max_new_tokens": sampling_params["max_new_tokens"]}) as span:
         output = await post(url, payload, headers=headers)
@@ -343,10 +342,13 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
     assert not state.aborted
     state.aborted = True
 
-    response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers")
+    router_headers = bearer_auth_headers(getattr(args, "router_api_key", None)) or None
+    response = await get(
+        f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers", headers=router_headers
+    )
     urls = [worker["url"] for worker in response["workers"]]
 
-    await abort_servers_until_idle(urls)
+    await abort_servers_until_idle(urls, api_key=getattr(args, "sglang_api_key", None))
 
     # make sure all the pending tasks are finished
     count = 0
