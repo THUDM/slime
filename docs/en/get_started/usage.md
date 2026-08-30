@@ -198,6 +198,7 @@ The recommended contract is to put the source identifier in `metadata["source_na
     - `grpo` ([https://arxiv.org/abs/2402.03300](https://arxiv.org/abs/2402.03300))
     - `gspo` ([https://arxiv.org/abs/2507.18071](https://arxiv.org/abs/2507.18071))
     - `cispo` ([https://arxiv.org/abs/2506.13585](https://arxiv.org/abs/2506.13585))
+    - `reinforce` (GRPO-style group baseline with the additive `-A log pi` surrogate; no PPO clip or IS ratio)
     - `reinforce_plus_plus` and `reinforce_plus_plus_baseline` ([https://arxiv.org/abs/2501.03262](https://arxiv.org/abs/2501.03262))
     - `ppo` ([https://arxiv.org/abs/1707.06347](https://arxiv.org/abs/1707.06347))
 

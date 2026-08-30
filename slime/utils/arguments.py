@@ -955,6 +955,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "grpo",
                     "gspo",
                     "cispo",
+                    "reinforce",
                     "reinforce_plus_plus",
                     "reinforce_plus_plus_baseline",
                     "ppo",
