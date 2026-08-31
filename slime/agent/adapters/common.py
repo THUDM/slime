@@ -539,9 +539,7 @@ async def _abort_sglang_request(sglang_url: str, rid: str, logger: logging.Logge
                         exc,
                     )
 
-            await asyncio.gather(
-                *(abort_worker(worker) for worker in workers if isinstance(worker, dict))
-            )
+            await asyncio.gather(*(abort_worker(worker) for worker in workers if isinstance(worker, dict)))
     except Exception as exc:
         logger.warning(
             "SGLang abort request failed: url=%s rid=%s error=%s",
