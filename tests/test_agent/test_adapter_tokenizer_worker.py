@@ -56,6 +56,21 @@ class _BlockingTokenizer(FakeTokenizer):
                 self.active -= 1
 
 
+class _DelayedCancellationSemaphore(asyncio.BoundedSemaphore):
+    def __init__(self, value: int) -> None:
+        super().__init__(value)
+        self.cancellation_started = asyncio.Event()
+        self.finish_cancellation = asyncio.Event()
+
+    async def acquire(self) -> bool:
+        try:
+            return await super().acquire()
+        except asyncio.CancelledError:
+            self.cancellation_started.set()
+            await self.finish_cancellation.wait()
+            raise
+
+
 class _Request:
     def __init__(self, sid: str, body: dict) -> None:
         self.headers = {"Authorization": f"Bearer {sid}"}
@@ -217,6 +232,9 @@ def test_cancel_during_admission_handoff_returns_the_permit():
 def test_repeated_cancellation_does_not_wait_for_admission():
     async def run_case():
         worker = TokenizerWorker(max_pending=1)
+        worker.bind_to_current_loop()
+        slots = _DelayedCancellationSemaphore(1)
+        worker._slots = slots
         release = threading.Event()
         started = threading.Event()
 
@@ -233,9 +251,14 @@ def test_repeated_cancellation_does_not_wait_for_admission():
 
         second.cancel()
         asyncio.get_running_loop().call_soon(second.cancel)
+        await asyncio.wait_for(slots.cancellation_started.wait(), timeout=0.1)
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(asyncio.shield(second), timeout=0.1)
         assert not first.done()
+        assert worker._acquire_tasks
+
+        slots.finish_cancellation.set()
+        await _wait_until(lambda: not worker._acquire_tasks)
 
         release.set()
         assert await first == [1]
