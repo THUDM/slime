@@ -214,6 +214,42 @@ def test_cancel_during_admission_handoff_returns_the_permit():
     assert metrics["worker"]["admission_waiters"] == 0
 
 
+def test_repeated_cancellation_does_not_wait_for_admission():
+    async def run_case():
+        worker = TokenizerWorker(max_pending=1)
+        release = threading.Event()
+        started = threading.Event()
+
+        def blocking_render() -> list[int]:
+            started.set()
+            if not release.wait(timeout=5):
+                raise TimeoutError("test render was not released")
+            return [1]
+
+        first = asyncio.create_task(worker.render(blocking_render))
+        await _wait_until(started.is_set)
+        second = asyncio.create_task(worker.render(lambda: [2]))
+        await _wait_until(lambda: len(worker._acquire_tasks) == 1)
+
+        second.cancel()
+        asyncio.get_running_loop().call_soon(second.cancel)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(second), timeout=0.1)
+        assert not first.done()
+
+        release.set()
+        assert await first == [1]
+        assert await asyncio.wait_for(worker.render(lambda: [3]), timeout=0.25) == [3]
+        metrics = worker.snapshot()
+        await worker.close()
+        return metrics
+
+    metrics = asyncio.run(run_case())
+    assert metrics["worker"]["outstanding"] == 0
+    assert metrics["worker"]["admission_waiters"] == 0
+    assert metrics["counters"]["render_cancelled_total"] == 1
+
+
 def test_client_cancellation_stays_cancelled_after_worker_is_marked_closed():
     async def run_case():
         worker = TokenizerWorker(max_pending=1)
