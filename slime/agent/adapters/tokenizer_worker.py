@@ -120,19 +120,13 @@ class TokenizerWorker:
             close_cancelled = acquire_task in self._close_cancelled_acquires
             if not acquire_task.done():
                 acquire_task.cancel()
-            while not acquire_task.done():
-                try:
-                    await asyncio.shield(acquire_task)
-                except asyncio.CancelledError:
-                    pass
-            if acquire_task.done() and not acquire_task.cancelled() and acquire_task.exception() is None:
-                self._slots.release()
+            acquire_task.add_done_callback(self._release_cancelled_acquire)
             if close_cancelled:
                 self._request_rejected_after_close()
                 raise RuntimeError("tokenizer worker is closed") from None
             self._request_cancelled_before_submit()
             raise
-        finally:
+        else:
             self._acquire_tasks.discard(acquire_task)
             self._close_cancelled_acquires.discard(acquire_task)
 
@@ -163,6 +157,13 @@ class TokenizerWorker:
         if result is None:
             raise RuntimeError("tokenizer render result was discarded")
         return result
+
+    def _release_cancelled_acquire(self, acquire_task: asyncio.Task) -> None:
+        self._acquire_tasks.discard(acquire_task)
+        self._close_cancelled_acquires.discard(acquire_task)
+        if not acquire_task.cancelled() and acquire_task.exception() is None:
+            assert self._slots is not None
+            self._slots.release()
 
     def _execute(self, job: _RenderJob) -> list[int] | None:
         started_at = time.monotonic()
