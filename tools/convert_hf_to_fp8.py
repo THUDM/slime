@@ -113,7 +113,12 @@ class ConversionResult:
             self.modules_to_not_convert.extend(module_names)
 
 
-def process_file(input_path, output_path, filename, strategy, block_size, result_collector):
+def _matches_skip_rule(key: str, skip_substrings) -> bool:
+    return any(sub in key for sub in skip_substrings if sub)
+
+
+def process_file(input_path, output_path, filename, strategy, block_size, result_collector, skip_substrings=None):
+    skip_substrings = skip_substrings or []
     if not filename.endswith(".safetensors"):
         return
 
@@ -129,6 +134,7 @@ def process_file(input_path, output_path, filename, strategy, block_size, result
     for key in weights.keys():
         if (
             "weight" in key
+            and not _matches_skip_rule(key, skip_substrings)
             and "layernorm" not in key
             and "embed" not in key
             and "router" not in key
@@ -159,7 +165,16 @@ def process_file(input_path, output_path, filename, strategy, block_size, result
     result_collector.add_result(filename, q_weights, modules_to_not_convert)
 
 
-def convert_fp8(input_path, output_path, strategy, block_size=None, max_workers=4, scale_fmt=None):
+def convert_fp8(
+    input_path,
+    output_path,
+    strategy,
+    block_size=None,
+    max_workers=4,
+    scale_fmt=None,
+    skip_substrings=None,
+):
+    skip_substrings = skip_substrings or []
     input_path = os.path.abspath(input_path)
     os.makedirs(output_path, exist_ok=True)
 
@@ -175,7 +190,14 @@ def convert_fp8(input_path, output_path, strategy, block_size=None, max_workers=
         futures = []
         for filename in safetensors_files:
             future = executor.submit(
-                process_file, input_path, output_path, filename, strategy, block_size, result_collector
+                process_file,
+                input_path,
+                output_path,
+                filename,
+                strategy,
+                block_size,
+                result_collector,
+                skip_substrings,
             )
             futures.append(future)
 
@@ -254,6 +276,12 @@ if __name__ == "__main__":
     parser.add_argument("--block-size", type=int, nargs="*", default=None, help="eg. --block-size 128 128")
     parser.add_argument("--max-workers", type=int, default=1, help="Number of worker threads for parallel processing")
     parser.add_argument("--scale-fmt", type=str, default=None, choices=["ue8m0"])
+    parser.add_argument(
+        "--skip-substrings",
+        nargs="*",
+        default=[],
+        help="Keep matching weights in BF16, e.g. --skip-substrings self_attn",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.save_dir):
@@ -262,4 +290,12 @@ if __name__ == "__main__":
     elif not os.path.isdir(args.save_dir):
         raise ValueError("The save_dir should be a directory.")
 
-    convert_fp8(args.model_dir, args.save_dir, args.strategy, args.block_size, args.max_workers, args.scale_fmt)
+    convert_fp8(
+        args.model_dir,
+        args.save_dir,
+        args.strategy,
+        args.block_size,
+        args.max_workers,
+        args.scale_fmt,
+        args.skip_substrings,
+    )
