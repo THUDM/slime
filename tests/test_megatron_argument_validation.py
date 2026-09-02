@@ -325,6 +325,8 @@ def test_slime_validate_args_preserves_larger_rollout_gpus_under_colocate(monkey
         actor_num_gpus_per_node=8,
         actor_num_nodes=1,
         rollout_num_gpus=12,
+        update_weight_transport="disk",
+        update_weight_disk_dir="/shared/weights",
     )
 
     module.slime_validate_args(args)
@@ -332,6 +334,85 @@ def test_slime_validate_args_preserves_larger_rollout_gpus_under_colocate(monkey
     assert args.rollout_num_gpus == 12
     assert args.offload_train is True
     assert args.offload_rollout is True
+
+
+@pytest.mark.unit
+def test_slime_validate_args_rejects_colocated_megatron_offload_with_full_nccl(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(colocate=True, rollout_num_gpus=8)
+
+    with pytest.raises(ValueError, match="--update-weight-mode=full --update-weight-transport=disk") as exc_info:
+        module.slime_validate_args(args)
+
+    message = str(exc_info.value)
+    assert "--update-weight-transport=disk" in message
+    assert "--update-weight-disk-dir" in message
+    assert "--no-offload-train" in message
+    assert "delta" not in message
+
+
+@pytest.mark.unit
+def test_slime_validate_args_rejects_ppo_forced_colocated_offload_with_full_nccl(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        advantage_estimator="ppo",
+        colocate=True,
+        rollout_num_gpus=8,
+        offload_train=False,
+    )
+
+    with pytest.raises(ValueError, match="Colocated Megatron weight updates"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_slime_validate_args_rejects_dangerous_custom_config(monkeypatch, tmp_path):
+    module = load_slime_arguments_module(monkeypatch)
+    custom_config = tmp_path / "dangerous.yaml"
+    custom_config.write_text(
+        "colocate: true\n"
+        "rollout_num_gpus: 8\n"
+        "offload_train: true\n"
+        "update_weight_mode: full\n"
+        "update_weight_transport: nccl\n"
+    )
+    args = make_slime_validate_args(
+        custom_config_path=str(custom_config),
+        update_weight_transport="disk",
+        update_weight_disk_dir="/shared/weights",
+    )
+
+    with pytest.raises(ValueError, match="Colocated Megatron weight updates"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_slime_validate_args_allows_colocated_full_nccl_without_train_offload(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        colocate=True,
+        rollout_num_gpus=8,
+        offload_train=False,
+    )
+
+    module.slime_validate_args(args)
+
+    assert args.offload_train is False
+    assert args.offload_rollout is True
+
+
+@pytest.mark.unit
+def test_slime_validate_args_allows_debug_train_only_with_colocated_full_nccl(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        colocate=True,
+        rollout_num_gpus=8,
+        debug_train_only=True,
+    )
+
+    module.slime_validate_args(args)
+
+    assert args.offload_train is True
 
 
 @pytest.mark.unit

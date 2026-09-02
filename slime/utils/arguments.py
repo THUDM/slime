@@ -2041,6 +2041,23 @@ def slime_validate_args(args):
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")
 
+    if (
+        args.train_backend == "megatron"
+        and args.colocate
+        and args.rollout_num_gpus > 0
+        and not args.debug_train_only
+        and args.offload_train
+        and args.update_weight_mode == "full"
+        and args.update_weight_transport == "nccl"
+    ):
+        raise ValueError(
+            "Colocated Megatron weight updates with --offload-train and "
+            "--update-weight-mode=full --update-weight-transport=nccl are unsupported: "
+            "colocated engines use CUDA IPC, which is incompatible with torch_memory_saver offload. "
+            "Use --update-weight-mode=full --update-weight-transport=disk with a shared "
+            "--update-weight-disk-dir, or disable training offload with --no-offload-train."
+        )
+
     # disk-backed sync (full or delta) writes on the trainer and reads on the engines: needs a shared dir
     if args.update_weight_transport == "disk" and not args.update_weight_disk_dir:
         raise ValueError(
