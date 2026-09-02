@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 import traceback
 from pathlib import Path
@@ -11,24 +12,53 @@ from slime.utils.memory_utils import print_memory
 logger = logging.getLogger(__name__)
 
 
+def _env_flag(name: str) -> bool:
+    """Read a boolean env var. Accepts 1/true/yes (case-insensitive) as truthy."""
+    return os.environ.get(name, "0").lower() not in ("0", "", "false", "no")
+
+
+def _should_profile_this_rank() -> bool:
+    """Rank 0 only by default; per-rank profiler buffers can host-OOM on large MoE.
+    Set SLIME_PROFILE_ALL_RANKS=1 to profile every rank."""
+    if _env_flag("SLIME_PROFILE_ALL_RANKS"):
+        return True
+    if not torch.distributed.is_initialized():
+        return True
+    return torch.distributed.get_rank() == 0
+
+
 class TrainProfiler:
+    """torch.profiler + memory profilers across training phases. Targets (via
+    ``--profile-target``, a list): train_overall (full rollout, large traces),
+    train_actor (one grad-accum step, small), train_log_probs (one log-probs forward)."""
+
     def __init__(self, args):
         self.args = args
         self._torch_profiler_overall = None
         self._memory_profiler_overall = None
+        self._torch_profiler_train_actor = None
+        self._torch_profiler_train_actor_started = False
+        self._torch_profiler_train_log_probs = None
+        self._torch_profiler_train_log_probs_started = False
 
-        if args.use_pytorch_profiler:
-            self._torch_profiler_overall = _create_torch_profiler(args, name="train_overall")
-
-        if args.record_memory_history:
-            self._memory_profiler_overall = _BaseMemoryProfiler.create(args)
-            self._memory_profiler_overall.start()
+        if _should_profile_this_rank():
+            if args.use_pytorch_profiler and ("train_overall" in args.profile_target):
+                self._torch_profiler_overall = _create_torch_profiler(args, name="train_overall")
+            if args.use_pytorch_profiler and ("train_actor" in args.profile_target):
+                self._torch_profiler_train_actor = _create_torch_profiler(args, name="train_actor")
+            if args.use_pytorch_profiler and ("train_log_probs" in args.profile_target):
+                self._torch_profiler_train_log_probs = _create_torch_profiler(args, name="train_log_probs")
+            if args.record_memory_history and ("train_overall" in args.profile_target):
+                self._memory_profiler_overall = _BaseMemoryProfiler.create(args)
+                self._memory_profiler_overall.start()
 
     def on_init_end(self):
+        # train_overall starts at init; per-step profilers start lazily on first tick.
         if self._torch_profiler_overall is not None:
             self._torch_profiler_overall.start()
 
     def step(self, rollout_id: int):
+        """Advance the train_overall profiler once per rollout."""
         if self._torch_profiler_overall is not None:
             self._torch_profiler_overall.step()
 
@@ -39,13 +69,55 @@ class TrainProfiler:
         ):
             self._memory_profiler_overall.stop()
 
+    def step_train_actor(self):
+        """Advance the train_actor profiler one tick per grad-accum step."""
+        if self._torch_profiler_train_actor is None:
+            return
+        if not self._torch_profiler_train_actor_started:
+            self._torch_profiler_train_actor.start()
+            self._torch_profiler_train_actor_started = True
+        self._torch_profiler_train_actor.step()
+
+    def step_train_log_probs(self):
+        """Advance the train_log_probs profiler one tick per log-probs step."""
+        if self._torch_profiler_train_log_probs is None:
+            return
+        if not self._torch_profiler_train_log_probs_started:
+            self._torch_profiler_train_log_probs.start()
+            self._torch_profiler_train_log_probs_started = True
+        self._torch_profiler_train_log_probs.step()
+
+    def iterate_train_actor(self, iterator):
+        return _profile_simple_loop(iterator, self.args, name="train_actor")
+
+    def iterate_train_log_probs(self, iterator):
+        return _profile_simple_loop(iterator, self.args, name="train_log_probs")
+
+
+def _profile_simple_loop(iterator, args, name):
+    if not (args.use_pytorch_profiler and (name in args.profile_target) and _should_profile_this_rank()):
+        yield from iterator
+        return
+
+    torch_profiler = _create_torch_profiler(args, name=name)
+    torch_profiler.start()
+    for item in iterator:
+        yield item
+        torch_profiler.step()
+
 
 def _create_torch_profiler(args, name):
+    # record_shapes/with_flops/with_stack/profile_memory can produce 10+ GB traces
+    # and OOM the host on large MoE — all off by default, opt in via env var.
+    record_shapes = _env_flag("SLIME_PROFILE_RECORD_SHAPES")
+    with_flops = _env_flag("SLIME_PROFILE_WITH_FLOPS")
+    with_stack = _env_flag("SLIME_PROFILE_WITH_STACK")
+    profile_memory = _env_flag("SLIME_PROFILE_MEMORY")
+
     activities = [torch.profiler.ProfilerActivity.CPU]
     activity_name = accelerator.device_type().upper()
     if hasattr(torch.profiler.ProfilerActivity, activity_name):
         activities.append(getattr(torch.profiler.ProfilerActivity, activity_name))
-
     return torch.profiler.profile(
         activities=activities,
         schedule=torch.profiler.schedule(
@@ -59,10 +131,10 @@ def _create_torch_profiler(args, name):
             worker_name=f"{name}_rank_{torch.distributed.get_rank()}",
             use_gzip=True,
         ),
-        record_shapes=True,
-        with_stack=True,
-        profile_memory=True,
-        with_flops=True,
+        record_shapes=record_shapes,
+        with_flops=with_flops,
+        with_stack=with_stack,
+        profile_memory=profile_memory,
     )
 
 
