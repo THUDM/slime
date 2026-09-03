@@ -61,6 +61,8 @@ class FakeGenerateState:
         self.pendings = set()
         self.remaining_batch_size = 0
         self.aborted = False
+        self.cancellable_tasks = set()
+        self.active_server_generations = 0
         self.group_sampling_seeds = [args.rollout_seed + i for i in range(args.n_samples_per_prompt)]
 
     @contextmanager
