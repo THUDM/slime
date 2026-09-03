@@ -587,6 +587,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_weight_update_group_ordering.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "utils/test_megatron_role_config.py"
             },
             {

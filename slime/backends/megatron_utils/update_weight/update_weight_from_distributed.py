@@ -4,6 +4,7 @@ import socket
 import time
 from argparse import Namespace
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from datetime import timedelta
 
 import ray
 import torch
@@ -64,7 +65,14 @@ class UpdateWeightFromDistributed:
         engine_parallel_configs: Sequence[Mapping[str, object]] | None = None,
     ) -> None:
         """
-        Create "slime-pp_{pp_rank}" if PP source (DP=TP=0). Lock prevents concurrent transfers.
+        Create "slime-pp_{pp_rank}" if PP source (DP=TP=0).
+
+        Every training rank walks the PP ranks in the same order. This is
+        required because each synchronous rollout-engine actor blocks while
+        its SGLang server joins the requested process group. If two PP sources
+        submit groups concurrently, different engine actors can start them in
+        opposite orders and neither actor can service the request needed by
+        the other group.
         """
         self.rollout_engines = rollout_engines
         self.rollout_engine_lock = rollout_engine_lock
@@ -80,23 +88,57 @@ class UpdateWeightFromDistributed:
         if self._is_pp_src_rank:
             self._group_name = f"slime-pp_{pp_rank}"
 
-        if self._is_pp_src_rank:
-            if self._model_update_groups is not None:
-                disconnect_rollout_engines_from_distributed(
-                    self._group_name, self._model_update_groups, self.rollout_engines
-                )
-            self._model_update_groups = connect_rollout_engines_from_distributed(
-                self.args,
-                self._group_name,
-                rollout_engines,
-                engine_gpu_counts=engine_gpu_counts,
-            )
+        for current_pp_rank in range(mpu.get_pipeline_model_parallel_world_size()):
+            error = None
+            if self._is_pp_src_rank and pp_rank == current_pp_rank:
+                try:
+                    if self._model_update_groups is not None:
+                        disconnect_rollout_engines_from_distributed(
+                            self._group_name,
+                            self._model_update_groups,
+                            self.rollout_engines,
+                        )
+                        self._model_update_groups = None
+                    self._model_update_groups = connect_rollout_engines_from_distributed(
+                        self.args,
+                        self._group_name,
+                        rollout_engines,
+                        engine_gpu_counts=engine_gpu_counts,
+                    )
+                except BaseException as exc:
+                    error = exc
+            self._raise_on_ordered_phase_error(error, "connect", current_pp_rank)
 
     def disconnect_rollout_engines(self) -> None:
-        if not getattr(self, "_is_pp_src_rank", False) or self._model_update_groups is None:
+        pp_rank = mpu.get_pipeline_model_parallel_rank()
+        for current_pp_rank in range(mpu.get_pipeline_model_parallel_world_size()):
+            error = None
+            if (
+                getattr(self, "_is_pp_src_rank", False)
+                and pp_rank == current_pp_rank
+                and self._model_update_groups is not None
+            ):
+                try:
+                    disconnect_rollout_engines_from_distributed(
+                        self._group_name,
+                        self._model_update_groups,
+                        self.rollout_engines,
+                    )
+                    self._model_update_groups = None
+                except BaseException as exc:
+                    error = exc
+            self._raise_on_ordered_phase_error(error, "disconnect", current_pp_rank)
+
+    @staticmethod
+    def _raise_on_ordered_phase_error(error: BaseException | None, operation: str, pp_rank: int) -> None:
+        """Keep every training rank on the same ordered phase, including failures."""
+        failed = torch.tensor([error is not None], dtype=torch.uint8)
+        dist.all_reduce(failed, op=dist.ReduceOp.MAX, group=get_gloo_group())
+        if not failed.item():
             return
-        disconnect_rollout_engines_from_distributed(self._group_name, self._model_update_groups, self.rollout_engines)
-        self._model_update_groups = None
+        if error is not None:
+            raise error
+        raise RuntimeError(f"weight-update group {operation} failed on pipeline rank {pp_rank}")
 
     @torch.no_grad()
     def update_weights(self) -> None:
@@ -219,7 +261,12 @@ class UpdateWeightFromDistributed:
                 torch.empty_like(param.data, device=accelerator.current_device())
                 for _ in range(mpu.get_expert_model_parallel_world_size())
             ]
-            handle = dist.all_gather(params, param.data, group=mpu.get_expert_model_parallel_group(), async_op=True)
+            handle = dist.all_gather(
+                params,
+                param.data,
+                group=mpu.get_expert_model_parallel_group(),
+                async_op=True,
+            )
             handles.append(handle)
             for ep_rank, names in enumerate(all_names):
                 all_gathered_params[ep_rank].append((names[i], params[ep_rank]))
@@ -249,18 +296,19 @@ class UpdateWeightFromDistributed:
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
             time.sleep(0.1)
 
-        refs = update_weights_from_distributed(
-            self._group_name,
-            self._model_update_groups,
-            self.weight_version,
-            self.rollout_engines,
-            converted_named_tensors,
-            load_format=load_format,
-        )
-
-        ray.get(refs)
-        converted_named_tensors.clear()
-        ray.get(self.rollout_engine_lock.release.remote())
+        try:
+            refs = update_weights_from_distributed(
+                self._group_name,
+                self._model_update_groups,
+                self.weight_version,
+                self.rollout_engines,
+                converted_named_tensors,
+                load_format=load_format,
+            )
+            ray.get(refs)
+            converted_named_tensors.clear()
+        finally:
+            ray.get(self.rollout_engine_lock.release.remote())
         pbar.update(1)
 
 
@@ -292,6 +340,13 @@ def connect_rollout_engines_from_distributed(
         cumulative.append(cumulative[-1] + c)
 
     backend = accelerator.weight_update_backend()
+    timeout_seconds = getattr(
+        args,
+        "update_weight_group_timeout_seconds",
+        getattr(args, "distributed_timeout_minutes", 5.0) * 60,
+    )
+    if timeout_seconds <= 0:
+        raise ValueError("weight-update group timeout must be greater than zero")
     refs = [
         engine.init_weights_update_group.remote(
             master_address=master_address,
@@ -303,15 +358,39 @@ def connect_rollout_engines_from_distributed(
         )
         for i, engine in enumerate(rollout_engines)
     ]
-    model_update_groups = init_process_group(
-        backend=backend,
-        init_method=f"tcp://{_wrap_ipv6(master_address)}:{master_port}",
-        world_size=world_size,
-        rank=0,
-        group_name=group_name,
-    )
-    ray.get(refs)
-    return model_update_groups
+    model_update_groups = None
+    try:
+        model_update_groups = init_process_group(
+            backend=backend,
+            init_method=f"tcp://{_wrap_ipv6(master_address)}:{master_port}",
+            world_size=world_size,
+            rank=0,
+            group_name=group_name,
+            timeout=timedelta(seconds=timeout_seconds),
+        )
+        ray.get(refs, timeout=timeout_seconds)
+        return model_update_groups
+    except BaseException:
+        for ref in refs:
+            try:
+                ray.cancel(ref, force=False)
+            except Exception:
+                pass
+        if model_update_groups is not None:
+            try:
+                dist.destroy_process_group(model_update_groups)
+            except Exception:
+                pass
+        # A synchronous engine actor can remain blocked inside SGLang's group
+        # join and cannot service a queued destroy request. Terminate only the
+        # actors associated with this failed group so Ray also reaps their
+        # server subprocesses.
+        for engine in rollout_engines:
+            try:
+                ray.kill(engine, no_restart=True)
+            except Exception:
+                pass
+        raise
 
 
 def disconnect_rollout_engines_from_distributed(group_name, model_update_groups, rollout_engines):
