@@ -34,7 +34,7 @@ from typing import Any, NamedTuple
 
 from slime.agent import sandbox as agent_sandbox
 from slime.agent.adapters.common import flatten_content
-from slime.agent.sandbox import E2BSandbox, Sandbox, exec_and_wait
+from slime.agent.sandbox import Sandbox, create_sandbox, exec_and_wait
 from slime.utils.types import Sample
 
 try:
@@ -98,6 +98,7 @@ def _metadata_scaleswe(sample: Sample) -> dict[str, Any]:
         "protocol": PROTOCOL_SCALESWE,
         "instance_id": m.get("instance_id") or rem.get("instance_id") or label or "unknown",
         "image": m.get("image") or rem.get("image_url"),
+        "snapshot": m.get("snapshot") or rem.get("snapshot"),
         "workdir": m.get("workdir") or rem.get("workdir"),
         "problem_statement": m.get("problem_statement") or _coerce_prompt(sample.prompt),
         "looks_swebench": looks_swebench,
@@ -131,6 +132,7 @@ def _metadata_swebench(sample: Sample) -> dict[str, Any]:
         "protocol": PROTOCOL_SWEBENCH,
         "instance_id": instance["instance_id"],
         "image": rem.get("image"),
+        "snapshot": rem.get("snapshot"),
         "workdir": rem.get("workdir") or "/testbed",
         "problem_statement": instance["problem_statement"],
         "grading": {"sweb_instance": instance},
@@ -254,7 +256,7 @@ async def _grade_scaleswe(md: dict, diff_text: str, timeout_sec: int) -> EvalRes
     """Three mutually-exclusive grading paths, in priority order: swepro test
     harness, a shell ``eval_cmd``, or a self-contained ``f2p_script`` pytest
     file. All resolve to "exit 0 == solved", reward is 1.0 iff solved."""
-    image = md["image"]
+    image = md.get("image")
     workdir = md["workdir"]
     grading = md.get("grading") or {}
     swepro = grading.get("swepro")
@@ -266,7 +268,7 @@ async def _grade_scaleswe(md: dict, diff_text: str, timeout_sec: int) -> EvalRes
         logger.warning("[swe.scaleswe] no swepro/eval_cmd/f2p_script; reward=0")
         return EvalResult(0.0, True)
 
-    async with E2BSandbox(image) as ev:
+    async with create_sandbox(image, snapshot=md.get("snapshot")) as ev:
         await agent_sandbox.ensure_agent_user(ev, workdir)
         if swepro:
             await _setup_swepro_assets(ev, swepro)
@@ -457,12 +459,12 @@ async def _grade_swebench(md: dict, diff_text: str, timeout_sec: int) -> EvalRes
         logger.warning("[swe.swebench] %s: make_test_spec/eval_script failed: %s; reward=0", instance_id, e)
         return EvalResult(0.0, True)
 
-    image = md["image"]
-    if not image:
-        logger.warning("[swe.swebench] %s: missing image; reward=0", instance_id)
+    image = md.get("image")
+    if not image and not md.get("snapshot"):
+        logger.warning("[swe.swebench] %s: missing image or snapshot; reward=0", instance_id)
         return EvalResult(0.0, True)
 
-    async with E2BSandbox(image) as ev:
+    async with create_sandbox(image, snapshot=md.get("snapshot")) as ev:
         await asyncio.gather(
             ev.write_file("/tmp/patch.diff", diff_text or "", user="root"),
             ev.write_file("/tmp/eval.sh", eval_sh, user="root"),

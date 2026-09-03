@@ -11,17 +11,23 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import math
 import os
 import random
+import shlex
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, TypeVar, runtime_checkable
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
 
 ExecResult = tuple[int, str, str]
 FileContent = str | bytes | Path
+_RpcResult = TypeVar("_RpcResult")
+_DAYTONA_INSTANCE_LABEL = "slime.instance"
 
 
 @runtime_checkable
@@ -385,6 +391,298 @@ class E2BSandbox:
             )
         except Exception:
             return ""
+
+
+class DaytonaSandbox:
+    """Async Daytona implementation of the existing Slime sandbox contract.
+
+    Exactly one of ``image`` or ``snapshot`` is required. Snapshots are treated
+    as immutable provider-side environment references; Slime still transfers
+    task inputs and outputs through ``write_file`` and ``read_file``.
+    """
+
+    lifetime_sec_env = ("SLIME_AGENT_SANDBOX_LIFETIME_SEC", "SWE_SANDBOX_LIFETIME_SEC")
+    rpc_retries_env = ("SLIME_AGENT_SANDBOX_RPC_RETRIES", "SWE_RPC_RETRIES")
+    create_timeout_sec_env = ("SLIME_AGENT_DAYTONA_CREATE_TIMEOUT_SEC",)
+    connection_pool_size_env = ("SLIME_AGENT_DAYTONA_CONNECTION_POOL_SIZE",)
+
+    default_lifetime_sec = 3600
+    default_rpc_retries = 6
+    default_create_timeout_sec = 600
+    default_connection_pool_size = 250
+    rpc_backoff_base_sec = 1.0
+    rpc_backoff_cap_sec = 32.0
+    _TRANSIENT_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+    _TRANSIENT_ERROR_NAMES = frozenset(
+        {
+            "ClientConnectionError",
+            "ConnectError",
+            "ConnectTimeout",
+            "DaytonaRateLimitError",
+            "DaytonaTimeoutError",
+            "ReadError",
+            "ReadTimeout",
+            "RemoteProtocolError",
+            "ServerDisconnectedError",
+            "WriteError",
+            "WriteTimeout",
+        }
+    )
+
+    def __init__(
+        self,
+        image: str | None = None,
+        *,
+        snapshot: str | None = None,
+        timeout: int | None = None,
+        rpc_retries: int | None = None,
+        create_timeout: int | None = None,
+        connection_pool_size: int | None = None,
+        cpu: int | None = None,
+        memory_gb: int | None = None,
+        disk_gb: int | None = None,
+        network_block_all: bool = False,
+    ) -> None:
+        if image is not None and not image.strip():
+            raise ValueError("Daytona image must not be empty")
+        if snapshot is not None and not snapshot.strip():
+            raise ValueError("Daytona snapshot must not be empty")
+        if (image is None) == (snapshot is None):
+            raise ValueError("DaytonaSandbox requires exactly one of image or snapshot")
+        for name, value in (
+            ("timeout", timeout),
+            ("rpc_retries", rpc_retries),
+            ("create_timeout", create_timeout),
+            ("connection_pool_size", connection_pool_size),
+            ("cpu", cpu),
+            ("memory_gb", memory_gb),
+            ("disk_gb", disk_gb),
+        ):
+            if value is not None and value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        if snapshot is not None and any(value is not None for value in (cpu, memory_gb, disk_gb)):
+            raise ValueError("Daytona snapshot creation does not accept resource overrides")
+        self.image = image
+        self.snapshot = snapshot
+        self.timeout = (
+            timeout if timeout is not None else self._int_from_env(self.lifetime_sec_env, self.default_lifetime_sec)
+        )
+        self.rpc_retries = (
+            rpc_retries
+            if rpc_retries is not None
+            else self._int_from_env(self.rpc_retries_env, self.default_rpc_retries)
+        )
+        self.create_timeout = (
+            create_timeout
+            if create_timeout is not None
+            else self._int_from_env(self.create_timeout_sec_env, self.default_create_timeout_sec)
+        )
+        self.connection_pool_size = (
+            connection_pool_size
+            if connection_pool_size is not None
+            else self._int_from_env(self.connection_pool_size_env, self.default_connection_pool_size)
+        )
+        self.cpu = cpu
+        self.memory_gb = memory_gb
+        self.disk_gb = disk_gb
+        self.network_block_all = network_block_all
+        self._instance_label = f"slime-{uuid4().hex}"
+        self._client = None
+        self._sb = None
+        self.sandbox_id = ""
+
+    @staticmethod
+    def _int_from_env(names: tuple[str, ...], default: int) -> int:
+        value = int(_getenv(*names, default=str(default)))
+        if value < 1:
+            raise ValueError(f"{names[0]} must be a positive integer")
+        return value
+
+    @classmethod
+    def _is_transient_rpc_error(cls, error: BaseException) -> bool:
+        if type(error).__name__ in cls._TRANSIENT_ERROR_NAMES:
+            return True
+        status_code = getattr(error, "status_code", None)
+        if status_code in cls._TRANSIENT_STATUS_CODES:
+            return True
+        response = getattr(error, "response", None)
+        return getattr(response, "status_code", None) in cls._TRANSIENT_STATUS_CODES
+
+    async def _rpc_retry(
+        self,
+        operation_name: str,
+        operation: Callable[[], Awaitable[_RpcResult]],
+        *,
+        idempotent: bool = True,
+    ) -> _RpcResult:
+        last_error = None
+        for attempt in range(self.rpc_retries):
+            try:
+                return await operation()
+            except Exception as error:
+                if not idempotent or not self._is_transient_rpc_error(error):
+                    raise
+                last_error = error
+                if attempt + 1 < self.rpc_retries:
+                    ceiling = min(self.rpc_backoff_cap_sec, self.rpc_backoff_base_sec * (2**attempt))
+                    backoff = random.uniform(0.0, ceiling)
+                    logger.debug(
+                        "[agent.sandbox] %s transient %s, retry %d/%d in %.1fs",
+                        operation_name,
+                        type(error).__name__,
+                        attempt + 1,
+                        self.rpc_retries,
+                        backoff,
+                    )
+                    await asyncio.sleep(backoff)
+        assert last_error is not None
+        raise last_error
+
+    async def __aenter__(self) -> DaytonaSandbox:
+        sdk = _daytona_sdk()
+        self._client = sdk.AsyncDaytona(sdk.DaytonaConfig(connection_pool_maxsize=self.connection_pool_size))
+        resources = None
+        if any(value is not None for value in (self.cpu, self.memory_gb, self.disk_gb)):
+            resources = sdk.Resources(cpu=self.cpu, memory=self.memory_gb, disk=self.disk_gb)
+        common_params: dict[str, Any] = {
+            "auto_stop_interval": max(1, math.ceil(self.timeout / 60)),
+            "auto_delete_interval": 0,
+            "network_block_all": self.network_block_all,
+            "ephemeral": True,
+            "os_user": "root",
+            "labels": {_DAYTONA_INSTANCE_LABEL: self._instance_label},
+        }
+        if self.snapshot is not None:
+            params = sdk.CreateSandboxFromSnapshotParams(snapshot=self.snapshot, **common_params)
+        else:
+            params = sdk.CreateSandboxFromImageParams(image=self.image, resources=resources, **common_params)
+        try:
+            self._sb = await self._rpc_retry(
+                "create", lambda: self._client.create(params=params, timeout=self.create_timeout)
+            )
+        except asyncio.CancelledError:
+            await self._cleanup_failed_create(sdk)
+            raise
+        except Exception:
+            await self._cleanup_failed_create(sdk)
+            raise
+        self.sandbox_id = self._sb.id
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        try:
+            if self._sb is not None:
+                await self._rpc_retry("delete", lambda: self._sb.delete())
+        except Exception as error:
+            logger.warning("[agent.sandbox] Daytona delete %s failed: %s", self.sandbox_id[:8], error)
+        finally:
+            if self._client is not None:
+                try:
+                    await self._client.close()
+                except Exception as error:
+                    logger.warning("[agent.sandbox] Daytona client close failed: %s", error)
+            self._sb = None
+            self._client = None
+
+    async def _cleanup_failed_create(self, sdk: Any) -> None:
+        await asyncio.shield(self._reap_orphaned_sandboxes(sdk))
+        try:
+            await self._client.close()
+        except Exception as error:
+            logger.warning("[agent.sandbox] Daytona client close after failed create: %s", error)
+        self._client = None
+
+    async def _reap_orphaned_sandboxes(self, sdk: Any) -> None:
+        """Best-effort cleanup scoped to this creation's unique label."""
+        query = sdk.ListSandboxesQuery(labels={_DAYTONA_INSTANCE_LABEL: self._instance_label})
+        for attempt in range(6):
+            try:
+                orphans = [sandbox async for sandbox in self._client.list(query)]
+                for orphan in orphans:
+                    await orphan.delete()
+                if orphans:
+                    return
+            except Exception as error:
+                logger.warning("[agent.sandbox] Daytona orphan cleanup failed: %s", error)
+            if attempt < 5:
+                await asyncio.sleep(2)
+
+    async def exec(
+        self,
+        cmd: str,
+        *,
+        user: str = "root",
+        env: dict[str, str] | None = None,
+        timeout: int = 120,
+        check: bool = False,
+        idempotent: bool = True,
+    ) -> ExecResult:
+        if self._sb is None:
+            raise RuntimeError("Daytona sandbox is not running")
+        command = cmd if user == "root" else f"su {shlex.quote(user)} -s /bin/bash -c {shlex.quote(cmd)}"
+        result = await self._rpc_retry(
+            f"exec({cmd[:60]!r})",
+            lambda: self._sb.process.exec(command, env=env, timeout=timeout),
+            idempotent=idempotent,
+        )
+        stdout = result.result or ""
+        if check and result.exit_code != 0:
+            raise RuntimeError(f"Daytona exec failed (exit={result.exit_code}): {cmd[:120]}\n{stdout[-400:]}")
+        return result.exit_code, stdout, ""
+
+    async def write_file(self, sandbox_path: str, content: FileContent, *, user: str = "root") -> None:
+        if self._sb is None:
+            raise RuntimeError("Daytona sandbox is not running")
+        source: str | bytes = (
+            str(content) if isinstance(content, Path) else content.encode() if isinstance(content, str) else content
+        )
+        await self._rpc_retry("write_file", lambda: self._sb.fs.upload_file(source, sandbox_path))
+        if user != "root":
+            await self.exec(f"chown {shlex.quote(user)}:{shlex.quote(user)} {shlex.quote(sandbox_path)}", check=True)
+
+    async def read_file(self, sandbox_path: str, *, user: str = "root") -> str:
+        del user  # Daytona's byte download API has no user-specific read mode.
+        if self._sb is None:
+            raise RuntimeError("Daytona sandbox is not running")
+        try:
+            content = await self._rpc_retry("read_file", lambda: self._sb.fs.download_file(sandbox_path))
+        except Exception as error:
+            if self._is_not_found_error(error):
+                return ""
+            raise
+        if content is None:
+            return ""
+        return content.decode(errors="replace") if isinstance(content, bytes) else str(content)
+
+    @staticmethod
+    def _is_not_found_error(error: BaseException) -> bool:
+        if type(error).__name__ == "DaytonaNotFoundError" or getattr(error, "status_code", None) == 404:
+            return True
+        response = getattr(error, "response", None)
+        return getattr(response, "status_code", None) == 404
+
+
+def _daytona_sdk() -> Any:
+    """Load Daytona only when its backend is selected."""
+    try:
+        import daytona  # noqa: PLC0415
+    except ImportError as error:
+        raise RuntimeError("Daytona is not installed. Install daytona>=0.182.0 to use this backend.") from error
+    return daytona
+
+
+def create_sandbox(image: str | None, *, snapshot: str | None = None, backend: str | None = None) -> Sandbox:
+    """Create the configured sandbox provider without changing its public protocol."""
+    selected_backend = backend or _getenv("SLIME_AGENT_SANDBOX_BACKEND", default="e2b")
+    if selected_backend == "e2b":
+        if snapshot is not None:
+            raise ValueError("E2B sandbox selection does not support Daytona snapshots")
+        if image is None:
+            raise ValueError("E2B sandbox selection requires an image")
+        return E2BSandbox(image)
+    if selected_backend == "daytona":
+        return DaytonaSandbox(image=image if snapshot is None else None, snapshot=snapshot)
+    raise ValueError(f"unknown sandbox backend {selected_backend!r}; expected 'e2b' or 'daytona'")
 
 
 async def ensure_agent_user(sb: Sandbox, workdir: str) -> None:

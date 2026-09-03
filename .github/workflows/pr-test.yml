@@ -905,6 +905,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_agent/test_daytona_sandbox.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_agent/test_agent_rollout_cpu.py"
             }
           ]

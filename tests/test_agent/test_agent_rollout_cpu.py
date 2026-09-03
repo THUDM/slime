@@ -142,8 +142,8 @@ def _patch_generate(monkeypatch, tokenizer: FakeTokenizer, sandbox_factory) -> N
         ),
     )
     monkeypatch.setattr(gen, "load_tokenizer", lambda *a, **k: tokenizer)
-    monkeypatch.setattr(gen, "E2BSandbox", sandbox_factory)  # boot sandbox
-    monkeypatch.setattr(swe, "E2BSandbox", sandbox_factory)  # eval sandbox
+    monkeypatch.setattr(gen, "create_sandbox", lambda image, snapshot=None: sandbox_factory(image))
+    monkeypatch.setattr(swe, "create_sandbox", lambda image, snapshot=None: sandbox_factory(image))
     monkeypatch.setattr(ClaudeCodeHarness, "install_cli", _noop_install)
     monkeypatch.setattr(harness_common.asyncio, "sleep", _fast_sleep)
     monkeypatch.setattr(

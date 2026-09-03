@@ -228,9 +228,8 @@ class FakeSandbox:
     ``on_launch(env)`` agent coroutine, then writes its exit code into the
     done-marker file so the next poll succeeds.
 
-    Construct directly, or via :meth:`factory` to get a zero-arg callable that
-    ``examples...generate.E2BSandbox`` / ``swe.E2BSandbox`` can be monkeypatched
-    to (they call ``E2BSandbox(image)``).
+    Construct directly, or via :meth:`factory` to get an image-taking callable
+    that the coding-agent example's sandbox factory can use.
     """
 
     def __init__(
@@ -250,7 +249,7 @@ class FakeSandbox:
 
     @classmethod
     def factory(cls, **kwargs) -> Callable[..., FakeSandbox]:
-        """Return ``E2BSandbox(image)``-compatible constructor with kwargs baked in."""
+        """Return an image-taking sandbox constructor with kwargs baked in."""
 
         def _make(image: str = "fake-image", **_ignored) -> FakeSandbox:
             return cls(image, **kwargs)

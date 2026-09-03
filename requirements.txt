@@ -3,6 +3,7 @@ anthropic
 blake3
 blobfile
 datasets
+daytona>=0.182.0
 e2b
 httpx[http2]
 mcp[cli]

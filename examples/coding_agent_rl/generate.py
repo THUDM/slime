@@ -32,7 +32,7 @@ from typing import Any
 from slime.agent.adapters import AnthropicAdapter, OpenAIAdapter
 from slime.agent.aiohttp_threaded import FilteredAccessLogger, run_app_in_thread
 from slime.agent.harness import ClaudeCodeHarness, CodexHarness
-from slime.agent.sandbox import E2BSandbox
+from slime.agent.sandbox import Sandbox, create_sandbox
 from slime.utils.misc import SingletonMeta
 from slime.utils.processing_utils import load_tokenizer
 from slime.utils.types import Sample
@@ -93,8 +93,8 @@ _BOOT_SEM = asyncio.Semaphore(CONFIG.boot_concurrency)
 
 
 @asynccontextmanager
-async def boot_agent_sandbox(image: str, instance_id: str) -> AsyncIterator[E2BSandbox]:
-    """Boot a fresh E2B sandbox and install the selected harness toolchain.
+async def boot_agent_sandbox(image: str | None, snapshot: str | None, instance_id: str) -> AsyncIterator[Sandbox]:
+    """Boot a fresh sandbox and install the selected harness toolchain.
 
     Create the sandbox from the dataset image, install Node 22 + the harness CLI
     from host tarballs, retry transient boot/install failures, and close the
@@ -103,7 +103,7 @@ async def boot_agent_sandbox(image: str, instance_id: str) -> AsyncIterator[E2BS
     sb = None
     last_err: Exception | None = None
     for attempt in range(CONFIG.boot_retries):
-        cand = E2BSandbox(image)
+        cand = create_sandbox(image, snapshot=snapshot)
         try:
             async with _BOOT_SEM:
                 await cand.__aenter__()
@@ -185,8 +185,10 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any], e
     protocol = CONFIG.eval_protocol if evaluation else CONFIG.train_protocol
     md = swe.get_metadata(base_sample, protocol)
     instance_id = md["instance_id"]
-    if not md["image"] or not md["workdir"]:
+    if not (md.get("image") or md.get("snapshot")) or not md["workdir"]:
         return _abort_result(base_sample, "missing_image_or_workdir", instance_id)
+    if md.get("image") and md.get("snapshot"):
+        return _abort_result(base_sample, "image_and_snapshot_are_mutually_exclusive", instance_id)
     reason = swe.evaluability_check(md)
     if reason:
         return _abort_result(base_sample, f"unevaluatable:{reason}", instance_id)
@@ -200,7 +202,7 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any], e
     t0 = time.time()
     try:
         async with asyncio.timeout(CONFIG.rollout_guard_sec):
-            async with boot_agent_sandbox(md["image"], instance_id) as sb:
+            async with boot_agent_sandbox(md.get("image"), md.get("snapshot"), instance_id) as sb:
                 await swe.prepare_workspace(sb, md["workdir"], md)
                 agent_exit_code = await HARNESS_CLS().run(
                     sb,
