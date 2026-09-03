@@ -515,22 +515,23 @@ async def call_sglang_generate(
 
 
 async def _abort_sglang_request(sglang_url: str, rid: str, logger: logging.Logger) -> None:
-    """Abort one request on every worker behind the SGLang router."""
+    """Abort one request on a worker or every worker behind the router."""
     try:
         timeout = aiohttp.ClientTimeout(total=5)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(f"{sglang_url}/workers") as response:
-                response.raise_for_status()
-                workers = (await response.json()).get("workers", [])
-
-            async def abort_worker(worker: dict[str, Any]) -> None:
-                url = worker["url"].rstrip("/")
+            async def abort_worker(url: str) -> None:
                 try:
                     async with session.post(
                         f"{url}/abort_request",
                         json={"rid": rid},
                     ) as response:
-                        response.raise_for_status()
+                        if response.status >= 400:
+                            logger.warning(
+                                "SGLang worker abort failed: url=%s rid=%s status=%s",
+                                url,
+                                rid,
+                                response.status,
+                            )
                 except Exception as exc:
                     logger.warning(
                         "SGLang worker abort failed: url=%s rid=%s error=%s",
@@ -539,7 +540,24 @@ async def _abort_sglang_request(sglang_url: str, rid: str, logger: logging.Logge
                         exc,
                     )
 
-            await asyncio.gather(*(abort_worker(worker) for worker in workers if isinstance(worker, dict)))
+            async with session.get(f"{sglang_url}/workers") as response:
+                if response.status == 404:
+                    await abort_worker(sglang_url)
+                    return
+                response.raise_for_status()
+                payload = await response.json()
+
+            if not isinstance(payload, dict):
+                logger.warning("Invalid SGLang workers response: url=%s rid=%s", sglang_url, rid)
+                return
+
+            worker_urls = [
+                worker["url"].rstrip("/")
+                for worker in payload.get("workers", [])
+                if isinstance(worker, dict) and isinstance(worker.get("url"), str) and worker["url"]
+            ]
+
+            await asyncio.gather(*(abort_worker(url) for url in worker_urls))
     except Exception as exc:
         logger.warning(
             "SGLang abort request failed: url=%s rid=%s error=%s",
