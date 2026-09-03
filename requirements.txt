@@ -20,6 +20,7 @@ ray[default]
 safetensors
 sglang-router>=0.3.0
 tensorboard
+tomli>=2; python_version < "3.11"
 transformers
 wandb
 xxhash  # disk delta weight sync (checksum + codec)

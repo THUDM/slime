@@ -49,6 +49,41 @@ Standard slime JSONL with three keys:
 
 Wire it up with `--input-key prompt --label-key label --metadata-key metadata`.
 
+### Converting Harbor tasks
+
+Convert one task, several tasks, or a directory tree to this JSONL format with:
+
+```bash
+python -m slime.agent.harbor_converter /path/to/harbor/tasks \
+  --output /path/to/slime-tasks.jsonl
+```
+
+The converter accepts single-step Linux tasks with a prebuilt image and an
+absolute `environment.workdir`. It embeds `setup_files/` in `pre_commands` and
+embeds `tests/` in `eval_cmd`; tests remain absent from the agent sandbox and
+are materialized only in Slime's clean evaluator sandbox. Harbor's
+`reward.txt` or the `reward` field in `reward.json` is mapped to Slime's binary
+reward (`1.0` passes). The task's `solution/` directory is never read.
+
+Use an existing sandbox snapshot instead of `environment.docker_image` with a
+per-task override:
+
+```bash
+python -m slime.agent.harbor_converter /path/to/tasks \
+  --snapshot org/task=snapshot-id \
+  --workdir org/task=/workspace/repo \
+  --output /path/to/slime-tasks.jsonl
+```
+
+Image and workdir overrides use the same `TASK=VALUE` form. Conversion fails
+with a list of unsupported semantics rather than silently discarding them.
+Unsupported features include multi-step and multi-container tasks, Dockerfile
+builds without an image or snapshot override, separate verifier containers,
+custom agent/verifier users or environment variables, MCP and skill injection,
+network isolation, healthchecks, accelerator/resource requests, and artifact
+collection. `--skip-unsupported` reports those tasks on stderr and writes the
+convertible remainder.
+
 ## Running the Script
 
 Override the paths at the top of the launcher, then run from a long-lived shell on the Ray head node (do **not** wrap in `nohup` — Ray child processes get cleaned up with it):
