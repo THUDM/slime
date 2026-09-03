@@ -521,24 +521,10 @@ async def _abort_sglang_request(sglang_url: str, rid: str, logger: logging.Logge
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async def abort_worker(url: str) -> None:
                 try:
-                    async with session.post(
-                        f"{url}/abort_request",
-                        json={"rid": rid},
-                    ) as response:
-                        if response.status >= 400:
-                            logger.warning(
-                                "SGLang worker abort failed: url=%s rid=%s status=%s",
-                                url,
-                                rid,
-                                response.status,
-                            )
-                except Exception as exc:
-                    logger.warning(
-                        "SGLang worker abort failed: url=%s rid=%s error=%s",
-                        url,
-                        rid,
-                        exc,
-                    )
+                    async with session.post(f"{url}/abort_request", json={"rid": rid}):
+                        pass
+                except Exception:
+                    pass
 
             async with session.get(f"{sglang_url}/workers") as response:
                 if response.status == 404:
