@@ -181,7 +181,7 @@ def _parse_extra_env_vars(text: str):
     try:
         return json.loads(text)
     except ValueError:
-        return {kv[0]: kv[1] for item in text.split(" ") if item.strip() != "" if (kv := item.split("=")) or True}
+        return {kv[0]: kv[1] for item in text.split(" ") if item.strip() != "" if (kv := item.split("=", 1)) or True}
 
 
 def check_has_nvlink():

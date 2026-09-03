@@ -787,6 +787,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "utils/test_command_utils.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "utils/test_hf_checkpoint_saver.py"
             },
             {
