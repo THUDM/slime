@@ -254,6 +254,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--log-probs-chunk-size", type=int, default=-1, help="Chunk size to compute log probs to save memory"
             )
             parser.add_argument(
+                "--compact-actor-logits",
+                action="store_true",
+                help=(
+                    "Project vocabulary logits only for loss-masked actor tokens. "
+                    "This is an opt-in memory optimization for built-in policy/SFT paths; "
+                    "unsupported or custom paths retain full logits."
+                ),
+            )
+            parser.add_argument(
                 "--only-train-params-name-list",
                 type=str,
                 nargs="*",

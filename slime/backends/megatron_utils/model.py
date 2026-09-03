@@ -28,12 +28,14 @@ try:
     from megatron.core.pipeline_parallel.utils import unwrap_model
 except ImportError:
     from megatron.core.utils import unwrap_model
+
 from slime.observability import logging_utils, train_metric_utils
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
+from .compact_logits import can_compact_actor_logits, compact_actor_logits
 from .data import DataIterator, get_batch
-from .loss import ROLLOUT_TOP_P_TOKEN_KEYS, get_rollout_top_p_logprob_kwargs, loss_function
+from .loss import ROLLOUT_TOP_P_TOKEN_KEYS, get_log_probs_and_entropy, get_rollout_top_p_logprob_kwargs, loss_function
 from .model_provider import get_model_provider_func
 from .stateless_adam import StatelessAdam
 
@@ -379,6 +381,8 @@ def forward_only(
         dict[str, list[torch.Tensor]]: Aggregated outputs keyed by ``store_prefix + key``.
     """
 
+    use_compact_logits = f is get_log_probs_and_entropy and can_compact_actor_logits(args)
+
     # reset data iterator
     for iterator in data_iterator:
         iterator.reset()
@@ -442,6 +446,8 @@ def forward_only(
             "response_lengths": response_lengths,
             "with_entropy": args.use_rollout_entropy,
         }
+        if use_compact_logits:
+            output_kwargs["full_loss_masks"] = batch["full_loss_masks"]
         if use_rollout_top_p_replay:
             output_kwargs.update(get_rollout_top_p_logprob_kwargs(args, batch))
 
@@ -472,15 +478,16 @@ def forward_only(
     )
     forward_step_with_progress = _wrap_forward_step_with_microbatch_pbar(forward_step, microbatch_pbar)
     for step_id in range(num_steps_per_rollout):
-        forward_data_store += forward_backward_func(
-            forward_step_func=forward_step_with_progress,
-            data_iterator=data_iterator,
-            model=model,
-            num_microbatches=num_microbatches[step_id],
-            seq_length=args.seq_length,
-            micro_batch_size=args.micro_batch_size,
-            forward_only=True,
-        )
+        with compact_actor_logits(use_compact_logits):
+            forward_data_store += forward_backward_func(
+                forward_step_func=forward_step_with_progress,
+                data_iterator=data_iterator,
+                model=model,
+                num_microbatches=num_microbatches[step_id],
+                seq_length=args.seq_length,
+                micro_batch_size=args.micro_batch_size,
+                forward_only=True,
+            )
     microbatch_pbar.close()
 
     # Move model back to the train mode.
@@ -645,16 +652,17 @@ def train_one_step(
 
     # Forward pass.
     forward_backward_func = get_forward_backward_func()
-    losses_reduced = forward_backward_func(
-        forward_step_func=_wrap_forward_step_with_microbatch_pbar(forward_step, microbatch_pbar),
-        data_iterator=data_iterator,
-        model=model,
-        num_microbatches=num_microbatches,
-        seq_length=args.seq_length,
-        micro_batch_size=args.micro_batch_size,
-        decoder_seq_length=args.decoder_seq_length,
-        forward_only=False,
-    )
+    with compact_actor_logits(can_compact_actor_logits(args)):
+        losses_reduced = forward_backward_func(
+            forward_step_func=_wrap_forward_step_with_microbatch_pbar(forward_step, microbatch_pbar),
+            data_iterator=data_iterator,
+            model=model,
+            num_microbatches=num_microbatches,
+            seq_length=args.seq_length,
+            micro_batch_size=args.micro_batch_size,
+            decoder_seq_length=args.decoder_seq_length,
+            forward_only=False,
+        )
 
     valid_step = True
     grad_norm = float("nan")

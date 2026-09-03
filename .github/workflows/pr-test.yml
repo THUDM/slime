@@ -775,6 +775,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_megatron_compact_logits.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_model_provider_freeze.py"
             },
             {
