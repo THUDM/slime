@@ -306,6 +306,25 @@ def test_slime_validate_args_rejects_non_positive_rollout_temperature(monkeypatc
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("overrides", [{"kl_coef": 0.1}, {"use_kl_loss": True}])
+def test_slime_validate_args_requires_ref_load_when_kl_enabled(monkeypatch, overrides):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(ref_load=None, **overrides)
+
+    with pytest.raises(ValueError, match="--ref-load is required"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_slime_validate_args_refuses_missing_ref_load_path(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(kl_coef=0.1, ref_load="/does/not/exist")
+
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
 def test_slime_validate_args_preserves_zero_rollout_gpus_under_colocate(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(colocate=True, rollout_num_gpus=0)

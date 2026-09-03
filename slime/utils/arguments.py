@@ -1779,6 +1779,11 @@ def slime_validate_args(args):
         )
 
     if args.kl_coef != 0 or args.use_kl_loss:
+        if args.ref_load is None:
+            raise ValueError(
+                "--ref-load is required when --kl-coef is non-zero or --use-kl-loss is enabled. "
+                "Please provide the reference model checkpoint path."
+            )
         if not os.path.exists(args.ref_load):
             raise FileNotFoundError(f"ref_load {args.ref_load} does not exist, please check the path.")
 
