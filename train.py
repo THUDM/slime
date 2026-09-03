@@ -36,7 +36,7 @@ def train(args):
     if args.num_rollout == 0 and args.eval_interval is not None:
         ray.get(rollout_manager.eval.remote(rollout_id=0))
 
-    def offload_train(actor_trains_this_step):
+    def clear_memory_after_train(actor_trains_this_step):
         # Each model auto-offloads after train() when offload_train is set,
         # so we only need clear_memory for the non-offload case.
         if not args.offload_train:
@@ -79,7 +79,7 @@ def train(args):
             if args.rollout_global_dataset:
                 ray.get(rollout_manager.save.remote(rollout_id))
 
-        offload_train(actor_trains)
+        clear_memory_after_train(actor_trains)
         if args.offload_rollout and not release_train:
             ray.get(rollout_manager.onload_weights.remote())
         actor_model.update_weights()
