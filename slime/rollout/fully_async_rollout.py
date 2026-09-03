@@ -250,9 +250,14 @@ async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> list[li
 
     # Order by sample.index for determinism (slime convention).
     def _key(group: list[Sample]) -> int:
-        for s in group:
-            idx = getattr(s, "index", None)
-            if idx is not None:
+        stack = list(group)
+        while stack:
+            item = stack.pop(0)
+            if isinstance(item, list):
+                stack = item + stack
+                continue
+            idx = getattr(item, "index", None)
+            if idx is not None and not callable(idx):
                 return int(idx)
         return 0
 
