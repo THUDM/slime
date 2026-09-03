@@ -519,6 +519,7 @@ async def _abort_sglang_request(sglang_url: str, rid: str, logger: logging.Logge
     try:
         timeout = aiohttp.ClientTimeout(total=5)
         async with aiohttp.ClientSession(timeout=timeout) as session:
+
             async def abort_worker(url: str) -> None:
                 try:
                     async with session.post(f"{url}/abort_request", json={"rid": rid}):
