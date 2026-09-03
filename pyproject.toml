@@ -22,6 +22,13 @@ src_paths = ["slime", "slime_plugins"]
 [tool.black]
 line_length = 119
 
+[tool.marin-style]
+# Preserve Slime's established Black formatting while making the shared shim the
+# single Python lint entry point. Repository-wide type checking is not yet green.
+checks = ["ruff-check", "black"]
+ruff_version = "0.14.7"
+black_version = "24.3.0"
+
 [tool.ruff]
 line-length = 320  # TODO
 
