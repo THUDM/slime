@@ -33,7 +33,7 @@ setup(
     author="slime Team",
     name="slime",
     version="0.3.2",
-    packages=find_packages(include=["slime*", "slime_plugins*"]),
+    packages=find_packages(include=["slime*", "slime_plugins*", "infra*"]),
     include_package_data=True,
     install_requires=_fetch_requirements("requirements.txt"),
     extras_require={},

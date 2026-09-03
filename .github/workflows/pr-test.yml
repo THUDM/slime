@@ -759,6 +759,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_iris_launcher.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_streaming_rollout.py"
             },
             {
