@@ -17,8 +17,8 @@ pylatexenc
 pyyaml
 qwen_vl_utils # for VLM
 ray[default]
-safetensors
 s3fs
+safetensors
 sglang-router>=0.3.0
 tensorboard
 tomli>=2; python_version < "3.11"
