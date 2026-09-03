@@ -1,3 +1,5 @@
+import sys
+from array import array
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -107,6 +109,7 @@ class Sample:
     # prompt
     prompt: str | list[dict[str, str]] = ""
     tokens: list[int] = field(default_factory=list)
+    _prompt_token_ids_cache: bytes | None = field(default=None, init=False, repr=False, compare=False)
     multimodal_inputs: dict[str, Any] | None = None  # raw multimodal data, e.g. images, videos, etc.
     multimodal_train_inputs: dict[str, Any] | None = None  # processed multimodal data, e.g. pixel_values, etc.
     multimodal_train_input_id: str | None = None
@@ -221,6 +224,7 @@ class Sample:
 
     def to_dict(self):
         value = self.__dict__.copy()
+        value.pop("_prompt_token_ids_cache", None)
         value["status"] = self.status.value
         value["spec_info"] = self.spec_info.to_dict()
         value["prefix_cache_info"] = self.prefix_cache_info.to_dict()
@@ -229,6 +233,7 @@ class Sample:
     @staticmethod
     def from_dict(data: dict):
         data = dict(data)
+        data.pop("_prompt_token_ids_cache", None)
         data["status"] = Sample.Status(data["status"])
         data["spec_info"] = Sample.SpecInfo.from_dict(data.get("spec_info", {}))
         data["prefix_cache_info"] = Sample.PrefixCacheInfo.from_dict(data.get("prefix_cache_info", {}))
@@ -242,6 +247,37 @@ class Sample:
                 setattr(sample, key, value)
 
         return sample
+
+    def cache_prompt_token_ids(self, token_ids) -> bool:
+        """Store prompt token IDs in a compact, transient representation."""
+        try:
+            values = array("I", token_ids)
+        except (OverflowError, TypeError, ValueError):
+            self._prompt_token_ids_cache = None
+            return False
+
+        if values.itemsize != 4:
+            self._prompt_token_ids_cache = None
+            return False
+        if sys.byteorder != "little":
+            values.byteswap()
+        self._prompt_token_ids_cache = values.tobytes()
+        return True
+
+    def pop_cached_prompt_token_ids(self) -> list[int] | None:
+        """Consume cached prompt token IDs, returning ``None`` on a cache miss."""
+        payload = self._prompt_token_ids_cache
+        self._prompt_token_ids_cache = None
+        if payload is None or len(payload) % 4 != 0:
+            return None
+
+        values = array("I")
+        if values.itemsize != 4:
+            return None
+        values.frombytes(payload)
+        if sys.byteorder != "little":
+            values.byteswap()
+        return values.tolist()
 
     def get_reward_value(self, args) -> float:
         return self.reward if not args.reward_key else self.reward[args.reward_key]
