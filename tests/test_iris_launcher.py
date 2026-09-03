@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -28,9 +29,36 @@ def base_spec(**overrides):
     return IrisLaunchSpec(**values)
 
 
-def test_spec_rejects_multiple_iris_tasks():
-    with pytest.raises(LaunchConfigError, match="duplicate trainers"):
+def test_spec_requires_rendezvous_for_multiple_iris_tasks():
+    with pytest.raises(LaunchConfigError, match="rendezvous-dir"):
         base_spec(nodes=2).validate()
+
+
+def test_multinode_dry_run_uses_rank_aware_ray_runtime(tmp_path, capsys):
+    exit_code = run(
+        [
+            "--cluster",
+            "cw-rno2a",
+            "--task-image",
+            "image",
+            "--nodes",
+            "5",
+            "--rendezvous-dir",
+            "s3://experiments/slime-test",
+            "--workspace",
+            str(tmp_path),
+            "--dry-run",
+            "--",
+            "python",
+            "train.py",
+        ]
+    )
+
+    rendered = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert rendered["nodes"] == 5
+    assert rendered["task_command"][-2:] == ["python", "train.py"]
+    assert rendered["task_command"][:3] == ["python", "-m", "infra.iris.ray_runtime"]
 
 
 def test_spec_requires_exactly_one_controller_selection():

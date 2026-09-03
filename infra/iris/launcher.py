@@ -1,4 +1,4 @@
-"""Submit a Slime command as a single-task Iris GPU job.
+"""Submit a Slime command as an Iris GPU job.
 
 Iris is imported only by :class:`IrisBackend`, so parsing, validation, and dry
 runs work in a normal Slime development environment.
@@ -62,6 +62,7 @@ class IrisLaunchSpec:
     env: dict[str, str] = field(default_factory=dict)
     secret_env_names: tuple[str, ...] = ()
     setup_commands: tuple[str, ...] = ()
+    rendezvous_dir: str | None = None
 
     def validate(self) -> None:
         if not _JOB_NAME.fullmatch(self.job_name) or "/" in self.job_name:
@@ -72,11 +73,10 @@ class IrisLaunchSpec:
             raise LaunchConfigError("--task-image must not be empty")
         if not self.command or not self.command[0]:
             raise LaunchConfigError("a command is required after '--'")
-        if self.nodes != 1:
-            raise LaunchConfigError(
-                "only one Iris task is supported; Slime's current multi-node scripts create Ray through an SSH "
-                "hostfile, so Iris replicas would start duplicate trainers"
-            )
+        if self.nodes < 1:
+            raise LaunchConfigError("--nodes must be at least 1")
+        if self.nodes > 1 and not self.rendezvous_dir:
+            raise LaunchConfigError("--rendezvous-dir is required when --nodes is greater than 1")
         selected_endpoints = sum(
             value is not None for value in (self.cluster, self.cluster_config, self.controller_url)
         )
@@ -131,7 +131,21 @@ class IrisLaunchSpec:
         rendered["env"] = sorted(self.env)
         rendered["secret_env_names"] = list(self.secret_env_names)
         rendered["setup_commands"] = list(self.setup_commands)
+        rendered["task_command"] = list(self.task_command())
         return rendered
+
+    def task_command(self) -> tuple[str, ...]:
+        if self.nodes == 1:
+            return self.command
+        return (
+            "python",
+            "-m",
+            "infra.iris.ray_runtime",
+            "--rendezvous-dir",
+            self.rendezvous_dir or "",
+            "--",
+            *self.command,
+        )
 
 
 class LaunchBackend(Protocol):
@@ -148,7 +162,11 @@ class IrisBackend:
     def submit(self, spec: IrisLaunchSpec, workspace: Path, *, wait: bool) -> str:
         try:
             from iris.cli.connect import open_iris_client  # noqa: PLC0415
+            from iris.cluster.platforms.k8s.coreweave_topology import (  # noqa: PLC0415
+                gpu_gang_coscheduling_level,
+            )
             from iris.cluster.types import (  # noqa: PLC0415
+                CoschedulingConfig,
                 Entrypoint,
                 EnvironmentSpec,
                 ResourceSpec,
@@ -180,7 +198,7 @@ class IrisBackend:
             workspace=workspace,
         ) as client:
             job = client.submit(
-                entrypoint=Entrypoint.from_command(*spec.command),
+                entrypoint=Entrypoint.from_command(*spec.task_command()),
                 name=spec.job_name,
                 resources=ResourceSpec(
                     cpu=spec.cpu,
@@ -190,6 +208,13 @@ class IrisBackend:
                 ),
                 environment=environment,
                 replicas=spec.nodes,
+                coscheduling=(
+                    CoschedulingConfig(
+                        group_by=gpu_gang_coscheduling_level(spec.gpu_variant, spec.gpus_per_node, spec.nodes)
+                    )
+                    if spec.nodes > 1
+                    else None
+                ),
                 max_retries_failure=spec.max_retries_failure,
                 max_retries_preemption=spec.max_retries_preemption,
                 max_task_failures=spec.max_task_failures,
@@ -223,14 +248,18 @@ def _default_job_name() -> str:
 
 
 def create_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Submit one Slime GPU task to an Iris cluster")
+    parser = argparse.ArgumentParser(description="Submit a Slime GPU job to an Iris cluster")
     endpoint = parser.add_mutually_exclusive_group(required=True)
     endpoint.add_argument("--cluster", help="named Iris cluster")
     endpoint.add_argument("--cluster-config", type=Path, help="Iris cluster configuration file")
     endpoint.add_argument("--controller-url", help="direct Iris controller URL")
     parser.add_argument("--job-name", default=None, help="unique Iris job name")
     parser.add_argument("--task-image", required=True, help="GPU image with Slime dependencies already installed")
-    parser.add_argument("--nodes", type=int, default=DEFAULT_NODES, help="Iris task count; currently must be 1")
+    parser.add_argument("--nodes", type=int, default=DEFAULT_NODES, help="number of Iris GPU tasks")
+    parser.add_argument(
+        "--rendezvous-dir",
+        help="shared local or s3:// directory used to coordinate a multi-node Ray cluster",
+    )
     parser.add_argument("--gpu-variant", default=DEFAULT_GPU_VARIANT)
     parser.add_argument("--gpus-per-node", type=int, default=DEFAULT_GPUS_PER_NODE)
     parser.add_argument("--cpu", type=float, default=DEFAULT_CPU)
@@ -300,6 +329,7 @@ def spec_from_args(args: argparse.Namespace) -> IrisLaunchSpec:
         env=env,
         secret_env_names=tuple(args.secret_env),
         setup_commands=tuple(args.setup_command),
+        rendezvous_dir=args.rendezvous_dir,
     )
     spec.validate()
     return spec

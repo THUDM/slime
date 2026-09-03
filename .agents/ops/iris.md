@@ -1,6 +1,6 @@
 # Slime jobs on Iris
 
-Slime's Iris adapter submits one GPU task from the current checkout. Iris owns
+Slime's Iris adapter submits one or more GPU tasks from the current checkout. Iris owns
 workspace transfer, scheduling, retries, and logs; the selected image owns CUDA,
 Ray, SGLang, Megatron, and Slime dependencies.
 
@@ -38,10 +38,12 @@ The dry-run output lists environment variable names but never their values. Remo
 
 ## Operational boundary
 
-`--nodes` must be 1. Existing Slime multi-node scripts bootstrap Ray through an SSH
-hostfile. Iris replicas run the same entrypoint, so accepting multiple tasks would
-start duplicate trainers. Do not bypass the validation; add a tested cross-node Ray
-rendezvous runtime first.
+For multi-node jobs, set `--nodes N` and provide a unique shared `--rendezvous-dir`
+on S3 or a filesystem mounted by every task. The launcher gang-schedules the
+GPU replicas and wraps the command with `infra.iris.ray_runtime`: rank zero starts
+the Ray head and runs the command, while the remaining ranks join as Ray workers.
+The command must attach to the existing cluster through `RAY_ADDRESS`; it must not
+start another local Ray head. Use a distinct rendezvous directory for every job.
 
 The launcher uses Iris's default container security profile. It does not request a
 Docker socket or privileged container. Sandbox services used by coding-agent
