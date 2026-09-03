@@ -47,6 +47,7 @@ printf -v MOE_LAYER_FREQ "[%s]" "$(IFS=', '; echo "${arr[*]}")"
 # ============ context length ============
 MAX_CONTEXT_LEN="${MAX_CONTEXT_LEN:-96000}"
 MAX_GEN_LEN="${MAX_GEN_LEN:-32768}"
+export SLIME_PRESERVE_REASONING_HISTORY="${SLIME_PRESERVE_REASONING_HISTORY:-1}"
 
 # ============ paths — override before launching ============
 HF_CHECKPOINT="${HF_CHECKPOINT:-/path/to/Qwen3.6-35B-A3B}"
