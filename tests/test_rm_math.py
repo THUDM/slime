@@ -62,6 +62,11 @@ def test_last_boxed_falls_back_to_fbox():
 
 
 @pytest.mark.unit
+def test_extract_boxed_answer_handles_fbox_end_to_end():
+    assert extract_boxed_answer(r"answer: \fbox{7}") == "7"
+
+
+@pytest.mark.unit
 def test_last_boxed_returns_none_when_missing():
     assert last_boxed_only_string("plain text, no box") is None
 
@@ -112,9 +117,13 @@ def test_extract_boxed_answer_end_to_end():
 
 @pytest.mark.unit
 def test_extract_answer_returns_none_when_no_boxed_marker():
-    """``extract_answer`` only triggers when ``\\boxed`` is in the passage;
-    otherwise returns None (pinning the branch at math_utils.py:479)."""
+    """Return None when neither supported box marker is present."""
     assert extract_answer("just 42") is None
+
+
+@pytest.mark.unit
+def test_extract_answer_handles_fbox():
+    assert extract_answer(r"Solution: \fbox{42}") == "42"
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +224,11 @@ def test_grade_answer_verl_extracts_both_sides_from_boxed():
     function extracts then grades. Confirms the wiring at
     math_utils.py:488-492 not just the inner mathd/sympy logic."""
     assert grade_answer_verl(r"answer: \boxed{42}", r"\boxed{42}") is True
+
+
+@pytest.mark.unit
+def test_grade_answer_verl_extracts_fbox():
+    assert grade_answer_verl(r"answer: \fbox{42}", r"\fbox{42}") is True
 
 
 @pytest.mark.unit
