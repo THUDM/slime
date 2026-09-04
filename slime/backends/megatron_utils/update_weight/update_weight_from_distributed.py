@@ -13,6 +13,13 @@ from ray import ObjectRef
 from ray.actor import ActorHandle
 from tqdm import tqdm
 
+from slime.observability.communication_timeline import (
+    communication_context,
+    communication_event,
+    communication_phase,
+    flush_communication_timeline,
+    iter_communication_buckets,
+)
 from slime.utils import accelerator
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.http_utils import _wrap_ipv6
@@ -105,32 +112,35 @@ class UpdateWeightFromDistributed:
         """
         self.weight_version += 1
 
-        if dist.get_rank() == 0:
-            ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
-            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
+        with communication_context(weight_version=self.weight_version, transport="nccl"):
+            if dist.get_rank() == 0:
+                ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
+                ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
 
-            # int4/fp4 pre_process
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
-                post_process_weights(
-                    restore_weights_before_load=True,
-                    post_process_quantization=False,
-                    rollout_engines=self.rollout_engines,
-                )
-        dist.barrier(group=get_gloo_group())
+                # int4/fp4 pre_process
+                if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+                    post_process_weights(
+                        restore_weights_before_load=True,
+                        post_process_quantization=False,
+                        rollout_engines=self.rollout_engines,
+                    )
+            dist.barrier(group=get_gloo_group())
 
-        pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_pp_src_rank else None
-        self._send_weights(pbar)
+            pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_pp_src_rank else None
+            self._send_weights(pbar)
 
-        if dist.get_rank() == 0:
-            # int4/fp4 post_process
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
-                post_process_weights(
-                    restore_weights_before_load=False,
-                    post_process_quantization=True,
-                    rollout_engines=self.rollout_engines,
-                )
-            ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
-        dist.barrier(group=get_gloo_group())
+            if dist.get_rank() == 0:
+                # int4/fp4 post_process
+                if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+                    post_process_weights(
+                        restore_weights_before_load=False,
+                        post_process_quantization=True,
+                        rollout_engines=self.rollout_engines,
+                    )
+                ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
+            dist.barrier(group=get_gloo_group())
+            communication_event("weight_sync_complete")
+            flush_communication_timeline(block=False)
 
     def _send_weights(self, pbar: tqdm | None) -> None:
         """
@@ -138,10 +148,30 @@ class UpdateWeightFromDistributed:
         yields broadcast-ready chunks (bucketing happens internally); subclasses
         override ``_on_chunk`` to inject per-chunk behaviour.
         """
-        for chunk_iter in (self._iter_non_expert_chunks(), self._iter_expert_chunks()):
-            for hf_chunk in chunk_iter:
+        bucket_id = 0
+        chunk_iters = (
+            ("non_expert", self._iter_non_expert_chunks()),
+            ("expert", self._iter_expert_chunks()),
+        )
+        for bucket_kind, chunk_iter in chunk_iters:
+            for current_bucket_id, hf_chunk in iter_communication_buckets(
+                chunk_iter,
+                start_bucket_id=bucket_id,
+            ):
+                message_bytes = sum(tensor.numel() * tensor.element_size() for _, tensor in hf_chunk)
+                communication_event(
+                    "weight_bucket_ready",
+                    bucket_id=current_bucket_id,
+                    message_bytes=message_bytes,
+                    bucket_kind=bucket_kind,
+                )
                 self._on_chunk(hf_chunk)
-                self._update_bucket_weights_from_distributed(hf_chunk, pbar=pbar)
+                self._update_bucket_weights_from_distributed(
+                    hf_chunk,
+                    bucket_id=current_bucket_id,
+                    pbar=pbar,
+                )
+                bucket_id = current_bucket_id + 1
             dist.barrier(group=get_gloo_group())
 
     def _on_chunk(self, hf_chunk: list[tuple[str, torch.Tensor]]) -> None:
@@ -239,6 +269,7 @@ class UpdateWeightFromDistributed:
     def _update_bucket_weights_from_distributed(
         self,
         converted_named_tensors: list[tuple[str, torch.Tensor]],
+        bucket_id: int,
         pbar: tqdm | None = None,
         load_format: str | None = None,
     ) -> None:
@@ -249,16 +280,26 @@ class UpdateWeightFromDistributed:
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
             time.sleep(0.1)
 
-        refs = update_weights_from_distributed(
-            self._group_name,
-            self._model_update_groups,
-            self.weight_version,
-            self.rollout_engines,
-            converted_named_tensors,
-            load_format=load_format,
-        )
+        message_bytes = sum(tensor.numel() * tensor.element_size() for _, tensor in converted_named_tensors)
+        shared_fields = {
+            "bucket_id": bucket_id,
+            "message_bytes": message_bytes,
+            "engine_count": len(self.rollout_engines),
+        }
+        with communication_phase("weight_bucket_send", **shared_fields):
+            refs = update_weights_from_distributed(
+                self._group_name,
+                self._model_update_groups,
+                self.weight_version,
+                self.rollout_engines,
+                converted_named_tensors,
+                load_format=load_format,
+            )
 
-        ray.get(refs)
+        communication_event("engine_bucket_receive", observation="trainer_broadcast_complete", **shared_fields)
+        with communication_phase("engine_load_weights", **shared_fields) as phase:
+            ray.get(refs)
+            phase.mark_consumer()
         converted_named_tensors.clear()
         ray.get(self.rollout_engine_lock.release.remote())
         pbar.update(1)

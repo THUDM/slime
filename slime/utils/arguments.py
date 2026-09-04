@@ -1318,6 +1318,22 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
             )
             parser.add_argument(
+                "--communication-timeline",
+                type=str,
+                default=None,
+                help=(
+                    "Optional JSONL path for trainer communication phases. Supports {rank}, {trainer_rank}, "
+                    "{local_rank}, {pid}, {hostname}, {role}, and {world_size}; a rank suffix is added "
+                    "automatically for a shared multi-rank path."
+                ),
+            )
+            parser.add_argument(
+                "--communication-timeline-run-id",
+                type=str,
+                default=None,
+                help="Optional run identifier shared by all trainer communication timeline records.",
+            )
+            parser.add_argument(
                 "--memory-recorder",
                 type=str,
                 choices=["torch", "memray"],
