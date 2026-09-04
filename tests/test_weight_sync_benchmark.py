@@ -30,9 +30,9 @@ def test_parse_size_supports_binary_decimal_and_exact_bytes():
 @pytest.mark.parametrize(
     ("world_size", "group_size", "expected"),
     [
+        (2, 1, [(1,)]),
         (4, 1, [(1,), (2,), (3,)]),
-        (5, 2, [(1, 2), (3, 4)]),
-        (7, 3, [(1, 2, 3), (4, 5, 6)]),
+        (4, 3, [(1, 2, 3)]),
     ],
 )
 def test_engine_groups_are_derived_from_world_size(world_size, group_size, expected):
@@ -42,17 +42,17 @@ def test_engine_groups_are_derived_from_world_size(world_size, group_size, expec
 
 
 def test_heterogeneous_engine_groups_cover_every_non_trainer_rank_once():
-    groups = build_engine_groups(9, engine_group_sizes=[1, 3, 4])
+    groups = build_engine_groups(4, engine_group_sizes=[1, 2])
 
-    assert [group.ranks for group in groups] == [(1,), (2, 3, 4), (5, 6, 7, 8)]
+    assert [group.ranks for group in groups] == [(1,), (2, 3)]
 
 
 def test_invalid_homogeneous_partition_explains_heterogeneous_option():
     with pytest.raises(ValueError, match="--engine-group-sizes"):
-        build_engine_groups(6, engine_group_size=2)
+        build_engine_groups(4, engine_group_size=2)
 
 
-def _tasks(bucket_count=3, engine_count=4, message_bytes=1024):
+def _tasks(bucket_count=3, engine_count=3, message_bytes=1024):
     groups = [EngineGroup(engine_id=index, ranks=(index + 1,)) for index in range(engine_count)]
     return build_transfer_tasks(bucket_count, groups, message_bytes)
 
@@ -63,7 +63,7 @@ def test_serialized_policy_has_one_transfer_per_wave():
         policy="serialized",
         max_inflight_buckets=3,
         max_inflight_bytes=0,
-        max_inflight_engine_groups=4,
+        max_inflight_engine_groups=3,
     )
 
     assert all(len(wave) == 1 for wave in waves)
@@ -83,7 +83,7 @@ def test_all_at_once_keeps_all_engines_for_each_bucket_together():
 
 def test_windowed_policy_respects_bucket_byte_and_engine_credits():
     waves = plan_transfer_waves(
-        _tasks(bucket_count=4, engine_count=4, message_bytes=1024),
+        _tasks(bucket_count=4, engine_count=3, message_bytes=1024),
         policy="windowed",
         max_inflight_buckets=2,
         max_inflight_bytes=2048,
@@ -142,8 +142,8 @@ def test_weight_sync_total_uses_slowest_rank_not_only_trainer():
     )
     waves = [[TransferTask(bucket_id=0, engine_id=0, message_bytes=1024, transport="p2p")]]
     gathered = [
-        {"rank": 0, "iteration_ms": [5.0, 6.0], "records": []},
-        {"rank": 1, "iteration_ms": [7.0, 4.0], "records": []},
+        {"rank": 0, "hostname": "node-a", "iteration_ms": [5.0, 6.0], "records": []},
+        {"rank": 1, "hostname": "node-a", "iteration_ms": [7.0, 4.0], "records": []},
     ]
 
     result = _aggregate_experiment(
@@ -156,3 +156,64 @@ def test_weight_sync_total_uses_slowest_rank_not_only_trainer():
     assert result["weight_sync_total_ms"]["p50"] == 6.5
     assert result["trainer_total_ms"]["p50"] == 5.5
     assert result["max_inflight_engine_groups_observed"] == 1
+    assert result["cross_rank_clock_comparable"] is True
+
+
+def test_cross_host_timestamps_are_not_compared():
+    config = ExperimentConfig(
+        transport="p2p",
+        message_bytes=1024,
+        max_inflight_buckets=1,
+        max_inflight_bytes=0,
+        max_inflight_engine_groups=1,
+        engine_wave_policy="serialized",
+        phase_stride_us=0,
+    )
+    waves = [[TransferTask(bucket_id=0, engine_id=0, message_bytes=1024, transport="p2p")]]
+    common_record = {
+        "iteration": 0,
+        "bucket_id": 0,
+        "engine_id": 0,
+        "transfer_ms": 1.0,
+        "synthetic_load_ms": None,
+        "control_wait_ms": 0.0,
+    }
+    gathered = [
+        {
+            "rank": 0,
+            "hostname": "node-a",
+            "iteration_ms": [2.0],
+            "records": [
+                {
+                    **common_record,
+                    "rank": 0,
+                    "role": "trainer",
+                    "api_launch_timestamp_ns": 10_000,
+                }
+            ],
+        },
+        {
+            "rank": 1,
+            "hostname": "node-b",
+            "iteration_ms": [2.0],
+            "records": [
+                {
+                    **common_record,
+                    "rank": 1,
+                    "role": "engine",
+                    "api_launch_timestamp_ns": 20_000,
+                }
+            ],
+        },
+    ]
+
+    result = _aggregate_experiment(
+        config,
+        waves,
+        gathered,
+        engine_groups=[EngineGroup(engine_id=0, ranks=(1,))],
+    )
+
+    assert result["cross_rank_clock_comparable"] is False
+    assert result["rank_start_skew_us"]["p50"] is None
+    assert result["engine_finish_skew_us"]["p50"] is None

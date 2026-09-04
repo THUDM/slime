@@ -580,18 +580,21 @@ def _aggregate_experiment(
     for record in records:
         key = (record["iteration"], record["bucket_id"], record["engine_id"])
         by_transfer.setdefault(key, []).append(record)
+    hostnames = {item.get("hostname") for item in gathered}
+    cross_rank_clock_comparable = None not in hostnames and len(hostnames) == 1
     rank_start_skew_us = []
     engine_finish_skew_us = []
-    for transfer_records in by_transfer.values():
-        launches = [record["api_launch_timestamp_ns"] for record in transfer_records]
-        rank_start_skew_us.append((max(launches) - min(launches)) / 1_000)
-        receiver_finishes = [
-            record["api_launch_timestamp_ns"] + record["transfer_ms"] * 1_000_000
-            for record in transfer_records
-            if record["role"] == "engine"
-        ]
-        if receiver_finishes:
-            engine_finish_skew_us.append((max(receiver_finishes) - min(receiver_finishes)) / 1_000)
+    if cross_rank_clock_comparable:
+        for transfer_records in by_transfer.values():
+            launches = [record["api_launch_timestamp_ns"] for record in transfer_records]
+            rank_start_skew_us.append((max(launches) - min(launches)) / 1_000)
+            receiver_finishes = [
+                record["api_launch_timestamp_ns"] + record["transfer_ms"] * 1_000_000
+                for record in transfer_records
+                if record["role"] == "engine"
+            ]
+            if receiver_finishes:
+                engine_finish_skew_us.append((max(receiver_finishes) - min(receiver_finishes)) / 1_000)
 
     max_inflight_bytes = max(
         sum(
@@ -610,6 +613,7 @@ def _aggregate_experiment(
         "max_inflight_bytes_observed": max_inflight_bytes,
         "max_inflight_wire_bytes_observed": max_inflight_wire_bytes,
         "max_inflight_engine_groups_observed": max_inflight_engine_groups,
+        "cross_rank_clock_comparable": cross_rank_clock_comparable,
         "weight_sync_total_ms": _summarize(total_ms),
         "trainer_total_ms": _summarize(trainer_total_ms),
         "bucket_send_ms": _summarize([record["transfer_ms"] for record in trainer_records]),
@@ -824,6 +828,7 @@ def main() -> None:
 
             payload = {
                 "rank": rank,
+                "hostname": socket.gethostname(),
                 "iteration_ms": local_iteration_ms,
                 "records": local_records,
             }
@@ -852,7 +857,7 @@ def main() -> None:
 
         if rank == 0:
             report = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "framework": "slime",
                 "run_id": f"{socket.gethostname()}-{time.time_ns()}",
                 "world_size": world_size,
@@ -867,10 +872,23 @@ def main() -> None:
                 "iters": args.iters,
                 "simulate_load": args.simulate_load,
                 "seed": args.seed,
+                "kernel_observed": False,
+                "gpu_timestamp_semantics": "event-bracket" if device.type == "cuda" else None,
+                "timestamp_domain": (
+                    "single-node-process-monotonic"
+                    if len({item["hostname"] for item in rank_metadata if item is not None}) == 1
+                    else "host-local-process-monotonic"
+                ),
+                "clock_sync_error_bound_us": None,
+                "automatic_policy_eligible": False,
+                "automatic_policy_ineligibility_reasons": [
+                    "transfer timing brackets framework operations rather than observing exact kernels",
+                    "no measured cross-rank clock-synchronization error bound",
+                ],
                 "timing_sources": {
-                    "transfer_duration": "cuda_event" if device.type == "cuda" else "host_perf_counter",
+                    "transfer_duration": ("cuda_event_bracket" if device.type == "cuda" else "host_call_bracket"),
                     "weight_sync_total": "maximum per-rank host duration after a shared Gloo start barrier",
-                    "rank_skew": "single-node host_perf_counter",
+                    "rank_skew": ("single-node process monotonic clock; omitted across hosts"),
                     "engine_load": "synthetic device-to-device copy",
                     "idle": "total duration minus summed per-rank transfer/load durations; overlap is clamped at zero",
                     "launch_alignment": "one Gloo barrier per trainer-to-engine transfer; every policy executes the same count",
