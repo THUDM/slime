@@ -62,6 +62,9 @@ def test_span_and_event_emit_stable_shared_schema(tmp_path):
     span, event = _read_jsonl(resolved)
     assert span["schema_version"] == timeline.COMMUNICATION_TIMELINE_VERSION
     assert span["framework"] == "slime"
+    assert span["gpu_timestamp_semantics"] == "event-bracket"
+    assert span["timestamp_domain"] == "process-realtime-projected-cuda-event"
+    assert span["clock_sync_error_bound_us"] is None
     assert span["run_id"] == "run-1"
     assert span["operation"] == "weight_bucket_send"
     assert span["logical_operation_id"] == "7/3/5/1/weight_bucket_send"
@@ -75,6 +78,8 @@ def test_span_and_event_emit_stable_shared_schema(tmp_path):
     assert span["duration_ns"] >= 0
     assert event["record_type"] == "event"
     assert event["operation"] == "weight_sync_complete"
+    assert event["gpu_timestamp_semantics"] == "event-bracket"
+    assert event["clock_sync_error_bound_us"] is None
     assert event["sequence_id"] == span["sequence_id"] + 1
 
 
@@ -83,7 +88,7 @@ def test_world_size_uses_rank_suffix_when_template_is_shared(tmp_path):
         str(tmp_path / "timeline.jsonl"),
         rank=3,
         local_rank=1,
-        world_size=8,
+        world_size=4,
     )
 
     assert configured.path == tmp_path / "timeline.rank-3.jsonl"
