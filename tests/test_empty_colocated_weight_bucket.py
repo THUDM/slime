@@ -71,6 +71,7 @@ def _install_fake_deps(monkeypatch):
     accelerator_mod.device = lambda: "cuda:0"
     accelerator_mod.current_device = lambda: "cuda:0"
     accelerator_mod.ipc_collect = lambda: None
+    accelerator_mod.empty_cache = lambda: None
 
     dist_mod = types.ModuleType("torch.distributed")
 
@@ -95,6 +96,7 @@ def _install_fake_deps(monkeypatch):
 
     ray_mod = types.ModuleType("ray")
     ray_mod.ObjectRef = object
+    ray_mod.get = lambda refs: refs
     ray_actor_mod = types.ModuleType("ray.actor")
     ray_actor_mod.ActorHandle = object
 
@@ -129,8 +131,8 @@ def _install_fake_deps(monkeypatch):
     )
     update_from_distributed_mod.connect_rollout_engines_from_distributed = lambda *args, **kwargs: None
     update_from_distributed_mod.disconnect_rollout_engines_from_distributed = lambda *args, **kwargs: None
+    update_from_distributed_mod.launch_weights_from_distributed = lambda *args, **kwargs: ([], [])
     update_from_distributed_mod.post_process_weights = lambda *args, **kwargs: None
-    update_from_distributed_mod.update_weights_from_distributed = lambda *args, **kwargs: []
 
     monkeypatch.setitem(sys.modules, "slime", slime_pkg)
     monkeypatch.setitem(sys.modules, "slime.backends", slime_backends_pkg)
@@ -226,6 +228,94 @@ def test_source_rank_pads_empty_colocated_bucket_entries(monkeypatch):
             "weight_version": "7",
         }
     ]
+
+
+def test_tensor_credit_window_launches_all_admitted_buckets_before_waiting(monkeypatch):
+    module, _ = _load_update_weight_module(monkeypatch)
+    events = []
+
+    class _Tensor:
+        def __init__(self, size):
+            self.size = size
+
+        def numel(self):
+            return self.size
+
+        def element_size(self):
+            return 1
+
+    class _Handle:
+        def __init__(self, name):
+            self.name = name
+
+        def wait(self):
+            events.append(("wait", self.name))
+
+    updater = object.__new__(module.UpdateWeightFromTensor)
+    updater._weight_sync_credit = module.WeightSyncCreditController(
+        max_inflight_buckets=2,
+        max_inflight_bytes=10,
+    )
+    updater._weight_sync_credit.begin_version(4)
+    updater._weight_bucket_bytes = lambda bucket: sum(tensor.numel() for _, tensor in bucket)
+
+    def send_hf_params(bucket):
+        name = bucket[0][0]
+        events.append(("launch", name))
+        return [f"ref-{name}"], [_Handle(name)], object()
+
+    updater._send_hf_params = send_hf_params
+    module.ray.get = lambda refs: events.append(("get", refs[0]))
+    buckets = [[("b0", _Tensor(6))], [("b1", _Tensor(4))], [("b2", _Tensor(5))]]
+
+    updater._send_weight_bucket_windows(iter(buckets))
+    updater._weight_sync_credit.commit_version(4)
+
+    assert events == [
+        ("launch", "b0"),
+        ("launch", "b1"),
+        ("wait", "b0"),
+        ("get", "ref-b0"),
+        ("wait", "b1"),
+        ("get", "ref-b1"),
+        ("launch", "b2"),
+        ("wait", "b2"),
+        ("get", "ref-b2"),
+    ]
+    assert buckets == [[], [], []]
+
+
+def test_tensor_byte_credit_uses_the_largest_trainer_rank_bucket(monkeypatch):
+    module, _ = _load_update_weight_module(monkeypatch)
+
+    class _Tensor:
+        def numel(self):
+            return 5
+
+        def element_size(self):
+            return 1
+
+    class _Scalar:
+        def __init__(self, value):
+            self.value = value
+
+        def item(self):
+            return self.value
+
+    updater = object.__new__(module.UpdateWeightFromTensor)
+    updater._weight_sync_credit = module.WeightSyncCreditController(max_inflight_bytes=16)
+    monkeypatch.setattr(module.torch, "int64", "int64", raising=False)
+    monkeypatch.setattr(module.torch, "tensor", lambda value, **_: _Scalar(value), raising=False)
+    monkeypatch.setattr(module.dist, "ReduceOp", types.SimpleNamespace(MAX="max"), raising=False)
+
+    def all_reduce(value, *, op, group):
+        assert op == "max"
+        assert group is not None
+        value.value = 12
+
+    monkeypatch.setattr(module.dist, "all_reduce", all_reduce, raising=False)
+
+    assert updater._weight_bucket_bytes([("local", _Tensor())]) == 12
 
 
 if __name__ == "__main__":

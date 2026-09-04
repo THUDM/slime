@@ -476,6 +476,26 @@ engine 读取之前，在每个训练 rank 上调用。用于在非 POSIX 共享
 `hook(source_dir: str, target_version: int)`——在 `/pull_weights` 读取已发布权重之前调用
 （例如刷新挂载视图）。完整机制见 [Delta 权重同步](../advanced/delta-weight-sync.md)。
 
+### 20. 权重同步在飞 Credit
+
+full tensor/NCCL 权重同步可以同时推进多个已转换的 bucket，而不必在每个 bucket 后立即等待。
+窗口由两个相互独立的上限控制：
+
+| 参数 | 含义 |
+| --- | --- |
+| `--update-weight-max-inflight-buckets` | 在飞逻辑 bucket 数量上限；`0` 表示不限制这个维度。 |
+| `--update-weight-max-inflight-bytes` | 在飞逻辑 bucket 总字节数上限；`0` 表示不限制这个维度。 |
+
+两个参数默认都是 `0`，因此默认仍走原有的逐 bucket 阻塞路径；设置任意一个即可启用窗口。
+逻辑 bucket 只统计一份字节，不会按 rollout engine fan-out 重复计数；colocated 更新会取所有
+trainer rank 中最大的本地 bucket 大小，确保每个 rank 在相同的 collective 边界 flush。bucket
+始终按 FIFO 顺序完成和归还 credit，并且一个 weight version 必须完全 drain 后才能 commit。
+如果单个 bucket 已经大于配置的字节上限，slime 会直接报错，而不是无限等待。
+
+credit 窗口覆盖 distributed 和 colocated 更新中的普通 full-weight bucket。显式路由的 expert
+传输为了安全复用 staging buffer，仍保持串行，但其 bucket 大小仍受 byte credit 检查。
+disk 和 delta transport 没有内存在飞 bucket 数据面，因此非零 credit 配置会被拒绝。
+
 ## 自定义函数路径的测试
 
 slime 现在也提供了一组 CPU 契约测试，用于校验这些 customization 接口。测试会通过字符串形式的导入路径来动态加载组件，因此既能回归仓库内置 hook，也能验证用户通过和训练时完全相同的 CLI 参数传入的自定义实现。

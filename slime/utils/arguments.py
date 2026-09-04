@@ -546,6 +546,26 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--update-weight-max-inflight-buckets",
+                type=int,
+                default=0,
+                help=(
+                    "Maximum number of logical weight buckets launched before waiting for completion. "
+                    "0 disables the bucket-count credit. When both in-flight limits are 0, weight sync "
+                    "keeps the existing one-bucket-at-a-time behavior."
+                ),
+            )
+            parser.add_argument(
+                "--update-weight-max-inflight-bytes",
+                type=int,
+                default=0,
+                help=(
+                    "Maximum bytes across logical weight buckets launched before waiting for completion. "
+                    "Bytes are counted once per bucket, independent of rollout-engine fan-out; 0 disables "
+                    "the byte credit."
+                ),
+            )
+            parser.add_argument(
                 "--update-weights-interval",
                 type=int,
                 default=1,
@@ -2048,6 +2068,16 @@ def slime_validate_args(args):
         raise ValueError(
             "--update-weight-transport=disk requires --update-weight-disk-dir to point at "
             "a filesystem shared between the trainer and the rollout engines."
+        )
+    if args.update_weight_max_inflight_buckets < 0:
+        raise ValueError("--update-weight-max-inflight-buckets must be non-negative")
+    if args.update_weight_max_inflight_bytes < 0:
+        raise ValueError("--update-weight-max-inflight-bytes must be non-negative")
+    if (args.update_weight_max_inflight_buckets or args.update_weight_max_inflight_bytes) and (
+        args.update_weight_mode != "full" or args.update_weight_transport != "nccl"
+    ):
+        raise ValueError(
+            "weight bucket in-flight credits require --update-weight-mode=full " "and --update-weight-transport=nccl"
         )
     if args.release_train:
         if args.use_critic:
