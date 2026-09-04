@@ -29,7 +29,9 @@ trainer 会记录：
 
 每条记录都有 `global_step`、`rollout_id`、`weight_version`、`bucket_id`、`trainer_rank`、`engine_id`、`message_bytes` 和 `transport` 等共享字段。不适用的字段为 `null`。`sequence_id` 在进程内单调递增，`logical_operation_id` 则由当前可用的生命周期 ID 与操作名组合而成。
 
-CUDA span 在框架当前 stream 上记录 event。正常运行中只做非阻塞查询，在进程退出时才排空尚未完成的 event。这些时间戳表示框架操作可执行到观测完成的区间，并不宣称等于 ProcessGroupNCCL 内部 stream 上 NCCL kernel 的精确起点。每个 span 同时生成名为 `slime.comm/<operation>` 的 NVTX range，可在 Nsight Systems 中精确关联 kernel。
+CUDA span 在框架当前 stream 上记录 event。正常运行中只做非阻塞查询，在进程退出时才排空尚未完成的 event。schema v2 用 `gpu_timestamp_semantics="event-bracket"`、`timestamp_domain="process-realtime-projected-cuda-event"` 和 `clock_sync_error_bound_us=null` 显式标注时间来源。投影后的 GPU 区间表示框架操作可执行到观测完成的边界，并不宣称等于 ProcessGroupNCCL 内部 stream 上 NCCL kernel 的精确起点；各进程 realtime clock 也没有经过测量的跨 rank 误差上界。每个 span 同时生成名为 `slime.comm/<operation>` 的 NVTX range，可在 Nsight Systems 中精确关联 kernel。
+
+自动通信策略不得直接使用这些 event-bracket 时间戳进行选择或执行；在 adapter 为每个参与 rank 提供 kernel-observed 时间戳和实测时钟同步误差上界之前，策略消费者必须 fail closed。内置时间线仍可用于生命周期诊断，以及通过 NVTX range 与精确 profiler trace 做关联。
 
 ## 从自定义代码补充语义阶段
 

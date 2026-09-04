@@ -29,7 +29,9 @@ The trainer records:
 
 Every record carries the common fields `global_step`, `rollout_id`, `weight_version`, `bucket_id`, `trainer_rank`, `engine_id`, `message_bytes`, and `transport`. Fields that do not apply at a boundary are `null`. `sequence_id` is process-local and monotonic, while `logical_operation_id` combines the available lifecycle identifiers with the operation name.
 
-CUDA spans use events on the current framework stream. Events are queried without blocking during normal execution and drained at process shutdown. These timestamps bracket framework eligibility and observed completion; they do not claim to be the exact start of an NCCL kernel on an internal ProcessGroupNCCL stream. Each span also emits an NVTX range named `slime.comm/<operation>` so Nsight Systems can provide exact kernel correlation.
+CUDA spans use events on the current framework stream. Events are queried without blocking during normal execution and drained at process shutdown. Schema v2 labels this provenance explicitly with `gpu_timestamp_semantics="event-bracket"`, `timestamp_domain="process-realtime-projected-cuda-event"`, and `clock_sync_error_bound_us=null`. The projected GPU interval brackets framework eligibility and observed completion; it does not claim to be the exact start of an NCCL kernel on an internal ProcessGroupNCCL stream, and the process realtime clocks have no measured cross-rank error bound. Each span also emits an NVTX range named `slime.comm/<operation>` so Nsight Systems can provide exact kernel correlation.
+
+Do not use these event-bracket timestamps to select or apply an automatic communication policy. Such a consumer must fail closed until an adapter supplies kernel-observed timestamps and a measured clock-synchronization error bound for every participating rank. The built-in timeline remains useful for lifecycle diagnostics and for correlating its NVTX ranges with an exact profiler trace.
 
 ## Add semantic phases from custom code
 

@@ -17,7 +17,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-COMMUNICATION_TIMELINE_VERSION = 1
+COMMUNICATION_TIMELINE_VERSION = 2
 COMMUNICATION_TIMELINE_ENV = "SLIME_COMMUNICATION_TIMELINE"
 COMMUNICATION_TIMELINE_RUN_ID_ENV = "SLIME_COMMUNICATION_TIMELINE_RUN_ID"
 
@@ -200,6 +200,9 @@ class CommunicationTimeline:
         return {
             "schema_version": COMMUNICATION_TIMELINE_VERSION,
             "framework": "slime",
+            "gpu_timestamp_semantics": "event-bracket",
+            "timestamp_domain": "process-realtime-projected-cuda-event",
+            "clock_sync_error_bound_us": None,
             "run_id": self.run_id,
             "role": self.role,
             "rank": self.rank,
