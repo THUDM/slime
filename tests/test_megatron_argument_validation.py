@@ -177,6 +177,15 @@ def test_update_weight_disk_dir_required_for_disk_transport(monkeypatch):
         module.slime_validate_args(args)
 
 
+@pytest.mark.unit
+def test_update_weight_engine_group_wave_limit_must_be_non_negative(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(update_weight_max_inflight_engine_groups=-1)
+
+    with pytest.raises(ValueError, match="max-inflight-engine-groups"):
+        module.slime_validate_args(args)
+
+
 def make_slime_validate_args(**overrides):
     values = dict(
         eval_config=None,
@@ -401,6 +410,26 @@ def test_force_fp8_ue8m0_scale_argument(monkeypatch):
 
     assert defaults.force_fp8_ue8m0_scale is False
     assert configured.force_fp8_ue8m0_scale is True
+
+
+@pytest.mark.unit
+def test_update_weight_engine_group_wave_argument(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    module.get_slime_extra_args_provider()(parser)
+
+    defaults = parser.parse_args(["--rollout-batch-size", "1"])
+    configured = parser.parse_args(
+        [
+            "--rollout-batch-size",
+            "1",
+            "--update-weight-max-inflight-engine-groups",
+            "3",
+        ]
+    )
+
+    assert defaults.update_weight_max_inflight_engine_groups == 0
+    assert configured.update_weight_max_inflight_engine_groups == 3
 
 
 if __name__ == "__main__":
