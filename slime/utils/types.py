@@ -104,6 +104,10 @@ class Sample:
     # sibling, so loss aggregation averages within the rollout instead of
     # over-counting it.
     rollout_id: int | None = None
+    # Monotonic version of the actor policy used when this sample was admitted
+    # for generation. This is separate from ``weight_versions``, which contains
+    # backend-reported weight metadata collected while tokens are generated.
+    policy_version: int | None = None
     # prompt
     prompt: str | list[dict[str, str]] = ""
     tokens: list[int] = field(default_factory=list)
