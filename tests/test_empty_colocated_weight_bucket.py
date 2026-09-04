@@ -127,8 +127,9 @@ def _install_fake_deps(monkeypatch):
     update_from_distributed_mod = types.ModuleType(
         "slime.backends.megatron_utils.update_weight.update_weight_from_distributed"
     )
-    update_from_distributed_mod.connect_rollout_engines_from_distributed = lambda *args, **kwargs: None
-    update_from_distributed_mod.disconnect_rollout_engines_from_distributed = lambda *args, **kwargs: None
+    update_from_distributed_mod.connect_rollout_engine_groups_from_distributed = lambda *args, **kwargs: []
+    update_from_distributed_mod.disconnect_rollout_engine_groups_from_distributed = lambda *args, **kwargs: None
+    update_from_distributed_mod.launch_weights_from_distributed = lambda *args, **kwargs: ([], [])
     update_from_distributed_mod.post_process_weights = lambda *args, **kwargs: None
     update_from_distributed_mod.update_weights_from_distributed = lambda *args, **kwargs: []
 
