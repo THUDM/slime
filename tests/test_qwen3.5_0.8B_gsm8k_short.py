@@ -51,8 +51,9 @@ def execute():
         "--eval-top-k 1 "
     )
 
+    # Qwen3.5-0.8B has 2 query groups; TP=4 covers gated attention with query groups < TP.
     perf_args = (
-        "--tensor-model-parallel-size 1 "
+        "--tensor-model-parallel-size 4 "
         "--sequence-parallel "
         "--pipeline-model-parallel-size 1 "
         "--context-parallel-size 1 "
