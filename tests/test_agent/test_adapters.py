@@ -28,7 +28,12 @@ if str(REPO_ROOT) not in sys.path:
 from tests.test_agent._fakes import FakeSGLangServer, FakeTokenizer  # noqa: E402
 
 from slime.agent.adapters import anthropic, openai  # noqa: E402
-from slime.agent.parsing import parse_model_output, parse_xml_tool_uses  # noqa: E402
+from slime.agent.parsing import (  # noqa: E402
+    ParsedModelOutput,
+    _parse_tool_arguments,
+    parse_model_output,
+    parse_xml_tool_uses,
+)
 from slime.utils.types import Sample  # noqa: E402
 
 NUM_GPUS = 0
@@ -158,6 +163,52 @@ def test_openai_translation_developer_to_system_and_tool_calls_to_dict():
         # tool_call_id dropped.
         {"role": "tool", "content": "found"},
     ]
+
+
+def test_openai_reply_preserves_raw_tool_arguments():
+    raw = '{"cmd": "pytest"'
+    parsed = ParsedModelOutput(
+        reasoning="",
+        text="",
+        tool_uses=[
+            {
+                "name": "bash",
+                "input": {"_raw_arguments": raw},
+                "raw_arguments": raw,
+                "arguments_valid": False,
+            }
+        ],
+        ill_formed=True,
+    )
+
+    wire, manager, finish = openai._build_reply_parts(parsed, "stop")
+
+    assert wire["tool_calls"][0]["function"]["arguments"] == raw
+    assert manager["tool_calls"][0]["function"]["arguments"] == {"_raw_arguments": raw}
+    assert finish == "tool_calls"
+
+
+def test_anthropic_reply_drops_unrepresentable_tool_arguments():
+    raw = '{"cmd": "pytest"'
+    parsed = ParsedModelOutput(
+        reasoning="",
+        text="",
+        tool_uses=[
+            {
+                "name": "bash",
+                "input": {"_raw_arguments": raw},
+                "raw_arguments": raw,
+                "arguments_valid": False,
+            }
+        ],
+        ill_formed=True,
+    )
+
+    blocks, stop_reason, manager = anthropic._build_reply_parts(parsed, "stop")
+
+    assert blocks == [{"type": "text", "text": ""}]
+    assert stop_reason == "end_turn"
+    assert manager == {"role": "assistant", "content": ""}
 
 
 # ===========================================================================
@@ -428,6 +479,23 @@ def test_parse_model_output_plain_text_no_parsers():
     assert parsed.text == "just text"
     assert parsed.tool_uses == []
     assert parsed.reasoning == ""
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected", "valid"),
+    [
+        (' {"q" : "slime"} ', {"q": "slime"}, True),
+        ('{"cmd": "pytest"', {"_raw_arguments": '{"cmd": "pytest"'}, False),
+        ('["not", "an", "object"]', {"_raw_arguments": '["not", "an", "object"]'}, False),
+        (None, {}, True),
+    ],
+)
+def test_parse_tool_arguments_preserves_wire_text(raw, expected, valid):
+    parsed, wire_text, is_valid = _parse_tool_arguments(raw)
+
+    assert parsed == expected
+    assert wire_text == (raw if raw is not None else "{}")
+    assert is_valid is valid
 
 
 def test_parse_model_output_think_split_fallback():
