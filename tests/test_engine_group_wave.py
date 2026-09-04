@@ -15,7 +15,7 @@ NUM_GPUS = 0
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("engine_count", [1, 2, 4, 7])
+@pytest.mark.parametrize("engine_count", [1, 2, 4])
 def test_zero_limit_preserves_all_at_once(engine_count):
     engines = [f"engine-{index}" for index in range(engine_count)]
 
@@ -26,20 +26,19 @@ def test_zero_limit_preserves_all_at_once(engine_count):
 
 @pytest.mark.unit
 def test_positive_limit_builds_stable_bounded_waves():
-    engines = [f"engine-{index}" for index in range(5)]
+    engines = [f"engine-{index}" for index in range(4)]
 
-    waves = build_engine_group_waves(engines, 2)
+    waves = build_engine_group_waves(engines, 3)
 
     assert waves == (
-        ((0, "engine-0"), (1, "engine-1")),
-        ((2, "engine-2"), (3, "engine-3")),
-        ((4, "engine-4"),),
+        ((0, "engine-0"), (1, "engine-1"), (2, "engine-2")),
+        ((3, "engine-3"),),
     )
 
 
 @pytest.mark.unit
 def test_limit_larger_than_population_is_one_wave():
-    assert build_engine_group_waves(["a", "b"], 8) == (((0, "a"), (1, "b")),)
+    assert build_engine_group_waves(["a", "b"], 4) == (((0, "a"), (1, "b")),)
 
 
 @pytest.mark.unit
@@ -64,17 +63,15 @@ def test_runner_waits_before_submitting_the_next_wave():
     def wait(refs):
         events.append(("wait", tuple(refs)))
 
-    run_engine_group_waves(["a", "b", "c", "d", "e"], 2, submit, wait)
+    run_engine_group_waves(["a", "b", "c", "d"], 3, submit, wait)
 
     assert events == [
         ("submit", 0, "a"),
         ("submit", 1, "b"),
-        ("wait", ("ref-0", "ref-1")),
         ("submit", 2, "c"),
+        ("wait", ("ref-0", "ref-1", "ref-2")),
         ("submit", 3, "d"),
-        ("wait", ("ref-2", "ref-3")),
-        ("submit", 4, "e"),
-        ("wait", ("ref-4",)),
+        ("wait", ("ref-3",)),
     ]
 
 

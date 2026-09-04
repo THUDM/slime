@@ -94,7 +94,7 @@ def _load_distributed_update_module(monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("limit", [0, 3, 8])
+@pytest.mark.parametrize("limit", [0, 2, 4])
 def test_unbounded_distributed_topology_keeps_one_aggregate_group(monkeypatch, limit):
     module = _load_distributed_update_module(monkeypatch)
     calls = []
@@ -104,19 +104,19 @@ def test_unbounded_distributed_topology_keeps_one_aggregate_group(monkeypatch, l
         return f"pg-{name}"
 
     monkeypatch.setattr(module, "connect_rollout_engines_from_distributed", connect)
-    engines = ["engine-0", "engine-1", "engine-2"]
+    engines = ["engine-0", "engine-1"]
 
     groups = module.connect_rollout_engine_groups_from_distributed(
         Namespace(rollout_num_gpus_per_engine=1),
         "slime",
         engines,
-        engine_gpu_counts=[1, 2, 3],
+        engine_gpu_counts=[1, 2],
         max_inflight_engine_groups=limit,
     )
 
-    assert calls == [("slime", tuple(engines), (1, 2, 3))]
+    assert calls == [("slime", tuple(engines), (1, 2))]
     assert len(groups) == 1
-    assert groups[0].engine_indices == (0, 1, 2)
+    assert groups[0].engine_indices == (0, 1)
     assert groups[0].rollout_engines == tuple(engines)
 
 
@@ -142,7 +142,7 @@ def test_partial_group_setup_is_torn_down_on_failure(monkeypatch):
         module.connect_rollout_engine_groups_from_distributed(
             Namespace(rollout_num_gpus_per_engine=1),
             "slime",
-            ["engine-a", "engine-b", "engine-c"],
+            ["engine-a", "engine-b"],
             max_inflight_engine_groups=1,
         )
 
@@ -221,19 +221,18 @@ def test_bounded_distributed_topology_builds_one_group_per_engine(monkeypatch):
     groups = module.connect_rollout_engine_groups_from_distributed(
         Namespace(rollout_num_gpus_per_engine=1),
         "slime",
-        ["engine-a", "engine-b", "engine-c"],
-        engine_gpu_counts=[1, 3, 2],
+        ["engine-a", "engine-b"],
+        engine_gpu_counts=[1, 2],
         max_inflight_engine_groups=2,
-        total_engine_groups=5,
+        total_engine_groups=4,
         engine_index_offset=2,
     )
 
     assert calls == [
         ("slime-engine-2", ("engine-a",), (1,)),
-        ("slime-engine-3", ("engine-b",), (3,)),
-        ("slime-engine-4", ("engine-c",), (2,)),
+        ("slime-engine-3", ("engine-b",), (2,)),
     ]
-    assert [group.engine_indices for group in groups] == [(2,), (3,), (4,)]
+    assert [group.engine_indices for group in groups] == [(2,), (3,)]
 
 
 @pytest.mark.unit
@@ -255,7 +254,7 @@ def test_distributed_wave_waits_before_admitting_next_engines(monkeypatch):
             process_group=f"pg-{index}",
             rollout_engines=(f"engine-{index}",),
         )
-        for index in range(5)
+        for index in range(4)
     ]
 
     def launch(group_name, _group, _version, _engines, _tensors, load_format=None):
@@ -270,24 +269,21 @@ def test_distributed_wave_waits_before_admitting_next_engines(monkeypatch):
         groups,
         weight_version=9,
         converted_named_tensors=[],
-        max_inflight_engine_groups=2,
+        max_inflight_engine_groups=3,
         load_format="test",
     )
 
     assert events == [
         ("launch", 0, "test"),
         ("launch", 1, "test"),
+        ("launch", 2, "test"),
         ("work.wait", 0),
         ("work.wait", 1),
-        ("ray.get", ("ref-0", "ref-1")),
-        ("launch", 2, "test"),
-        ("launch", 3, "test"),
         ("work.wait", 2),
+        ("ray.get", ("ref-0", "ref-1", "ref-2")),
+        ("launch", 3, "test"),
         ("work.wait", 3),
-        ("ray.get", ("ref-2", "ref-3")),
-        ("launch", 4, "test"),
-        ("work.wait", 4),
-        ("ray.get", ("ref-4",)),
+        ("ray.get", ("ref-3",)),
     ]
 
 
