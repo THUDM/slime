@@ -11,6 +11,13 @@ from ray import ObjectRef
 from ray.actor import ActorHandle
 from tqdm import tqdm
 
+from slime.observability.communication_timeline import (
+    communication_context,
+    communication_event,
+    communication_phase,
+    flush_communication_timeline,
+    iter_communication_buckets,
+)
 from slime.utils import accelerator
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.types import ParamInfo
@@ -259,13 +266,19 @@ class UpdateWeightFromTensor:
             desc="Update expert weights",
         ):
             for transfer_batch in transfer_group:
-                hf_named_tensors = self._prepare_expert_weight_batch(
-                    transfer_batch,
-                    megatron_local_weights,
-                    staging_buffers,
+                bucket_id = self._communication_bucket_id
+                with communication_phase("weight_convert", bucket_id=bucket_id) as phase:
+                    hf_named_tensors = self._prepare_expert_weight_batch(
+                        transfer_batch,
+                        megatron_local_weights,
+                        staging_buffers,
+                    )
+                    phase.update(message_bytes=self._weight_bytes(hf_named_tensors), bucket_kind="expert")
+                refs, long_lived_tensors = self._send_weight_bucket(
+                    hf_named_tensors,
+                    bucket_id=bucket_id,
+                    bucket_kind="expert",
                 )
-                refs, long_lived_tensors = self._send_hf_params(hf_named_tensors)
-                ray.get(refs)
                 dist.barrier(group=get_gloo_group())
                 accelerator.synchronize()
                 del refs, long_lived_tensors, hf_named_tensors
@@ -280,56 +293,93 @@ class UpdateWeightFromTensor:
         version++, flush caches, process buckets. Progress on rank 0.
         """
         self.weight_version += 1
+        self._communication_bucket_id = 0
 
-        if self.rank == 0:
-            ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
-            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
-                post_process_weights(
-                    restore_weights_before_load=True,
-                    post_process_quantization=False,
-                    rollout_engines=self.rollout_engines,
+        with communication_context(weight_version=self.weight_version, transport="nccl_or_cuda_ipc"):
+            if self.rank == 0:
+                ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
+                ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
+                if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+                    post_process_weights(
+                        restore_weights_before_load=True,
+                        post_process_quantization=False,
+                        rollout_engines=self.rollout_engines,
+                    )
+            dist.barrier(group=get_gloo_group())
+
+            megatron_local_weights = self.weights_getter()
+
+            param_info_buckets = (
+                self._non_expert_param_info_buckets if self._expert_transfer_plan else self._full_param_info_buckets
+            )
+            chunks = self._hf_weight_iterator.get_hf_weight_chunks(
+                megatron_local_weights,
+                param_info_buckets=param_info_buckets,
+            )
+            for bucket_id, hf_named_tensors in iter_communication_buckets(
+                chunks,
+                start_bucket_id=self._communication_bucket_id,
+            ):
+                refs, long_lived_tensors = self._send_weight_bucket(
+                    hf_named_tensors,
+                    bucket_id=bucket_id,
+                    bucket_kind="non_expert",
                 )
-        dist.barrier(group=get_gloo_group())
+                # Free GPU tensors so the caching allocator can reuse the blocks,
+                # then release CUDA IPC cache entries whose consumers (sglang engines)
+                # have already closed their IPC handles.
+                del refs, long_lived_tensors, hf_named_tensors
+                accelerator.ipc_collect()
+                accelerator.empty_cache()
 
-        megatron_local_weights = self.weights_getter()
+            if self._expert_transfer_plan:
+                self._update_expert_weights(megatron_local_weights)
 
-        param_info_buckets = (
-            self._non_expert_param_info_buckets if self._expert_transfer_plan else self._full_param_info_buckets
-        )
-        for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(
-            megatron_local_weights,
-            param_info_buckets=param_info_buckets,
-        ):
-            refs, long_lived_tensors = self._send_hf_params(hf_named_tensors)
-            ray.get(refs)
-            # Free GPU tensors so the caching allocator can reuse the blocks,
-            # then release CUDA IPC cache entries whose consumers (sglang engines)
-            # have already closed their IPC handles.
-            del refs, long_lived_tensors, hf_named_tensors
+            del megatron_local_weights
+            dist.barrier(group=get_gloo_group())
+            # After the barrier all engines have returned, so every rank's last-chunk
+            # IPC handles are now released by the consumers.  Clean them up.
             accelerator.ipc_collect()
             accelerator.empty_cache()
 
-        if self._expert_transfer_plan:
-            self._update_expert_weights(megatron_local_weights)
+            # int4/fp4 post_process
+            if self.rank == 0:
+                if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+                    post_process_weights(
+                        restore_weights_before_load=False,
+                        post_process_quantization=True,
+                        rollout_engines=self.rollout_engines,
+                    )
+                ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
+            dist.barrier(group=get_gloo_group())
+            communication_event("weight_sync_complete")
+            flush_communication_timeline(block=False)
 
-        del megatron_local_weights
-        dist.barrier(group=get_gloo_group())
-        # After the barrier all engines have returned, so every rank's last-chunk
-        # IPC handles are now released by the consumers.  Clean them up.
-        accelerator.ipc_collect()
-        accelerator.empty_cache()
+    @staticmethod
+    def _weight_bytes(hf_named_tensors) -> int:
+        return sum(tensor.numel() * tensor.element_size() for _, tensor in hf_named_tensors)
 
-        # int4/fp4 post_process
-        if self.rank == 0:
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
-                post_process_weights(
-                    restore_weights_before_load=False,
-                    post_process_quantization=True,
-                    rollout_engines=self.rollout_engines,
-                )
-            ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
-        dist.barrier(group=get_gloo_group())
+    def _send_weight_bucket(self, hf_named_tensors, *, bucket_id: int, bucket_kind: str):
+        message_bytes = self._weight_bytes(hf_named_tensors)
+        engine_count = len(self.rollout_engines) + (
+            len(self.distributed_rollout_engines) if getattr(self, "use_distribute", False) else 0
+        )
+        shared_fields = {
+            "bucket_id": bucket_id,
+            "message_bytes": message_bytes,
+            "bucket_kind": bucket_kind,
+            "engine_count": engine_count,
+        }
+        communication_event("weight_bucket_ready", **shared_fields)
+        with communication_phase("weight_bucket_send", **shared_fields):
+            refs, long_lived_tensors = self._send_hf_params(hf_named_tensors)
+        if refs:
+            communication_event("engine_bucket_receive", observation="trainer_transfer_complete", **shared_fields)
+            with communication_phase("engine_load_weights", **shared_fields) as phase:
+                ray.get(refs)
+                phase.mark_consumer()
+        self._communication_bucket_id = bucket_id + 1
+        return refs, long_lived_tensors
 
     def _send_hf_params(self, hf_named_tensors) -> tuple[list[ObjectRef], Any]:
         all_refs = []

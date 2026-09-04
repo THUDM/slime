@@ -29,6 +29,11 @@ try:
 except ImportError:
     from megatron.core.utils import unwrap_model
 from slime.observability import logging_utils, train_metric_utils
+from slime.observability.communication_timeline import (
+    communication_context,
+    communication_phase,
+    flush_communication_timeline,
+)
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
@@ -38,6 +43,11 @@ from .model_provider import get_model_provider_func
 from .stateless_adam import StatelessAdam
 
 logger = logging.getLogger(__name__)
+
+
+def _finalize_model_grads_with_trace(*args, **kwargs):
+    with communication_phase("grad_sync"):
+        return finalize_model_grads(*args, **kwargs)
 
 
 def _disable_tqdm_for_non_main_rank() -> bool:
@@ -519,6 +529,7 @@ def train_one_step(
     opt_param_scheduler: OptimizerParamScheduler,
     num_microbatches: int,
     step_global_batch_size: int,
+    global_step: int,
     microbatch_pbar=None,
 ) -> tuple[dict[str, float], float]:
     """Execute a single pipeline-parallel training step.
@@ -542,6 +553,8 @@ def train_one_step(
             normalizer inside the closure and as the LR scheduler
             ``increment``. In the common case (1 rollout = 1 sample) this
             equals the per-step sample count, so behavior is unchanged.
+        global_step (int): Monotonic train-step identifier used by the
+            communication timeline.
 
     Returns:
         tuple[dict[str, float], float]: Reduced loss dictionary (last stage only)
@@ -645,16 +658,23 @@ def train_one_step(
 
     # Forward pass.
     forward_backward_func = get_forward_backward_func()
-    losses_reduced = forward_backward_func(
-        forward_step_func=_wrap_forward_step_with_microbatch_pbar(forward_step, microbatch_pbar),
-        data_iterator=data_iterator,
-        model=model,
-        num_microbatches=num_microbatches,
-        seq_length=args.seq_length,
-        micro_batch_size=args.micro_batch_size,
-        decoder_seq_length=args.decoder_seq_length,
-        forward_only=False,
-    )
+    trace_context = {
+        "global_step": global_step,
+        "rollout_id": rollout_id,
+        "trainer_rank": getattr(args, "rank", None),
+    }
+    with communication_context(**trace_context):
+        with communication_phase("train_forward_backward", microbatch_count=num_microbatches):
+            losses_reduced = forward_backward_func(
+                forward_step_func=_wrap_forward_step_with_microbatch_pbar(forward_step, microbatch_pbar),
+                data_iterator=data_iterator,
+                model=model,
+                num_microbatches=num_microbatches,
+                seq_length=args.seq_length,
+                micro_batch_size=args.micro_batch_size,
+                decoder_seq_length=args.decoder_seq_length,
+                forward_only=False,
+            )
 
     valid_step = True
     grad_norm = float("nan")
@@ -678,7 +698,9 @@ def train_one_step(
 
     if valid_step:
         # Update parameters.
-        update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
+        with communication_context(**trace_context):
+            with communication_phase("optimizer_step"):
+                update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
 
         # Update learning rate. Use the per-step global_batch_size when dynamic
         # batching is on so the scheduler's samples-seen counter tracks reality.
@@ -690,6 +712,7 @@ def train_one_step(
         model_chunk.zero_grad_buffer()
     optimizer.zero_grad()
 
+    flush_communication_timeline(block=False)
     if mpu.is_pipeline_last_stage(ignore_virtual=True):
         loss_reduced = train_metric_utils.reduce_train_step_metrics(
             losses_reduced,
@@ -769,7 +792,7 @@ def train(
         config.param_sync_func = [model_chunk.start_param_sync for model_chunk in model]
         if len(model) == 1:
             config.param_sync_func = config.param_sync_func[0]
-    config.finalize_model_grads_func = finalize_model_grads
+    config.finalize_model_grads_func = _finalize_model_grads_with_trace
 
     pre_hook_enabled = False
 
@@ -825,6 +848,7 @@ def train(
 
     # Run training iterations till done.
     for step_id in range(num_steps_per_rollout):
+        global_step = rollout_id * num_steps_per_rollout + step_id
 
         # Run training step.
         loss_dict, grad_norm = train_one_step(
@@ -837,6 +861,7 @@ def train(
             opt_param_scheduler,
             num_microbatches[step_id],
             global_batch_sizes[step_id],
+            global_step,
             microbatch_pbar=microbatch_pbar,
         )
 
@@ -876,7 +901,7 @@ def train(
             and mpu.get_tensor_model_parallel_rank() == 0
             and mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1
         ):
-            accumulated_step_id = rollout_id * num_steps_per_rollout + step_id
+            accumulated_step_id = global_step
             role = getattr(model[0], "role", "actor")
             role_tag = "" if role == "actor" else f"{role}-"
             log_dict = {
