@@ -12,8 +12,8 @@ without adding a hardware-specific time delay:
 An engine group here means one logical SGLang engine. Its tensor-, pipeline-, or
 multi-node workers remain one indivisible group. The scheduler walks the resolved
 engine list in stable order and admits at most the configured number at once.
-For five engines and a limit of two, the waves are therefore `(0, 1)`, `(2, 3)`,
-and `(4)`; no particular world size or number of engines is assumed.
+For four engines and a limit of three, the waves are therefore `(0, 1, 2)` and
+`(3)`; no particular world size or number of engines is assumed.
 
 The default is `0`, which keeps the existing all-at-once behavior. A value at
 least as large as the engine count is equivalent to the default. Negative values

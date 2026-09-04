@@ -10,9 +10,9 @@ bucket。这样可以最大化 fan-out，但也可能瞬间占满 GPU、PCIe、N
 
 这里的 engine group 指一个逻辑 SGLang engine。它内部的 tensor parallel、
 pipeline parallel 或多节点 worker 始终作为不可拆分的整体。调度器按解析后的
-engine 列表稳定分波，每波最多放行配置数量。例如五个 engine、上限为二时，
-wave 依次为 `(0, 1)`、`(2, 3)` 和 `(4)`；实现不假设特定 world size 或
-engine 数量。
+engine 列表稳定分波，每波最多放行配置数量。例如四个 engine、上限为三时，
+wave 依次为 `(0, 1, 2)` 和 `(3)`；实现不假设特定 world size 或 engine
+数量。
 
 默认值为 `0`，保持原有 all-at-once 行为。配置值大于等于 engine 数量时也
 等价于默认行为；负数会在启动参数校验阶段被拒绝。
