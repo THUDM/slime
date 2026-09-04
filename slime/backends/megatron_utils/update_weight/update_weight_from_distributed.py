@@ -4,6 +4,7 @@ import socket
 import time
 from argparse import Namespace
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from typing import Any
 
 import ray
 import torch
@@ -19,6 +20,7 @@ from slime.utils.http_utils import _wrap_ipv6
 
 from ..megatron_to_hf import convert_to_hf
 from .common import all_gather_param, named_params_and_buffers
+from .weight_sync_credit import WeightBucketReservation, WeightSyncCreditController
 
 
 class UpdateWeightFromDistributed:
@@ -47,6 +49,10 @@ class UpdateWeightFromDistributed:
         self.weight_version = 0
         self._model_update_groups = None
         self.update_weight_metrics: dict[str, float] = {}
+        self._weight_sync_credit = WeightSyncCreditController(
+            max_inflight_buckets=getattr(args, "update_weight_max_inflight_buckets", 0),
+            max_inflight_bytes=getattr(args, "update_weight_max_inflight_bytes", 0),
+        )
 
     def pop_metrics(self) -> dict[str, float]:
         """
@@ -119,7 +125,9 @@ class UpdateWeightFromDistributed:
         dist.barrier(group=get_gloo_group())
 
         pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_pp_src_rank else None
+        self._weight_sync_credit.begin_version(self.weight_version)
         self._send_weights(pbar)
+        self._weight_sync_credit.commit_version(self.weight_version)
 
         if dist.get_rank() == 0:
             # int4/fp4 post_process
@@ -139,10 +147,84 @@ class UpdateWeightFromDistributed:
         override ``_on_chunk`` to inject per-chunk behaviour.
         """
         for chunk_iter in (self._iter_non_expert_chunks(), self._iter_expert_chunks()):
-            for hf_chunk in chunk_iter:
-                self._on_chunk(hf_chunk)
-                self._update_bucket_weights_from_distributed(hf_chunk, pbar=pbar)
+            if self._weight_sync_credit.enabled:
+                self._send_weight_bucket_windows(chunk_iter, pbar=pbar)
+            else:
+                for hf_chunk in chunk_iter:
+                    self._on_chunk(hf_chunk)
+                    reservation = self._reserve_weight_bucket(hf_chunk)
+                    self._update_bucket_weights_from_distributed(hf_chunk, pbar=pbar)
+                    self._weight_sync_credit.release(reservation)
             dist.barrier(group=get_gloo_group())
+
+    def _reserve_weight_bucket(self, hf_chunk: Sequence[tuple[str, torch.Tensor]]) -> WeightBucketReservation:
+        bucket_bytes = sum(tensor.numel() * tensor.element_size() for _, tensor in hf_chunk)
+        reservation = self._weight_sync_credit.reserve(bucket_bytes)
+        if reservation is None:
+            raise RuntimeError("weight bucket credits are full")
+        return reservation
+
+    def _send_weight_bucket_windows(
+        self,
+        chunk_iter: Iterator[list[tuple[str, torch.Tensor]]],
+        pbar: tqdm | None,
+    ) -> None:
+        pending: list[tuple[WeightBucketReservation, list[tuple[str, torch.Tensor]]]] = []
+        for hf_chunk in chunk_iter:
+            self._on_chunk(hf_chunk)
+            bucket_bytes = sum(tensor.numel() * tensor.element_size() for _, tensor in hf_chunk)
+            reservation = self._weight_sync_credit.reserve(bucket_bytes)
+            if reservation is None:
+                self._flush_weight_bucket_window(pending, pbar=pbar)
+                pending = []
+                reservation = self._weight_sync_credit.reserve(bucket_bytes)
+                if reservation is None:
+                    raise RuntimeError("weight bucket credit did not admit an empty window")
+            pending.append((reservation, hf_chunk))
+            if self._weight_sync_credit.full:
+                self._flush_weight_bucket_window(pending, pbar=pbar)
+                pending = []
+
+        if pending:
+            self._flush_weight_bucket_window(pending, pbar=pbar)
+
+    def _flush_weight_bucket_window(
+        self,
+        pending: Sequence[tuple[WeightBucketReservation, list[tuple[str, torch.Tensor]]]],
+        pbar: tqdm | None,
+    ) -> None:
+        while not ray.get(self.rollout_engine_lock.acquire.remote()):
+            time.sleep(0.1)
+
+        launched: list[
+            tuple[
+                WeightBucketReservation,
+                list[tuple[str, torch.Tensor]],
+                list[ObjectRef],
+                list[Any],
+            ]
+        ] = []
+        try:
+            for reservation, converted_named_tensors in pending:
+                refs, handles = launch_weights_from_distributed(
+                    self._group_name,
+                    self._model_update_groups,
+                    self.weight_version,
+                    self.rollout_engines,
+                    converted_named_tensors,
+                )
+                launched.append((reservation, converted_named_tensors, refs, handles))
+
+            for reservation, converted_named_tensors, refs, handles in launched:
+                for handle in handles:
+                    handle.wait()
+                ray.get(refs)
+                converted_named_tensors.clear()
+                self._weight_sync_credit.release(reservation)
+                if pbar is not None:
+                    pbar.update(1)
+        finally:
+            ray.get(self.rollout_engine_lock.release.remote())
 
     def _on_chunk(self, hf_chunk: list[tuple[str, torch.Tensor]]) -> None:
         """
@@ -334,6 +416,28 @@ def update_weights_from_distributed(
     """
     Send metadata through Ray and tensors through the configured transport.
     """
+    refs, handles = launch_weights_from_distributed(
+        group_name,
+        group,
+        weight_version,
+        rollout_engines,
+        converted_named_tensors,
+        load_format=load_format,
+    )
+    for handle in handles:
+        handle.wait()
+    return refs
+
+
+def launch_weights_from_distributed(
+    group_name: str,
+    group: dist.ProcessGroup,
+    weight_version: int,
+    rollout_engines: Sequence[ActorHandle],
+    converted_named_tensors: Sequence[tuple[str, torch.Tensor]],
+    load_format: str | None = None,
+) -> tuple[list[ObjectRef], list[Any]]:
+    """Launch one bucket without waiting for its device collectives."""
     refs = [
         engine.update_weights_from_distributed.remote(
             names=[name for name, _ in converted_named_tensors],
@@ -348,10 +452,7 @@ def update_weights_from_distributed(
     handles = []
     for _, param in converted_named_tensors:
         handles.append(dist.broadcast(param.data, 0, group=group, async_op=True))
-    for handle in handles:
-        handle.wait()
-
-    return refs
+    return refs, handles
 
 
 def post_process_weights(

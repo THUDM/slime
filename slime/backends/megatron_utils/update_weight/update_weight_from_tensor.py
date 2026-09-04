@@ -1,6 +1,6 @@
 from argparse import Namespace
 from collections import defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any
 
 import ray
@@ -22,9 +22,10 @@ from .hf_weight_iterator_direct import HfWeightIteratorDirect
 from .update_weight_from_distributed import (
     connect_rollout_engines_from_distributed,
     disconnect_rollout_engines_from_distributed,
+    launch_weights_from_distributed,
     post_process_weights,
-    update_weights_from_distributed,
 )
+from .weight_sync_credit import WeightBucketReservation, WeightSyncCreditController
 
 
 def _build_flattened_tensor_data(
@@ -77,6 +78,10 @@ class UpdateWeightFromTensor:
         self.quantization_config = quantization_config
         self.weight_version = 0
         self.update_weight_metrics: dict[str, float] = {}
+        self._weight_sync_credit = WeightSyncCreditController(
+            max_inflight_buckets=getattr(args, "update_weight_max_inflight_buckets", 0),
+            max_inflight_bytes=getattr(args, "update_weight_max_inflight_bytes", 0),
+        )
 
         self._hf_weight_iterator = HfWeightIteratorDirect(
             args=args, model=model, model_name=model_name, quantization_config=quantization_config
@@ -264,11 +269,15 @@ class UpdateWeightFromTensor:
                     megatron_local_weights,
                     staging_buffers,
                 )
-                refs, long_lived_tensors = self._send_hf_params(hf_named_tensors)
+                reservation = self._reserve_weight_bucket(hf_named_tensors)
+                refs, handles, long_lived_tensors = self._send_hf_params(hf_named_tensors)
+                for handle in handles:
+                    handle.wait()
                 ray.get(refs)
+                self._weight_sync_credit.release(reservation)
                 dist.barrier(group=get_gloo_group())
                 accelerator.synchronize()
-                del refs, long_lived_tensors, hf_named_tensors
+                del refs, handles, long_lived_tensors, hf_named_tensors
                 accelerator.ipc_collect()
                 accelerator.empty_cache()
         del staging_buffers
@@ -292,23 +301,32 @@ class UpdateWeightFromTensor:
                 )
         dist.barrier(group=get_gloo_group())
 
+        self._weight_sync_credit.begin_version(self.weight_version)
         megatron_local_weights = self.weights_getter()
 
         param_info_buckets = (
             self._non_expert_param_info_buckets if self._expert_transfer_plan else self._full_param_info_buckets
         )
-        for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(
+        hf_chunks = self._hf_weight_iterator.get_hf_weight_chunks(
             megatron_local_weights,
             param_info_buckets=param_info_buckets,
-        ):
-            refs, long_lived_tensors = self._send_hf_params(hf_named_tensors)
-            ray.get(refs)
-            # Free GPU tensors so the caching allocator can reuse the blocks,
-            # then release CUDA IPC cache entries whose consumers (sglang engines)
-            # have already closed their IPC handles.
-            del refs, long_lived_tensors, hf_named_tensors
-            accelerator.ipc_collect()
-            accelerator.empty_cache()
+        )
+        if self._weight_sync_credit.enabled:
+            self._send_weight_bucket_windows(hf_chunks)
+        else:
+            for hf_named_tensors in hf_chunks:
+                reservation = self._reserve_weight_bucket(hf_named_tensors)
+                refs, handles, long_lived_tensors = self._send_hf_params(hf_named_tensors)
+                for handle in handles:
+                    handle.wait()
+                ray.get(refs)
+                self._weight_sync_credit.release(reservation)
+                # Free GPU tensors so the caching allocator can reuse the blocks,
+                # then release CUDA IPC cache entries whose consumers (sglang engines)
+                # have already closed their IPC handles.
+                del refs, handles, long_lived_tensors, hf_named_tensors
+                accelerator.ipc_collect()
+                accelerator.empty_cache()
 
         if self._expert_transfer_plan:
             self._update_expert_weights(megatron_local_weights)
@@ -319,6 +337,7 @@ class UpdateWeightFromTensor:
         # IPC handles are now released by the consumers.  Clean them up.
         accelerator.ipc_collect()
         accelerator.empty_cache()
+        self._weight_sync_credit.commit_version(self.weight_version)
 
         # int4/fp4 post_process
         if self.rank == 0:
@@ -331,8 +350,68 @@ class UpdateWeightFromTensor:
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
-    def _send_hf_params(self, hf_named_tensors) -> tuple[list[ObjectRef], Any]:
+    def _reserve_weight_bucket(self, hf_named_tensors: Sequence[tuple[str, torch.Tensor]]) -> WeightBucketReservation:
+        bucket_bytes = self._weight_bucket_bytes(hf_named_tensors)
+        reservation = self._weight_sync_credit.reserve(bucket_bytes)
+        if reservation is None:
+            raise RuntimeError("weight bucket credits are full")
+        return reservation
+
+    def _weight_bucket_bytes(self, hf_named_tensors: Sequence[tuple[str, torch.Tensor]]) -> int:
+        bucket_bytes = sum(tensor.numel() * tensor.element_size() for _, tensor in hf_named_tensors)
+        if self._weight_sync_credit.max_inflight_bytes:
+            # Every rank must flush at the same bucket boundary before the next
+            # gather_object. Use the largest local representation so byte-credit
+            # decisions stay identical even when a rank contributes no tensors.
+            global_bucket_bytes = torch.tensor(bucket_bytes, dtype=torch.int64, device="cpu")
+            dist.all_reduce(global_bucket_bytes, op=dist.ReduceOp.MAX, group=get_gloo_group())
+            bucket_bytes = int(global_bucket_bytes.item())
+        return bucket_bytes
+
+    def _send_weight_bucket_windows(
+        self,
+        hf_chunks: Iterator[list[tuple[str, torch.Tensor]]],
+    ) -> None:
+        pending: list[tuple[WeightBucketReservation, list[tuple[str, torch.Tensor]]]] = []
+        for hf_named_tensors in hf_chunks:
+            bucket_bytes = self._weight_bucket_bytes(hf_named_tensors)
+            reservation = self._weight_sync_credit.reserve(bucket_bytes)
+            if reservation is None:
+                self._flush_weight_bucket_window(pending)
+                pending = []
+                reservation = self._weight_sync_credit.reserve(bucket_bytes)
+                if reservation is None:
+                    raise RuntimeError("weight bucket credit did not admit an empty window")
+            pending.append((reservation, hf_named_tensors))
+            if self._weight_sync_credit.full:
+                self._flush_weight_bucket_window(pending)
+                pending = []
+
+        if pending:
+            self._flush_weight_bucket_window(pending)
+
+    def _flush_weight_bucket_window(
+        self,
+        pending: Sequence[tuple[WeightBucketReservation, list[tuple[str, torch.Tensor]]]],
+    ) -> None:
+        launched = []
+        for reservation, hf_named_tensors in pending:
+            refs, handles, long_lived_tensors = self._send_hf_params(hf_named_tensors)
+            launched.append((reservation, hf_named_tensors, refs, handles, long_lived_tensors))
+
+        for reservation, hf_named_tensors, refs, handles, _long_lived_tensors in launched:
+            for handle in handles:
+                handle.wait()
+            ray.get(refs)
+            hf_named_tensors.clear()
+            self._weight_sync_credit.release(reservation)
+
+        accelerator.ipc_collect()
+        accelerator.empty_cache()
+
+    def _send_hf_params(self, hf_named_tensors) -> tuple[list[ObjectRef], list[Any], Any]:
         all_refs = []
+        all_handles = []
 
         refs_colocated, long_lived_tensors = _send_to_colocated_engine(
             hf_named_tensors,
@@ -344,7 +423,7 @@ class UpdateWeightFromTensor:
         all_refs.extend(refs_colocated)
 
         if self.use_distribute and self._is_distributed_src_rank:
-            refs_distributed = update_weights_from_distributed(
+            refs_distributed, handles_distributed = launch_weights_from_distributed(
                 self._group_name,
                 self._model_update_groups,
                 self.weight_version,
@@ -353,8 +432,9 @@ class UpdateWeightFromTensor:
             )
             if refs_distributed:
                 all_refs.extend(refs_distributed)
+            all_handles.extend(handles_distributed)
 
-        return all_refs, long_lived_tensors
+        return all_refs, all_handles, long_lived_tensors
 
 
 def _send_to_colocated_engine(

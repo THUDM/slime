@@ -477,6 +477,28 @@ therefore an sglang server argument rather than a slime hook: pass
 published weights (e.g. refresh the mount's view). See
 [Delta Weight Sync](../advanced/delta-weight-sync.md) for the full mechanism.
 
+### 20. Weight-Sync In-Flight Credits
+
+Full tensor/NCCL weight sync can keep several converted buckets in flight instead of waiting
+after every bucket. The window is controlled by two independent limits:
+
+| Argument | Meaning |
+| --- | --- |
+| `--update-weight-max-inflight-buckets` | Maximum number of logical buckets in flight. `0` disables this dimension. |
+| `--update-weight-max-inflight-bytes` | Maximum bytes across logical buckets in flight. `0` disables this dimension. |
+
+Both values default to `0`, which preserves the existing one-bucket-at-a-time path. Set either
+or both to opt in. Bucket bytes are counted once, regardless of how many rollout engines consume
+the bucket. Colocated updates use the largest contribution across trainer ranks so every rank
+flushes at the same collective boundary. Completion and credit release remain FIFO, and every
+window is fully drained before its weight version is committed. If one bucket is larger than a
+configured byte limit, slime raises an error instead of waiting indefinitely.
+
+The credit window applies to ordinary full-weight buckets in distributed and colocated updates.
+Explicitly routed expert transfers remain serial so they can safely reuse their staging buffers;
+their bucket size is still checked against the byte limit. Disk and delta transports do not have
+an in-memory bucket data plane and reject nonzero in-flight credit settings.
+
 ## Testing Custom Function Paths
 
 slime also provides CPU-only contract tests for customization interfaces. These tests resolve components through import-path strings, so they can validate both built-in hooks and user-defined implementations passed through the same CLI arguments used by training.
