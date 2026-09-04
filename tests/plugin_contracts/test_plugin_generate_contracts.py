@@ -199,5 +199,33 @@ def test_generate_and_rm_group_rm_accepts_list_result_from_custom_generate(patch
     assert all(isinstance(sample, Sample) for sample in result)
 
 
+def test_generate_and_rm_group_cancels_siblings_after_failure(patch_generate_state, monkeypatch):
+    sglang_rollout = patch_generate_state
+    sibling_cancelled = asyncio.Event()
+
+    async def generate(args, sample: Sample, sampling_params: dict, evaluation: bool = False):
+        if sample.index == 0:
+            await asyncio.sleep(0)
+            raise RuntimeError("generation failed")
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            sibling_cancelled.set()
+            raise
+
+    monkeypatch.setattr(sglang_rollout, "generate_and_rm", generate)
+
+    async def run_case():
+        with pytest.raises(RuntimeError, match="generation failed"):
+            await sglang_rollout.generate_and_rm_group(
+                make_args(),
+                [Sample(index=0, prompt="first"), Sample(index=1, prompt="second")],
+                sampling_params={"temperature": 0.3},
+            )
+        assert sibling_cancelled.is_set()
+
+    asyncio.run(run_case())
+
+
 if __name__ == "__main__":
     run_contract_test_file()

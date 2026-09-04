@@ -356,7 +356,14 @@ async def generate_and_rm_group(
             asyncio.create_task(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
         )
 
-    group = await asyncio.gather(*tasks)
+    try:
+        group = await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
     # for the rm that need the whole group, we will do the rm here
     if not state.aborted and args.group_rm:
@@ -454,7 +461,17 @@ async def generate_rollout_async(
         # wait for the generation to finish
         done, state.pendings = await asyncio.wait(state.pendings, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
-            group: list[Sample] = task.result()
+            try:
+                group: list[Sample] = task.result()
+            except BaseException:
+                siblings = state.pendings | (done - {task})
+                for sibling in siblings:
+                    if not sibling.done():
+                        sibling.cancel()
+                await asyncio.gather(*siblings, return_exceptions=True)
+                state.reset()
+                pbar.close()
+                raise
 
             if do_print:
                 sample = group[0][0] if isinstance(group[0], list) else group[0]
@@ -637,7 +654,15 @@ async def eval_rollout_single_dataset(
     do_print = True
     pbar = tqdm(total=len(tasks), desc=f"Eval {dataset_cfg.name}", disable=not do_print)
     for coro in asyncio.as_completed(tasks):
-        sample = await coro
+        try:
+            sample = await coro
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            pbar.close()
+            raise
         if do_print:
             logged_sample = sample[0] if isinstance(sample, list) else sample
             logger.info(
