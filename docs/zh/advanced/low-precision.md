@@ -124,6 +124,39 @@ RUNTIME_ENV_JSON="{
 - `128`：`moonlight-16B-A3B`、`qwen3-30B-A3B`、`qwen3-235B-A22B-int4`；
 - `32`：`kimi-k2-Thinking-int4`。
 
+### Qwen3.5 MoE INT4-QAT
+
+Qwen3.5 MoE 通过 slime 自己维护的原生 HF→Megatron / Megatron→HF bridge 支持 routed-expert INT4-QAT。转换器先精确检查 Qwen3.5 MoE 的 `model_type` 与 `architectures`，再识别 3D fused expert tensor，并写出 SGLang 所需的逐 expert 2D compressed-tensors 布局；在线 actor 权重更新复用同一模型 identity 与布局适配器。
+
+当前精度范围：
+
+```text
+INT4：routed experts
+BF16：attention、linear_attn、conv1d、shared_expert、router gate、
+      visual、mtp、embedding、norm、lm_head
+```
+
+先转换 rollout checkpoint：
+
+```bash
+python tools/convert_hf_to_int4_direct.py \
+  --model-dir /path/to/Qwen3.5-35B-A3B \
+  --save-dir /path/to/Qwen3.5-35B-A3B-INT4 \
+  --group-size 128 \
+  --is-symmetric
+```
+
+训练 actor 保持 BF16。本 recipe 中，`--ref-load` 只在 `SAVE_DIR` 尚不是有效 Megatron checkpoint 时作为首次初始化回退，不启用 reference/KL-loss 路径。令 `HF_MODEL` 指向原始 Hugging Face 目录，`INT4_MODEL` 指向转换后的 checkpoint；原生 bridge 可以直接加载 BF16 HF checkpoint，不再需要预先转换一份 `torch_dist`：
+
+```bash
+BASE_FOLDER=/path/to/workdir \
+HF_MODEL=/path/to/Qwen3.5-35B-A3B \
+INT4_MODEL=/path/to/Qwen3.5-35B-A3B-INT4 \
+bash scripts/low_precision/run-qwen3.5-35B-A3B-int4-qat-rl.sh
+```
+
+当前路径要求 `--expert-tensor-parallel-size 1`，且不包含 MTP training 和 visual INT4-QAT。
+
 3. 启动 example：
 
 ```bash
@@ -138,6 +171,9 @@ bash scripts/low_precision/run-qwen3-235B-A22B-int4.sh
 
 # Kimi-k2-Thinking INT4 training (32 nodes)
 bash scripts/low_precision/run-kimi-k2-Thinking-int4.sh
+
+# Qwen3.5-35B-A3B routed experts INT4-QAT training
+bash scripts/low_precision/run-qwen3.5-35B-A3B-int4-qat-rl.sh
 ```
 
 多机环境请根据集群配置启动 Ray 服务。
