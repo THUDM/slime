@@ -28,6 +28,8 @@ sample's reward to a different sample).
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import ray
 
@@ -160,6 +162,26 @@ def test_missing_raw_reward_is_tolerated(unwrap_ray_get):
 
     assert "local_raw_reward" not in rollout_data
     assert rollout_data["total_lengths"] == [201, 200]
+
+
+def test_mooncake_transport_uses_configured_loader(monkeypatch):
+    from slime.utils import data_transfer
+
+    args = SimpleNamespace(rollout_data_transport="mooncake")
+    ref = _FakeBox("opaque-mooncake-ref")
+    expected = {"partition": [0], "total_lengths": [123]}
+    calls = []
+
+    def fake_get_mooncake_rollout_data(actual_args, actual_ref):
+        calls.append((actual_args, actual_ref))
+        return expected
+
+    monkeypatch.setattr(data_transfer, "get_mooncake_rollout_data", fake_get_mooncake_rollout_data)
+
+    rollout_data = process_rollout_data([ref], dp_rank=0, dp_size=1, args=args)
+
+    assert calls == [(args, ref)]
+    assert rollout_data["total_lengths"] == [123]
 
 
 if __name__ == "__main__":
