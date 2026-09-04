@@ -503,11 +503,7 @@ async def call_sglang_generate(
         # free the sglang slot eagerly on client cancel/timeout, else the
         # orphaned generation keeps occupying KV until its own length cap
         logger.debug("[%s] sid=%s rid=%s turn aborted: %s", adapter.log_prefix, session_id, rid, type(e).__name__)
-        try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as s2:
-                await s2.post(f"{sglang_url}/abort_request", json={"rid": rid})
-        except Exception:
-            pass
+        await _abort_sglang_request(sglang_url, rid, logger)
         raise
 
     return TurnRecord(
@@ -516,6 +512,46 @@ async def call_sglang_generate(
         finish_reason=finish,
         output_log_probs=output_log_probs,
     )
+
+
+async def _abort_sglang_request(sglang_url: str, rid: str, logger: logging.Logger) -> None:
+    """Abort one request on a worker or every worker behind the router."""
+    try:
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+
+            async def abort_worker(url: str) -> None:
+                try:
+                    async with session.post(f"{url}/abort_request", json={"rid": rid}):
+                        pass
+                except Exception:
+                    pass
+
+            async with session.get(f"{sglang_url}/workers") as response:
+                if response.status == 404:
+                    await abort_worker(sglang_url)
+                    return
+                response.raise_for_status()
+                payload = await response.json()
+
+            if not isinstance(payload, dict):
+                logger.warning("Invalid SGLang workers response: url=%s rid=%s", sglang_url, rid)
+                return
+
+            worker_urls = [
+                worker["url"].rstrip("/")
+                for worker in payload.get("workers", [])
+                if isinstance(worker, dict) and isinstance(worker.get("url"), str) and worker["url"]
+            ]
+
+            await asyncio.gather(*(abort_worker(url) for url in worker_urls))
+    except Exception as exc:
+        logger.warning(
+            "SGLang abort request failed: url=%s rid=%s error=%s",
+            sglang_url,
+            rid,
+            exc,
+        )
 
 
 async def _health(request: web.Request) -> web.Response:
