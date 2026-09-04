@@ -155,3 +155,4 @@ def test_weight_sync_total_uses_slowest_rank_not_only_trainer():
 
     assert result["weight_sync_total_ms"]["p50"] == 6.5
     assert result["trainer_total_ms"]["p50"] == 5.5
+    assert result["max_inflight_engine_groups_observed"] == 1

@@ -14,8 +14,9 @@ Examples:
         --engine-wave-policies all_at_once serialized windowed \
         --output-json /tmp/weight-sync.json
 
-Six ranks are one ordinary configuration.  For example, ``--engine-group-sizes
-2 3`` assigns ranks 1-2 and 3-5 to two heterogeneous rollout engines.
+The layout is derived from the launched world size.  For example, a four-rank
+run with ``--engine-group-sizes 1 2`` assigns rank 1 and ranks 2-3 to two
+heterogeneous rollout engines.
 """
 
 from __future__ import annotations
@@ -602,11 +603,13 @@ def _aggregate_experiment(
     max_inflight_wire_bytes = max(
         sum(task.message_bytes * len(engine_groups[task.engine_id].ranks) for task in wave) for wave in waves
     )
+    max_inflight_engine_groups = max(len({task.engine_id for task in wave}) for wave in waves)
     result = {
         **asdict(config),
         "wave_count": len(waves),
         "max_inflight_bytes_observed": max_inflight_bytes,
         "max_inflight_wire_bytes_observed": max_inflight_wire_bytes,
+        "max_inflight_engine_groups_observed": max_inflight_engine_groups,
         "weight_sync_total_ms": _summarize(total_ms),
         "trainer_total_ms": _summarize(trainer_total_ms),
         "bucket_send_ms": _summarize([record["transfer_ms"] for record in trainer_records]),
