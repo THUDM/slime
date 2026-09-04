@@ -1,5 +1,7 @@
 import base64
+import importlib.util
 from argparse import Namespace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -12,8 +14,37 @@ from slime.utils.types import Sample
 NUM_GPUS = 0
 
 
+def _load_compute_mis_weights():
+    module_path = Path(__file__).resolve().parents[1] / "examples" / "train_infer_mismatch_helper" / "mis.py"
+    spec = importlib.util.spec_from_file_location("train_infer_mismatch_mis", module_path)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module.compute_mis_weights
+
+
+compute_mis_weights = _load_compute_mis_weights()
+
+
 def _make_args():
     return Namespace(sglang_speculative_algorithm=False, num_layers=2, moe_router_topk=2)
+
+
+@pytest.mark.unit
+def test_mismatch_metrics_do_not_require_tis_settings_when_tis_is_disabled():
+    loss_masks = [torch.ones(2)]
+
+    weights, modified_masks, metrics = compute_mis_weights(
+        Namespace(use_tis=False),
+        train_log_probs=[torch.tensor([-0.2, -0.4])],
+        rollout_log_probs=[torch.tensor([-0.3, -0.5])],
+        loss_masks=loss_masks,
+    )
+
+    assert weights is None
+    assert modified_masks == loss_masks
+    assert metrics
 
 
 @pytest.mark.unit
