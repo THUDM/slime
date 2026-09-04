@@ -739,6 +739,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_sglang_patch.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_qwen3_linear_attention_cu_seqlens.py"
             },
             {
