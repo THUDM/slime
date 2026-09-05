@@ -33,6 +33,8 @@ CUDA spans use events on the current framework stream. Events are queried withou
 
 Do not use these event-bracket timestamps to select or apply an automatic communication policy. Such a consumer must fail closed until an adapter supplies kernel-observed timestamps and a measured clock-synchronization error bound for every participating rank. The built-in timeline remains useful for lifecycle diagnostics and for correlating its NVTX ranges with an exact profiler trace.
 
+When the timeline is not configured, the public helpers use one shared no-op phase. They do not read clocks, import torch, allocate CUDA events, push NVTX, scan bucket tensor sizes, update context variables, serialize JSON, open files, or synchronize. Host-only, CUDA-event, and external-profiler overhead must be measured as separate modes; profiler runs must not be mixed into non-profiler throughput samples.
+
 ## Add semantic phases from custom code
 
 slime deliberately does not patch Megatron's internal MoE implementation. A custom Megatron hook or plugin can add `ep_dispatch` and `ep_combine` without changing the schema:

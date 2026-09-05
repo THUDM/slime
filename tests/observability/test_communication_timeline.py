@@ -41,6 +41,43 @@ def test_disabled_timeline_does_not_create_a_file(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_disabled_timeline_skips_clocks_torch_events_context_and_serialization(monkeypatch):
+    timeline.configure_communication_timeline(None)
+    monkeypatch.setattr(timeline.time, "time_ns", lambda: pytest.fail("disabled timeline read the wall clock"))
+    monkeypatch.setattr(
+        timeline.time,
+        "perf_counter_ns",
+        lambda: pytest.fail("disabled timeline read the monotonic clock"),
+    )
+    monkeypatch.setattr(timeline, "_optional_torch", lambda: pytest.fail("disabled timeline imported torch"))
+    monkeypatch.setattr(timeline.json, "dumps", lambda *_args, **_kwargs: pytest.fail("disabled timeline serialized"))
+
+    first = timeline.communication_phase("weight_bucket_send", message_bytes=8)
+    second = timeline.communication_phase("grad_sync")
+    assert first is second
+    assert not first.enabled
+    with first as phase:
+        phase.update(bucket_id=3)
+        phase.mark_consumer()
+    timeline.communication_event("weight_sync_complete", weight_version=4)
+    with timeline.communication_context(global_step=2):
+        assert timeline._CONTEXT.get() is None
+    timeline.flush_communication_timeline(block=True)
+
+
+def test_disabled_bucket_iterator_does_not_scan_tensor_sizes():
+    class SizeMustNotBeRead:
+        def numel(self):
+            pytest.fail("disabled timeline scanned tensor elements")
+
+        def element_size(self):
+            pytest.fail("disabled timeline scanned tensor element size")
+
+    timeline.configure_communication_timeline(None)
+    bucket = [("weight", SizeMustNotBeRead())]
+    assert list(timeline.iter_communication_buckets([bucket])) == [(0, bucket)]
+
+
 def test_span_and_event_emit_stable_shared_schema(tmp_path):
     path_template = str(tmp_path / "trainer-{rank}.jsonl")
     resolved = tmp_path / "trainer-2.jsonl"

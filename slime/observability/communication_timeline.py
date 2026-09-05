@@ -13,7 +13,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,30 @@ _CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar
 _GLOBAL_LOCK = threading.RLock()
 _GLOBAL_TIMELINE: CommunicationTimeline | None = None
 _GLOBAL_CONFIGURED = False
+
+
+class _DisabledCommunicationPhase:
+    """Shared no-op phase used after tracing is configured off."""
+
+    enabled = False
+
+    def __enter__(self) -> _DisabledCommunicationPhase:
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> bool:
+        return False
+
+    def update(self, **fields: Any) -> _DisabledCommunicationPhase:
+        return self
+
+    def mark_consumer(self) -> _DisabledCommunicationPhase:
+        return self
+
+    def cancel(self) -> None:
+        return None
+
+
+_DISABLED_PHASE = _DisabledCommunicationPhase()
 
 
 def _optional_torch():
@@ -318,6 +342,7 @@ class CommunicationTimeline:
 
 @dataclass
 class CommunicationPhase:
+    enabled: ClassVar[bool] = True
     timeline: CommunicationTimeline | None
     operation: str
     fields: dict[str, Any] = field(default_factory=dict)
@@ -431,19 +456,30 @@ def get_communication_timeline() -> CommunicationTimeline | None:
         return _GLOBAL_TIMELINE
 
 
-def communication_phase(operation: str, **fields: Any) -> CommunicationPhase:
-    timeline = get_communication_timeline()
+def _configured_timeline() -> CommunicationTimeline | None:
+    if _GLOBAL_CONFIGURED:
+        return _GLOBAL_TIMELINE
+    return get_communication_timeline()
+
+
+def communication_phase(operation: str, **fields: Any) -> CommunicationPhase | _DisabledCommunicationPhase:
+    timeline = _configured_timeline()
+    if timeline is None:
+        return _DISABLED_PHASE
     return CommunicationPhase(timeline, operation, fields)
 
 
 def communication_event(operation: str, **fields: Any) -> None:
-    timeline = get_communication_timeline()
+    timeline = _configured_timeline()
     if timeline is not None:
         timeline.emit_event(operation, fields)
 
 
 @contextmanager
 def communication_context(**fields: Any) -> Iterator[None]:
+    if _configured_timeline() is None:
+        yield
+        return
     current = dict(_CONTEXT.get() or {})
     current.update(fields)
     token = _CONTEXT.set(current)
@@ -465,13 +501,14 @@ def iter_communication_buckets(chunks, *, operation: str = "weight_convert", sta
             except StopIteration:
                 phase.cancel()
                 break
-            phase.update(message_bytes=_message_bytes(chunk))
+            if phase.enabled:
+                phase.update(message_bytes=_message_bytes(chunk))
         yield bucket_id, chunk
         bucket_id += 1
 
 
 def flush_communication_timeline(*, block: bool = False) -> None:
-    timeline = get_communication_timeline()
+    timeline = _configured_timeline()
     if timeline is not None:
         timeline.flush(block=block)
 
