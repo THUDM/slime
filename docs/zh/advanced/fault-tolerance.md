@@ -26,17 +26,17 @@ rollout 过程中，slime 会定期向所有 SGLang server 发送 heartbeat 请�
 
 主要参数：
 
-- `--rollout-health-check-first-wait`：第一次 rollout 前等待多久再开始 heartbeat。大 MoE 模型首次运行可能需要 kernel compilation。默认 `300` 秒。
-- `--rollout-health-check-interval`：heartbeat 间隔。默认 `10` 秒。
-- `--rollout-health-check-timeout`：单次 heartbeat timeout。默认 `5` 秒。
+- `--rollout-health-check-first-wait`：第一次 rollout 前等待多久再开始 heartbeat。大 MoE 模型首次运行可能需要 kernel compilation。默认 `0` 秒。
+- `--rollout-health-check-interval`：heartbeat 间隔。默认 `30` 秒。
+- `--rollout-health-check-timeout`：单次 heartbeat timeout。默认 `30` 秒。
 
-示例：
+示例（大模型首次运行需要 kernel compilation 时可增大 first-wait）：
 
 ```bash
 --use-fault-tolerance \
 --rollout-health-check-first-wait 600 \
---rollout-health-check-interval 10 \
---rollout-health-check-timeout 5
+--rollout-health-check-interval 30 \
+--rollout-health-check-timeout 30
 ```
 
 ## Debug 与 Replay 路径
