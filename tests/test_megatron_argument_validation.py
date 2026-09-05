@@ -306,6 +306,24 @@ def test_slime_validate_args_rejects_non_positive_rollout_temperature(monkeypatc
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("estimator", ["grpo", "gspo", "cispo"])
+def test_slime_validate_args_rejects_kl_coef_for_grpo_style_estimators(monkeypatch, estimator):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(advantage_estimator=estimator, kl_coef=0.1, ref_load=".")
+
+    with pytest.raises(ValueError, match="kl-coef.*kl-loss"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_slime_validate_args_allows_grpo_with_zero_kl_coef(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(advantage_estimator="grpo", kl_coef=0)
+
+    module.slime_validate_args(args)
+
+
+@pytest.mark.unit
 def test_slime_validate_args_preserves_zero_rollout_gpus_under_colocate(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(colocate=True, rollout_num_gpus=0)
