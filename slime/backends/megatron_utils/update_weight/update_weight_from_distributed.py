@@ -109,6 +109,7 @@ class UpdateWeightFromDistributed:
         """
         Pause → flush → _send_weights → continue. Progress on PP source.
         """
+        sync_started = time.perf_counter()
         self.weight_version += 1
 
         if dist.get_rank() == 0:
@@ -126,19 +127,28 @@ class UpdateWeightFromDistributed:
 
         pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_pp_src_rank else None
         self._weight_sync_credit.begin_version(self.weight_version)
-        self._send_weights(pbar)
-        self._weight_sync_credit.commit_version(self.weight_version)
+        try:
+            self._send_weights(pbar)
 
-        if dist.get_rank() == 0:
-            # int4/fp4 post_process
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
-                post_process_weights(
-                    restore_weights_before_load=False,
-                    post_process_quantization=True,
-                    rollout_engines=self.rollout_engines,
-                )
-            ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
-        dist.barrier(group=get_gloo_group())
+            if dist.get_rank() == 0:
+                # int4/fp4 post_process
+                if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+                    post_process_weights(
+                        restore_weights_before_load=False,
+                        post_process_quantization=True,
+                        rollout_engines=self.rollout_engines,
+                    )
+                ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
+            dist.barrier(group=get_gloo_group())
+        except BaseException as error:
+            self._weight_sync_credit.fail_version(self.weight_version, error)
+            raise
+
+        # A version is committed only after all bucket resources are drained,
+        # post-processing has completed, and consumers have resumed.
+        self._weight_sync_credit.commit_version(self.weight_version)
+        self.update_weight_metrics.update(self._weight_sync_credit.metrics())
+        self.update_weight_metrics["perf/update_weights_sync_seconds"] = time.perf_counter() - sync_started
 
     def _send_weights(self, pbar: tqdm | None) -> None:
         """
@@ -153,8 +163,7 @@ class UpdateWeightFromDistributed:
                 for hf_chunk in chunk_iter:
                     self._on_chunk(hf_chunk)
                     reservation = self._reserve_weight_bucket(hf_chunk)
-                    self._update_bucket_weights_from_distributed(hf_chunk, pbar=pbar)
-                    self._weight_sync_credit.release(reservation)
+                    self._update_bucket_weights_from_distributed(hf_chunk, reservation, pbar=pbar)
             dist.barrier(group=get_gloo_group())
 
     def _reserve_weight_bucket(self, hf_chunk: Sequence[tuple[str, torch.Tensor]]) -> WeightBucketReservation:
@@ -213,13 +222,24 @@ class UpdateWeightFromDistributed:
                     self.rollout_engines,
                     converted_named_tensors,
                 )
+                self._weight_sync_credit.mark_launched(
+                    reservation,
+                    transport_bytes=reservation.bucket_bytes if handles else 0,
+                    staging_bytes=0,
+                    consumer_objects=len(refs),
+                )
                 launched.append((reservation, converted_named_tensors, refs, handles))
 
-            for reservation, converted_named_tensors, refs, handles in launched:
+            while launched:
+                reservation, converted_named_tensors, refs, handles = launched.pop(0)
                 for handle in handles:
                     handle.wait()
+                self._weight_sync_credit.mark_transport_complete(reservation)
                 ray.get(refs)
+                self._weight_sync_credit.mark_consumers_complete(reservation)
                 converted_named_tensors.clear()
+                del converted_named_tensors, refs, handles
+                self._weight_sync_credit.mark_staging_released(reservation)
                 self._weight_sync_credit.release(reservation)
                 if pbar is not None:
                     pbar.update(1)
@@ -321,6 +341,7 @@ class UpdateWeightFromDistributed:
     def _update_bucket_weights_from_distributed(
         self,
         converted_named_tensors: list[tuple[str, torch.Tensor]],
+        reservation: WeightBucketReservation,
         pbar: tqdm | None = None,
         load_format: str | None = None,
     ) -> None:
@@ -331,19 +352,33 @@ class UpdateWeightFromDistributed:
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
             time.sleep(0.1)
 
-        refs = update_weights_from_distributed(
-            self._group_name,
-            self._model_update_groups,
-            self.weight_version,
-            self.rollout_engines,
-            converted_named_tensors,
-            load_format=load_format,
-        )
-
-        ray.get(refs)
-        converted_named_tensors.clear()
-        ray.get(self.rollout_engine_lock.release.remote())
-        pbar.update(1)
+        try:
+            refs, handles = launch_weights_from_distributed(
+                self._group_name,
+                self._model_update_groups,
+                self.weight_version,
+                self.rollout_engines,
+                converted_named_tensors,
+                load_format=load_format,
+            )
+            self._weight_sync_credit.mark_launched(
+                reservation,
+                transport_bytes=reservation.bucket_bytes if handles else 0,
+                staging_bytes=0,
+                consumer_objects=len(refs),
+            )
+            for handle in handles:
+                handle.wait()
+            self._weight_sync_credit.mark_transport_complete(reservation)
+            ray.get(refs)
+            self._weight_sync_credit.mark_consumers_complete(reservation)
+            converted_named_tensors.clear()
+            self._weight_sync_credit.mark_staging_released(reservation)
+            self._weight_sync_credit.release(reservation)
+        finally:
+            ray.get(self.rollout_engine_lock.release.remote())
+        if pbar is not None:
+            pbar.update(1)
 
 
 def connect_rollout_engines_from_distributed(

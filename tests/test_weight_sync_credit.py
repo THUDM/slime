@@ -95,6 +95,80 @@ def test_release_is_fifo_and_commit_requires_a_drained_version() -> None:
         controller.begin_version(3)
 
 
+def test_lifecycle_accounting_tracks_distinct_resources_and_duplicate_completion() -> None:
+    controller = WeightSyncCreditController(max_inflight_buckets=2, max_inflight_bytes=10)
+    controller.begin_version(5)
+    first = controller.reserve(6)
+    second = controller.reserve(4)
+    assert first is not None
+    assert second is not None
+
+    controller.mark_launched(first, transport_bytes=6, staging_bytes=12, consumer_objects=2)
+    controller.mark_launched(second, transport_bytes=4, staging_bytes=8, consumer_objects=1)
+    snapshot = controller.snapshot
+    assert snapshot.inflight_bytes == 10
+    assert snapshot.transport_outstanding_bytes == 10
+    assert snapshot.staging_resident_bytes == 20
+    assert snapshot.pending_consumer_objects == 3
+    assert snapshot.peak_staging_resident_bytes > snapshot.peak_inflight_bytes
+
+    controller.mark_transport_complete(first)
+    controller.mark_transport_complete(first)
+    controller.mark_consumers_complete(first)
+    controller.mark_consumers_complete(first)
+    with pytest.raises(RuntimeError, match="before transport, consumers, and staging"):
+        controller.release(first)
+    controller.mark_staging_released(first)
+    controller.mark_staging_released(first)
+    controller.release(first)
+
+    controller.mark_transport_complete(second)
+    controller.mark_consumers_complete(second)
+    controller.mark_staging_released(second)
+    controller.release(second)
+    controller.commit_version(5)
+
+    metrics = controller.metrics()
+    assert metrics["perf/update_weights_peak_inflight_buckets"] == 2
+    assert metrics["perf/update_weights_peak_logical_inflight_bytes"] == 10
+    assert metrics["perf/update_weights_peak_transport_outstanding_bytes"] == 10
+    assert metrics["perf/update_weights_peak_staging_resident_bytes"] == 20
+    assert metrics["perf/update_weights_peak_pending_consumer_objects"] == 3
+
+
+def test_failed_version_is_poisoned_and_preserves_outstanding_evidence() -> None:
+    controller = WeightSyncCreditController(max_inflight_buckets=1)
+    controller.begin_version(8)
+    reservation = controller.reserve(7)
+    assert reservation is not None
+    controller.mark_launched(reservation, transport_bytes=7, staging_bytes=11, consumer_objects=1)
+
+    controller.fail_version(8, RuntimeError("consumer load failed"))
+    controller.fail_version(8, RuntimeError("later wrapper error"))
+    snapshot = controller.snapshot
+    assert snapshot.failed_reason == "RuntimeError: consumer load failed"
+    assert snapshot.transport_outstanding_bytes == 7
+    assert snapshot.staging_resident_bytes == 11
+    assert snapshot.pending_consumer_objects == 1
+    with pytest.raises(RuntimeError, match="cannot commit failed weight version 8"):
+        controller.commit_version(8)
+    with pytest.raises(RuntimeError, match="weight version 8 is still active"):
+        controller.begin_version(9)
+
+
+def test_persistent_staging_must_be_released_before_version_commit() -> None:
+    controller = WeightSyncCreditController()
+    controller.begin_version(2)
+    controller.set_persistent_staging_bytes(32)
+    controller.set_persistent_staging_bytes(48)
+    assert controller.snapshot.staging_resident_bytes == 48
+    assert controller.snapshot.peak_staging_resident_bytes == 48
+    with pytest.raises(RuntimeError, match="lifecycle resources still resident"):
+        controller.commit_version(2)
+    controller.set_persistent_staging_bytes(0)
+    controller.commit_version(2)
+
+
 def _load_distributed_update_module(monkeypatch):
     ray_mod = types.ModuleType("ray")
     ray_mod.ObjectRef = object

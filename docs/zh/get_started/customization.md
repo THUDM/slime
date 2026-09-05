@@ -489,11 +489,27 @@ full tensor/NCCL 权重同步可以同时推进多个已转换的 bucket，而�
 两个参数默认都是 `0`，因此默认仍走原有的逐 bucket 阻塞路径；设置任意一个即可启用窗口。
 逻辑 bucket 只统计一份字节，不会按 rollout engine fan-out 重复计数；colocated 更新会取所有
 trainer rank 中最大的本地 bucket 大小，确保每个 rank 在相同的 collective 边界 flush。bucket
-始终按 FIFO 顺序完成和归还 credit，并且一个 weight version 必须完全 drain 后才能 commit。
+始终按 FIFO 顺序完成和归还 credit，并且一个 weight version 只有在窗口完全 drain、后处理完成、
+rollout consumer 恢复之后才能 commit。
 如果单个 bucket 已经大于配置的字节上限，slime 会直接报错，而不是无限等待。
 
+byte credit 统计的是逻辑 bucket payload，不把 allocator 或 transport 产生的副本混为同一数值。
+slime 会在 `perf/update_weights_*` 下分别记录各 rank 的逻辑在飞字节、transport outstanding 字节、
+IPC staging resident 字节和待 consumer 对象数的峰值。colocated flattened IPC buffer 可能让 staging
+驻留量大于逻辑 byte credit，因此这些量必须分开解释；它们是观测指标，不是新增的 admission budget。
+staging residency 只统计 producer 明确持有的 staging tensor 对象，不估算 allocator fragmentation，
+也不把 producer 丢弃引用后的 CUDA IPC limbo 伪装成已测量值。`perf/update_weights_sync_seconds` 使用同一
+控制端时钟，测量从同步开始到所有目标 consumer 完成加载、
+后处理结束且 generation 恢复的时间。
+
+在 colocated engine 既有的 Gloo TP group 内，source rank 会先把 Ray load acknowledgement 传播给所有
+成员，然后各 rank 才归还对应 credit；这里不会增加全局 CUDA synchronize。加载失败会 poison 当前
+version，使其不能 commit 或复用，actor group 必须走框架原有的 abort/restart 路径；进程丢失不会被
+伪装成成功 consensus。
+
 credit 窗口覆盖 distributed 和 colocated 更新中的普通 full-weight bucket。显式路由的 expert
-传输为了安全复用 staging buffer，仍保持串行，但其 bucket 大小仍受 byte credit 检查。
+传输为了安全复用 staging buffer，仍保持串行，但其 bucket 大小仍受 byte credit 检查，且复用的
+staging pool 会计入 staging-residency 指标。
 disk 和 delta transport 没有内存在飞 bucket 数据面，因此非零 credit 配置会被拒绝。
 
 ## 自定义函数路径的测试
