@@ -8,6 +8,7 @@ from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
+from slime.utils.engine_group_wave import run_engine_group_waves
 
 
 class RayTrainGroup:
@@ -233,24 +234,30 @@ class RayTrainGroup:
             if not self.args.update_weight_disk_keep_files:
                 shutil.rmtree(disk_weight_dir, ignore_errors=True)
             return
+        max_inflight_engine_groups = getattr(self.args, "update_weight_max_inflight_engine_groups", 0)
         if self.args.update_weight_local_checkpoint_dir:
             # each host pulls the published checkpoint onto local disk (e.g. NVMe) and
             # the engines reload from there; the pull is disk-only, so it runs before
             # pause and overlaps generation
-            ray.get([engine.pull_weights.remote(int(weight_version)) for engine in engines])
+            run_engine_group_waves(
+                engines,
+                max_inflight_engine_groups,
+                lambda _index, engine: engine.pull_weights.remote(int(weight_version)),
+                ray.get,
+            )
             model_path = self.args.update_weight_local_checkpoint_dir
         else:
             model_path = str(disk_weight_dir)
         ray.get([engine.pause_generation.remote() for engine in engines])
         ray.get([engine.flush_cache.remote() for engine in engines])
-        ray.get(
-            [
-                engine.update_weights_from_disk.remote(
-                    model_path=model_path,
-                    weight_version=weight_version,
-                )
-                for engine in engines
-            ]
+        run_engine_group_waves(
+            engines,
+            max_inflight_engine_groups,
+            lambda _index, engine: engine.update_weights_from_disk.remote(
+                model_path=model_path,
+                weight_version=weight_version,
+            ),
+            ray.get,
         )
         if self.args.ci_test:
             engine_versions = ray.get([engine.get_weight_version.remote() for engine in engines])
