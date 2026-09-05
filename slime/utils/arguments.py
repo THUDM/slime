@@ -640,10 +640,10 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_false",
                 dest="rollout_global_dataset",
                 help=(
-                    "Whether to use a global dataset for rollout. "
-                    "If set, the rollout will use the `--prompt-data` as the prompt dataset, "
-                    "and the prompts for rollout will be sampled from the dataset. "
-                    "If not set, you need to manage the data by your self."
+                    "Disable the global prompt dataset for rollout. "
+                    "By default, rollout uses `--prompt-data` as a global prompt dataset "
+                    "and samples prompts from it. "
+                    "If this flag is set, you need to manage the data yourself."
                 ),
             )
 
@@ -948,7 +948,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 choices=["k1", "k2", "k3", "low_var_kl"],
                 default="k1",
-                help="Choose KL loss type: kl, k2, k3, low_var_kl",
+                help="Choose KL loss type: k1, k2, k3, low_var_kl. Default: k1.",
             )
             parser.add_argument(
                 "--advantage-estimator",

@@ -26,17 +26,17 @@ During rollout, slime periodically sends heartbeat requests (`/health_generate`)
 
 The main arguments are:
 
-- `--rollout-health-check-first-wait`: wait before starting heartbeat checks for the first rollout. Large MoE models may compile kernels on first run. Default: `300` seconds.
-- `--rollout-health-check-interval`: interval between heartbeat checks. Default: `10` seconds.
-- `--rollout-health-check-timeout`: timeout for one heartbeat request. Default: `5` seconds.
+- `--rollout-health-check-first-wait`: wait before starting heartbeat checks for the first rollout. Large MoE models may compile kernels on first run. Default: `0` seconds.
+- `--rollout-health-check-interval`: interval between heartbeat checks. Default: `30` seconds.
+- `--rollout-health-check-timeout`: timeout for one heartbeat request. Default: `30` seconds.
 
-Example:
+Example (increase first-wait for large models that compile kernels on first run):
 
 ```bash
 --use-fault-tolerance \
 --rollout-health-check-first-wait 600 \
---rollout-health-check-interval 10 \
---rollout-health-check-timeout 5
+--rollout-health-check-interval 30 \
+--rollout-health-check-timeout 30
 ```
 
 ## Debug and Replay Path
