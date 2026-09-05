@@ -40,3 +40,52 @@ wave 先完成就提前恢复 generation。disk checkpoint pull 可以在 pause 
 应选择既能消除观测到的流量或显存峰值、又不会增加权重同步总时间或尾延迟的
 最大值。该参数只限制并发 engine group 数量；每个权重 bucket 的大小仍由
 `--update-weight-buffer-size` 独立控制。
+
+## 生产调用点确认
+
+`tools/benchmark_weight_sync_callsite.py` 直接调用生产函数
+`update_weights_in_engine_group_waves`，使用真实 process group 和合成 payload。
+它是调用点/模块级探针：不会重写调度器、改变默认值，也不声称测到了
+Ray/SGLang 加载性能。
+
+四进程启动会保留三个真实的二 rank `[trainer, engine]` 通信组。A/B 是
+engine group 0 和 1；第三组是区分 all-at-once 与 window-2 的竞争操作。
+只使用当前测试环境允许的设备数量。
+
+下列每条命令只生成一个独立进程运行制品：
+
+```bash
+torchrun --standalone --nproc-per-node=4 \
+  tools/benchmark_weight_sync_callsite.py \
+  --backend gloo --policy candidate_windowed \
+  --evidence-role selection --run-id selection-windowed-00 \
+  --order ab --output-json /tmp/selection-windowed-00.json
+```
+
+若最小 PyTorch 容器缺少 slime 的 Ray/Megatron 控制面依赖，可显式设置
+`SLIME_CALLSITE_SOURCE_LOAD=1`。该模式加载完全相同的生产源文件，只替换本
+探针不会调用的 actor/conversion import；制品会记录
+`source_with_control_plane_stubs`，不能静默混入完整运行时 campaign。
+若容器内没有挂载 checkout 的 `.git` 元数据，请用
+`SLIME_BENCHMARK_SOURCE_COMMIT` 显式传入被测 revision。
+
+对每个 policy 分别以 `selection`、`confirmation` 角色启动独立进程（默认
+每个 policy/role 五次），并交替使用 `--order ab`、`--order ba`。随后校验、
+汇总不可变原始制品：
+
+```bash
+python tools/benchmark_weight_sync_callsite.py \
+  --summarize /tmp/weight-sync-callsite/*.json \
+  --min-runs-per-role 5 \
+  --summary-json /tmp/weight-sync-callsite-summary.json
+```
+
+遇到重复进程/运行身份、rank 覆盖不完整、payload 不一致、混用运行时/
+消息/拓扑 cell，或独立运行不足时，汇总器会 fail closed。它分别报告通信
+A/B、rank-local pair makespan、接收端 consumer wait、调用点返回、设备
+ready 和整个同步阶段 ready。NCCL 区间只标记为 `event_bracket`，绝不冒充
+`kernel_observed`。工具记录 PyTorch/CUDA/NCCL 版本、launch-order 配置、
+dtype、消息几何、graph 状态、主机/设备身份与精确 PG membership。
+
+这些证据不能证明端到端训练吞吐、SGLang 加载延迟、多机行为或某个生产
+策略必胜；汇总器不会自动选择或应用策略。
