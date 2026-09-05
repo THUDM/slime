@@ -12,6 +12,8 @@ from ray import ObjectRef
 from ray.actor import ActorHandle
 from tqdm import tqdm
 
+from slime.observability.communication_timeline import communication_phase
+from slime.observability.weight_sync_trace import trace_weight_update
 from slime.utils import accelerator
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.engine_group_wave import build_engine_group_waves
@@ -236,13 +238,26 @@ class UpdateWeightFromTensor:
     ) -> None:
         """Wait for transport/load and share the engine acknowledgement within its TP group."""
         local_error: Exception | None = None
+        trace = getattr(self, "_weight_sync_trace", None)
+        if trace is not None and reservation.bucket_id not in trace.pending:
+            trace = None  # A waved submission already waited and recorded its consumers.
         try:
             for handle in handles:
                 handle.wait()
             if handles:
                 synchronize_weight_transfer(named_tensors)
-            ray.get(refs)
+            if trace is not None:
+                with trace.consumer(reservation) as phase:
+                    ray.get(refs)
+                    phase.mark_consumer()
+                # CUDA IPC has no separate transport Work; its first observed
+                # completion remains the engine receive/load acknowledgement.
+                trace.complete(reservation)
+            else:
+                ray.get(refs)
         except Exception as error:
+            if trace is not None:
+                trace.complete(reservation, error)
             local_error = error
 
         group_error: str | None = None
@@ -353,11 +368,17 @@ class UpdateWeightFromTensor:
             desc="Update expert weights",
         ):
             for transfer_batch in transfer_group:
-                hf_named_tensors = self._prepare_expert_weight_batch(
-                    transfer_batch,
-                    megatron_local_weights,
-                    staging_buffers,
-                )
+                trace = getattr(self, "_weight_sync_trace", None)
+                if trace is None:
+                    hf_named_tensors = self._prepare_expert_weight_batch(
+                        transfer_batch, megatron_local_weights, staging_buffers
+                    )
+                else:
+                    with communication_phase("weight_convert", bucket_id=trace.next_bucket_id, bucket_kind="expert"):
+                        hf_named_tensors = self._prepare_expert_weight_batch(
+                            transfer_batch, megatron_local_weights, staging_buffers
+                        )
+                    trace.next_bucket_id += 1
                 self._weight_sync_credit.set_persistent_staging_bytes(_tensor_tree_nbytes(staging_buffers))
                 reservation = self._reserve_weight_bucket(hf_named_tensors)
                 refs, handles, long_lived_tensors = self._submit_weight_bucket(hf_named_tensors, reservation)
@@ -367,6 +388,8 @@ class UpdateWeightFromTensor:
                     long_lived_tensors.clear()
                 self._weight_sync_credit.mark_staging_released(reservation)
                 self._weight_sync_credit.release(reservation)
+                if trace is not None:
+                    trace.released(reservation)
                 dist.barrier(group=get_gloo_group())
                 accelerator.synchronize()
                 del refs, handles, long_lived_tensors, hf_named_tensors
@@ -377,6 +400,7 @@ class UpdateWeightFromTensor:
         accelerator.empty_cache()
 
     @torch.no_grad()
+    @trace_weight_update
     def update_weights(self) -> None:
         """
         version++, flush caches, process buckets. Progress on rank 0.
@@ -408,6 +432,9 @@ class UpdateWeightFromTensor:
                 megatron_local_weights,
                 param_info_buckets=param_info_buckets,
             )
+            trace = getattr(self, "_weight_sync_trace", None)
+            if trace is not None:
+                hf_chunks = trace.converted_chunks(hf_chunks)
             if self._weight_sync_credit.enabled:
                 self._send_weight_bucket_windows(hf_chunks)
             else:
@@ -420,6 +447,8 @@ class UpdateWeightFromTensor:
                         long_lived_tensors.clear()
                     self._weight_sync_credit.mark_staging_released(reservation)
                     self._weight_sync_credit.release(reservation)
+                    if trace is not None:
+                        trace.released(reservation)
                     # Free GPU tensors so the caching allocator can reuse the blocks,
                     # then release CUDA IPC cache entries whose consumers (sglang engines)
                     # have already closed their IPC handles.
@@ -516,6 +545,8 @@ class UpdateWeightFromTensor:
             del hf_named_tensors, refs, handles, long_lived_tensors
             self._weight_sync_credit.mark_staging_released(reservation)
             self._weight_sync_credit.release(reservation)
+            if getattr(self, "_weight_sync_trace", None) is not None:
+                self._weight_sync_trace.released(reservation)
 
         accelerator.ipc_collect()
         accelerator.empty_cache()
@@ -525,7 +556,12 @@ class UpdateWeightFromTensor:
     ) -> tuple[list[ObjectRef], list[Any], Any]:
         if self._wave_scheduling_enabled:
             return self._send_hf_params_in_waves(hf_named_tensors, reservation)
+        trace = getattr(self, "_weight_sync_trace", None)
+        if trace is not None:
+            trace.start(reservation)
         refs, handles, long_lived_tensors = self._send_hf_params(hf_named_tensors)
+        if trace is not None:
+            trace.submitted(reservation)
         self._mark_bucket_launched(reservation, refs, handles, long_lived_tensors)
         return refs, handles, long_lived_tensors
 
@@ -563,11 +599,14 @@ class UpdateWeightFromTensor:
         """Send one bucket in globally coordinated colocated/distributed waves."""
         self._weight_sync_credit.mark_launched(reservation, transport_bytes=0, staging_bytes=0, consumer_objects=0)
         engine_indices = tuple(range(self._total_engine_groups))
-        for wave in build_engine_group_waves(engine_indices, self._max_inflight_engine_groups):
+        trace = getattr(self, "_weight_sync_trace", None)
+        for wave_id, wave in enumerate(build_engine_group_waves(engine_indices, self._max_inflight_engine_groups)):
             active_indices = {engine_index for _position, engine_index in wave}
             wave_refs = []
             wave_handles = []
             wave_long_lived_tensors = None
+            if trace is not None:
+                trace.start(reservation, wave_id=wave_id, engine_group_count=len(wave))
 
             if self._ipc_engine_index in active_indices:
                 refs_colocated, wave_long_lived_tensors = _send_to_colocated_engine(
@@ -593,6 +632,8 @@ class UpdateWeightFromTensor:
                     wave_refs.extend(refs)
                     wave_handles.extend(handles)
 
+            if trace is not None:
+                trace.submitted(reservation)
             self._weight_sync_credit.mark_next_wave(
                 reservation,
                 transport_bytes=reservation.bucket_bytes if wave_handles or wave_refs else 0,

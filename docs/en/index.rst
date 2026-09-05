@@ -42,7 +42,7 @@ Start by Use Case
 - Use PD disaggregation: :doc:`advanced/pd-disaggregation`
 - Use BF16 training with FP8 rollout or FP8 KV cache: :doc:`advanced/low-precision`
 - Understand CI and reliability coverage: :doc:`developer_guide/ci`
-- Debug, trace, and profile long-running jobs: :doc:`developer_guide/debug`, :doc:`developer_guide/trace`, :doc:`developer_guide/profiling`
+- Debug, trace, and profile long-running jobs: :doc:`developer_guide/debug`, :doc:`developer_guide/trace`, :doc:`developer_guide/communication_timeline`, :doc:`developer_guide/profiling`
 
 .. toctree::
    :maxdepth: 1
@@ -107,6 +107,7 @@ Start by Use Case
    developer_guide/ci.md
    developer_guide/debug.md
    developer_guide/trace.md
+   developer_guide/communication_timeline.md
    developer_guide/profiling.md
 
 .. toctree::

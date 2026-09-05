@@ -1,12 +1,19 @@
+import atexit
 import os
 import shutil
 import time
+import uuid
 from pathlib import Path
 
 import ray
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
+from slime.observability.communication_timeline import (
+    COMMUNICATION_TIMELINE_ENV,
+    COMMUNICATION_TIMELINE_RUN_ID_ENV,
+    CommunicationTimeline,
+)
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
 from slime.utils.engine_group_wave import run_engine_group_waves
 
@@ -54,6 +61,25 @@ class RayTrainGroup:
         self._rollout_manager = None
         self._disk_weight_version = getattr(args, "update_weight_start_version", 0)
         self._actor_handlers = []
+        timeline_path = getattr(args, "communication_timeline", None) or os.environ.get(COMMUNICATION_TIMELINE_ENV)
+        self._communication_timeline_enabled = bool(timeline_path)
+        self._communication_timeline = None
+        timeline_run_id = getattr(args, "communication_timeline_run_id", None) or os.environ.get(
+            COMMUNICATION_TIMELINE_RUN_ID_ENV
+        )
+        if timeline_path and timeline_run_id is None:
+            timeline_run_id = uuid.uuid4().hex
+            args.communication_timeline_run_id = timeline_run_id
+        if timeline_path and self._full_disk_weight_update_enabled():
+            self._communication_timeline = CommunicationTimeline(
+                timeline_path,
+                rank=-1,
+                local_rank=-1,
+                world_size=1,
+                role=f"{role}-orchestrator",
+                run_id=timeline_run_id,
+            )
+            atexit.register(self._communication_timeline.close)
 
     def _allocate_gpus_for_actor(self, pg, num_gpus_per_actor):
         world_size = self._num_nodes * self._num_gpus_per_node
@@ -160,8 +186,10 @@ class RayTrainGroup:
             self.args.no_load_rng = False
         return ret
 
-    def update_weights(self):
+    def update_weights(self, rollout_id=None):
         """Broadcast weights from rank 0 to all other ranks."""
+        if self._communication_timeline_enabled:
+            ray.get([actor.set_communication_rollout_id.remote(rollout_id) for actor in self._actor_handlers])
         if not self._full_disk_weight_update_enabled():
             return ray.get([actor.update_weights.remote() for actor in self._actor_handlers])
 
@@ -171,7 +199,7 @@ class RayTrainGroup:
         self._disk_weight_version = weight_version
         if self._release_train_enabled():
             self.release()
-        self._reload_rollout_weights_from_disk(disk_weight_dir, str(weight_version))
+        self._reload_rollout_weights_from_disk(disk_weight_dir, str(weight_version), rollout_id=rollout_id)
 
     def onload(self):
         return ray.get([actor.wake_up.remote() for actor in self._actor_handlers])
@@ -225,7 +253,7 @@ class RayTrainGroup:
             and self.args.update_weight_transport == "disk"
         )
 
-    def _reload_rollout_weights_from_disk(self, disk_weight_dir, weight_version):
+    def _reload_rollout_weights_from_disk(self, disk_weight_dir, weight_version, *, rollout_id=None):
         assert self._rollout_manager is not None, "disk weight update requires a rollout manager."
         if self.args.offload_rollout:
             ray.get(self._rollout_manager.onload_weights.remote())
@@ -239,26 +267,62 @@ class RayTrainGroup:
             # each host pulls the published checkpoint onto local disk (e.g. NVMe) and
             # the engines reload from there; the pull is disk-only, so it runs before
             # pause and overlaps generation
-            run_engine_group_waves(
-                engines,
-                max_inflight_engine_groups,
-                lambda _index, engine: engine.pull_weights.remote(int(weight_version)),
-                ray.get,
-            )
+            def pull_wave():
+                run_engine_group_waves(
+                    engines,
+                    max_inflight_engine_groups,
+                    lambda _index, engine: engine.pull_weights.remote(int(weight_version)),
+                    ray.get,
+                )
+
+            if self._communication_timeline is None:
+                pull_wave()
+            else:
+                with self._communication_timeline.new_span(
+                    "engine_bucket_receive",
+                    {
+                        "weight_version": weight_version,
+                        "rollout_id": rollout_id,
+                        "bucket_id": 0,
+                        "transport": "disk",
+                        "engine_count": len(engines),
+                        "observation": "trainer_pull_request_complete",
+                    },
+                ) as phase:
+                    pull_wave()
+                    phase.mark_consumer()
             model_path = self.args.update_weight_local_checkpoint_dir
         else:
             model_path = str(disk_weight_dir)
         ray.get([engine.pause_generation.remote() for engine in engines])
         ray.get([engine.flush_cache.remote() for engine in engines])
-        run_engine_group_waves(
-            engines,
-            max_inflight_engine_groups,
-            lambda _index, engine: engine.update_weights_from_disk.remote(
-                model_path=model_path,
-                weight_version=weight_version,
-            ),
-            ray.get,
-        )
+
+        def load_wave():
+            run_engine_group_waves(
+                engines,
+                max_inflight_engine_groups,
+                lambda _index, engine: engine.update_weights_from_disk.remote(
+                    model_path=model_path,
+                    weight_version=weight_version,
+                ),
+                ray.get,
+            )
+
+        if self._communication_timeline is None:
+            load_wave()
+        else:
+            with self._communication_timeline.new_span(
+                "engine_load_weights",
+                {
+                    "weight_version": weight_version,
+                    "rollout_id": rollout_id,
+                    "bucket_id": 0,
+                    "transport": "disk",
+                    "engine_count": len(engines),
+                },
+            ) as phase:
+                load_wave()
+                phase.mark_consumer()
         if self.args.ci_test:
             engine_versions = ray.get([engine.get_weight_version.remote() for engine in engines])
             mismatches = [
@@ -274,3 +338,14 @@ class RayTrainGroup:
         if not self.args.update_weight_disk_keep_files:
             shutil.rmtree(disk_weight_dir, ignore_errors=True)
         ray.get([engine.continue_generation.remote() for engine in engines])
+        if self._communication_timeline is not None:
+            self._communication_timeline.emit_event(
+                "weight_sync_complete",
+                {
+                    "weight_version": weight_version,
+                    "rollout_id": rollout_id,
+                    "transport": "disk",
+                    "engine_count": len(engines),
+                },
+            )
+            self._communication_timeline.flush(block=False)

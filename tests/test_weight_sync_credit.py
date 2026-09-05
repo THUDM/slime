@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import socket
 import sys
@@ -403,9 +404,25 @@ def test_wave_transition_keeps_bucket_credit_and_requires_every_resource_drained
     controller.commit_version(11)
 
 
+@pytest.fixture(params=[False, True], ids=["trace-off", "trace-on"])
+def capture_updater_trace(request, tmp_path, monkeypatch):
+    from slime.observability import communication_timeline as timeline
+
+    timeline.close_communication_timeline()
+    monkeypatch.delenv(timeline.COMMUNICATION_TIMELINE_ENV, raising=False)
+    monkeypatch.setattr(timeline, "_optional_torch", lambda: None)
+    path = tmp_path / "logical-updater.jsonl" if request.param else None
+    if path is not None:
+        timeline.configure_communication_timeline(str(path), rank=0, world_size=1, run_id="logical-updater-test")
+    yield timeline, path
+    timeline.close_communication_timeline()
+
+
 @pytest.mark.parametrize("engine_count", [2, 4])
 @pytest.mark.parametrize("fail_load", [False, True])
-def test_production_updater_composes_waves_credits_and_publication(monkeypatch, engine_count, fail_load):
+def test_production_updater_composes_waves_credits_and_publication(
+    monkeypatch, engine_count, fail_load, capture_updater_trace
+):
     module = _load_distributed_update_module(monkeypatch)
     events = []
 
@@ -495,6 +512,32 @@ def test_production_updater_composes_waves_credits_and_publication(monkeypatch, 
             for phase in ("launch", "wait", "load")
         ]
         assert events.count("resume") == engine_count
+
+    timeline, path = capture_updater_trace
+    timeline.close_communication_timeline()
+    if path is not None:
+        records = [json.loads(line) for line in path.read_text().splitlines()]
+        sequence_ids = [row["sequence_id"] for row in records]
+        assert sequence_ids == sorted(set(sequence_ids))
+        # Each exhausted conversion iterator cancels its terminal span. These
+        # are global trace sequence IDs, not communicator collective sequence.
+        assert sequence_ids[-1] + 1 - len(records) == (0 if fail_load else 2)
+        assert all(row["weight_version"] == 1 for row in records)
+        sends = [row for row in records if row["operation"] == "weight_bucket_send"]
+        assert len(sends) == (2 if fail_load else 3 * engine_count)
+        assert len({row["logical_operation_id"] for row in sends}) == len(sends)
+        assert all(row["gpu_start_timestamp_ns"] is None for row in records)
+        assert all(
+            row["api_launch_timestamp_ns"] <= row["api_return_timestamp_ns"] <= row["completion_timestamp_ns"]
+            for row in sends
+        )
+        if fail_load:
+            assert records[-1]["operation"] == "weight_sync_failed"
+            assert any(row["status"] == "error" and row["operation"] == "engine_load_weights" for row in records)
+            assert not any(row["operation"] in {"weight_sync_complete", "weight_bucket_reusable"} for row in records)
+        else:
+            assert records[-1]["operation"] == "weight_sync_complete"
+            assert sum(row["operation"] == "weight_bucket_reusable" for row in records) == 3
 
 
 if __name__ == "__main__":

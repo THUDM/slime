@@ -82,7 +82,7 @@ def train(args):
         offload_train(actor_trains)
         if args.offload_rollout and not release_train:
             ray.get(rollout_manager.onload_weights.remote())
-        actor_model.update_weights()
+        actor_model.update_weights(rollout_id=rollout_id)
 
         if args.offload_rollout:
             ray.get(rollout_manager.onload_kv.remote())
