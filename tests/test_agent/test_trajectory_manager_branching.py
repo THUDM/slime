@@ -681,15 +681,15 @@ def test_2_4_drift_case_B1_short_replaces():
     s0 = samples[0]
     L = _common_prefix_len(p1 + r1, p2)
     assert L == drift_idx
-    # replace: the drifted r:call response is no longer a faithful echo of what the
-    # model generated (its tail diverged), so the WHOLE surviving span is masked and
-    # re-supplied as loss=0 prompt context (the <DRIFT> token marks the divergence);
-    # only the new r:done trains.
+    # replace from the divergence: the last token of r:call is the split, so that
+    # suffix (and the tool/gen tail) is re-supplied as loss=0 context. The
+    # innocent r:call prefix was already trained and keeps loss=1; only r:done
+    # is the new trained response.
     assert goldens(samples) == [
-        "<sys> system:S </sys> <usr> user:u </usr> <gen> r:call <DRIFT> "
+        "<sys> system:S </sys> <usr> user:u </usr> <gen> [r:call] <DRIFT> "
         "<tul> tool:t </tul> <gen> [r:done] [</ast>]",
     ]
-    assert s0.rollout_log_probs == [0.0] * (len(p2) - len(p1)) + [-0.4] * len(r2)
+    assert s0.rollout_log_probs == [-0.5] + [0.0] * (len(p2) - len(p1) - 1) + [-0.4] * len(r2)
     _check_invariants(samples)
     _record("2.4 drift case B1 (small) -> replace", mgr, sid, samples)
     print("PASS 2.4")
@@ -1216,19 +1216,21 @@ def test_4_5_mixed_logprobs_across_turns():
 
 
 def test_4_6_drift_B1_threshold_boundary():
-    """case-B1 threshold compares the incoming turn's full ``output_ids`` length
-    to ``fork_threshold`` (mirroring ``_try_merge_assistant_rewrite``): the gate
-    is exclusive, so ``len(r2) == threshold`` forks and ``len(r2) < threshold``
-    replaces. Drift-tail length is not part of the gate -- only its position
-    (inside the most-recent response span) keeps REALIGN physically applicable."""
+    """REALIGN only when BOTH the previous response length and this turn's
+    ``output_ids`` are ``< fork_threshold``. A long previous response forks
+    even if this turn is short (REALIGN rewrites that previous span, so its
+    length is what we would sacrifice). After REALIGN, tokens before
+    ``realign_at`` that were already trained keep ``loss_mask=1``; only the
+    suffix from the divergence is zeroed."""
 
-    def run(threshold, new_resp_len):
+    def run(threshold, new_resp_len, prev_resp_len=4):
         mgr = TrajectoryManager(fork_threshold_tokens=threshold)
-        sid = f"4.6-{threshold}-{new_resp_len}"
+        sid = f"4.6-{threshold}-{new_resp_len}-{prev_resp_len}"
         s, u = sys_msg("S"), usr_msg("u")
-        # 4-token response so the divergence can sit inside the response span.
+        # Default 4-token previous response so the divergence can sit inside
+        # the response span with an innocent prefix in front of it.
         p1 = render_prompt([s, u])
-        r1 = [9001, 9002, 9003, 9004]
+        r1 = [9001 + i for i in range(prev_resp_len)]
         mgr.record_turn(
             sid,
             turn=turn(p1, r1, finish_reason="tool_calls"),
@@ -1252,21 +1254,34 @@ def test_4_6_drift_B1_threshold_boundary():
         samples = get_traj(mgr, sid, base_sample=Sample(index=0, prompt=""), reward=1.0)
         return samples, p1, r1, p2, r2
 
-    # len(r2) == threshold -> fork: two single-turn segments, each trains its own resp.
-    forked, p1, r1, p2, r2 = run(threshold=2, new_resp_len=2)
-    assert len(forked) == 2, f"len(r2)==threshold must fork, got {len(forked)}"
+    # Previous response long (r1=4 >= 3) even though this turn is short (r2=2):
+    # must FORK. Old contract realigned here because it only looked at len(r2).
+    forked, p1, r1, p2, r2 = run(threshold=3, new_resp_len=2)
+    assert len(forked) == 2, f"long previous response must fork, got {len(forked)}"
     assert forked[0].tokens == p1 + r1
     assert forked[0].loss_mask == [1] * len(r1)
     assert forked[1].tokens == p2 + r2
     assert forked[1].loss_mask == [1] * len(r2)
-    # len(r2) < threshold -> replace: one coherent segment realigned to p2.
-    replaced, p1b, r1b, p2b, r2b = run(threshold=3, new_resp_len=2)
-    assert len(replaced) == 1, f"len(r2)<threshold must replace, got {len(replaced)}"
+
+    # This turn at the threshold, previous short -> still FORK (both must be short).
+    forked_new, p1c, r1c, p2c, r2c = run(threshold=3, new_resp_len=3, prev_resp_len=2)
+    assert len(forked_new) == 2, f"len(r2)==threshold must fork, got {len(forked_new)}"
+    assert forked_new[0].tokens == p1c + r1c
+    assert forked_new[1].tokens == p2c + r2c
+
+    # Both sides short -> REALIGN. Innocent r1 prefix (tokens before the last-
+    # token divergence) keeps loss_mask=1; only the suffix from realign_at is
+    # zeroed, then r2 trains.
+    replaced, p1b, r1b, p2b, r2b = run(threshold=5, new_resp_len=2)
+    assert len(replaced) == 1, f"both sides <threshold must realign, got {len(replaced)}"
     assert replaced[0].tokens == p2b + r2b
-    # the drifted r1 echo is not a faithful response anymore -> the WHOLE r1 span is
-    # masked (loss=0 prompt context), r2 trains.
-    assert replaced[0].loss_mask == [0] * (len(p2b) - len(p1b)) + [1] * len(r2b)
+    realign_at = len(p1b) + len(r1b) - 1
+    innocent = realign_at - len(p1b)
+    suffix = len(p2b) - realign_at
+    assert innocent == 3, "r1=4 with last-token drift leaves 3 trained tokens"
+    assert replaced[0].loss_mask == [1] * innocent + [0] * suffix + [1] * len(r2b)
     _check_invariants(forked)
+    _check_invariants(forked_new)
     _check_invariants(replaced)
     print("PASS 4.6")
 
