@@ -9,6 +9,12 @@ import torch
 import torch.distributed as dist
 from ray.actor import ActorHandle
 
+from slime.observability.communication_timeline import (
+    communication_context,
+    communication_event,
+    communication_phase,
+    flush_communication_timeline,
+)
 from slime.utils.distributed_utils import get_gloo_group
 
 from ..hf_checkpoint_saver import save_hf_model_to_path
@@ -71,24 +77,29 @@ class UpdateWeightFromDisk:
             shutil.rmtree(version_dir, ignore_errors=True)
         dist.barrier(group=get_gloo_group())
 
-        # every writing rank creates the dir itself: a non-POSIX shared filesystem may not surface
-        # one rank's mkdir to another until commit
-        version_dir.mkdir(parents=True, exist_ok=True)
-        save_hf_model_to_path(
-            self.args,
-            version_dir,
-            self.model,
-            model_name=self.model_name,
-            quantization_config=self.quantization_config,
-            progress_desc="Save HF  weights for update from disk",
-        )
-        dist.barrier(group=get_gloo_group())
+        with communication_context(weight_version=self.weight_version, transport="disk"):
+            # every writing rank creates the dir itself: a non-POSIX shared filesystem may not surface
+            # one rank's mkdir to another until commit
+            version_dir.mkdir(parents=True, exist_ok=True)
+            with communication_phase("weight_convert", bucket_id=0):
+                save_hf_model_to_path(
+                    self.args,
+                    version_dir,
+                    self.model,
+                    model_name=self.model_name,
+                    quantization_config=self.quantization_config,
+                    progress_desc="Save HF  weights for update from disk",
+                )
+            dist.barrier(group=get_gloo_group())
+            communication_event("weight_bucket_ready", bucket_id=0)
 
-        # every rank runs the hook (it gates itself): each container must publish
-        # its own writes
-        if self._post_write_hook is not None:
-            self._post_write_hook(self.args, str(version_dir), list(self.rollout_engines))
-        dist.barrier(group=get_gloo_group())
+            # every rank runs the hook (it gates itself): each container must publish
+            # its own writes
+            with communication_phase("weight_bucket_send", bucket_id=0):
+                if self._post_write_hook is not None:
+                    self._post_write_hook(self.args, str(version_dir), list(self.rollout_engines))
+                dist.barrier(group=get_gloo_group())
+            flush_communication_timeline(block=False)
 
         # SGLang reload is orchestrated by RayTrainGroup after the checkpoint
         # is fully written, so training-side lifecycle can decide whether

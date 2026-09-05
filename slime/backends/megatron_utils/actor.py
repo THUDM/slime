@@ -13,6 +13,7 @@ from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
 from slime.observability import train_data_utils, train_metric_utils
+from slime.observability.communication_timeline import communication_context, flush_communication_timeline
 from slime.observability.logging_utils import init_tracking
 from slime.observability.profile_utils import TrainProfiler
 from slime.observability.timer import Timer, inverse_timer, timer, with_defer
@@ -604,7 +605,8 @@ class MegatronTrainRayActor(TrainRayActor):
 
         with torch_memory_saver.disable() if self.args.offload_train else nullcontext():
             print_memory("before update_weights")
-            self.weight_updater.update_weights()
+            with communication_context(rollout_id=self._communication_rollout_id):
+                self.weight_updater.update_weights()
             print_memory("after update_weights")
 
             if getattr(self.args, "keep_old_actor", False):
@@ -622,6 +624,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.sleep()
         elif self.args.offload_train:
             destroy_process_groups()
+        flush_communication_timeline(block=getattr(self.args, "release_train", False))
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:
         old_args = (

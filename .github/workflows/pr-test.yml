@@ -587,6 +587,18 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_engine_group_wave.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_engine_group_wave_distributed.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_weight_sync_callsite_benchmark.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "utils/test_megatron_role_config.py"
             },
             {
@@ -640,6 +652,10 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_logprob_response_spans.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "observability/test_communication_timeline.py"
             },
             {
               "num_gpus": 0,
@@ -764,6 +780,10 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_empty_colocated_weight_bucket.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_weight_sync_credit.py"
             },
             {
               "num_gpus": 0,

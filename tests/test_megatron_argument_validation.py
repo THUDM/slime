@@ -177,6 +177,15 @@ def test_update_weight_disk_dir_required_for_disk_transport(monkeypatch):
         module.slime_validate_args(args)
 
 
+@pytest.mark.unit
+def test_update_weight_engine_group_wave_limit_must_be_non_negative(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(update_weight_max_inflight_engine_groups=-1)
+
+    with pytest.raises(ValueError, match="max-inflight-engine-groups"):
+        module.slime_validate_args(args)
+
+
 def make_slime_validate_args(**overrides):
     values = dict(
         eval_config=None,
@@ -256,6 +265,8 @@ def make_slime_validate_args(**overrides):
         update_weight_disk_dir=None,
         update_weight_local_checkpoint_dir=None,
         update_weight_mode="full",
+        update_weight_max_inflight_buckets=0,
+        update_weight_max_inflight_bytes=0,
         rollout_temperature=1.0,
     )
     values.update(overrides)
@@ -391,6 +402,59 @@ def test_update_weight_delta_requires_local_checkpoint_dir(monkeypatch):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("field", "option"),
+    [
+        ("update_weight_max_inflight_buckets", "--update-weight-max-inflight-buckets"),
+        ("update_weight_max_inflight_bytes", "--update-weight-max-inflight-bytes"),
+    ],
+)
+def test_weight_bucket_credit_rejects_negative_limits(monkeypatch, field, option):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(**{field: -1})
+
+    with pytest.raises(ValueError, match=option):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_weight_bucket_credit_requires_full_nccl_sync(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        update_weight_transport="disk",
+        update_weight_disk_dir="/shared/weights",
+        update_weight_max_inflight_buckets=2,
+    )
+
+    with pytest.raises(ValueError, match="require --update-weight-mode=full"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_weight_bucket_credit_argument_defaults_preserve_synchronous_sync(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    module.get_slime_extra_args_provider()(parser)
+
+    defaults = parser.parse_args(["--rollout-batch-size", "1"])
+    configured = parser.parse_args(
+        [
+            "--rollout-batch-size",
+            "1",
+            "--update-weight-max-inflight-buckets",
+            "3",
+            "--update-weight-max-inflight-bytes",
+            "1048576",
+        ]
+    )
+
+    assert defaults.update_weight_max_inflight_buckets == 0
+    assert defaults.update_weight_max_inflight_bytes == 0
+    assert configured.update_weight_max_inflight_buckets == 3
+    assert configured.update_weight_max_inflight_bytes == 1048576
+
+
+@pytest.mark.unit
 def test_force_fp8_ue8m0_scale_argument(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     parser = argparse.ArgumentParser()
@@ -401,6 +465,26 @@ def test_force_fp8_ue8m0_scale_argument(monkeypatch):
 
     assert defaults.force_fp8_ue8m0_scale is False
     assert configured.force_fp8_ue8m0_scale is True
+
+
+@pytest.mark.unit
+def test_update_weight_engine_group_wave_argument(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    module.get_slime_extra_args_provider()(parser)
+
+    defaults = parser.parse_args(["--rollout-batch-size", "1"])
+    configured = parser.parse_args(
+        [
+            "--rollout-batch-size",
+            "1",
+            "--update-weight-max-inflight-engine-groups",
+            "3",
+        ]
+    )
+
+    assert defaults.update_weight_max_inflight_engine_groups == 0
+    assert configured.update_weight_max_inflight_engine_groups == 3
 
 
 if __name__ == "__main__":
