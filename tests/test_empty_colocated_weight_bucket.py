@@ -143,10 +143,11 @@ def _install_fake_deps(monkeypatch):
     update_from_distributed_mod = types.ModuleType(
         "slime.backends.megatron_utils.update_weight.update_weight_from_distributed"
     )
-    update_from_distributed_mod.connect_rollout_engines_from_distributed = lambda *args, **kwargs: None
-    update_from_distributed_mod.disconnect_rollout_engines_from_distributed = lambda *args, **kwargs: None
+    update_from_distributed_mod.connect_rollout_engine_groups_from_distributed = lambda *args, **kwargs: []
+    update_from_distributed_mod.disconnect_rollout_engine_groups_from_distributed = lambda *args, **kwargs: None
     update_from_distributed_mod.launch_weights_from_distributed = lambda *args, **kwargs: ([], [])
     update_from_distributed_mod.post_process_weights = lambda *args, **kwargs: None
+    update_from_distributed_mod.synchronize_weight_transfer = lambda *args, **kwargs: None
 
     monkeypatch.setitem(sys.modules, "slime", slime_pkg)
     monkeypatch.setitem(sys.modules, "slime.backends", slime_backends_pkg)
@@ -274,6 +275,7 @@ def test_tensor_credit_window_launches_all_admitted_buckets_before_waiting(monke
     updater._weight_bucket_bytes = lambda bucket: sum(tensor.numel() for _, tensor in bucket)
     updater._ipc_gather_group = None
     updater._ipc_gather_src = None
+    updater._wave_scheduling_enabled = False
     updater.rank = 0
 
     def send_hf_params(bucket):
@@ -389,6 +391,80 @@ def test_colocated_non_source_observes_source_failure(monkeypatch):
         updater._wait_for_bucket_completion(reservation, [], [])
     assert updater._weight_sync_credit.snapshot.inflight_buckets == 1
     assert updater._weight_sync_credit.snapshot.transport_outstanding_bytes == 8
+
+
+@pytest.mark.parametrize("engine_count", [2, 4])
+@pytest.mark.parametrize("peer_failure", [False, True])
+def test_tensor_wave_holds_credit_staging_and_shares_peer_failure(monkeypatch, engine_count, peer_failure):
+    module, state = _load_update_weight_module(monkeypatch)
+    events = []
+    updater = object.__new__(module.UpdateWeightFromTensor)
+    updater.rank = 0
+    updater.weight_version = 3
+    updater._total_engine_groups = engine_count
+    updater._max_inflight_engine_groups = 1
+    updater._wave_scheduling_enabled = True
+    updater._ipc_engine_index = 0
+    updater._ipc_engine = object()
+    updater._ipc_gather_src = 0
+    updater._ipc_gather_group = object()
+    updater.use_distribute = True
+    updater._is_distributed_src_rank = True
+    updater._model_update_groups = [
+        types.SimpleNamespace(
+            engine_indices=(i,), group_name=f"group-{i}", process_group=i, rollout_engines=(object(),)
+        )
+        for i in range(1, engine_count)
+    ]
+    updater._weight_sync_credit = module.WeightSyncCreditController(max_inflight_buckets=1, max_inflight_bytes=8)
+    updater._weight_sync_credit.begin_version(3)
+    reservation = updater._weight_sync_credit.reserve(8)
+    tensor = types.SimpleNamespace(numel=lambda: 8, element_size=lambda: 1)
+    staging = [types.SimpleNamespace(numel=lambda: 16, element_size=lambda: 1)]
+
+    def colocated(*_args, **_kwargs):
+        events.append("ipc-launch")
+        return ["ipc-ref"], staging
+
+    def distributed(_name, group, *_args):
+        events.append(f"distributed-{group}")
+        assert staging == []
+        assert updater._weight_sync_credit.snapshot.inflight_buckets == 1
+        return [f"distributed-{group}"], [types.SimpleNamespace(wait=lambda: events.append("wait"))]
+
+    def all_gather(errors, local, group):
+        assert group is not None
+        assert state.broadcast_value is None
+        assert updater._weight_sync_credit.snapshot.inflight_buckets == 1
+        errors[:] = [local] * len(errors)
+        if peer_failure:
+            errors[-1] = "peer engine load failed"
+
+    monkeypatch.setattr(module, "_send_to_colocated_engine", colocated)
+    monkeypatch.setattr(module, "launch_weights_from_distributed", distributed)
+    monkeypatch.setattr(module.dist, "all_gather_object", all_gather, raising=False)
+    if peer_failure:
+        with pytest.raises(RuntimeError, match="peer engine load failed"):
+            updater._submit_weight_bucket([("weight", tensor)], reservation)
+        assert events == ["ipc-launch"]
+        assert staging
+        assert updater._active_wave_resources[1] is staging
+        assert updater._weight_sync_credit.snapshot.staging_resident_bytes == 16
+    else:
+        assert updater._submit_weight_bucket([("weight", tensor)], reservation) == ([], [], None)
+        assert staging == []
+        assert events == [
+            "ipc-launch",
+            *[phase for i in range(1, engine_count) for phase in (f"distributed-{i}", "wait")],
+        ]
+        snapshot = updater._weight_sync_credit.snapshot
+        assert snapshot.inflight_buckets == 1
+        assert snapshot.transport_outstanding_bytes == 0
+        assert snapshot.pending_consumer_objects == 0
+        assert snapshot.staging_resident_bytes == 0
+        assert snapshot.peak_staging_resident_bytes == 16
+        updater._weight_sync_credit.release(reservation)
+        updater._weight_sync_credit.commit_version(3)
 
 
 def _make_empty_update_updater(module, events, continue_result="continue-ref"):

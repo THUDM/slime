@@ -4,6 +4,7 @@ import socket
 import time
 from argparse import Namespace
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import ray
@@ -16,11 +17,22 @@ from tqdm import tqdm
 
 from slime.utils import accelerator
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
+from slime.utils.engine_group_wave import build_engine_group_waves, run_engine_group_waves
 from slime.utils.http_utils import _wrap_ipv6
 
 from ..megatron_to_hf import convert_to_hf
 from .common import all_gather_param, named_params_and_buffers
 from .weight_sync_credit import WeightBucketReservation, WeightSyncCreditController
+
+
+@dataclass(frozen=True)
+class DistributedWeightUpdateGroup:
+    """One trainer process group and the rollout engines that join it."""
+
+    engine_indices: tuple[int, ...]
+    group_name: str
+    process_group: dist.ProcessGroup
+    rollout_engines: tuple[ActorHandle, ...]
 
 
 class UpdateWeightFromDistributed:
@@ -47,7 +59,7 @@ class UpdateWeightFromDistributed:
         self.model_name = model_name
         self.quantization_config = quantization_config
         self.weight_version = 0
-        self._model_update_groups = None
+        self._model_update_groups: list[DistributedWeightUpdateGroup] = []
         self.update_weight_metrics: dict[str, float] = {}
         self._weight_sync_credit = WeightSyncCreditController(
             max_inflight_buckets=getattr(args, "update_weight_max_inflight_buckets", 0),
@@ -87,22 +99,21 @@ class UpdateWeightFromDistributed:
             self._group_name = f"slime-pp_{pp_rank}"
 
         if self._is_pp_src_rank:
-            if self._model_update_groups is not None:
-                disconnect_rollout_engines_from_distributed(
-                    self._group_name, self._model_update_groups, self.rollout_engines
-                )
-            self._model_update_groups = connect_rollout_engines_from_distributed(
+            if self._model_update_groups:
+                disconnect_rollout_engine_groups_from_distributed(self._model_update_groups)
+            self._model_update_groups = connect_rollout_engine_groups_from_distributed(
                 self.args,
                 self._group_name,
                 rollout_engines,
                 engine_gpu_counts=engine_gpu_counts,
+                max_inflight_engine_groups=getattr(self.args, "update_weight_max_inflight_engine_groups", 0),
             )
 
     def disconnect_rollout_engines(self) -> None:
-        if not getattr(self, "_is_pp_src_rank", False) or self._model_update_groups is None:
+        if not getattr(self, "_is_pp_src_rank", False) or not self._model_update_groups:
             return
-        disconnect_rollout_engines_from_distributed(self._group_name, self._model_update_groups, self.rollout_engines)
-        self._model_update_groups = None
+        disconnect_rollout_engine_groups_from_distributed(self._model_update_groups)
+        self._model_update_groups = []
 
     @torch.no_grad()
     def update_weights(self) -> None:
@@ -122,6 +133,7 @@ class UpdateWeightFromDistributed:
                     restore_weights_before_load=True,
                     post_process_quantization=False,
                     rollout_engines=self.rollout_engines,
+                    max_inflight_engine_groups=getattr(self.args, "update_weight_max_inflight_engine_groups", 0),
                 )
         dist.barrier(group=get_gloo_group())
 
@@ -137,6 +149,7 @@ class UpdateWeightFromDistributed:
                         restore_weights_before_load=False,
                         post_process_quantization=True,
                         rollout_engines=self.rollout_engines,
+                        max_inflight_engine_groups=getattr(self.args, "update_weight_max_inflight_engine_groups", 0),
                     )
                 ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
             dist.barrier(group=get_gloo_group())
@@ -202,6 +215,13 @@ class UpdateWeightFromDistributed:
         pending: Sequence[tuple[WeightBucketReservation, list[tuple[str, torch.Tensor]]]],
         pbar: tqdm | None,
     ) -> None:
+        if len(self._model_update_groups) > 1:
+            # Logical reservations remain bounded across the buffered window.
+            # Drain all waves of a bucket before another bucket starts, so the
+            # engine-group cap is global rather than multiplied by bucket count.
+            for reservation, tensors in pending:
+                self._update_bucket_weights_from_distributed(tensors, reservation, pbar=pbar)
+            return
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
             time.sleep(0.1)
 
@@ -215,11 +235,12 @@ class UpdateWeightFromDistributed:
         ] = []
         try:
             for reservation, converted_named_tensors in pending:
+                update_group = self._model_update_groups[0]
                 refs, handles = launch_weights_from_distributed(
-                    self._group_name,
-                    self._model_update_groups,
+                    update_group.group_name,
+                    update_group.process_group,
                     self.weight_version,
-                    self.rollout_engines,
+                    update_group.rollout_engines,
                     converted_named_tensors,
                 )
                 self._weight_sync_credit.mark_launched(
@@ -234,6 +255,7 @@ class UpdateWeightFromDistributed:
                 reservation, converted_named_tensors, refs, handles = launched.pop(0)
                 for handle in handles:
                     handle.wait()
+                synchronize_weight_transfer(converted_named_tensors)
                 self._weight_sync_credit.mark_transport_complete(reservation)
                 ray.get(refs)
                 self._weight_sync_credit.mark_consumers_complete(reservation)
@@ -352,26 +374,30 @@ class UpdateWeightFromDistributed:
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
             time.sleep(0.1)
 
-        try:
-            refs, handles = launch_weights_from_distributed(
-                self._group_name,
-                self._model_update_groups,
-                self.weight_version,
-                self.rollout_engines,
-                converted_named_tensors,
-                load_format=load_format,
-            )
-            self._weight_sync_credit.mark_launched(
+        def observe_wave_launch(refs, handles, group_count):
+            # Keep strong references on the poisoned updater if a consumer
+            # fails; remaining engine loads may still reference this buffer.
+            self._active_wave_resources = (converted_named_tensors, refs, handles)
+            self._weight_sync_credit.mark_next_wave(
                 reservation,
-                transport_bytes=reservation.bucket_bytes if handles else 0,
+                transport_bytes=reservation.bucket_bytes * group_count if handles else 0,
                 staging_bytes=0,
                 consumer_objects=len(refs),
             )
-            for handle in handles:
-                handle.wait()
-            self._weight_sync_credit.mark_transport_complete(reservation)
-            ray.get(refs)
-            self._weight_sync_credit.mark_consumers_complete(reservation)
+
+        try:
+            self._weight_sync_credit.mark_launched(reservation, transport_bytes=0, staging_bytes=0, consumer_objects=0)
+            update_weights_in_engine_group_waves(
+                self._model_update_groups,
+                self.weight_version,
+                converted_named_tensors,
+                max_inflight_engine_groups=getattr(self.args, "update_weight_max_inflight_engine_groups", 0),
+                load_format=load_format,
+                on_wave_launched=observe_wave_launch,
+                on_transport_complete=lambda: self._weight_sync_credit.mark_transport_complete(reservation),
+                on_consumers_complete=lambda: self._weight_sync_credit.mark_consumers_complete(reservation),
+            )
+            self._active_wave_resources = None
             converted_named_tensors.clear()
             self._weight_sync_credit.mark_staging_released(reservation)
             self._weight_sync_credit.release(reservation)
@@ -431,6 +457,82 @@ def connect_rollout_engines_from_distributed(
     return model_update_groups
 
 
+def connect_rollout_engine_groups_from_distributed(
+    args: Namespace,
+    group_name: str,
+    rollout_engines: Sequence[ActorHandle],
+    engine_gpu_counts: Sequence[int] | None = None,
+    *,
+    max_inflight_engine_groups: int = 0,
+    total_engine_groups: int | None = None,
+    engine_index_offset: int = 0,
+) -> list[DistributedWeightUpdateGroup]:
+    """Create aggregate or per-engine process groups for weight-update waves.
+
+    The aggregate group preserves the existing data path when every engine may
+    run together. A bounded policy needs one process group per logical engine;
+    otherwise an aggregate NCCL broadcast would still require every engine to
+    enter the collective at once and could not be admitted in waves.
+    """
+    if engine_gpu_counts is None:
+        engine_gpu_counts = [args.rollout_num_gpus_per_engine] * len(rollout_engines)
+    if len(engine_gpu_counts) != len(rollout_engines):
+        raise ValueError("engine_gpu_counts must have one entry per rollout engine")
+    if any(gpu_count <= 0 for gpu_count in engine_gpu_counts):
+        raise ValueError("engine GPU counts must be positive")
+    if max_inflight_engine_groups < 0:
+        raise ValueError("max_inflight_engine_groups must be non-negative")
+    if not rollout_engines:
+        return []
+
+    total = total_engine_groups if total_engine_groups is not None else len(rollout_engines)
+    if total < len(rollout_engines):
+        raise ValueError("total_engine_groups cannot be smaller than the distributed engine count")
+    if engine_index_offset < 0 or engine_index_offset + len(rollout_engines) > total:
+        raise ValueError("distributed engine indices must fit within total_engine_groups")
+    use_waves = 0 < max_inflight_engine_groups < total
+
+    if not use_waves:
+        process_group = connect_rollout_engines_from_distributed(
+            args,
+            group_name,
+            rollout_engines,
+            engine_gpu_counts=engine_gpu_counts,
+        )
+        return [
+            DistributedWeightUpdateGroup(
+                engine_indices=tuple(range(engine_index_offset, engine_index_offset + len(rollout_engines))),
+                group_name=group_name,
+                process_group=process_group,
+                rollout_engines=tuple(rollout_engines),
+            )
+        ]
+
+    update_groups = []
+    try:
+        for local_index, (engine, gpu_count) in enumerate(zip(rollout_engines, engine_gpu_counts, strict=True)):
+            engine_index = engine_index_offset + local_index
+            engine_group_name = f"{group_name}-engine-{engine_index}"
+            process_group = connect_rollout_engines_from_distributed(
+                args,
+                engine_group_name,
+                [engine],
+                engine_gpu_counts=[gpu_count],
+            )
+            update_groups.append(
+                DistributedWeightUpdateGroup(
+                    engine_indices=(engine_index,),
+                    group_name=engine_group_name,
+                    process_group=process_group,
+                    rollout_engines=(engine,),
+                )
+            )
+    except Exception:
+        disconnect_rollout_engine_groups_from_distributed(update_groups)
+        raise
+    return update_groups
+
+
 def disconnect_rollout_engines_from_distributed(group_name, model_update_groups, rollout_engines):
     """
     Destroy the weight-update process group on training and engines.
@@ -438,6 +540,42 @@ def disconnect_rollout_engines_from_distributed(group_name, model_update_groups,
     refs = [engine.destroy_weights_update_group.remote(group_name) for engine in rollout_engines]
     dist.destroy_process_group(model_update_groups)
     ray.get(refs)
+
+
+def disconnect_rollout_engine_groups_from_distributed(
+    update_groups: Sequence[DistributedWeightUpdateGroup],
+) -> None:
+    """Destroy all process groups created for aggregate or waved updates."""
+    for update_group in update_groups:
+        disconnect_rollout_engines_from_distributed(
+            update_group.group_name,
+            update_group.process_group,
+            update_group.rollout_engines,
+        )
+
+
+def launch_weights_from_distributed(
+    group_name: str,
+    group: dist.ProcessGroup,
+    weight_version: int,
+    rollout_engines: Sequence[ActorHandle],
+    converted_named_tensors: Sequence[tuple[str, torch.Tensor]],
+    load_format: str | None = None,
+) -> tuple[list[ObjectRef], list[dist.Work]]:
+    """Launch engine receives and broadcasts without waiting for completion."""
+    refs = [
+        engine.update_weights_from_distributed.remote(
+            names=[name for name, _ in converted_named_tensors],
+            dtypes=[param.dtype for _, param in converted_named_tensors],
+            shapes=[param.shape for _, param in converted_named_tensors],
+            group_name=group_name,
+            weight_version=str(weight_version),
+            load_format=load_format,
+        )
+        for engine in rollout_engines
+    ]
+    handles = [dist.broadcast(param.data, 0, group=group, async_op=True) for _, param in converted_named_tensors]
+    return refs, handles
 
 
 def update_weights_from_distributed(
@@ -464,46 +602,69 @@ def update_weights_from_distributed(
     return refs
 
 
-def launch_weights_from_distributed(
-    group_name: str,
-    group: dist.ProcessGroup,
+def synchronize_weight_transfer(converted_named_tensors: Sequence[tuple[str, torch.Tensor]]) -> None:
+    """Fence the stream dependency inserted by Work.wait before releasing credit."""
+    if any(getattr(getattr(tensor, "device", None), "type", "cpu") != "cpu" for _, tensor in converted_named_tensors):
+        accelerator.current_stream().synchronize()
+
+
+def update_weights_in_engine_group_waves(
+    update_groups: Sequence[DistributedWeightUpdateGroup],
     weight_version: int,
-    rollout_engines: Sequence[ActorHandle],
     converted_named_tensors: Sequence[tuple[str, torch.Tensor]],
+    *,
+    max_inflight_engine_groups: int,
     load_format: str | None = None,
-) -> tuple[list[ObjectRef], list[Any]]:
-    """Launch one bucket without waiting for its device collectives."""
-    refs = [
-        engine.update_weights_from_distributed.remote(
-            names=[name for name, _ in converted_named_tensors],
-            dtypes=[param.dtype for _, param in converted_named_tensors],
-            shapes=[param.shape for _, param in converted_named_tensors],
-            group_name=group_name,
-            weight_version=str(weight_version),
-            load_format=load_format,
-        )
-        for engine in rollout_engines
-    ]
-    handles = []
-    for _, param in converted_named_tensors:
-        handles.append(dist.broadcast(param.data, 0, group=group, async_op=True))
-    return refs, handles
+    on_wave_launched: Callable[[Sequence[ObjectRef], Sequence[Any], int], None] | None = None,
+    on_transport_complete: Callable[[], None] | None = None,
+    on_consumers_complete: Callable[[], None] | None = None,
+) -> list[ObjectRef]:
+    """Transfer one bucket to bounded waves of independent engine groups."""
+    all_refs = []
+    for wave in build_engine_group_waves(update_groups, max_inflight_engine_groups):
+        wave_refs = []
+        wave_handles = []
+        for _index, update_group in wave:
+            refs, handles = launch_weights_from_distributed(
+                update_group.group_name,
+                update_group.process_group,
+                weight_version,
+                update_group.rollout_engines,
+                converted_named_tensors,
+                load_format=load_format,
+            )
+            wave_refs.extend(refs)
+            wave_handles.extend(handles)
+        if on_wave_launched is not None:
+            on_wave_launched(wave_refs, wave_handles, len(wave))
+        for handle in wave_handles:
+            handle.wait()
+        if on_transport_complete is not None:
+            synchronize_weight_transfer(converted_named_tensors)
+            on_transport_complete()
+        if wave_refs:
+            ray.get(wave_refs)
+        if on_consumers_complete is not None:
+            on_consumers_complete()
+        all_refs.extend(wave_refs)
+    return all_refs
 
 
 def post_process_weights(
     restore_weights_before_load: bool,
     post_process_quantization: bool,
     rollout_engines: Sequence[ActorHandle],
+    max_inflight_engine_groups: int = 0,
 ):
     """
     Trigger post-process for int4/fp4 quantization on all rollout engines.
     """
-    ray.get(
-        [
-            engine.post_process_weights.remote(
-                restore_weights_before_load=restore_weights_before_load,
-                post_process_quantization=post_process_quantization,
-            )
-            for engine in rollout_engines
-        ]
+    run_engine_group_waves(
+        rollout_engines,
+        max_inflight_engine_groups,
+        lambda _index, engine: engine.post_process_weights.remote(
+            restore_weights_before_load=restore_weights_before_load,
+            post_process_quantization=post_process_quantization,
+        ),
+        ray.get,
     )

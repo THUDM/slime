@@ -587,6 +587,18 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_engine_group_wave.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_engine_group_wave_distributed.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_weight_sync_callsite_benchmark.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "utils/test_megatron_role_config.py"
             },
             {

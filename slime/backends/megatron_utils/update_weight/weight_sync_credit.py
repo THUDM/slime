@@ -206,6 +206,30 @@ class WeightSyncCreditController:
         self._peak_staging_resident_bytes = max(self._peak_staging_resident_bytes, self._staging_resident_bytes)
         self._peak_pending_consumer_objects = max(self._peak_pending_consumer_objects, self._pending_consumer_objects)
 
+    def mark_next_wave(
+        self,
+        reservation: WeightBucketReservation,
+        *,
+        transport_bytes: int,
+        staging_bytes: int,
+        consumer_objects: int,
+    ) -> None:
+        """Observe another wave without releasing the logical bucket credit."""
+        previous = self._require_lifecycle(reservation)
+        if previous.transport_bytes or previous.staging_bytes or previous.consumer_objects:
+            raise RuntimeError("cannot advance a weight wave before its resources complete")
+        del self._bucket_lifecycles[reservation]
+        try:
+            self.mark_launched(
+                reservation,
+                transport_bytes=transport_bytes,
+                staging_bytes=staging_bytes,
+                consumer_objects=consumer_objects,
+            )
+        except BaseException:
+            self._bucket_lifecycles[reservation] = previous
+            raise
+
     def mark_transport_complete(self, reservation: WeightBucketReservation) -> None:
         """Release transport accounting exactly once after its wait boundary."""
         lifecycle = self._require_lifecycle(reservation)
