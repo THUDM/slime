@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from slime.utils import accelerator
 from slime.utils.distributed_utils import get_gloo_group
+from slime.utils.engine_group_wave import build_engine_group_waves
 from slime.utils.types import ParamInfo
 
 from ..megatron_to_hf import convert_to_hf
@@ -21,10 +22,11 @@ from ..sglang import FlattenedTensorBucket, MultiprocessingSerializer
 from .expert_routing import configure_expert_routing
 from .hf_weight_iterator_direct import HfWeightIteratorDirect
 from .update_weight_from_distributed import (
-    connect_rollout_engines_from_distributed,
-    disconnect_rollout_engines_from_distributed,
+    connect_rollout_engine_groups_from_distributed,
+    disconnect_rollout_engine_groups_from_distributed,
     launch_weights_from_distributed,
     post_process_weights,
+    synchronize_weight_transfer,
 )
 from .weight_sync_credit import WeightBucketReservation, WeightSyncCreditController
 
@@ -109,7 +111,11 @@ class UpdateWeightFromTensor:
         self._ipc_gather_group = None
         self._ipc_gather_src = None
         self._ipc_engine = None
-        self._model_update_groups = None
+        self._ipc_engine_index = None
+        self._model_update_groups = []
+        self._total_engine_groups = 0
+        self._max_inflight_engine_groups = getattr(args, "update_weight_max_inflight_engine_groups", 0)
+        self._wave_scheduling_enabled = False
         self._expert_transfer_plan = []
 
     def connect_rollout_engines(
@@ -126,6 +132,9 @@ class UpdateWeightFromTensor:
         """
         self._all_rollout_engines = rollout_engines
         self.rollout_engines = rollout_engines
+        self._total_engine_groups = len(rollout_engines)
+        self._max_inflight_engine_groups = getattr(self.args, "update_weight_max_inflight_engine_groups", 0)
+        self._wave_scheduling_enabled = 0 < self._max_inflight_engine_groups < self._total_engine_groups
 
         if engine_gpu_counts is None:
             engine_gpu_counts = [self.args.rollout_num_gpus_per_engine] * len(rollout_engines)
@@ -158,16 +167,17 @@ class UpdateWeightFromTensor:
             )
             self._group_name = "slime"
             if self._is_distributed_src_rank:
-                if self._model_update_groups is not None:
-                    disconnect_rollout_engines_from_distributed(
-                        self._group_name, self._model_update_groups, self.distributed_rollout_engines
-                    )
+                if self._model_update_groups:
+                    disconnect_rollout_engine_groups_from_distributed(self._model_update_groups)
 
-                self._model_update_groups = connect_rollout_engines_from_distributed(
+                self._model_update_groups = connect_rollout_engine_groups_from_distributed(
                     self.args,
                     self._group_name,
                     self.distributed_rollout_engines,
                     engine_gpu_counts=distributed_gpu_counts,
+                    max_inflight_engine_groups=self._max_inflight_engine_groups,
+                    total_engine_groups=self._total_engine_groups,
+                    engine_index_offset=colocate_engine_nums,
                 )
 
         colocate_gpu_offsets = engine_gpu_offsets[:colocate_engine_nums]
@@ -187,11 +197,13 @@ class UpdateWeightFromTensor:
                     self._ipc_gather_src = colocate_gpu_offsets[i]
 
         # Map training ranks to colocated engine actors.
+        self._ipc_engine_index = None
         for i, engine in enumerate(self.rollout_engines):
             start = colocate_gpu_offsets[i]
             end = start + colocate_gpu_counts[i]
             if start <= self.rank < end:
                 self._ipc_engine = engine
+                self._ipc_engine_index = i
 
         self._non_expert_param_info_buckets, self._expert_transfer_plan = configure_expert_routing(
             args=self.args,
@@ -220,12 +232,15 @@ class UpdateWeightFromTensor:
         reservation: WeightBucketReservation,
         handles: Sequence[Any],
         refs: Sequence[ObjectRef],
+        named_tensors: Sequence[tuple[str, torch.Tensor]] = (),
     ) -> None:
         """Wait for transport/load and share the engine acknowledgement within its TP group."""
         local_error: Exception | None = None
         try:
             for handle in handles:
                 handle.wait()
+            if handles:
+                synchronize_weight_transfer(named_tensors)
             ray.get(refs)
         except Exception as error:
             local_error = error
@@ -345,9 +360,8 @@ class UpdateWeightFromTensor:
                 )
                 self._weight_sync_credit.set_persistent_staging_bytes(_tensor_tree_nbytes(staging_buffers))
                 reservation = self._reserve_weight_bucket(hf_named_tensors)
-                refs, handles, long_lived_tensors = self._send_hf_params(hf_named_tensors)
-                self._mark_bucket_launched(reservation, refs, handles, long_lived_tensors)
-                self._wait_for_bucket_completion(reservation, handles, refs)
+                refs, handles, long_lived_tensors = self._submit_weight_bucket(hf_named_tensors, reservation)
+                self._wait_for_bucket_completion(reservation, handles, refs, hf_named_tensors)
                 hf_named_tensors.clear()
                 if isinstance(long_lived_tensors, list):
                     long_lived_tensors.clear()
@@ -379,6 +393,7 @@ class UpdateWeightFromTensor:
                     restore_weights_before_load=True,
                     post_process_quantization=False,
                     rollout_engines=consumer_engines,
+                    max_inflight_engine_groups=self._max_inflight_engine_groups,
                 )
         dist.barrier(group=get_gloo_group())
 
@@ -398,9 +413,8 @@ class UpdateWeightFromTensor:
             else:
                 for hf_named_tensors in hf_chunks:
                     reservation = self._reserve_weight_bucket(hf_named_tensors)
-                    refs, handles, long_lived_tensors = self._send_hf_params(hf_named_tensors)
-                    self._mark_bucket_launched(reservation, refs, handles, long_lived_tensors)
-                    self._wait_for_bucket_completion(reservation, handles, refs)
+                    refs, handles, long_lived_tensors = self._submit_weight_bucket(hf_named_tensors, reservation)
+                    self._wait_for_bucket_completion(reservation, handles, refs, hf_named_tensors)
                     hf_named_tensors.clear()
                     if isinstance(long_lived_tensors, list):
                         long_lived_tensors.clear()
@@ -430,6 +444,7 @@ class UpdateWeightFromTensor:
                         restore_weights_before_load=False,
                         post_process_quantization=True,
                         rollout_engines=self._consumer_engines(),
+                        max_inflight_engine_groups=self._max_inflight_engine_groups,
                     )
                 ray.get([engine.continue_generation.remote() for engine in self._consumer_engines()])
             dist.barrier(group=get_gloo_group())
@@ -489,13 +504,12 @@ class UpdateWeightFromTensor:
     ) -> None:
         launched = []
         for reservation, hf_named_tensors in pending:
-            refs, handles, long_lived_tensors = self._send_hf_params(hf_named_tensors)
-            self._mark_bucket_launched(reservation, refs, handles, long_lived_tensors)
+            refs, handles, long_lived_tensors = self._submit_weight_bucket(hf_named_tensors, reservation)
             launched.append((reservation, hf_named_tensors, refs, handles, long_lived_tensors))
 
         while launched:
             reservation, hf_named_tensors, refs, handles, long_lived_tensors = launched.pop(0)
-            self._wait_for_bucket_completion(reservation, handles, refs)
+            self._wait_for_bucket_completion(reservation, handles, refs, hf_named_tensors)
             hf_named_tensors.clear()
             if isinstance(long_lived_tensors, list):
                 long_lived_tensors.clear()
@@ -505,6 +519,15 @@ class UpdateWeightFromTensor:
 
         accelerator.ipc_collect()
         accelerator.empty_cache()
+
+    def _submit_weight_bucket(
+        self, hf_named_tensors, reservation: WeightBucketReservation
+    ) -> tuple[list[ObjectRef], list[Any], Any]:
+        if self._wave_scheduling_enabled:
+            return self._send_hf_params_in_waves(hf_named_tensors, reservation)
+        refs, handles, long_lived_tensors = self._send_hf_params(hf_named_tensors)
+        self._mark_bucket_launched(reservation, refs, handles, long_lived_tensors)
+        return refs, handles, long_lived_tensors
 
     def _send_hf_params(self, hf_named_tensors) -> tuple[list[ObjectRef], list[Any], Any]:
         all_refs = []
@@ -520,11 +543,12 @@ class UpdateWeightFromTensor:
         all_refs.extend(refs_colocated)
 
         if self.use_distribute and self._is_distributed_src_rank:
+            update_group = self._model_update_groups[0]
             refs_distributed, handles_distributed = launch_weights_from_distributed(
-                self._group_name,
-                self._model_update_groups,
+                update_group.group_name,
+                update_group.process_group,
                 self.weight_version,
-                self.distributed_rollout_engines,
+                update_group.rollout_engines,
                 hf_named_tensors,
             )
             if refs_distributed:
@@ -532,6 +556,72 @@ class UpdateWeightFromTensor:
             all_handles.extend(handles_distributed)
 
         return all_refs, all_handles, long_lived_tensors
+
+    def _send_hf_params_in_waves(
+        self, hf_named_tensors, reservation: WeightBucketReservation
+    ) -> tuple[list[ObjectRef], list[Any], None]:
+        """Send one bucket in globally coordinated colocated/distributed waves."""
+        self._weight_sync_credit.mark_launched(reservation, transport_bytes=0, staging_bytes=0, consumer_objects=0)
+        engine_indices = tuple(range(self._total_engine_groups))
+        for wave in build_engine_group_waves(engine_indices, self._max_inflight_engine_groups):
+            active_indices = {engine_index for _position, engine_index in wave}
+            wave_refs = []
+            wave_handles = []
+            wave_long_lived_tensors = None
+
+            if self._ipc_engine_index in active_indices:
+                refs_colocated, wave_long_lived_tensors = _send_to_colocated_engine(
+                    hf_named_tensors,
+                    ipc_engine=self._ipc_engine,
+                    ipc_gather_src=self._ipc_gather_src,
+                    ipc_gather_group=self._ipc_gather_group,
+                    weight_version=self.weight_version,
+                )
+                wave_refs.extend(refs_colocated)
+
+            if self.use_distribute and self._is_distributed_src_rank:
+                for update_group in self._model_update_groups:
+                    if not active_indices.intersection(update_group.engine_indices):
+                        continue
+                    refs, handles = launch_weights_from_distributed(
+                        update_group.group_name,
+                        update_group.process_group,
+                        self.weight_version,
+                        update_group.rollout_engines,
+                        hf_named_tensors,
+                    )
+                    wave_refs.extend(refs)
+                    wave_handles.extend(handles)
+
+            self._weight_sync_credit.mark_next_wave(
+                reservation,
+                transport_bytes=reservation.bucket_bytes if wave_handles or wave_refs else 0,
+                staging_bytes=_tensor_tree_nbytes(wave_long_lived_tensors),
+                consumer_objects=len(wave_refs),
+            )
+            error_message = None
+            try:
+                self._wait_for_bucket_completion(reservation, wave_handles, wave_refs, hf_named_tensors)
+            except Exception as error:
+                error_message = f"{type(error).__name__}: {error}"
+            # Propagate a load failure to inactive engines too, before anybody
+            # enters the next wave. This also keeps all IPC producers alive.
+            group = get_gloo_group()
+            errors = [None] * dist.get_world_size(group=group)
+            dist.all_gather_object(errors, error_message, group=group)
+            if any(errors):
+                self._active_wave_resources = (hf_named_tensors, wave_long_lived_tensors, wave_refs, wave_handles)
+                raise RuntimeError(f"weight wave failed: {errors}")
+
+            # Every training rank advances together, so IPC producers cannot
+            # release a bucket while another rank in the engine is still using it.
+            if isinstance(wave_long_lived_tensors, list):
+                wave_long_lived_tensors.clear()
+            del wave_long_lived_tensors
+            self._weight_sync_credit.mark_staging_released(reservation)
+
+        # Every Ray ref and IPC consumer completed at its wave boundary.
+        return [], [], None
 
 
 def _send_to_colocated_engine(

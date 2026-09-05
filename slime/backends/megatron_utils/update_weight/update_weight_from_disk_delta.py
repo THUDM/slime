@@ -22,6 +22,7 @@ from ray.actor import ActorHandle
 from slime.utils import accelerator
 from slime.utils.disk_delta import NUM_WORKERS, checksum, make_tensor_reader, overwrite_encode
 from slime.utils.distributed_utils import get_gloo_group
+from slime.utils.engine_group_wave import run_engine_group_waves
 
 from .update_weight_from_distributed import UpdateWeightFromDistributed
 
@@ -107,7 +108,16 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
             os.makedirs(self.delta_dir, exist_ok=True)
             if self._post_write_hook is not None:
                 self._post_write_hook(self.args, self.delta_dir, list(self.rollout_engines))
-            pulls = [engine.pull_weights.remote(target_version=0) for engine in self.rollout_engines]
+            max_inflight_engine_groups = getattr(self.args, "update_weight_max_inflight_engine_groups", 0)
+            if 0 < max_inflight_engine_groups < len(self.rollout_engines):
+                run_engine_group_waves(
+                    self.rollout_engines,
+                    max_inflight_engine_groups,
+                    lambda _index, engine: engine.pull_weights.remote(target_version=0),
+                    ray.get,
+                )
+            else:
+                pulls = [engine.pull_weights.remote(target_version=0) for engine in self.rollout_engines]
         dist.barrier(group=get_gloo_group())
 
         read_hf = make_tensor_reader(self.args.hf_checkpoint)  # index the HF headers once
@@ -118,7 +128,8 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
                 self._snapshot[name] = tensor.detach().cpu().contiguous().view(torch.uint8).numpy().reshape(-1)
                 logger.warning("seed: %s absent from hf_checkpoint; seeding from current weights", name)
         if dist.get_rank() == 0:
-            ray.get(pulls)
+            if pulls:
+                ray.get(pulls)
             logger.info(
                 "[disk delta] captured baseline snapshot of %d tensors from %s",
                 len(self._snapshot),
@@ -175,17 +186,23 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
             self._post_write_hook(self.args, self._version_dir, list(self.rollout_engines))
         dist.barrier(group=get_gloo_group())
         if dist.get_rank() == 0:
-            ray.get([engine.pull_weights.remote(self.weight_version) for engine in self.rollout_engines])
+            max_inflight_engine_groups = getattr(self.args, "update_weight_max_inflight_engine_groups", 0)
+            run_engine_group_waves(
+                self.rollout_engines,
+                max_inflight_engine_groups,
+                lambda _index, engine: engine.pull_weights.remote(self.weight_version),
+                ray.get,
+            )
             ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
-            ray.get(
-                [
-                    engine.update_weights_from_disk.remote(
-                        model_path=self.args.update_weight_local_checkpoint_dir,
-                        weight_version=str(self.weight_version),
-                    )
-                    for engine in self.rollout_engines
-                ]
+            run_engine_group_waves(
+                self.rollout_engines,
+                max_inflight_engine_groups,
+                lambda _index, engine: engine.update_weights_from_disk.remote(
+                    model_path=self.args.update_weight_local_checkpoint_dir,
+                    weight_version=str(self.weight_version),
+                ),
+                ray.get,
             )
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())

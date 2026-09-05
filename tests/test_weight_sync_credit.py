@@ -281,7 +281,7 @@ def test_distributed_credit_window_holds_one_lock_and_waits_fifo(monkeypatch) ->
 
     updater = object.__new__(module.UpdateWeightFromDistributed)
     updater._group_name = "weights"
-    updater._model_update_groups = "group"
+    updater._model_update_groups = [module.DistributedWeightUpdateGroup((0,), "weights", "group", (object(),))]
     updater.weight_version = 13
     updater.rollout_engines = [object()]
     updater.rollout_engine_lock = types.SimpleNamespace(
@@ -376,6 +376,125 @@ def _gloo_credit_worker(rank: int, world_size: int, port: int) -> None:
 @pytest.mark.unit
 def test_credit_window_drives_real_async_gloo_broadcasts() -> None:
     mp.spawn(_gloo_credit_worker, args=(2, _free_port()), nprocs=2, join=True)
+
+
+def test_wave_transition_keeps_bucket_credit_and_requires_every_resource_drained() -> None:
+    controller = WeightSyncCreditController(max_inflight_buckets=1, max_inflight_bytes=8)
+    controller.begin_version(11)
+    reservation = controller.reserve(8)
+    controller.mark_launched(reservation, transport_bytes=8, staging_bytes=12, consumer_objects=1)
+    for release in (
+        controller.mark_transport_complete,
+        controller.mark_consumers_complete,
+        controller.mark_staging_released,
+    ):
+        with pytest.raises(RuntimeError, match="cannot advance a weight wave"):
+            controller.mark_next_wave(reservation, transport_bytes=8, staging_bytes=0, consumer_objects=2)
+        release(reservation)
+    assert controller.reserve(0) is None
+    controller.mark_next_wave(reservation, transport_bytes=16, staging_bytes=0, consumer_objects=2)
+    assert controller.snapshot.inflight_bytes == 8
+    assert controller.snapshot.transport_outstanding_bytes == 16
+    controller.mark_transport_complete(reservation)
+    controller.mark_consumers_complete(reservation)
+    with pytest.raises(ValueError, match="non-negative"):
+        controller.mark_next_wave(reservation, transport_bytes=-1, staging_bytes=0, consumer_objects=0)
+    controller.release(reservation)
+    controller.commit_version(11)
+
+
+@pytest.mark.parametrize("engine_count", [2, 4])
+@pytest.mark.parametrize("fail_load", [False, True])
+def test_production_updater_composes_waves_credits_and_publication(monkeypatch, engine_count, fail_load):
+    module = _load_distributed_update_module(monkeypatch)
+    events = []
+
+    class Remote:
+        def __init__(self, name, result=None):
+            self.name, self.result = name, result
+
+        def remote(self):
+            events.append(self.name)
+            return self.result
+
+    engines = [
+        types.SimpleNamespace(
+            pause_generation=Remote("pause"),
+            flush_cache=Remote("flush"),
+            continue_generation=Remote("resume"),
+        )
+        for _ in range(engine_count)
+    ]
+    updater = module.UpdateWeightFromDistributed(
+        types.SimpleNamespace(
+            update_weight_max_inflight_buckets=2,
+            update_weight_max_inflight_bytes=32,
+            update_weight_max_inflight_engine_groups=1,
+        ),
+        [],
+        lambda: {},
+        model_name="logical-integration-fixture",
+        quantization_config=None,
+    )
+    updater.rollout_engines = engines
+    updater._is_pp_src_rank = False
+    updater._model_update_groups = [
+        module.DistributedWeightUpdateGroup((i,), f"engine-{i}", i, (engine,)) for i, engine in enumerate(engines)
+    ]
+    updater.rollout_engine_lock = types.SimpleNamespace(acquire=Remote("lock", True), release=Remote("unlock"))
+    updater._iter_non_expert_chunks = lambda: iter([[(f"bucket-{i}", torch.ones(4))] for i in range(3)])
+    updater._iter_expert_chunks = lambda: iter(())
+    monkeypatch.setattr(module.dist, "get_rank", lambda: 0)
+    monkeypatch.setattr(module.dist, "barrier", lambda **_: None)
+
+    def launch(_name, group, version, _engines, tensors, **_kwargs):
+        assert version == 1
+        bucket = tensors[0][0]
+        assert updater._weight_sync_credit.snapshot.active_version == 1
+        events.append(("launch", bucket, group))
+        handle = types.SimpleNamespace(wait=lambda: events.append(("wait", bucket, group)))
+        return [(bucket, group)], [handle]
+
+    def ray_get(refs):
+        if isinstance(refs, list) and refs and isinstance(refs[0], tuple):
+            bucket, group = refs[0]
+            snapshot = updater._weight_sync_credit.snapshot
+            assert snapshot.transport_outstanding_bytes == 0
+            assert snapshot.pending_consumer_objects == 1
+            assert snapshot.inflight_buckets > 0
+            events.append(("load", bucket, group))
+            if fail_load and group == 1:
+                raise RuntimeError("injected engine load failure")
+        return refs
+
+    monkeypatch.setattr(module, "launch_weights_from_distributed", launch)
+    module.ray.get = ray_get
+    if fail_load:
+        with pytest.raises(RuntimeError, match="injected engine load failure"):
+            updater.update_weights()
+        snapshot = updater._weight_sync_credit.snapshot
+        assert snapshot.active_version == 1
+        assert snapshot.failed_reason is not None
+        assert snapshot.pending_consumer_objects == 1
+        assert updater._active_wave_resources[0][0][0] == "bucket-0"
+        assert "resume" not in events
+        assert not any(event[:2] == ("launch", "bucket-1") for event in events if isinstance(event, tuple))
+    else:
+        updater.update_weights()
+        snapshot = updater._weight_sync_credit.snapshot
+        assert snapshot.active_version is None
+        assert snapshot.inflight_buckets == 0
+        assert snapshot.peak_inflight_buckets == 2
+        assert snapshot.peak_inflight_bytes == 32
+        assert snapshot.peak_pending_consumer_objects == 1
+        assert snapshot.peak_transport_outstanding_bytes == 16
+        assert [event for event in events if isinstance(event, tuple)] == [
+            (phase, f"bucket-{bucket}", group)
+            for bucket in range(3)
+            for group in range(engine_count)
+            for phase in ("launch", "wait", "load")
+        ]
+        assert events.count("resume") == engine_count
 
 
 if __name__ == "__main__":
