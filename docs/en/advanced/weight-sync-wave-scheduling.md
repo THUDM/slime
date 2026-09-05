@@ -47,3 +47,58 @@ value that avoids the observed traffic or memory burst without increasing total
 weight-sync time or tail latency. This option limits concurrent engine groups;
 `--update-weight-buffer-size` independently controls the size of each weight
 bucket.
+
+## Production-callsite confirmation
+
+`tools/benchmark_weight_sync_callsite.py` invokes the production
+`update_weights_in_engine_group_waves` function with real process groups and
+synthetic payloads. It is intentionally a callsite/module probe: it does not
+replace the scheduler, change defaults, or claim Ray/SGLang load performance.
+
+Use a four-process launch to retain three real two-rank
+`[trainer, engine]` groups. A/B are engine groups 0 and 1; the third group is
+the competing operation that distinguishes the all-at-once and window-2
+policies. Only use device counts permitted by the test environment.
+
+Each command below creates exactly one independent process-run artifact:
+
+```bash
+torchrun --standalone --nproc-per-node=4 \
+  tools/benchmark_weight_sync_callsite.py \
+  --backend gloo --policy candidate_windowed \
+  --evidence-role selection --run-id selection-windowed-00 \
+  --order ab --output-json /tmp/selection-windowed-00.json
+```
+
+In a minimal PyTorch container without slime's Ray/Megatron control-plane
+dependencies, set `SLIME_CALLSITE_SOURCE_LOAD=1`. That opt-in mode loads the
+exact production source file while stubbing only unused actor/conversion
+imports; the artifact records `source_with_control_plane_stubs` so it cannot be
+silently mixed with an installed-runtime campaign.
+When the checkout's `.git` metadata is not mounted into the container, pass the
+tested revision as `SLIME_BENCHMARK_SOURCE_COMMIT`.
+
+Run every policy in both `selection` and `confirmation` roles in separate
+process launches (five launches per policy/role by default), alternating
+`--order ab` and `--order ba`. Then validate and summarize the immutable raw
+artifacts:
+
+```bash
+python tools/benchmark_weight_sync_callsite.py \
+  --summarize /tmp/weight-sync-callsite/*.json \
+  --min-runs-per-role 5 \
+  --summary-json /tmp/weight-sync-callsite-summary.json
+```
+
+The summary fails closed on duplicate process/run identity, incomplete rank
+coverage, payload mismatch, mixed runtime/message/topology cells, or too few
+independent runs. It reports communication A/B, rank-local pair makespan,
+receiver consumer waits, callsite return, device readiness, and whole-stage
+sync readiness separately. NCCL intervals are labeled `event_bracket`, never
+`kernel_observed`. The tool records PyTorch/CUDA/NCCL versions, launch-order
+configuration, dtype, message geometry, graph state, hostname, device identity,
+and exact process-group membership.
+
+This evidence does not establish end-to-end training throughput, SGLang load
+latency, multi-node behavior, or a production policy winner. The summarizer
+does not automatically select or apply a policy.
