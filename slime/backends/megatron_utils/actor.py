@@ -153,9 +153,10 @@ class MegatronTrainRayActor(TrainRayActor):
         # empty cache after initialization
         clear_memory()
 
+        # Auxiliary checkpoints reuse self.model. Restore the actor before the
+        # initial rollout weight sync.
+        self._restore_actor_after_loads()
         if self.args.offload_train:
-            # recover to actor in the end.
-            self._switch_model("actor")
             self.sleep()
 
         self.rollout_engines = None
@@ -271,6 +272,16 @@ class MegatronTrainRayActor(TrainRayActor):
             raise ValueError(f"Cannot switch to unknown model tag: {target_tag}")
         self.weights_backuper.restore(target_tag)
         self._active_model_tag = target_tag
+
+    def _restore_actor_after_loads(self) -> None:
+        """Restore actor weights after loading auxiliary checkpoints."""
+        if self._active_model_tag != "actor":
+            self._switch_model("actor")
+
+    def _require_actor_active(self) -> None:
+        """Require actor weights before a rollout sync."""
+        if self._active_model_tag != "actor":
+            raise RuntimeError(f"update_weights requires actor weights, but {self._active_model_tag!r} is active")
 
     def fill_routing_replay(self, data_iterator, num_microbatches, rollout_data):
         if "rollout_routed_experts" not in rollout_data:
@@ -604,6 +615,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         with torch_memory_saver.disable() if self.args.offload_train else nullcontext():
             print_memory("before update_weights")
+            self._require_actor_active()
             self.weight_updater.update_weights()
             print_memory("after update_weights")
 
