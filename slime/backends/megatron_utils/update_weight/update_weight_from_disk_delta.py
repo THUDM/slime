@@ -19,6 +19,12 @@ import zstandard
 from megatron.core import mpu
 from ray.actor import ActorHandle
 
+from slime.observability.communication_timeline import (
+    communication_context,
+    communication_event,
+    communication_phase,
+    flush_communication_timeline,
+)
 from slime.utils import accelerator
 from slime.utils.disk_delta import NUM_WORKERS, checksum, make_tensor_reader, overwrite_encode
 from slime.utils.distributed_utils import get_gloo_group
@@ -85,14 +91,20 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
     def update_weights(self) -> None:
         # The first call only captures the baseline snapshot the next sync diffs against.
         if not self._baseline_captured:
-            self._capture_baseline()
+            with communication_context(weight_version=0, transport="disk_delta"):
+                with communication_phase("weight_convert", bucket_id=0, baseline_snapshot=True):
+                    self._capture_baseline()
+                flush_communication_timeline(block=False)
             self._baseline_captured = True
             return
 
         self.weight_version += 1
-        self._publish()
-        self._reload_engines()
-        self._record_metrics()
+        with communication_context(weight_version=self.weight_version, transport="disk_delta"):
+            self._publish()
+            self._reload_engines()
+            self._record_metrics()
+            communication_event("weight_sync_complete")
+            flush_communication_timeline(block=False)
 
     def _capture_baseline(self) -> None:
         """Capture the baseline snapshot the first delta diffs against (no publish), and clear any
@@ -138,9 +150,14 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
 
     def _publish(self) -> None:
         """Encode this version's changed tensors (PP-src ranks), then write it as a canonical HF dir."""
-        self._encode_delta()
-        dist.barrier(group=get_gloo_group())
-        self._write_delta_files()
+        with communication_phase("weight_convert", bucket_id=0) as phase:
+            self._encode_delta()
+            phase.update(message_bytes=self.total_bytes, changed_bytes=self.changed_bytes)
+        communication_event("weight_bucket_ready", bucket_id=0, message_bytes=self.changed_bytes)
+        with communication_phase("weight_bucket_send", bucket_id=0, message_bytes=self.changed_bytes) as phase:
+            dist.barrier(group=get_gloo_group())
+            self._write_delta_files()
+            phase.update(wire_bytes=self.wire_bytes)
 
     def _write_delta_files(self) -> None:
         """Write this rank's changed tensors as one canonical model-NNNNN.safetensors, and on rank
@@ -187,23 +204,36 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
         dist.barrier(group=get_gloo_group())
         if dist.get_rank() == 0:
             max_inflight_engine_groups = getattr(self.args, "update_weight_max_inflight_engine_groups", 0)
-            run_engine_group_waves(
-                self.rollout_engines,
-                max_inflight_engine_groups,
-                lambda _index, engine: engine.pull_weights.remote(self.weight_version),
-                ray.get,
-            )
+            shared_fields = {
+                "bucket_id": 0,
+                "message_bytes": self.wire_bytes,
+                "engine_count": len(self.rollout_engines),
+            }
+            with communication_phase(
+                "engine_bucket_receive",
+                observation="trainer_pull_request_complete",
+                **shared_fields,
+            ) as phase:
+                run_engine_group_waves(
+                    self.rollout_engines,
+                    max_inflight_engine_groups,
+                    lambda _index, engine: engine.pull_weights.remote(self.weight_version),
+                    ray.get,
+                )
+                phase.mark_consumer()
             ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
-            run_engine_group_waves(
-                self.rollout_engines,
-                max_inflight_engine_groups,
-                lambda _index, engine: engine.update_weights_from_disk.remote(
-                    model_path=self.args.update_weight_local_checkpoint_dir,
-                    weight_version=str(self.weight_version),
-                ),
-                ray.get,
-            )
+            with communication_phase("engine_load_weights", **shared_fields) as phase:
+                run_engine_group_waves(
+                    self.rollout_engines,
+                    max_inflight_engine_groups,
+                    lambda _index, engine: engine.update_weights_from_disk.remote(
+                        model_path=self.args.update_weight_local_checkpoint_dir,
+                        weight_version=str(self.weight_version),
+                    ),
+                    ray.get,
+                )
+                phase.mark_consumer()
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 

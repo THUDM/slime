@@ -15,6 +15,7 @@ from ray import ObjectRef
 from ray.actor import ActorHandle
 from tqdm import tqdm
 
+from slime.observability.weight_sync_trace import trace_weight_update
 from slime.utils import accelerator
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.engine_group_wave import build_engine_group_waves, run_engine_group_waves
@@ -116,6 +117,7 @@ class UpdateWeightFromDistributed:
         self._model_update_groups = []
 
     @torch.no_grad()
+    @trace_weight_update(transport="nccl")
     def update_weights(self) -> None:
         """
         Pause → flush → _send_weights → continue. Progress on PP source.
@@ -170,6 +172,9 @@ class UpdateWeightFromDistributed:
         override ``_on_chunk`` to inject per-chunk behaviour.
         """
         for chunk_iter in (self._iter_non_expert_chunks(), self._iter_expert_chunks()):
+            trace = getattr(self, "_weight_sync_trace", None)
+            if trace is not None:
+                chunk_iter = trace.converted_chunks(chunk_iter)
             if self._weight_sync_credit.enabled:
                 self._send_weight_bucket_windows(chunk_iter, pbar=pbar)
             else:
@@ -236,6 +241,9 @@ class UpdateWeightFromDistributed:
         try:
             for reservation, converted_named_tensors in pending:
                 update_group = self._model_update_groups[0]
+                trace = getattr(self, "_weight_sync_trace", None)
+                if trace is not None:
+                    trace.start(reservation, group_name=update_group.group_name)
                 refs, handles = launch_weights_from_distributed(
                     update_group.group_name,
                     update_group.process_group,
@@ -243,6 +251,8 @@ class UpdateWeightFromDistributed:
                     update_group.rollout_engines,
                     converted_named_tensors,
                 )
+                if trace is not None:
+                    trace.submitted(reservation)
                 self._weight_sync_credit.mark_launched(
                     reservation,
                     transport_bytes=reservation.bucket_bytes if handles else 0,
@@ -257,12 +267,20 @@ class UpdateWeightFromDistributed:
                     handle.wait()
                 synchronize_weight_transfer(converted_named_tensors)
                 self._weight_sync_credit.mark_transport_complete(reservation)
-                ray.get(refs)
+                if trace is not None:
+                    trace.complete(reservation)
+                    with trace.consumer(reservation) as phase:
+                        ray.get(refs)
+                        phase.mark_consumer()
+                else:
+                    ray.get(refs)
                 self._weight_sync_credit.mark_consumers_complete(reservation)
                 converted_named_tensors.clear()
                 del converted_named_tensors, refs, handles
                 self._weight_sync_credit.mark_staging_released(reservation)
                 self._weight_sync_credit.release(reservation)
+                if trace is not None:
+                    trace.released(reservation)
                 if pbar is not None:
                     pbar.update(1)
         finally:
@@ -396,11 +414,15 @@ class UpdateWeightFromDistributed:
                 on_wave_launched=observe_wave_launch,
                 on_transport_complete=lambda: self._weight_sync_credit.mark_transport_complete(reservation),
                 on_consumers_complete=lambda: self._weight_sync_credit.mark_consumers_complete(reservation),
+                trace=getattr(self, "_weight_sync_trace", None),
+                reservation=reservation,
             )
             self._active_wave_resources = None
             converted_named_tensors.clear()
             self._weight_sync_credit.mark_staging_released(reservation)
             self._weight_sync_credit.release(reservation)
+            if getattr(self, "_weight_sync_trace", None) is not None:
+                self._weight_sync_trace.released(reservation)
         finally:
             ray.get(self.rollout_engine_lock.release.remote())
         if pbar is not None:
@@ -618,12 +640,16 @@ def update_weights_in_engine_group_waves(
     on_wave_launched: Callable[[Sequence[ObjectRef], Sequence[Any], int], None] | None = None,
     on_transport_complete: Callable[[], None] | None = None,
     on_consumers_complete: Callable[[], None] | None = None,
+    trace=None,
+    reservation=None,
 ) -> list[ObjectRef]:
     """Transfer one bucket to bounded waves of independent engine groups."""
     all_refs = []
-    for wave in build_engine_group_waves(update_groups, max_inflight_engine_groups):
+    for wave_id, wave in enumerate(build_engine_group_waves(update_groups, max_inflight_engine_groups)):
         wave_refs = []
         wave_handles = []
+        if trace is not None:
+            trace.start(reservation, wave_id=wave_id, engine_group_count=len(wave))
         for _index, update_group in wave:
             refs, handles = launch_weights_from_distributed(
                 update_group.group_name,
@@ -635,14 +661,22 @@ def update_weights_in_engine_group_waves(
             )
             wave_refs.extend(refs)
             wave_handles.extend(handles)
+        if trace is not None:
+            trace.submitted(reservation)
         if on_wave_launched is not None:
             on_wave_launched(wave_refs, wave_handles, len(wave))
         for handle in wave_handles:
             handle.wait()
-        if on_transport_complete is not None:
+        if on_transport_complete is not None or trace is not None:
             synchronize_weight_transfer(converted_named_tensors)
+        if on_transport_complete is not None:
             on_transport_complete()
-        if wave_refs:
+        if trace is not None:
+            trace.complete(reservation)
+            with trace.consumer(reservation) as phase:
+                ray.get(wave_refs)
+                phase.mark_consumer()
+        elif wave_refs:
             ray.get(wave_refs)
         if on_consumers_complete is not None:
             on_consumers_complete()

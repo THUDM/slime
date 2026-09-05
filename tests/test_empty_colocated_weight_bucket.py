@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -393,12 +394,34 @@ def test_colocated_non_source_observes_source_failure(monkeypatch):
     assert updater._weight_sync_credit.snapshot.transport_outstanding_bytes == 8
 
 
+@pytest.fixture(params=[False, True], ids=["trace-off", "trace-on"])
+def tensor_updater_trace(request, tmp_path, monkeypatch):
+    from slime.observability import communication_timeline as timeline
+
+    timeline.close_communication_timeline()
+    monkeypatch.delenv(timeline.COMMUNICATION_TIMELINE_ENV, raising=False)
+    monkeypatch.setattr(timeline, "_optional_torch", lambda: None)
+    path = tmp_path / "tensor-updater.jsonl" if request.param else None
+    if path is not None:
+        timeline.configure_communication_timeline(str(path), rank=0, world_size=1, run_id="logical-tensor-test")
+    with timeline.communication_context(weight_version=3, transport="nccl_or_cuda_ipc"):
+        yield timeline, path
+    timeline.close_communication_timeline()
+
+
 @pytest.mark.parametrize("engine_count", [2, 4])
 @pytest.mark.parametrize("peer_failure", [False, True])
-def test_tensor_wave_holds_credit_staging_and_shares_peer_failure(monkeypatch, engine_count, peer_failure):
+def test_tensor_wave_holds_credit_staging_and_shares_peer_failure(
+    monkeypatch, engine_count, peer_failure, tensor_updater_trace
+):
     module, state = _load_update_weight_module(monkeypatch)
     events = []
     updater = object.__new__(module.UpdateWeightFromTensor)
+    timeline, path = tensor_updater_trace
+    if path is not None:
+        from slime.observability.weight_sync_trace import WeightSyncTrace
+
+        updater._weight_sync_trace = WeightSyncTrace()
     updater.rank = 0
     updater.weight_version = 3
     updater._total_engine_groups = engine_count
@@ -465,6 +488,19 @@ def test_tensor_wave_holds_credit_staging_and_shares_peer_failure(monkeypatch, e
         assert snapshot.peak_staging_resident_bytes == 16
         updater._weight_sync_credit.release(reservation)
         updater._weight_sync_credit.commit_version(3)
+
+    timeline.close_communication_timeline()
+    if path is not None:
+        records = [json.loads(line) for line in path.read_text().splitlines()]
+        sends = [row for row in records if row["operation"] == "weight_bucket_send"]
+        assert len(sends) == (1 if peer_failure else engine_count)
+        assert len({row["logical_operation_id"] for row in sends}) == len(sends)
+        assert all(row["weight_version"] == 3 for row in records)
+        assert all(row["gpu_start_timestamp_ns"] is None for row in records)
+        assert all(
+            row["api_launch_timestamp_ns"] <= row["api_return_timestamp_ns"] <= row["completion_timestamp_ns"]
+            for row in sends
+        )
 
 
 def _make_empty_update_updater(module, events, continue_result="continue-ref"):
