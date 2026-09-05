@@ -33,6 +33,8 @@ CUDA span 在框架当前 stream 上记录 event。正常运行中只做非阻�
 
 自动通信策略不得直接使用这些 event-bracket 时间戳进行选择或执行；在 adapter 为每个参与 rank 提供 kernel-observed 时间戳和实测时钟同步误差上界之前，策略消费者必须 fail closed。内置时间线仍可用于生命周期诊断，以及通过 NVTX range 与精确 profiler trace 做关联。
 
+未配置 timeline 时，公开 helper 会复用同一个 no-op phase，不读取时钟、不导入 torch、不分配 CUDA event、不 push NVTX、不扫描 bucket tensor 大小、不更新 context variable、不序列化 JSON、不打开文件，也不做同步。host-only、CUDA-event 和外部 profiler 三种开销必须分别测量；带 profiler 的样本不得混入不带 profiler 的吞吐对比。
+
 ## 从自定义代码补充语义阶段
 
 slime 不会修改 Megatron 内部 MoE 实现。自定义 Megatron hook 或 plugin 可以直接按同一 schema 补充 `ep_dispatch` 与 `ep_combine`：
