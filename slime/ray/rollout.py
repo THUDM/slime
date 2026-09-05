@@ -280,6 +280,14 @@ class RolloutManager:
         if self.custom_reward_post_process_func is not None:
             return self.custom_reward_post_process_func(self.args, samples)
 
+        # Aborted / unrewarded samples must not be silently scored as 0.
+        for sample in samples:
+            if sample.status == Sample.Status.ABORTED or sample.reward is None:
+                raise ValueError(
+                    "Aborted / unrewarded samples must not reach training. "
+                    "Filter them in the generate function, or use partial-rollout recycling."
+                )
+
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
         if (
             self.args.advantage_estimator in ["grpo", "gspo", "cispo", "reinforce_plus_plus_baseline"]
