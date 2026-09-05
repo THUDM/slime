@@ -42,7 +42,7 @@ slime 的设计目标，是让这两大能力彼此强化，同时避免把系�
 - 使用 PD disaggregation：:doc:`advanced/pd-disaggregation`
 - 使用 BF16 训练 + FP8 rollout 或 FP8 KV cache：:doc:`advanced/low-precision`
 - 了解 CI 和可靠性覆盖：:doc:`developer_guide/ci`
-- 调试、trace 和 profiling 长时间任务：:doc:`developer_guide/debug`、:doc:`developer_guide/trace`、:doc:`developer_guide/profiling`
+- 调试、trace 和 profiling 长时间任务：:doc:`developer_guide/debug`、:doc:`developer_guide/trace`、:doc:`developer_guide/communication_timeline`、:doc:`developer_guide/profiling`
 
 .. toctree::
    :maxdepth: 1
@@ -106,6 +106,7 @@ slime 的设计目标，是让这两大能力彼此强化，同时避免把系�
    developer_guide/ci.md
    developer_guide/debug.md
    developer_guide/trace.md
+   developer_guide/communication_timeline.md
    developer_guide/profiling.md
 
 .. toctree::
