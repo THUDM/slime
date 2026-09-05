@@ -1849,6 +1849,13 @@ def slime_validate_args(args):
     if args.save_interval is not None:
         assert args.save is not None, "'--save' is required when save_interval is set."
 
+    if args.kl_coef != 0 and args.advantage_estimator in ["grpo", "gspo", "cispo"]:
+        raise ValueError(
+            "--kl-coef is not supported with --advantage-estimator "
+            f"{args.advantage_estimator}. GRPO-style estimators do not apply KL to rewards; "
+            "use --use-kl-loss / --kl-loss-coef instead."
+        )
+
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 
     if args.advantage_estimator in ["reinforce_plus_plus", "reinforce_plus_plus_baseline"]:
