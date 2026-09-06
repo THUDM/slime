@@ -981,6 +981,9 @@ def policy_loss_function(
     # unless capture is enabled). Must run before the torch.cat below rebinds
     # `log_probs` to a single concatenated tensor.
     _maybe_capture_log_probs(batch, log_probs)
+    # Current pi_theta (grad-carrying list), captured before cat so TIS hooks
+    # can form pi_theta / pi_rollout (see off_policy_is_function).
+    cur_log_probs = log_probs
     if not args.use_rollout_logprobs and not old_log_probs:
         old_log_probs = [log_prob.detach() for log_prob in log_probs]
     train_log_probs_for_tis = batch.get("log_probs")
@@ -1063,6 +1066,7 @@ def policy_loss_function(
         tis_kwargs = {
             "args": args,
             "pg_loss": pg_loss,
+            "cur_log_probs": cur_log_probs,
             "train_log_probs": train_log_probs_for_tis,
             "rollout_log_probs": batch["rollout_log_probs"],
             "loss_masks": batch["loss_masks"],

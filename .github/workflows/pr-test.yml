@@ -663,6 +663,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_off_policy_is.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_ppo_logprob_entropy.py"
             },
             {
