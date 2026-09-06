@@ -202,6 +202,7 @@ slime 支持加载 `.jsonl` 和 `.parquet` 格式文件；读取 Parquet 需要�
   - `grpo`（https://arxiv.org/abs/2402.03300）；
   - `gspo`（https://arxiv.org/abs/2507.18071）；
   - `cispo`（https://arxiv.org/abs/2506.13585）；
+  - `reinforce`（GRPO 风格组内 baseline，加性 `-A log pi` surrogate，无 PPO clip / IS ratio）；
   - `reinforce_plus_plus` 与 `reinforce_plus_plus_baseline`（https://arxiv.org/abs/2501.03262）；
   - `ppo`（https://arxiv.org/abs/1707.06347）。
 
