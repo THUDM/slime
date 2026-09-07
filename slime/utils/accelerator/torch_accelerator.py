@@ -154,6 +154,11 @@ class TorchAccelerator(Accelerator):
         module = self._module()
         if capability == "device_memory":
             return all(hasattr(module, name) for name in ("empty_cache", "mem_get_info", "memory_allocated"))
+        if capability == "peak_memory":
+            return all(
+                hasattr(module, name)
+                for name in ("reset_peak_memory_stats", "max_memory_allocated", "max_memory_reserved")
+            )
         if capability == "events":
             return hasattr(module, "Event")
         if capability == "rng":

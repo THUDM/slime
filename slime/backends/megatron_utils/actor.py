@@ -20,7 +20,7 @@ from slime.ray.train_actor import TrainRayActor
 from slime.utils import accelerator
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.memory_utils import clear_memory, print_memory
+from slime.utils.memory_utils import clear_memory, print_memory, report_peak_memory
 from slime.utils.misc import Box
 from slime.utils.reloadable_process_group import (
     destroy_process_groups,
@@ -327,7 +327,7 @@ class MegatronTrainRayActor(TrainRayActor):
         num_microbatches: list[int],
         store_prefix: str = "",
     ) -> dict[str, list[torch.Tensor]]:
-        with timer(f"{store_prefix}log_probs"):
+        with timer(f"{store_prefix}log_probs"), report_peak_memory(f"{store_prefix}log_probs"):
             return forward_only(
                 get_log_probs_and_entropy,
                 self.args,
@@ -488,7 +488,7 @@ class MegatronTrainRayActor(TrainRayActor):
             capture_log_probs = self.args.save_debug_train_data is not None and "log_probs" not in rollout_data
             if capture_log_probs:
                 enable_log_prob_capture()
-            with timer("actor_train"):
+            with timer("actor_train"), report_peak_memory("actor_train"):
                 train(
                     rollout_id,
                     self.model,
