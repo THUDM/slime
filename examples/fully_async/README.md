@@ -65,8 +65,9 @@ multi-turn agent (Claude Code in a Docker-Proxy sandbox) this way.
 * First call: create a process-wide `AsyncRolloutWorker` (thread + asyncio
   loop). The worker is shared across all subsequent `generate_rollout`
   calls so its queue stays warm.
-* Loop keeps up to `args.sglang_server_concurrency` tasks in flight using
-  `generate_and_rm_group`.
+* The loop converts the total per-sample SGLang concurrency into group
+  concurrency using `n_samples_per_prompt`, then keeps that many
+  `generate_and_rm_group` tasks in flight.
 * Completed groups land on an output queue; each `generate_rollout` call
   drains until it has `rollout_batch_size` groups and returns them sorted
   by `sample.index`.

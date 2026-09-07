@@ -77,10 +77,18 @@ def _make_group(index: int) -> list[Sample]:
     return [sample]
 
 
-def _make_worker(monkeypatch, data_buffer=None, concurrency=4) -> fa.AsyncRolloutWorker:
+def _make_worker(monkeypatch, data_buffer=None, group_concurrency=4) -> fa.AsyncRolloutWorker:
     monkeypatch.setattr(fa, "GenerateState", _FakeGenerateState)
     args = SimpleNamespace(rollout_global_dataset=True, rollout_batch_size=4)
-    return fa.AsyncRolloutWorker(args, data_buffer or _FakeDataBuffer([]), concurrency=concurrency)
+    return fa.AsyncRolloutWorker(args, data_buffer or _FakeDataBuffer([]), group_concurrency=group_concurrency)
+
+
+@pytest.mark.unit
+def test_group_concurrency_is_derived_from_sample_concurrency(monkeypatch):
+    args = SimpleNamespace(sglang_server_concurrency=10, n_samples_per_prompt=4)
+    monkeypatch.setattr(fa, "get_rollout_num_engines", lambda _: 3)
+
+    assert fa._get_group_concurrency(args) == 8
 
 
 @pytest.mark.unit
@@ -142,7 +150,7 @@ def test_done_callback_never_blocks_event_loop_thread(monkeypatch):
 def test_loop_backpressure_stops_topping_up_when_queue_is_full(monkeypatch):
     """With instantly-completing generations and plenty of fuel, the queue must
     plateau around ``concurrency`` instead of absorbing the whole dataset."""
-    concurrency = 3
+    group_concurrency = 3
     fuel = 60
     data_buffer = _FakeDataBuffer([_make_group(i) for i in range(fuel)])
 
@@ -150,7 +158,7 @@ def test_loop_backpressure_stops_topping_up_when_queue_is_full(monkeypatch):
         return group
 
     monkeypatch.setattr(fa, "generate_and_rm_group", _instant_generate)
-    worker = _make_worker(monkeypatch, data_buffer=data_buffer, concurrency=concurrency)
+    worker = _make_worker(monkeypatch, data_buffer=data_buffer, group_concurrency=group_concurrency)
     worker.poll_interval = 0.01
 
     worker.start()
@@ -160,7 +168,7 @@ def test_loop_backpressure_stops_topping_up_when_queue_is_full(monkeypatch):
         max_seen = 0
         while time.time() < deadline:
             max_seen = max(max_seen, worker.queue_size())
-            if max_seen > 2 * concurrency:
+            if max_seen > 2 * group_concurrency:
                 break
             time.sleep(0.02)
     finally:
@@ -168,7 +176,9 @@ def test_loop_backpressure_stops_topping_up_when_queue_is_full(monkeypatch):
 
     # In-flight tasks may still land after the gate check, so allow one pool
     # beyond the gate — but nothing near the unthrottled fuel size.
-    assert 0 < max_seen <= 2 * concurrency, f"queue grew to {max_seen} with concurrency={concurrency}"
+    assert (
+        0 < max_seen <= 2 * group_concurrency
+    ), f"queue grew to {max_seen} with group_concurrency={group_concurrency}"
 
 
 if __name__ == "__main__":

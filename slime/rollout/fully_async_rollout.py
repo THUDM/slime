@@ -10,9 +10,9 @@ Plug in per-sample logic via ``--custom-generate-function-path`` and
 per-sample reward via ``--custom-rm-path`` — the worker calls slime's stock
 :func:`generate_and_rm_group` which dispatches to those.
 
-Concurrency is sourced from ``args.sglang_server_concurrency`` and scaled by
-the number of sglang engines to match the per-sample semaphore cap in
-:mod:`slime.rollout.sglang_rollout`.
+Group concurrency is derived from the per-sample semaphore cap in
+:mod:`slime.rollout.sglang_rollout` by dividing by
+``args.n_samples_per_prompt`` (rounding up).
 
 The worker is intentionally oblivious to slime's higher-level pause /
 weight-update signalling (e.g. ``GenerateState.aborted``). Each in-flight
@@ -50,13 +50,23 @@ _global_worker: AsyncRolloutWorker | None = None
 _worker_lock = threading.Lock()
 
 
+def _get_group_concurrency(args) -> int:
+    sample_concurrency = args.sglang_server_concurrency * get_rollout_num_engines(args)
+    return max(
+        1,
+        (sample_concurrency + args.n_samples_per_prompt - 1) // args.n_samples_per_prompt,
+    )
+
+
 def _get_global_worker(args, data_buffer) -> AsyncRolloutWorker:
     global _global_worker
     with _worker_lock:
         if _global_worker is None or not _global_worker.worker_thread.is_alive():
             logger.info("starting fully-async rollout worker")
             _global_worker = AsyncRolloutWorker(
-                args, data_buffer, concurrency=args.sglang_server_concurrency * get_rollout_num_engines(args)
+                args,
+                data_buffer,
+                group_concurrency=_get_group_concurrency(args),
             )
             _global_worker.start()
         return _global_worker
@@ -77,10 +87,10 @@ class AsyncRolloutWorker:
     """Background thread + asyncio loop that continuously consumes groups
     from ``data_buffer`` and runs :func:`generate_and_rm_group` on each."""
 
-    def __init__(self, args, data_buffer, concurrency: int = 10):
+    def __init__(self, args, data_buffer, group_concurrency: int = 10):
         self.args = args
         self.data_buffer = data_buffer
-        self.concurrency = concurrency
+        self.group_concurrency = group_concurrency
         self.running = True
         # Unbounded on purpose: put() runs inside the event-loop thread (task
         # done-callback), so a bounded queue that fills up would block the loop
@@ -130,7 +140,7 @@ class AsyncRolloutWorker:
 
     async def _loop(self) -> None:
         active_tasks: set[asyncio.Task] = set()
-        max_concurrent = self.concurrency
+        max_concurrent_groups = self.group_concurrency
         gid_counter = 0
 
         while self.running:
@@ -149,7 +159,9 @@ class AsyncRolloutWorker:
                 # full pool of completed groups is waiting, stop pulling new
                 # prompts until the training side drains some.
                 while (
-                    len(active_tasks) < max_concurrent and self.output_queue.qsize() < max_concurrent and self.running
+                    len(active_tasks) < max_concurrent_groups
+                    and self.output_queue.qsize() < max_concurrent_groups
+                    and self.running
                 ):
                     groups = self.data_buffer.get_samples(1)
                     if not groups:
