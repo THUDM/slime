@@ -110,6 +110,12 @@ slime 的设计目标，是让这两大能力彼此强化，同时避免把系�
 
 .. toctree::
    :maxdepth: 1
+   :caption: 硬件平台
+
+   platform_support/amd_tutorial.md
+
+.. toctree::
+   :maxdepth: 1
    :caption: 博客
 
    blogs/release_v0.1.0.md

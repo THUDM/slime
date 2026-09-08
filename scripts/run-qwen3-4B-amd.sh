@@ -10,25 +10,14 @@ sleep 3
 pkill -9 ray
 pkill -9 python
 
-
-set -euxo pipefail
-
-
-### AMD Support ###
-SLIME_DIR="${SLIME_DIR:-/root}" # Default path if not set in environment
-export SLIME_DIR
-
-MODEL_DIR="${MODEL_DIR:-/root}" # Default path if not set in environment
-export MODEL_DIR
-
-DATA_DIR="${DATA_DIR:-/root}"  # Default path if not set in environment
-export DATA_DIR
+set -ex
 
 # For AMD GPU
 export RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES=${RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES:-"1"} # Must set to 1
 export HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-"0,1,2,3,4,5,6,7"} #You can choose which gpus to use
-####################
-
+export CUDA_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES} # Required by https://github.com/THUDM/slime/blob/a3f500977f33b82de6ac0414c0c43abfe656c3e0/slime/utils/accelerator/base.py#L149-L175
+NUM_GPUS=${NUM_GPUS:-$(echo "${HIP_VISIBLE_DEVICES}" | tr ',' '\n' | wc -l)}
+echo "NUM_GPUS: ${NUM_GPUS}"
 
 # will prevent ray from buffering stdout/stderr
 export PYTHONUNBUFFERED=1
@@ -37,15 +26,16 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/qwen3-4B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint ${MODEL_DIR}/Qwen3-4B
-   --ref-load ${MODEL_DIR}/Qwen3-4B_torch_dist
-   --load ${MODEL_DIR}/Qwen3-4B_slime/
-   --save ${MODEL_DIR}/Qwen3-4B_slime/
+   --hf-checkpoint /root/Qwen3-4B
+   #--hf-checkpoint /root/Qwen3-4B-FP8
+   --ref-load /root/Qwen3-4B_torch_dist
+   --load /root/Qwen3-4B_slime/
+   --save /root/Qwen3-4B_slime/
    --save-interval 20
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data ${DATA_DIR}/dapo-math-17k/dapo-math-17k.jsonl
+   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
    --apply-chat-template
@@ -63,7 +53,7 @@ ROLLOUT_ARGS=(
 
 EVAL_ARGS=(
    --eval-interval 20
-   --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
+   --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 16
    --eval-max-response-len 16384
    --eval-top-p 1
@@ -126,35 +116,26 @@ MISC_ARGS=(
    --attention-softmax-in-fp32
    # need to comment this when using model with MLA
    --attention-backend flash
-   ### AMD Support ###
-   # disable gradient accumulation fusion: Need to add apex to enable this
-   --no-gradient-accumulation-fusion
-   ###################
 )
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-
-NUM_GPUS=$(echo ${HIP_VISIBLE_DEVICES} | tr ',' '\n' | wc -l)
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
-
-# "PYTHONPATH": "/workspace/Megatron-LM/",
-MEGATRON_LM_PATH=$(pip list | grep megatron-core | awk '{print $NF}')
+# Build the runtime environment JSON with proper variable substitution
+RUNTIME_ENV_JSON="{
+  \"env_vars\": {
+    \"PYTHONPATH\": \"/root/Megatron-LM/\",
+    \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\"
+  }
+}"
 
 ray job submit --address="http://127.0.0.1:8265" \
-   --runtime-env-json='{
-     "env_vars": {
-        "PYTHONPATH": "/workspace/Megatron-LM/",
-        "CUDA_DEVICE_MAX_CONNECTIONS": "1"
-     }
-   }' \
+   --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 8 \
+   --actor-num-gpus-per-node ${NUM_GPUS} \
    --colocate \
-   --no-offload-train \
-   --no-offload-rollout \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
