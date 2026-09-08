@@ -922,7 +922,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--kl-coef",
                 type=float,
                 default=0.00,
-                help="KL penalty coefficient for reward shaping. This is applied to the reward signal before advantage calculation.",
+                help=(
+                    "KL penalty coefficient for reward shaping. This is applied to the reward signal before "
+                    "advantage calculation. Only applied by the ppo / reinforce_plus_plus / "
+                    "reinforce_plus_plus_baseline estimators; the grpo/gspo/cispo estimators ignore it "
+                    "(use --use-kl-loss instead)."
+                ),
             )
             parser.add_argument(
                 "--loss-type",
@@ -1776,6 +1781,17 @@ def slime_validate_args(args):
     if args.rollout_temperature <= 0:
         raise ValueError(
             "--rollout-temperature must be > 0; temperature 0 is greedy decoding and is not a valid RL policy."
+        )
+
+    if (
+        args.custom_advantage_function_path is None
+        and args.advantage_estimator in ["grpo", "gspo", "cispo"]
+        and args.kl_coef != 0
+    ):
+        raise ValueError(
+            f"--kl-coef has no effect with advantage_estimator {args.advantage_estimator!r}: "
+            "the GRPO-family estimators do not apply KL reward shaping. "
+            "Use `--use-kl-loss --kl-loss-coef <coef>` for KL regularization instead."
         )
 
     if args.kl_coef != 0 or args.use_kl_loss:
