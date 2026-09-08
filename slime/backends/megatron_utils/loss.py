@@ -770,10 +770,16 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         old_rewards = rewards
         rewards = []
         kl_coef = -args.kl_coef
-        cp_rank = mpu.get_context_parallel_rank()
-        for reward, per_token_kl in zip(old_rewards, kl, strict=False):
+        cp_size = mpu.get_context_parallel_world_size()
+        for reward, per_token_kl, total_length, response_length in zip(
+            old_rewards, kl, total_lengths, response_lengths, strict=False
+        ):
             token_level_rewards = per_token_kl * kl_coef
-            if cp_rank == 0:
+            owns_terminal_token = True
+            if cp_size > 1:
+                _, _, _, token_offsets = get_logits_and_tokens_offset_with_cp(total_length, response_length)
+                owns_terminal_token = any(end == total_length for _, end in token_offsets)
+            if owns_terminal_token:
                 token_level_rewards[-1] += reward
             rewards.append(token_level_rewards)
         advantages, returns = get_advantages_and_returns_batch(
