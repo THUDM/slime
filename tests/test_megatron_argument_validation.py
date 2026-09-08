@@ -205,6 +205,7 @@ def make_slime_validate_args(**overrides):
         use_tis=False,
         get_mismatch_metrics=False,
         custom_tis_function_path=None,
+        custom_advantage_function_path=None,
         use_dynamic_batch_size=False,
         max_tokens_per_gpu=None,
         log_probs_max_tokens_per_gpu=None,
@@ -312,6 +313,46 @@ def test_slime_validate_args_rejects_non_positive_rollout_temperature(monkeypatc
 
     with pytest.raises(ValueError, match="--rollout-temperature must be > 0"):
         module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("estimator", ["grpo", "gspo", "cispo"])
+def test_slime_validate_args_rejects_kl_coef_with_grpo_family(monkeypatch, estimator):
+    """``--kl-coef`` is silently ignored by the GRPO-family estimators, so reject it upfront."""
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(advantage_estimator=estimator, kl_coef=0.01)
+
+    with pytest.raises(ValueError, match="--kl-coef has no effect"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("estimator", ["ppo", "reinforce_plus_plus", "reinforce_plus_plus_baseline"])
+def test_slime_validate_args_allows_kl_coef_with_shaping_estimators(monkeypatch, tmp_path, estimator):
+    """Estimators that fold the KL penalty into rewards must keep accepting ``--kl-coef``."""
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        advantage_estimator=estimator,
+        kl_coef=0.01,
+        ref_load=str(tmp_path),
+        normalize_advantages=True,
+    )
+
+    module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_slime_validate_args_allows_kl_coef_with_custom_advantage_fn(monkeypatch, tmp_path):
+    """A custom advantage function replaces the estimator branch and may consume ``--kl-coef`` itself."""
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        advantage_estimator="grpo",
+        kl_coef=0.01,
+        custom_advantage_function_path="my_module.py:my_advantage_fn",
+        ref_load=str(tmp_path),
+    )
+
+    module.slime_validate_args(args)
 
 
 @pytest.mark.unit
