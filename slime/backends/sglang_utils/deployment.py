@@ -122,7 +122,7 @@ def start_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
         else:
             server_groups = []
             init_handles = []
-            port_cursors: dict[int, int] = {}
+            port_cursors: dict[str, int] = {}
             for group_config in model_config.server_groups:
                 group = placement.create(group_config, router_ip, router_port)
                 handles, port_cursors = group.start_engines(port_cursors)
