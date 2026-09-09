@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+NUM_GPUS = 0
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -132,3 +134,7 @@ class TestLayoutValidation:
     def test_group_gpus_must_divide_per_engine(self):
         with pytest.raises(AssertionError, match="not divisible"):
             _validate(gpus_per_engine=4, group_abs_start=0, num_gpus=10)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))
