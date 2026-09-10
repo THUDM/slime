@@ -167,6 +167,24 @@ def _prepare_initial_inputs(sample: Sample, processor, tokenizer):
     return prompt_ids, image_data, sample.multimodal_train_inputs
 
 
+def _remaining_generation_budget(
+    sample: Sample, response_tokens: list[int], args: Any, sampling_params: dict
+) -> int | None:
+    # SGLang max_new_tokens is a response-side budget; prompt tokens are already
+    # part of the request and should only count against the optional context cap.
+    budgets = []
+
+    context_len = getattr(args, "rollout_max_context_len", None)
+    if context_len is not None:
+        budgets.append(int(context_len) - len(sample.tokens))
+
+    max_new_tokens = sampling_params.get("max_new_tokens")
+    if max_new_tokens is not None:
+        budgets.append(int(max_new_tokens) - len(response_tokens))
+
+    return min(budgets) if budgets else None
+
+
 def _prepare_start_state(sample: Sample, state, args: Any, sampling_params: dict):
     prompt_ids, image_data, init_mm_train = _prepare_initial_inputs(sample, state.processor, state.tokenizer)
     current_image_data = image_data
@@ -181,11 +199,7 @@ def _prepare_start_state(sample: Sample, state, args: Any, sampling_params: dict
     sample.rollout_log_probs = sample.rollout_log_probs or []
     sample.response_length = len(response_tokens)
 
-    budget = None
-    if args.rollout_max_context_len is not None:
-        budget = args.rollout_max_context_len - len(sample.tokens)
-    elif sampling_params.get("max_new_tokens") is not None:
-        budget = sampling_params["max_new_tokens"] - len(sample.tokens)
+    budget = _remaining_generation_budget(sample, response_tokens, args, sampling_params)
     return current_image_data, response_tokens, budget, multimodal_train_inputs_buffer
 
 
