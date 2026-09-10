@@ -44,6 +44,10 @@ class OpenAIAdapter(BaseAdapter):
     max_token_keys = ("max_completion_tokens", "max_tokens", "max_output_tokens")
     stop_keys = ("stop",)
 
+    def __init__(self, *, preserve_parallel_tool_calls: bool = False, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.preserve_parallel_tool_calls = bool(preserve_parallel_tool_calls)
+
     def _register_routes(self, app: web.Application) -> None:
         app.router.add_post("/v1/chat/completions", self._run_turn)
 
@@ -59,7 +63,11 @@ class OpenAIAdapter(BaseAdapter):
         return translated, tools_schema
 
     def _build_reply(self, parsed, raw_finish, translated, tools_schema) -> Reply:
-        wire_message, manager_message, wire_finish = _build_reply_parts(parsed, raw_finish)
+        wire_message, manager_message, wire_finish = _build_reply_parts(
+            parsed,
+            raw_finish,
+            preserve_parallel_tool_calls=self.preserve_parallel_tool_calls,
+        )
         return Reply(
             manager_message=manager_message,
             finish_reason=manager_finish_reason(parsed.tool_uses, raw_finish),
@@ -208,7 +216,12 @@ def _tools_to_chat_tools(tools: list[dict] | None) -> list[dict] | None:
 # --- Reply building: parsed output -> OpenAI wire message + manager_message ---
 
 
-def _build_reply_parts(parsed: ParsedModelOutput, finish: str) -> tuple[dict[str, Any], dict[str, Any], str]:
+def _build_reply_parts(
+    parsed: ParsedModelOutput,
+    finish: str,
+    *,
+    preserve_parallel_tool_calls: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
     """Return (wire_message, manager_message, wire_finish).
 
     wire_message follows the OpenAI Chat-Completions spec: tool_calls[].id is a
@@ -259,7 +272,9 @@ def _build_reply_parts(parsed: ParsedModelOutput, finish: str) -> tuple[dict[str
     # Differences from wire_message, each needed to match the echo:
     #   * no reasoning_content -- some clients strip it on echo (the reasoning
     #     token ids are still kept in the trained tokens, only the text drops)
-    #   * only the first tool_call -- some clients drop extra parallel tool_calls
+    #   * by default only the first tool_call -- some clients drop extra parallel
+    #     tool_calls. Native clients that faithfully echo every call opt into
+    #     preserve_parallel_tool_calls so the policy may execute all of them.
     #   * empty content when tool_calls are present -- mirrors content=null above
     manager_message: dict[str, Any] = {
         "role": "assistant",
@@ -268,8 +283,9 @@ def _build_reply_parts(parsed: ParsedModelOutput, finish: str) -> tuple[dict[str
     if parsed.reasoning:
         wire_message["reasoning_content"] = parsed.reasoning
     if wire_tool_calls:
-        wire_message["tool_calls"] = wire_tool_calls[:1]
-        manager_message["tool_calls"] = manager_tool_calls[:1]
+        limit = None if preserve_parallel_tool_calls else 1
+        wire_message["tool_calls"] = wire_tool_calls[:limit]
+        manager_message["tool_calls"] = manager_tool_calls[:limit]
 
     if parsed.tool_uses:
         wire_finish = "tool_calls"
