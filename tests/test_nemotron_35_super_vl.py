@@ -317,6 +317,44 @@ def test_analytic_tree_matches_the_real_modules():
     }
 
 
+# ---------------------------------------------- the dynamic-resolution batch --
+def test_project_images_handles_a_ragged_list():
+    """The shape contract `_inject_vision_embeddings` depends on.
+
+    This image processor returns `pixel_values` as a *list* of `(3, H, W)`
+    tensors whenever two images differ in size -- which, with an
+    aspect-preserving resize, is the normal case. The released projector's own
+    list branch cannot take that: it indexes four dimensions, and it would then
+    `torch.cat(..., dim=0)` per-image results whose token counts differ.
+    `project_images` iterates instead, and the result must be one flat row per
+    image token, in image order.
+    """
+    from slime_plugins.models.nemotron_35_super_vl import project_images
+
+    hidden = 8
+
+    class _Projector:
+        """Stands in for the real one: 4 patches collapse into 1 token."""
+
+        def __call__(self, pixel_values, vision_model):
+            assert pixel_values.dim() == 4, "project_images must hand over a batched tensor"
+            images, _, height, width = pixel_values.shape
+            tokens = (height // 16) * (width // 16) // 4
+            return torch.arange(images * tokens * hidden, dtype=torch.float32).reshape(images, tokens, hidden)
+
+    # Two images of different sizes: 32x32 -> 1 token, 64x32 -> 2 tokens.
+    ragged = [torch.zeros(3, 32, 32), torch.zeros(3, 64, 32)]
+    features = project_images(ragged, None, _Projector())
+    assert features.shape == (3, hidden)
+
+    # And the stacked case, which is what arrives when the sizes happen to agree.
+    stacked = torch.zeros(2, 3, 32, 32)
+    assert project_images(stacked, None, _Projector()).shape == (2, hidden)
+
+    # A single unbatched image is the one-image sample.
+    assert project_images(torch.zeros(3, 64, 32), None, _Projector()).shape == (2, hidden)
+
+
 # ------------------------------------------------------- the loss-mask claim --
 @needs_checkpoint
 def test_the_mask_alignment_survives_the_image_expansion():

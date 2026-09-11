@@ -59,7 +59,57 @@ from .nemotron_h import get_nemotron_h_spec
 # rather than copied so a fix to the packing arithmetic reaches both models.
 from .qwen3_5_vl_utils import gather_packed_input_ids, get_packed_cp_local_indices
 
-__all__ = ["NemotronOmniVLModel", "get_nemotron_35_super_vl_model_provider"]
+__all__ = ["NemotronOmniVLModel", "get_nemotron_35_super_vl_model_provider", "project_images"]
+
+
+def project_images(pixel_values, vision_model, vision_projector) -> torch.Tensor:
+    """Run the frozen tower plus the projector, and return ``(tokens, hidden)``.
+
+    One call covers the whole vision stack, because
+    ``NemotronH_Omni_Reasoning_V3VisionProjector.forward`` does: tower -> drop
+    the 10 class/register tokens (inside ``RadioModel``, via
+    ``num_summary_tokens``) -> ``vision_final_layernorm`` -> 2x2 pixel shuffle
+    (1280 -> 5120, N -> N/4) -> ``mlp1`` (5120 -> 20480 -> 4096, squared ReLU).
+
+    WHY THIS DOES NOT JUST HAND THE LIST TO THE PROJECTOR
+    ----------------------------------------------------
+    It has a list branch -- ``torch.cat([self.forward(pv, ...) for pv in ...])``
+    -- but that branch cannot serve this processor. Two things are wrong with it
+    here, and both come from dynamic resolution:
+
+    * the elements the image processor puts in the list are ``(3, H, W)``, and
+      ``forward`` immediately does ``_, _, H, W = pixel_values.shape``, which
+      needs four dimensions;
+    * even given four, each image projects to ``(1, tokens_i, hidden)`` with a
+      *different* ``tokens_i``, and ``torch.cat(..., dim=0)`` on those raises.
+
+    So the list is iterated here instead, each image is projected on its own and
+    flattened, and the results concatenate on the token axis. That is also the
+    shape the placeholder scatter needs: one row per ``<image>`` token, in image
+    order. A stacked ``(N, 3, H, W)`` tensor -- what the processor returns when
+    every image in the sample happens to be the same size -- takes the same path
+    through the projector's own batch dimension and flattens to the same thing.
+
+    The tower is frozen, but the projector is not, so this is deliberately not
+    wrapped in ``torch.no_grad()``: the gradient has to reach ``mlp1``.
+    """
+
+    def flatten(features: torch.Tensor) -> torch.Tensor:
+        # (images, tokens, hidden) -> (images * tokens, hidden)
+        return features.reshape(-1, features.shape[-1]) if features.dim() == 3 else features
+
+    if isinstance(pixel_values, (list, tuple)):
+        return torch.cat(
+            [
+                flatten(vision_projector(image if image.dim() == 4 else image.unsqueeze(0), vision_model))
+                for image in pixel_values
+            ],
+            dim=0,
+        )
+
+    if pixel_values.dim() == 3:
+        pixel_values = pixel_values.unsqueeze(0)
+    return flatten(vision_projector(pixel_values, vision_model))
 
 
 def _load_remote_class(hf_checkpoint: str, class_reference: str):
@@ -179,30 +229,6 @@ class NemotronOmniVLModel(MegatronModule):
         self.language_model.set_input_tensor(input_tensor)
 
     # ------------------------------------------------------------------------
-    def _project_images(self, pixel_values) -> torch.Tensor:
-        """Run the frozen tower plus the projector, and return LLM-space features.
-
-        One call covers the whole vision stack, because
-        ``NemotronH_Omni_Reasoning_V3VisionProjector.forward`` does: tower ->
-        drop the 10 class/register tokens (inside ``RadioModel``, via
-        ``num_summary_tokens``) -> optional ``vision_final_layernorm`` -> 2x2
-        pixel shuffle (1280 -> 5120, N -> N/4) -> ``mlp1`` (5120 -> 20480 ->
-        4096, squared ReLU). It also already handles ``pixel_values`` arriving
-        as a list, which is the normal case here: this image processor is
-        dynamic-resolution, so two images in one batch usually have different
-        heights and widths and cannot be stacked.
-
-        The tower is frozen, but the projector is not, so this is deliberately
-        **not** wrapped in ``torch.no_grad()``: the gradient has to reach
-        ``mlp1``.
-        """
-        features = self.vision_projector(pixel_values, self.vision_model)
-        # (num_images, tokens_per_image, hidden) -> (total_tokens, hidden).
-        # Already flat when the projector concatenated a list.
-        if features.dim() == 3:
-            features = features.reshape(-1, features.shape[-1])
-        return features
-
     def _inject_vision_embeddings(
         self,
         input_ids: torch.Tensor,
@@ -222,7 +248,7 @@ class NemotronOmniVLModel(MegatronModule):
                 input_ids.device,
             )
 
-            vision_embeddings = self._project_images(pixel_values).to(
+            vision_embeddings = project_images(pixel_values, self.vision_model, self.vision_projector).to(
                 device=embeddings.device, dtype=embeddings.dtype
             )
             full_vision_positions = (full_input_ids[0] == self.image_token_id).nonzero(as_tuple=False).flatten()
