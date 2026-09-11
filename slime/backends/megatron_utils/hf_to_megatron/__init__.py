@@ -22,6 +22,10 @@ _LOADERS = {
     "mimo": mimo_hf_tensor,
     "minimax_m2": minimax_m2_hf_tensor,
     "nemotron_h": nemotron_h_hf_tensor,
+    # Nemotron 3.5 Super VL. Same file: its language tower is Nemotron-3's under
+    # a `language_model.` prefix, and the vision half is 395 more tensors in the
+    # same map. See the module docstring for how that was established.
+    "nemotron_h_omni": nemotron_h_hf_tensor,
     "qwen2": qwen_hf_tensor,
     "qwen2_moe": qwen_moe_hf_tensor,
     "qwen3": qwen_hf_tensor,

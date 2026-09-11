@@ -70,7 +70,13 @@ class NemotronHModel(MambaModel):
         return super().forward(*args, **kwargs)
 
 
-def get_nemotron_h_spec(args, config, vp_stage: int | None = None):
+def get_nemotron_h_spec(
+    args,
+    config,
+    vp_stage: int | None = None,
+    *,
+    scatter_embedding_sequence_parallel: bool = True,
+):
     """Return a model provider for the Nemotron-3 hybrid stack.
 
     ``config`` arrives already built by slime, so unlike a standalone provider
@@ -78,12 +84,22 @@ def get_nemotron_h_spec(args, config, vp_stage: int | None = None):
     the call that turns ``--squared-relu`` into ``config.activation_func``,
     ``--num-experts`` into ``config.num_moe_experts`` and the four ``--mamba-*``
     flags into the fields ``MambaMixer`` reads, and slime has already made it.
+
+    ``scatter_embedding_sequence_parallel`` is keyword-only and defaults to
+    megatron's own default, so the ``--spec`` contract -- which calls this with
+    exactly ``(args, config, vp_stage)`` -- is unchanged. The VL wrapper in
+    ``nemotron_35_super_vl.py`` is the one caller that passes ``False``: it has
+    to scatter the embeddings itself, *after* substituting image features into
+    them, and an embedding that has already been split across the
+    sequence-parallel ranks cannot be indexed by whole-sequence token
+    positions. Same reason ``qwen3_5_vl.py`` passes it to ``GPTModel``.
     """
     _assert_supported(args, config, vp_stage)
 
     def model_provider(pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None):
         _assert_no_virtual_pipeline(vp_stage)
         return NemotronHModel(
+            scatter_embedding_sequence_parallel=scatter_embedding_sequence_parallel,
             config=config,
             mamba_stack_spec=mamba_stack_spec,
             vocab_size=args.padded_vocab_size,
