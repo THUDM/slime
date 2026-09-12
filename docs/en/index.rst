@@ -107,6 +107,7 @@ Start by Use Case
    developer_guide/debug.md
    developer_guide/trace.md
    developer_guide/profiling.md
+   developer_guide/multimodal-inputs.md
 
 .. toctree::
    :maxdepth: 1

@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from slime.utils.multimodal import map_multimodal_fields
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
@@ -33,14 +34,13 @@ def tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:
             rollout_data[key] = [_cpu_tensor(value, dtype=dtype) for value in rollout_data[key]]
 
     if "multimodal_train_inputs" in rollout_data:
+        # A field can be a *list* of per-image tensors rather than one tensor --
+        # see slime/utils/multimodal.py -- so this walks into the containers
+        # instead of passing over any value that is not itself tensor-like.
         rollout_data["multimodal_train_inputs"] = [
-            (
-                {
-                    key: _cpu_tensor(value) if isinstance(value, (np.ndarray, torch.Tensor)) else value
-                    for key, value in mm_dict.items()
-                }
-                if mm_dict is not None
-                else None
+            map_multimodal_fields(
+                mm_dict,
+                lambda value: _cpu_tensor(value) if isinstance(value, (np.ndarray, torch.Tensor)) else value,
             )
             for mm_dict in rollout_data["multimodal_train_inputs"]
         ]
