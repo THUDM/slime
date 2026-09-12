@@ -5,6 +5,7 @@ from transformers import AutoConfig
 from .common import load_model_hf_weights
 from .deepseek import deepseek_hf_tensor
 from .glm import glm4_hf_tensor, glm4_moe_hf_tensor
+from .nemotron_h import nemotron_h_hf_tensor
 from .qwen import mimo_hf_tensor, minimax_m2_hf_tensor, qwen_hf_tensor, qwen_moe_hf_tensor
 from .qwen3_5 import qwen3_5_hf_tensor
 from .qwen3_next import qwen3_next_hf_tensor
@@ -20,6 +21,11 @@ _LOADERS = {
     "llama": qwen_hf_tensor,
     "mimo": mimo_hf_tensor,
     "minimax_m2": minimax_m2_hf_tensor,
+    "nemotron_h": nemotron_h_hf_tensor,
+    # Nemotron 3.5 Super VL. Same file: its language tower is Nemotron-3's under
+    # a `language_model.` prefix, and the vision half is 395 more tensors in the
+    # same map. See the module docstring for how that was established.
+    "nemotron_h_omni": nemotron_h_hf_tensor,
     "qwen2": qwen_hf_tensor,
     "qwen2_moe": qwen_moe_hf_tensor,
     "qwen3": qwen_hf_tensor,

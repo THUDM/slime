@@ -11,6 +11,38 @@ from slime.utils.types import RolloutBatch
 from .cp_utils import slice_with_cp
 
 
+def _concat_multimodal_field(left, right):
+    """Join one processor output field across the samples of a micro-batch.
+
+    `torch.cat` alone covers the fixed-resolution processors -- Qwen3.5-VL's
+    `pixel_values` is one tensor per sample and they stack on dim 0. It does not
+    cover the dynamic-resolution ones: Nemotron 3.5 Super VL's image processor
+    resizes each image to its own aspect-preserving patch grid and returns
+    `pixel_values` as a *list* of `(3, H, W)` tensors whenever those shapes
+    differ, plus `num_patches` / `num_tokens` as plain Python lists. Those are
+    not a defect to normalize away -- the model's own vision projector takes the
+    list form and iterates it -- so the micro-batch join has to be per-type.
+
+    Sequences concatenate, tensors `cat` on dim 0, and anything else is an
+    unhandled processor output rather than something to guess at.
+    """
+    if isinstance(left, torch.Tensor) and isinstance(right, torch.Tensor):
+        return torch.cat([left, right], dim=0)
+    if isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
+        return list(left) + list(right)
+    # One of each: a processor that stacked for one sample and could not for the
+    # next, which is exactly what happens when sample A has two same-sized
+    # images and sample B has two different-sized ones.
+    if isinstance(left, torch.Tensor) and isinstance(right, (list, tuple)):
+        return list(left) + list(right)
+    if isinstance(left, (list, tuple)) and isinstance(right, torch.Tensor):
+        return list(left) + list(right)
+    raise TypeError(
+        f"cannot join multimodal fields of types {type(left).__name__} and {type(right).__name__} "
+        "across a micro-batch"
+    )
+
+
 def get_batch(
     data_iterator: "DataIterator",
     keys: Sequence[str],
@@ -143,7 +175,7 @@ def get_batch(
                     if key not in multimodal_data:
                         multimodal_data[key] = mm_tensor
                     else:
-                        multimodal_data[key] = torch.cat([multimodal_data[key], mm_tensor], dim=0)
+                        multimodal_data[key] = _concat_multimodal_field(multimodal_data[key], mm_tensor)
         batch["multimodal_train_inputs"] = multimodal_data
 
     return batch

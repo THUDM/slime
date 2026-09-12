@@ -22,6 +22,7 @@ from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.misc import Box
+from slime.utils.multimodal import map_multimodal_fields
 from slime.utils.reloadable_process_group import (
     destroy_process_groups,
     monkey_patch_torch_dist,
@@ -235,15 +236,16 @@ class MegatronTrainRayActor(TrainRayActor):
                 device=device, dtype=torch.float32, non_blocking=True
             )
         if "multimodal_train_inputs" in rollout_data:
-            # Move multimodal training tensors to GPU in advance
+            # Move multimodal training tensors to GPU in advance. A field can be
+            # a *list* of per-image tensors rather than one tensor -- see
+            # slime/utils/multimodal.py -- so this walks into the containers
+            # instead of passing over any value that is not itself a tensor.
             rollout_data["multimodal_train_inputs"] = [
-                (
-                    {
-                        key: value.to(device=device, non_blocking=True) if isinstance(value, torch.Tensor) else value
-                        for key, value in mm_dict.items()
-                    }
-                    if mm_dict is not None
-                    else None
+                map_multimodal_fields(
+                    mm_dict,
+                    lambda value: (
+                        value.to(device=device, non_blocking=True) if isinstance(value, torch.Tensor) else value
+                    ),
                 )
                 for mm_dict in rollout_data["multimodal_train_inputs"]
             ]
