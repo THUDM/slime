@@ -69,7 +69,11 @@ def train(args):
             ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
 
         if release_train or should_run_periodic_action(
-            rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout
+            rollout_id,
+            args.save_interval,
+            num_rollout_per_epoch,
+            args.num_rollout,
+            skip_final_step=args.no_final_save,
         ):
             force_sync = release_train or rollout_id == args.num_rollout - 1
             if actor_trains:
