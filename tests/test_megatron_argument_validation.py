@@ -263,6 +263,16 @@ def make_slime_validate_args(**overrides):
 
 
 @pytest.mark.unit
+def test_no_final_save_argument_is_opt_in(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())
+
+    required_args = ["--rollout-batch-size", "1"]
+    assert parser.parse_args(required_args).no_final_save is False
+    assert parser.parse_args([*required_args, "--no-final-save"]).no_final_save is True
+
+
+@pytest.mark.unit
 def test_slime_validate_args_preserves_explicit_start_rollout_id(monkeypatch):
     """``--start-rollout-id`` is only a fallback when the user did not set it."""
     module = load_slime_arguments_module(monkeypatch)
