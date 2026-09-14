@@ -14,6 +14,7 @@ except ImportError:
     pq = None
 
 from slime.observability.timer import Timer
+from slime.utils.misc import RolloutDataRefs
 from slime.utils.types import MultimodalTypes, Sample
 
 __all__ = ["Dataset", "get_source"]
@@ -301,9 +302,28 @@ class Dataset:
         return len(self.samples)
 
 
-def process_rollout_data(rollout_data_ref, dp_rank, dp_size):
-    assert len(rollout_data_ref) == dp_size
-    rollout_data = ray.get(rollout_data_ref[dp_rank].inner)
+def process_rollout_data(
+    rollout_data_ref,
+    dp_rank,
+    dp_size,
+    *,
+    routing_replay_rank: tuple[int, int] | None = None,
+):
+    if routing_replay_rank is not None and not isinstance(rollout_data_ref, RolloutDataRefs):
+        raise ValueError("Actor-local routed-experts refs are required when routing replay is enabled.")
+
+    data_refs = rollout_data_ref.data if isinstance(rollout_data_ref, RolloutDataRefs) else rollout_data_ref
+    assert len(data_refs) == dp_size
+    rollout_data = ray.get(data_refs[dp_rank].inner)
+
+    if routing_replay_rank is not None:
+        cp_rank, tp_rank = routing_replay_rank
+        key = (dp_rank, cp_rank, tp_rank)
+        try:
+            shard_ref = rollout_data_ref.routed_experts[key]
+        except KeyError as exc:
+            raise ValueError(f"Missing routed-experts shard for logical rank {key}.") from exc
+        rollout_data["rollout_routed_experts_prepared"] = ray.get(shard_ref.inner)
 
     # Keep `partition` in rollout_data: each local sample's position in the
     # flattened rollout batch (== its index in the rollout debug dump's

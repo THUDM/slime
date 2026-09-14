@@ -122,5 +122,8 @@ class TrainRayActor(RayActor):
 
     def set_rollout_manager(self, rollout_manager):
         self.rollout_manager = rollout_manager
-        if not self.args.debug_rollout_only and self.args.rank == 0:
+        # Rollout batches (including actor-local routing shards) follow the
+        # actor model's parallel layout.  A separately configured critic must
+        # not overwrite that layout when it attaches to the same manager.
+        if not self.args.debug_rollout_only and self.role == "actor" and self.args.rank == 0:
             ray.get(self.rollout_manager.set_train_parallel_config.remote(self.train_parallel_config))

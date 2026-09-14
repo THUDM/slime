@@ -21,7 +21,7 @@ from slime.utils import accelerator
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory
-from slime.utils.misc import Box
+from slime.utils.misc import Box, RolloutDataRefs
 from slime.utils.reloadable_process_group import (
     destroy_process_groups,
     monkey_patch_torch_dist,
@@ -33,7 +33,7 @@ from slime.utils.types import RolloutBatch
 
 from ...utils.tensor_backper import TensorBackuper
 from .checkpoint import load_checkpoint
-from .cp_utils import prepare_routed_experts_for_routing_replay, slice_log_prob_with_cp
+from .cp_utils import slice_log_prob_with_cp
 from .data import DataIterator, get_data_iterator
 from .hf_checkpoint_saver import save_hf_model_to_path
 from .initialize import init, is_megatron_main_rank
@@ -105,6 +105,9 @@ class MegatronTrainRayActor(TrainRayActor):
         self.train_parallel_config = {
             "dp_size": mpu.get_data_parallel_world_size(with_context_parallel=False),
             "cp_size": mpu.get_context_parallel_world_size(),
+            "tp_size": mpu.get_tensor_model_parallel_world_size(),
+            "pp_size": mpu.get_pipeline_model_parallel_world_size(),
+            "world_size": dist.get_world_size(),
             "vpp_size": vpp_size,
             "microbatch_group_size_per_vp_stage": microbatch_group_size_per_vp_stage,
         }
@@ -211,13 +214,21 @@ class MegatronTrainRayActor(TrainRayActor):
             self._switch_model("actor")
         print_memory("after wake_up model")
 
-    def _get_rollout_data(self, rollout_data_ref: Box) -> RolloutBatch:
+    def _get_rollout_data(self, rollout_data_ref: list[Box] | RolloutDataRefs) -> RolloutBatch:
         # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
         # Both first pp stage and the last pp stage will receive the data.
         rollout_data = process_rollout_data(
             rollout_data_ref,
             mpu.get_data_parallel_rank(with_context_parallel=False),
             mpu.get_data_parallel_world_size(with_context_parallel=False),
+            routing_replay_rank=(
+                (
+                    mpu.get_context_parallel_rank(),
+                    mpu.get_tensor_model_parallel_rank(),
+                )
+                if self.role == "actor" and self.args.use_rollout_routing_replay
+                else None
+            ),
         )
         # TODO: this is ugly, move to somewhere else?
         # move tokens to GPU in advance
@@ -272,30 +283,25 @@ class MegatronTrainRayActor(TrainRayActor):
         self.weights_backuper.restore(target_tag)
         self._active_model_tag = target_tag
 
-    def fill_routing_replay(self, data_iterator, num_microbatches, rollout_data):
-        if "rollout_routed_experts" not in rollout_data:
+    def fill_routing_replay(self, num_microbatches, rollout_data):
+        prepared_shards = rollout_data.get("rollout_routed_experts_prepared")
+        if prepared_shards is None:
             raise ValueError(
-                "rollout_routed_experts is required in rollout_data when use_rollout_routing_replay is set."
+                "Actor-local routed-experts shards are required when use_rollout_routing_replay is enabled."
             )
 
         from megatron.core.transformer.transformer_block import get_num_layers_to_build
         from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
 
-        from slime.utils.routing_replay import RoutingReplay
-
-        for iterator in data_iterator:
-            iterator.reset()
-
-        for _ in range(sum(num_microbatches)):
-            batch = data_iterator[0].get_next(["rollout_routed_experts", "tokens"])
-            rollout_routed_experts = prepare_routed_experts_for_routing_replay(
-                batch["rollout_routed_experts"],
-                batch["tokens"],
-                num_experts=self.args.num_experts,
-                data_pad_size_multiplier=self.args.data_pad_size_multiplier,
-                sequence_parallel=self.args.sequence_parallel,
-                allgather_cp=self.args.allgather_cp,
+        expected_microbatches = sum(num_microbatches)
+        if len(prepared_shards) != expected_microbatches:
+            raise ValueError(
+                "Routed-experts shard has the wrong number of microbatches: "
+                f"got {len(prepared_shards)}, expected {expected_microbatches}."
             )
+
+        for microbatch_idx in range(expected_microbatches):
+            rollout_routed_experts = prepared_shards[microbatch_idx]
 
             routing_replay_offset = 0
             for vp_stage, model in enumerate(self.model):
@@ -316,10 +322,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     routing_replay_offset += 1
             assert routing_replay_offset == len(RoutingReplay.all_routing_replays)
 
-        del rollout_data["rollout_routed_experts"]
-
-        for iterator in data_iterator:
-            iterator.reset()
+        rollout_data.pop("rollout_routed_experts_prepared", None)
 
     def compute_log_prob(
         self,
@@ -338,7 +341,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 use_rollout_top_p_replay=True,
             )
 
-    def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):
+    def train(self, rollout_id: int, rollout_data_ref: list[Box] | RolloutDataRefs, external_data=None):
         if self.args.debug_rollout_only:
             return None
 
@@ -395,7 +398,7 @@ class MegatronTrainRayActor(TrainRayActor):
         global_batch_sizes = rollout_data["global_batch_sizes"]
 
         if self.args.use_rollout_routing_replay:
-            self.fill_routing_replay(data_iterator, num_microbatches, rollout_data)
+            self.fill_routing_replay(num_microbatches, rollout_data)
 
         with inverse_timer("train_wait"), timer("train"):
             if self.args.compute_advantages_and_returns:

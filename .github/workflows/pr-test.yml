@@ -611,6 +611,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_rollout_route_sharding.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_train_data_utils.py"
             },
             {

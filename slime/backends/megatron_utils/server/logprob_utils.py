@@ -13,6 +13,7 @@ from slime.backends.megatron_utils.data import get_data_iterator
 from slime.backends.megatron_utils.loss import get_log_probs_and_entropy, get_responses
 from slime.backends.megatron_utils.model import forward_only
 from slime.utils import accelerator
+from slime.utils.misc import RolloutDataRefs
 
 logging.getLogger().setLevel(logging.WARNING)
 
@@ -228,7 +229,8 @@ def _to_accelerator_tensors(values, dtype: torch.dtype) -> list[torch.Tensor]:
 
 
 def _prepare_rollout_data(rollout_data_ref):
-    rollout_data = ray.get(rollout_data_ref[0].inner)
+    data_refs = rollout_data_ref.data if isinstance(rollout_data_ref, RolloutDataRefs) else rollout_data_ref
+    rollout_data = ray.get(data_refs[0].inner)
 
     rollout_data["tokens"] = _to_accelerator_tensors(rollout_data["tokens"], torch.long)
     rollout_data["loss_masks"] = _to_accelerator_tensors(rollout_data["loss_masks"], torch.int)

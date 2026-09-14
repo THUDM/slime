@@ -23,7 +23,8 @@ from slime.utils.data import get_source
 from slime.utils.dp_schedule import build_dp_schedule
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import init_http_client
-from slime.utils.misc import Box, load_function
+from slime.utils.misc import Box, RolloutDataRefs, load_function
+from slime.utils.routing_replay_data import prepare_routing_replay_shard
 from slime.utils.types import Sample
 
 from .utils import Lock, add_default_ray_env_vars
@@ -402,10 +403,9 @@ class RolloutManager:
             train_data["rollout_top_p_token_ids"] = [sample.rollout_top_p_token_ids for sample in samples]
             train_data["rollout_top_p_token_offsets"] = [sample.rollout_top_p_token_offsets for sample in samples]
 
-        if samples[0].rollout_routed_experts is not None:
+        if getattr(self.args, "use_rollout_routing_replay", False) and samples[0].rollout_routed_experts is not None:
             routed_experts = [torch.as_tensor(sample.rollout_routed_experts) for sample in samples]
-            if getattr(self.args, "use_rollout_routing_replay", False):
-                validate_rollout_routed_experts_for_replay(routed_experts, self.args)
+            validate_rollout_routed_experts_for_replay(routed_experts, self.args)
             train_data["rollout_routed_experts"] = routed_experts
 
         if samples[0].train_metadata is not None:
@@ -438,6 +438,24 @@ class RolloutManager:
         rollout produced.
         """
         dp_size = self.train_parallel_config["dp_size"]
+        cp_size = self.train_parallel_config["cp_size"]
+        tp_size = self.train_parallel_config.get("tp_size")
+        pp_size = self.train_parallel_config.get("pp_size")
+        world_size = self.train_parallel_config.get("world_size")
+        use_actor_local_routing_shards = getattr(self.args, "use_rollout_routing_replay", False)
+        if use_actor_local_routing_shards:
+            if "rollout_routed_experts" not in data:
+                raise ValueError("rollout_routed_experts is required when use_rollout_routing_replay is enabled.")
+            if tp_size is None or pp_size is None or world_size is None:
+                raise ValueError(
+                    "Routing-replay sharding requires tp_size, pp_size, and world_size in train_parallel_config."
+                )
+            expected_world_size = dp_size * cp_size * tp_size * pp_size
+            if world_size != expected_world_size:
+                raise ValueError(
+                    "Invalid training parallel config for routing-replay sharding: "
+                    f"world_size={world_size}, expected dp*cp*tp*pp={expected_world_size}."
+                )
         total_lengths = [len(t) for t in data["tokens"]]
         data["total_lengths"] = total_lengths
 
@@ -451,6 +469,9 @@ class RolloutManager:
 
         # Package per-rank rollout_data
         rollout_data_refs = []
+        transport = getattr(self.args, "rollout_data_transport", "object-store")
+        if transport not in ("nixl", "object-store"):
+            raise ValueError(f"Unsupported rollout data transport: {transport!r}")
         for r in range(dp_size):
             partition = partitions[r]
             rollout_data = {"partition": partition}
@@ -468,7 +489,6 @@ class RolloutManager:
                 "rollout_log_probs",
                 "rollout_top_p_token_ids",
                 "rollout_top_p_token_offsets",
-                "rollout_routed_experts",
                 "source_names",
                 "prompt",
                 "teacher_log_probs",
@@ -485,11 +505,42 @@ class RolloutManager:
             rollout_data["num_microbatches"] = num_microbatches
             rollout_data["micro_batch_indices"] = micro_batch_indices[r]
             tensorize_rollout_data_for_training(rollout_data)
-            transport = getattr(self.args, "rollout_data_transport", "object-store")
             if transport == "nixl":
                 rollout_data_refs.append(Box(ray.put(rollout_data, _tensor_transport="nixl")))
-            elif transport == "object-store":
-                rollout_data_refs.append(Box(ray.put(rollout_data)))
             else:
-                raise ValueError(f"Unsupported rollout data transport: {transport!r}")
-        return rollout_data_refs
+                rollout_data_refs.append(Box(ray.put(rollout_data)))
+        if not use_actor_local_routing_shards:
+            return rollout_data_refs
+
+        routed_experts_refs = {}
+        for dp_rank, partition in enumerate(partitions):
+            local_tokens = [data["tokens"][j] for j in partition]
+            local_routes = [data["rollout_routed_experts"][j] for j in partition]
+            for cp_rank in range(cp_size):
+                shard_boxes = {}
+                tp_ranks_to_materialize = range(tp_size) if self.args.sequence_parallel else range(1)
+                for tp_rank in tp_ranks_to_materialize:
+                    shard = prepare_routing_replay_shard(
+                        tokens=local_tokens,
+                        routed_experts=local_routes,
+                        micro_batch_indices=micro_batch_indices[dp_rank],
+                        cp_rank=cp_rank,
+                        cp_size=cp_size,
+                        tp_rank=tp_rank,
+                        tp_size=tp_size,
+                        num_experts=self.args.num_experts,
+                        data_pad_size_multiplier=self.args.data_pad_size_multiplier,
+                        sequence_parallel=self.args.sequence_parallel,
+                        allgather_cp=self.args.allgather_cp,
+                    )
+                    if transport == "nixl":
+                        shard_boxes[tp_rank] = Box(ray.put(shard, _tensor_transport="nixl"))
+                    else:
+                        shard_boxes[tp_rank] = Box(ray.put(shard))
+
+                for tp_rank in range(tp_size):
+                    # Without sequence parallelism every TP rank consumes the
+                    # same CP-local routes, so all TP keys share one object.
+                    source_tp_rank = tp_rank if self.args.sequence_parallel else 0
+                    routed_experts_refs[(dp_rank, cp_rank, tp_rank)] = shard_boxes[source_tp_rank]
+        return RolloutDataRefs(data=rollout_data_refs, routed_experts=routed_experts_refs)
