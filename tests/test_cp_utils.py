@@ -23,13 +23,83 @@ import _cp_dist_helpers  # noqa: F401
 import pytest
 import torch
 
+from slime.backends.megatron_utils import cp_utils  # noqa: E402
 from slime.backends.megatron_utils.cp_utils import (  # noqa: E402
     get_logits_and_tokens_offset_with_cp,
     get_sum_of_sample_mean,
+    slice_with_cp,
+)
+from slime.utils.routing_replay_data import (  # noqa: E402
+    _pad_routed_experts,
+    prepare_routed_experts_for_routing_replay_rank,
 )
 
-
 NUM_GPUS = 0
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("allgather_cp", [False, True])
+@pytest.mark.parametrize("sequence_parallel", [False, True])
+@pytest.mark.parametrize("cp_size,tp_size", [(1, 1), (2, 2), (2, 4)])
+def test_explicit_rank_routing_shard_matches_legacy_layout(
+    monkeypatch,
+    allgather_cp,
+    sequence_parallel,
+    cp_size,
+    tp_size,
+):
+    num_experts = 17
+    multiplier = 4
+    tokens = [torch.arange(8), torch.arange(13), torch.arange(6)]
+    routes = [
+        torch.arange((len(token_ids) - 1) * 3 * 2, dtype=torch.int32).reshape(-1, 3, 2) % num_experts
+        for token_ids in tokens
+    ]
+
+    for cp_rank in range(cp_size):
+        for tp_rank in range(tp_size):
+            padded = [_pad_routed_experts(experts, 1, num_experts) for experts in routes]
+            pad_size = tp_size * multiplier
+            if allgather_cp:
+                expected = torch.cat(padded, dim=0)
+                global_pad_size = cp_size * pad_size
+                pad = (global_pad_size - len(expected) % global_pad_size) % global_pad_size
+                expected = _pad_routed_experts(expected, pad, num_experts).chunk(cp_size)[cp_rank]
+            else:
+                monkeypatch.setattr(
+                    cp_utils.mpu,
+                    "get_context_parallel_world_size",
+                    lambda cp_size=cp_size: cp_size,
+                )
+                monkeypatch.setattr(
+                    cp_utils.mpu,
+                    "get_context_parallel_rank",
+                    lambda cp_rank=cp_rank: cp_rank,
+                )
+                expected = torch.cat(
+                    [
+                        slice_with_cp(experts, lambda x, pad: _pad_routed_experts(x, pad, num_experts))
+                        for experts in padded
+                    ]
+                )
+                pad = (pad_size - len(expected) % pad_size) % pad_size
+                expected = _pad_routed_experts(expected, pad, num_experts)
+            if sequence_parallel:
+                expected = expected.chunk(tp_size)[tp_rank]
+
+            actual = prepare_routed_experts_for_routing_replay_rank(
+                routes,
+                tokens,
+                num_experts=num_experts,
+                data_pad_size_multiplier=multiplier,
+                sequence_parallel=sequence_parallel,
+                allgather_cp=allgather_cp,
+                cp_rank=cp_rank,
+                cp_size=cp_size,
+                tp_rank=tp_rank,
+                tp_size=tp_size,
+            )
+            assert torch.equal(actual, expected)
 
 
 def _make_inputs(per_sample_lengths: list[int]):

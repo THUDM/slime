@@ -2,6 +2,7 @@ import importlib
 import subprocess
 from collections import defaultdict
 from collections.abc import Iterable
+from dataclasses import dataclass
 from functools import cache
 from typing import Any
 
@@ -135,6 +136,29 @@ class Box:
     @property
     def inner(self):
         return self._inner
+
+
+@dataclass
+class RolloutDataRefs:
+    """Ray refs for DP-common data and actor-local routing-replay data.
+
+    ``Box`` deliberately keeps the nested ObjectRefs from being automatically
+    resolved when this small descriptor is passed to a Ray actor. Routing
+    shards are keyed by Megatron's logical ``(dp, cp, tp)`` coordinates, not by
+    Ray placement order. PP is intentionally absent: pipeline stages with the
+    same coordinates reuse the same all-layer shard, then retain only their
+    local layers while filling routing replay.
+    """
+
+    data: list[Box]
+    routed_experts: dict[tuple[int, int, int], Box]
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+    def __getitem__(self, index):
+        """Preserve list-like access to the DP-common refs for consumers."""
+        return self.data[index]
 
 
 # details: https://stackoverflow.com/questions/773/how-do-i-use-itertools-groupby

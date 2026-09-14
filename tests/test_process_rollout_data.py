@@ -32,6 +32,7 @@ import pytest
 import ray
 
 from slime.utils.data import process_rollout_data
+from slime.utils.misc import RolloutDataRefs
 
 NUM_GPUS = 0
 
@@ -66,6 +67,112 @@ def _split_train_data_by_dp(partitions, raw_reward, response_lengths, total_leng
         )
         for partition in partitions
     ]
+
+
+def test_actor_fetches_only_its_logical_routing_shard(monkeypatch):
+    fetched = []
+
+    def fake_get(ref):
+        fetched.append(ref)
+        return ref
+
+    monkeypatch.setattr(ray, "get", fake_get)
+    other_common = {"partition": [0], "total_lengths": [4, 5]}
+    common = {"partition": [1], "total_lengths": [4, 5]}
+    own_shard = ["cp1-tp0-mb0"]
+    other_shard = ["cp0-tp0-mb0"]
+    refs = RolloutDataRefs(
+        data=[_FakeBox(other_common), _FakeBox(common)],
+        routed_experts={
+            (1, 0, 0): _FakeBox(other_shard),
+            (1, 1, 0): _FakeBox(own_shard),
+        },
+    )
+
+    result = process_rollout_data(
+        rollout_data_ref=refs,
+        dp_rank=1,
+        dp_size=2,
+        routing_replay_rank=(1, 0),
+    )
+
+    assert result["rollout_routed_experts_prepared"] is own_shard
+    assert fetched == [common, own_shard]
+    assert other_shard not in fetched
+
+
+def test_non_replay_consumer_does_not_fetch_any_routing_shard(monkeypatch):
+    fetched = []
+
+    def fake_get(ref):
+        fetched.append(ref)
+        return ref
+
+    monkeypatch.setattr(ray, "get", fake_get)
+    common = {"partition": [0], "total_lengths": [4]}
+    route_shard = ["unused"]
+    refs = RolloutDataRefs(
+        data=[_FakeBox(common)],
+        routed_experts={(0, 0, 0): _FakeBox(route_shard)},
+    )
+
+    result = process_rollout_data(rollout_data_ref=refs, dp_rank=0, dp_size=1)
+
+    assert "rollout_routed_experts_prepared" not in result
+    assert fetched == [common]
+
+
+def test_routing_refs_preserve_common_ref_sequence_access():
+    common_refs = [_FakeBox("dp0"), _FakeBox("dp1")]
+    refs = RolloutDataRefs(data=common_refs, routed_experts={})
+
+    assert len(refs) == 2
+    assert refs[0] is common_refs[0]
+    assert list(refs) == common_refs
+
+
+def test_missing_actor_routing_shard_fails_loudly(unwrap_ray_get):
+    refs = RolloutDataRefs(
+        data=[_FakeBox({"partition": [0], "total_lengths": [4]})],
+        routed_experts={},
+    )
+
+    with pytest.raises(ValueError, match="logical rank \\(0, 1, 3\\)"):
+        process_rollout_data(
+            rollout_data_ref=refs,
+            dp_rank=0,
+            dp_size=1,
+            routing_replay_rank=(1, 3),
+        )
+
+
+def test_replay_rejects_legacy_full_data_before_fetch(monkeypatch):
+    fetched = []
+
+    def fake_get(ref):
+        fetched.append(ref)
+        return ref
+
+    monkeypatch.setattr(ray, "get", fake_get)
+    refs = [
+        _FakeBox(
+            {
+                "partition": [0],
+                "total_lengths": [4],
+                "rollout_routed_experts": ["full-routes"],
+            }
+        )
+    ]
+
+    with pytest.raises(ValueError, match="Actor-local routed-experts refs are required"):
+        process_rollout_data(
+            rollout_data_ref=refs,
+            dp_rank=0,
+            dp_size=1,
+            routing_replay_rank=(0, 0),
+        )
+
+    assert fetched == []
 
 
 # 8 samples; only the odd-indexed ones are correct. Lengths encode their own
