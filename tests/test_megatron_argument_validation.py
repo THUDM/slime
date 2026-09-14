@@ -241,6 +241,10 @@ def make_slime_validate_args(**overrides):
         rollout_global_dataset=False,
         enable_mtp_training=False,
         mtp_num_layers=None,
+        log_probs_backend="torch",
+        loss_type="policy_loss",
+        rollout_top_p=1.0,
+        virtual_pipeline_model_parallel_size=None,
         use_rollout_routing_replay=False,
         use_routing_replay=False,
         custom_config_path=None,
@@ -401,6 +405,24 @@ def test_force_fp8_ue8m0_scale_argument(monkeypatch):
 
     assert defaults.force_fp8_ue8m0_scale is False
     assert configured.force_fp8_ue8m0_scale is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"loss_type": "sft_loss"}, "policy_loss"),
+        ({"rollout_top_p": 0.95}, "top-p replay"),
+        ({"enable_mtp_training": True, "mtp_num_layers": 1}, "MTP"),
+        ({"virtual_pipeline_model_parallel_size": 2}, "virtual pipeline"),
+    ],
+)
+def test_slime_validate_args_rejects_unsupported_triton_log_probs_modes(monkeypatch, overrides, message):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(log_probs_backend="triton", **overrides)
+
+    with pytest.raises(AssertionError, match=message):
+        module.slime_validate_args(args)
 
 
 if __name__ == "__main__":

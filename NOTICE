@@ -1,0 +1,9 @@
+This product includes software derived from verl
+(https://github.com/verl-project/verl):
+
+Copyright 2023-2024 Bytedance Ltd. and/or its affiliates
+
+The vendored linear cross-entropy implementation also retains the following
+copyright notice from its source files:
+
+Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.

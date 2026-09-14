@@ -254,6 +254,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--log-probs-chunk-size", type=int, default=-1, help="Chunk size to compute log probs to save memory"
             )
             parser.add_argument(
+                "--log-probs-backend",
+                choices=("torch", "triton"),
+                default="torch",
+                help="Log-probability implementation: the standard PyTorch logits path or the fused Triton output head.",
+            )
+            parser.add_argument(
                 "--only-train-params-name-list",
                 type=str,
                 nargs="*",
@@ -2012,6 +2018,14 @@ def slime_validate_args(args):
 
     if args.enable_mtp_training:
         assert args.mtp_num_layers, "mtp_num_layers must be set when enable_mtp_training is set"
+
+    if args.log_probs_backend == "triton":
+        assert args.loss_type == "policy_loss", "triton log probs only support policy_loss"
+        assert args.rollout_top_p == 1.0, "triton log probs do not support rollout top-p replay"
+        assert not args.enable_mtp_training, "triton log probs do not support MTP"
+        assert getattr(args, "virtual_pipeline_model_parallel_size", None) is None, (
+            "triton log probs do not support virtual pipeline"
+        )
 
     if args.use_rollout_routing_replay:
         args.use_routing_replay = True
