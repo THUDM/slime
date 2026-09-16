@@ -22,7 +22,10 @@ def rollout(monkeypatch):
     vision_utils = ModuleType("qwen_vl_utils")
     vision_utils.process_vision_info = lambda messages: (messages[0].get("images"), None)
     monkeypatch.setitem(sys.modules, vision_utils.__name__, vision_utils)
-    path = Path(__file__).resolve().parents[1] / "examples/geo3k_vlm_multi_turn/rollout.py"
+    # CI executes this file directly; examples is not part of the installed package.
+    repo_root = Path(__file__).resolve().parents[1]
+    monkeypatch.syspath_prepend(str(repo_root))
+    path = repo_root / "examples/geo3k_vlm_multi_turn/rollout.py"
     spec = importlib.util.spec_from_file_location("geo3k_rollout_under_test", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
