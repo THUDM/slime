@@ -727,6 +727,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_geo3k_vlm_multi_turn_tokens.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_hf_to_megatron.py"
             },
             {
