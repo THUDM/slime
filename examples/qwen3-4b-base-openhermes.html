@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Aug 28, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 18, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -584,7 +584,6 @@ bash<span class="w"> </span>scripts/run-qwen3-4B-base-sft.sh
 <p>As for <code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>, this is because <code class="docutils literal notranslate"><span class="pre">slime</span></code> defaults to calculating the per-sample mean for GRPO. In general SFT training, the average is taken over all unmasked tokens in a batch, so it is recommended to configure this.</p>
 <p>Finally, <code class="docutils literal notranslate"><span class="pre">--disable-compute-advantages-and-returns</span></code> indicates that there is no need to pre-calculate log probabilities during the SFT process, and <code class="docutils literal notranslate"><span class="pre">--debug-train-only</span></code> means that <code class="docutils literal notranslate"><span class="pre">sglang</span></code> does not need to be initialized.</p>
 </li>
-<li><p>Used <code class="docutils literal notranslate"><span class="pre">train_async.py</span></code> instead of <code class="docutils literal notranslate"><span class="pre">train.py</span></code>. This is to leverage the asynchronous training process to implement data prefetching.</p></li>
 </ol>
 </section>
 </section>
@@ -675,7 +674,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 28, 2026.
+  Last updated on Sep 18, 2026.
   <br/>
 </p>
   </div>

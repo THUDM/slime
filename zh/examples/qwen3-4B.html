@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 28 日"/>
+    <meta name="docbuild:last-update" content="2026 年 09 月 18 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -507,7 +507,7 @@
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling">dynamic sampling</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partial-rollout">partial rollout</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">训推分离</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">异步训练</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#fully-async-rollout">Fully-Async Rollout</a></li>
 </ul>
 </li>
 </ul>
@@ -781,11 +781,13 @@ bash<span class="w"> </span>scripts/run-qwen3-4B.sh
 </li>
 </ol>
 </section>
-<section id="id5">
-<h3>异步训练<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h3>
-<p>当进行训推分离时，你会发现训练和推理的 GPU 总是相互等待着，为了避免这种资源空闲，我们可以开启异步训练。开启的方式即为将启动脚本中的 <code class="docutils literal notranslate"><span class="pre">train.py</span></code> 改变为 <code class="docutils literal notranslate"><span class="pre">train_async.py</span></code>。这样 slime 就会在进行当前 rollout 的训练时进行下一个 rollout 的数据生成了。</p>
-<p><code class="docutils literal notranslate"><span class="pre">train.py</span></code> 和 <code class="docutils literal notranslate"><span class="pre">train_async.py</span></code> 的差别只在于 train loop 的同步逻辑，我们通过 ray 的异步（<code class="docutils literal notranslate"><span class="pre">.remote</span></code>, <code class="docutils literal notranslate"><span class="pre">ray.get</span></code>）实现了这点。</p>
-<p>⚠️  在异步训练时，sglang 的性能检测日志与训练日志可能会混到一起，不易区分，可以通过 <code class="docutils literal notranslate"><span class="pre">--sglang-log-level</span></code> 来减少 sglang 的日志。</p>
+<section id="fully-async-rollout">
+<h3>Fully-Async Rollout<a class="headerlink" href="#fully-async-rollout" title="链接到此标题。">#</a></h3>
+<p>训推分离时，可以使用 fully-async rollout 让推理跨 rollout 边界持续运行，同时无需引入第二个训练入口。继续使用 <code class="docutils literal notranslate"><span class="pre">train.py</span></code>，并指定 fully-async rollout 实现：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-function-path<span class="w"> </span>slime.rollout.fully_async_rollout.generate_rollout_fully_async
+</pre></div>
+</div>
+<p>后台 rollout worker 会持续维护一组正在生成的样本，并在训练 step 之间保留已经预热的队列。完整启动脚本和当前限制请参考 <a class="reference internal" href="../_examples_synced/fully_async/README.html"><span class="std std-doc">fully-async 示例</span></a>。</p>
 </section>
 </section>
 </section>
@@ -853,7 +855,7 @@ bash<span class="w"> </span>scripts/run-qwen3-4B.sh
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling">dynamic sampling</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partial-rollout">partial rollout</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">训推分离</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">异步训练</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#fully-async-rollout">Fully-Async Rollout</a></li>
 </ul>
 </li>
 </ul>
@@ -889,7 +891,7 @@ bash<span class="w"> </span>scripts/run-qwen3-4B.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 28 日.
+  最后更新于 2026 年 09 月 18 日.
   <br/>
 </p>
   </div>

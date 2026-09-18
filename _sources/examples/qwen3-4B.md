@@ -292,8 +292,12 @@ In this case, 2 GPUs will be allocated for training, and 6 GPUs will be allocate
     --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
     ```
 
-### Asynchronous Training
+### Fully-Async Rollout
 
-When you separate training and inference, you may notice that the training and inference GPUs are always waiting for each other. To prevent these resources from being idle, we can enable asynchronous training. This can be done by changing `train.py` to `train_async.py` in the startup script. By doing this, slime will generate data for the next rollout while training on the current one.
+When training and inference use separate GPUs, fully-async rollout can keep inference busy across rollout boundaries without introducing a second training entrypoint. Continue to use `train.py` and select the fully-async rollout implementation:
 
-The only difference between `train.py` and `train_async.py` lies in the synchronization logic of the training loop. We achieve this by using Ray's asynchronous features (`.remote`, `ray.get`).
+```bash
+--rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async
+```
+
+The background rollout worker keeps a pool of individual generations in flight and carries its warm queue across training steps. See the [fully-async example](../_examples_synced/fully_async/README.md) for a complete launch script and the current limitations.

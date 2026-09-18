@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 28 日"/>
+    <meta name="docbuild:last-update" content="2026 年 09 月 18 日"/>
   
     
     <script src="_static/searchtools.js"></script>
@@ -525,7 +525,7 @@
 <li><p><strong>专注 SGLang rollout</strong>：slime 有意选择单一 rollout backend，避免为了同时兼容多个 inference engine 而被迫抽象成 lowest-common-denominator 的公共能力子集，从而可以直接发挥 SGLang-specific 的 serving、routing、caching、disaggregation 和 weight-sync 能力。</p></li>
 <li><p><strong>Agentic workflow 就是数据生成</strong>：tool use、sandbox interaction、verifier reward、environment feedback、multi-agent loop 和 long-horizon agentic workflow 都接入同一条 training / rollout / Data Buffer 路径，而不是 fork training kernel。</p></li>
 <li><p><strong>BF16 训练 + FP8 rollout</strong>：大规模 MoE recipe 使用 Megatron BF16 training state 搭配 SGLang FP8 rollout/inference；long-context rollout 还可以通过 <code class="docutils literal notranslate"><span class="pre">--sglang-kv-cache-dtype</span> <span class="pre">fp8_e4m3</span></code> 提升有效 KV cache 容量。</p></li>
-<li><p><strong>作为 RL 基础设施来测试</strong>：CPU correctness tests 默认运行，GPU e2e tests 覆盖真实 Megatron + SGLang training/rollout 路径，包括 dense/MoE recipe、async rollout、SGLang config、checkpoint、precision 和 debug replay。详见 <a class="reference internal" href="developer_guide/ci.html"><span class="doc">CI（持续集成）</span></a>。</p></li>
+<li><p><strong>作为 RL 基础设施来测试</strong>：CPU correctness tests 默认运行，GPU e2e tests 覆盖真实 Megatron + SGLang training/rollout 路径，包括 dense/MoE recipe、fully-async rollout、SGLang config、checkpoint、precision 和 debug replay。详见 <a class="reference internal" href="developer_guide/ci.html"><span class="doc">CI（持续集成）</span></a>。</p></li>
 </ul>
 </section>
 <section id="id2">
@@ -702,7 +702,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 28 日.
+  最后更新于 2026 年 09 月 18 日.
   <br/>
 </p>
   </div>

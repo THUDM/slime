@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Aug 28, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 18, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -526,7 +526,7 @@
 </ul>
 <p>That’s why we present <a class="reference external" href="https://github.com/THUDM/slime">slime</a>, a post-training framework designed to be:</p>
 <ul class="simple">
-<li><p><strong>Versatile</strong> – with a fully customizable rollout interface and flexible training setups (colocated or decoupled, synchronous or asynchronous, RL or SFT cold start).</p></li>
+<li><p><strong>Versatile</strong> – with a fully customizable rollout interface and flexible training setups (colocated or decoupled, standard or fully-async rollout, RL or SFT cold start).</p></li>
 <li><p><strong>Performant</strong> - integrating SGLang for inference and Megatron-LM for training, natively.</p></li>
 <li><p><strong>Maintainable</strong> - with a lightweight codebase and smooth transition from Megatron pretraining to SGLang deployment.</p></li>
 </ul>
@@ -539,13 +539,13 @@
 <div><p>We should stop trying to find simple ways to think about the contents of minds, such as simple ways to think about space, objects, multiple agents, or symmetries.</p>
 <p>— <em>The Bitter Lesson</em></p>
 </div></blockquote>
-<p>A prevailing misconception within the RL community is the need for separate frameworks for different tasks: one for plain math, one for multi-turn tool calling, one for asynchronous training, one for agentic tasks, and so on. Forking and maintaining multiple frameworks is dreadful, leading to time-wasting bugfix cherry-picking, or worse, training crashes by missing patches.</p>
+<p>A prevailing misconception within the RL community is the need for separate frameworks for different tasks: one for plain math, one for multi-turn tool calling, one for fully-async rollout, one for agentic tasks, and so on. Forking and maintaining multiple frameworks is dreadful, leading to time-wasting bugfix cherry-picking, or worse, training crashes by missing patches.</p>
 <p>It wasn’t always like this: no one forks PyTorch just for a new dataloader. We believe the current chaos stems from the trap of dictating how people should build their applications. If we insist on defining a universal template for every rollout scenario, we’ll inevitably create an RL framework that meets only a fraction of real-world needs.</p>
 <p>slime views the data sampling in RL differently. We manage all SGLang servers within slime with <a class="reference external" href="https://github.com/sgl-project/sglang/tree/main/sgl-router">sgl-router</a> and provide an interface for the data generation component, <strong>allowing users to inject custom logic and freely interact with SGLang servers</strong>. Unleash their creativity.</p>
 <p><img alt="slime architecture" src="../_images/arch.png" /></p>
 <p>With the sgl-router, users only need to send HTTP requests to a single endpoint. By exposing this endpoint, complex agent environments can directly interact with slime through an OpenAI-compatible API — no need to modify the environment, and training-deployment consistency is preserved.</p>
 <p>Regarding training schemes, slime uses Ray for resource management, enabling <strong>colocated</strong> (same GPUs) or <strong>decoupled</strong> (separate GPUs) setups with a single flag (<code class="docutils literal notranslate"><span class="pre">--colocate</span></code>).</p>
-<p>And with Ray’s asynchronous execution via <code class="docutils literal notranslate"><span class="pre">.remote()</span></code>, slime naturally supports asynchronous training. Changing synchronization behavior is as simple as moving the <code class="docutils literal notranslate"><span class="pre">ray.get</span></code> operation. And to make experimenting with different strategies easy, we didn’t wrap the code with trainer classes, but simply exposed the training loop in entrypoint  <code class="docutils literal notranslate"><span class="pre">train.py</span></code>.</p>
+<p>slime keeps a single training entrypoint, <code class="docutils literal notranslate"><span class="pre">train.py</span></code>. Fully-async behavior lives in the rollout implementation instead of a separate training loop: select <code class="docutils literal notranslate"><span class="pre">slime.rollout.fully_async_rollout.generate_rollout_fully_async</span></code> with <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>. Its background worker keeps individual generations in flight and carries a warm queue across training steps.</p>
 </section>
 <section id="built-for-performance">
 <h2>Built for Performance<a class="headerlink" href="#built-for-performance" title="Link to this heading">#</a></h2>
@@ -690,7 +690,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 28, 2026.
+  Last updated on Sep 18, 2026.
   <br/>
 </p>
   </div>

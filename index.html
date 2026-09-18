@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Aug 28, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 18, 2026"/>
   
     
     <script src="_static/searchtools.js"></script>
@@ -529,7 +529,7 @@
 <li><p><strong>SGLang-focused rollout</strong>: slime chooses one rollout backend intentionally. This avoids flattening multiple inference engines into a lowest-common-denominator abstraction and lets RL workloads use SGLang-specific serving, routing, caching, disaggregation, and weight-sync behavior directly.</p></li>
 <li><p><strong>Agentic workflows as data generation</strong>: tool use, sandbox interaction, verifier rewards, environment feedback, multi-agent loops, and long-horizon agentic workflows plug into the same training / rollout / Data Buffer path instead of forking the training kernel.</p></li>
 <li><p><strong>BF16 training with FP8 rollout</strong>: large MoE recipes use Megatron BF16 training state with SGLang FP8 rollout/inference; long-context rollout can also use <code class="docutils literal notranslate"><span class="pre">--sglang-kv-cache-dtype</span> <span class="pre">fp8_e4m3</span></code> to increase effective KV cache capacity.</p></li>
-<li><p><strong>Tested as RL infrastructure</strong>: CPU correctness tests run automatically, while GPU e2e tests cover real Megatron + SGLang training/rollout paths, including dense/MoE recipes, async rollout, SGLang config, checkpointing, precision, and debug replay. See <a class="reference internal" href="developer_guide/ci.html"><span class="doc">CI (Continuous Integration)</span></a>.</p></li>
+<li><p><strong>Tested as RL infrastructure</strong>: CPU correctness tests run automatically, while GPU e2e tests cover real Megatron + SGLang training/rollout paths, including dense/MoE recipes, fully-async rollout, SGLang config, checkpointing, precision, and debug replay. See <a class="reference internal" href="developer_guide/ci.html"><span class="doc">CI (Continuous Integration)</span></a>.</p></li>
 </ul>
 </section>
 <section id="production-validation">
@@ -712,7 +712,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 28, 2026.
+  Last updated on Sep 18, 2026.
   <br/>
 </p>
   </div>

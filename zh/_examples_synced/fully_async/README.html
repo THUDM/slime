@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 28 日"/>
+    <meta name="docbuild:last-update" content="2026 年 09 月 18 日"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -549,15 +549,11 @@ bash<span class="w"> </span>examples/fully_async/run-qwen2.5-0.5B-fully_async.sh
 </section>
 <section id="how-to-plug-your-own-generate-into-this">
 <h2>How To Plug Your Own Generate Into This<a class="headerlink" href="#how-to-plug-your-own-generate-into-this" title="链接到此标题。">#</a></h2>
-<p>Two pieces flip the standard pipeline into fully-async:</p>
-<ol class="arabic">
-<li><p>Use the async training driver: <code class="docutils literal notranslate"><span class="pre">python3</span> <span class="pre">train_async.py</span></code> (not <code class="docutils literal notranslate"><span class="pre">train.py</span></code>).</p></li>
-<li><p>Set the rollout function path:</p>
+<p>Fully-async uses the standard <code class="docutils literal notranslate"><span class="pre">python3</span> <span class="pre">train.py</span></code> entrypoint. Select the
+rollout implementation with:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">--</span><span class="n">rollout</span><span class="o">-</span><span class="n">function</span><span class="o">-</span><span class="n">path</span> <span class="n">slime</span><span class="o">.</span><span class="n">rollout</span><span class="o">.</span><span class="n">fully_async_rollout</span><span class="o">.</span><span class="n">generate_rollout_fully_async</span>
 </pre></div>
 </div>
-</li>
-</ol>
 <p>For custom per-sample logic, use slime's standard plug-in points — they
 work unchanged under fully-async:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">--</span><span class="n">custom</span><span class="o">-</span><span class="n">generate</span><span class="o">-</span><span class="n">function</span><span class="o">-</span><span class="n">path</span> <span class="n">your</span><span class="o">.</span><span class="n">module</span><span class="o">.</span><span class="n">generate</span>     <span class="c1"># (args, sample, sampling_params) -&gt; Sample | list[Sample]</span>
@@ -681,7 +677,7 @@ yet wired; for now the trajectory is re-queued and starts over.</p></li>
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 28 日.
+  最后更新于 2026 年 09 月 18 日.
   <br/>
 </p>
   </div>

@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 08 月 28 日"/>
+    <meta name="docbuild:last-update" content="2026 年 09 月 18 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -588,7 +588,7 @@
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-megatron</span></code></p></td>
 <td><p>GPU</p></td>
-<td><p>核心 Megatron 训练测试，覆盖 dense、MoE、PPO、MTP、OPD、async rollout、PD/Mooncake 和 debug replay 路径。</p></td>
+<td><p>核心 Megatron 训练测试，覆盖 dense、MoE、PPO、MTP、OPD、fully-async rollout、PD/Mooncake 和 debug replay 路径。</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-precision</span></code></p></td>
@@ -640,7 +640,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
 <p>GPU e2e tests 验证 CPU tests 无法覆盖的集成训练/rollout 行为：</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">run-ci-sglang-config</span></code>：高级 SGLang deployment path，包括 config-based engine layouts。</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code>：主要 Megatron backend coverage，包括 dense/MoE recipe、async rollout、OPD、PPO-style path、PD/Mooncake 和 debug rollout-then-train replay。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code>：主要 Megatron backend coverage，包括 dense/MoE recipe、fully-async rollout、OPD、PPO-style path、PD/Mooncake 和 debug rollout-then-train replay。</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code>：不同并行设置下的数值一致性。</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code>：checkpoint save/load 组合和 async save。</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code>：与 <code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code> 相同的 matrix，但运行在 release/test image 上。</p></li>
@@ -823,7 +823,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 08 月 28 日.
+  最后更新于 2026 年 09 月 18 日.
   <br/>
 </p>
   </div>

@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Aug 28, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 18, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -511,7 +511,7 @@
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling">Dynamic Sampling</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partial-rollout">Partial Rollout</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#decoupled-training-and-inference">Decoupled Training and Inference</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#asynchronous-training">Asynchronous Training</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#fully-async-rollout">Fully-Async Rollout</a></li>
 </ul>
 </li>
 </ul>
@@ -785,10 +785,13 @@ bash<span class="w"> </span>scripts/run-qwen3-4B.sh
 </li>
 </ol>
 </section>
-<section id="asynchronous-training">
-<h3>Asynchronous Training<a class="headerlink" href="#asynchronous-training" title="Link to this heading">#</a></h3>
-<p>When you separate training and inference, you may notice that the training and inference GPUs are always waiting for each other. To prevent these resources from being idle, we can enable asynchronous training. This can be done by changing <code class="docutils literal notranslate"><span class="pre">train.py</span></code> to <code class="docutils literal notranslate"><span class="pre">train_async.py</span></code> in the startup script. By doing this, slime will generate data for the next rollout while training on the current one.</p>
-<p>The only difference between <code class="docutils literal notranslate"><span class="pre">train.py</span></code> and <code class="docutils literal notranslate"><span class="pre">train_async.py</span></code> lies in the synchronization logic of the training loop. We achieve this by using Ray’s asynchronous features (<code class="docutils literal notranslate"><span class="pre">.remote</span></code>, <code class="docutils literal notranslate"><span class="pre">ray.get</span></code>).</p>
+<section id="fully-async-rollout">
+<h3>Fully-Async Rollout<a class="headerlink" href="#fully-async-rollout" title="Link to this heading">#</a></h3>
+<p>When training and inference use separate GPUs, fully-async rollout can keep inference busy across rollout boundaries without introducing a second training entrypoint. Continue to use <code class="docutils literal notranslate"><span class="pre">train.py</span></code> and select the fully-async rollout implementation:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-function-path<span class="w"> </span>slime.rollout.fully_async_rollout.generate_rollout_fully_async
+</pre></div>
+</div>
+<p>The background rollout worker keeps a pool of individual generations in flight and carries its warm queue across training steps. See the <a class="reference internal" href="../_examples_synced/fully_async/README.html"><span class="std std-doc">fully-async example</span></a> for a complete launch script and the current limitations.</p>
 </section>
 </section>
 </section>
@@ -856,7 +859,7 @@ bash<span class="w"> </span>scripts/run-qwen3-4B.sh
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling">Dynamic Sampling</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partial-rollout">Partial Rollout</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#decoupled-training-and-inference">Decoupled Training and Inference</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#asynchronous-training">Asynchronous Training</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#fully-async-rollout">Fully-Async Rollout</a></li>
 </ul>
 </li>
 </ul>
@@ -892,7 +895,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 28, 2026.
+  Last updated on Sep 18, 2026.
   <br/>
 </p>
   </div>
