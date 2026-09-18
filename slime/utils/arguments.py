@@ -553,18 +553,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--update-weights-interval",
-                type=int,
-                default=1,
-                help="Interval for updating the weights",
-            )
-            parser.add_argument(
-                "--keep-old-actor",
-                action="store_true",
-                help="Whether to keep the rollout model on training process",
-            )
-
-            parser.add_argument(
                 "--rollout-data-postprocess-path",
                 type=str,
                 default=None,
@@ -2101,8 +2089,6 @@ def slime_validate_args(args):
     if args.release_train:
         if args.use_critic:
             raise ValueError("--release-train does not support critic training yet.")
-        if args.keep_old_actor:
-            raise ValueError("--release-train does not support --keep-old-actor.")
         if args.save is None:
             raise ValueError("--release-train requires --save so the next Megatron actor can reload.")
         if args.save_interval is None:

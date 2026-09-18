@@ -30,11 +30,6 @@ class TensorBackuper:
         accelerator.synchronize()
 
     @torch.no_grad()
-    def copy(self, *, src_tag: str, dst_tag: str):
-        for name in self._backups[dst_tag]:
-            self._backups[dst_tag][name].copy_(self._backups[src_tag][name])
-
-    @torch.no_grad()
     def restore(self, tag: str) -> None:
         backup_dict = self._backups[tag]
         for name, param in self._source_getter():

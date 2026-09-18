@@ -293,8 +293,8 @@ class RolloutManager:
             metrics = None
         else:
             if fully_async_metrics_enabled(self.args):
-                # The async training driver keeps serving weights fixed while
-                # collecting this batch. Query only the updatable model.
+                # The training loop keeps serving weights fixed while collecting
+                # this batch. Query only the updatable model.
                 server = self._get_updatable_server()
                 engines = [engine for engine in server.engines if engine is not None] if server else []
                 versions = ray.get([engine.get_weight_version.remote() for engine in engines])

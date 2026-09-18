@@ -4,7 +4,7 @@ from typing import Any
 
 import torch
 
-from slime.utils.misc import decode_int32_meta_array, decode_meta_array
+from slime.utils.misc import decode_int32_meta_array
 from slime.utils.tensor_store import DiskTensorRef
 
 _TOP_P_TOKEN_ID_META_KEYS = ("top_p_token_ids", "top_p_kept_token_ids")
@@ -352,20 +352,8 @@ class Sample:
                 new_token_count,
             )
 
-        # SGLang may omit the requested dtype from meta_info. Keep the fallback
-        # aligned with the request payload rather than decoding uint8 as int32.
-        num_experts = getattr(args, "num_experts", None)
-        default_routed_experts_dtype = "uint8" if num_experts is not None and num_experts <= 256 else "int32"
-        routed_experts_dtype_name = str(
-            meta_info.get("routed_experts_dtype", default_routed_experts_dtype)
-        ).removeprefix("torch.")
-        try:
-            routed_experts_dtype = {"int32": torch.int32, "uint8": torch.uint8}[routed_experts_dtype_name]
-        except KeyError as exc:
-            raise ValueError(f"Unsupported SGLang routed_experts_dtype={routed_experts_dtype_name!r}.") from exc
-        if routed_experts_dtype == torch.uint8 and num_experts is not None and num_experts > 256:
-            raise ValueError(f"uint8 routed experts require num_experts <= 256, got {num_experts}.")
-        routed_experts = decode_meta_array(meta_info, "routed_experts", dtype=routed_experts_dtype)
+        # Community SGLang returns routed expert ids as base64-encoded int32.
+        routed_experts = decode_int32_meta_array(meta_info, "routed_experts")
         if routed_experts is not None:
             if args is None:
                 raise ValueError("args is required to decode routed experts metadata.")

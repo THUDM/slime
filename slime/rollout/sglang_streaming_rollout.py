@@ -80,7 +80,6 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     }
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
-        payload["routed_experts_dtype"] = "uint8" if args.num_experts <= 256 else "int32"
 
     images = sample.multimodal_inputs.get("images") if sample.multimodal_inputs else None
     if images:
