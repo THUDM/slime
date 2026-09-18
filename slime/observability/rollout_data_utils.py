@@ -5,6 +5,8 @@ from typing import Any
 import numpy as np
 import torch
 
+from slime.utils.routed_experts import validate_routed_experts_value
+from slime.utils.tensor_store import DiskTensorRef
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
@@ -30,7 +32,10 @@ def _cpu_tensor(value, dtype: torch.dtype | None = None) -> torch.Tensor:
 def tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:
     for key, dtype in _ROLLOUT_DATA_TENSOR_DTYPES.items():
         if key in rollout_data:
-            rollout_data[key] = [_cpu_tensor(value, dtype=dtype) for value in rollout_data[key]]
+            rollout_data[key] = [
+                value if isinstance(value, DiskTensorRef) else _cpu_tensor(value, dtype=dtype)
+                for value in rollout_data[key]
+            ]
 
     if "multimodal_train_inputs" in rollout_data:
         rollout_data["multimodal_train_inputs"] = [
@@ -53,40 +58,21 @@ def tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:
 
 
 def validate_rollout_routed_experts_for_replay(
-    routed_experts: list[torch.Tensor],
+    routed_experts: list[torch.Tensor | DiskTensorRef],
     args,
+    expected_rows: list[int] | None = None,
 ) -> None:
     """Reject incomplete PP routing captures before R3 consumes them."""
     if not routed_experts:
         raise ValueError("R3 is enabled but no rollout routed-experts tensors were returned.")
 
-    num_layers = int(args.num_layers)
-    topk = int(args.moe_router_topk)
-    moe_layer_freq = getattr(args, "moe_layer_freq", None)
-    if isinstance(moe_layer_freq, (list, tuple)):
-        moe_layers = [layer_id for layer_id, freq in enumerate(moe_layer_freq[:num_layers]) if int(freq) != 0]
-    else:
-        moe_layers = list(range(num_layers))
-
     for sample_idx, experts in enumerate(routed_experts):
-        experts = torch.as_tensor(experts)
-        if experts.ndim != 3 or tuple(experts.shape[1:]) != (num_layers, topk):
-            raise ValueError(
-                "Invalid rollout routed-experts shape for R3: "
-                f"sample={sample_idx}, got={tuple(experts.shape)}, "
-                f"expected=(*, {num_layers}, {topk})."
-            )
-        if experts.shape[0] == 0:
-            raise ValueError(f"R3 sample {sample_idx} has no routed-experts rows.")
-        if topk > 1:
-            missing_layers = [layer_id for layer_id in moe_layers if not torch.count_nonzero(experts[:, layer_id, :])]
-            if missing_layers:
-                raise ValueError(
-                    "R3 routed-experts capture is all zero for MoE layers "
-                    f"{missing_layers} in sample {sample_idx}. This usually means "
-                    "SGLang pipeline stages did not aggregate their disjoint routing "
-                    "captures; refusing to replay expert 0 everywhere."
-                )
+        validate_routed_experts_value(
+            experts,
+            args,
+            sample_index=sample_idx,
+            expected_rows=None if expected_rows is None else expected_rows[sample_idx],
+        )
 
 
 def validate_rollout_id_annotated(node, depth=0):

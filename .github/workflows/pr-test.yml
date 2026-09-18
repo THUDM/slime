@@ -723,6 +723,22 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_rollout_buffer_order.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_server_control.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_cuda_stack_offload.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_r3_spill.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_rollout_sample_hooks.py"
             },
             {

@@ -20,7 +20,7 @@ from slime.ray.train_actor import TrainRayActor
 from slime.utils import accelerator
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.memory_utils import clear_memory, print_memory
+from slime.utils.memory_utils import clear_memory, get_process_host_memory_gib, print_memory, reset_cuda_stack_size
 from slime.utils.misc import Box
 from slime.utils.reloadable_process_group import (
     destroy_process_groups,
@@ -28,7 +28,13 @@ from slime.utils.reloadable_process_group import (
     register_default_process_group,
     reload_process_groups,
 )
+from slime.utils.routed_experts import (
+    RoutedExpertsLayerRef,
+    RoutedExpertsMicrobatch,
+    RoutedExpertsMicrobatchPrefetcher,
+)
 from slime.utils.routing_replay import RoutingReplay
+from slime.utils.tensor_store import DiskTensorRef
 from slime.utils.types import RolloutBatch
 
 from ...utils.tensor_backper import TensorBackuper
@@ -186,6 +192,7 @@ class MegatronTrainRayActor(TrainRayActor):
         destroy_process_groups()
 
         torch_memory_saver.pause()
+        reset_cuda_stack_size()
 
         print_memory("after offload model")
 
@@ -283,38 +290,81 @@ class MegatronTrainRayActor(TrainRayActor):
 
         from slime.utils.routing_replay import RoutingReplay
 
+        layer_ids = []
+        for vp_stage, model in enumerate(self.model):
+            config = model.module.config
+            num_layers_to_build = get_num_layers_to_build(config, vp_stage=vp_stage)
+            offset = get_transformer_layer_offset(config, vp_stage=vp_stage)
+            for layer_id in range(offset, offset + num_layers_to_build):
+                if isinstance(config.moe_layer_freq, int):
+                    if layer_id % config.moe_layer_freq != 0:
+                        continue
+                elif isinstance(config.moe_layer_freq, list):
+                    assert len(config.moe_layer_freq) == config.num_layers
+                    if config.moe_layer_freq[layer_id] == 0:
+                        continue
+                layer_ids.append(layer_id)
+        assert len(layer_ids) == len(RoutingReplay.all_routing_replays)
+
         for iterator in data_iterator:
             iterator.reset()
 
+        replay_source = rollout_data["rollout_routed_experts"]
+        disk_prefetcher = None
+        prepare_kwargs = {
+            "num_experts": self.args.num_experts,
+            "data_pad_size_multiplier": self.args.data_pad_size_multiplier,
+            "sequence_parallel": self.args.sequence_parallel,
+            "allgather_cp": self.args.allgather_cp,
+        }
         for _ in range(sum(num_microbatches)):
-            batch = data_iterator[0].get_next(["rollout_routed_experts", "tokens"])
-            rollout_routed_experts = prepare_routed_experts_for_routing_replay(
-                batch["rollout_routed_experts"],
-                batch["tokens"],
-                num_experts=self.args.num_experts,
-                data_pad_size_multiplier=self.args.data_pad_size_multiplier,
-                sequence_parallel=self.args.sequence_parallel,
-                allgather_cp=self.args.allgather_cp,
-            )
+            iterator = data_iterator[0]
+            batch_indices = iterator.micro_batch_indices[iterator.offset]
+            batch = iterator.get_next(["rollout_routed_experts", "tokens"])
+            values = batch["rollout_routed_experts"]
 
-            routing_replay_offset = 0
-            for vp_stage, model in enumerate(self.model):
-                config = model.module.config
-                num_layers_to_build = get_num_layers_to_build(config, vp_stage=vp_stage)
-                offset = get_transformer_layer_offset(config, vp_stage=vp_stage)
-                for layer_id in range(offset, offset + num_layers_to_build):
-                    # skip dense layer
-                    if isinstance(config.moe_layer_freq, int):
-                        if layer_id % config.moe_layer_freq != 0:
-                            continue
-                    elif isinstance(config.moe_layer_freq, list):
-                        assert len(config.moe_layer_freq) == config.num_layers
-                        if config.moe_layer_freq[layer_id] == 0:
-                            continue
-                    layer_routed_experts = rollout_routed_experts[:, layer_id]
-                    RoutingReplay.all_routing_replays[routing_replay_offset].record(layer_routed_experts)
-                    routing_replay_offset += 1
-            assert routing_replay_offset == len(RoutingReplay.all_routing_replays)
+            disk_backed = [isinstance(value, DiskTensorRef) for value in values]
+            if any(disk_backed) and not all(disk_backed):
+                raise ValueError("A routing replay microbatch cannot mix disk-backed and resident route tensors.")
+
+            if layer_ids and all(disk_backed):
+                if disk_prefetcher is None:
+                    disk_prefetcher = RoutedExpertsMicrobatchPrefetcher(self.args.routing_replay_prefetch_microbatches)
+                source = RoutedExpertsMicrobatch(
+                    values,
+                    batch["tokens"],
+                    consumer_count=len(layer_ids),
+                    prepare_kwargs=prepare_kwargs,
+                )
+                disk_prefetcher.add(source)
+                for replay, layer_id in zip(RoutingReplay.all_routing_replays, layer_ids, strict=True):
+                    replay.record(RoutedExpertsLayerRef(source, layer_id))
+            elif layer_ids:
+                rollout_routed_experts = prepare_routed_experts_for_routing_replay(
+                    values,
+                    batch["tokens"],
+                    **prepare_kwargs,
+                )
+                for replay, layer_id in zip(RoutingReplay.all_routing_replays, layer_ids, strict=True):
+                    replay.record(rollout_routed_experts[:, layer_id])
+
+            # Drop manager-owned references as soon as this microbatch has
+            # been registered, bounding actor RSS during setup.
+            for sample_idx in batch_indices:
+                replay_source[sample_idx] = None
+
+        if disk_prefetcher is not None:
+            disk_prefetcher.start()
+            RoutingReplay.register_lazy_resource(disk_prefetcher)
+            rss_gib, hwm_gib = get_process_host_memory_gib()
+            logger.info(
+                "R3 lazy replay initialized: microbatches=%d layers=%d prefetch=%d rss=%.3f GiB hwm=%.3f GiB",
+                len(disk_prefetcher.sources),
+                len(layer_ids),
+                disk_prefetcher.prefetch_microbatches,
+                rss_gib,
+                hwm_gib,
+            )
 
         del rollout_data["rollout_routed_experts"]
 
@@ -443,6 +493,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     if self.args.use_routing_replay:
                         if self.args.use_rollout_routing_replay:
                             os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
+                            RoutingReplay.begin_lazy_pass("forward")
                         else:
                             os.environ["ROUTING_REPLAY_STAGE"] = "record"
                     rollout_data.update(
@@ -481,6 +532,10 @@ class MegatronTrainRayActor(TrainRayActor):
             # Train
             if self.args.use_routing_replay:
                 os.environ["ROUTING_REPLAY_STAGE"] = "replay_backward"
+                if self.args.use_rollout_routing_replay:
+                    # Hold each microbatch across forward and recompute; release
+                    # it after the backward replay has consumed every layer.
+                    RoutingReplay.begin_lazy_pass("backward")
             # When dumping train debug data but the actor log_probs were not
             # recomputed separately (can_reuse_log_probs_in_loss / use_rollout_logprobs),
             # snapshot them from the training forward so the dump still carries
