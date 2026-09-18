@@ -305,6 +305,8 @@ SGLANG_ARGS=(
 
 ### Colocated Actor and Rollout
 
+如需在单张 GPU 上完整运行标准同步 GRPO 流程（包括在线 rollout、规则奖励、优化器更新、周期性评测和 checkpoint 保存），可使用 [`scripts/run-qwen3-0.6B-single-gpu.sh`](../../../scripts/run-qwen3-0.6B-single-gpu.sh)。脚本需要本地 Qwen3-0.6B Hugging Face checkpoint、转换后的 Megatron checkpoint，以及 GSM8K 的 train/test parquet 文件；所有路径都可以通过脚本开头记录的环境变量覆盖。
+
 在默认的配置下，训练（Actor）和推理（Rollout）的资源是分开指定的，通过 ray 给训练部分分配 `actor_num_nodes * actor_num_gpus_per_node` 张 GPU，给推理分配 `rollout_num_gpus` 张 GPU，也即训推分离。将 `--rollout-num-gpus` 显式设置为 `0` 时，slime 仍会解析 SGLang 参数并启动 router，但不会启动本地 SGLang server。
 
 **标准（分离）配置**：
