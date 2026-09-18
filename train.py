@@ -79,6 +79,8 @@ def train(args):
             if args.rollout_global_dataset:
                 ray.get(rollout_manager.save.remote(rollout_id))
 
+        ray.get(rollout_manager.cleanup_rollout_data.remote(rollout_id))
+
         offload_train(actor_trains)
         if args.offload_rollout and not release_train:
             ray.get(rollout_manager.onload_weights.remote())

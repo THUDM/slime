@@ -462,7 +462,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "use `slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std_with_fallback`."
                 ),
             )
-
             # partial rollout
             parser.add_argument(
                 "--partial-rollout",
@@ -489,7 +488,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "Only substitue the `def generate(args, sample, sampling_params)` function within the example rollout function. "
-                    "This should be useful if you need to implement some special rollout logic, e.g. multi-turn, function calling."
+                    "This should be useful if you need to implement some special rollout logic, e.g. multi-turn, function calling. "
+                    "Set `abort_mode = 'request'` on the function when it implements request-level abort; otherwise "
+                    "Slime uses server-wide abort."
                 ),
             )
             parser.add_argument(
@@ -533,6 +534,14 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "The function should take list[list[Sample]] and return list[list[Sample]]."
                 ),
             )
+            parser.add_argument(
+                "--buffer-sort-by-staleness",
+                action="store_true",
+                help=(
+                    "Resume buffered groups with the oldest generated-token weight version first. "
+                    "Disabled by default; an explicit --buffer-filter-path takes precedence."
+                ),
+            )
             # update weight
             parser.add_argument(
                 "--update-weight-buffer-size",
@@ -543,18 +552,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This is used for updating weights by chunk and should be useful for MoE models."
                 ),
             )
-            parser.add_argument(
-                "--update-weights-interval",
-                type=int,
-                default=1,
-                help="Interval for updating the weights",
-            )
-            parser.add_argument(
-                "--keep-old-actor",
-                action="store_true",
-                help="Whether to keep the rollout model on training process",
-            )
-
             parser.add_argument(
                 "--rollout-data-postprocess-path",
                 type=str,
@@ -1110,6 +1107,27 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_true",
                 default=False,
                 help="The rollout routing replay technique from https://arxiv.org/abs/2510.11370",
+            )
+            parser.add_argument(
+                "--rollout-routed-experts-store-dir",
+                type=str,
+                default=None,
+                help=(
+                    "Shared filesystem directory used by routed-experts sample spill hooks. "
+                    "All rollout and training nodes must be able to access this path."
+                ),
+            )
+            parser.add_argument(
+                "--routing-replay-prefetch-microbatches",
+                type=int,
+                default=1,
+                help="Number of upcoming disk-backed R3 microbatches to prefetch into CPU memory.",
+            )
+            parser.add_argument(
+                "--keep-rollout-routed-experts-files",
+                action="store_true",
+                default=False,
+                help="Keep disk-backed routed-experts files after all trainers finish the rollout.",
             )
             parser.add_argument(
                 "--use-opsm",
@@ -2013,6 +2031,27 @@ def slime_validate_args(args):
 
     if args.use_rollout_routing_replay:
         args.use_routing_replay = True
+        if args.routing_replay_prefetch_microbatches < 0:
+            raise ValueError("--routing-replay-prefetch-microbatches must be non-negative")
+
+    fully_async = "fully_async" in (getattr(args, "rollout_function_path", None) or "")
+    disk_spill = "slime.utils.routed_experts.spill_routed_experts" in (
+        getattr(args, "rollout_sample_hook_path", None) or []
+    )
+    if disk_spill and not getattr(args, "rollout_routed_experts_store_dir", None):
+        raise ValueError(
+            "slime.utils.routed_experts.spill_routed_experts requires --rollout-routed-experts-store-dir."
+        )
+    if (
+        not getattr(args, "debug_train_only", False)
+        and fully_async
+        and disk_spill
+        and not getattr(args, "keep_rollout_routed_experts_files", False)
+    ):
+        raise ValueError(
+            "fully-async rollout with routed-experts disk spill requires "
+            "--keep-rollout-routed-experts-files because in-flight samples can cross rollout boundaries."
+        )
 
     if args.custom_config_path:
         with open(args.custom_config_path) as f:
@@ -2050,8 +2089,6 @@ def slime_validate_args(args):
     if args.release_train:
         if args.use_critic:
             raise ValueError("--release-train does not support critic training yet.")
-        if args.keep_old_actor:
-            raise ValueError("--release-train does not support --keep-old-actor.")
         if args.save is None:
             raise ValueError("--release-train requires --save so the next Megatron actor can reload.")
         if args.save_interval is None:

@@ -170,7 +170,7 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
         super().__init__(args)
         self.buffer = []
         if self.args.buffer_filter_path is None:
-            self.buffer_filter = pop_first
+            self.buffer_filter = pop_oldest if getattr(args, "buffer_sort_by_staleness", False) else pop_first
         else:
             self.buffer_filter = load_function(self.args.buffer_filter_path)
 
@@ -220,6 +220,20 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
 
     def get_buffer_length(self):
         return len(self.buffer)
+
+
+def pop_oldest(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
+    """Resume groups with the oldest generated tokens first; preserve ties."""
+
+    def oldest_version(group):
+        versions = (str(v) for sample in group for v in (sample.weight_versions or []))
+        return min(
+            (int(v) for v in versions if v.isascii() and v.removeprefix("-").isdigit()),
+            default=float("inf"),
+        )
+
+    buffer.sort(key=oldest_version)
+    return pop_first(args, rollout_id, buffer, num_samples)
 
 
 def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:

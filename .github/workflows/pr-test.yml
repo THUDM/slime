@@ -265,10 +265,6 @@ jobs:
               "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"
             },
             {
-              "num_gpus": 4,
-              "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"
-            },
-            {
               "num_gpus": 8,
               "test_args": "--save-optimizer gpu --load-optimizer gpu",
               "test_file": "test_qwen3_4B_ckpt.py"
@@ -723,6 +719,22 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_rollout_buffer_order.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_server_control.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_cuda_stack_offload.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_r3_spill.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_rollout_sample_hooks.py"
             },
             {
@@ -756,6 +768,10 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_external_sglang_engines.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_streaming_rollout.py"
             },
             {
               "num_gpus": 0,
@@ -1079,10 +1095,6 @@ jobs:
             {
               "num_gpus": 4,
               "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"
-            },
-            {
-              "num_gpus": 4,
-              "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"
             },
             {
               "num_gpus": 8,
