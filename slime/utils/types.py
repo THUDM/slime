@@ -4,7 +4,8 @@ from typing import Any
 
 import torch
 
-from slime.utils.misc import decode_int32_meta_array
+from slime.utils.misc import decode_int32_meta_array, decode_meta_array
+from slime.utils.tensor_store import DiskTensorRef
 
 _TOP_P_TOKEN_ID_META_KEYS = ("top_p_token_ids", "top_p_kept_token_ids")
 _TOP_P_TOKEN_OFFSET_META_KEYS = ("top_p_token_offsets", "top_p_kept_token_offsets")
@@ -123,7 +124,9 @@ class Sample:
     # token i, kept ids are rollout_top_p_token_ids[offsets[i]:offsets[i + 1]].
     rollout_top_p_token_ids: list[int] | torch.Tensor | None = None
     rollout_top_p_token_offsets: list[int] | torch.Tensor | None = None
-    rollout_routed_experts: list[list[int]] | torch.Tensor | None = None  # Routed experts from rollout engine
+    rollout_routed_experts: list[list[int]] | list[torch.Tensor] | torch.Tensor | DiskTensorRef | None = (
+        None  # Routed experts from rollout engine
+    )
     remove_sample: bool = False
     teacher_log_probs: list[float] | None = None  # Log probabilities from teacher model for OPD
 
@@ -349,7 +352,20 @@ class Sample:
                 new_token_count,
             )
 
-        routed_experts = decode_int32_meta_array(meta_info, "routed_experts")
+        # SGLang may omit the requested dtype from meta_info. Keep the fallback
+        # aligned with the request payload rather than decoding uint8 as int32.
+        num_experts = getattr(args, "num_experts", None)
+        default_routed_experts_dtype = "uint8" if num_experts is not None and num_experts <= 256 else "int32"
+        routed_experts_dtype_name = str(
+            meta_info.get("routed_experts_dtype", default_routed_experts_dtype)
+        ).removeprefix("torch.")
+        try:
+            routed_experts_dtype = {"int32": torch.int32, "uint8": torch.uint8}[routed_experts_dtype_name]
+        except KeyError as exc:
+            raise ValueError(f"Unsupported SGLang routed_experts_dtype={routed_experts_dtype_name!r}.") from exc
+        if routed_experts_dtype == torch.uint8 and num_experts is not None and num_experts > 256:
+            raise ValueError(f"uint8 routed experts require num_experts <= 256, got {num_experts}.")
+        routed_experts = decode_meta_array(meta_info, "routed_experts", dtype=routed_experts_dtype)
         if routed_experts is not None:
             if args is None:
                 raise ValueError("args is required to decode routed experts metadata.")
@@ -376,23 +392,25 @@ class Sample:
             if routed_experts_start_len == 0:
                 self.rollout_routed_experts = routed_experts
             else:
-                existing = self.rollout_routed_experts
-                if existing is None:
+                existing_len = self.get_rollout_routed_experts_length()
+                if existing_len == 0:
                     raise ValueError(
                         "Cannot append partial routed experts without existing routed experts "
                         f"(routed_experts_start_len={routed_experts_start_len})."
                     )
-                if not torch.is_tensor(existing):
-                    existing = torch.as_tensor(existing, dtype=routed_experts.dtype)
-                if existing.shape[0] < routed_experts_start_len:
+                if existing_len < routed_experts_start_len:
                     raise ValueError(
                         "Existing routed experts shorter than routed_experts_start_len: "
-                        f"existing_rows={existing.shape[0]}, routed_experts_start_len={routed_experts_start_len}."
+                        f"existing_rows={existing_len}, routed_experts_start_len={routed_experts_start_len}."
                     )
-                self.rollout_routed_experts = torch.cat(
-                    [existing[:routed_experts_start_len], routed_experts],
-                    dim=0,
-                )
+                if existing_len == routed_experts_start_len:
+                    self._append_rollout_routed_experts_chunk(routed_experts)
+                else:
+                    existing = self.materialize_rollout_routed_experts(replace=False)
+                    self.rollout_routed_experts = torch.cat(
+                        [existing[:routed_experts_start_len], routed_experts],
+                        dim=0,
+                    )
 
         if not update_terminal_info or "finish_reason" not in meta_info:
             return
@@ -404,7 +422,7 @@ class Sample:
         # Collect prefix cache statistics
         self.prefix_cache_info.add(meta_info=meta_info)
 
-        if "weight_version" in meta_info:
+        if new_token_count > 0 and "weight_version" in meta_info:
             self.weight_versions.append(meta_info["weight_version"])
 
         match meta_info["finish_reason"]["type"]:
@@ -414,6 +432,50 @@ class Sample:
                 self.status = Sample.Status.ABORTED
             case "stop":
                 self.status = Sample.Status.COMPLETED
+
+    def _append_rollout_routed_experts_chunk(self, routed_experts: torch.Tensor) -> None:
+        existing = self.rollout_routed_experts
+        if existing is None:
+            self.rollout_routed_experts = routed_experts
+        elif isinstance(existing, DiskTensorRef):
+            self.rollout_routed_experts = [existing.load(), routed_experts]
+        elif isinstance(existing, list) and all(torch.is_tensor(item) for item in existing):
+            existing.append(routed_experts)
+        else:
+            self.rollout_routed_experts = [torch.as_tensor(existing, dtype=routed_experts.dtype), routed_experts]
+
+    def get_rollout_routed_experts_length(self) -> int:
+        routed_experts = self.rollout_routed_experts
+        if routed_experts is None:
+            return 0
+        if isinstance(routed_experts, DiskTensorRef):
+            return int(routed_experts.shape[0])
+        if torch.is_tensor(routed_experts):
+            return int(routed_experts.shape[0])
+        if isinstance(routed_experts, list):
+            if not routed_experts:
+                return 0
+            if all(torch.is_tensor(item) for item in routed_experts):
+                return sum(int(item.shape[0]) for item in routed_experts)
+            return int(torch.as_tensor(routed_experts).shape[0])
+        return int(torch.as_tensor(routed_experts).shape[0])
+
+    def materialize_rollout_routed_experts(self, *, replace: bool = True) -> torch.Tensor | None:
+        routed_experts = self.rollout_routed_experts
+        if routed_experts is None:
+            return None
+        if isinstance(routed_experts, DiskTensorRef):
+            tensor = routed_experts.load()
+        elif torch.is_tensor(routed_experts):
+            tensor = routed_experts.reshape(*routed_experts.shape)
+        elif isinstance(routed_experts, list) and all(torch.is_tensor(item) for item in routed_experts):
+            tensor = torch.cat(routed_experts, dim=0) if len(routed_experts) > 1 else routed_experts[0]
+        else:
+            tensor = torch.as_tensor(routed_experts, dtype=torch.int32)
+        tensor = tensor.detach().cpu().contiguous()
+        if replace:
+            self.rollout_routed_experts = tensor
+        return tensor
 
     def _validate_response_metadata_lengths(self):
         if self.loss_mask is not None and len(self.loss_mask) != self.response_length:
