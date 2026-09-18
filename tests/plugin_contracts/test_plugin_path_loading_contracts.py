@@ -221,6 +221,32 @@ def test_strict_dynamic_filter_still_drops_at_target_capacity():
     assert should_drop_dynamic_filter_output(output, remaining_batch_size=2, target_data_size=2) is True
 
 
+def test_dynamic_filter_accepts_fanout_trajectories():
+    fn = load_function("slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std")
+    output = call_dynamic_filter(
+        fn,
+        make_args(),
+        [
+            [make_sample(0, reward=0.0), make_sample(1, reward=0.0)],
+            [make_sample(2, reward=1.0), make_sample(3, reward=1.0)],
+        ],
+    )
+
+    assert bool(output.keep)
+
+    zero_std_output = call_dynamic_filter(
+        fn,
+        make_args(),
+        [
+            [make_sample(4, reward=0.0), make_sample(5, reward=0.0)],
+            [make_sample(6, reward=0.0), make_sample(7, reward=0.0)],
+        ],
+    )
+
+    assert not bool(zero_std_output.keep)
+    assert zero_std_output.reason == "zero_std_0.0"
+
+
 def check_buffer_filter_default() -> None:
     fn = load_function("slime.rollout.data_source.pop_first")
     assert tuple(inspect.signature(fn).parameters)[:4] == ("args", "rollout_id", "buffer", "num_samples")

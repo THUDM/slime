@@ -6,8 +6,9 @@ from slime.utils.types import Sample
 __all__ = ["check_reward_nonzero_std", "check_reward_nonzero_std_with_fallback"]
 
 
-def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
-    rewards = [sample.get_reward_value(args) for sample in samples]
+def check_reward_nonzero_std(args, samples: list[Sample | list[Sample]], **kwargs):
+    # Agent fan-out stores one reward-identical list of fragments per trajectory.
+    rewards = [(sample[0] if isinstance(sample, list) else sample).get_reward_value(args) for sample in samples]
     keep = torch.tensor(rewards, dtype=torch.float64).std() > 1e-6
     return DynamicFilterOutput(
         keep=keep,
@@ -15,7 +16,7 @@ def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
     )
 
 
-def check_reward_nonzero_std_with_fallback(args, samples: list[Sample], **kwargs):
+def check_reward_nonzero_std_with_fallback(args, samples: list[Sample | list[Sample]], **kwargs):
     """Prefer non-zero-std groups without triggering another sampling round."""
 
     output = check_reward_nonzero_std(args, samples, **kwargs)
