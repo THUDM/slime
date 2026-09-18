@@ -135,13 +135,6 @@ class MegatronTrainRayActor(TrainRayActor):
         if with_opd_teacher:
             self.load_other_checkpoint("teacher", args.opd_teacher_load)
 
-        if self.args.keep_old_actor:
-            # Load old_actor checkpoint
-            self.load_other_checkpoint("old_actor", args.load)
-            # Create rollout_actor as a copy of current actor
-            if args.update_weights_interval == 1:
-                self.weights_backuper.backup("rollout_actor")
-
         if self.args.vocab_size is None:
             # Prefer HF config vocab_size (which may include model-native padding)
             # over tokenizer vocab_size, which may be smaller.
@@ -474,7 +467,7 @@ class MegatronTrainRayActor(TrainRayActor):
                         )
                     )
 
-                self._switch_model("old_actor" if self.args.keep_old_actor else "actor")
+                self._switch_model("actor")
                 can_reuse_log_probs_in_loss = (
                     len(num_microbatches) == 1
                     and self.args.loss_type == "policy_loss"
@@ -482,7 +475,6 @@ class MegatronTrainRayActor(TrainRayActor):
                     and not self.args.use_rollout_logprobs
                     and not self.args.get_mismatch_metrics
                     and not self.args.use_critic
-                    and not self.args.keep_old_actor
                     and not self.args.use_opd
                     and (not self.args.use_routing_replay or self.args.use_rollout_routing_replay)
                     and self.args.advantage_estimator != "gspo"
@@ -661,17 +653,6 @@ class MegatronTrainRayActor(TrainRayActor):
             print_memory("before update_weights")
             self.weight_updater.update_weights()
             print_memory("after update_weights")
-
-            if getattr(self.args, "keep_old_actor", False):
-                if self.args.update_weights_interval == 1:
-                    logger.info("updating model queue: rollout_actor -> old_actor, actor -> rollout_actor")
-                    # Queue-style update: rollout_actor params -> old_actor, actor params -> rollout_actor
-                    # First copy rollout_actor to old_actor
-                    self.weights_backuper.copy(src_tag="rollout_actor", dst_tag="old_actor")
-                    # Then copy current actor to rollout_actor
-                    self.weights_backuper.backup("rollout_actor")
-                else:
-                    self.weights_backuper.backup("old_actor")
 
         if reconnect_rollout_engines:
             self.sleep()
