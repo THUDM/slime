@@ -14,6 +14,18 @@ from slime.utils.types import Sample
 logger = logging.getLogger(__name__)
 
 
+def _should_cache_prompt_token_ids(args) -> bool:
+    return (
+        args.rollout_function_path == "slime.rollout.sglang_rollout.generate_rollout"
+        and args.custom_generate_function_path is None
+        and args.data_source_path
+        in {
+            "slime.rollout.data_source.RolloutDataSource",
+            "slime.rollout.data_source.RolloutDataSourceWithBuffer",
+        }
+    )
+
+
 class DataSource(abc.ABC):
     @abc.abstractmethod
     def get_samples(self, num_samples: int) -> list[list[Sample]]:
@@ -80,6 +92,7 @@ class RolloutDataSource(DataSource):
                 tool_key=args.tool_key,
                 apply_chat_template=args.apply_chat_template,
                 apply_chat_template_kwargs=args.apply_chat_template_kwargs,
+                cache_prompt_token_ids=_should_cache_prompt_token_ids(args),
                 seed=args.rollout_seed,
             )
             if self.args.rollout_shuffle:

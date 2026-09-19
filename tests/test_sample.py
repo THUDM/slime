@@ -18,6 +18,8 @@ Pins two contracts that the rollout / training boundary depends on:
 from __future__ import annotations
 
 import argparse
+import copy
+import struct
 
 import pytest
 
@@ -170,6 +172,61 @@ def test_round_trip_through_default_constructed_sample():
     assert restored.status is Sample.Status.PENDING
     assert restored.tokens == []
     assert restored.metadata == {}
+
+
+@pytest.mark.unit
+def test_prompt_token_cache_round_trips_uint32_values_and_empty_prompts():
+    sample = Sample()
+
+    assert sample.cache_prompt_token_ids([])
+    assert sample.pop_cached_prompt_token_ids() == []
+    assert sample.cache_prompt_token_ids([0, 1, 2**32 - 1])
+    assert sample._prompt_token_ids_cache == struct.pack("<III", 0, 1, 2**32 - 1)
+    assert sample.pop_cached_prompt_token_ids() == [0, 1, 2**32 - 1]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("token_ids", [[-1], [2**32], [1.5], ["1"]])
+def test_prompt_token_cache_rejects_values_outside_uint32(token_ids):
+    sample = Sample()
+
+    assert not sample.cache_prompt_token_ids(token_ids)
+    assert sample.pop_cached_prompt_token_ids() is None
+
+
+@pytest.mark.unit
+def test_prompt_token_cache_is_shared_by_deepcopy_and_consumed_per_sample():
+    source = Sample()
+    assert source.cache_prompt_token_ids([10, 11])
+    sibling = copy.deepcopy(source)
+
+    assert sibling._prompt_token_ids_cache is source._prompt_token_ids_cache
+    sibling_ids = sibling.pop_cached_prompt_token_ids()
+    sibling_ids.append(12)
+    assert sibling_ids == [10, 11, 12]
+    assert source.pop_cached_prompt_token_ids() == [10, 11]
+
+
+@pytest.mark.unit
+def test_prompt_token_cache_is_excluded_from_sample_serialization():
+    sample = _make_sample()
+    assert sample.cache_prompt_token_ids([10, 11])
+
+    serialized = sample.to_dict()
+    assert "_prompt_token_ids_cache" not in serialized
+
+    serialized["_prompt_token_ids_cache"] = b"\x0a\x00\x00\x00"
+    restored = Sample.from_dict(serialized)
+    assert restored.pop_cached_prompt_token_ids() is None
+
+
+@pytest.mark.unit
+def test_malformed_prompt_token_cache_is_consumed_as_a_miss():
+    sample = Sample()
+    sample._prompt_token_ids_cache = b"\x01"
+
+    assert sample.pop_cached_prompt_token_ids() is None
+    assert sample._prompt_token_ids_cache is None
 
 
 # ---------------------------------------------------------------------------
