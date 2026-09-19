@@ -72,14 +72,16 @@ class MegatronTrainRayActor(TrainRayActor):
             self.args = args
             return 0
 
-        monkey_patch_torch_dist()
+        if args.offload_train:
+            monkey_patch_torch_dist()
         super().init(args, role, with_ref, with_opd_teacher)
-        # Destroying and recreating WORLD invalidates raw dist.group.WORLD references cached by external code.
-        # Set SLIME_DESTROY_WORLD_PROCESS_GROUP=0 when such references may outlive a train sleep/wake cycle.
-        if os.getenv("SLIME_DESTROY_WORLD_PROCESS_GROUP", "1").lower() not in {"0", "false", "no"}:
-            register_default_process_group(timeout=timedelta(minutes=args.distributed_timeout_minutes))
-        else:
-            logger.info("Default WORLD process-group destruction is disabled")
+        if args.offload_train:
+            # Destroying and recreating WORLD invalidates raw dist.group.WORLD references cached by external code.
+            # Set SLIME_DESTROY_WORLD_PROCESS_GROUP=0 when such references may outlive a train sleep/wake cycle.
+            if os.getenv("SLIME_DESTROY_WORLD_PROCESS_GROUP", "1").lower() not in {"0", "false", "no"}:
+                register_default_process_group(timeout=timedelta(minutes=args.distributed_timeout_minutes))
+            else:
+                logger.info("Default WORLD process-group destruction is disabled")
 
         init(args)
 
