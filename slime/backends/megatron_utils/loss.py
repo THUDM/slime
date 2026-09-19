@@ -332,6 +332,7 @@ def _fill_topp_mask_rows(
     length: int,
     vocab_start: int,
     vocab_end: int,
+    selected_row_mapping: list[int] | None = None,
 ) -> None:
     end = min(response_start + length, max(len(offsets) - 1, 0))
     for response_idx in range(response_start, end):
@@ -341,6 +342,10 @@ def _fill_topp_mask_rows(
             if vocab_start <= token_id < vocab_end
         ]
         row = local_start + response_idx - response_start
+        if selected_row_mapping is not None:
+            row = selected_row_mapping[row]
+            if row < 0:
+                continue
         keep[row].fill_(False)
         if local_ids:
             keep[row, torch.tensor(local_ids, device=keep.device, dtype=torch.long)] = True
@@ -355,12 +360,16 @@ def _build_topp_keep_mask(
     total_lengths: list[int],
     response_lengths: list[int],
     allgather_cp: bool,
+    selected_rows: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Build a ``[T, vocab_local]`` boolean keep-mask aligned to local logits.
+    """Build a boolean keep-mask aligned to full or selected local logits rows.
 
     For response token ``r`` of a sample, the rollout top-p nucleus is
     ``ids[offsets[r]:offsets[r + 1]]``. Rows without a recorded nucleus stay
-    all-True, so only response rows with replay data are masked.
+    all-True, so only response rows with replay data are masked. If
+    ``selected_rows`` is provided, the output is ``[N, vocab_local]`` where N
+    is the number of selected rows, without allocating an intermediate
+    ``[T, vocab_local]`` mask.
     """
     cp_size = mpu.get_context_parallel_world_size()
     tp_rank = mpu.get_tensor_model_parallel_rank()
@@ -371,7 +380,19 @@ def _build_topp_keep_mask(
     top_p_token_ids = [t.tolist() if torch.is_tensor(t) else list(t) for t in top_p_token_ids]
     top_p_token_offsets = [t.tolist() if torch.is_tensor(t) else list(t) for t in top_p_token_offsets]
 
-    keep = torch.ones((T, vocab_local), dtype=torch.bool, device=device)
+    selected_row_mapping = None
+    num_rows = T
+    if selected_rows is not None:
+        selected_rows = selected_rows.reshape(-1).to(device=device, dtype=torch.bool)
+        if selected_rows.numel() != T:
+            raise ValueError(f"selected_rows must contain {T} entries, got {selected_rows.numel()}")
+        selected_positions = selected_rows.nonzero(as_tuple=False).squeeze(-1).tolist()
+        selected_row_mapping = [-1] * T
+        for selected_row, full_row in enumerate(selected_positions):
+            selected_row_mapping[full_row] = selected_row
+        num_rows = len(selected_positions)
+
+    keep = torch.ones((num_rows, vocab_local), dtype=torch.bool, device=device)
 
     if cp_size > 1 and not allgather_cp:
         local_base = 0
@@ -386,7 +407,17 @@ def _build_topp_keep_mask(
                 local_start = base + logits_offset[half][0] - chunks_offset[half][0]
                 length = logits_offset[half][1] - logits_offset[half][0]
                 response_start = tokens_offset[half][0] - prompt_length
-                _fill_topp_mask_rows(keep, ids, offsets, response_start, local_start, length, vocab_start, vocab_end)
+                _fill_topp_mask_rows(
+                    keep,
+                    ids,
+                    offsets,
+                    response_start,
+                    local_start,
+                    length,
+                    vocab_start,
+                    vocab_end,
+                    selected_row_mapping,
+                )
             local_base += 2 * chunk_size_cp
         return keep
 
@@ -413,6 +444,7 @@ def _build_topp_keep_mask(
                     e - s,
                     vocab_start,
                     vocab_end,
+                    selected_row_mapping,
                 )
             seq_start += total_length
         return keep
@@ -423,7 +455,17 @@ def _build_topp_keep_mask(
     ):
         end = offset + total_length
         start = end - response_length
-        _fill_topp_mask_rows(keep, ids, offsets, 0, start - 1, response_length, vocab_start, vocab_end)
+        _fill_topp_mask_rows(
+            keep,
+            ids,
+            offsets,
+            0,
+            start - 1,
+            response_length,
+            vocab_start,
+            vocab_end,
+            selected_row_mapping,
+        )
         offset += total_length
 
     return keep
@@ -521,12 +563,14 @@ def get_log_probs_and_entropy(
     non_loss_data: bool = True,
     top_p_token_ids: list[list[int]] | None = None,
     top_p_token_offsets: list[list[int]] | None = None,
+    full_loss_masks: torch.Tensor | None = None,
 ) -> dict[str, list[torch.Tensor]]:
     """Compute per-token log-probabilities (and optionally entropy) on responses.
 
-    Computes on the **full** logits ``[T, V]`` tensor at once (instead of
-    per-sample slicing) so backward traverses ``[T, V]`` only once, then
-    extracts per-sample response portions.
+    Logits may contain all T local sequence rows or only the N rows selected by
+    ``full_loss_masks``. Full logits retain the existing behavior. Compact
+    logits evaluate only selected rows and scatter scalar results back to the
+    full T-row layout before response portions are extracted.
 
     If rollout top-p replay is provided, the keep-mask is applied only to
     log-probabilities; entropy is always computed from the unmasked logits.
@@ -542,7 +586,7 @@ def get_log_probs_and_entropy(
     if rollout_temperature != 1.0:
         logits = logits / rollout_temperature
     logits = logits.contiguous()
-    T = logits.size(0)
+    logits_rows = logits.size(0)
     device = logits.device
     tp_group = mpu.get_tensor_model_parallel_group()
     chunk_size = args.log_probs_chunk_size
@@ -550,8 +594,26 @@ def get_log_probs_and_entropy(
     # the entropy term cannot affect the loss.
     with_entropy_grad = with_entropy and getattr(args, "entropy_coef", 0.0) != 0
 
-    # --- build full shifted-token target tensor ---
+    selected_rows = None
+    T = logits_rows
+    logits_to_evaluate = logits
+    if full_loss_masks is not None:
+        if full_loss_masks.ndim != 2 or full_loss_masks.size(0) != 1:
+            raise ValueError(f"full_loss_masks must have shape [1, T], got {tuple(full_loss_masks.shape)}")
+        full_row_mask = full_loss_masks.reshape(-1).to(device=device, dtype=torch.bool)
+        T = full_row_mask.numel()
+        if logits_rows != T:
+            selected_count = int(full_row_mask.sum().item())
+            if logits_rows != selected_count:
+                raise ValueError(
+                    "logits row count must match either full_loss_masks length "
+                    f"({T}) or selected row count ({selected_count}), got {logits_rows}"
+                )
+            selected_rows = full_row_mask
+
+    # --- build full shifted-token target tensor, then select evaluated rows ---
     full_tokens = _build_shifted_tokens(T, device, unconcat_tokens, total_lengths, response_lengths, args.allgather_cp)
+    tokens_to_evaluate = full_tokens if selected_rows is None else full_tokens[selected_rows]
 
     # --- build top-p nucleus keep-mask (logprob only; entropy stays unmasked) ---
     top_p_keep_mask = None
@@ -565,19 +627,44 @@ def get_log_probs_and_entropy(
             total_lengths,
             response_lengths,
             args.allgather_cp,
+            selected_rows=selected_rows,
         )
 
-    # --- compute on full [T,V] logits at once via calculate_log_probs_and_entropy ---
-    log_prob_full, entropy_full = calculate_log_probs_and_entropy(
-        logits,
-        full_tokens,
-        tp_group,
-        with_entropy=with_entropy,
-        with_entropy_grad=with_entropy_grad,
-        chunk_size=chunk_size,
-        log_prob_keep_mask=top_p_keep_mask,
-    )
-    log_prob_full = log_prob_full.squeeze(-1)  # [T, 1] -> [T]
+    # --- compute only evaluated rows via calculate_log_probs_and_entropy ---
+    if logits_to_evaluate.size(0) == 0:
+        # Avoid entering the vocab-parallel softmax collectives for an empty
+        # microbatch while keeping the policy-loss output connected to logits.
+        log_prob_rows = logits_to_evaluate.sum(dim=-1, keepdim=True)
+        entropy_rows = None
+        if with_entropy:
+            entropy_rows = logits_to_evaluate.sum(dim=-1)
+            if not with_entropy_grad:
+                entropy_rows = entropy_rows.detach()
+    else:
+        log_prob_rows, entropy_rows = calculate_log_probs_and_entropy(
+            logits_to_evaluate,
+            tokens_to_evaluate,
+            tp_group,
+            with_entropy=with_entropy,
+            with_entropy_grad=with_entropy_grad,
+            chunk_size=chunk_size,
+            log_prob_keep_mask=top_p_keep_mask,
+        )
+    log_prob_rows = log_prob_rows.squeeze(-1)
+
+    if selected_rows is None:
+        log_prob_full = log_prob_rows
+        entropy_full = entropy_rows
+    else:
+        # Keep empty compact outputs connected to the model graph while
+        # preserving the existing full response shapes for downstream code.
+        graph_anchor = 0 * logits.sum()
+        log_prob_full = logits.new_zeros(T).masked_scatter(selected_rows, log_prob_rows) + graph_anchor
+        entropy_full = None
+        if entropy_rows is not None:
+            entropy_full = logits.new_zeros(T).masked_scatter(selected_rows, entropy_rows)
+            if with_entropy_grad:
+                entropy_full = entropy_full + graph_anchor
 
     # --- extract per-sample response portions ---
     log_probs_list, entropy_list = _extract_per_sample(
@@ -973,6 +1060,7 @@ def policy_loss_function(
         total_lengths=total_lengths,
         response_lengths=response_lengths,
         with_entropy=True,
+        full_loss_masks=batch["full_loss_masks"] if getattr(args, "compact_actor_logits", False) else None,
         **get_rollout_top_p_logprob_kwargs(args, batch),
     )
 
@@ -1261,6 +1349,7 @@ def sft_loss_function(
         total_lengths=total_lengths,
         response_lengths=response_lengths,
         with_entropy=False,
+        full_loss_masks=batch["full_loss_masks"] if getattr(args, "compact_actor_logits", False) else None,
     )
 
     log_probs = log_probs_and_entropy["log_probs"]
