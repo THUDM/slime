@@ -711,6 +711,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_dataset_shuffle.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_read_file_slicing.py"
             },
             {
