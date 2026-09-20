@@ -256,6 +256,7 @@ def make_slime_validate_args(**overrides):
         update_weight_local_checkpoint_dir=None,
         update_weight_mode="full",
         rollout_temperature=1.0,
+        eval_temperature=None,
     )
     values.update(overrides)
     return types.SimpleNamespace(**values)
@@ -302,6 +303,25 @@ def test_slime_validate_args_rejects_non_positive_rollout_temperature(monkeypatc
 
     with pytest.raises(ValueError, match="--rollout-temperature must be > 0"):
         module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("temperature", [0.0, -0.1])
+def test_slime_validate_args_rejects_non_positive_eval_temperature(monkeypatch, temperature):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(eval_temperature=temperature)
+
+    with pytest.raises(ValueError, match="--eval-temperature must be > 0"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_slime_validate_args_allows_unspecified_eval_temperature(monkeypatch):
+    """``--eval-temperature`` is optional and falls back to the rollout temperature."""
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(eval_temperature=None)
+
+    module.slime_validate_args(args)
 
 
 @pytest.mark.unit
