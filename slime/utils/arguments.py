@@ -835,7 +835,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=1,
                 help="number of responses for each prompt in generation",
             )
-            parser.add_argument("--eval-temperature", type=float, default=None)
+            parser.add_argument(
+                "--eval-temperature",
+                type=float,
+                default=None,
+                help="the temperature for the inference engine during evaluation. Must be > 0.",
+            )
             parser.add_argument("--eval-top-p", type=float, default=None)
             parser.add_argument("--eval-top-k", type=int, default=None)
             parser.add_argument("--eval-max-response-len", type=int, default=None)
@@ -1792,6 +1797,14 @@ def slime_validate_args(args):
     if args.rollout_temperature <= 0:
         raise ValueError(
             "--rollout-temperature must be > 0; temperature 0 is greedy decoding and is not a valid RL policy."
+        )
+
+    # `--eval-temperature` overrides the same `temperature` sampling parameter for evaluation
+    # (see slime/utils/eval_config.py), so it must not be able to reintroduce a value the check
+    # above rejects. It is optional: when omitted the rollout temperature is used.
+    if args.eval_temperature is not None and args.eval_temperature <= 0:
+        raise ValueError(
+            "--eval-temperature must be > 0; temperature 0 is greedy decoding and is not a valid sampling policy."
         )
 
     if args.kl_coef != 0 or args.use_kl_loss:
