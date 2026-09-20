@@ -36,6 +36,11 @@ from slime.agent.parsing import ParsedModelOutput
 logger = logging.getLogger(__name__)
 
 
+def _representable_tool_uses(tool_uses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only calls whose arguments can be represented as an input object."""
+    return [tu for tu in tool_uses if tu.get("arguments_valid", isinstance(tu.get("input"), dict))]
+
+
 class AnthropicAdapter(BaseAdapter):
     """Anthropic Messages-compatible HTTP adapter: wire translation and reply
     framing only; the turn machinery is inherited from BaseAdapter."""
@@ -64,7 +69,7 @@ class AnthropicAdapter(BaseAdapter):
         blocks, stop_reason, manager_message = _build_reply_parts(parsed, raw_finish)
         return Reply(
             manager_message=manager_message,
-            finish_reason=manager_finish_reason(parsed.tool_uses, raw_finish),
+            finish_reason=manager_finish_reason(_representable_tool_uses(parsed.tool_uses), raw_finish),
             wire=(blocks, stop_reason),
         )
 
@@ -160,8 +165,9 @@ def _build_reply_parts(
     if parsed.text:
         blocks.append({"type": "text", "text": parsed.text})
 
+    representable_tool_uses = _representable_tool_uses(parsed.tool_uses)
     manager_tcs: list[dict] = []
-    for tu in parsed.tool_uses:
+    for tu in representable_tool_uses:
         tu_id = f"toolu_{secrets.token_hex(8)}"
         blocks.append({"type": "tool_use", "id": tu_id, "name": tu["name"], "input": tu["input"]})
         # tu_id is wire-only; tool_call_dict drops it so the leaf matches its echo
@@ -170,7 +176,7 @@ def _build_reply_parts(
     if not blocks:
         blocks.append({"type": "text", "text": ""})
 
-    if parsed.tool_uses:
+    if representable_tool_uses:
         stop_reason = "tool_use"
     elif finish == "length":
         stop_reason = "max_tokens"
