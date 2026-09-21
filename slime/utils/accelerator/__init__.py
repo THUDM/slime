@@ -27,7 +27,7 @@ from .supa import is_supa_available as _is_supa_available
 
 logger = logging.getLogger(__name__)
 
-_MUSA_PATCH_IMPORTED = False
+_MUSA_TITAN_IMPORTED = False
 _MUSA_BOOTSTRAP_CHECKED = False
 _SUPA_RUNTIME_IMPORTED = False
 _SUPA_BOOTSTRAP_CHECKED = False
@@ -66,22 +66,29 @@ def register_accelerator(
         )
 
 
-def _append_musa_patch_path() -> None:
-    patch_path = os.environ.get("MUSA_PATCH_PATH")
+def _append_musa_titan_path() -> None:
+    patch_path = os.environ.get("MUSA_TITAN_PATH")
     if patch_path and patch_path not in sys.path:
         sys.path.append(patch_path)
 
 
-def _import_musa_patch() -> bool:
-    _append_musa_patch_path()
+def _import_musa_titan() -> bool:
+    _append_musa_titan_path()
     try:
-        importlib.import_module("musa_patch")
+        module = importlib.import_module("musa_titan")
     except ModuleNotFoundError as exc:
-        if exc.name == "musa_patch":
+        if exc.name == "musa_titan":
             return False
-        raise RuntimeError(f"musa_patch failed because dependency {exc.name!r} is missing") from exc
+        raise RuntimeError(f"musa_titan failed because dependency {exc.name!r} is missing") from exc
     except Exception as exc:
-        raise RuntimeError(f"musa_patch initialization failed: {exc}") from exc
+        raise RuntimeError(f"musa_titan initialization failed: {exc}") from exc
+    apply_rl = getattr(module, "apply_rl_patch", None)
+    if apply_rl is not None:
+        apply_rl()
+    else:
+        callback = getattr(module, "patch_after_import_torch", None)
+        if callback is not None:
+            callback()
     return True
 
 
@@ -94,36 +101,36 @@ def is_musa_environment() -> bool:
         is_musa_available()
         or os.environ.get("SLIME_ACCELERATOR", "").lower() == "musa"
         or "MUSA_VISIBLE_DEVICES" in os.environ
-        or bool(os.environ.get("MUSA_PATCH_PATH"))
+        or bool(os.environ.get("MUSA_TITAN_PATH"))
     )
 
 
-def _try_import_musa_patch() -> bool:
-    global _MUSA_PATCH_IMPORTED
-    if _MUSA_PATCH_IMPORTED:
+def _try_import_musa_titan() -> bool:
+    global _MUSA_TITAN_IMPORTED
+    if _MUSA_TITAN_IMPORTED:
         return True
     if not is_musa_environment():
         return False
-    _MUSA_PATCH_IMPORTED = _import_musa_patch()
-    if not _MUSA_PATCH_IMPORTED and is_musa_environment():
-        logger.warning("musa_patch is not importable; continuing without it")
-    return _MUSA_PATCH_IMPORTED
+    _MUSA_TITAN_IMPORTED = _import_musa_titan()
+    if not _MUSA_TITAN_IMPORTED and is_musa_environment():
+        logger.warning("musa_titan is not importable; continuing without it")
+    return _MUSA_TITAN_IMPORTED
 
 
 def _musa_requested() -> bool:
     configured = os.environ.get("SLIME_ACCELERATOR", "").lower()
     if configured and configured != "auto":
         return configured == "musa"
-    return "MUSA_VISIBLE_DEVICES" in os.environ or bool(os.environ.get("MUSA_PATCH_PATH"))
+    return "MUSA_VISIBLE_DEVICES" in os.environ or bool(os.environ.get("MUSA_TITAN_PATH"))
 
 
-def _bootstrap_musa_patch_if_needed() -> bool:
-    """Bootstrap the patch for an already chosen MUSA backend at most once."""
+def _bootstrap_musa_titan_if_needed() -> bool:
+    """Bootstrap musa_titan for an already chosen MUSA backend at most once."""
     global _MUSA_BOOTSTRAP_CHECKED
     if _MUSA_BOOTSTRAP_CHECKED:
-        return _MUSA_PATCH_IMPORTED
+        return _MUSA_TITAN_IMPORTED
     _MUSA_BOOTSTRAP_CHECKED = True
-    return _try_import_musa_patch()
+    return _try_import_musa_titan()
 
 
 def _import_torch_supa() -> bool:
@@ -217,18 +224,16 @@ def _make_selected(name: str, explicit: bool) -> Accelerator:
         available = ", ".join(sorted(_REGISTRY))
         raise ValueError(f"Unknown accelerator {name!r}; registered backends: {available}")
     if name == "musa":
-        # musa_patch may expose torch.musa, so bootstrap after MUSA has been
+        # musa_titan may expose torch.musa, so bootstrap after MUSA has been
         # chosen but before validating and constructing its backend.
-        _bootstrap_musa_patch_if_needed()
+        _bootstrap_musa_titan_if_needed()
     if name == "supa":
         # torch_supa attaches torch.supa and registers the "supa" device type,
         # so bootstrap after SUPA has been chosen but before validating it.
         _bootstrap_torch_supa_if_needed()
     if explicit and not entry.is_available():
         if name == "musa":
-            detail = (
-                "torch.musa is unavailable; install a MUSA-enabled PyTorch runtime and set MUSA_PATCH_PATH if required"
-            )
+            detail = "torch.musa is unavailable; install a MUSA-enabled PyTorch runtime and set MUSA_TITAN_PATH to the musa_titan checkout if required"
         elif name == "supa":
             detail = "torch.supa is unavailable; install a SUPA-enabled PyTorch runtime that provides torch_supa"
         elif name == "cuda":
