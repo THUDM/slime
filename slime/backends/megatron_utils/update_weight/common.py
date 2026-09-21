@@ -10,6 +10,31 @@ from megatron.core.transformer.transformer_layer import get_transformer_layer_of
 
 from slime.utils.types import ParamInfo
 
+_TE_GROUPED_LINEAR_EXPERT_PARAM = re.compile(r"\.experts\.linear_fc([12])\.(weight|bias)\d+$")
+
+
+def _tp_partition_dim(name: str, param: torch.Tensor) -> int | None:
+    """Return the TP partition dimension, including legacy TEGroupedLinear metadata."""
+    if getattr(param, "parallel_mode", None) == "duplicated":
+        return None
+
+    has_tp_metadata = hasattr(param, "tensor_model_parallel")
+    if has_tp_metadata and param.tensor_model_parallel:
+        return param.partition_dim
+
+    # Older Megatron-LM revisions explicitly shard expert TEGroupedLinear parameters while
+    # clearing TE's parallel_mode, but do not stamp tensor_model_parallel/partition_dim. The
+    # exported expert names still identify the column-parallel fc1 and row-parallel fc2 shards.
+    match = _TE_GROUPED_LINEAR_EXPERT_PARAM.search(name)
+    if match is None:
+        assert has_tp_metadata, f"{name} does not have tensor_model_parallel attribute"
+        return None
+
+    projection, kind = match.groups()
+    if projection == "2" and kind == "bias":
+        return None  # row-parallel bias is replicated
+    return 0 if projection == "1" else 1
+
 
 def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
     """
@@ -20,8 +45,8 @@ def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
     if "expert_bias" in name:
         return param
 
-    assert hasattr(param, "tensor_model_parallel"), f"{name} does not have tensor_model_parallel attribute"
-    if not param.tensor_model_parallel or getattr(param, "parallel_mode", None) == "duplicated":
+    partition_dim = _tp_partition_dim(name, param)
+    if partition_dim is None:
         return param.data
 
     if ".experts." in name:
@@ -39,9 +64,9 @@ def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
 
     param_partitions = [torch.empty_like(param.data) for _ in range(tp_size)]
     dist.all_gather(param_partitions, param.data, group=tp_group)
-    partition_dim = param.partition_dim
-    assert param.partition_stride == 1 or (
-        param.partition_stride == 2 and "linear_fc1" in name
+    partition_stride = getattr(param, "partition_stride", 1)
+    assert partition_stride == 1 or (
+        partition_stride == 2 and "linear_fc1" in name
     ), "partition_stride != 1 is not supported"
     # TODO: here we did an extra copy during concat, maybe merge this with convert_to_hf is better?
     # TODO: check only GLU is used.
@@ -73,9 +98,12 @@ def all_gather_params_async(
         # Prepare async all_gather
         if "expert_bias" in info.name:
             gather_tasks.append((info, param, None, None, None))
-        elif not param.tensor_model_parallel or getattr(param, "parallel_mode", None) == "duplicated":
-            gather_tasks.append((info, param.data, None, None, None))
         else:
+            partition_dim = _tp_partition_dim(info.name, param)
+            if partition_dim is None:
+                gather_tasks.append((info, param.data, None, None, None))
+                continue
+
             # Start async all_gather
             if ".experts." in info.name:
                 tp_size = mpu.get_expert_tensor_parallel_world_size()
@@ -93,7 +121,7 @@ def all_gather_params_async(
 
             param_partitions = [torch.empty_like(param.data) for _ in range(tp_size)]
             handle = dist.all_gather(param_partitions, param.data, group=tp_group, async_op=True)
-            gather_tasks.append((info, None, handle, param_partitions, param.partition_dim))
+            gather_tasks.append((info, None, handle, param_partitions, partition_dim))
             handles.append(handle)
 
     # Phase 2: Wait for ALL async operations to complete at once
