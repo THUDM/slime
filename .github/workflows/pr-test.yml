@@ -767,6 +767,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_engine_group_addr_allocation.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_external_sglang_engines.py"
             },
             {

@@ -111,6 +111,7 @@ class SGLangEngine(RayActor):
         disaggregation_bootstrap_port=None,
         router_ip=None,
         router_port=None,
+        node_rank=None,
     ):
         self.router_ip = router_ip if router_ip is not None else self.args.sglang_router_ip
         self.router_port = router_port if router_port is not None else self.args.sglang_router_port
@@ -143,6 +144,7 @@ class SGLangEngine(RayActor):
             base_gpu_id=self.base_gpu_id,
             sglang_overrides=self.sglang_overrides,
             num_gpus_per_engine=self.num_gpus_per_engine,
+            node_rank=node_rank,
         )
 
         self.node_rank = server_args_dict["node_rank"]
@@ -515,13 +517,15 @@ def _compute_server_args(
     base_gpu_id: int | None = None,
     sglang_overrides: dict | None = None,
     num_gpus_per_engine: int | None = None,
+    node_rank: int | None = None,
 ):
     _gpus_per_engine = num_gpus_per_engine or args.rollout_num_gpus_per_engine
     normalized_overrides = {key.replace("-", "_"): value for key, value in (sglang_overrides or {}).items()}
     pp_size = int(normalized_overrides.get("pp_size", args.sglang_pp_size))
     tp_size = int(normalized_overrides.get("tp_size", _gpus_per_engine // pp_size))
     nnodes = max(1, _gpus_per_engine // args.num_gpus_per_node)
-    node_rank = rank % nnodes
+    if node_rank is None:
+        node_rank = rank % nnodes
     base = base_gpu_id if base_gpu_id is not None else get_base_gpu_id(args, rank)
     base = accelerator.resolve_visible_device_id(base)
     kwargs = {
