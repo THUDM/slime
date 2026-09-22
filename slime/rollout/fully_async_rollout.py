@@ -59,6 +59,8 @@ _worker_lock = threading.Lock()
 def _get_global_worker(args, data_buffer) -> AsyncRolloutWorker:
     global _global_worker
     with _worker_lock:
+        if _global_worker is not None:
+            _global_worker.raise_if_failed()
         if _global_worker is None or not _global_worker.worker_thread.is_alive():
             logger.info("starting fully-async rollout worker")
             _global_worker = AsyncRolloutWorker(
@@ -88,6 +90,7 @@ class AsyncRolloutWorker:
         self.data_buffer = data_buffer
         self.concurrency = max(1, concurrency // getattr(args, "n_samples_per_prompt", 1))
         self.running = True
+        self._failure: Exception | None = None
         # Unbounded on purpose: put() runs inside the event-loop thread (task
         # done-callback), so a bounded queue that fills up would block the loop
         # and freeze every in-flight generation. Backpressure lives in _loop()
@@ -110,6 +113,10 @@ class AsyncRolloutWorker:
         if self.worker_thread and self.worker_thread.is_alive():
             self.worker_thread.join(timeout=5)
 
+    def raise_if_failed(self) -> None:
+        if self._failure is not None:
+            raise RuntimeError("fully-async rollout worker failed") from self._failure
+
     def get_completed_groups(self, limit: int | None = None) -> list[tuple[int, list[Sample]]]:
         """Pop up to ``limit`` completed groups (all of them when ``None``).
 
@@ -119,6 +126,7 @@ class AsyncRolloutWorker:
         already consumed from ``data_buffer``.
         """
         completed: list[tuple[int, list[Sample]]] = []
+        self.raise_if_failed()
         while limit is None or len(completed) < limit:
             try:
                 completed.append(self.output_queue.get_nowait())
@@ -131,8 +139,19 @@ class AsyncRolloutWorker:
 
     # -- internals -----------------------------------------------------------
 
+    def _fail(self, error: Exception) -> None:
+        # Preserve the first cause for the consumer, including after the thread
+        # exits. Restarting here would lose the prompts already consumed.
+        if self._failure is None:
+            self._failure = error
+        self.running = False
+
     def _thread_main(self) -> None:
-        asyncio.run(self._loop())
+        try:
+            asyncio.run(self._loop())
+        except Exception as e:
+            logger.exception("fully-async worker failed")
+            self._fail(e)
 
     async def _loop(self) -> None:
         active_tasks: set[asyncio.Task] = set()
@@ -181,7 +200,13 @@ class AsyncRolloutWorker:
                 await asyncio.sleep(self.poll_interval)
             except Exception as e:  # noqa: BLE001
                 logger.exception("fully-async loop iteration error: %s", e)
-                await asyncio.sleep(self.poll_interval)
+                self._fail(e)
+
+        if self._failure is not None:
+            for task in active_tasks:
+                task.cancel()
+            await asyncio.gather(*active_tasks, return_exceptions=True)
+            return
 
         if active_tasks:
             logger.info(
@@ -197,21 +222,24 @@ class AsyncRolloutWorker:
         def _cb(done_task: asyncio.Task) -> None:
             try:
                 result = done_task.result()
-            except Exception:  # noqa: BLE001
+            except asyncio.CancelledError:
+                if self.running:
+                    self._fail(RuntimeError("fully-async generation task was cancelled"))
+                return
+            except Exception as e:  # noqa: BLE001
                 logger.exception("fully-async: process task raised")
+                self._fail(e)
                 return
             if not isinstance(result, list):
-                logger.warning(
-                    "fully-async: generate_and_rm_group returned %r, expected list[Sample]; dropping",
-                    type(result).__name__,
-                )
+                self._fail(TypeError(f"generate_and_rm_group returned {type(result).__name__}, expected a list"))
                 return
             # Aborted group → requeue, don't ship to training.
             if any(getattr(s, "status", None) == Sample.Status.ABORTED for s in result):
                 try:
                     self.data_buffer.add_samples([result])
-                except Exception:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001
                     logger.exception("fully-async: failed to requeue aborted group")
+                    self._fail(e)
                 return
             self.output_queue.put((gid, result))
 
