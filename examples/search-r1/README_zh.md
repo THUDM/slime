@@ -176,6 +176,17 @@ CUSTOM_ARGS=(
 
 也就是 `generate_with_search.py` 中的 `generate` 和 `reward_func` 两个函数。
 
+### Partial Rollout
+
+Search-R1 也支持 slime 的 partial rollout 路径，适合耗时较长、容易出现长尾的搜索轨迹：
+
+```bash
+--partial-rollout
+--mask-offpolicy-in-partial-rollout
+```
+
+当某轮 rollout 中还有未完成请求被 abort 时，Search-R1 会把已经生成的 response、搜索 observation、loss mask 和 rollout log probabilities 保存在 `Sample` 上。下一轮 rollout 会从已有上下文继续生成，而不是从原始 prompt 重新开始。开启 `--mask-offpolicy-in-partial-rollout` 后，旧权重生成的 token 会继续作为上下文保留，但不会参与训练。
+
 ## 附录：配置本地检索器
 
 本节提供详细的本地密集检索器设置说明，用于本地搜索后端。
