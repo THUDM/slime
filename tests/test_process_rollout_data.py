@@ -162,5 +162,91 @@ def test_missing_raw_reward_is_tolerated(unwrap_ray_get):
     assert rollout_data["total_lengths"] == [201, 200]
 
 
+@pytest.fixture
+def rollout_manager(monkeypatch):
+    """Load the real manager without starting serving, telemetry, or Ray."""
+    import importlib.util
+    import sys
+    import types
+    from pathlib import Path
+
+    deployment = types.ModuleType("slime.backends.sglang_utils.deployment")
+    deployment.start_rollout_servers = lambda *args: None
+    monkeypatch.setitem(sys.modules, deployment.__name__, deployment)
+    if "wandb" not in sys.modules:
+        monkeypatch.setitem(sys.modules, "wandb", types.ModuleType("wandb"))
+
+    name = "slime.ray._metadata_test_rollout"
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parents[1] / "slime/ray/rollout.py")
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, name, module)
+    spec.loader.exec_module(module)
+    cls = module.RolloutManager.__ray_metadata__.modified_class
+    manager = object.__new__(cls)
+    manager.custom_reward_post_process_func = None
+    manager.custom_convert_samples_to_train_data_func = None
+    return manager
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("dp_size", [1, 2])
+@pytest.mark.parametrize("dynamic", [False, True])
+@pytest.mark.parametrize("metadata_kind", ["all", "mixed", "none"])
+def test_train_metadata_survives_conversion_and_dp_transport(
+    monkeypatch, unwrap_ray_get, rollout_manager, dp_size, dynamic, metadata_kind
+):
+    from types import SimpleNamespace
+
+    from slime.utils.types import Sample
+
+    manager = rollout_manager
+    manager.args = SimpleNamespace(
+        advantage_estimator="grpo",
+        rewards_normalization=False,
+        reward_key=None,
+        global_batch_size=4,
+        micro_batch_size=1,
+        use_dynamic_batch_size=dynamic,
+        max_tokens_per_gpu=9,
+        balance_data=False,
+        balance_by_flops=False,
+    )
+    manager.train_parallel_config = dict(dp_size=dp_size, cp_size=1, vpp_size=1, microbatch_group_size_per_vp_stage=1)
+    samples = [
+        Sample(
+            index=i,
+            tokens=[i + 1] * length,
+            response_length=1,
+            reward=float(i),
+            train_metadata={"sample_id": i, "loss_weight": i + 0.5},
+        )
+        for i, length in enumerate([2, 8, 3, 6])
+    ]
+    if metadata_kind == "mixed":
+        samples[0].train_metadata = None
+    elif metadata_kind == "none":
+        for sample in samples:
+            sample.train_metadata = None
+    expected = [sample.train_metadata for sample in samples]
+    data = manager._convert_samples_to_train_data(samples)
+    if metadata_kind != "none":
+        assert data["metadata"] == expected
+    else:
+        assert "metadata" not in data
+
+    monkeypatch.setattr(ray, "put", lambda value: value)
+    refs = manager._split_train_data_by_dp(data)
+    seen = []
+    for rank in range(dp_size):
+        local = process_rollout_data(refs, rank, dp_size)
+        indices = local["sample_indices"]
+        seen.extend(indices)
+        if metadata_kind != "none":
+            assert local["metadata"] == [expected[i] for i in indices]
+        else:
+            assert "metadata" not in local
+    assert sorted(seen) == list(range(len(samples)))
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
