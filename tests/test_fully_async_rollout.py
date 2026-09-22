@@ -30,6 +30,12 @@ from types import SimpleNamespace
 # and (transitively) transformers — both deliberately absent from the CPU CI
 # env. The tests below never dial a server or touch a tokenizer, so stub the
 # imports, same as tests/test_agent/test_agent_rollout_cpu.py.
+if "ray" not in sys.modules:
+    _ray_stub = types.ModuleType("ray")
+    _ray_stub._private = types.SimpleNamespace(
+        services=types.SimpleNamespace(get_node_ip_address=lambda: "127.0.0.1")
+    )
+    sys.modules["ray"] = _ray_stub
 if "sglang_router" not in sys.modules:
     _router_stub = types.ModuleType("sglang_router")
     _router_stub.__version__ = "0.2.3"
@@ -172,6 +178,24 @@ def test_staleness_metrics_use_serving_snapshot():
         "staleness/max": 9,
     }
     assert compute_staleness_metrics(samples, None) == {}
+
+
+@pytest.mark.unit
+def test_done_callback_requeues_original_group_for_nested_abort(monkeypatch):
+    worker = _make_worker(monkeypatch)
+    original_group = _make_group(7)
+    aborted = Sample(index=0, status=Sample.Status.ABORTED)
+    completed = Sample(index=1, reward=1.0, status=Sample.Status.COMPLETED)
+    result = [[aborted], [completed]]
+
+    class _DoneTask:
+        def result(self):
+            return result
+
+    worker._make_done_cb(7, original_group)(_DoneTask())
+
+    assert worker.queue_size() == 0
+    assert worker.data_buffer.requeued == [original_group]
 
 
 @pytest.mark.unit
