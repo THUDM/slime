@@ -15,6 +15,7 @@
 
 import re
 import signal
+from decimal import Decimal, InvalidOperation
 
 
 def last_boxed_only_string(string: str) -> str | None:
@@ -63,7 +64,6 @@ def remove_boxed(s: str) -> str:
 
 
 class timeout:
-
     def __init__(self, seconds=1, error_message="Timeout"):
         self.seconds = seconds
         self.error_message = error_message
@@ -207,7 +207,15 @@ def is_correct_minerva(
     else:
         gt = normalize_final_answer(gt)
 
-    gt = str(int(float(gt)))  # in dapo, all answers are integers
+    try:
+        numeric_gt = Decimal(gt)
+    except InvalidOperation as exc:
+        raise ValueError(f"DAPO ground-truth label must be an integer, got {gt!r}") from exc
+
+    if not numeric_gt.is_finite() or numeric_gt != numeric_gt.to_integral_value():
+        raise ValueError(f"DAPO ground-truth label must be an integer, got {gt!r}")
+
+    gt = str(int(numeric_gt))
 
     return (pred == gt), pred
 
