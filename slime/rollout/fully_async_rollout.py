@@ -34,6 +34,7 @@ import logging
 import queue
 import threading
 import time
+from typing import Any
 
 from slime.rollout.base_types import RolloutFnTrainOutput
 from slime.rollout.filter_hub.base_types import call_dynamic_filter
@@ -175,7 +176,7 @@ class AsyncRolloutWorker:
                                 evaluation=False,
                             )
                         )
-                        task.add_done_callback(self._make_done_cb(gid))
+                        task.add_done_callback(self._make_done_cb(gid, group))
                         active_tasks.add(task)
 
                 await asyncio.sleep(self.poll_interval)
@@ -193,7 +194,16 @@ class AsyncRolloutWorker:
             except Exception:  # noqa: BLE001
                 pass
 
-    def _make_done_cb(self, gid: int):
+    @staticmethod
+    def _has_aborted_leaf(samples: Any) -> bool:
+        """Return whether a (possibly nested) rollout result contains an aborted leaf."""
+        if isinstance(samples, Sample):
+            return samples.status == Sample.Status.ABORTED
+        if not isinstance(samples, list):
+            return False
+        return any(AsyncRolloutWorker._has_aborted_leaf(item) for item in samples)
+
+    def _make_done_cb(self, gid: int, group: list[Sample] | None = None):
         def _cb(done_task: asyncio.Task) -> None:
             try:
                 result = done_task.result()
@@ -206,10 +216,14 @@ class AsyncRolloutWorker:
                     type(result).__name__,
                 )
                 return
-            # Aborted group → requeue, don't ship to training.
-            if any(getattr(s, "status", None) == Sample.Status.ABORTED for s in result):
+            # Aborted group → requeue, don't ship to training. Custom generate
+            # functions may fan out one rollout into nested segments, so inspect
+            # leaves. Requeue the original prompt group because generate_and_rm_group
+            # expects list[Sample] inputs, not nested outputs.
+            if self._has_aborted_leaf(result):
+                requeue_group = group if group is not None else result
                 try:
-                    self.data_buffer.add_samples([result])
+                    self.data_buffer.add_samples([requeue_group])
                 except Exception:  # noqa: BLE001
                     logger.exception("fully-async: failed to requeue aborted group")
                 return
