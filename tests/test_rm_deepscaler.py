@@ -81,6 +81,16 @@ def test_label_with_boxed_marker_is_extracted_too():
 
 
 @pytest.mark.unit
+def test_missing_response_returns_zero():
+    """A None/empty response scores 0 instead of raising. ``async_rm``
+    feeds ``sample.response`` straight in, and the sibling gpqa / f1 reward
+    functions already guard this; without the guard ``None`` raised
+    ``TypeError: argument of type 'NoneType' is not iterable``."""
+    assert get_deepscaler_rule_based_reward(None, "42") == 0
+    assert get_deepscaler_rule_based_reward("", "42") == 0
+
+
+@pytest.mark.unit
 def test_wrong_answer_returns_zero():
     """Sanity-check the negative side of the contract."""
     assert get_deepscaler_rule_based_reward(r"</think>\boxed{43}", "42") == 0
