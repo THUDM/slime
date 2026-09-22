@@ -7,11 +7,16 @@ from typing import Any
 
 import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
+from sglang.srt import constants as sglang_constants
 
 from slime.backends.sglang_utils.sglang_config import ServerGroupConfig
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
+
+# Official AMD images ship an older sglang whose constants module has no CUDA graph tag.
+GPU_MEMORY_TYPE_KV_CACHE = sglang_constants.GPU_MEMORY_TYPE_KV_CACHE
+GPU_MEMORY_TYPE_WEIGHTS = sglang_constants.GPU_MEMORY_TYPE_WEIGHTS
+GPU_MEMORY_TYPE_CUDA_GRAPH = getattr(sglang_constants, "GPU_MEMORY_TYPE_CUDA_GRAPH", None)
 
 logger = logging.getLogger(__name__)
 
@@ -324,9 +329,12 @@ class RolloutServer:
 
     def onload_kv(self):
         """Resume KV cache and CUDA graphs for offloaded groups."""
+        tags = [GPU_MEMORY_TYPE_KV_CACHE]
+        if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
+            tags.append(GPU_MEMORY_TYPE_CUDA_GRAPH)
         handles = []
         for g in self.server_groups:
-            handles.extend(g.onload(tags=[GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH]))
+            handles.extend(g.onload(tags=tags))
         return ray.get(handles) if handles else []
 
 
