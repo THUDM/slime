@@ -208,6 +208,7 @@ slime 支持加载 `.jsonl` 和 `.parquet` 格式文件；读取 Parquet 需要�
   注意：在策略蒸馏 (OPD) 现在与 advantage estimator 正交，使用 `--use-opd` 和 `--opd-kl-coef` 可以在任意 estimator 之上启用 OPD。
 - `--calculate-per-token-loss`：slime 中默认的方案是 per sample loss，即 `mean(sum(sample_i) / len(sample_i))`，如果需要计算 per token loss，即 `sum(sum(sample_i)) / sum(len(sample_i))`，可以开启 `--calculate-per-token-loss`；
 - `--use-tis`：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置；
+- `--use-score-centering`：启用 [Score Centering](https://arxiv.org/abs/2609.20807)，可与 TIS 组合使用，详见下方的 [Score Centering](#score-centering)。
 
 #### GRPO 算法
 
@@ -256,6 +257,36 @@ PPO 相关参数：
 - `--eps-clip`：PPO clip 范围；
 - `--value-clip`：value loss 的 clip 范围；
 - `--kl-coef`：KL penalty 系数，用于 reward shaping。
+
+#### Score Centering
+
+[Score Centering Stabilizes Off-policy Reinforcement Learning](https://arxiv.org/abs/2609.20807) 提出了一种加性修正，用于减轻训练与推理不一致引起的梯度漂移，也可以与重要性采样组合使用。slime 的 score centering（SC）目前支持 Megatron backend 和非流式 SGLang rollout。
+
+在已有的 RL 启动命令中加入以下配置：
+
+```bash
+--use-score-centering \
+--score-centering-top-k 128 \
+--pg-loss-type reinforce \
+--advantage-estimator grpo \
+--disable-grpo-std-normalization \
+--calculate-per-token-loss \
+--rollout-temperature 1.0 \
+--rollout-top-p 1.0 \
+--rollout-top-k -1 \
+--entropy-coef 0 \
+--kl-coef 0
+```
+
+- `--use-score-centering`：启用 REINFORCE score-centering 目标。省略 `--pg-loss-type` 时，SC 会自动选择 `reinforce`；未开启 SC 时保留原有的 PPO/CISPO 默认行为。SC 不能与 `--pg-loss-type ppo` 或 GSPO/CISPO advantage estimator 组合，PPO clipping 参数不影响 REINFORCE 目标。
+- `--score-centering-top-k`：每个 response token 保存的 sampler top-k token ID 和 logprob 数量，默认为 128，不能超过模型词表大小。top-k 概率保留其在完整词表上的概率质量；剩余的 sampler 概率质量按当前 trainer 的尾部概率分布估计。
+- `--use-tis`：可选，与 SC 独立开关。组合开启时，使用 `--tis-clip-low` 和 `--tis-clip` 对加权后的 score 做 centering。也支持通过 `--custom-tis-function-path` 选择内置的 `slime.backends.megatron_utils.loss.icepop_function`，但不支持与任意自定义 TIS 回调组合。REINFORCE 使用 detached 的当前 trainer/sampler 权重，PPO 保留原有的旧 trainer/sampler 权重。
+
+**采样要求：** temperature 必须为正，使用 `top_p=1`、`top_k=-1`、`min_p=0`，不启用 repetition/frequency/presence penalty 或约束解码。temperature 不为 1 时，所有 sampler worker 上的 `SGLANG_RETURN_ORIGINAL_LOGPROB` 必须未设置或为 false。目前不支持逐请求修改 temperature，也不支持流式 SC。评估不会请求 SC 数据，可以使用独立的采样配置。
+
+**SGLang 支持：** 使用包含 `docker/patch/latest/sglang-top_p.patch` 的镜像，该 patch 在 top-p replay 之外加入了二进制 top-k 输出。slime 通过 `top_logprobs_num=k` 请求并保存原始采样时的概率，不使用更新后的 checkpoint 重新计算这些概率。自定义 generator 应调用 `slime.utils.score_centering` 中的 `score_centering_request`，并将响应 metadata 传给 `Sample.append_response_tokens`。
+
+sampler top-k 数据支持 partial rollout 续接、masked tool token、DP 划分、microbatch 选择、TP 及两种 CP 布局；使用 R3 spill hook 时共享其文件生命周期。相关日志指标包括 `sc_correction`、`sc_sampler_head_mass`、`sc_train_head_mass` 和 `sc_importance_weight`。
 
 ### 高级 Megatron 配置（--megatron-config-path）
 

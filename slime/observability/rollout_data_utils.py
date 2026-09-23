@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 from slime.utils.routed_experts import validate_routed_experts_value
-from slime.utils.tensor_store import DiskTensorRef
+from slime.utils.tensor_store import DiskTensorRef, retain_debug_tensor_refs
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
@@ -15,6 +15,8 @@ _ROLLOUT_DATA_TENSOR_DTYPES = {
     "tokens": torch.long,
     "loss_masks": torch.int,
     "rollout_log_probs": torch.float32,
+    "rollout_topk_token_ids": torch.int32,
+    "rollout_topk_log_probs": torch.float32,
     "rollout_top_p_token_ids": torch.int32,
     "rollout_top_p_token_offsets": torch.int32,
     "teacher_log_probs": torch.float32,
@@ -136,4 +138,6 @@ def save_debug_rollout_data(path_template, data, *, rollout_id: int, evaluation:
     else:
         samples = [sample.to_dict() for sample in data]
 
-    torch.save({"rollout_id": rollout_id, "samples": samples}, path)
+    dump_data = {"rollout_id": rollout_id, "samples": samples}
+    retain_debug_tensor_refs(dump_data, path)
+    torch.save(dump_data, path)

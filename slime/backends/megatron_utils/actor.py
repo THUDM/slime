@@ -266,6 +266,21 @@ class MegatronTrainRayActor(TrainRayActor):
                     strict=False,
                 )
             ]
+        for key, dtype in (("rollout_topk_token_ids", torch.int32), ("rollout_topk_log_probs", torch.float32)):
+            if key not in rollout_data:
+                continue
+            rollout_data[key] = [
+                (
+                    value
+                    if isinstance(value, DiskTensorRef)
+                    else (value if self.args.allgather_cp else slice_log_prob_with_cp(value, total, response)).to(
+                        device="cpu", dtype=dtype
+                    )
+                )
+                for value, total, response in zip(
+                    rollout_data[key], rollout_data["total_lengths"], rollout_data["response_lengths"], strict=True
+                )
+            ]
         return rollout_data
 
     def _switch_model(self, target_tag: str) -> None:

@@ -8,6 +8,132 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 
+def get_pg_loss_type(args):
+    """Resolve the PG objective while preserving legacy launch configurations."""
+    configured = getattr(args, "pg_loss_type", None)
+    sc = getattr(args, "use_score_centering", False)
+    estimator = getattr(args, "advantage_estimator", None)
+    objective = configured or ("reinforce" if sc else "cispo" if estimator == "cispo" else "ppo")
+    if sc and objective != "reinforce":
+        raise ValueError("--use-score-centering requires --pg-loss-type reinforce.")
+    if configured is not None and estimator in ("gspo", "cispo"):
+        if objective != ("ppo" if estimator == "gspo" else "cispo"):
+            raise ValueError(f"--pg-loss-type {objective} cannot combine with --advantage-estimator {estimator}.")
+    return objective
+
+
+def importance_weights(ratio, mode="none", low=None, high=None):
+    """Token-wise IS weights shared by TIS/IcePop and score centering."""
+    if mode == "none":
+        return torch.ones_like(ratio)
+    if mode == "tis":
+        return ratio.clamp(min=0.0 if low is None else low, max=2.0 if high is None else high)
+    if mode == "mis":
+        low = 0.5 if low is None else low
+        high = 5.0 if high is None else high
+        return torch.where((ratio >= low) & (ratio <= high), ratio, 0.0)
+    raise ValueError(f"Unknown importance sampling mode: {mode}")
+
+
+class _VocabParallelTopKLogProbs(torch.autograd.Function):
+    """Top-k logprobs with bounded FP32 workspace in forward AND backward.
+
+    Saving autograd's exp/gather intermediates for every row chunk retains
+    O(N * V_p) FP32 activations despite chunking. Save the original logits
+    (no copy), ids, and two scalars per row instead, and recompute softmax
+    chunks in backward. The single Function also avoids a full [N, V_p]
+    slice-backward allocation for each chunk.
+    """
+
+    @staticmethod
+    def forward(ctx, logits, token_ids, process_group, chunk_size, temperature):
+        n, vocab_size = logits.shape
+        rank, _ = _get_vocab_parallel_rank_size(process_group)
+        vocab_start = rank * vocab_size
+        chunk_size = chunk_size if chunk_size > 0 else max(n, 1)
+        output = torch.empty(token_ids.shape, device=logits.device, dtype=torch.float32)
+        maxima = torch.empty((n, 1), device=logits.device, dtype=torch.float32)
+        denominators = torch.empty_like(maxima)
+        for start in range(0, n, chunk_size):
+            end = min(start + chunk_size, n)
+            # Always own the workspace: in-place operations must not modify
+            # FP32 inputs or their views. Cast before temperature scaling.
+            work = logits[start:end].to(dtype=torch.float32, copy=True)
+            if temperature != 1.0:
+                work.div_(temperature)
+            maximum = work.max(dim=-1, keepdim=True).values
+            _maybe_all_reduce(maximum, dist.ReduceOp.MAX, process_group)
+            ids = token_ids[start:end]
+            local_mask = (ids >= vocab_start) & (ids < vocab_start + vocab_size)
+            local_ids = (ids - vocab_start).clamp(0, vocab_size - 1)
+            targets = work.gather(-1, local_ids).masked_fill_(~local_mask, 0.0)
+            _maybe_all_reduce(targets, dist.ReduceOp.SUM, process_group)
+            work.sub_(maximum).exp_()
+            denominator = work.sum(dim=-1, keepdim=True)
+            _maybe_all_reduce(denominator, dist.ReduceOp.SUM, process_group)
+            # Normalize over the full distributed vocabulary.
+            output[start:end] = (targets - maximum) - denominator.log()
+            maxima[start:end] = maximum
+            denominators[start:end] = denominator
+            del work
+        ctx.save_for_backward(logits, token_ids, maxima, denominators)
+        ctx.chunk_size = chunk_size
+        ctx.temperature = temperature
+        ctx.vocab_start = vocab_start
+        return output
+
+    @staticmethod
+    @torch.autograd.function.once_differentiable
+    def backward(ctx, grad_output):
+        logits, token_ids, maxima, denominators = ctx.saved_tensors
+        n, vocab_size = logits.shape
+        # Allocate the returned gradient once, in the input dtype. All softmax
+        # and scatter accumulation stays FP32 within a bounded row chunk.
+        grad_input = torch.empty_like(logits)
+        for start in range(0, n, ctx.chunk_size):
+            end = min(start + ctx.chunk_size, n)
+            work = logits[start:end].to(dtype=torch.float32, copy=True)
+            if ctx.temperature != 1.0:
+                work.div_(ctx.temperature)
+            work.sub_(maxima[start:end]).exp_().div_(denominators[start:end])
+            grad = grad_output[start:end].float()
+            work.mul_(-grad.sum(dim=-1, keepdim=True))
+            ids = token_ids[start:end]
+            local_mask = (ids >= ctx.vocab_start) & (ids < ctx.vocab_start + vocab_size)
+            local_ids = (ids - ctx.vocab_start).clamp(0, vocab_size - 1)
+            work.scatter_add_(-1, local_ids, grad.masked_fill(~local_mask, 0.0))
+            if ctx.temperature != 1.0:
+                work.div_(ctx.temperature)
+            grad_input[start:end] = work
+            del work
+        # Every TP rank differentiates the replicated loss. No backward
+        # all-reduce: that would multiply the gradient by the TP world size.
+        return grad_input, None, None, None, None
+
+
+def calculate_topk_log_probs(
+    logits: torch.Tensor,
+    token_ids: torch.Tensor,
+    process_group,
+    chunk_size: int = -1,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Full-vocab-normalized log-probs at arbitrary token ids under vocab parallelism.
+
+    Args:
+        logits: `[N, V_p]` local vocab shard, cast to FP32 per row chunk
+            before the softmax math.
+        token_ids: `[N, k]` global token ids.
+        temperature: Divisor applied to the logits after the per-chunk FP32 cast,
+            matching the RL log-prob path's cast-then-scale order.
+
+    Returns `[N, k]` FP32 log-probs; first-order gradients flow to the local
+    logits shard only. Saved state shares the original logits storage plus
+    O(N * k + N) ids/normalizers; FP32 workspace is O(chunk_size * V_p).
+    """
+    return _VocabParallelTopKLogProbs.apply(logits, token_ids, process_group, chunk_size, temperature)
+
+
 @torch.compile(dynamic=True)
 def compute_approx_kl(
     log_probs: torch.Tensor,
