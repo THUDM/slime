@@ -40,6 +40,7 @@ import os
 import socket
 import sys
 import types
+from importlib.machinery import ModuleSpec
 
 
 # --- Stub ``megatron.core.mpu`` (must run before cp_utils is imported) ---
@@ -54,11 +55,14 @@ import types
 # ``get_context_parallel_*`` attributes via ``_stub_megatron_in_worker``
 # below to pin (cp_size, cp_rank) for that worker.
 _fake_mpu = types.ModuleType("megatron.core.mpu")
+_fake_mpu.__spec__ = ModuleSpec("megatron.core.mpu", loader=None)
 _fake_mpu.get_context_parallel_world_size = lambda: 1
 _fake_mpu.get_context_parallel_rank = lambda: 0
 _fake_core = types.ModuleType("megatron.core")
+_fake_core.__spec__ = ModuleSpec("megatron.core", loader=None, is_package=True)
 _fake_core.mpu = _fake_mpu
 _fake_megatron = types.ModuleType("megatron")
+_fake_megatron.__spec__ = ModuleSpec("megatron", loader=None, is_package=True)
 _fake_megatron.core = _fake_core
 sys.modules.setdefault("megatron", _fake_megatron)
 sys.modules.setdefault("megatron.core", _fake_core)

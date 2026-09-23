@@ -772,10 +772,14 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         kl_coef = -args.kl_coef
         cp_rank = mpu.get_context_parallel_rank()
         for reward, k in zip(old_rewards, kl, strict=False):
-            k *= kl_coef
+            # Keep ``rollout_data["kl"]`` as the raw reference-policy KL.
+            # Reef's adaptive-KL telemetry reads this field after the
+            # advantage pass; mutating ``k`` in place would make the
+            # controller observe an already beta-scaled reward signal.
+            token_rewards = k * kl_coef
             if cp_rank == 0:
-                k[-1] += reward
-            rewards.append(k)
+                token_rewards[-1] += reward
+            rewards.append(token_rewards)
         advantages, returns = get_advantages_and_returns_batch(
             total_lengths, response_lengths, values, rewards, args.gamma, args.lambd
         )
