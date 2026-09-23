@@ -218,8 +218,7 @@ def create_training_models(args, pgs, rollout_manager, actor_cls=None):
     if args.start_rollout_id is None:
         args.start_rollout_id = start_rollout_ids[0]
 
-    if args.rollout_global_dataset:
-        ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
+    ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
 
     return actor_model, critic_model
 
