@@ -686,6 +686,7 @@
 </section>
 <section id="id6">
 <h3>数据格式<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h3>
+<p>原始数据统一由 DataSource 管理。有 <code class="docutils literal notranslate"><span class="pre">--prompt-data</span></code> 时内置 DataSource 会加载数据；需要自行管理数据时可通过 <code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code> 提供自定义实现。原来的 <code class="docutils literal notranslate"><span class="pre">--disable-rollout-global-dataset</span></code> 已移除，旧启动脚本需要删除该参数。</p>
 <p>slime 支持加载 <code class="docutils literal notranslate"><span class="pre">.jsonl</span></code> 和 <code class="docutils literal notranslate"><span class="pre">.parquet</span></code> 格式文件；读取 Parquet 需要安装 <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code>。两种格式中的每条记录都应包含 <code class="docutils literal notranslate"><span class="pre">--input-key</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--label-key</span></code> 指定的字段。下面是一条 JSONL 数据展开后的示例：</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
 <span class="w">  </span><span class="nt">"prompt"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>

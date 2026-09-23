@@ -689,6 +689,7 @@ The reason for not using a parameter like <code class="docutils literal notransl
 </section>
 <section id="data-format">
 <h3>Data Format<a class="headerlink" href="#data-format" title="Link to this heading">#</a></h3>
+<p>Raw data is always managed by the DataSource. The built-in DataSource loads <code class="docutils literal notranslate"><span class="pre">--prompt-data</span></code> when provided; use <code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code> for custom data management. The former <code class="docutils literal notranslate"><span class="pre">--disable-rollout-global-dataset</span></code> flag has been removed; remove it from older launch scripts.</p>
 <p>slime supports <code class="docutils literal notranslate"><span class="pre">.jsonl</span></code> and <code class="docutils literal notranslate"><span class="pre">.parquet</span></code> files; reading Parquet requires <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code>. Each record in either format should contain the fields selected by <code class="docutils literal notranslate"><span class="pre">--input-key</span></code> and <code class="docutils literal notranslate"><span class="pre">--label-key</span></code>. An expanded JSONL record looks like this:</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
 <span class="w">  </span><span class="nt">"prompt"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>

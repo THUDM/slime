@@ -152,6 +152,8 @@ For details on some of SGLang's customizations and the principles behind how sli
 
 ### Data Format
 
+Raw data is always managed by the DataSource. The built-in DataSource loads `--prompt-data` when provided; use `--data-source-path` for custom data management. The former `--disable-rollout-global-dataset` flag has been removed; remove it from older launch scripts.
+
 slime supports `.jsonl` and `.parquet` files; reading Parquet requires `pyarrow`. Each record in either format should contain the fields selected by `--input-key` and `--label-key`. An expanded JSONL record looks like this:
 
 ```json
