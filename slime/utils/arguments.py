@@ -861,14 +861,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Use the REINFORCE score-centering objective from "
                     "Score Centering Stabilizes Off-policy Reinforcement Learning "
-                    "(https://arxiv.org/abs/2609.20807)."
+                    "(https://arxiv.org/abs/2609.20807). Uses exact centering on the complete replay support "
+                    "when rollout-top-p < 1, otherwise uses the paper's top-k tail approximation."
                 ),
             )
             parser.add_argument(
                 "--score-centering-top-k",
                 type=int,
                 default=128,
-                help="Number of sampler top logprobs to retain per generated token.",
+                help="Number of sampler top logprobs retained when rollout-top-p=1; ignored for exact top-p centering.",
             )
             parser.add_argument(
                 "--ref-load",

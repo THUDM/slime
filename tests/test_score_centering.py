@@ -334,7 +334,7 @@ def test_missing_topk_fails_before_token_append():
     "overrides",
     [
         dict(pg_loss_type="ppo"),
-        dict(rollout_top_p=0.9),
+        dict(rollout_top_p=0.0),
         dict(rollout_top_k=8),
         dict(rollout_temperature=0),
         dict(score_centering_top_k=0),

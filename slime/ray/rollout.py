@@ -430,14 +430,32 @@ class RolloutManager:
             train_data["rollout_log_probs"] = [sample.rollout_log_probs for sample in samples]
 
         if getattr(self.args, "use_score_centering", False):
-            from slime.utils.score_centering import validate_sampler_topk
+            from slime.utils.score_centering import validate_sampler_top_p, validate_sampler_topk
 
             for sample in samples:
-                validate_sampler_topk(sample, self.args.score_centering_top_k)
                 if sample.rollout_log_probs is None or len(sample.rollout_log_probs) != sample.response_length:
                     raise ValueError("Score centering requires sampler logprobs for every response token.")
-            train_data["rollout_topk_token_ids"] = [sample.rollout_topk_token_ids for sample in samples]
-            train_data["rollout_topk_log_probs"] = [sample.rollout_topk_log_probs for sample in samples]
+                if self.args.rollout_top_p < 1:
+                    if sample.response_length == 0 and sample.rollout_top_p_token_ids is None:
+                        sample.rollout_top_p_token_ids = torch.empty(0, dtype=torch.int32)
+                        sample.rollout_top_p_token_offsets = torch.zeros(1, dtype=torch.int32)
+                        sample.rollout_top_p_log_probs = torch.empty(0, dtype=torch.float32)
+                    validate_sampler_top_p(
+                        sample.rollout_top_p_token_ids,
+                        sample.rollout_top_p_token_offsets,
+                        sample.rollout_top_p_log_probs,
+                        sample.response_length,
+                        sample.loss_mask,
+                        sample.tokens[-sample.response_length :] if sample.response_length else [],
+                        sample.rollout_log_probs,
+                    )
+                else:
+                    validate_sampler_topk(sample, self.args.score_centering_top_k)
+            if self.args.rollout_top_p < 1:
+                train_data["rollout_top_p_log_probs"] = [sample.rollout_top_p_log_probs for sample in samples]
+            else:
+                train_data["rollout_topk_token_ids"] = [sample.rollout_topk_token_ids for sample in samples]
+                train_data["rollout_topk_log_probs"] = [sample.rollout_topk_log_probs for sample in samples]
 
         if getattr(self.args, "rollout_top_p", 1.0) != 1.0:
             for sample in samples:
@@ -565,6 +583,7 @@ class RolloutManager:
                 "rollout_topk_log_probs",
                 "rollout_top_p_token_ids",
                 "rollout_top_p_token_offsets",
+                "rollout_top_p_log_probs",
                 "rollout_routed_experts",
                 "source_names",
                 "prompt",

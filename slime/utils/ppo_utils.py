@@ -134,6 +134,52 @@ def calculate_topk_log_probs(
     return _VocabParallelTopKLogProbs.apply(logits, token_ids, process_group, chunk_size, temperature)
 
 
+class _VocabParallelRaggedLogProbs(torch.autograd.Function):
+    """Normalize only over the recorded support, without gathering the vocabulary."""
+
+    @staticmethod
+    def forward(ctx, logits, token_ids, offsets, process_group, temperature):
+        n, vocab_size = logits.shape
+        rank, world_size = _get_vocab_parallel_rank_size(process_group)
+        if ((token_ids < 0) | (token_ids >= vocab_size * world_size)).any():
+            raise ValueError("Top-p replay token ids are outside the model vocabulary.")
+        rows = torch.repeat_interleave(torch.arange(n, device=logits.device), offsets.diff())
+        local_ids = token_ids - rank * vocab_size
+        local = (local_ids >= 0) & (local_ids < vocab_size)
+        local_ids = local_ids.clamp(0, vocab_size - 1)
+        values = logits[rows, local_ids].float().div_(temperature).masked_fill_(~local, 0)
+        _maybe_all_reduce(values, dist.ReduceOp.SUM, process_group)
+        maxima = values.new_full((n,), -torch.inf)
+        maxima.scatter_reduce_(0, rows, values, reduce="amax", include_self=True)
+        values = values - maxima[rows]
+        probs = values.exp()
+        denominators = values.new_zeros(n).scatter_add_(0, rows, probs)
+        log_probs = values - denominators[rows].log()
+        probs.div_(denominators[rows])
+        ctx.save_for_backward(rows, local_ids, local, probs)
+        ctx.shape, ctx.dtype, ctx.temperature = logits.shape, logits.dtype, temperature
+        return log_probs
+
+    @staticmethod
+    @torch.autograd.function.once_differentiable
+    def backward(ctx, grad_output):
+        rows, local_ids, local, probs = ctx.saved_tensors
+        row_sum = grad_output.new_zeros(ctx.shape[0]).scatter_add_(0, rows, grad_output)
+        grad = (grad_output - probs * row_sum[rows]) / ctx.temperature
+        grad_input = torch.zeros(ctx.shape, device=grad.device, dtype=ctx.dtype)
+        grad_input.index_put_((rows[local], local_ids[local]), grad[local].to(ctx.dtype), accumulate=True)
+        return grad_input, None, None, None, None
+
+
+def calculate_ragged_log_probs(logits, token_ids, offsets, process_group, temperature=1.0):
+    """Return flat logprobs normalized over each row's complete replay support.
+
+    Empty spans are allowed for masked environment tokens. TP ranks hold local
+    vocabulary shards; only the selected logits are reduced across ranks.
+    """
+    return _VocabParallelRaggedLogProbs.apply(logits, token_ids, offsets, process_group, temperature)
+
+
 @torch.compile(dynamic=True)
 def compute_approx_kl(
     log_probs: torch.Tensor,

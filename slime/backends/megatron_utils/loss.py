@@ -12,6 +12,7 @@ from slime.utils.distributed_utils import distributed_masked_whiten
 from slime.utils.misc import load_function
 from slime.utils.ppo_utils import (
     calculate_log_probs_and_entropy,
+    calculate_ragged_log_probs,
     calculate_topk_log_probs,
     compute_approx_kl,
     compute_cispo_loss,
@@ -962,10 +963,66 @@ def _slice_allgather_response_rows(
 def get_score_centering_terms(args, batch, logits):
     """Compute per-token centering corrections and head-mass diagnostics.
 
-    Sampler top-k rows follow the response tokens through TP/CP layouts.
-    Redistribute the scalar correction before multiplying by zigzag-CP advantages.
+    With top-p replay, sum over the complete recorded support. Otherwise use
+    the paper's top-k approximation. Redistribute the scalar correction before
+    multiplying by zigzag-CP advantages.
     """
     total_lengths, response_lengths = batch["total_lengths"], batch["response_lengths"]
+    if args.rollout_top_p < 1:
+        if batch.get("rollout_top_p_log_probs") is None or batch.get("rollout_log_probs") is None:
+            raise ValueError("Top-p score centering requires complete sampler top-p and sampled-token logprobs.")
+        get_rollout_top_p_logprob_kwargs(args, batch)
+        # Ragged replay data remains complete on CPU across CP ranks. Slice row
+        # indices first, then gather only the supports consumed by this rank.
+        row_indices = [torch.arange(length) for length in response_lengths]
+        allgather_cp = args.allgather_cp and mpu.get_context_parallel_world_size() > 1
+        if allgather_cp:
+            row_indices = _slice_allgather_response_rows(row_indices, total_lengths, response_lengths, logits.size(1))
+        else:
+            row_indices = [
+                slice_log_prob_with_cp(indices, total, response)
+                for indices, total, response in zip(row_indices, total_lengths, response_lengths, strict=True)
+            ]
+        weighting = get_score_centering_is_config(args)
+        res = {"sc_correction": [], "sc_sampler_head_mass": [], "sc_train_head_mass": []}
+        for (rows, _), indices, ids, offsets, q in zip(
+            get_responses(
+                logits,
+                args=args,
+                unconcat_tokens=batch["unconcat_tokens"],
+                total_lengths=total_lengths,
+                response_lengths=response_lengths,
+                apply_temperature=False,
+            ),
+            row_indices,
+            batch["rollout_top_p_token_ids"],
+            batch["rollout_top_p_token_offsets"],
+            batch["rollout_top_p_log_probs"],
+            strict=True,
+        ):
+            offsets = torch.as_tensor(offsets, device="cpu", dtype=torch.long)
+            spans = [torch.arange(offsets[i], offsets[i + 1]) for i in indices.tolist()]
+            selected = torch.cat(spans) if spans else torch.empty(0, dtype=torch.long)
+            lengths = offsets[indices + 1] - offsets[indices]
+            local_offsets = torch.cat((lengths.new_zeros(1), lengths.cumsum(0))).to(logits.device)
+            head_ids = torch.as_tensor(ids)[selected].to(device=logits.device, dtype=torch.long)
+            q = torch.as_tensor(q)[selected].to(device=logits.device, dtype=torch.float32)
+            p = calculate_ragged_log_probs(
+                rows, head_ids, local_offsets, mpu.get_tensor_model_parallel_group(), args.rollout_temperature
+            )
+            row_ids = torch.repeat_interleave(torch.arange(len(rows), device=logits.device), lengths.to(logits.device))
+            with torch.no_grad():
+                coefficients = q.exp() * importance_weights((p - q).exp(), **weighting)
+                q_mass = q.new_zeros(len(rows)).scatter_add_(0, row_ids, q.exp())
+                p_mass = p.new_zeros(len(rows)).scatter_add_(0, row_ids, p.exp())
+            correction = p.new_zeros(len(rows)).scatter_add_(0, row_ids, coefficients * p)
+            for key, value in zip(res, (correction, q_mass, p_mass), strict=True):
+                res[key].append(value)
+        if allgather_cp:
+            _allgather_cp_redistribute(
+                res, logits_local_len=logits.size(1), total_lengths=total_lengths, response_lengths=response_lengths
+            )
+        return {key: torch.cat(values) for key, values in res.items()}
     ids, sampler_head = batch.get("rollout_topk_token_ids"), batch.get("rollout_topk_log_probs")
     if ids is None or sampler_head is None or batch.get("rollout_log_probs") is None:
         raise ValueError("Score centering requires sampler top-k ids, top-k logprobs, and sampled-token logprobs.")

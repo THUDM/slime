@@ -128,6 +128,7 @@ class Sample:
     # token i, kept ids are rollout_top_p_token_ids[offsets[i]:offsets[i + 1]].
     rollout_top_p_token_ids: list[int] | torch.Tensor | None = None
     rollout_top_p_token_offsets: list[int] | torch.Tensor | None = None
+    rollout_top_p_log_probs: np.ndarray | torch.Tensor | list[float] | None = None
     rollout_routed_experts: list[list[int]] | list[torch.Tensor] | torch.Tensor | DiskTensorRef | None = (
         None  # Routed experts from rollout engine
     )
@@ -288,7 +289,7 @@ class Sample:
             log_probs = [0.0] * len(tokens)
 
         previous_response_length = self.response_length
-        if tokens and getattr(args, "use_score_centering", False):
+        if tokens and getattr(args, "use_score_centering", False) and getattr(args, "rollout_top_p", 1.0) == 1.0:
             from .score_centering import extract_sampler_topk
 
             k = args.score_centering_top_k
@@ -320,6 +321,31 @@ class Sample:
                 if previous_response_length
                 else logps
             )
+        if tokens and getattr(args, "use_score_centering", False) and getattr(args, "rollout_top_p", 1.0) < 1:
+            from .score_centering import extract_sampler_top_p, validate_sampler_top_p
+
+            if self.rollout_top_p_token_ids is None:
+                if previous_response_length and any(self.loss_mask or [1] * previous_response_length):
+                    raise ValueError("Existing trainable response tokens have no sampler top-p data.")
+                self.rollout_top_p_token_ids = torch.empty(0, dtype=torch.int32)
+                self.rollout_top_p_token_offsets = torch.zeros(previous_response_length + 1, dtype=torch.int32)
+                self.rollout_top_p_log_probs = np.empty(0, dtype=np.float32)
+            if trainable:
+                ids, offsets, logps = extract_sampler_top_p(meta_info or {}, len(tokens))
+                validate_sampler_top_p(ids, offsets, logps, len(tokens), tokens=tokens, sampled_logps=log_probs)
+                self.rollout_top_p_token_ids, self.rollout_top_p_token_offsets = _merge_rollout_top_p_token_data(
+                    self.rollout_top_p_token_ids,
+                    self.rollout_top_p_token_offsets,
+                    torch.as_tensor(ids),
+                    torch.as_tensor(offsets),
+                )
+                self.rollout_top_p_log_probs = np.concatenate((np.asarray(self.rollout_top_p_log_probs), logps))
+                # Already appended the validated replay data above.
+                meta_info = {
+                    key: value
+                    for key, value in (meta_info or {}).items()
+                    if key not in (*_TOP_P_TOKEN_ID_META_KEYS, *_TOP_P_TOKEN_OFFSET_META_KEYS)
+                }
         if text is not None:
             self.response += text
         if tokens:
@@ -525,6 +551,8 @@ class Sample:
                 f"len(offsets)={offsets.numel()}, response_length={self.response_length}."
             )
         token_id_count = _numel(self.rollout_top_p_token_ids)
+        if self.rollout_top_p_log_probs is not None and len(self.rollout_top_p_log_probs) != token_id_count:
+            raise ValueError("Top-p logprobs must align with the replay token ids.")
         if int(offsets[-1]) != token_id_count:
             raise ValueError(
                 "rollout top-p token ids/offsets mismatch: "

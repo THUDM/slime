@@ -170,6 +170,7 @@ def log_rollout_data(
             "rollout_topk_log_probs",
             "rollout_top_p_token_ids",
             "rollout_top_p_token_offsets",
+            "rollout_top_p_log_probs",
             "rollout_routed_experts",
             "global_batch_sizes",
             "num_microbatches",
