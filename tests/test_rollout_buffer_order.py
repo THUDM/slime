@@ -46,5 +46,43 @@ def test_buffer_sort_is_opt_in_and_explicit_filter_takes_precedence(monkeypatch,
     assert source.buffer_filter is pop_first
 
 
+def test_data_source_reads_and_checkpoints_without_global_dataset_flag(monkeypatch, tmp_path):
+    import slime.rollout.data_source as module
+
+    prompts = [Sample(prompt="first"), Sample(prompt="second")]
+    monkeypatch.setattr(module, "load_tokenizer", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "load_processor", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "Dataset", lambda *args, **kwargs: SimpleNamespace(samples=prompts))
+    args = SimpleNamespace(
+        prompt_data="local.jsonl",
+        hf_checkpoint="local-tokenizer",
+        dump_details=None,
+        rollout_max_prompt_len=None,
+        input_key="text",
+        multimodal_keys=None,
+        label_key=None,
+        metadata_key="metadata",
+        tool_key=None,
+        apply_chat_template=False,
+        apply_chat_template_kwargs=None,
+        rollout_seed=42,
+        rollout_shuffle=False,
+        n_samples_per_prompt=1,
+        save=str(tmp_path),
+        load=None,
+    )
+    source = RolloutDataSource(args)
+    assert source.dataset.samples == prompts
+    # Empty-prompt custom rollouts still own a checkpointable global cursor.
+    args.prompt_data = None
+    source = RolloutDataSource(args)
+    assert source.get_samples(2)[1][0].index == 1
+    source.save(4)
+    args.load = str(tmp_path)
+    restored = RolloutDataSource(args)
+    restored.load(4)
+    assert restored.get_samples(1)[0][0].index == 2
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

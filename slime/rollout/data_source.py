@@ -58,7 +58,7 @@ class RolloutDataSource(DataSource):
         # TODO remove this
         self.metadata = {}
 
-        if args.rollout_global_dataset and args.prompt_data is not None:
+        if args.prompt_data is not None:
             tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
             processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
@@ -121,9 +121,6 @@ class RolloutDataSource(DataSource):
         raise RuntimeError(f"Cannot add samples to {self.__class__.__name__}. This is a read-only data source.")
 
     def save(self, rollout_id):
-        if not self.args.rollout_global_dataset:
-            return
-
         state_dict = {
             "sample_offset": self.sample_offset,
             "epoch_id": self.epoch_id,
@@ -136,9 +133,6 @@ class RolloutDataSource(DataSource):
         torch.save(state_dict, path)
 
     def load(self, rollout_id=None):
-        if not self.args.rollout_global_dataset:
-            return
-
         if self.args.load is None:
             return
 
@@ -156,7 +150,7 @@ class RolloutDataSource(DataSource):
         self.sample_index = state_dict.get("sample_index", 0)
         self.metadata = state_dict.get("metadata", {})
 
-        if self.args.rollout_global_dataset and self.args.rollout_shuffle and self.dataset is not None:
+        if self.args.rollout_shuffle and self.dataset is not None:
             self.dataset.shuffle(self.epoch_id)
 
     def __len__(self) -> int:

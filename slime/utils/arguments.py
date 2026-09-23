@@ -631,18 +631,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
 
             parser.add_argument(
-                "--disable-rollout-global-dataset",
-                action="store_false",
-                dest="rollout_global_dataset",
-                help=(
-                    "Whether to use a global dataset for rollout. "
-                    "If set, the rollout will use the `--prompt-data` as the prompt dataset, "
-                    "and the prompts for rollout will be sampled from the dataset. "
-                    "If not set, you need to manage the data by your self."
-                ),
-            )
-
-            parser.add_argument(
                 "--data-source-path",
                 type=str,
                 default="slime.rollout.data_source.RolloutDataSourceWithBuffer",
@@ -2048,11 +2036,6 @@ def slime_validate_args(args):
     if args.num_epoch is not None:
         if args.num_rollout is not None:
             logger.info("Both num_epoch and num_rollout are set, num_epoch will be ignored.")
-        else:
-            assert args.rollout_global_dataset, (
-                "num_epoch is set, but rollout_global_dataset is not set, "
-                "please remove --disable-rollout-global-dataset to use num_epoch"
-            )
     else:
         # if num_epoch is not set, we should set num_rollout
         assert args.num_rollout is not None, (

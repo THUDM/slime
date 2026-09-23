@@ -156,6 +156,8 @@ sglang 的加载非常简单，只需要：
 
 ### 数据格式
 
+原始数据统一由 DataSource 管理。有 `--prompt-data` 时内置 DataSource 会加载数据；需要自行管理数据时可通过 `--data-source-path` 提供自定义实现。原来的 `--disable-rollout-global-dataset` 已移除，旧启动脚本需要删除该参数。
+
 slime 支持加载 `.jsonl` 和 `.parquet` 格式文件；读取 Parquet 需要安装 `pyarrow`。两种格式中的每条记录都应包含 `--input-key` 和 `--label-key` 指定的字段。下面是一条 JSONL 数据展开后的示例：
 
 ```json

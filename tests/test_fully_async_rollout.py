@@ -81,7 +81,7 @@ def _make_group(index: int) -> list[Sample]:
 
 def _make_worker(monkeypatch, data_buffer=None, concurrency=4) -> fa.AsyncRolloutWorker:
     monkeypatch.setattr(fa, "GenerateState", _FakeGenerateState)
-    args = SimpleNamespace(rollout_global_dataset=True, rollout_batch_size=4, n_samples_per_prompt=1)
+    args = SimpleNamespace(rollout_batch_size=4, n_samples_per_prompt=1)
     return fa.AsyncRolloutWorker(args, data_buffer or _FakeDataBuffer([]), concurrency=concurrency)
 
 
@@ -92,7 +92,7 @@ def test_rollout_takes_target_groups_and_leaves_surplus_queued(monkeypatch):
         worker.output_queue.put((gid, _make_group(gid)))
     monkeypatch.setattr(fa, "_get_global_worker", lambda args, data_buffer: worker)
 
-    args = SimpleNamespace(rollout_global_dataset=True, rollout_batch_size=4)
+    args = SimpleNamespace(rollout_batch_size=4)
     out = asyncio.run(fa._generate_rollout_async(args, rollout_id=0, data_buffer=None))
 
     assert len(out) == 4
@@ -136,7 +136,6 @@ def test_dynamic_filter_drops_groups_and_refills(monkeypatch):
 
     monkeypatch.setattr(fa, "load_function", lambda path: keep_odd)
     args = SimpleNamespace(
-        rollout_global_dataset=True,
         rollout_batch_size=3,
         dynamic_sampling_filter_path="test.keep_odd",
     )
