@@ -265,8 +265,8 @@ jobs:
               "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"
             },
             {
-              "num_gpus": 4,
-              "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"
+              "num_gpus": 2,
+              "test_file": "test_qwen2.5_0.5B_score_centering.py"
             },
             {
               "num_gpus": 8,
@@ -663,6 +663,18 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_score_centering.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_score_centering_binary.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_score_centering_transport.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_ppo_logprob_entropy.py"
             },
             {
@@ -720,6 +732,22 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_fully_async_rollout.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_rollout_buffer_order.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_server_control.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_cuda_stack_offload.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_r3_spill.py"
             },
             {
               "num_gpus": 0,
@@ -1089,8 +1117,8 @@ jobs:
               "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"
             },
             {
-              "num_gpus": 4,
-              "test_file": "test_qwen3.5_0.8B_gsm8k_async_short.py"
+              "num_gpus": 2,
+              "test_file": "test_qwen2.5_0.5B_score_centering.py"
             },
             {
               "num_gpus": 8,
@@ -1219,7 +1247,7 @@ jobs:
             FIRST=true
             for filepath in $CHANGED; do
               # Extract NUM_GPUS from the test file, default to 8
-              NGPU=$(grep -oP '^NUM_GPUS\s*=\s*\K\d+' "$filepath" | head -1)
+              NGPU=$(grep -m1 -oP '^NUM_GPUS\s*=\s*\K\d+' "$filepath" || true)
               NGPU=${NGPU:-8}
               if [ "$FIRST" = true ]; then FIRST=false; else MATRIX+=","; fi
               MATRIX+="{\"test_file\":\"$filepath\",\"num_gpus\":$NGPU}"
