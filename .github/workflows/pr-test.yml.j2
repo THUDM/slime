@@ -338,7 +338,7 @@ jobs:
             FIRST=true
             for filepath in $CHANGED; do
               # Extract NUM_GPUS from the test file, default to 8
-              NGPU=$(grep -oP '^NUM_GPUS\s*=\s*\K\d+' "$filepath" | head -1)
+              NGPU=$(grep -m1 -oP '^NUM_GPUS\s*=\s*\K\d+' "$filepath" || true)
               NGPU=${NGPU:-8}
               if [ "$FIRST" = true ]; then FIRST=false; else MATRIX+=","; fi
               MATRIX+="{\"test_file\":\"$filepath\",\"num_gpus\":$NGPU}"

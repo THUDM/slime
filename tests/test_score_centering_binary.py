@@ -10,6 +10,8 @@ import pytest
 from slime.utils.score_centering import decode_score_centering_response, extract_sampler_topk, validate_sampler_topk
 from slime.utils.types import Sample
 
+NUM_GPUS = 0
+
 
 def binary_meta(ids, logps):
     ids = np.asarray(ids, dtype="<i4")
