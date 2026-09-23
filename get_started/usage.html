@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Sep 18, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 23, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -509,6 +509,7 @@
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hyperparameters-for-rl-training">Hyperparameters for RL Training</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#grpo-algorithm">GRPO Algorithm</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#ppo-algorithm">PPO Algorithm</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#score-centering">Score Centering</a></li>
 </ul>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#advanced-megatron-configuration-megatron-config-path">Advanced Megatron Configuration (–megatron-config-path)</a></li>
@@ -736,6 +737,7 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 </li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>: By default, slime calculates loss on a per-sample basis, i.e., <code class="docutils literal notranslate"><span class="pre">mean(sum(sample_i)</span> <span class="pre">/</span> <span class="pre">len(sample_i))</span></code>. Enable this flag to calculate loss on a per-token basis, i.e., <code class="docutils literal notranslate"><span class="pre">sum(sum(sample_i))</span> <span class="pre">/</span> <span class="pre">sum(len(sample_i))</span></code>.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>: Enable this setting to use TIS (Truncated Importance Sampling) (https://fengyao.notion.site/off-policy-rl).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code>: Enable <a class="reference external" href="https://arxiv.org/abs/2609.20807">Score Centering</a>, optionally combined with TIS. See <a class="reference internal" href="#score-centering"><span class="std std-ref">Score Centering</span></a> below.</p></li>
 </ul>
 <section id="grpo-algorithm">
 <h4>GRPO Algorithm<a class="headerlink" href="#grpo-algorithm" title="Link to this heading">#</a></h4>
@@ -779,6 +781,32 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <li><p><code class="docutils literal notranslate"><span class="pre">--value-clip</span></code>: Clip range for value loss.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--kl-coef</span></code>: KL penalty coefficient for reward shaping.</p></li>
 </ul>
+</section>
+<section id="score-centering">
+<h4>Score Centering<a class="headerlink" href="#score-centering" title="Link to this heading">#</a></h4>
+<p><a class="reference external" href="https://arxiv.org/abs/2609.20807">Score Centering Stabilizes Off-policy Reinforcement Learning</a> introduces an additive correction to reduce drift caused by training-inference mismatch. It can also be combined with importance sampling. In slime, score centering (SC) is supported by the Megatron backend with non-streaming SGLang rollouts.</p>
+<p>Add the following options to an existing RL launch:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--use-score-centering<span class="w"> </span><span class="se">\</span>
+--score-centering-top-k<span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="se">\</span>
+--pg-loss-type<span class="w"> </span>reinforce<span class="w"> </span><span class="se">\</span>
+--advantage-estimator<span class="w"> </span>grpo<span class="w"> </span><span class="se">\</span>
+--disable-grpo-std-normalization<span class="w"> </span><span class="se">\</span>
+--calculate-per-token-loss<span class="w"> </span><span class="se">\</span>
+--rollout-temperature<span class="w"> </span><span class="m">1</span>.0<span class="w"> </span><span class="se">\</span>
+--rollout-top-p<span class="w"> </span><span class="m">1</span>.0<span class="w"> </span><span class="se">\</span>
+--rollout-top-k<span class="w"> </span>-1<span class="w"> </span><span class="se">\</span>
+--entropy-coef<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
+--kl-coef<span class="w"> </span><span class="m">0</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code>: Enable the REINFORCE score-centering objective. If <code class="docutils literal notranslate"><span class="pre">--pg-loss-type</span></code> is omitted, SC selects <code class="docutils literal notranslate"><span class="pre">reinforce</span></code> automatically. Without SC, the existing PPO/CISPO default is preserved. SC cannot be combined with <code class="docutils literal notranslate"><span class="pre">--pg-loss-type</span> <span class="pre">ppo</span></code> or the GSPO/CISPO advantage estimators; PPO clipping parameters do not affect the REINFORCE objective.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--score-centering-top-k</span></code>: Number of sampler top-k token IDs and logprobs retained for each response token; defaults to 128 and must fit the model vocabulary. The head retains its full-vocabulary probability mass. The remaining sampler mass is modeled as proportional to the current trainer’s tail mass.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>: Optional and independent of SC. Combine the two to center the weighted scores using <code class="docutils literal notranslate"><span class="pre">--tis-clip-low</span></code> and <code class="docutils literal notranslate"><span class="pre">--tis-clip</span></code>. The built-in <code class="docutils literal notranslate"><span class="pre">slime.backends.megatron_utils.loss.icepop_function</span></code> is also supported through <code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code>; arbitrary custom TIS callbacks are not supported with SC. REINFORCE uses detached current-trainer/sampler weights, while PPO preserves its old-trainer/sampler weights.</p></li>
+</ul>
+<p><strong>Sampling requirements:</strong> Use a positive temperature, <code class="docutils literal notranslate"><span class="pre">top_p=1</span></code>, <code class="docutils literal notranslate"><span class="pre">top_k=-1</span></code>, <code class="docutils literal notranslate"><span class="pre">min_p=0</span></code>, and no repetition/frequency/presence penalties or constrained decoding. Keep <code class="docutils literal notranslate"><span class="pre">SGLANG_RETURN_ORIGINAL_LOGPROB</span></code> unset or false on all sampler workers when temperature differs from one. Per-request temperature changes and streaming SC are unsupported. Evaluation does not request SC data and may use its own sampling settings.</p>
+<p><strong>SGLang support:</strong> Use an image built with <code class="docutils literal notranslate"><span class="pre">docker/patch/latest/sglang-top_p.patch</span></code>, which includes binary top-k output alongside top-p replay. Slime requests <code class="docutils literal notranslate"><span class="pre">top_logprobs_num=k</span></code> and stores the original sampler probabilities, rather than recomputing them with a newer checkpoint. Custom generators should call <code class="docutils literal notranslate"><span class="pre">score_centering_request</span></code> from <code class="docutils literal notranslate"><span class="pre">slime.utils.score_centering</span></code> and pass the response metadata to <code class="docutils literal notranslate"><span class="pre">Sample.append_response_tokens</span></code>.</p>
+<p>Sampler heads survive partial-rollout continuation, masked tool tokens, DP partitioning, microbatch selection, TP and both CP layouts. With the R3 spill hook, they share its file lifetime. Logged metrics include <code class="docutils literal notranslate"><span class="pre">sc_correction</span></code>, <code class="docutils literal notranslate"><span class="pre">sc_sampler_head_mass</span></code>, <code class="docutils literal notranslate"><span class="pre">sc_train_head_mass</span></code> and <code class="docutils literal notranslate"><span class="pre">sc_importance_weight</span></code>.</p>
 </section>
 </section>
 <section id="advanced-megatron-configuration-megatron-config-path">
@@ -1021,6 +1049,7 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hyperparameters-for-rl-training">Hyperparameters for RL Training</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#grpo-algorithm">GRPO Algorithm</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#ppo-algorithm">PPO Algorithm</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#score-centering">Score Centering</a></li>
 </ul>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#advanced-megatron-configuration-megatron-config-path">Advanced Megatron Configuration (–megatron-config-path)</a></li>
@@ -1071,7 +1100,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Sep 18, 2026.
+  Last updated on Sep 23, 2026.
   <br/>
 </p>
   </div>

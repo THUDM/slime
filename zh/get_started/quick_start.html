@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 09 月 18 日"/>
+    <meta name="docbuild:last-update" content="2026 年 09 月 23 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -812,6 +812,7 @@ slime 总是会通过 data packing 的方法训练模型，并且严格保证 pe
 <li><p><code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span></code>: 除去 <a class="reference external" href="https://arxiv.org/abs/2402.03300">GRPO</a>，slime 还支持丰富的其他训练算法，例如 <a class="reference external" href="https://arxiv.org/abs/2507.18071">GSPO</a>、<a class="reference external" href="https://arxiv.org/abs/2501.03262">Reinforce++</a> 与 <a class="reference external" href="https://arxiv.org/abs/2501.03262">Reinforce++ Baseline</a>、以及 <a class="reference external" href="https://arxiv.org/abs/1707.06347">PPO</a>；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>：slime 中默认的方案是 per sample loss，即 <code class="docutils literal notranslate"><span class="pre">mean(sum(sample_i)</span> <span class="pre">/</span> <span class="pre">len(sample_i))</span></code>，如果需要计算 per token loss，即 <code class="docutils literal notranslate"><span class="pre">sum(sum(sample_i))</span> <span class="pre">/</span> <span class="pre">sum(len(sample_i))</span></code>，可以开启 <code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>：如果需要开启 TIS (Truncated Importance Sampling)，可以开启这一设置。TIS 由此<a class="reference external" href="https://fengyao.notion.site/off-policy-rl">博客</a>介绍。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code>：启用 <a class="reference external" href="https://arxiv.org/abs/2609.20807">Score Centering</a>，使用 REINFORCE 目标，也可与 TIS 组合使用，详见<a class="reference internal" href="usage.html#score-centering"><span class="std std-ref">配置与采样要求</span></a>。</p></li>
 </ul>
 </section>
 <section id="optimizer-args">
@@ -1247,7 +1248,7 @@ ray<span class="w"> </span>start<span class="w"> </span>--address<span class="o"
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 09 月 18 日.
+  最后更新于 2026 年 09 月 23 日.
   <br/>
 </p>
   </div>

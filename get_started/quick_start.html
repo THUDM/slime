@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Sep 18, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 23, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -817,6 +817,7 @@ slime always trains models through data packing methods and strictly ensures tha
 <li><p><code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span></code>: In addition to <a class="reference external" href="https://arxiv.org/abs/2402.03300">GRPO</a>, slime also supports several other training algorithms, such as <a class="reference external" href="https://arxiv.org/abs/2507.18071">GSPO</a>, <a class="reference external" href="https://arxiv.org/abs/2501.03262">Reinforce++</a> and <a class="reference external" href="https://arxiv.org/abs/2501.03262">Reinforce++ Baseline</a>, and <a class="reference external" href="https://arxiv.org/abs/1707.06347">PPO</a>.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>: By default, slime calculates the loss on a per-sample basis, i.e., <code class="docutils literal notranslate"><span class="pre">mean(sum(sample_i)</span> <span class="pre">/</span> <span class="pre">len(sample_i))</span></code>. To calculate the loss on a per-token basis, i.e., <code class="docutils literal notranslate"><span class="pre">sum(sum(sample_i))</span> <span class="pre">/</span> <span class="pre">sum(len(sample_i))</span></code>, you can enable this flag.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>: Enable this setting to use TIS (Truncated Importance Sampling), which is introduced by this <a class="reference external" href="https://fengyao.notion.site/off-policy-rl">blog</a>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code>: Enable <a class="reference external" href="https://arxiv.org/abs/2609.20807">Score Centering</a> with the REINFORCE objective, optionally combined with TIS. See <a class="reference internal" href="usage.html#score-centering"><span class="std std-ref">configuration and sampling requirements</span></a>.</p></li>
 </ul>
 </section>
 <section id="optimizer-args-optimizer-parameters">
@@ -1257,7 +1258,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Sep 18, 2026.
+  Last updated on Sep 23, 2026.
   <br/>
 </p>
   </div>

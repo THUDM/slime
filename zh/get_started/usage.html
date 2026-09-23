@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 09 月 18 日"/>
+    <meta name="docbuild:last-update" content="2026 年 09 月 23 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -505,6 +505,7 @@
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rl">RL 训练需要的超参</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#grpo">GRPO 算法</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#ppo">PPO 算法</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#score-centering">Score Centering</a></li>
 </ul>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-megatron-config-path">高级 Megatron 配置（--megatron-config-path）</a></li>
@@ -733,6 +734,7 @@
 </li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>：slime 中默认的方案是 per sample loss，即 <code class="docutils literal notranslate"><span class="pre">mean(sum(sample_i)</span> <span class="pre">/</span> <span class="pre">len(sample_i))</span></code>，如果需要计算 per token loss，即 <code class="docutils literal notranslate"><span class="pre">sum(sum(sample_i))</span> <span class="pre">/</span> <span class="pre">sum(len(sample_i))</span></code>，可以开启 <code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code>：启用 <a class="reference external" href="https://arxiv.org/abs/2609.20807">Score Centering</a>，可与 TIS 组合使用，详见下方的 <a class="reference internal" href="#score-centering"><span class="std std-ref">Score Centering</span></a>。</p></li>
 </ul>
 <section id="grpo">
 <h4>GRPO 算法<a class="headerlink" href="#grpo" title="链接到此标题。">#</a></h4>
@@ -776,6 +778,32 @@
 <li><p><code class="docutils literal notranslate"><span class="pre">--value-clip</span></code>：value loss 的 clip 范围；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--kl-coef</span></code>：KL penalty 系数，用于 reward shaping。</p></li>
 </ul>
+</section>
+<section id="score-centering">
+<h4>Score Centering<a class="headerlink" href="#score-centering" title="链接到此标题。">#</a></h4>
+<p><a class="reference external" href="https://arxiv.org/abs/2609.20807">Score Centering Stabilizes Off-policy Reinforcement Learning</a> 提出了一种加性修正，用于减轻训练与推理不一致引起的梯度漂移，也可以与重要性采样组合使用。slime 的 score centering（SC）目前支持 Megatron backend 和非流式 SGLang rollout。</p>
+<p>在已有的 RL 启动命令中加入以下配置：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--use-score-centering<span class="w"> </span><span class="se">\</span>
+--score-centering-top-k<span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="se">\</span>
+--pg-loss-type<span class="w"> </span>reinforce<span class="w"> </span><span class="se">\</span>
+--advantage-estimator<span class="w"> </span>grpo<span class="w"> </span><span class="se">\</span>
+--disable-grpo-std-normalization<span class="w"> </span><span class="se">\</span>
+--calculate-per-token-loss<span class="w"> </span><span class="se">\</span>
+--rollout-temperature<span class="w"> </span><span class="m">1</span>.0<span class="w"> </span><span class="se">\</span>
+--rollout-top-p<span class="w"> </span><span class="m">1</span>.0<span class="w"> </span><span class="se">\</span>
+--rollout-top-k<span class="w"> </span>-1<span class="w"> </span><span class="se">\</span>
+--entropy-coef<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
+--kl-coef<span class="w"> </span><span class="m">0</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code>：启用 REINFORCE score-centering 目标。省略 <code class="docutils literal notranslate"><span class="pre">--pg-loss-type</span></code> 时，SC 会自动选择 <code class="docutils literal notranslate"><span class="pre">reinforce</span></code>；未开启 SC 时保留原有的 PPO/CISPO 默认行为。SC 不能与 <code class="docutils literal notranslate"><span class="pre">--pg-loss-type</span> <span class="pre">ppo</span></code> 或 GSPO/CISPO advantage estimator 组合，PPO clipping 参数不影响 REINFORCE 目标。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--score-centering-top-k</span></code>：每个 response token 保存的 sampler top-k token ID 和 logprob 数量，默认为 128，不能超过模型词表大小。top-k 概率保留其在完整词表上的概率质量；剩余的 sampler 概率质量按当前 trainer 的尾部概率分布估计。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>：可选，与 SC 独立开关。组合开启时，使用 <code class="docutils literal notranslate"><span class="pre">--tis-clip-low</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--tis-clip</span></code> 对加权后的 score 做 centering。也支持通过 <code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code> 选择内置的 <code class="docutils literal notranslate"><span class="pre">slime.backends.megatron_utils.loss.icepop_function</span></code>，但不支持与任意自定义 TIS 回调组合。REINFORCE 使用 detached 的当前 trainer/sampler 权重，PPO 保留原有的旧 trainer/sampler 权重。</p></li>
+</ul>
+<p><strong>采样要求：</strong> temperature 必须为正，使用 <code class="docutils literal notranslate"><span class="pre">top_p=1</span></code>、<code class="docutils literal notranslate"><span class="pre">top_k=-1</span></code>、<code class="docutils literal notranslate"><span class="pre">min_p=0</span></code>，不启用 repetition/frequency/presence penalty 或约束解码。temperature 不为 1 时，所有 sampler worker 上的 <code class="docutils literal notranslate"><span class="pre">SGLANG_RETURN_ORIGINAL_LOGPROB</span></code> 必须未设置或为 false。目前不支持逐请求修改 temperature，也不支持流式 SC。评估不会请求 SC 数据，可以使用独立的采样配置。</p>
+<p><strong>SGLang 支持：</strong> 使用包含 <code class="docutils literal notranslate"><span class="pre">docker/patch/latest/sglang-top_p.patch</span></code> 的镜像，该 patch 在 top-p replay 之外加入了二进制 top-k 输出。slime 通过 <code class="docutils literal notranslate"><span class="pre">top_logprobs_num=k</span></code> 请求并保存原始采样时的概率，不使用更新后的 checkpoint 重新计算这些概率。自定义 generator 应调用 <code class="docutils literal notranslate"><span class="pre">slime.utils.score_centering</span></code> 中的 <code class="docutils literal notranslate"><span class="pre">score_centering_request</span></code>，并将响应 metadata 传给 <code class="docutils literal notranslate"><span class="pre">Sample.append_response_tokens</span></code>。</p>
+<p>sampler top-k 数据支持 partial rollout 续接、masked tool token、DP 划分、microbatch 选择、TP 及两种 CP 布局；使用 R3 spill hook 时共享其文件生命周期。相关日志指标包括 <code class="docutils literal notranslate"><span class="pre">sc_correction</span></code>、<code class="docutils literal notranslate"><span class="pre">sc_sampler_head_mass</span></code>、<code class="docutils literal notranslate"><span class="pre">sc_train_head_mass</span></code> 和 <code class="docutils literal notranslate"><span class="pre">sc_importance_weight</span></code>。</p>
 </section>
 </section>
 <section id="megatron-megatron-config-path">
@@ -1018,6 +1046,7 @@
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rl">RL 训练需要的超参</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#grpo">GRPO 算法</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#ppo">PPO 算法</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#score-centering">Score Centering</a></li>
 </ul>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-megatron-config-path">高级 Megatron 配置（--megatron-config-path）</a></li>
@@ -1068,7 +1097,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 09 月 18 日.
+  最后更新于 2026 年 09 月 23 日.
   <br/>
 </p>
   </div>
