@@ -19,6 +19,7 @@ def _args():
     return SimpleNamespace(
         num_layers=6,
         moe_router_topk=2,
+        num_experts=16,
         moe_layer_freq=[0, 0, 0, 1, 1, 1],
     )
 
@@ -41,6 +42,26 @@ def test_r3_validation_rejects_wrong_shape():
     routes = torch.zeros((4, 5, 2), dtype=torch.uint8)
 
     with pytest.raises(ValueError, match="Invalid rollout routed-experts shape"):
+        validate_rollout_routed_experts_for_replay([routes], _args())
+
+
+def test_r3_validation_rejects_partial_token_routes():
+    routes = torch.zeros((4, 6, 2), dtype=torch.uint8)
+    routes[:, 3:, 1] = 7
+    routes[2, 4] = 0
+
+    with pytest.raises(ValueError, match=r"token/layer pairs.*\(2, 4\)"):
+        validate_rollout_routed_experts_for_replay([routes], _args())
+
+
+def test_r3_validation_rejects_row_mismatch_and_expert_range():
+    routes = torch.zeros((4, 6, 2), dtype=torch.int32)
+    routes[:, 3:, 1] = 7
+    with pytest.raises(ValueError, match=r"rows=4, expected=5"):
+        validate_rollout_routed_experts_for_replay([routes], _args(), expected_rows=[5])
+
+    routes[1, 5, 0] = 16
+    with pytest.raises(ValueError, match=r"outside \[0, 15\].*16"):
         validate_rollout_routed_experts_for_replay([routes], _args())
 
 

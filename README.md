@@ -51,7 +51,7 @@ Choosing SGLang as the single rollout backend is also intentional. Multi-backend
 
 ## Correctness, Stability, and CI
 
-slime is developed as RL infrastructure, where "the script runs" is not enough. The project maintains CPU unit tests, contract tests for customization hooks, and GPU end-to-end tests covering dense and MoE models, Megatron training paths, SGLang deployment configurations, checkpointing, numerical precision, async rollout, OPD, PPO-style workflows, and debug rollout-then-train replay.
+slime is developed as RL infrastructure, where "the script runs" is not enough. The project maintains CPU unit tests, contract tests for customization hooks, and GPU end-to-end tests covering dense and MoE models, Megatron training paths, SGLang deployment configurations, checkpointing, numerical precision, fully-async rollout, OPD, PPO-style workflows, and debug rollout-then-train replay.
 
 Useful engineering docs:
 
@@ -131,7 +131,7 @@ These are not just demos. They are independent systems that use slime as a reusa
 
 ### 🦞 OpenClaw-RL: Train a Personalized Clawbot Simply by Talking to It
 
-[**OpenClaw-RL**](https://github.com/Gen-Verse/OpenClaw-RL) is an RL server for personalized OpenClaw agents. It hosts the OpenClaw model and improves it from prior conversations across deployments, while slime's asynchronous RL infrastructure prevents training from interfering with API serving. It supports two automatic optimization methods: GRPO with binary feedback inferred from subsequent states, and on-policy distillation that extracts hindsight hints from later feedback for the current policy.
+[**OpenClaw-RL**](https://github.com/Gen-Verse/OpenClaw-RL) is an RL server for personalized OpenClaw agents. It hosts the OpenClaw model and improves it from prior conversations across deployments, while slime's decoupled RL infrastructure prevents training from interfering with API serving. It supports two automatic optimization methods: GRPO with binary feedback inferred from subsequent states, and on-policy distillation that extracts hindsight hints from later feedback for the current policy.
 
 ### ⚛️ P1: Mastering Physics Olympiads with Reinforcement Learning
 

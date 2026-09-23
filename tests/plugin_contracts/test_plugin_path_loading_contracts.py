@@ -82,7 +82,7 @@ def make_sample(index: int, reward: float = 1.0) -> Sample:
 
 def make_args(**overrides):
     class Args:
-        rollout_global_dataset = False
+        prompt_data = None
         buffer_filter_path = None
         n_samples_per_prompt = 2
         custom_rm_path = None

@@ -24,7 +24,7 @@
     {'test_file': 'test_qwen2.5_0.5B_fanout_short.py', 'num_gpus': 4},
     {'test_file': 'test_qwen3_4B_streaming_partial_rollout.py', 'num_gpus': 8},
     {'test_file': 'test_qwen3.5_0.8B_gsm8k_short.py', 'num_gpus': 4},
-    {'test_file': 'test_qwen3.5_0.8B_gsm8k_async_short.py', 'num_gpus': 4},
+    {'test_file': 'test_qwen2.5_0.5B_score_centering.py', 'num_gpus': 2},
     {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer gpu', 'num_gpus': 8},
     {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer cpu', 'num_gpus': 8},
     {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer cpu', 'num_gpus': 8},
@@ -95,6 +95,9 @@
         {'test_file': 'test_ppo_kl_metric.py', 'num_gpus': 0},
         {'test_file': 'test_cispo_loss.py', 'num_gpus': 0},
         {'test_file': 'test_policy_loss.py', 'num_gpus': 0},
+        {'test_file': 'test_score_centering.py', 'num_gpus': 0},
+        {'test_file': 'test_score_centering_binary.py', 'num_gpus': 0},
+        {'test_file': 'test_score_centering_transport.py', 'num_gpus': 0},
         {'test_file': 'test_ppo_logprob_entropy.py', 'num_gpus': 0},
         {'test_file': 'test_discounted_returns.py', 'num_gpus': 0},
         {'test_file': 'test_block_fp8_zero_block.py', 'num_gpus': 0},
@@ -110,6 +113,10 @@
         {'test_file': 'test_filter_long_prompt.py', 'num_gpus': 0},
         {'test_file': 'test_read_file_slicing.py', 'num_gpus': 0},
         {'test_file': 'test_fully_async_rollout.py', 'num_gpus': 0},
+        {'test_file': 'test_rollout_buffer_order.py', 'num_gpus': 0},
+        {'test_file': 'test_server_control.py', 'num_gpus': 0},
+        {'test_file': 'test_cuda_stack_offload.py', 'num_gpus': 0},
+        {'test_file': 'test_r3_spill.py', 'num_gpus': 0},
         {'test_file': 'test_rollout_sample_hooks.py', 'num_gpus': 0},
         {'test_file': 'test_hf_to_megatron.py', 'num_gpus': 0},
         {'test_file': 'test_qwen3_5_vl_native.py', 'num_gpus': 0},
@@ -336,7 +343,7 @@ jobs:
             FIRST=true
             for filepath in $CHANGED; do
               # Extract NUM_GPUS from the test file, default to 8
-              NGPU=$(grep -oP '^NUM_GPUS\s*=\s*\K\d+' "$filepath" | head -1)
+              NGPU=$(grep -m1 -oP '^NUM_GPUS\s*=\s*\K\d+' "$filepath" || true)
               NGPU=${NGPU:-8}
               if [ "$FIRST" = true ]; then FIRST=false; else MATRIX+=","; fi
               MATRIX+="{\"test_file\":\"$filepath\",\"num_gpus\":$NGPU}"
