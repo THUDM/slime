@@ -18,7 +18,7 @@ slime 的设计目标，是让这两大能力彼此强化，同时避免把系�
 - **专注 SGLang rollout**：slime 有意选择单一 rollout backend，避免为了同时兼容多个 inference engine 而被迫抽象成 lowest-common-denominator 的公共能力子集，从而可以直接发挥 SGLang-specific 的 serving、routing、caching、disaggregation 和 weight-sync 能力。
 - **Agentic workflow 就是数据生成**：tool use、sandbox interaction、verifier reward、environment feedback、multi-agent loop 和 long-horizon agentic workflow 都接入同一条 training / rollout / Data Buffer 路径，而不是 fork training kernel。
 - **BF16 训练 + FP8 rollout**：大规模 MoE recipe 使用 Megatron BF16 training state 搭配 SGLang FP8 rollout/inference；long-context rollout 还可以通过 ``--sglang-kv-cache-dtype fp8_e4m3`` 提升有效 KV cache 容量。
-- **作为 RL 基础设施来测试**：CPU correctness tests 默认运行，GPU e2e tests 覆盖真实 Megatron + SGLang training/rollout 路径，包括 dense/MoE recipe、async rollout、SGLang config、checkpoint、precision 和 debug replay。详见 :doc:`developer_guide/ci`。
+- **作为 RL 基础设施来测试**：CPU correctness tests 默认运行，GPU e2e tests 覆盖真实 Megatron + SGLang training/rollout 路径，包括 dense/MoE recipe、fully-async rollout、SGLang config、checkpoint、precision 和 debug replay。详见 :doc:`developer_guide/ci`。
 
 生产验证
 --------

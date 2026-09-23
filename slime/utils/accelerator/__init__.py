@@ -22,11 +22,15 @@ from .base import Accelerator
 from .cuda import CUDAAccelerator
 from .musa import MUSAAccelerator
 from .musa import is_musa_available as _is_musa_available
+from .supa import SUPAAccelerator
+from .supa import is_supa_available as _is_supa_available
 
 logger = logging.getLogger(__name__)
 
 _MUSA_PATCH_IMPORTED = False
 _MUSA_BOOTSTRAP_CHECKED = False
+_SUPA_RUNTIME_IMPORTED = False
+_SUPA_BOOTSTRAP_CHECKED = False
 _ACCELERATOR: Accelerator | None = None
 _SELECTION_LOCK = threading.RLock()
 
@@ -122,6 +126,59 @@ def _bootstrap_musa_patch_if_needed() -> bool:
     return _try_import_musa_patch()
 
 
+def _import_torch_supa() -> bool:
+    try:
+        importlib.import_module("torch_supa")
+    except ModuleNotFoundError as exc:
+        if exc.name == "torch_supa":
+            return False
+        raise RuntimeError(f"torch_supa failed because dependency {exc.name!r} is missing") from exc
+    except Exception as exc:
+        raise RuntimeError(f"torch_supa initialization failed: {exc}") from exc
+    return True
+
+
+def is_supa_available() -> bool:
+    return _is_supa_available()
+
+
+def is_supa_environment() -> bool:
+    return (
+        is_supa_available()
+        or os.environ.get("SLIME_ACCELERATOR", "").lower() == "supa"
+        or "SUPA_VISIBLE_DEVICES" in os.environ
+        or bool(os.environ.get("BIREN_HOME"))
+    )
+
+
+def _try_import_torch_supa() -> bool:
+    global _SUPA_RUNTIME_IMPORTED
+    if _SUPA_RUNTIME_IMPORTED:
+        return True
+    if not is_supa_environment():
+        return False
+    _SUPA_RUNTIME_IMPORTED = _import_torch_supa()
+    if not _SUPA_RUNTIME_IMPORTED and is_supa_environment():
+        logger.warning("torch_supa is not importable; continuing without it")
+    return _SUPA_RUNTIME_IMPORTED
+
+
+def _supa_requested() -> bool:
+    configured = os.environ.get("SLIME_ACCELERATOR", "").lower()
+    if configured and configured != "auto":
+        return configured == "supa"
+    return "SUPA_VISIBLE_DEVICES" in os.environ or bool(os.environ.get("BIREN_HOME"))
+
+
+def _bootstrap_torch_supa_if_needed() -> bool:
+    """Bootstrap the runtime for an already chosen SUPA backend at most once."""
+    global _SUPA_BOOTSTRAP_CHECKED
+    if _SUPA_BOOTSTRAP_CHECKED:
+        return _SUPA_RUNTIME_IMPORTED
+    _SUPA_BOOTSTRAP_CHECKED = True
+    return _try_import_torch_supa()
+
+
 def _cuda_available() -> bool:
     try:
         return bool(torch.cuda.is_available() and torch.cuda.device_count() > 0)
@@ -136,6 +193,10 @@ def _register_builtin_backends() -> None:
         register_accelerator(
             "musa", MUSAAccelerator, is_musa_available, priority=200, communication_backends=("mccl",)
         )
+    if "supa" not in _REGISTRY:
+        register_accelerator(
+            "supa", SUPAAccelerator, is_supa_available, priority=150, communication_backends=("bccl",)
+        )
 
 
 def _requested_name() -> str | None:
@@ -144,6 +205,8 @@ def _requested_name() -> str | None:
         return value.strip().lower()
     if _musa_requested():
         return "musa"
+    if _supa_requested():
+        return "supa"
     return None
 
 
@@ -157,11 +220,17 @@ def _make_selected(name: str, explicit: bool) -> Accelerator:
         # musa_patch may expose torch.musa, so bootstrap after MUSA has been
         # chosen but before validating and constructing its backend.
         _bootstrap_musa_patch_if_needed()
+    if name == "supa":
+        # torch_supa attaches torch.supa and registers the "supa" device type,
+        # so bootstrap after SUPA has been chosen but before validating it.
+        _bootstrap_torch_supa_if_needed()
     if explicit and not entry.is_available():
         if name == "musa":
             detail = (
                 "torch.musa is unavailable; install a MUSA-enabled PyTorch runtime and set MUSA_PATCH_PATH if required"
             )
+        elif name == "supa":
+            detail = "torch.supa is unavailable; install a SUPA-enabled PyTorch runtime that provides torch_supa"
         elif name == "cuda":
             detail = "torch.cuda.is_available() is false or no CUDA device is visible"
         else:

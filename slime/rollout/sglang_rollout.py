@@ -180,6 +180,9 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         "return_logprob": True,
     }
 
+    from slime.utils.score_centering import score_centering_request
+
+    payload.update(score_centering_request(args, sampling_params))
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
 
@@ -202,7 +205,16 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
             headers = {"X-SMG-Routing-Key": sample.session_id}
 
     with trace_span(sample, "sglang_generate", attrs={"max_new_tokens": sampling_params["max_new_tokens"]}) as span:
-        output = await post(url, payload, headers=headers)
+        output = await post(
+            url,
+            payload,
+            headers=headers,
+            score_centering_top_k=(
+                (0 if args.rollout_top_p < 1 else args.score_centering_top_k)
+                if getattr(args, "use_score_centering", False)
+                else None
+            ),
+        )
         span.update(build_sglang_meta_trace_attrs(output["meta_info"]))
 
     if "output_token_logprobs" in output["meta_info"]:
@@ -272,6 +284,10 @@ async def generate_and_rm(
         return sample
 
     state = GenerateState(args)
+
+    if evaluation and getattr(args, "use_score_centering", False):
+        args = copy.copy(args)
+        args.use_score_centering = False
 
     # generate
     async with state.semaphore:

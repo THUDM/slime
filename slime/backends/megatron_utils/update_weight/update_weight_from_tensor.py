@@ -95,7 +95,7 @@ class UpdateWeightFromTensor:
         self._ipc_engine_index = None
         self._model_update_groups = []
         self._total_engine_groups = 0
-        self._max_inflight_engine_groups = getattr(args, "update_weight_max_inflight_engine_groups", 0)
+        self._max_inflight_engine_groups = args.update_weight_max_inflight_engine_groups
         self._wave_scheduling_enabled = False
         self._expert_transfer_plan = []
 
@@ -113,7 +113,7 @@ class UpdateWeightFromTensor:
         """
         self.rollout_engines = rollout_engines
         self._total_engine_groups = len(rollout_engines)
-        self._max_inflight_engine_groups = getattr(self.args, "update_weight_max_inflight_engine_groups", 0)
+        self._max_inflight_engine_groups = self.args.update_weight_max_inflight_engine_groups
         self._wave_scheduling_enabled = 0 < self._max_inflight_engine_groups < self._total_engine_groups
 
         if engine_gpu_counts is None:

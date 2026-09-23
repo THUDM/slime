@@ -108,7 +108,7 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
             os.makedirs(self.delta_dir, exist_ok=True)
             if self._post_write_hook is not None:
                 self._post_write_hook(self.args, self.delta_dir, list(self.rollout_engines))
-            max_inflight_engine_groups = getattr(self.args, "update_weight_max_inflight_engine_groups", 0)
+            max_inflight_engine_groups = self.args.update_weight_max_inflight_engine_groups
             if 0 < max_inflight_engine_groups < len(self.rollout_engines):
                 run_engine_group_waves(
                     self.rollout_engines,
@@ -186,7 +186,7 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
             self._post_write_hook(self.args, self._version_dir, list(self.rollout_engines))
         dist.barrier(group=get_gloo_group())
         if dist.get_rank() == 0:
-            max_inflight_engine_groups = getattr(self.args, "update_weight_max_inflight_engine_groups", 0)
+            max_inflight_engine_groups = self.args.update_weight_max_inflight_engine_groups
             run_engine_group_waves(
                 self.rollout_engines,
                 max_inflight_engine_groups,

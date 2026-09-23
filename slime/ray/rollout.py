@@ -3,6 +3,7 @@ import logging
 import time
 from typing import Any
 
+import psutil
 import ray
 import torch
 
@@ -23,7 +24,10 @@ from slime.utils.data import get_source
 from slime.utils.dp_schedule import build_dp_schedule
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import init_http_client
+from slime.utils.memory_utils import get_process_host_memory_gib
 from slime.utils.misc import Box, load_function
+from slime.utils.staleness import fully_async_metrics_enabled
+from slime.utils.tensor_store import DiskTensorRef
 from slime.utils.types import Sample
 
 from .utils import Lock, add_default_ray_env_vars
@@ -77,6 +81,7 @@ class RolloutManager:
             runtime_env={"env_vars": add_default_ray_env_vars()},
         ).remote()
         self.rollout_id = -1
+        self._active_routed_experts_rollouts: set[int] = set()
 
         self._health_monitors = []
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
@@ -116,7 +121,15 @@ class RolloutManager:
     def dispose(self):
         for monitor in self._health_monitors:
             monitor.stop()
+        for rollout_id in list(self._active_routed_experts_rollouts):
+            self.cleanup_rollout_data(rollout_id)
         logging_utils.finish_tracking(self.args)
+
+    def cleanup_rollout_data(self, rollout_id: int) -> None:
+        from slime.utils.routed_experts import cleanup_routed_experts_rollout
+
+        cleanup_routed_experts_rollout(self.args, rollout_id)
+        self._active_routed_experts_rollouts.discard(rollout_id)
 
     @property
     def server(self) -> Any | None:
@@ -168,6 +181,26 @@ class RolloutManager:
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
         data, metrics = self._get_rollout_data(rollout_id=rollout_id)
+        disk_routes = [
+            value
+            for sample in data
+            for value in (sample.rollout_routed_experts, sample.rollout_topk_token_ids, sample.rollout_topk_log_probs)
+            if isinstance(value, DiskTensorRef)
+        ]
+        if disk_routes:
+            self._active_routed_experts_rollouts.add(rollout_id)
+            rss_gib, hwm_gib = get_process_host_memory_gib()
+            logger.info(
+                "R3 manager spill profile: rollout_id=%d samples=%d files=%d disk_bytes=%.3f GiB "
+                "rss=%.3f GiB hwm=%.3f GiB host_available=%.3f GiB",
+                rollout_id,
+                len(data),
+                len(disk_routes),
+                sum(ref.nbytes for ref in disk_routes) / 1024**3,
+                rss_gib,
+                hwm_gib,
+                psutil.virtual_memory().available / 1024**3,
+            )
         save_debug_rollout_data(
             self.args.save_debug_rollout_data,
             data,
@@ -260,6 +293,16 @@ class RolloutManager:
             )
             metrics = None
         else:
+            if fully_async_metrics_enabled(self.args):
+                # The training loop keeps serving weights fixed while collecting
+                # this batch. Query only the updatable model.
+                server = self._get_updatable_server()
+                engines = [engine for engine in server.engines if engine is not None] if server else []
+                versions = ray.get([engine.get_weight_version.remote() for engine in engines])
+                valid = bool(versions) and all(
+                    str(version).isascii() and str(version).isdigit() for version in versions
+                )
+                self.args._rollout_weight_version = max(map(int, versions)) if valid else None
             data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
             metrics = data.metrics
             data = data.samples
@@ -386,6 +429,34 @@ class RolloutManager:
         if samples[0].rollout_log_probs is not None:
             train_data["rollout_log_probs"] = [sample.rollout_log_probs for sample in samples]
 
+        if getattr(self.args, "use_score_centering", False):
+            from slime.utils.score_centering import validate_sampler_top_p, validate_sampler_topk
+
+            for sample in samples:
+                if sample.rollout_log_probs is None or len(sample.rollout_log_probs) != sample.response_length:
+                    raise ValueError("Score centering requires sampler logprobs for every response token.")
+                if self.args.rollout_top_p < 1:
+                    if sample.response_length == 0 and sample.rollout_top_p_token_ids is None:
+                        sample.rollout_top_p_token_ids = torch.empty(0, dtype=torch.int32)
+                        sample.rollout_top_p_token_offsets = torch.zeros(1, dtype=torch.int32)
+                        sample.rollout_top_p_log_probs = torch.empty(0, dtype=torch.float32)
+                    validate_sampler_top_p(
+                        sample.rollout_top_p_token_ids,
+                        sample.rollout_top_p_token_offsets,
+                        sample.rollout_top_p_log_probs,
+                        sample.response_length,
+                        sample.loss_mask,
+                        sample.tokens[-sample.response_length :] if sample.response_length else [],
+                        sample.rollout_log_probs,
+                    )
+                else:
+                    validate_sampler_topk(sample, self.args.score_centering_top_k)
+            if self.args.rollout_top_p < 1:
+                train_data["rollout_top_p_log_probs"] = [sample.rollout_top_p_log_probs for sample in samples]
+            else:
+                train_data["rollout_topk_token_ids"] = [sample.rollout_topk_token_ids for sample in samples]
+                train_data["rollout_topk_log_probs"] = [sample.rollout_topk_log_probs for sample in samples]
+
         if getattr(self.args, "rollout_top_p", 1.0) != 1.0:
             for sample in samples:
                 assert sample.rollout_top_p_token_ids is not None
@@ -395,17 +466,59 @@ class RolloutManager:
                     f"!= response length + 1 {sample.response_length + 1}"
                 )
                 offset_end = int(sample.rollout_top_p_token_offsets[-1])
-                assert offset_end == len(sample.rollout_top_p_token_ids), (
-                    f"top-p token offsets[-1] {offset_end} "
-                    f"!= token ids length {len(sample.rollout_top_p_token_ids)}"
-                )
+                assert offset_end == len(
+                    sample.rollout_top_p_token_ids
+                ), f"top-p token offsets[-1] {offset_end} != token ids length {len(sample.rollout_top_p_token_ids)}"
             train_data["rollout_top_p_token_ids"] = [sample.rollout_top_p_token_ids for sample in samples]
             train_data["rollout_top_p_token_offsets"] = [sample.rollout_top_p_token_offsets for sample in samples]
 
-        if samples[0].rollout_routed_experts is not None:
-            routed_experts = [torch.as_tensor(sample.rollout_routed_experts) for sample in samples]
-            if getattr(self.args, "use_rollout_routing_replay", False):
-                validate_rollout_routed_experts_for_replay(routed_experts, self.args)
+        routed_experts_present = [sample.rollout_routed_experts is not None for sample in samples]
+        dead_sample_indices = {
+            idx
+            for idx, (present, sample) in enumerate(zip(routed_experts_present, samples, strict=True))
+            if not present and sample.loss_mask is not None and not any(sample.loss_mask)
+        }
+        live_missing = [
+            idx for idx, present in enumerate(routed_experts_present) if not present and idx not in dead_sample_indices
+        ]
+        routing_replay_enabled = getattr(self.args, "use_rollout_routing_replay", False)
+        if live_missing and (routing_replay_enabled or any(routed_experts_present)):
+            raise ValueError(f"Rollout routed experts are missing for live sample indices {live_missing[:32]}.")
+
+        if any(routed_experts_present) or (routing_replay_enabled and dead_sample_indices):
+            dtype = torch.uint8 if self.args.num_experts <= 256 else torch.int32
+            routed_experts = [
+                (
+                    (
+                        sample.rollout_routed_experts
+                        if isinstance(sample.rollout_routed_experts, DiskTensorRef)
+                        else sample.materialize_rollout_routed_experts()
+                    )
+                    if present
+                    else torch.zeros(
+                        (max(0, len(sample.tokens) - 1), self.args.num_layers, self.args.moe_router_topk),
+                        dtype=dtype,
+                    )
+                )
+                for sample, present in zip(samples, routed_experts_present, strict=True)
+            ]
+            if routing_replay_enabled and any(routed_experts_present):
+                captured_pairs = [
+                    (experts, max(0, len(sample.tokens) - 1))
+                    for sample, experts, present in zip(samples, routed_experts, routed_experts_present, strict=True)
+                    if present
+                ]
+                validate_rollout_routed_experts_for_replay(
+                    [experts for experts, _ in captured_pairs],
+                    self.args,
+                    expected_rows=[rows for _, rows in captured_pairs],
+                )
+            if dead_sample_indices:
+                logger.warning(
+                    "Using all-zero routed experts for %d fully loss-masked samples (indices %s).",
+                    len(dead_sample_indices),
+                    sorted(dead_sample_indices)[:16],
+                )
             train_data["rollout_routed_experts"] = routed_experts
 
         if samples[0].train_metadata is not None:
@@ -466,8 +579,11 @@ class RolloutManager:
                 "rollout_ids",
                 "rollout_mask_sums",
                 "rollout_log_probs",
+                "rollout_topk_token_ids",
+                "rollout_topk_log_probs",
                 "rollout_top_p_token_ids",
                 "rollout_top_p_token_offsets",
+                "rollout_top_p_log_probs",
                 "rollout_routed_experts",
                 "source_names",
                 "prompt",

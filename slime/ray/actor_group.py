@@ -234,7 +234,7 @@ class RayTrainGroup:
             if not self.args.update_weight_disk_keep_files:
                 shutil.rmtree(disk_weight_dir, ignore_errors=True)
             return
-        max_inflight_engine_groups = getattr(self.args, "update_weight_max_inflight_engine_groups", 0)
+        max_inflight_engine_groups = self.args.update_weight_max_inflight_engine_groups
         if self.args.update_weight_local_checkpoint_dir:
             # each host pulls the published checkpoint onto local disk (e.g. NVMe) and
             # the engines reload from there; the pull is disk-only, so it runs before

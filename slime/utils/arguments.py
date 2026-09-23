@@ -462,7 +462,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "use `slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std_with_fallback`."
                 ),
             )
-
             # partial rollout
             parser.add_argument(
                 "--partial-rollout",
@@ -535,6 +534,14 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "The function should take list[list[Sample]] and return list[list[Sample]]."
                 ),
             )
+            parser.add_argument(
+                "--buffer-sort-by-staleness",
+                action="store_true",
+                help=(
+                    "Resume buffered groups with the oldest generated-token weight version first. "
+                    "Disabled by default; an explicit --buffer-filter-path takes precedence."
+                ),
+            )
             # update weight
             parser.add_argument(
                 "--update-weight-buffer-size",
@@ -554,18 +561,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "concurrently. 0 keeps the existing all-at-once behavior."
                 ),
             )
-            parser.add_argument(
-                "--update-weights-interval",
-                type=int,
-                default=1,
-                help="Interval for updating the weights",
-            )
-            parser.add_argument(
-                "--keep-old-actor",
-                action="store_true",
-                help="Whether to keep the rollout model on training process",
-            )
-
             parser.add_argument(
                 "--rollout-data-postprocess-path",
                 type=str,
@@ -861,6 +856,31 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
         def add_algo_arguments(parser):
             parser.add_argument(
+                "--pg-loss-type",
+                choices=["ppo", "reinforce"],
+                default=None,
+                help=(
+                    "Policy gradient objective. Defaults to REINFORCE with score centering, "
+                    "otherwise preserves the existing PPO/CISPO objective."
+                ),
+            )
+            parser.add_argument(
+                "--use-score-centering",
+                action="store_true",
+                help=(
+                    "Use the REINFORCE score-centering objective from "
+                    "Score Centering Stabilizes Off-policy Reinforcement Learning "
+                    "(https://arxiv.org/abs/2609.20807). Uses exact centering on the complete replay support "
+                    "when rollout-top-p < 1, otherwise uses the paper's top-k tail approximation."
+                ),
+            )
+            parser.add_argument(
+                "--score-centering-top-k",
+                type=int,
+                default=128,
+                help="Number of sampler top logprobs retained when rollout-top-p=1; ignored for exact top-p centering.",
+            )
+            parser.add_argument(
                 "--ref-load",
                 type=str,
                 default=None,
@@ -1083,7 +1103,10 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--use-tis",
                 action="store_true",
                 default=False,
-                help="Enable TIS from https://fengyao.notion.site/off-policy-rl for off-policy importance sampling.",
+                help=(
+                    "Enable TIS for off-policy importance sampling. With --use-score-centering, "
+                    "center the weighted scores using the same --tis-clip/--tis-clip-low bounds."
+                ),
             )
             parser.add_argument(
                 "--tis-clip",
@@ -1121,6 +1144,27 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_true",
                 default=False,
                 help="The rollout routing replay technique from https://arxiv.org/abs/2510.11370",
+            )
+            parser.add_argument(
+                "--rollout-routed-experts-store-dir",
+                type=str,
+                default=None,
+                help=(
+                    "Shared filesystem directory used by routed-experts sample spill hooks. "
+                    "All rollout and training nodes must be able to access this path."
+                ),
+            )
+            parser.add_argument(
+                "--routing-replay-prefetch-microbatches",
+                type=int,
+                default=1,
+                help="Number of upcoming disk-backed R3 microbatches to prefetch into CPU memory.",
+            )
+            parser.add_argument(
+                "--keep-rollout-routed-experts-files",
+                action="store_true",
+                default=False,
+                help="Keep disk-backed routed-experts files after all trainers finish the rollout.",
             )
             parser.add_argument(
                 "--use-opsm",
@@ -1780,6 +1824,11 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
 
 
 def slime_validate_args(args):
+    from slime.utils.ppo_utils import get_pg_loss_type
+    from slime.utils.score_centering import validate_score_centering_args
+
+    get_pg_loss_type(args)
+    validate_score_centering_args(args)
     args.eval_datasets = _resolve_eval_datasets(args)
 
     if args.rollout_temperature <= 0:
@@ -1866,7 +1915,7 @@ def slime_validate_args(args):
             "require advantage normalization. Please add `--normalize-advantages` to your command."
         )
 
-    if args.use_rollout_logprobs:
+    if args.use_rollout_logprobs and get_pg_loss_type(args) != "reinforce":
         assert not args.use_tis, "use_rollout_logprobs and use_tis cannot be set at the same time."
 
     if args.get_mismatch_metrics:
@@ -2024,6 +2073,27 @@ def slime_validate_args(args):
 
     if args.use_rollout_routing_replay:
         args.use_routing_replay = True
+        if args.routing_replay_prefetch_microbatches < 0:
+            raise ValueError("--routing-replay-prefetch-microbatches must be non-negative")
+
+    fully_async = "fully_async" in (getattr(args, "rollout_function_path", None) or "")
+    disk_spill = "slime.utils.routed_experts.spill_routed_experts" in (
+        getattr(args, "rollout_sample_hook_path", None) or []
+    )
+    if disk_spill and not getattr(args, "rollout_routed_experts_store_dir", None):
+        raise ValueError(
+            "slime.utils.routed_experts.spill_routed_experts requires --rollout-routed-experts-store-dir."
+        )
+    if (
+        not getattr(args, "debug_train_only", False)
+        and fully_async
+        and disk_spill
+        and not getattr(args, "keep_rollout_routed_experts_files", False)
+    ):
+        raise ValueError(
+            "fully-async rollout with routed-experts disk spill requires "
+            "--keep-rollout-routed-experts-files because in-flight samples can cross rollout boundaries."
+        )
 
     if args.custom_config_path:
         with open(args.custom_config_path) as f:
@@ -2058,13 +2128,11 @@ def slime_validate_args(args):
             "--update-weight-transport=disk requires --update-weight-disk-dir to point at "
             "a filesystem shared between the trainer and the rollout engines."
         )
-    if getattr(args, "update_weight_max_inflight_engine_groups", 0) < 0:
+    if args.update_weight_max_inflight_engine_groups < 0:
         raise ValueError("--update-weight-max-inflight-engine-groups must be non-negative.")
     if args.release_train:
         if args.use_critic:
             raise ValueError("--release-train does not support critic training yet.")
-        if args.keep_old_actor:
-            raise ValueError("--release-train does not support --keep-old-actor.")
         if args.save is None:
             raise ValueError("--release-train requires --save so the next Megatron actor can reload.")
         if args.save_interval is None:

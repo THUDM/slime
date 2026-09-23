@@ -110,7 +110,6 @@ def execute():
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=MODEL_TYPE,
-        train_script="train_async.py",
     )
 
 

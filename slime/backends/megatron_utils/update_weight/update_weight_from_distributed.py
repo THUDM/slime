@@ -100,7 +100,7 @@ class UpdateWeightFromDistributed:
                 self._group_name,
                 rollout_engines,
                 engine_gpu_counts=engine_gpu_counts,
-                max_inflight_engine_groups=getattr(self.args, "update_weight_max_inflight_engine_groups", 0),
+                max_inflight_engine_groups=self.args.update_weight_max_inflight_engine_groups,
             )
 
     def disconnect_rollout_engines(self) -> None:
@@ -126,7 +126,7 @@ class UpdateWeightFromDistributed:
                     restore_weights_before_load=True,
                     post_process_quantization=False,
                     rollout_engines=self.rollout_engines,
-                    max_inflight_engine_groups=getattr(self.args, "update_weight_max_inflight_engine_groups", 0),
+                    max_inflight_engine_groups=self.args.update_weight_max_inflight_engine_groups,
                 )
         dist.barrier(group=get_gloo_group())
 
@@ -140,7 +140,7 @@ class UpdateWeightFromDistributed:
                     restore_weights_before_load=False,
                     post_process_quantization=True,
                     rollout_engines=self.rollout_engines,
-                    max_inflight_engine_groups=getattr(self.args, "update_weight_max_inflight_engine_groups", 0),
+                    max_inflight_engine_groups=self.args.update_weight_max_inflight_engine_groups,
                 )
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
@@ -267,7 +267,7 @@ class UpdateWeightFromDistributed:
                 self._model_update_groups,
                 self.weight_version,
                 converted_named_tensors,
-                max_inflight_engine_groups=getattr(self.args, "update_weight_max_inflight_engine_groups", 0),
+                max_inflight_engine_groups=self.args.update_weight_max_inflight_engine_groups,
                 load_format=load_format,
             )
         finally:

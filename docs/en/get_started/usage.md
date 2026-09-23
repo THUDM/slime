@@ -204,6 +204,7 @@ The recommended contract is to put the source identifier in `metadata["source_na
   Note: On-policy distillation (OPD) is now orthogonal to the advantage estimator. Use `--use-opd` and `--opd-kl-coef` to enable OPD on top of any estimator.
 - `--calculate-per-token-loss`: By default, slime calculates loss on a per-sample basis, i.e., `mean(sum(sample_i) / len(sample_i))`. Enable this flag to calculate loss on a per-token basis, i.e., `sum(sum(sample_i)) / sum(len(sample_i))`.
 - `--use-tis`: Enable this setting to use TIS (Truncated Importance Sampling) (https://fengyao.notion.site/off-policy-rl).
+- `--use-score-centering`: Enable [Score Centering](https://arxiv.org/abs/2609.20807), optionally combined with TIS. See [Score Centering](#score-centering) below.
 
 #### GRPO Algorithm
 
@@ -252,6 +253,40 @@ PPO-related parameters:
 - `--eps-clip`: PPO clip range.
 - `--value-clip`: Clip range for value loss.
 - `--kl-coef`: KL penalty coefficient for reward shaping.
+
+#### Score Centering
+
+[Score Centering Stabilizes Off-policy Reinforcement Learning](https://arxiv.org/abs/2609.20807) introduces an additive correction to reduce drift caused by training-inference mismatch. It can also be combined with importance sampling. In slime, score centering (SC) is supported by the Megatron backend with non-streaming SGLang rollouts.
+
+Add the following options to an existing RL launch:
+
+```bash
+--use-score-centering \
+--score-centering-top-k 128 \
+--pg-loss-type reinforce \
+--advantage-estimator grpo \
+--disable-grpo-std-normalization \
+--calculate-per-token-loss \
+--rollout-temperature 1.0 \
+--rollout-top-p 1.0 \
+--rollout-top-k -1 \
+--entropy-coef 0 \
+--kl-coef 0
+```
+
+- `--use-score-centering`: Enable the REINFORCE score-centering objective. If `--pg-loss-type` is omitted, SC selects `reinforce` automatically. Without SC, the existing PPO/CISPO default is preserved. SC cannot be combined with `--pg-loss-type ppo` or the GSPO/CISPO advantage estimators; PPO clipping parameters do not affect the REINFORCE objective.
+- `--score-centering-top-k`: Applies only when `--rollout-top-p 1`. Number of sampler top-k token IDs and logprobs retained for each response token; defaults to 128 and must fit the model vocabulary. The head retains its full-vocabulary probability mass. The remaining sampler mass is modeled as proportional to the current trainer's tail mass.
+- `--use-tis`: Optional and independent of SC. Combine the two to center the weighted scores using `--tis-clip-low` and `--tis-clip`. The built-in `slime.backends.megatron_utils.loss.icepop_function` is also supported through `--custom-tis-function-path`; arbitrary custom TIS callbacks are not supported with SC. REINFORCE uses detached current-trainer/sampler weights, while PPO preserves its old-trainer/sampler weights.
+
+**Sampling requirements:** Use a positive temperature, `0 < top_p <= 1`, `top_k=-1`, `min_p=0`, and no repetition/frequency/presence penalties or constrained decoding. Keep `SGLANG_RETURN_ORIGINAL_LOGPROB` unset or false on all sampler workers when temperature differs from one or top_p is below one. Per-request temperature or top_p changes and streaming SC are unsupported. Evaluation does not request SC data and may use its own sampling settings.
+
+**Combining with top-p replay:** Change `--rollout-top-p 1.0` above to, for example, `--rollout-top-p 0.9`. SC automatically sums over the complete replay support and ignores `--score-centering-top-k`. Rollout returns all support IDs and their post-truncation, normalized sampler logprobs. The trainer normalizes on the same support and computes the correction `sum(stop_gradient(q * weight) * log p)`. This uses no tail approximation and excludes tokens outside the support. Full trainer logits cannot reconstruct the sampler probabilities, so the original probabilities must still be stored. Payload size varies with the support and can greatly exceed fixed top-k heads when top-p approaches one. Exactness is relative to the recorded replay support, including replay's existing rule for retaining sampled boundary tokens.
+
+**SGLang support:** Use an image built with `docker/patch/latest/sglang-top_p.patch`, which provides binary top-k and complete top-p probability outputs. Slime requests `top_logprobs_num=k` when `top_p=1`, or `custom_params.return_top_p_log_probs` when `top_p<1`, and stores the original sampler probabilities without recomputing them with a newer checkpoint. Custom generators should call `score_centering_request` from `slime.utils.score_centering` and pass the response metadata to `Sample.append_response_tokens`.
+
+Top-p probabilities stay on CPU with replay IDs/offsets and support partial rollouts, masked tool tokens, DP, TP, and both CP layouts. PD metadata currently holds at most 4096 tokens per step; SC fails if that capacity is exceeded instead of falling back to the sampled token alone. Exact top-p SC does not currently support the Ascend sampler.
+
+Sampler heads survive partial-rollout continuation, masked tool tokens, DP partitioning, microbatch selection, TP and both CP layouts. With the R3 spill hook, they share its file lifetime. Logged metrics include `sc_correction`, `sc_sampler_head_mass`, `sc_train_head_mass` and `sc_importance_weight`.
 
 ### Advanced Megatron Configuration (--megatron-config-path)
 
