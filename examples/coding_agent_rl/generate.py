@@ -60,6 +60,7 @@ class SweConfig:
     adapter_bind_host: str
     adapter_port: int
     fork_merge_threshold: int | None
+    preserve_reasoning_history: bool
     agent_time_budget_sec: int
     eval_timeout_sec: int
     rollout_guard_sec: int
@@ -72,6 +73,12 @@ class SweConfig:
         eval_timeout = int(os.environ.get("SWE_EVAL_TIMEOUT_SEC", "600"))
         guard = int(os.environ.get("SWE_ROLLOUT_GUARD_SEC", "0") or 0) or (agent_time_budget + eval_timeout + 180)
         fork = int(v) if (v := os.environ.get("SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS")) else None
+        preserve_reasoning = os.environ.get("SLIME_PRESERVE_REASONING_HISTORY", "0").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         return cls(
             eval_protocol=os.environ.get("SWE_EVAL_PROTOCOL", swe.PROTOCOL_SCALESWE),
             train_protocol=os.environ.get("SWE_TRAIN_PROTOCOL", swe.PROTOCOL_SCALESWE),
@@ -79,6 +86,7 @@ class SweConfig:
             adapter_bind_host=os.environ.get("ADAPTER_BIND_HOST", "0.0.0.0"),
             adapter_port=int(os.environ.get("ADAPTER_PORT", "18001")),
             fork_merge_threshold=fork,
+            preserve_reasoning_history=preserve_reasoning,
             agent_time_budget_sec=agent_time_budget,
             eval_timeout_sec=eval_timeout,
             rollout_guard_sec=guard,
@@ -152,6 +160,7 @@ class _AdapterService(metaclass=SingletonMeta):
             sglang_url=sglang_url,
             tool_parser=self.tool_parser,
             reasoning_parser=self.reasoning_parser,
+            preserve_reasoning_history=CONFIG.preserve_reasoning_history,
             fork_threshold_tokens=CONFIG.fork_merge_threshold,
         )
         # handler_cancellation=True so a client disconnect cancels the handler
@@ -170,12 +179,14 @@ class _AdapterService(metaclass=SingletonMeta):
         )
         self.adapter_url = f"http://{CONFIG.adapter_public_host}:{self.app_handle.port}"
         logger.info(
-            "[coding_agent_rl] tokenizer=%s adapter=%s max_context_len=%s tool_parser=%s reasoning_parser=%s",
+            "[coding_agent_rl] tokenizer=%s adapter=%s max_context_len=%s tool_parser=%s reasoning_parser=%s "
+            "preserve_reasoning_history=%s",
             args.hf_checkpoint,
             self.adapter_url,
             self.max_context_len,
             self.tool_parser,
             self.reasoning_parser,
+            CONFIG.preserve_reasoning_history,
         )
 
 
