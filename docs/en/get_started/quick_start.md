@@ -20,7 +20,18 @@ Since slime may contain temporary patches for sglang/megatron, to avoid potentia
 - B-series basic functionality is stable and suitable for development/testing, but currently lacks CI protection
 - Both hardware platforms use identical installation and startup procedures
 
-- For scenarios where Docker is not convenient, please refer to [build_conda.sh](https://github.com/THUDM/slime/blob/main/build_conda.sh);
+- For scenarios where Docker is not convenient, please refer to [build_conda.sh](https://github.com/THUDM/slime/blob/main/build_conda.sh).
+  `build_conda.sh` supports two patch sets via the `PATCH_VERSION` env var:
+  - `PATCH_VERSION=v0.5.9` (default) — upstream build (sglang + megatron patches only).
+  - `PATCH_VERSION=v0.5.9.a100` — A100 (SM80) build that additionally builds DeepEP without SM90/NVSHMEM features and applies the `deep_ep`, `transformer_engine`, and `slime` patches.
+
+  ```bash
+  # default (H-series)
+  bash build_conda.sh
+
+  # A100
+  PATCH_VERSION=v0.5.9.a100 bash build_conda.sh
+  ```
 - For AMD support, please refer to [AMD Usage Tutorial](../platform_support/amd_tutorial.md).
 
 ### Pull and Start Docker Container
