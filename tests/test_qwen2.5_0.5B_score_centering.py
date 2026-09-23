@@ -75,5 +75,5 @@ if __name__ == "__main__":
     prepare()
     for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
         os.environ.pop(key, None)
-    for top_p in (1.0, 0.9):
+    for top_p in (1.0, 0.95):
         execute(top_p)

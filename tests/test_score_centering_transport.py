@@ -220,7 +220,7 @@ def test_training_metrics_ignore_sampler_head_payloads(monkeypatch, tmp_path, di
 @pytest.mark.parametrize("transport", ["object-store", "nixl"])
 def test_exact_top_p_transport_and_microbatch(monkeypatch, transport):
     import numpy as np
-    from test_score_centering_top_p import binary_top_p_meta
+    from test_score_centering import binary_top_p_meta
     from slime.ray import rollout
 
     packed = types.ModuleType("megatron.core.packed_seq_params")
@@ -258,7 +258,7 @@ def test_exact_top_p_transport_and_microbatch(monkeypatch, transport):
 
 def test_generate_requests_complete_top_p_probabilities(monkeypatch):
     import numpy as np
-    from test_score_centering_top_p import binary_top_p_meta
+    from test_score_centering import binary_top_p_meta
     from slime.rollout import sglang_rollout as rollout
 
     a = args(
