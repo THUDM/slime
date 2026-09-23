@@ -5,6 +5,8 @@ from typing import Any
 
 import torch
 
+from slime.utils.tensor_store import DiskTensorRef, retain_debug_tensor_refs
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,6 +22,41 @@ _CONTEXT_PARALLEL_FIELDS = (
     "entropy",
     "opd_reverse_kl",
 )
+
+
+_SAMPLER_HEAD_FIELDS = ("rollout_topk_token_ids", "rollout_topk_log_probs")
+
+
+def _gather_sampler_heads_with_cp(value, total_length, response_length):
+    """Restore CPU heads without casting integer ids or using autograd collectives."""
+    from megatron.core import mpu
+
+    from slime.backends.megatron_utils.cp_utils import get_logits_and_tokens_offset_with_cp
+
+    if mpu.get_context_parallel_world_size() == 1:
+        return value.detach().cpu()
+    group = mpu.get_context_parallel_group()
+    device = (
+        torch.device("cuda", torch.cuda.current_device())
+        if torch.distributed.get_backend(group) == "nccl"
+        else value.device
+    )
+    # Bound extra device storage to one sample; disk-backed heads never enter
+    # this path. NCCL requires CUDA tensors even though heads live on CPU.
+    full = torch.zeros((response_length, *value.shape[1:]), dtype=value.dtype, device=device)
+    _, _, offsets, _ = get_logits_and_tokens_offset_with_cp(total_length, response_length)
+    prompt_length = total_length - response_length
+    offset = 0
+    for start, end in offsets:
+        count = end - start
+        if count:
+            full[start - prompt_length + 1 : end - prompt_length + 1] = value[offset : offset + count].to(device)
+        offset += count
+    if offset != value.size(0):
+        raise ValueError(f"Sampler head CP shard has {value.size(0)} rows, expected {offset}.")
+    if full.numel():
+        torch.distributed.all_reduce(full, group=group)
+    return full
 
 
 def _to_cpu(value):
@@ -40,6 +77,7 @@ def restore_context_parallel_fields_to_cpu(
     gather_tensor: Callable[[torch.Tensor, int, int], torch.Tensor],
     *,
     keep_restored: bool,
+    allgather_cp: bool = False,
 ) -> dict[str, Any] | None:
     """Restore CP fields one tensor at a time, retaining CPU values only on the writer."""
     total_lengths = rollout_data["total_lengths"]
@@ -52,10 +90,34 @@ def restore_context_parallel_fields_to_cpu(
         )
 
     restored = (
-        {key: _to_cpu(value) for key, value in rollout_data.items() if key not in _CONTEXT_PARALLEL_FIELDS}
+        {
+            key: _to_cpu(value)
+            for key, value in rollout_data.items()
+            if key not in _CONTEXT_PARALLEL_FIELDS + _SAMPLER_HEAD_FIELDS
+        }
         if keep_restored
         else None
     )
+    for key in _SAMPLER_HEAD_FIELDS:
+        values = rollout_data.get(key)
+        if values is None:
+            continue
+        if len(values) != num_samples:
+            raise ValueError(f"Sampler head field {key!r} must contain one value per sample.")
+        full_values = [] if keep_restored else None
+        for value, total_length, response_length in zip(values, total_lengths, response_lengths, strict=True):
+            # Disk references and allgather-CP heads retain full response rows.
+            if isinstance(value, DiskTensorRef) or allgather_cp:
+                full_value = value
+                if len(full_value) != response_length:
+                    raise ValueError(f"Full sampler head field {key!r} must have {response_length} rows.")
+            else:
+                full_value = _gather_sampler_heads_with_cp(value, int(total_length), int(response_length))
+            if keep_restored:
+                full_values.append(_to_cpu(full_value))
+            del full_value
+        if keep_restored:
+            restored[key] = full_values
     for key in _CONTEXT_PARALLEL_FIELDS:
         values = rollout_data.get(key)
         if values is None:
@@ -209,6 +271,7 @@ def save_debug_train_data(args, *, rollout_id, rollout_data):
         rollout_data,
         all_gather_with_cp,
         keep_restored=cp_rank == 0,
+        allgather_cp=getattr(args, "allgather_cp", False),
     )
     if cp_rank != 0:
         return
@@ -239,4 +302,6 @@ def save_debug_train_data(args, *, rollout_id, rollout_data):
     path = Path(path_template.format(rollout_id=rollout_id, rank=rank))
     logger.info(f"Save debug train data from {dp_size} DP shard(s) to {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(_build_dump_payload(dp_shards, rollout_id=rollout_id, writer_rank=rank), path)
+    dump_data = _build_dump_payload(dp_shards, rollout_id=rollout_id, writer_rank=rank)
+    retain_debug_tensor_refs(dump_data, path)
+    torch.save(dump_data, path)

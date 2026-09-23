@@ -58,7 +58,7 @@ class RolloutDataSource(DataSource):
         # TODO remove this
         self.metadata = {}
 
-        if args.rollout_global_dataset and args.prompt_data is not None:
+        if args.prompt_data is not None:
             tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
             processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
@@ -121,9 +121,6 @@ class RolloutDataSource(DataSource):
         raise RuntimeError(f"Cannot add samples to {self.__class__.__name__}. This is a read-only data source.")
 
     def save(self, rollout_id):
-        if not self.args.rollout_global_dataset:
-            return
-
         state_dict = {
             "sample_offset": self.sample_offset,
             "epoch_id": self.epoch_id,
@@ -136,9 +133,6 @@ class RolloutDataSource(DataSource):
         torch.save(state_dict, path)
 
     def load(self, rollout_id=None):
-        if not self.args.rollout_global_dataset:
-            return
-
         if self.args.load is None:
             return
 
@@ -156,7 +150,7 @@ class RolloutDataSource(DataSource):
         self.sample_index = state_dict.get("sample_index", 0)
         self.metadata = state_dict.get("metadata", {})
 
-        if self.args.rollout_global_dataset and self.args.rollout_shuffle and self.dataset is not None:
+        if self.args.rollout_shuffle and self.dataset is not None:
             self.dataset.shuffle(self.epoch_id)
 
     def __len__(self) -> int:
@@ -170,7 +164,7 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
         super().__init__(args)
         self.buffer = []
         if self.args.buffer_filter_path is None:
-            self.buffer_filter = pop_first
+            self.buffer_filter = pop_oldest if getattr(args, "buffer_sort_by_staleness", False) else pop_first
         else:
             self.buffer_filter = load_function(self.args.buffer_filter_path)
 
@@ -220,6 +214,20 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
 
     def get_buffer_length(self):
         return len(self.buffer)
+
+
+def pop_oldest(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
+    """Resume groups with the oldest generated tokens first; preserve ties."""
+
+    def oldest_version(group):
+        versions = (str(v) for sample in group for v in (sample.weight_versions or []))
+        return min(
+            (int(v) for v in versions if v.isascii() and v.removeprefix("-").isdigit()),
+            default=float("inf"),
+        )
+
+    buffer.sort(key=oldest_version)
+    return pop_first(args, rollout_id, buffer, num_samples)
 
 
 def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:

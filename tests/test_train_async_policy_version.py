@@ -31,7 +31,7 @@ try:
             setattr(module, attribute, value)
         sys.modules[name] = module
 
-    import train_async
+    import train
 finally:
     for name, original_module in _original_modules.items():
         if original_module is None:
@@ -81,11 +81,11 @@ class _FakeActorModel:
 
 @pytest.mark.unit
 def test_policy_version_advances_after_successful_weight_update(monkeypatch):
-    monkeypatch.setattr(train_async.ray, "get", lambda value: value)
+    monkeypatch.setattr(train.ray, "get", lambda value: value)
     actor_model = _FakeActorModel()
     rollout_manager = _FakeRolloutManager()
 
-    train_async._update_actor_weights(actor_model, rollout_manager)
+    train._update_actor_weights(actor_model, rollout_manager)
 
     assert actor_model.update_calls == 1
     assert rollout_manager.policy_version == 1
@@ -94,12 +94,12 @@ def test_policy_version_advances_after_successful_weight_update(monkeypatch):
 
 @pytest.mark.unit
 def test_failed_weight_update_keeps_policy_version(monkeypatch):
-    monkeypatch.setattr(train_async.ray, "get", lambda value: value)
+    monkeypatch.setattr(train.ray, "get", lambda value: value)
     actor_model = _FakeActorModel(fail=True)
     rollout_manager = _FakeRolloutManager()
 
     with pytest.raises(RuntimeError, match="weight update failed"):
-        train_async._update_actor_weights(actor_model, rollout_manager)
+        train._update_actor_weights(actor_model, rollout_manager)
 
     assert actor_model.update_calls == 1
     assert rollout_manager.policy_version == 0

@@ -81,5 +81,3 @@ bash scripts/run-qwen3-4B-base-sft.sh
    至于 `--calculate-per-token-loss`，这是因为 slime 默认是以 GRPO 的 per sample mean 进行计算的，而一般 sft 训练都是按一个 batch 的所有不被 mask 的 token 取平均，所以建议配置上。
 
    最后 `--disable-compute-advantages-and-returns` 表示 sft 的过程中不需要预先计算 log prob，`--debug-train-only` 表示不需要初始化 sglang。
-
-3. 使用了 `train_async.py` 而不是 `train.py`。这是为了利用异步训练的流程，来实现数据 prefetch。

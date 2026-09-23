@@ -224,10 +224,8 @@ def test_unknown_finish_reason_leaves_status_unchanged():
 
 
 @pytest.mark.unit
-def test_weight_version_is_appended_when_present():
-    """``weight_version`` in meta_info is appended to the sample's list
-    (types.py:173-174) — partial-rollout uses this to track which model
-    version produced each chunk."""
+def test_weight_version_is_not_appended_for_zero_token_segment():
+    """A terminal metadata-only update must not make an old sample look fresh."""
     sample = Sample()
     sample.weight_versions = ["v1"]
     sample.append_response_tokens(
@@ -239,7 +237,7 @@ def test_weight_version_is_appended_when_present():
             "weight_version": "v2",
         },
     )
-    assert sample.weight_versions == ["v1", "v2"]
+    assert sample.weight_versions == ["v1"]
 
 
 @pytest.mark.unit
