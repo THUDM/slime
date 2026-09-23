@@ -1,59 +1,58 @@
 # AMD
 
-⚠️ If you encounter problems on AMD instinct, feel free to reach out [Yusheng Su](https://yushengsu-thu.github.io/).
-
-
 ## Introduction
 
-If you are running slime on AMD's Instinct, please refer to the following materials. This tutorial will explain how to set up the development environment (Docker), use the modified ROCm dependencies, and provide an example for running the experiments. The current rocm docker only support AMD's MI300 and MI325 GPUs.
-
-
-<!-- First, you need to configure the slime runtime environment according to the [Readme](../../README.md) documentation and cd to the slime project directory. -->
+If you are running slime on AMD Instinct GPUs, this tutorial explains how to set up the development environment with Docker, use the required ROCm dependencies, and run an example experiment. The current ROCm Docker image supports AMD Instinct MI300X, MI325X, MI350X, and MI355X GPUs.
 
 ## Docker
 
-You can download the prebuilt image from DockerHub: [rlsys/slime](https://hub.docker.com/r/rlsys/slime/tags).
+Download a prebuilt ROCm image from
+[amddevhub/slime](https://hub.docker.com/r/amddevhub/slime) on Docker Hub:
+
 ```bash
-docker pull rlsys/slime:latest
-```
-Or you can use the [Dockerfile.rocm](https://github.com/THUDM/slime/blob/main/docker/Dockerfile.rocm) to build it on your side.
-```bash
-cd docker
-docker build -f Dockerfile.rocm -t rlsys/slime:latest .
+docker pull amddevhub/slime:<tag>  # Choose a suitable tag for your setup.
 ```
 
-Acknowledgement: Thanks to [Yang Wang](https://www.microsoft.com/en-us/research/people/yangwang5/) for working on the patch for this [ROCm base Docker image](https://hub.docker.com/r/rlsys/rocm-6.3.4-patch/tags) to support virtual memory management on MI300X.
+Alternatively, build the image from the slime repository root with
+[Dockerfile.rocm](https://github.com/THUDM/slime/blob/main/docker/Dockerfile.rocm).
 
+```bash
+GPU_ARCH=gfx950  # gfx942: MI300X/MI325X; gfx950: MI350X/MI355X.
+DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.rocm \
+  --build-arg GPU_ARCH="${GPU_ARCH}" -t "slime:rocm720-${GPU_ARCH}" .
+```
 
 ## Quick Start
 
 ### Environment Setup
 
-Based on the [rlsys/slime](https://hub.docker.com/r/rlsys/slime/tags) image (pre-installed with SGLang and Megatron-LM):
+Set `IMAGE` to a compatible image downloaded from Docker Hub or to the local
+tag created by the build command above, then start the container. The image
+already includes slime, SGLang, and Megatron-LM.
+
 ```bash
-docker run --rm -it \
-  --device /dev/dri \
-  --device /dev/kfd \
+IMAGE=YOUR_IMAGE_TAG
+CONTAINER_NAME=YOUR_CONTAINER_NAME
+
+docker run -d \
+  --name "${CONTAINER_NAME}" \
+  --device=/dev/kfd \
+  --device=/dev/dri \
+  --security-opt=seccomp=unconfined \
+  --shm-size=128g \
+  --ulimit memlock=-1:-1 \
+  --ulimit stack=67108864:67108864 \
   -p 8265:8265 \
-  --group-add video \
-  --cap-add SYS_PTRACE \
-  --security-opt seccomp=unconfined \
-  --privileged \
-  -v $HOME/.ssh:/root/.ssh \
-  -v $HOME:$HOME \
-  --shm-size 128G \
-  --name slime_dev \
-  --ulimit memlock=-1 \
-  --ulimit stack=67108864 \
-  -w $PWD \
-  rlsys/slime:latest \
-  /bin/bash
+  "${IMAGE}" sleep infinity
+
+docker exec -it "${CONTAINER_NAME}" /bin/bash
 ```
 
-Then, download and install slime:
+To update slime to the latest version, run:
+
 ```bash
-git clone https://github.com/THUDM/slime.git
-cd slime
+cd /root/slime
+git pull
 pip install -e . --no-deps
 ```
 
@@ -74,221 +73,92 @@ hf download --repo-type dataset zhuzilin/aime-2024 \
 
 ### Checkpoint Format Conversion
 
-Since slime uses Megatron, and Megatron does not support loading Hugging Face checkpoints directly, we need to convert the model to the `torch_dist` format that Megatron supports.
-
-#### HF → Megatron torch\_dist ckpt
-
-Use slime's built-in HuggingFace-to-Megatron loader for conversion:
+Convert the Hugging Face checkpoint to Megatron's `torch_dist` format. On
+ROCm, the [converter](https://github.com/THUDM/slime/blob/main/tools/convert_hf_to_torch_dist.py)
+requires `--use-cpu-initialization` to construct the model parameters on the
+CPU.
 
 ```bash
-cd slime/
+cd /root/slime
 source scripts/models/qwen3-4B.sh
-MEGATRON_LM_PATH=$(pip list | grep megatron-core | awk '{print $NF}')
-PYTHONPATH=${MEGATRON_LM_PATH} python tools/convert_hf_to_torch_dist.py \
-    ${MODEL_ARGS[@]} \
-    --no-gradient-accumulation-fusion \
-    --hf-checkpoint /root/Qwen3-4B \
-    --save /root/Qwen3-4B_torch_dist
+PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
+  "${MODEL_ARGS[@]}" \
+  --use-cpu-initialization \
+  --hf-checkpoint /root/Qwen3-4B \
+  --save /root/Qwen3-4B_torch_dist
 ```
 
-Note: We implemented a dedicated AMD conversion script that forces a CPU-only conversion workflow using the Gloo backend to bypass hardware-specific issues. A GPU-based script for ROCm is currently in development.
+### Run Training
 
-⚠️ If you encounter an issue where slime cannot be found, please run `pip install -e . --no-deps` in the slime directory.
-
-
-### Example: Qwen3-4B
-
-We provide examples to use [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B), please refer to:
-- [Example: Qwen3-4B Model](https://github.com/THUDM/slime/blob/main/scripts/run-qwen3-4B-amd.sh): Just run
+Execute the [AMD Qwen3-4B training script](https://github.com/THUDM/slime/blob/main/scripts/run-qwen3-4B-amd.sh):
 
 ```bash
-SLIME_DIR=/root \
-MODEL_DIR=/root \
-DATA_DIR=/root \
+cd /root/slime
 bash scripts/run-qwen3-4B-amd.sh
-``` 
-
-⚠️ TODO: ROCM seems to not support `apex` yet. Thus, we need to disable gradient accumulation fusionby adding the `--no-gradient-accumulation-fusion` flag in the training script currently. We will continue investigating how to enable this.
-
-⚠️ Note: The main difference between ROCm's training script and NVIDIA's script is that you need to set `RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES` and `HIP_VISIBLE_DEVICES` for ray to function properly on AMD GPUs.
-
-- We show the training script below:
-
-```bash
-#!/bin/bash
-
-# for rerun the task
-pkill -9 sglang
-sleep 3
-ray stop --force
-pkill -9 ray
-pkill -9 python
-sleep 3
-pkill -9 ray
-pkill -9 python
-
-
-set -euxo pipefail
-
-
-### AMD Support ###
-SLIME_DIR="${SLIME_DIR:-/home/yushensu/projects/slime}" # Default path if not set in environment
-export SLIME_DIR
-
-MODEL_DIR="${MODEL_DIR:-/home/yushensu/projects/model}" # Default path if not set in environment
-export MODEL_DIR
-
-DATA_DIR="${DATA_DIR:-/home/yushensu/projects/data}"  # Default path if not set in environment
-export DATA_DIR
-
-# For AMD GPU
-export RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES=${RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES:-"1"} # Must set to 1
-export HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-"0,1,2,3,4,5,6,7"} #You can choose which gpus to use
-####################
-
-
-# will prevent ray from buffering stdout/stderr
-export PYTHONUNBUFFERED=1
-
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/models/qwen3-4B.sh"
-
-CKPT_ARGS=(
-   --hf-checkpoint ${MODEL_DIR}/Qwen3-4B
-   --ref-load ${MODEL_DIR}/Qwen3-4B_torch_dist
-   --load ${MODEL_DIR}/Qwen3-4B_slime/
-   --save ${MODEL_DIR}/Qwen3-4B_slime/
-   --save-interval 20
-)
-
-ROLLOUT_ARGS=(
-   --prompt-data ${DATA_DIR}/dapo-math-17k/dapo-math-17k.jsonl
-   --input-key prompt
-   --label-key label
-   --apply-chat-template
-   --rollout-shuffle
-   --rm-type deepscaler
-   --num-rollout 3000
-   --rollout-batch-size 32
-   --n-samples-per-prompt 8
-   --rollout-max-response-len 8192
-   --rollout-temperature 1
-
-   --global-batch-size 256
-   --balance-data
-)
-
-EVAL_ARGS=(
-   --eval-interval 20
-   --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
-   --n-samples-per-eval-prompt 16
-   --eval-max-response-len 16384
-   --eval-top-p 1
-)
-
-PERF_ARGS=(
-   --tensor-model-parallel-size 2
-   --sequence-parallel
-   --pipeline-model-parallel-size 1
-   --context-parallel-size 1
-   --expert-model-parallel-size 1
-   --expert-tensor-parallel-size 1
-
-   --recompute-granularity full
-   --recompute-method uniform
-   --recompute-num-layers 1
-
-   # --micro-batch-size 1
-   --use-dynamic-batch-size
-   --max-tokens-per-gpu 9216
-)
-
-GRPO_ARGS=(
-   --advantage-estimator grpo
-   --use-kl-loss
-   --kl-loss-coef 0.00
-   --kl-loss-type low_var_kl
-   --entropy-coef 0.00
-   --eps-clip 0.2
-   --eps-clip-high 0.28
-)
-
-OPTIMIZER_ARGS=(
-   --optimizer adam
-   --lr 1e-6
-   --lr-decay-style constant
-   --weight-decay 0.1
-   --adam-beta1 0.9
-   --adam-beta2 0.98
-)
-
-WANDB_ARGS=(
-   # --use-wandb
-   # --wandb-project slime-dev
-   # --wandb-group qwen3-4B-test
-   # --wandb-key ${WANDB_KEY}
-)
-
-SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 2
-   --sglang-mem-fraction-static 0.7
-)
-
-MISC_ARGS=(
-   # default dropout in megatron is 0.1
-   --attention-dropout 0.0
-   --hidden-dropout 0.0
-   # should be good for model performance
-   --accumulate-allreduce-grads-in-fp32
-   --attention-softmax-in-fp32
-   # need to comment this when using model with MLA
-   --attention-backend flash
-   ### AMD Support ###
-   # disable gradient accumulation fusion: Need to add apex to enable this
-   --no-gradient-accumulation-fusion
-   ###################
-)
-
-# launch the master node of ray in container
-export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-
-NUM_GPUS=$(echo ${HIP_VISIBLE_DEVICES} | tr ',' '\n' | wc -l)
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
-
-
-# "PYTHONPATH": "/workspace/Megatron-LM/",
-MEGATRON_LM_PATH=$(pip list | grep megatron-core | awk '{print $NF}')
-
-ray job submit --address="http://127.0.0.1:8265" \
-   --runtime-env-json='{
-     "env_vars": {
-        "PYTHONPATH": "/workspace/Megatron-LM/",
-        "CUDA_DEVICE_MAX_CONNECTIONS": "1"
-     }
-   }' \
-   -- python3 train.py \
-   --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 8 \
-   --colocate \
-   ${MODEL_ARGS[@]} \
-   ${CKPT_ARGS[@]} \
-   ${ROLLOUT_ARGS[@]} \
-   ${OPTIMIZER_ARGS[@]} \
-   ${GRPO_ARGS[@]} \
-   ${WANDB_ARGS[@]} \
-   ${PERF_ARGS[@]} \
-   ${EVAL_ARGS[@]} \
-   ${SGLANG_ARGS[@]} \
-   ${MISC_ARGS[@]}
-
-
-####clear after training
-pkill -9 sglang
-sleep 3
-ray stop --force
-pkill -9 ray
-pkill -9 python
-sleep 3
-pkill -9 ray
-pkill -9 python
 ```
+
+The launcher sets `RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES=1`, uses
+`HIP_VISIBLE_DEVICES` to select GPUs, and mirrors that selection to
+`CUDA_VISIBLE_DEVICES` for slime's device-ID mapping. `CUDA_VISIBLE_DEVICES`
+is only a compatibility input here.
+
+## Troubleshooting
+
+### Severe slowdown with GPU tensor offload
+
+Slime's [GPU tensor offload mechanism](https://thudm.github.io/slime/zh/blogs/release_v0.1.0.html#offload-gpu-tensor)
+uses [`torch_memory_saver`](https://github.com/fzyzcjy/torch_memory_saver) and
+HIP virtual memory management (VMM). On Linux kernels without
+`CONFIG_DMABUF_MOVE_NOTIFY`, amdgpu
+[excludes VRAM from the allowed placement](https://github.com/ROCm/amdgpu/blob/rocm-7.2.0/drivers/gpu/drm/amd/amdgpu/amdgpu_dma_buf.c#L294-L333).
+This forces the physical memory for the VMM allocations to reside in GTT
+(system memory) rather than VRAM, causing a severe slowdown. Training may
+appear to hang or eventually time out because it is progressing extremely
+slowly.
+
+AMD's
+[IOMMU guide](https://instinct.docs.amd.com/projects/amdgpu-docs/en/docs-30.30.0/conceptual/iommu.html)
+documents `CONFIG_PCI_P2PDMA`, `CONFIG_DMABUF_MOVE_NOTIFY`, and
+`CONFIG_HSA_AMD_P2P` as the Linux kernel options used to enable peer-to-peer
+DMA. For an amdgpu DKMS installation, the
+[build script](https://github.com/ROCm/amdgpu/blob/rocm-7.2.0/drivers/gpu/drm/amd/dkms/dkms-config.sh#L108-L115)
+is intended to derive `CONFIG_HSA_AMD_P2P` from the first two options instead
+of requiring it to be configured separately.
+
+#### Solutions
+
+For system-side solutions—installing a preconfigured distribution kernel,
+rebuilding the Linux kernel, or patching amdgpu DKMS—follow the
+[MORI known issues guide](https://github.com/ROCm/mori/blob/main/.claude/skills/known-issues/SKILL.md#issue-1--vmm-peer-traffic-falls-off-xgmi-onto-pcie--host-memory).
+
+If the system configuration cannot be changed, a slime-side workaround is to
+trigger peer-access initialization before GPU tensor offload creates any VMM
+allocations.
+In ROCm 7.2.0, ROCclr
+[enables peer access when opening a HIP IPC buffer](https://github.com/ROCm/rocm-systems/blob/rocm-7.2.0/projects/clr/hipamd/src/hip_memory.cpp#L3389-L3390)
+and applies it to
+[existing allocations](https://github.com/ROCm/rocm-systems/blob/rocm-7.2.0/projects/clr/rocclr/device/device.cpp#L962-L970).
+Warming up first prevents ROCclr from enabling peer access for the VMM
+allocations created by `initialize_model_and_optimizer()`, thereby avoiding the
+GTT fallback described above. Add the following warmup at
+[this point in `MegatronTrainRayActor.init()`](https://github.com/THUDM/slime/blob/v0.3.2/slime/backends/megatron_utils/actor.py#L92-L94),
+after the distributed process group has been initialized and immediately before
+`initialize_model_and_optimizer()`:
+
+```python
+dist.all_reduce(torch.zeros(1, device="cuda"))
+torch.cuda.synchronize()
+```
+
+### Multi-process RCCL latency issue in slime with amdgpu 6.16.6
+
+When running slime with amdgpu 6.16.6, its one-process-per-GPU execution may
+trigger abnormally high RCCL collective latency.
+
+This behavior may have been introduced by
+[`8fbaf22`](https://github.com/ROCm/amdgpu/commit/8fbaf22c7acb) (amdgpu 6.16.6)
+and fixed by
+[`85aa9d6`](https://github.com/ROCm/amdgpu/commit/85aa9d615ec9) (amdgpu 6.16.13).
+
+Upgrade to amdgpu 6.16.13 or a newer ROCm-supported driver, then reboot the
+host.
