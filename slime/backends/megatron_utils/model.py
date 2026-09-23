@@ -33,9 +33,15 @@ from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
 from .data import DataIterator, get_batch
-from .loss import ROLLOUT_TOP_P_TOKEN_KEYS, get_rollout_top_p_logprob_kwargs, loss_function
+from .loss import (
+    ROLLOUT_TOP_P_TOKEN_KEYS,
+    build_triton_log_prob_labels,
+    get_rollout_top_p_logprob_kwargs,
+    loss_function,
+)
 from .model_provider import get_model_provider_func
 from .stateless_adam import StatelessAdam
+from .triton_log_probs.megatron import install_triton_log_probs
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +297,8 @@ def setup_model_and_optimizer(
     assert args.load is not None or args.pretrained_checkpoint is not None
 
     model = get_model(get_model_provider_func(args, role), ModelType.encoder_or_decoder)
+    if role == "actor":
+        install_triton_log_probs(model, args)
 
     if args.num_rollout == 0:
         args.no_load_optim = True
@@ -427,7 +435,9 @@ def forward_only(
             "input_ids": tokens,
             "position_ids": None,
             "attention_mask": None,
-            "labels": None,
+            "labels": build_triton_log_prob_labels(args, batch)
+            if getattr(args, "log_probs_backend", "torch") == "triton"
+            else None,
             "packed_seq_params": packed_seq_params,
             "loss_mask": batch["full_loss_masks"],
         }
@@ -627,7 +637,9 @@ def train_one_step(
                 "input_ids": batch["tokens"],
                 "position_ids": None,
                 "attention_mask": None,
-                "labels": None,
+                "labels": build_triton_log_prob_labels(args, batch)
+                if getattr(args, "log_probs_backend", "torch") == "triton" and args.loss_type == "policy_loss"
+                else None,
                 "packed_seq_params": batch["packed_seq_params"],
                 "loss_mask": batch["full_loss_masks"],
             }

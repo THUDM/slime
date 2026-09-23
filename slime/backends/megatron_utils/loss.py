@@ -328,6 +328,19 @@ def _build_shifted_tokens(
     return full_tokens
 
 
+def build_triton_log_prob_labels(args: Namespace, batch: RolloutBatch) -> torch.Tensor:
+    """Build labels in the exact local token order consumed by the fused output head."""
+    tokens = batch["tokens"]
+    return _build_shifted_tokens(
+        tokens.numel(),
+        tokens.device,
+        batch["unconcat_tokens"],
+        batch["total_lengths"],
+        batch["response_lengths"],
+        args.allgather_cp,
+    ).view_as(tokens)
+
+
 def _fill_topp_mask_rows(
     keep: torch.Tensor,
     ids: list[int],
@@ -537,6 +550,34 @@ def get_log_probs_and_entropy(
     log-probabilities; entropy is always computed from the unmasked logits.
     """
     assert non_loss_data
+    if getattr(args, "log_probs_backend", "torch") == "triton":
+        assert logits.ndim == 3 and logits.shape[0] == 1 and logits.shape[-1] == 2, logits.shape
+        log_prob_full, entropy_full = logits[0].unbind(dim=-1)
+        T = log_prob_full.numel()
+        res = dict(
+            zip(
+                ("log_probs", "entropy"),
+                _extract_per_sample(
+                    log_prob_full,
+                    entropy_full,
+                    total_lengths,
+                    response_lengths,
+                    args.allgather_cp,
+                ),
+                strict=True,
+            )
+        )
+        if not with_entropy:
+            res.pop("entropy")
+        if args.allgather_cp:
+            _allgather_cp_redistribute(
+                res,
+                logits_local_len=T,
+                total_lengths=total_lengths,
+                response_lengths=response_lengths,
+            )
+        return logits.new_empty((0,)), res
+
     assert logits.dtype == torch.float32, f"{logits.dtype}"
     assert len(logits.shape) == 3, f"{logits.shape}"
     assert logits.size(0) == 1, f"{logits.shape}"
