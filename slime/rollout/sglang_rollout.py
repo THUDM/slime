@@ -91,7 +91,8 @@ class GenerateState(metaclass=SingletonMeta):
         self.tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
         self.processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
-        self.semaphore = asyncio.Semaphore(args.sglang_server_concurrency * get_rollout_num_engines(args))
+        self._semaphore = None
+        self._semaphore_loop = None
         self.sampling_params: dict[str, Any] = dict(
             temperature=args.rollout_temperature,
             top_p=args.rollout_top_p,
@@ -116,6 +117,20 @@ class GenerateState(metaclass=SingletonMeta):
 
         self.reset()
 
+    @property
+    def semaphore(self):
+        """Lazily create or re-create the semaphore when the event loop changes."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if self._semaphore is None or self._semaphore_loop is not loop:
+            self._semaphore = asyncio.Semaphore(
+                self.args.sglang_server_concurrency * get_rollout_num_engines(self.args)
+            )
+            self._semaphore_loop = loop
+        return self._semaphore
+
     @contextmanager
     def dp_rank_context(self):
         candidates = [i for i, count in enumerate(self.dp_counts) if count == min(self.dp_counts)]
@@ -134,6 +149,8 @@ class GenerateState(metaclass=SingletonMeta):
         self.aborted = False
         self.cancellable_tasks = set()
         self.active_server_generations = 0
+        self._semaphore = None
+        self._semaphore_loop = None
 
     def submit_generate_tasks(self, samples: list[list[Sample]]) -> None:
         for group in samples:
