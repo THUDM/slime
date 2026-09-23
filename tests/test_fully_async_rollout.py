@@ -232,5 +232,131 @@ def test_loop_backpressure_stops_topping_up_when_queue_is_full(monkeypatch):
     assert 0 < max_seen <= 2 * concurrency, f"queue grew to {max_seen} with concurrency={concurrency}"
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize("failure_site", ["generate", "data_source", "result_type", "requeue"])
+def test_worker_errors_reach_waiting_rollout(monkeypatch, failure_site):
+    """A failed producer must fail the consumer instead of waiting forever."""
+    error = ValueError("broken rollout dependency")
+    data_buffer = _FakeDataBuffer([_make_group(0)])
+
+    def fail(*args):
+        raise error
+
+    async def generate(args, group, sampling_params, evaluation):
+        if failure_site == "generate":
+            raise error
+        if failure_site == "result_type":
+            return None
+        group[0].status = Sample.Status.ABORTED
+        return group
+
+    if failure_site == "data_source":
+        data_buffer.get_samples = fail
+    if failure_site == "requeue":
+        data_buffer.add_samples = fail
+    monkeypatch.setattr(fa, "generate_and_rm_group", generate)
+    worker = _make_worker(monkeypatch, data_buffer=data_buffer, concurrency=1)
+    worker.poll_interval = 0.01
+    monkeypatch.setattr(fa, "_get_global_worker", lambda args, data_buffer: worker)
+    args = SimpleNamespace(rollout_global_dataset=True, rollout_batch_size=1)
+
+    async def collect():
+        return await asyncio.wait_for(fa._generate_rollout_async(args, 0, data_buffer), timeout=2)
+
+    worker.start()
+    try:
+        with pytest.raises(RuntimeError, match="fully-async rollout worker failed") as exc:
+            asyncio.run(collect())
+        if failure_site == "result_type":
+            assert isinstance(exc.value.__cause__, TypeError)
+        else:
+            assert exc.value.__cause__ is error
+        assert not worker.running
+    finally:
+        worker.stop()
+
+
+@pytest.mark.unit
+def test_failed_global_worker_is_not_silently_restarted(monkeypatch):
+    worker = _make_worker(monkeypatch)
+    error = ValueError("reward failed before collection")
+
+    def fail():
+        raise error
+
+    task = SimpleNamespace(result=fail)
+    worker._make_done_cb(0)(task)
+    worker.worker_thread = threading.Thread(target=lambda: None)
+    worker.worker_thread.start()
+    worker.worker_thread.join()
+    monkeypatch.setattr(fa, "_global_worker", worker)
+
+    with pytest.raises(RuntimeError, match="fully-async rollout worker failed") as exc:
+        fa._get_global_worker(SimpleNamespace(), worker.data_buffer)
+    assert exc.value.__cause__ is error
+
+
+@pytest.mark.unit
+def test_aborted_group_is_still_requeued(monkeypatch):
+    worker = _make_worker(monkeypatch)
+    group = _make_group(0)
+    group[0].status = Sample.Status.ABORTED
+    worker._make_done_cb(0)(SimpleNamespace(result=lambda: group))
+
+    assert worker.data_buffer.requeued == [group]
+    assert worker.get_completed_groups() == []
+    assert worker.running
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("stopping", [False, True])
+def test_cancelled_task_is_only_an_error_while_running(monkeypatch, stopping):
+    worker = _make_worker(monkeypatch)
+
+    def cancelled():
+        raise asyncio.CancelledError
+
+    if stopping:
+        worker.stop()
+    worker._make_done_cb(0)(SimpleNamespace(result=cancelled))
+    if stopping:
+        assert worker.get_completed_groups() == []
+    else:
+        with pytest.raises(RuntimeError, match="fully-async rollout worker failed") as exc:
+            worker.get_completed_groups()
+        assert "cancelled" in str(exc.value.__cause__)
+
+
+@pytest.mark.unit
+def test_worker_failure_cancels_other_inflight_generations(monkeypatch):
+    blocked_started = threading.Event()
+    blocked_cancelled = threading.Event()
+    data_buffer = _FakeDataBuffer([_make_group(0), _make_group(1)])
+
+    async def generate(args, group, sampling_params, evaluation):
+        if group[0].index == 0:
+            while not blocked_started.is_set():
+                await asyncio.sleep(0)
+            raise ValueError("generation failed")
+        blocked_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            blocked_cancelled.set()
+
+    monkeypatch.setattr(fa, "generate_and_rm_group", generate)
+    worker = _make_worker(monkeypatch, data_buffer=data_buffer, concurrency=2)
+    worker.poll_interval = 0.01
+    worker.start()
+    try:
+        assert blocked_cancelled.wait(timeout=2), "in-flight task survived a fatal worker error"
+        with pytest.raises(RuntimeError) as exc:
+            worker.get_completed_groups()
+        assert isinstance(exc.value.__cause__, ValueError)
+    finally:
+        worker.stop()
+    assert not worker.worker_thread.is_alive()
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
