@@ -503,7 +503,7 @@ class RolloutManager:
                 )
             train_data["rollout_routed_experts"] = routed_experts
 
-        if samples[0].train_metadata is not None:
+        if any(sample.train_metadata is not None for sample in samples):
             train_data["metadata"] = [sample.train_metadata for sample in samples]
 
         if any(sample.multimodal_train_inputs is not None for sample in samples):
@@ -569,6 +569,7 @@ class RolloutManager:
                 "source_names",
                 "prompt",
                 "teacher_log_probs",
+                "metadata",
             ]:
                 if key not in data:
                     continue
