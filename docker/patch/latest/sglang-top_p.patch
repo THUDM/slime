@@ -726,10 +726,18 @@ index 6b691d84eb707525c98f2b88ca3b30348c6c9869..7ddd361722759675fff1eaf776f19507
              output_hidden_states=self.output_hidden_states,
              routed_experts=self.routed_experts,
 diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
-index f4331b64b42a081aa31e63370efc82a96e416e40..44358b387775266e79c2355f80e5f18ab7eac05d 100644
+index f4331b64b42a081aa31e63370efc82a96e416e40..533374ce07603b14a152833f2627fbabca646458 100644
 --- a/python/sglang/srt/managers/tokenizer_manager.py
 +++ b/python/sglang/srt/managers/tokenizer_manager.py
-@@ -212,6 +212,7 @@ class ReqState:
+@@ -36,6 +36,7 @@ from http import HTTPStatus
+ from typing import Any, Awaitable, Dict, Iterable, List, Optional, Tuple, Union
+
+ import fastapi
++import numpy as np
+ import pybase64
+ import torch
+ import uvloop
+@@ -212,6 +213,7 @@ class ReqState:
      output_top_logprobs: List[Any] = dataclasses.field(default_factory=list)
      input_token_ids_logprobs: List[Any] = dataclasses.field(default_factory=list)
      output_token_ids_logprobs: List[Any] = dataclasses.field(default_factory=list)
@@ -737,7 +745,7 @@ index f4331b64b42a081aa31e63370efc82a96e416e40..44358b387775266e79c2355f80e5f18a
      customized_info_accumulated: Dict[str, List[Any]] = dataclasses.field(
          default_factory=dict
      )
-@@ -233,6 +234,21 @@ def _slice_streaming_output_meta_info(
+@@ -233,6 +235,21 @@ def _slice_streaming_output_meta_info(
          meta_info[key] = meta_info[key][last_output_offset:]
  
  
@@ -759,7 +767,48 @@ index f4331b64b42a081aa31e63370efc82a96e416e40..44358b387775266e79c2355f80e5f18a
  class InputFormat(Enum):
      """Input format types for tokenization handling."""
  
-@@ -2223,6 +2239,11 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
+@@ -2177,17 +2194,30 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
+                         return_text_in_logprobs,
+                     )
+                 )
+-            if len(state.output_top_logprobs_val) > len(state.output_top_logprobs):
+-                state.output_top_logprobs.extend(
+-                    self.detokenize_top_logprobs_tokens(
+-                        state.output_top_logprobs_val[len(state.output_top_logprobs) :],
+-                        state.output_top_logprobs_idx[len(state.output_top_logprobs) :],
+-                        return_text_in_logprobs,
+-                    )
+-                )
+-
+             meta_info["input_top_logprobs"] = state.input_top_logprobs
+-            meta_info["output_top_logprobs"] = state.output_top_logprobs
++            if not return_text_in_logprobs:
++                # Preserve full-distribution probabilities and return fixed-width
++                # heads as binary, like the existing top-p/R3 metadata.
++                # Non-streaming requests only consume final metadata. Encoding
++                # the cumulative head every decode step would be quadratic.
++                if meta_info.get("finish_reason") is not None or state.obj.stream:
++                    ids = np.asarray(state.output_top_logprobs_idx, dtype="<i4").reshape(-1, top_logprobs_num)
++                    logps = np.asarray(state.output_top_logprobs_val, dtype="<f4").reshape(-1, top_logprobs_num)
++                    if ids.shape != logps.shape:
++                        raise ValueError("Sampler top-k ids/logprobs have different shapes")
++                    meta_info["output_topk_token_ids"] = pybase64.b64encode(ids.tobytes()).decode("ascii")
++                    meta_info["output_topk_log_probs"] = pybase64.b64encode(logps.tobytes()).decode("ascii")
++                    meta_info["output_topk_shape"] = list(ids.shape)
++            else:
++                if len(state.output_top_logprobs_val) > len(state.output_top_logprobs):
++                    state.output_top_logprobs.extend(
++                        self.detokenize_top_logprobs_tokens(
++                            state.output_top_logprobs_val[len(state.output_top_logprobs) :],
++                            state.output_top_logprobs_idx[len(state.output_top_logprobs) :],
++                            return_text_in_logprobs,
++                        )
++                    )
++                meta_info["output_top_logprobs"] = state.output_top_logprobs
+
+         # 3. Handle token_ids_logprob
+         if token_ids_logprob is not None:
+@@ -2223,6 +2253,11 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
              meta_info["input_token_ids_logprobs"] = state.input_token_ids_logprobs
              meta_info["output_token_ids_logprobs"] = state.output_token_ids_logprobs
  
@@ -771,7 +820,7 @@ index f4331b64b42a081aa31e63370efc82a96e416e40..44358b387775266e79c2355f80e5f18a
      def convert_logprob_style(
          self,
          meta_info: dict,
-@@ -2283,6 +2304,13 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
+@@ -2283,6 +2318,13 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
                  recv_obj.output_token_ids_logprobs_idx[recv_obj_index]
              )
  

@@ -847,6 +847,30 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
         def add_algo_arguments(parser):
             parser.add_argument(
+                "--pg-loss-type",
+                choices=["ppo", "reinforce"],
+                default=None,
+                help=(
+                    "Policy gradient objective. Defaults to REINFORCE with score centering, "
+                    "otherwise preserves the existing PPO/CISPO objective."
+                ),
+            )
+            parser.add_argument(
+                "--use-score-centering",
+                action="store_true",
+                help=(
+                    "Use the REINFORCE score-centering objective from "
+                    "Score Centering Stabilizes Off-policy Reinforcement Learning "
+                    "(https://arxiv.org/abs/2609.20807)."
+                ),
+            )
+            parser.add_argument(
+                "--score-centering-top-k",
+                type=int,
+                default=128,
+                help="Number of sampler top logprobs to retain per generated token.",
+            )
+            parser.add_argument(
                 "--ref-load",
                 type=str,
                 default=None,
@@ -1069,7 +1093,10 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--use-tis",
                 action="store_true",
                 default=False,
-                help="Enable TIS from https://fengyao.notion.site/off-policy-rl for off-policy importance sampling.",
+                help=(
+                    "Enable TIS for off-policy importance sampling. With --use-score-centering, "
+                    "center the weighted scores using the same --tis-clip/--tis-clip-low bounds."
+                ),
             )
             parser.add_argument(
                 "--tis-clip",
@@ -1787,6 +1814,11 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
 
 
 def slime_validate_args(args):
+    from slime.utils.ppo_utils import get_pg_loss_type
+    from slime.utils.score_centering import validate_score_centering_args
+
+    get_pg_loss_type(args)
+    validate_score_centering_args(args)
     args.eval_datasets = _resolve_eval_datasets(args)
 
     if args.rollout_temperature <= 0:
@@ -1873,7 +1905,7 @@ def slime_validate_args(args):
             "require advantage normalization. Please add `--normalize-advantages` to your command."
         )
 
-    if args.use_rollout_logprobs:
+    if args.use_rollout_logprobs and get_pg_loss_type(args) != "reinforce":
         assert not args.use_tis, "use_rollout_logprobs and use_tis cannot be set at the same time."
 
     if args.get_mismatch_metrics:

@@ -594,6 +594,8 @@ def train_one_step(
                     "advantages",
                     "returns",
                     "rollout_log_probs",
+                    "rollout_topk_token_ids",
+                    "rollout_topk_log_probs",
                     "teacher_log_probs",
                     "rollout_mask_sums",
                     # Only present when dumping train debug data; lets the loss

@@ -265,6 +265,10 @@ jobs:
               "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"
             },
             {
+              "num_gpus": 2,
+              "test_file": "test_qwen2.5_0.5B_score_centering.py"
+            },
+            {
               "num_gpus": 8,
               "test_args": "--save-optimizer gpu --load-optimizer gpu",
               "test_file": "test_qwen3_4B_ckpt.py"
@@ -656,6 +660,18 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_policy_loss.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_score_centering.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_score_centering_binary.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_score_centering_transport.py"
             },
             {
               "num_gpus": 0,
@@ -1095,6 +1111,10 @@ jobs:
             {
               "num_gpus": 4,
               "test_file": "test_qwen3.5_0.8B_gsm8k_short.py"
+            },
+            {
+              "num_gpus": 2,
+              "test_file": "test_qwen2.5_0.5B_score_centering.py"
             },
             {
               "num_gpus": 8,

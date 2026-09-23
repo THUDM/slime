@@ -133,6 +133,9 @@ def validate_routed_experts_value(
 
 def link_routed_experts_for_rollout(args, sample: Sample, rollout_id: int | None) -> None:
     """Retain spilled routes in a rollout directory using only file references."""
+    from slime.utils.score_centering import spill_sampler_topk
+
+    spill_sampler_topk(args, sample, rollout_id)
     ref = sample.rollout_routed_experts
     if not isinstance(ref, DiskTensorRef):
         return
@@ -180,6 +183,9 @@ async def spill_routed_experts(
     if not store_dir:
         raise ValueError("spill_routed_experts requires --rollout-routed-experts-store-dir")
 
+    from slime.utils.score_centering import spill_sampler_topk
+
+    spill_sampler_topk(args, sample, rollout_id)
     if isinstance(sample.rollout_routed_experts, DiskTensorRef):
         validate_routed_experts_value(sample.rollout_routed_experts, args, sample_index=sample.index)
         link_routed_experts_for_rollout(args, sample, rollout_id)

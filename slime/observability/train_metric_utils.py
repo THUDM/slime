@@ -166,6 +166,8 @@ def log_rollout_data(
             "sample_indices",
             "rollout_ids",
             "rollout_mask_sums",
+            "rollout_topk_token_ids",
+            "rollout_topk_log_probs",
             "rollout_top_p_token_ids",
             "rollout_top_p_token_offsets",
             "rollout_routed_experts",
