@@ -217,5 +217,73 @@ def test_training_metrics_ignore_sampler_head_payloads(monkeypatch, tmp_path, di
     assert "rollout_log_probs" in reported[0]
 
 
+@pytest.mark.parametrize("transport", ["object-store", "nixl"])
+def test_exact_top_p_transport_and_microbatch(monkeypatch, transport):
+    import numpy as np
+    from test_score_centering import binary_top_p_meta
+    from slime.ray import rollout
+
+    packed = types.ModuleType("megatron.core.packed_seq_params")
+    packed.PackedSeqParams = object
+    training = types.ModuleType("megatron.training")
+    training.get_args = lambda: None
+    monkeypatch.setitem(sys.modules, "megatron.core.packed_seq_params", packed)
+    monkeypatch.setitem(sys.modules, "megatron.training", training)
+    from slime.backends.megatron_utils.data import DataIterator
+
+    mgr = manager(rollout_top_p=0.9, rollout_data_transport=transport, global_batch_size=2)
+    mgr.train_parallel_config = {"dp_size": 2}
+    monkeypatch.setattr(rollout, "build_dp_schedule", lambda *a, **kw: ([[1], [0]], [[[0]], [[0]]], [1], [2]))
+    monkeypatch.setattr(rollout.ray, "put", lambda data, **kwargs: data)
+    samples = []
+    for i in range(2):
+        sample = Sample(index=i, tokens=[9])
+        sample.append_response_tokens(
+            mgr.args, tokens=[4, 2], log_probs=[float(np.log(0.7)), 0.0], meta_info=binary_top_p_meta()
+        )
+        if i == 1:
+            sample.append_response_tokens(mgr.args, tokens=[8], trainable=False)
+        samples.append(sample)
+    batch = mgr._convert_samples_to_train_data(samples)
+    refs = mgr._split_train_data_by_dp(batch)
+    assert refs[0].inner["rollout_top_p_token_offsets"][0].tolist() == [0, 2, 3, 3]
+    for ref in refs:
+        tensorize_rollout_data_for_training(ref.inner)
+        iterator = DataIterator(ref.inner, micro_batch_indices=[[0]])
+        data = iterator.get_next(["rollout_top_p_log_probs", "rollout_top_p_token_ids", "rollout_top_p_token_offsets"])
+        assert data["rollout_top_p_log_probs"][0].dtype == torch.float32
+        torch.testing.assert_close(data["rollout_top_p_log_probs"][0].exp(), torch.tensor([0.3, 0.7, 1.0]))
+        assert data["rollout_top_p_token_ids"][0].tolist() == [1, 4, 2]
+
+
+def test_generate_requests_complete_top_p_probabilities(monkeypatch):
+    import numpy as np
+    from test_score_centering import binary_top_p_meta
+    from slime.rollout import sglang_rollout as rollout
+
+    a = args(
+        rollout_top_p=0.9,
+        sglang_router_ip="localhost",
+        sglang_router_port=1234,
+        use_rollout_routing_replay=False,
+        ci_test=False,
+    )
+    monkeypatch.setattr(rollout, "GenerateState", lambda _: SimpleNamespace(tokenizer=None, processor=None))
+    monkeypatch.setattr(rollout, "_prepare_prompt_ids", lambda *_: [9])
+
+    async def post(url, payload, **kwargs):
+        assert payload["sampling_params"]["custom_params"]["return_top_p_log_probs"]
+        assert "top_logprobs_num" not in payload
+        assert kwargs["score_centering_top_k"] == 0
+        info = binary_top_p_meta()
+        info["finish_reason"] = {"type": "stop"}
+        return {"text": "x", "meta_info": info}
+
+    monkeypatch.setattr(rollout, "post", post)
+    sample = asyncio.run(rollout.generate(a, Sample(prompt="test"), {"max_new_tokens": 8}))
+    np.testing.assert_allclose(np.exp(sample.rollout_top_p_log_probs), [0.3, 0.7, 1.0], rtol=1e-6)
+    assert sample.rollout_top_p_token_ids.tolist() == [1, 4, 2]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

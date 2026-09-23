@@ -65,19 +65,31 @@ def score_centering_request(args, sampling_params):
         raise ValueError("Score centering requires stochastic sampling (temperature > 0).")
     if temperature != args.rollout_temperature:
         raise ValueError("Score centering requires the configured rollout temperature on every training request.")
-    if temperature != 1 and os.environ.get("SGLANG_RETURN_ORIGINAL_LOGPROB", "").lower() in ("1", "true"):
+    top_p = sampling_params.setdefault("top_p", getattr(args, "rollout_top_p", 1.0))
+    if not 0 < top_p <= 1 or top_p != getattr(args, "rollout_top_p", 1.0):
+        raise ValueError("Score centering requires the configured rollout top_p in (0, 1] on every request.")
+    if (temperature != 1 or top_p < 1) and os.environ.get("SGLANG_RETURN_ORIGINAL_LOGPROB", "").lower() in (
+        "1",
+        "true",
+    ):
         raise ValueError(
-            "Score centering requires temperature-scaled sampler logprobs; unset SGLANG_RETURN_ORIGINAL_LOGPROB."
+            "Score centering requires temperature-scaled, post-truncation sampler logprobs; "
+            "unset SGLANG_RETURN_ORIGINAL_LOGPROB."
         )
-    for key, default in (("top_p", 1.0), ("top_k", -1), ("min_p", 0.0)):
+    for key, default in (("top_k", -1), ("min_p", 0.0)):
         if sampling_params.get(key, default) != default:
-            raise ValueError(f"Score centering requires {key}={default}; truncated sampling is not supported.")
+            raise ValueError(f"Score centering requires {key}={default}; only top-p truncation is supported.")
     for key, default in (("repetition_penalty", 1.0), ("presence_penalty", 0.0), ("frequency_penalty", 0.0)):
         if sampling_params.get(key, default) != default:
             raise ValueError(f"Score centering requires {key}={default}.")
     for key in ("json_schema", "regex", "ebnf", "structural_tag", "logit_bias"):
         if sampling_params.get(key):
             raise ValueError(f"Score centering does not support constrained sampling ({key}).")
+    if top_p < 1:
+        sampling_params.setdefault("custom_params", {}).update(
+            return_top_p_token_ids=True, return_top_p_log_probs=True
+        )
+        return {"return_logprob": True}
     return {"return_logprob": True, "top_logprobs_num": args.score_centering_top_k}
 
 
@@ -92,7 +104,7 @@ def validate_score_centering_args(args):
         == "slime.rollout.sglang_streaming_rollout.generate_streaming"
     ):
         raise ValueError("Score centering does not support streaming rollout.")
-    if args.score_centering_top_k < 1:
+    if args.rollout_top_p == 1 and args.score_centering_top_k < 1:
         raise ValueError("--score-centering-top-k must be positive.")
     get_score_centering_is_config(args)
     if args.loss_type != "policy_loss":
@@ -149,14 +161,22 @@ def extract_sampler_topk(meta_info, count, k):
 def decode_score_centering_response(content, k):
     """Run in the HTTP worker thread, before Ray serializes the response.
 
-    Replace binary head payloads with compact arrays before Ray transport.
-    Other metadata is left intact.
+    k > 0 decodes fixed-width heads; k == 0 decodes complete top-p supports.
+    Replace binary payloads with compact arrays before Ray transport.
     """
     import json
 
     output = json.loads(content)
     meta = output.get("meta_info", {})
     count = len(meta.get("output_token_logprobs", []))
+    if k == 0:
+        # Exact top-p SC uses the complete ragged sampler distribution.
+        meta.pop("score_centering_top_p", None)
+        if count:
+            meta["score_centering_top_p"] = extract_sampler_top_p(meta, count)
+            for key in ("top_p_token_ids", "top_p_token_offsets", "top_p_log_probs"):
+                meta.pop(key, None)
+        return output
     if count:
         # Only locally validated compact arrays may take the fast path.
         meta.pop("score_centering_topk", None)
@@ -164,6 +184,51 @@ def decode_score_centering_response(content, k):
         for key in ("output_topk_token_ids", "output_topk_log_probs", "output_topk_shape"):
             meta.pop(key, None)
     return output
+
+
+def extract_sampler_top_p(meta_info, count):
+    """Decode the complete normalized sampler distribution on the replay mask."""
+    if "score_centering_top_p" in meta_info:
+        return meta_info["score_centering_top_p"]
+    import pybase64
+
+    from slime.utils.types import _extract_rollout_top_p_token_data
+
+    data = _extract_rollout_top_p_token_data(meta_info, expected_num_tokens=count)
+    if data is None or "top_p_log_probs" not in meta_info:
+        raise ValueError("Top-p score centering requires complete sampler top-p ids, offsets, and logprobs.")
+    ids, offsets = (value.numpy() for value in data)
+    logps = np.frombuffer(pybase64.b64decode(meta_info["top_p_log_probs"]), dtype="<f4").copy()
+    validate_sampler_top_p(ids, offsets, logps, count)
+    return ids, offsets, logps
+
+
+def validate_sampler_top_p(ids, offsets, logps, count, loss_mask=None, tokens=None, sampled_logps=None):
+    if ids is None or offsets is None or logps is None:
+        raise ValueError("Top-p score centering requires complete sampler top-p ids, offsets, and logprobs.")
+    ids, offsets, logps = np.asarray(ids), np.asarray(offsets), np.asarray(logps)
+    if (
+        ids.ndim != 1
+        or logps.shape != ids.shape
+        or offsets.shape != (count + 1,)
+        or not np.issubdtype(ids.dtype, np.integer)
+        or not np.issubdtype(offsets.dtype, np.integer)
+        or offsets[0] != 0
+        or offsets[-1] != len(ids)
+        or (np.diff(offsets) < 0).any()
+    ):
+        raise ValueError("Invalid top-p score-centering ids/logprobs/offsets.")
+    for row, (start, end) in enumerate(zip(offsets[:-1], offsets[1:], strict=True)):
+        if loss_mask is not None and not loss_mask[row] and start == end:
+            continue
+        row_ids, row_logps = ids[start:end], logps[start:end].astype(np.float64)
+        _validate_head_arrays(row_ids, row_logps)
+        if not np.isclose(np.exp(row_logps).sum(), 1.0, rtol=1e-4, atol=1e-6):
+            raise ValueError("Top-p score centering requires the complete normalized support, not a truncated head.")
+        if tokens is not None:
+            selected = row_logps[row_ids == tokens[row]]
+            if len(selected) != 1 or not np.isclose(selected[0], sampled_logps[row], rtol=1e-4, atol=1e-5):
+                raise ValueError("Top-p sampler distribution must include the sampled token with its rollout logprob.")
 
 
 def validate_sampler_topk(sample, k):
@@ -204,6 +269,8 @@ def validate_sampler_topk(sample, k):
 def spill_sampler_topk(args, sample, rollout_id):
     """Keep sampler heads beside routes under the existing R3 spill directory."""
     if not getattr(args, "use_score_centering", False):
+        return
+    if getattr(args, "rollout_top_p", 1.0) < 1:
         return
     store_dir = getattr(args, "rollout_routed_experts_store_dir", None)
     if not store_dir:

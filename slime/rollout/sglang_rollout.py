@@ -210,7 +210,9 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
             payload,
             headers=headers,
             score_centering_top_k=(
-                args.score_centering_top_k if getattr(args, "use_score_centering", False) else None
+                (0 if args.rollout_top_p < 1 else args.score_centering_top_k)
+                if getattr(args, "use_score_centering", False)
+                else None
             ),
         )
         span.update(build_sglang_meta_trace_attrs(output["meta_info"]))
