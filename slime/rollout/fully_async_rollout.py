@@ -219,7 +219,6 @@ class AsyncRolloutWorker:
 
 
 async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> RolloutFnTrainOutput | list[list[Sample]]:
-    assert args.rollout_global_dataset
     filters_enabled = bool(
         getattr(args, "dynamic_sampling_filter_path", None) or getattr(args, "rollout_sample_filter_path", None)
     )

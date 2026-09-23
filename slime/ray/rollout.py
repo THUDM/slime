@@ -170,7 +170,6 @@ class RolloutManager:
         return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets, parallel_configs
 
     def get_num_rollout_per_epoch(self):
-        assert self.args.rollout_global_dataset
         return len(self.data_source) // self.args.rollout_batch_size
 
     def generate(self, rollout_id):
