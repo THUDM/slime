@@ -238,7 +238,6 @@ def make_slime_validate_args(**overrides):
         over_sampling_batch_size=None,
         num_epoch=None,
         num_rollout=1,
-        rollout_global_dataset=False,
         enable_mtp_training=False,
         mtp_num_layers=None,
         use_rollout_routing_replay=False,
@@ -249,7 +248,6 @@ def make_slime_validate_args(**overrides):
         rollout_max_prompt_len=None,
         train_backend="megatron",
         release_train=False,
-        keep_old_actor=False,
         only_train_params_name_list=None,
         freeze_params_name_list=None,
         update_weight_transport="nccl",
@@ -260,6 +258,17 @@ def make_slime_validate_args(**overrides):
     )
     values.update(overrides)
     return types.SimpleNamespace(**values)
+
+
+def test_global_dataset_flag_is_removed(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())
+    args = parser.parse_args(["--rollout-batch-size", "1"])
+    assert not hasattr(args, "rollout_global_dataset")
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--rollout-batch-size", "1", "--disable-rollout-global-dataset"])
+    # Epoch-based scheduling no longer depends on this attribute.
+    module.slime_validate_args(make_slime_validate_args(num_epoch=2, num_rollout=None))
 
 
 @pytest.mark.unit

@@ -1,5 +1,6 @@
 import importlib
 import subprocess
+import warnings
 from collections import defaultdict
 from collections.abc import Iterable
 from functools import cache
@@ -10,7 +11,12 @@ import torch
 from slime.utils.http_utils import is_port_available
 
 
-def decode_int32_meta_array(meta_info: dict[str, Any], keys: str | Iterable[str]) -> torch.Tensor | None:
+def decode_meta_array(
+    meta_info: dict[str, Any],
+    keys: str | Iterable[str],
+    *,
+    dtype: torch.dtype,
+) -> torch.Tensor | None:
     if isinstance(keys, str):
         keys = (keys,)
     for key in keys:
@@ -27,12 +33,18 @@ def decode_int32_meta_array(meta_info: dict[str, Any], keys: str | Iterable[str]
 
         value = pybase64.b64decode(value.encode("ascii"))
     if isinstance(value, bytes | bytearray | memoryview):
-        return torch.frombuffer(bytearray(value), dtype=torch.int32)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="The given buffer is not writable", category=UserWarning)
+            return torch.frombuffer(value, dtype=dtype)
     if torch.is_tensor(value):
-        return value.detach().to(device="cpu", dtype=torch.int32).reshape(-1)
+        return value.detach().to(device="cpu", dtype=dtype).reshape(-1)
     if hasattr(value, "flags") and not value.flags.writeable:
         value = value.copy()
-    return torch.as_tensor(value, dtype=torch.int32).reshape(-1)
+    return torch.as_tensor(value, dtype=dtype).reshape(-1)
+
+
+def decode_int32_meta_array(meta_info: dict[str, Any], keys: str | Iterable[str]) -> torch.Tensor | None:
+    return decode_meta_array(meta_info, keys, dtype=torch.int32)
 
 
 @cache

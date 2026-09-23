@@ -6,6 +6,17 @@ from slime.utils.arguments import parse_args
 from slime.utils.misc import should_run_periodic_action
 
 
+def _update_actor_weights(actor_model, rollout_manager) -> None:
+    """Publish the policy version only after the weight update succeeds."""
+    ray.get(rollout_manager.before_weight_update.remote())
+    succeeded = False
+    try:
+        actor_model.update_weights()
+        succeeded = True
+    finally:
+        ray.get(rollout_manager.after_weight_update.remote(succeeded=succeeded))
+
+
 def train(args):
     configure_logger()
     release_train = args.release_train
@@ -24,7 +35,7 @@ def train(args):
         ray.get(rollout_manager.onload_weights.remote())
 
     # Always push actor weights to rollout once weights are loaded.
-    actor_model.update_weights()
+    _update_actor_weights(actor_model, rollout_manager)
 
     if args.check_weight_update_equal:
         ray.get(rollout_manager.check_weights.remote(action="compare"))
@@ -76,13 +87,14 @@ def train(args):
                 actor_model.save_model(rollout_id, force_sync=force_sync)
             if args.use_critic:
                 critic_model.save_model(rollout_id, force_sync=force_sync)
-            if args.rollout_global_dataset:
-                ray.get(rollout_manager.save.remote(rollout_id))
+            ray.get(rollout_manager.save.remote(rollout_id))
+
+        ray.get(rollout_manager.cleanup_rollout_data.remote(rollout_id))
 
         offload_train(actor_trains)
         if args.offload_rollout and not release_train:
             ray.get(rollout_manager.onload_weights.remote())
-        actor_model.update_weights()
+        _update_actor_weights(actor_model, rollout_manager)
 
         if args.offload_rollout:
             ray.get(rollout_manager.onload_kv.remote())
