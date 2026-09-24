@@ -199,5 +199,36 @@ def test_generate_and_rm_group_rm_accepts_list_result_from_custom_generate(patch
     assert all(isinstance(sample, Sample) for sample in result)
 
 
+@pytest.mark.parametrize("fanout_indices", [{0, 1}, {1}], ids=["all_fanout", "mixed"])
+def test_group_rm_rewards_each_sample_from_fanout(patch_generate_state, monkeypatch, fanout_indices):
+    sglang_rollout = patch_generate_state
+
+    async def custom_generate_list(args, sample: Sample, sampling_params: dict):
+        sample.status = Sample.Status.COMPLETED
+        if sample.index not in fanout_indices:
+            return sample
+        sibling = Sample(index=sample.index, prompt=sample.prompt, status=Sample.Status.COMPLETED)
+        return [sample, sibling]
+
+    async def group_reward(args, samples: list[Sample]):
+        assert len(samples) == 2 + len(fanout_indices)
+        assert all(isinstance(sample, Sample) for sample in samples)
+        return [float(i) for i in range(len(samples))]
+
+    monkeypatch.setattr(sglang_rollout, "load_function", lambda _path: custom_generate_list)
+    monkeypatch.setattr(sglang_rollout, "batched_async_rm", group_reward)
+
+    result = asyncio.run(
+        sglang_rollout.generate_and_rm_group(
+            make_args(custom_generate_function_path="plugin_contracts.fake_generate", group_rm=True),
+            [Sample(index=0, prompt="prompt-0"), Sample(index=1, prompt="prompt-1")],
+            sampling_params={"temperature": 0.3},
+        )
+    )
+
+    leaves = [sample for item in result for sample in (item if isinstance(item, list) else [item])]
+    assert [sample.reward for sample in leaves] == [float(i) for i in range(len(leaves))]
+
+
 if __name__ == "__main__":
     run_contract_test_file()
