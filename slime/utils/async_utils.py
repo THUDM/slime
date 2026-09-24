@@ -1,7 +1,45 @@
 import asyncio
 import threading
+from collections import deque
 
-__all__ = ["get_async_loop", "run"]
+__all__ = ["AsyncPacer", "get_async_loop", "run"]
+
+
+class AsyncPacer:
+    """Reduce asyncio scheduling pressure by resuming waiting tasks in batches.
+
+    At high concurrency, waking many tasks at once floods the loop's ready
+    queue with callbacks, delaying socket I/O and timers. Release at most 64
+    waiters per tick, with a 1 ms delay between batches, to spread that work
+    across loop iterations. This paces task starts without limiting in-flight
+    concurrency or waiting for previously released tasks to finish.
+
+    Use each instance within a single event loop.
+    """
+
+    def __init__(self):
+        self.pending = deque()
+        self.scheduled = False
+
+    async def wait(self):
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        self.pending.append(future)
+        if not self.scheduled:
+            self.scheduled = True
+            loop.call_soon(self._release)
+        await future
+
+    def _release(self):
+        for _ in range(min(64, len(self.pending))):
+            future = self.pending.popleft()
+            if not future.done():
+                future.set_result(None)
+        if self.pending:
+            # Let socket callbacks and timers run before waking more tasks.
+            asyncio.get_running_loop().call_later(0.001, self._release)
+        else:
+            self.scheduled = False
 
 
 # Create a background event loop thread

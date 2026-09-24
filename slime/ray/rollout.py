@@ -121,6 +121,8 @@ class RolloutManager:
     def dispose(self):
         for monitor in self._health_monitors:
             monitor.stop()
+        if close := getattr(self.data_source, "close", None):
+            close()
         for rollout_id in list(self._active_routed_experts_rollouts):
             self.cleanup_rollout_data(rollout_id)
         logging_utils.finish_tracking(self.args)

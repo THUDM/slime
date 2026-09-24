@@ -391,6 +391,29 @@ slime 支持不同程度的自定义数据生成（rollout）。
 
 - 有的时候，我们还需要支持自定义的 reward model，可以通过配置 `--custom-rm-path` 来进行配置。
 
+### 分布式 fully async rollout
+
+保留 fully async 入口，通过现有的 `--data-source-path` 选择各节点本地读数据的方案：
+
+```bash
+--rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async \
+--data-source-path slime.rollout.distributed_data_source.DistributedDataSourceWithBuffer
+```
+
+Fully async 函数负责分布式执行，在每个有 CPU 资源的 Ray 节点上创建一个常驻生成进程，每个进程占用一个 Ray CPU。总生成并发至少要容纳每个节点一个完整 prompt group；训练 batch 可以小于节点数量。使用默认数据源时，fully async 仍走原来的本地调度。
+
+每个进程用相同路径、tokenizer、chat template、过滤配置和 seed 加载相同的数据副本。全局分配器只分配互不重叠的整数索引区间，无须从 manager 传输原始 prompt。初始化时会检查过滤后的数据集大小；用户需要确保各节点的数据和预处理一致。
+
+`DistributedDataSourceWithBuffer` 保留 `get_samples(n)` 和 `add_samples(...)`。Custom rollout 可以将 `source.reader_config("unique_reader_id")` 传给自己的远端进程，在进程内调用 `config.open()`，获得同样接口的本地 reader。应传这个小配置，而不是加载后的数据源。每个 reader 的 ID 必须唯一，`owner` 为保留名称。Buffer 保留在每个 reader 本地：`add_samples()` 放回的 group 由同一个 reader 的后续 `get_samples()` 优先取用。放入 manager 侧 reader 的 group 不会转发到生成进程。数据源本身不创建生成进程。委托给 fully async 的 custom rollout wrapper 无须额外标记，custom generate 签名也不变。
+
+Fully async 将配置的总并发按完整 prompt group 平分给各个生成进程。每个进程维持本地任务池：一个位置空出来就自行读取下一组数据，不向 manager 逐次申请生成额度。完成的 group 逐个回传，每个进程没有固定的训练 batch 配额，快进程可以填满 batch。收集端跨训练步骤最多额外预取一个并发窗口；每个 worker 本地还保留最多一个排队结果，以及每个并发位置对应的一个在途或已完成 group。结果消费变慢时，这些有界队列会阻止本地继续补发；checkpoint 时会将它们全部收齐到待保存的完成队列。Dynamic filter 在本地检查完整 group，fully async 与本地版本一致，始终丢弃 `keep=False` 的 group 并继续补发，不使用有限 batch 的 `keep_when_insufficient` 兜底。被丢弃的 group 只累计数量、原因和丢弃比例，不保留完整样本。分布式 fully async 不支持 `--rollout-all-samples-process-path`，配置该参数时会明确报错。
+
+Rollout function 向 manager 返回该 batch 的全量 Samples。Batch sample filter、reward 后处理、训练数据转换、日志和 DP 切分仍作用于全局 batch。`--save-debug-rollout-data` 沿用原来的按 rollout 写入 `torch.save` 文件的方式，每个文件包含完整 batch。进程本地的 spill tensor 在传输前读回内存，仅释放已完成 group 自己的文件。Eval 仍走原来的 eval function 和 manager 路径。目前不做分布式写数据。
+
+SGLang 公共生成入口每次最多释放 64 个排队的生成调用，约 1 ms 后继续释放，不改变在途并发上限。同步 rollout 和使用该入口的 custom generate 也适用。生成进程直接发送 HTTP 请求，忽略 `--use-distributed-post`。
+
+Checkpoint 会停止补发、等待在途请求完成，将分配器状态、未使用索引区间、本地 buffer 和已完成 group 一起存入 `--save/rollout/distributed_data_source_<rollout_id>.pt`。恢复需要相同节点数量、过滤后的数据集大小、每个 prompt 的样本数、seed 和 shuffle 配置。自定义分布式 rollout 需要通过 `source.register_consumer(name, consumer)` 注册执行状态以参与 checkpoint；consumer 实现 `pause()`（返回之前是否暂停）、`resume()`、`state_dict()`、`load_state_dict(state)` 和 `close()`。Fully async 内部已完成注册。生成进程或其所在节点故障时，会将该 worker 移出调度，由剩余 worker 按原有并发上限继续补足全局 batch。已收到的完整 group 会保留；故障 worker 尚未回传的 group、本地 buffer 和未使用的索引区间会丢弃，不重放。Checkpoint 会保留停用的 worker 槽位，暂不支持自动重启和弹性扩缩容。所有生成 worker 均不可用、manager 或与其同节点的索引分配器故障时仍会报错结束；custom generate 自身抛出的代码错误也仍然报错。
+
 ## sglang 使用方法
 
 slime 通过 `HttpServerEngineAdapter` 作为中介，实现了基于 sglang 的 server based engine。

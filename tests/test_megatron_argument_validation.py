@@ -179,6 +179,8 @@ def test_update_weight_disk_dir_required_for_disk_transport(monkeypatch):
 
 def make_slime_validate_args(**overrides):
     values = dict(
+        use_distributed_post=False,
+        data_source_path="slime.rollout.data_source.RolloutDataSourceWithBuffer",
         eval_config=None,
         eval_prompt_data=None,
         kl_coef=0,
@@ -258,6 +260,17 @@ def make_slime_validate_args(**overrides):
     )
     values.update(overrides)
     return types.SimpleNamespace(**values)
+
+
+def test_distributed_fully_async_is_opt_in(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())
+    defaults = parser.parse_args(["--rollout-batch-size", "1"])
+    assert defaults.rollout_function_path == "slime.rollout.sglang_rollout.generate_rollout"
+    assert defaults.data_source_path == "slime.rollout.data_source.RolloutDataSourceWithBuffer"
+    path = "slime.rollout.distributed_data_source.DistributedDataSourceWithBuffer"
+    enabled = parser.parse_args(["--rollout-batch-size", "1", "--data-source-path", path])
+    assert enabled.data_source_path == path
 
 
 def test_global_dataset_flag_is_removed(monkeypatch):

@@ -735,6 +735,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_distributed_rollout.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_rollout_buffer_order.py"
             },
             {

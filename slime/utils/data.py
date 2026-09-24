@@ -288,9 +288,8 @@ class Dataset:
         if self.epoch_id == new_epoch_id:
             return
 
-        random.seed(self.seed + new_epoch_id)
         permutation = list(range(len(self.samples)))
-        random.shuffle(permutation)
+        random.Random(self.seed + new_epoch_id).shuffle(permutation)
         self.samples = [self.origin_samples[i] for i in permutation]
         self.epoch_id = new_epoch_id
 

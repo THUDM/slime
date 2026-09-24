@@ -24,3 +24,12 @@ def call_rollout_fn(fn, *args, evaluation: bool, **kwargs):
         output = RolloutFnEvalOutput(data=output) if evaluation else RolloutFnTrainOutput(samples=output)
 
     return output
+
+
+def iter_samples(value):
+    """Visit Sample leaves without changing custom generation's nested shape."""
+    if isinstance(value, Sample):
+        yield value
+    else:
+        for child in value:
+            yield from iter_samples(child)

@@ -11,6 +11,7 @@ import torch
 from test_score_centering import args, meta
 
 from slime.observability.rollout_data_utils import tensorize_rollout_data_for_training
+from slime.utils.async_utils import AsyncPacer
 from slime.utils.types import Sample
 
 NUM_GPUS = 0
@@ -134,6 +135,7 @@ def test_evaluation_preserves_training_score_centering(monkeypatch):
     a = args(partial_rollout=False, group_rm=True, custom_generate_function_path=None)
     state = SimpleNamespace(
         semaphore=asyncio.Semaphore(1),
+        generation_pacer=AsyncPacer(),
         aborted=False,
         active_server_generations=0,
         dp_rank_context=lambda: nullcontext(),
