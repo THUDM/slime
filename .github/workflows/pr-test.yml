@@ -647,6 +647,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "observability/test_wandb_utils.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_value_temperature.py"
             },
             {
