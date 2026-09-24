@@ -114,13 +114,13 @@ def compute_gpqa_reward(response: str, label, metadata: dict | None = None) -> f
         if value:
             candidate_answers.append(str(value))
 
-    if label_text:
+    if label_text and not (len(label_text) == 1 and label_text.upper() in valid_letters):
         candidate_answers.append(label_text)
 
     normalized_targets = {_normalize_text(text) for text in candidate_answers if text}
-    normalized_response = _normalize_text(_strip_chain_of_thought(response))
+    normalized_response = f" {_normalize_text(_strip_chain_of_thought(response))} "
     for target in normalized_targets:
-        if target and target in normalized_response:
+        if target and f" {target} " in normalized_response:
             return 1.0
 
     if extracted_letter and not correct_letter and label_text:

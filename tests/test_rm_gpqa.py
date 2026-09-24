@@ -174,5 +174,45 @@ def test_reward_no_correct_letter_and_no_match_is_zero():
     assert compute_gpqa_reward("random text", label="some answer") == 0.0
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize("label", ["A", "B", "C", "D"])
+@pytest.mark.parametrize(
+    "response",
+    [
+        "I'm sorry, but I can't help with that.",
+        "I cannot answer this question because it is ambiguous.",
+        "No comment.",
+        "compare them with each of the candidate values one by one, starting with the smallest, which is",
+    ],
+)
+def test_reward_letter_label_is_not_matched_inside_reply_text(label, response):
+    """A one-letter gold label is an option letter, not answer text: a reply with
+    no extractable letter must not score 1.0 because that letter occurs inside a word."""
+    metadata = {"choices": ["first", "second", "third", "fourth"]}
+    assert compute_gpqa_reward(response, label=label, metadata=metadata) == 0.0
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "response,expected",
+    [
+        ("I looked at 2011 and gave up", 0.0),
+        ("the count is 111", 0.0),
+        ("It is 11 units.", 1.0),
+    ],
+)
+def test_reward_text_fallback_matches_whole_tokens(response, expected):
+    """The text fallback compares whole normalized tokens, so a short numeric choice
+    is not found inside a longer number."""
+    metadata = {"choices": ["3", "11", "7", "9"]}
+    assert compute_gpqa_reward(response, label="B", metadata=metadata) == expected
+
+
+@pytest.mark.unit
+def test_reward_text_fallback_keeps_multi_token_choice_text():
+    metadata = {"choices": ["1", "2", "10^-4 eV", "5"]}
+    assert compute_gpqa_reward("It is 10^-4 eV", label="C", metadata=metadata) == 1.0
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
