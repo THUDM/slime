@@ -634,7 +634,11 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--data-source-path",
                 type=str,
                 default="slime.rollout.data_source.RolloutDataSourceWithBuffer",
-                help="The data source class for rollout data.",
+                help=(
+                    "The data source class for rollout data. Use "
+                    "slime.rollout.distributed_data_source.DistributedDataSourceWithBuffer for node-local dataset "
+                    "replicas with shared index allocation; fully-async rollout then generates across nodes."
+                ),
             )
             parser.add_argument(
                 "--prompt-data",
@@ -1481,7 +1485,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "Path to the rollout all samples process function that "
-                    "can process all samples including filtered ones."
+                    "can process all samples including filtered ones. "
+                    "Not supported by distributed fully-async rollout."
                 ),
             )
             return parser
@@ -2061,6 +2066,7 @@ def slime_validate_args(args):
     if (
         not getattr(args, "debug_train_only", False)
         and fully_async
+        and args.data_source_path != "slime.rollout.distributed_data_source.DistributedDataSourceWithBuffer"
         and disk_spill
         and not getattr(args, "keep_rollout_routed_experts_files", False)
     ):

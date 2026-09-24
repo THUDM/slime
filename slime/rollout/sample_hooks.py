@@ -1,17 +1,30 @@
 from __future__ import annotations
 
 import inspect
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
 
 _current_rollout_id: int | None = None
+_task_rollout_id = ContextVar("rollout_sample_hook_id", default=None)
 
 
 def set_current_rollout_id(rollout_id: int | None) -> None:
     global _current_rollout_id
     _current_rollout_id = rollout_id
+
+
+@contextmanager
+def rollout_context(rollout_id):
+    """Keep concurrent worker requests' hook contexts independent."""
+    token = _task_rollout_id.set(rollout_id)
+    try:
+        yield
+    finally:
+        _task_rollout_id.reset(token)
 
 
 def _accepted_kwargs(function, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -42,7 +55,8 @@ async def apply_rollout_sample_hooks(args, value, **kwargs):
     paths = getattr(args, "rollout_sample_hook_path", None) or []
     if not paths:
         return value
-    kwargs.setdefault("rollout_id", _current_rollout_id)
+    rollout_id = _task_rollout_id.get()
+    kwargs.setdefault("rollout_id", rollout_id if rollout_id is not None else _current_rollout_id)
     if isinstance(value, Sample):
         return await _apply_to_sample(args, value, paths, **kwargs)
     if isinstance(value, list):

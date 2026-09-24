@@ -17,7 +17,7 @@ from slime.observability.trace_utils import build_sglang_meta_trace_attrs, trace
 from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter, should_drop_dynamic_filter_output
 from slime.rollout.sample_hooks import apply_rollout_sample_hooks
-from slime.utils.async_utils import run
+from slime.utils.async_utils import AsyncPacer, run
 from slime.utils.data import Dataset
 from slime.utils.eval_config import EvalDatasetConfig
 from slime.utils.http_utils import get, get_rollout_num_engines, post
@@ -85,13 +85,16 @@ class GenerateState(metaclass=SingletonMeta):
     The global state for the generation process.
     """
 
-    def __init__(self, args: Namespace) -> None:
+    def __init__(self, args: Namespace, *, concurrency: int | None = None) -> None:
         # persistent state for the generation process
         self.args = args
         self.tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
         self.processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
-        self.semaphore = asyncio.Semaphore(args.sglang_server_concurrency * get_rollout_num_engines(args))
+        self.semaphore = asyncio.Semaphore(
+            concurrency if concurrency is not None else args.sglang_server_concurrency * get_rollout_num_engines(args)
+        )
+        self.generation_pacer = AsyncPacer()
         self.sampling_params: dict[str, Any] = dict(
             temperature=args.rollout_temperature,
             top_p=args.rollout_top_p,
@@ -291,6 +294,7 @@ async def generate_and_rm(
 
     # generate
     async with state.semaphore:
+        await state.generation_pacer.wait()
         if state.aborted:
             sample.status = Sample.Status.ABORTED
             return sample

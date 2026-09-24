@@ -389,6 +389,29 @@ slime supports customizing data generation (rollout) to various degrees.
 
   - Sometimes, you may also need to support a custom reward model. This can be configured by setting `--custom-rm-path`.
 
+### Distributed fully-async rollout
+
+Select the replicated data source with the existing fully-async entrypoint:
+
+```bash
+--rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async \
+--data-source-path slime.rollout.distributed_data_source.DistributedDataSourceWithBuffer
+```
+
+The fully-async function owns distributed execution, creating one persistent generation process per Ray node with CPU resources. Each process reserves one Ray CPU. Total generation concurrency must accommodate one complete prompt group per node; training batches can be smaller than the node count. The default data source keeps the existing local fully-async scheduler.
+
+Each process loads identical data locally using the same path, tokenizer, chat template, filtering settings, and seed. A shared allocator assigns disjoint integer ranges, so raw prompts do not need to be sent from the manager to generation processes. Initialization checks filtered dataset sizes; users must ensure identical data and preprocessing on every node.
+
+`DistributedDataSourceWithBuffer` retains `get_samples(n)` and `add_samples(...)`. Custom rollouts can pass `source.reader_config("unique_reader_id")` to their own remote processes and call `config.open()` there to obtain a local reader with the same interface. Pass this small configuration rather than the loaded data source. Each reader must have a unique ID; `owner` is reserved. Buffers are local to each reader: `add_samples()` returns groups to that reader, and its next `get_samples()` consumes them first. Groups added to the manager-side reader are not forwarded to generation processes. The data source does not create generation workers itself. Custom rollout wrappers that delegate to fully async need no capability marker, and custom generate signatures are unchanged.
+
+Fully async divides the configured total concurrency across generation processes, measured in complete prompt groups. Each process maintains a local task pool: a freed slot reads its next group locally without requesting generation credits from the manager. Completed groups are returned individually; no training-batch quota is assigned to a process, so faster processes can fill a batch without waiting for slower ones. The collector prefetches at most one extra concurrency window across training steps. Each worker also retains at most one queued result plus one in-flight or completed group per local slot. When result consumption slows, these bounded queues stop local refills; checkpointing drains them into the saved completion queue. Dynamic filters inspect complete groups locally; the fully-async function always replaces groups with `keep=False`, matching local fully async. The finite-batch `keep_when_insufficient` fallback does not apply. Rejected groups contribute only counts, reasons, and a drop ratio to metrics; their payloads are not retained. Distributed fully-async rollout does not support `--rollout-all-samples-process-path` and raises an error if it is configured.
+
+The function returns all Samples in the batch to the manager. Batch sample filters, reward post-processing, training-data conversion, logging, and DP partitioning retain their global scope. `--save-debug-rollout-data` uses the original per-rollout `torch.save` file, containing the complete batch. Worker-local spill tensors are materialized before transport, and only the completed group's files are released. Evaluation uses the original eval function and manager path. Distributed writing is not implemented.
+
+The shared SGLang entrypoint releases at most 64 queued generation calls at a time, scheduling the next release about 1 ms later without changing in-flight concurrency. This also applies to synchronous rollout and custom generate calls using that entrypoint. Generation processes send HTTP requests directly and ignore `--use-distributed-post`.
+
+Checkpointing pauses new generation, drains in-flight requests, and saves allocator state, unused index ranges, local buffers, and completed groups in `--save/rollout/distributed_data_source_<rollout_id>.pt`. Restore requires the same node count, filtered dataset size, samples per prompt, seed, and shuffle settings. Custom distributed rollouts must register their execution state with `source.register_consumer(name, consumer)` to participate in checkpoints: consumers implement `pause()` (returning the previous paused state), `resume()`, `state_dict()`, `load_state_dict(state)`, and `close()`. Fully async handles this registration internally. If a generation process or its node fails, that worker is removed from scheduling and surviving workers continue filling global batches at their original concurrency limits. Completed groups already received are kept; unreturned groups, the failed reader’s local buffer, and unused index ranges are discarded without replay. Checkpoints preserve disabled worker slots. No automatic restart or elastic resizing is implemented. Losing all generation workers, the manager, or its co-located index allocator is fatal; exceptions from custom generation code also remain fatal.
+
 ## How to Use SGLang
 
 slime implements a server-based engine using SGLang via the `HttpServerEngineAdapter` as an intermediary.
