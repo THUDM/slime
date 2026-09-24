@@ -477,6 +477,45 @@ therefore an sglang server argument rather than a slime hook: pass
 published weights (e.g. refresh the mount's view). See
 [Delta Weight Sync](../advanced/delta-weight-sync.md) for the full mechanism.
 
+### 20. Weight-Sync In-Flight Credits
+
+Full tensor/NCCL weight sync can keep several converted buckets in flight instead of waiting
+after every bucket. The window is controlled by two independent limits:
+
+| Argument | Meaning |
+| --- | --- |
+| `--update-weight-max-inflight-buckets` | Maximum number of logical buckets in flight. `0` disables this dimension. |
+| `--update-weight-max-inflight-bytes` | Maximum bytes across logical buckets in flight. `0` disables this dimension. |
+
+Both values default to `0`, which preserves the existing one-bucket-at-a-time path. Set either
+or both to opt in. Bucket bytes are counted once, regardless of how many rollout engines consume
+the bucket. Colocated updates use the largest contribution across trainer ranks so every rank
+flushes at the same collective boundary. Completion and credit release remain FIFO, and every
+window is fully drained before its weight version is committed. A version is committed only after
+post-processing finishes and the rollout consumers resume. If one bucket is larger than a configured
+byte limit, slime raises an error instead of waiting indefinitely.
+
+The byte credit counts logical bucket payload, not allocator or transport duplication. Slime records
+rank-local peaks for logical in-flight bytes, transport-outstanding bytes, IPC staging-resident bytes,
+and pending consumer objects under `perf/update_weights_*`. These counters are kept separate because a
+colocated flattened IPC buffer can make staging residency larger than the logical byte credit. They are
+observability, not an additional admission budget. Staging residency counts explicit producer-owned
+staging tensor objects; it does not estimate allocator fragmentation or CUDA IPC limbo after references
+are dropped. `perf/update_weights_sync_seconds` measures, on one control clock, from synchronization
+start until all target consumers have completed loading,
+post-processing has finished, and generation has resumed.
+
+Within a colocated engine's existing Gloo TP group, the source rank propagates the Ray load
+acknowledgement before any member returns the corresponding credit. This does not add a global CUDA
+synchronize. A load failure poisons the active version: it cannot be committed or reused, and the actor
+group must follow its normal abort/restart path. A lost process is not treated as a successful consensus.
+
+The credit window applies to ordinary full-weight buckets in distributed and colocated updates.
+Explicitly routed expert transfers remain serial so they can safely reuse their staging buffers;
+their bucket size is still checked against the byte limit, and the reusable staging pool is included in
+the staging-residency metric. Disk and delta transports do not have
+an in-memory bucket data plane and reject nonzero in-flight credit settings.
+
 ## Testing Custom Function Paths
 
 slime also provides CPU-only contract tests for customization interfaces. These tests resolve components through import-path strings, so they can validate both built-in hooks and user-defined implementations passed through the same CLI arguments used by training.
