@@ -1,9 +1,12 @@
-"""CPU unit tests for ``slime.backends.megatron_utils.cp_utils.get_sum_of_sample_mean``.
+"""CPU unit tests for ``slime.backends.megatron_utils.cp_utils``.
 
-Pins the per-rollout reducer contract: a rollout split into N training
+The reducer tests pin the per-rollout contract: a rollout split into N training
 samples (compact / subagent) must contribute exactly one token-weighted
 mean to the sum, even when first-fit packing puts those siblings into
 different micro-batches at training time.
+
+The routing-replay tests pin padding load distribution across samples,
+context-parallel layouts, and sequence-parallel slices.
 
 The CPU-only CI image does not ship megatron — ``_cp_dist_helpers``
 stubs ``megatron.core.mpu`` at import time so the subsequent
@@ -26,6 +29,7 @@ import torch
 from slime.backends.megatron_utils.cp_utils import (  # noqa: E402
     get_logits_and_tokens_offset_with_cp,
     get_sum_of_sample_mean,
+    prepare_routed_experts_for_routing_replay,
 )
 
 
@@ -49,6 +53,114 @@ def _denoms(*values: int) -> torch.Tensor:
     """Wrap per-sample denoms as the float tensor that the actor side promotes
     them to before calling the reducer."""
     return torch.tensor(values, dtype=torch.float32)
+
+
+def _set_parallel_ranks(monkeypatch, *, cp_size=1, cp_rank=0, tp_size=1, tp_rank=0, ep_size=1):
+    from megatron.core import mpu
+
+    monkeypatch.setattr(mpu, "get_context_parallel_world_size", lambda: cp_size)
+    monkeypatch.setattr(mpu, "get_context_parallel_rank", lambda: cp_rank)
+    monkeypatch.setattr(mpu, "get_tensor_model_parallel_world_size", lambda: tp_size, raising=False)
+    monkeypatch.setattr(mpu, "get_tensor_model_parallel_rank", lambda: tp_rank, raising=False)
+    monkeypatch.setattr(mpu, "get_expert_model_parallel_world_size", lambda: ep_size, raising=False)
+
+
+def _make_routing_replay_samples(num_samples=4, *, num_layers=4, topk=2):
+    routed_experts = [torch.full((2, num_layers, topk), 7, dtype=torch.int32) for _ in range(num_samples)]
+    tokens = [torch.zeros(3, dtype=torch.int64) for _ in range(num_samples)]
+    return routed_experts, tokens
+
+
+@pytest.mark.unit
+def test_routing_replay_small_padding_balances_expert_parallel_ranks(monkeypatch):
+    topk = 8
+    for num_experts, ep_size in ((128, 8), (128, 32), (256, 8), (256, 32)):
+        experts_per_rank = num_experts // ep_size
+        for num_padding_rows in range(1, 6):
+            _set_parallel_ranks(monkeypatch, ep_size=ep_size)
+            routed_experts, tokens = _make_routing_replay_samples(
+                num_padding_rows,
+                num_layers=4,
+                topk=topk,
+            )
+
+            actual = prepare_routed_experts_for_routing_replay(
+                routed_experts,
+                tokens,
+                num_experts=num_experts,
+                data_pad_size_multiplier=1,
+                sequence_parallel=False,
+                allgather_cp=False,
+            )
+
+            for sample_idx, expected in enumerate(routed_experts):
+                torch.testing.assert_close(actual[sample_idx * 3 : sample_idx * 3 + 2], expected)
+
+            padding = actual[torch.arange(2, num_padding_rows * 3, 3)]
+            assert padding.dtype == torch.int32
+            assert torch.all((padding >= 0) & (padding < num_experts))
+            sorted_padding = padding.sort(dim=2).values
+            assert torch.all(sorted_padding[:, :, 1:] != sorted_padding[:, :, :-1])
+
+            ep_ranks = padding // experts_per_rank
+            expected_row_fanout = min(ep_size, topk)
+            for row_layer_ranks in ep_ranks.reshape((-1, topk)):
+                assert torch.unique(row_layer_ranks).numel() == expected_row_fanout
+
+            expected_active_ranks = min(ep_size, num_padding_rows * topk)
+            for layer_experts, layer_ranks in zip(
+                padding.transpose(0, 1),
+                ep_ranks.transpose(0, 1),
+                strict=True,
+            ):
+                assert torch.unique(layer_experts).numel() == num_padding_rows * topk
+                histogram = torch.bincount(layer_ranks.flatten(), minlength=ep_size)
+                assert torch.count_nonzero(histogram).item() == expected_active_ranks
+                assert histogram.max().item() - histogram.min().item() <= 1
+
+
+@pytest.mark.unit
+def test_routing_replay_batch_padding_advances_per_row(monkeypatch):
+    _set_parallel_ranks(monkeypatch)
+    routed_experts, tokens = _make_routing_replay_samples(2)
+
+    actual = prepare_routed_experts_for_routing_replay(
+        routed_experts,
+        tokens,
+        num_experts=8,
+        data_pad_size_multiplier=8,
+        sequence_parallel=False,
+        allgather_cp=False,
+    )
+
+    expected = torch.tensor([[4, 5], [6, 7]], dtype=torch.int32)
+    torch.testing.assert_close(actual[-2:, 0], expected)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("allgather_cp", "expected_padding_rows"), [(False, (3, 3)), (True, (2, 4))])
+def test_routing_replay_padding_uses_post_cp_order_before_sp(monkeypatch, allgather_cp, expected_padding_rows):
+    routed_experts, tokens = _make_routing_replay_samples(3)
+
+    for cp_rank in range(2):
+        tp_outputs = []
+        for tp_rank in range(2):
+            _set_parallel_ranks(monkeypatch, cp_size=2, cp_rank=cp_rank, tp_size=2, tp_rank=tp_rank)
+            tp_outputs.append(
+                prepare_routed_experts_for_routing_replay(
+                    routed_experts,
+                    tokens,
+                    num_experts=8,
+                    data_pad_size_multiplier=1,
+                    sequence_parallel=True,
+                    allgather_cp=allgather_cp,
+                )
+            )
+
+        padding_rows = torch.cat(tp_outputs)
+        padding_rows = padding_rows[~(padding_rows == 7).all(dim=(1, 2))]
+        expected = torch.arange(expected_padding_rows[cp_rank] * 2, dtype=torch.int32).reshape((-1, 2))
+        torch.testing.assert_close(padding_rows[:, 0], expected)
 
 
 @pytest.mark.unit

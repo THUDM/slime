@@ -236,19 +236,11 @@ def slice_log_prob_with_cp(
         return torch.cat([chunk_1, chunk_2], dim=0)
 
 
-def _pad_routed_experts(experts: torch.Tensor, pad: int, num_experts: int) -> torch.Tensor:
+def _pad_routed_experts(experts: torch.Tensor, pad: int) -> torch.Tensor:
+    """Mark padding until the final context-parallel layout is known."""
     if pad == 0:
         return experts
-    _, num_layers, topk = experts.shape
-    pad_experts = (
-        torch.arange(
-            pad * num_layers * topk,
-            device=experts.device,
-            dtype=experts.dtype,
-        ).reshape((pad, num_layers, topk))
-        % num_experts
-    )
-    return torch.cat([experts, pad_experts], dim=0)
+    return F.pad(experts, (0, 0, 0, 0, 0, pad), value=-1)
 
 
 def prepare_routed_experts_for_routing_replay(
@@ -265,7 +257,7 @@ def prepare_routed_experts_for_routing_replay(
     for experts, token_ids in zip(rollout_routed_experts, tokens, strict=False):
         assert experts.shape[0] == token_ids.shape[0] - 1, f"{experts.shape}, {token_ids.shape}"
 
-    padded_experts = [_pad_routed_experts(experts, 1, num_experts) for experts in rollout_routed_experts]
+    padded_experts = [_pad_routed_experts(experts, 1) for experts in rollout_routed_experts]
     pad_size = mpu.get_tensor_model_parallel_world_size() * data_pad_size_multiplier
 
     if allgather_cp:
@@ -274,16 +266,35 @@ def prepare_routed_experts_for_routing_replay(
         cp_rank = mpu.get_context_parallel_rank()
         global_pad_size = cp_size * pad_size
         pad = (global_pad_size - routed_experts.size(0) % global_pad_size) % global_pad_size
-        routed_experts = _pad_routed_experts(routed_experts, pad, num_experts)
+        routed_experts = _pad_routed_experts(routed_experts, pad)
         routed_experts = routed_experts.chunk(cp_size, dim=0)[cp_rank]
     else:
-        routed_experts = [
-            slice_with_cp(experts, lambda x, pad: _pad_routed_experts(x, pad, num_experts))
-            for experts in padded_experts
-        ]
+        routed_experts = [slice_with_cp(experts, _pad_routed_experts) for experts in padded_experts]
         routed_experts = torch.cat(routed_experts, dim=0)
         pad = (pad_size - routed_experts.size(0) % pad_size) % pad_size
-        routed_experts = _pad_routed_experts(routed_experts, pad, num_experts)
+        routed_experts = _pad_routed_experts(routed_experts, pad)
+
+    # Number only the pad rows that survive CP slicing; SP partitions these
+    # assignments without changing them. Padding marks the whole row, so one
+    # element is sufficient to identify it.
+    padding_rows = (routed_experts[:, 0, 0] == -1).nonzero().flatten()
+    if padding_rows.numel():
+        _, num_layers, topk = routed_experts.shape
+        ep_size = mpu.get_expert_model_parallel_world_size()
+        assert num_experts % ep_size == 0, f"{num_experts=}, {ep_size=}"
+        assert topk <= num_experts, f"{topk=}, {num_experts=}"
+        experts_per_rank = num_experts // ep_size
+
+        pad_ordinal = torch.arange(padding_rows.numel(), device=routed_experts.device, dtype=torch.int64).reshape(
+            (-1, 1, 1)
+        )
+        layer = torch.arange(num_layers, device=routed_experts.device, dtype=torch.int64).reshape((1, num_layers, 1))
+        column = torch.arange(topk, device=routed_experts.device, dtype=torch.int64).reshape((1, 1, topk))
+        assignment = (pad_ordinal + layer * ep_size) * topk + column
+        expert_rank = assignment.remainder(ep_size)
+        local_expert = assignment.div(ep_size, rounding_mode="floor").remainder(experts_per_rank)
+        pad_experts = expert_rank * experts_per_rank + local_expert
+        routed_experts[padding_rows] = pad_experts.to(routed_experts.dtype)
 
     if sequence_parallel:
         tp_rank = mpu.get_tensor_model_parallel_rank()
