@@ -553,6 +553,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--update-weight-max-inflight-engine-groups",
+                type=int,
+                default=0,
+                help=(
+                    "Maximum number of rollout engine groups that may receive or load one weight bucket "
+                    "concurrently. 0 keeps the existing all-at-once behavior."
+                ),
+            )
+            parser.add_argument(
                 "--rollout-data-postprocess-path",
                 type=str,
                 default=None,
@@ -2102,6 +2111,8 @@ def slime_validate_args(args):
             "--update-weight-transport=disk requires --update-weight-disk-dir to point at "
             "a filesystem shared between the trainer and the rollout engines."
         )
+    if args.update_weight_max_inflight_engine_groups < 0:
+        raise ValueError("--update-weight-max-inflight-engine-groups must be non-negative.")
     if args.release_train:
         if args.use_critic:
             raise ValueError("--release-train does not support critic training yet.")
