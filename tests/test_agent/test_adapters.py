@@ -14,8 +14,10 @@ removed symbols and a dropped ``/v1/responses`` endpoint).
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -400,6 +402,98 @@ def test_max_turns_per_sid_returns_429():
         assert second.status == 429
 
     asyncio.run(run_case())
+
+
+def test_finish_session_drains_request_admitted_before_shutdown(monkeypatch):
+    from slime.agent.adapters import common
+
+    sid = "sid-shutdown-race"
+    admission_paused = threading.Event()
+    release_admission = threading.Event()
+    shutdown_at_boundary = threading.Event()
+
+    class ObservedLock:
+        """Signal when shutdown contends with the paused admission."""
+
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+
+        def __enter__(self):
+            if self._lock.locked():
+                shutdown_at_boundary.set()
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, *exc) -> None:
+            self._lock.release()
+
+    class ObservedInflight(dict):
+        """On the unfixed code, signal after shutdown takes its empty snapshot."""
+
+        def pop(self, key, default=None):
+            value = super().pop(key, default)
+            shutdown_at_boundary.set()
+            return value
+
+    class Request:
+        headers = {"Authorization": f"Bearer {sid}"}
+
+        async def json(self) -> dict:
+            return {"model": "m", "messages": [{"role": "user", "content": "hi"}]}
+
+    async def generate(prompt_ids, session, body, *, adapter, session_id=None):
+        return common.TurnRecord(
+            prompt_ids=list(prompt_ids),
+            output_ids=[901],
+            finish_reason="stop",
+            output_log_probs=[-0.1],
+        )
+
+    tok = FakeTokenizer(outputs={(901,): "done"})
+    adapter = openai.OpenAIAdapter(tokenizer=tok, sglang_url="http://unused")
+    adapter.open_session(sid)
+    adapter._session_lock = ObservedLock()
+    adapter.inflight = ObservedInflight()
+    monkeypatch.setattr(common, "call_sglang_generate", generate)
+
+    def pause_after_closed_check(_sid):
+        admission_paused.set()
+        assert release_admission.wait(timeout=5), "test did not release request admission"
+        return None
+
+    adapter._check_turn_cap = pause_after_closed_check
+
+    request_loop = asyncio.new_event_loop()
+    loop_started = threading.Event()
+
+    def run_request_loop():
+        asyncio.set_event_loop(request_loop)
+        loop_started.set()
+        request_loop.run_forever()
+
+    loop_thread = threading.Thread(target=run_request_loop)
+    loop_thread.start()
+    assert loop_started.wait(timeout=5), "request loop did not start"
+    try:
+        request_future = asyncio.run_coroutine_threadsafe(adapter._run_turn(Request()), request_loop)
+        assert admission_paused.wait(timeout=5), "request did not reach the admission barrier"
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            finish_future = pool.submit(
+                asyncio.run,
+                adapter.finish_session(sid, base_sample=Sample(index=0, prompt=""), reward=1.0),
+            )
+            assert shutdown_at_boundary.wait(timeout=5), "shutdown did not reach the admission boundary"
+            release_admission.set()
+            response = request_future.result(timeout=5)
+            samples = finish_future.result(timeout=5)
+    finally:
+        release_admission.set()
+        request_loop.call_soon_threadsafe(request_loop.stop)
+        loop_thread.join(timeout=5)
+        request_loop.close()
+
+    assert response.status == 200
+    assert samples, "a request admitted before shutdown must be included in the drained trajectory"
 
 
 def test_mid_list_system_folds_into_user():

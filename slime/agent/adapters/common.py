@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -156,6 +157,9 @@ class BaseAdapter:
         self.store: dict[str, Any] = {}
         self.inflight: dict[str, set[asyncio.Task]] = {}
         self.closed: set[str] = set()
+        # Handlers and shutdown run on different event-loop threads. Keep the
+        # closed check and inflight snapshot atomic; never await while held.
+        self._session_lock = threading.Lock()
         self.app = web.Application(client_max_size=64 * 1024 * 1024)
 
         # one manager shared across all sids; per-sid trees live inside it.
@@ -224,8 +228,9 @@ class BaseAdapter:
 
     async def shutdown_session(self, sid: str, *, wait_timeout: float = 5.0) -> None:
         """Mark a sid closed and drain its in-flight turn tasks."""
-        self.closed.add(sid)
-        tasks = [t for t in self.inflight.pop(sid, ()) if not t.done()]
+        with self._session_lock:
+            self.closed.add(sid)
+            tasks = [t for t in self.inflight.pop(sid, ()) if not t.done()]
         if not tasks:
             return
 
@@ -325,17 +330,18 @@ class BaseAdapter:
         body = await request.json()
         self._preprocess_body(body)
         sid = self._session_id(request, body)
-        if sid in self.closed:  # session drained; refuse stragglers
-            self.logger.debug("[%s] sid=%s request after session closed", self.log_prefix, sid)
-            return web.Response(status=503, text="session closed")
-        capped = self._check_turn_cap(sid)
-        if capped is not None:
-            return capped
+        task = asyncio.current_task()
+        with self._session_lock:
+            if sid in self.closed:  # session drained; refuse stragglers
+                self.logger.debug("[%s] sid=%s request after session closed", self.log_prefix, sid)
+                return web.Response(status=503, text="session closed")
+            capped = self._check_turn_cap(sid)
+            if capped is not None:
+                return capped
+            s = self.store.setdefault(sid, Session())
+            self.inflight.setdefault(sid, set()).add(task)
 
         tok = self.tokenizer
-        s = self.store.setdefault(sid, Session())
-        task = asyncio.current_task()
-        self.inflight.setdefault(sid, set()).add(task)
         t0 = time.monotonic()
         try:
             translated, tools_schema = self._translate(body)
@@ -390,7 +396,8 @@ class BaseAdapter:
             )
             return response
         finally:
-            self.inflight.get(sid, set()).discard(task)
+            with self._session_lock:
+                self.inflight.get(sid, set()).discard(task)
 
 
 def sid_from_bearer(request: web.Request) -> str | None:
