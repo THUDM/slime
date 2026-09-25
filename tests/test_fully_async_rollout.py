@@ -47,7 +47,6 @@ from slime.rollout.filter_hub.base_types import DynamicFilterOutput
 from slime.utils.staleness import compute_staleness_metrics, sample_staleness
 from slime.utils.types import Sample
 
-
 NUM_GPUS = 0
 
 
@@ -230,6 +229,37 @@ def test_loop_backpressure_stops_topping_up_when_queue_is_full(monkeypatch):
     # In-flight tasks may still land after the gate check, so allow one pool
     # beyond the gate — but nothing near the unthrottled fuel size.
     assert 0 < max_seen <= 2 * concurrency, f"queue grew to {max_seen} with concurrency={concurrency}"
+
+
+@pytest.mark.unit
+def test_worker_loop_cleans_up_remote_rm_session(monkeypatch):
+    worker = _make_worker(monkeypatch)
+    worker.running = False
+    cleaned = []
+
+    async def cleanup():
+        cleaned.append(asyncio.get_running_loop())
+
+    monkeypatch.setattr(fa, "cleanup_remote_rm_session", cleanup)
+
+    asyncio.run(worker._loop())
+
+    assert len(cleaned) == 1
+
+
+@pytest.mark.unit
+def test_worker_stop_surfaces_remote_rm_cleanup_failure(monkeypatch):
+    worker = _make_worker(monkeypatch)
+    worker.running = False
+
+    async def cleanup():
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(fa, "cleanup_remote_rm_session", cleanup)
+    worker.start()
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        worker.stop()
 
 
 if __name__ == "__main__":
