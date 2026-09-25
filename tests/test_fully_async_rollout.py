@@ -189,7 +189,7 @@ def test_done_callback_never_blocks_event_loop_thread(monkeypatch):
 
     def _push_all():
         for gid in range(1001):
-            worker._make_done_cb(gid)(_DoneTask(gid))
+            worker._make_done_cb(gid, _make_group(gid))(_DoneTask(gid))
 
     pusher = threading.Thread(target=_push_all, daemon=True)
     pusher.start()
@@ -197,6 +197,58 @@ def test_done_callback_never_blocks_event_loop_thread(monkeypatch):
 
     assert not pusher.is_alive(), "done-callback blocked on a full output queue"
     assert worker.queue_size() == 1001
+
+
+@pytest.mark.unit
+def test_done_callback_requeues_original_group_for_nested_aborted_result(monkeypatch):
+    data_buffer = _FakeDataBuffer([])
+    worker = _make_worker(monkeypatch, data_buffer=data_buffer)
+    original_group = [Sample(index=7, prompt="original")]
+    result = [
+        [Sample(index=7, status=Sample.Status.ABORTED)],
+        [Sample(index=8, status=Sample.Status.COMPLETED)],
+    ]
+
+    class _DoneTask:
+        def result(self):
+            return result
+
+    worker._make_done_cb(3, original_group)(_DoneTask())
+
+    assert worker.queue_size() == 0
+    assert data_buffer.requeued == [original_group]
+    assert data_buffer.requeued[0] is original_group
+
+
+@pytest.mark.unit
+def test_loop_snapshots_input_group_before_generation_mutates_it(monkeypatch):
+    original_sample = Sample(index=7, prompt="original")
+    data_buffer = _FakeDataBuffer([[original_sample]])
+
+    async def _mutating_generate(args, group, sampling_params, evaluation):
+        group[0].status = Sample.Status.ABORTED
+        group[0].response = "partial"
+        group[0].tokens.append(42)
+        return [[group[0]]]
+
+    monkeypatch.setattr(fa, "generate_and_rm_group", _mutating_generate)
+    worker = _make_worker(monkeypatch, data_buffer=data_buffer, concurrency=1)
+    worker.poll_interval = 0.01
+
+    worker.start()
+    try:
+        deadline = time.time() + 3.0
+        while not data_buffer.requeued and time.time() < deadline:
+            time.sleep(0.01)
+    finally:
+        worker.stop()
+
+    assert len(data_buffer.requeued) == 1
+    retry_sample = data_buffer.requeued[0][0]
+    assert retry_sample is not original_sample
+    assert retry_sample.status == Sample.Status.PENDING
+    assert retry_sample.response == ""
+    assert retry_sample.tokens == []
 
 
 @pytest.mark.unit
