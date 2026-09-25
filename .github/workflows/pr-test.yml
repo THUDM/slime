@@ -603,6 +603,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "utils/test_sglang_config_validation.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_dp_schedule.py"
             },
             {

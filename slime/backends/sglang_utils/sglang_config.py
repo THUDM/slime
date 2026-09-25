@@ -67,7 +67,9 @@ class ModelConfig:
 
     def resolve(self, args) -> None:
         """Resolve per-group defaults from model-level then args-level values."""
-        default_gpus_per_engine = self.num_gpus_per_engine or args.rollout_num_gpus_per_engine
+        default_gpus_per_engine = (
+            self.num_gpus_per_engine if self.num_gpus_per_engine is not None else args.rollout_num_gpus_per_engine
+        )
         default_model_path = self.model_path or args.hf_checkpoint
         for g in self.server_groups:
             if g.num_gpus_per_engine is None:
@@ -154,6 +156,74 @@ class SglangConfig:
 
     models: list[ModelConfig]
 
+    def resolve(self, args) -> None:
+        """Resolve every model, then validate whole-config invariants."""
+        for model in self.models:
+            model.resolve(args)
+
+        seen_names = set()
+        for model in self.models:
+            if model.name in seen_names:
+                raise ValueError(f"Duplicate model name '{model.name}'")
+            seen_names.add(model.name)
+            for group_index, group in enumerate(model.server_groups):
+                if group.worker_type == "placeholder":
+                    continue
+                if group.num_gpus_per_engine is None or group.num_gpus_per_engine <= 0:
+                    raise ValueError(
+                        f"Model '{model.name}' server group {group_index} ({group.worker_type}) has invalid "
+                        f"num_gpus_per_engine={group.num_gpus_per_engine}; must be > 0"
+                    )
+                if group.num_gpus % group.num_gpus_per_engine != 0:
+                    raise ValueError(
+                        f"Model '{model.name}' server group {group_index} ({group.worker_type}) has "
+                        f"num_gpus={group.num_gpus}, which is not divisible by "
+                        f"num_gpus_per_engine={group.num_gpus_per_engine}"
+                    )
+                if args.num_gpus_per_node <= 0:
+                    raise ValueError(
+                        f"Model '{model.name}' server group {group_index} ({group.worker_type}) has invalid "
+                        f"num_gpus_per_node={args.num_gpus_per_node}; must be > 0"
+                    )
+                if (
+                    group.num_gpus_per_engine > args.num_gpus_per_node
+                    and group.num_gpus_per_engine % args.num_gpus_per_node != 0
+                ):
+                    raise ValueError(
+                        f"Model '{model.name}' server group {group_index} ({group.worker_type}) has "
+                        f"num_gpus_per_engine={group.num_gpus_per_engine}, which is not divisible by "
+                        f"num_gpus_per_node={args.num_gpus_per_node}"
+                    )
+                overrides = {key.replace("-", "_"): value for key, value in group.overrides.items()}
+                pp_size = int(overrides.get("pp_size", args.sglang_pp_size))
+                if pp_size <= 0:
+                    raise ValueError(
+                        f"Model '{model.name}' server group {group_index} ({group.worker_type}) has invalid "
+                        f"pp_size={pp_size}; must be > 0"
+                    )
+                if group.num_gpus_per_engine % pp_size != 0:
+                    raise ValueError(
+                        f"Model '{model.name}' server group {group_index} ({group.worker_type}) has "
+                        f"num_gpus_per_engine={group.num_gpus_per_engine}, which is not divisible by pp_size={pp_size}"
+                    )
+                if "tp_size" in overrides:
+                    tp_size = int(overrides["tp_size"])
+                    if tp_size <= 0:
+                        raise ValueError(
+                            f"Model '{model.name}' server group {group_index} ({group.worker_type}) has invalid "
+                            f"tp_size={tp_size}; must be > 0"
+                        )
+                    if tp_size * pp_size != group.num_gpus_per_engine:
+                        raise ValueError(
+                            f"Model '{model.name}' server group {group_index} ({group.worker_type}) has "
+                            f"tp_size={tp_size} and pp_size={pp_size} require {tp_size * pp_size} GPUs, but "
+                            f"num_gpus_per_engine={group.num_gpus_per_engine}"
+                        )
+
+        updatable_models = [model.name for model in self.models if model.update_weights]
+        if len(updatable_models) > 1:
+            raise ValueError(f"At most one model may set update_weights=True; got: {', '.join(updatable_models)}")
+
     @staticmethod
     def from_yaml(path: str) -> "SglangConfig":
         with open(path) as f:
@@ -165,6 +235,15 @@ class SglangConfig:
         )
         models = []
         for m in data["sglang"]:
+            allowed_fields = {field.name for field in dataclasses.fields(ModelConfig)} | {"engine_groups"}
+            unknown_fields = sorted(set(m) - allowed_fields)
+            if unknown_fields:
+                model_name = m.get("name", "<unnamed>")
+                raise ValueError(f"Model '{model_name}' has unknown fields: {', '.join(unknown_fields)}")
+            if "server_groups" in m and "engine_groups" in m:
+                model_name = m.get("name", "<unnamed>")
+                raise ValueError(f"Model '{model_name}' cannot define both 'server_groups' and legacy 'engine_groups'")
+
             # Accept both "server_groups" and legacy "engine_groups".
             raw_groups = m.get("server_groups") or m.get("engine_groups") or []
             groups = [ServerGroupConfig(**g) for g in raw_groups]
