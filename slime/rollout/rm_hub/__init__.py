@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import random
+import threading
 
 import aiohttp
 
@@ -16,19 +17,40 @@ from .math_dapo_utils import compute_score as compute_score_dapo
 from .math_utils import extract_answer as extract_boxed_answer
 from .math_utils import grade_answer_verl
 
-_shared_session: aiohttp.ClientSession | None = None
+_shared_sessions: dict[asyncio.AbstractEventLoop, aiohttp.ClientSession] = {}
+_shared_sessions_lock = threading.Lock()
 
 
 def _get_shared_session() -> aiohttp.ClientSession:
-    global _shared_session
-    if _shared_session is None or _shared_session.closed:
-        connector = aiohttp.TCPConnector(
-            limit=64,
-            enable_cleanup_closed=True,
-        )
-        timeout = aiohttp.ClientTimeout(total=120)
-        _shared_session = aiohttp.ClientSession(connector=connector, timeout=timeout)
-    return _shared_session
+    loop = asyncio.get_running_loop()
+    with _shared_sessions_lock:
+        session = _shared_sessions.get(loop)
+        if session is None or session.closed:
+            connector = aiohttp.TCPConnector(
+                limit=64,
+                enable_cleanup_closed=True,
+            )
+            timeout = aiohttp.ClientTimeout(total=120)
+            session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+            _shared_sessions[loop] = session
+        return session
+
+
+async def cleanup_remote_rm_session() -> None:
+    """Close the remote-RM session owned by the current event loop."""
+    loop = asyncio.get_running_loop()
+    with _shared_sessions_lock:
+        session = _shared_sessions.get(loop)
+
+    if session is None:
+        return
+
+    if not session.closed:
+        await session.close()
+
+    with _shared_sessions_lock:
+        if _shared_sessions.get(loop) is session:
+            del _shared_sessions[loop]
 
 
 async def remote_rm(args, sample: Sample, max_retries: int = 10):

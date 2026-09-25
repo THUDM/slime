@@ -19,7 +19,9 @@ from slime.observability.rollout_data_utils import (
 )
 from slime.observability.rollout_metrics import log_eval_rollout_data, log_rollout_data
 from slime.rollout.base_types import call_rollout_fn
+from slime.rollout.rm_hub import cleanup_remote_rm_session
 from slime.rollout.sample_hooks import set_current_rollout_id
+from slime.utils.async_utils import run
 from slime.utils.data import get_source
 from slime.utils.dp_schedule import build_dp_schedule
 from slime.utils.health_monitor import RolloutHealthMonitor
@@ -119,11 +121,20 @@ class RolloutManager:
                 logger.warning(f"CI Fault Injection failed: {e}")
 
     def dispose(self):
-        for monitor in self._health_monitors:
-            monitor.stop()
-        for rollout_id in list(self._active_routed_experts_rollouts):
-            self.cleanup_rollout_data(rollout_id)
-        logging_utils.finish_tracking(self.args)
+        try:
+            try:
+                if fully_async_metrics_enabled(self.args):
+                    from slime.rollout.fully_async_rollout import _stop_global_worker
+
+                    _stop_global_worker()
+            finally:
+                run(cleanup_remote_rm_session())
+        finally:
+            for monitor in self._health_monitors:
+                monitor.stop()
+            for rollout_id in list(self._active_routed_experts_rollouts):
+                self.cleanup_rollout_data(rollout_id)
+            logging_utils.finish_tracking(self.args)
 
     def cleanup_rollout_data(self, rollout_id: int) -> None:
         from slime.utils.routed_experts import cleanup_routed_experts_rollout

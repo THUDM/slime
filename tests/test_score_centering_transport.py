@@ -74,6 +74,60 @@ def test_missing_sampler_metadata_rejected_by_manager(field):
         manager()._convert_samples_to_train_data(data)
 
 
+def test_dispose_stops_fully_async_worker_and_cleans_standard_loop_session(monkeypatch):
+    from slime.ray import rollout
+
+    events = []
+
+    async def cleanup():
+        events.append("cleanup")
+
+    fully_async = types.ModuleType("slime.rollout.fully_async_rollout")
+    fully_async._stop_global_worker = lambda: events.append("stop_worker")
+    monkeypatch.setitem(sys.modules, fully_async.__name__, fully_async)
+    monkeypatch.setattr(rollout, "cleanup_remote_rm_session", cleanup)
+    monkeypatch.setattr(rollout, "run", asyncio.run)
+    monkeypatch.setattr(rollout.logging_utils, "finish_tracking", lambda args: events.append("finish_tracking"))
+
+    rollout_manager = manager(rollout_function_path="slime.rollout.fully_async_rollout.generate_rollout_fully_async")
+    rollout_manager._health_monitors = []
+    rollout_manager._active_routed_experts_rollouts = set()
+
+    rollout_manager.dispose()
+
+    assert events == ["stop_worker", "cleanup", "finish_tracking"]
+
+
+def test_dispose_finishes_existing_teardown_when_remote_rm_cleanup_fails(monkeypatch):
+    from slime.ray import rollout
+
+    events = []
+    cleanup_error = RuntimeError("cleanup failed")
+
+    async def cleanup():
+        events.append("cleanup")
+        raise cleanup_error
+
+    class Monitor:
+        def stop(self):
+            events.append("stop_monitor")
+
+    monkeypatch.setattr(rollout, "cleanup_remote_rm_session", cleanup)
+    monkeypatch.setattr(rollout, "run", asyncio.run)
+    monkeypatch.setattr(rollout.logging_utils, "finish_tracking", lambda args: events.append("finish_tracking"))
+
+    rollout_manager = manager(rollout_function_path="slime.rollout.sglang_rollout.generate_rollout")
+    rollout_manager._health_monitors = [Monitor()]
+    rollout_manager._active_routed_experts_rollouts = {17}
+    rollout_manager.cleanup_rollout_data = lambda rollout_id: events.append(f"cleanup_rollout_{rollout_id}")
+
+    with pytest.raises(RuntimeError, match="cleanup failed") as exc_info:
+        rollout_manager.dispose()
+
+    assert exc_info.value is cleanup_error
+    assert events == ["cleanup", "stop_monitor", "cleanup_rollout_17", "finish_tracking"]
+
+
 def test_generate_requests_sampler_topk(monkeypatch):
     from slime.rollout import sglang_rollout as rollout
 

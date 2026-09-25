@@ -37,6 +37,7 @@ import time
 
 from slime.rollout.base_types import RolloutFnTrainOutput
 from slime.rollout.filter_hub.base_types import call_dynamic_filter
+from slime.rollout.rm_hub import cleanup_remote_rm_session
 from slime.rollout.sglang_rollout import GenerateState, generate_and_rm_group
 from slime.utils.async_utils import run
 from slime.utils.http_utils import get_rollout_num_engines
@@ -96,6 +97,7 @@ class AsyncRolloutWorker:
         self.output_queue: queue.Queue[tuple[int, list[Sample]]] = queue.Queue()
         self.poll_interval = 1.0
         self.worker_thread: threading.Thread | None = None
+        self._thread_error: Exception | None = None
         self.state = GenerateState(args)
 
     # -- public --------------------------------------------------------------
@@ -108,7 +110,11 @@ class AsyncRolloutWorker:
     def stop(self) -> None:
         self.running = False
         if self.worker_thread and self.worker_thread.is_alive():
-            self.worker_thread.join(timeout=5)
+            self.worker_thread.join(timeout=35)
+        if self.worker_thread and self.worker_thread.is_alive():
+            raise TimeoutError("fully-async rollout worker did not stop")
+        if self._thread_error is not None:
+            raise self._thread_error
 
     def get_completed_groups(self, limit: int | None = None) -> list[tuple[int, list[Sample]]]:
         """Pop up to ``limit`` completed groups (all of them when ``None``).
@@ -132,9 +138,18 @@ class AsyncRolloutWorker:
     # -- internals -----------------------------------------------------------
 
     def _thread_main(self) -> None:
-        asyncio.run(self._loop())
+        try:
+            asyncio.run(self._loop())
+        except Exception as e:  # noqa: BLE001
+            self._thread_error = e
 
     async def _loop(self) -> None:
+        try:
+            await self._run_loop()
+        finally:
+            await cleanup_remote_rm_session()
+
+    async def _run_loop(self) -> None:
         active_tasks: set[asyncio.Task] = set()
         max_concurrent = self.concurrency
         gid_counter = 0
