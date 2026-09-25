@@ -82,6 +82,7 @@ def start_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
         return start_external_rollout_servers(args, start_router=_start_router)
 
     config = resolve_sglang_config(args)
+    config.resolve(args)
     placement = ServerGroupPlacement(
         args=args,
         pg=pg,
@@ -93,8 +94,6 @@ def start_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
     pending_init_handles: list[Any] = []
 
     for model_idx, model_config in enumerate(config.models):
-        model_config.resolve(args)
-
         router_ip, router_port = _start_router(
             args,
             has_pd_disaggregation=model_config.has_pd_disaggregation,
