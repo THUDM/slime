@@ -17,6 +17,9 @@ from slime.utils.http_utils import get_host_info
 
 logger = logging.getLogger(__name__)
 
+_SERVER_HEALTH_CHECK_INTERVAL = 2.0
+_SERVER_HEALTH_CHECK_REQUEST_TIMEOUT = 5.0
+
 
 def get_base_gpu_id(args, rank):
     num_gpus = min(args.num_gpus_per_node, args.rollout_num_gpus_per_engine)
@@ -28,7 +31,7 @@ def get_base_gpu_id(args, rank):
     return start_index
 
 
-def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
+def launch_server_process(server_args: ServerArgs, startup_timeout=600) -> multiprocessing.Process:
     # Expandable segments help the colocated training actor tolerate repeated
     # cache releases, but SGLang's allocator/sleep path does not support them.
     # The rollout Ray actor inherits the job environment, so remove the option
@@ -55,34 +58,59 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
     if getattr(server_args, "node_rank", 0) != 0:
         return p
 
-    _wait_server_healthy(
-        base_url=server_args.url(),
-        api_key=server_args.api_key,
-        is_process_alive=lambda: p.is_alive(),
-    )
+    try:
+        _wait_server_healthy(
+            base_url=server_args.url(),
+            api_key=server_args.api_key,
+            is_process_alive=lambda: p.is_alive(),
+            startup_timeout=startup_timeout,
+        )
+    except BaseException:
+        try:
+            kill_process_tree(p.pid)
+        except Exception:
+            logger.exception("Failed to clean up SGLang server process tree with pid %s", p.pid)
+        raise
 
     return p
 
 
-def _wait_server_healthy(base_url, api_key, is_process_alive):
+def _wait_server_healthy(base_url, api_key, is_process_alive, startup_timeout=600):
     headers = {
         "Content-Type": "application/json; charset=utf-8",
         "Authorization": f"Bearer {api_key}",
     }
+    health_url = f"{base_url}/health_generate"
+    deadline = time.monotonic() + startup_timeout
+
+    def raise_timeout():
+        raise TimeoutError(f"SGLang server at {health_url} was not healthy after {startup_timeout:g} seconds.")
 
     with requests.Session() as session:
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise_timeout()
             try:
-                response = session.get(f"{base_url}/health_generate", headers=headers)
+                response = session.get(
+                    health_url,
+                    headers=headers,
+                    timeout=min(_SERVER_HEALTH_CHECK_REQUEST_TIMEOUT, remaining),
+                )
+                if time.monotonic() >= deadline:
+                    raise_timeout()
                 if response.status_code == 200:
                     break
             except requests.RequestException:
                 pass
 
             if not is_process_alive():
-                raise Exception("Server process terminated unexpectedly.")
+                raise RuntimeError(f"Server process terminated unexpectedly while waiting for {health_url}.")
 
-            time.sleep(2)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise_timeout()
+            time.sleep(min(_SERVER_HEALTH_CHECK_INTERVAL, remaining))
 
 
 class SGLangEngine(RayActor):
@@ -171,7 +199,10 @@ class SGLangEngine(RayActor):
 
     def _init_normal(self, server_args_dict):
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
-        self.process = launch_server_process(ServerArgs(**server_args_dict))
+        self.process = launch_server_process(
+            ServerArgs(**server_args_dict),
+            startup_timeout=self.args.sglang_server_startup_timeout,
+        )
         self._register_to_router(server_args_dict)
 
     def _register_to_router(self, server_args_dict):
