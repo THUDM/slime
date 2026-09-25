@@ -117,6 +117,32 @@ def _get_placement_group_layout(args) -> tuple[int, int]:
     return actor_num_gpus + args.rollout_num_gpus, actor_num_gpus
 
 
+def _resolve_start_rollout_id(
+    actor_start_rollout_ids,
+    critic_start_rollout_ids=None,
+    requested_start_rollout_id=None,
+    allow_fresh_start=False,
+):
+    if len(set(actor_start_rollout_ids)) != 1:
+        raise ValueError(f"Inconsistent actor start rollout IDs across ranks: {actor_start_rollout_ids}")
+    if critic_start_rollout_ids is not None and len(set(critic_start_rollout_ids)) != 1:
+        raise ValueError(f"Inconsistent critic start rollout IDs across ranks: {critic_start_rollout_ids}")
+    start_rollout_id = actor_start_rollout_ids[0]
+    if critic_start_rollout_ids is not None and start_rollout_id != critic_start_rollout_ids[0]:
+        raise ValueError(
+            f"Actor/critic start rollout ID mismatch: actor={start_rollout_id}, critic={critic_start_rollout_ids[0]}"
+        )
+    # Fresh HF/ref models report start ID 1; argument validation uses 0 as the fresh-start sentinel.
+    if allow_fresh_start and requested_start_rollout_id == 0 and start_rollout_id == 1:
+        return 0
+    if requested_start_rollout_id is not None and requested_start_rollout_id != start_rollout_id:
+        loaded_ids = f"actor={start_rollout_id}"
+        if critic_start_rollout_ids is not None:
+            loaded_ids += f", critic={critic_start_rollout_ids[0]}"
+        raise ValueError(f"Requested start rollout ID mismatch: requested={requested_start_rollout_id}, {loaded_ids}")
+    return start_rollout_id
+
+
 def create_placement_groups(args):
     """Create placement groups for actor, critic, and rollout engines."""
 
@@ -187,6 +213,7 @@ def create_training_models(args, pgs, rollout_manager, actor_cls=None):
     actor_model, actor_start_rollout_ids = create_actor_model(args, pgs, rollout_manager, actor_cls=actor_cls)
 
     critic_model = None
+    critic_start_rollout_ids = None
     if args.use_critic and args.num_rollout != 0:
         from slime.utils.arguments import parse_megatron_role_args
 
@@ -207,16 +234,19 @@ def create_training_models(args, pgs, rollout_manager, actor_cls=None):
         )
         critic_start_rollout_ids = critic_model.create(rollout_manager=rollout_manager)
 
-    # TODO how to decide rollout start id when critic is involved? For now we just require user to specify it via args.
-    if critic_model is not None:
-        start_rollout_ids = critic_start_rollout_ids
-    else:
-        start_rollout_ids = actor_start_rollout_ids
-
-    assert len(set(start_rollout_ids)) == 1
-
-    if args.start_rollout_id is None:
-        args.start_rollout_id = start_rollout_ids[0]
+    requested_start_rollout_id = args.start_rollout_id
+    debug_rollout_only = getattr(args, "debug_rollout_only", False)
+    loaded_start_rollout_id = _resolve_start_rollout_id(
+        actor_start_rollout_ids,
+        critic_start_rollout_ids=critic_start_rollout_ids,
+        requested_start_rollout_id=None if debug_rollout_only else requested_start_rollout_id,
+        allow_fresh_start=getattr(args, "finetune", False),
+    )
+    args.start_rollout_id = (
+        requested_start_rollout_id
+        if debug_rollout_only and requested_start_rollout_id is not None
+        else loaded_start_rollout_id
+    )
 
     ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
 
