@@ -26,6 +26,7 @@ checkpoint required. The code under test stays real; only these edges are faked:
 from __future__ import annotations
 
 import re
+import shlex
 from collections.abc import Awaitable, Callable
 
 from aiohttp import web
@@ -299,10 +300,8 @@ def _as_str(v: str | bytes) -> str:
 
 
 def _done_path_from_launch(cmd: str) -> str | None:
-    """Recover the exit-code marker path from a ``setsid bash {launcher}`` command
-    so the subsequent poll matches. ``sandbox.exec_and_wait`` names the launcher
-    ``/tmp/.{tag}.sh`` and its sibling marker ``/tmp/.{tag}.done``."""
-    m = re.search(r"setsid bash (\S+)\.sh\b", cmd)
-    if m:
-        return f"{m.group(1)}.done"
+    """Recover the launcher sibling's done-marker path from a setsid command."""
+    launcher = next((token for token in shlex.split(cmd) if token.endswith(".sh")), None)
+    if launcher:
+        return f"{launcher.removesuffix('.sh')}.done"
     return None
