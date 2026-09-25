@@ -19,6 +19,7 @@ from slime.utils.ppo_utils import (
     compute_gspo_kl,
     compute_opsm_mask,
     compute_policy_loss,
+    compute_reinforce_loss,
     get_advantages_and_returns_batch,
     get_grpo_returns,
     get_pg_loss_type,
@@ -712,7 +713,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
 
     This function extracts rewards, log-probs, values, and masks from
     `rollout_data`, computes KL divergences, then applies the chosen advantage
-    estimator. Supported methods: "grpo", "gspo", "cispo", "ppo",
+    estimator. Supported methods: "grpo", "gspo", "cispo", "reinforce", "ppo",
     "reinforce_plus_plus", and "reinforce_plus_plus_baseline". When
     `args.normalize_advantages` is True, advantages are whitened across the
     data-parallel-with-context-parallel group using masked statistics.
@@ -766,7 +767,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         custom_adv_fn(args, rollout_data)
         advantages, returns = rollout_data["advantages"], rollout_data["returns"]
 
-    elif args.advantage_estimator in ["grpo", "gspo", "cispo"]:
+    elif args.advantage_estimator in ["grpo", "gspo", "cispo", "reinforce"]:
         rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
         returns = get_grpo_returns(rewards, kl)
         # TODO: is the copy necessary?
@@ -1190,6 +1191,8 @@ def policy_loss_function(
         pg_clipfrac = torch.zeros_like(log_probs)
     elif pg_loss_type == "cispo":
         pg_loss, pg_clipfrac = compute_cispo_loss(ppo_kl, log_probs, advantages, args.eps_clip, args.eps_clip_high)
+    elif args.advantage_estimator == "reinforce":
+        pg_loss, pg_clipfrac = compute_reinforce_loss(advantages, log_probs)
     else:
         pg_loss, pg_clipfrac = compute_policy_loss(
             ppo_kl,
