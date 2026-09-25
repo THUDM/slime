@@ -23,6 +23,7 @@ from slime.utils import accelerator
 from slime.utils.disk_delta import NUM_WORKERS, checksum, make_tensor_reader, overwrite_encode
 from slime.utils.distributed_utils import get_gloo_group
 
+from ..hf_checkpoint_saver import save_hf_model_to_path
 from .update_weight_from_distributed import UpdateWeightFromDistributed
 
 logger = logging.getLogger(__name__)
@@ -82,14 +83,23 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
 
     @torch.no_grad()
     def update_weights(self) -> None:
-        # The first call only captures the baseline snapshot the next sync diffs against.
+        # A fresh finetune starts from hf_checkpoint, so its first call only captures the baseline.
+        # A resumed Megatron checkpoint may differ, so publish its current actor before rollout.
         if not self._baseline_captured:
-            self._capture_baseline()
+            if self.args.finetune:
+                self._capture_baseline()
+            else:
+                self.weight_version += 1
+                self._publish_full_baseline()
+                self._commit_published_files()
+                self._capture_snapshot(self._version_dir)
+                self._reload_engines()
             self._baseline_captured = True
             return
 
         self.weight_version += 1
         self._publish()
+        self._commit_published_files()
         self._reload_engines()
         self._record_metrics()
 
@@ -110,13 +120,7 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
             pulls = [engine.pull_weights.remote(target_version=0) for engine in self.rollout_engines]
         dist.barrier(group=get_gloo_group())
 
-        read_hf = make_tensor_reader(self.args.hf_checkpoint)  # index the HF headers once
-        for name, tensor in self._iter_hf_tensors():
-            try:
-                self._snapshot[name] = read_hf(name)
-            except KeyError:
-                self._snapshot[name] = tensor.detach().cpu().contiguous().view(torch.uint8).numpy().reshape(-1)
-                logger.warning("seed: %s absent from hf_checkpoint; seeding from current weights", name)
+        self._capture_snapshot(self.args.hf_checkpoint)
         if dist.get_rank() == 0:
             ray.get(pulls)
             logger.info(
@@ -124,6 +128,32 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
                 len(self._snapshot),
                 self.args.hf_checkpoint,
             )
+
+    def _publish_full_baseline(self) -> None:
+        """Publish resumed actor weights as a full checkpoint."""
+        self._version_dir = os.path.join(self.delta_dir, f"weight_v{self.weight_version:06d}")
+        if dist.get_rank() == 0:
+            shutil.rmtree(self.delta_dir, ignore_errors=True)
+        dist.barrier(group=get_gloo_group())
+        os.makedirs(self._version_dir, exist_ok=True)
+        save_hf_model_to_path(
+            self.args,
+            self._version_dir,
+            self.model,
+            model_name=self.model_name,
+            quantization_config=self.quantization_config,
+            progress_desc="Save resumed actor baseline for disk delta sync",
+        )
+        dist.barrier(group=get_gloo_group())
+
+    def _capture_snapshot(self, checkpoint: str) -> None:
+        read_hf = make_tensor_reader(checkpoint)  # index the HF headers once
+        for name, tensor in self._iter_hf_tensors():
+            try:
+                self._snapshot[name] = read_hf(name)
+            except KeyError:
+                self._snapshot[name] = tensor.detach().cpu().contiguous().view(torch.uint8).numpy().reshape(-1)
+                logger.warning("seed: %s absent from %s; seeding from current weights", name, checkpoint)
 
     def _publish(self) -> None:
         """Encode this version's changed tensors (PP-src ranks), then write it as a canonical HF dir."""
@@ -168,12 +198,13 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
             _atomic_write(os.path.join(self._version_dir, "model.safetensors.index.json"), json.dumps(index).encode())
         dist.barrier(group=group)
 
-    def _reload_engines(self) -> None:
-        """Commit the published files, have each engine pull the delta onto every host it spans
-        (checksum-verified), then reload the engines."""
+    def _commit_published_files(self) -> None:
         if self._post_write_hook is not None:
             self._post_write_hook(self.args, self._version_dir, list(self.rollout_engines))
         dist.barrier(group=get_gloo_group())
+
+    def _reload_engines(self) -> None:
+        """Have each engine pull the published version onto every host, then reload the engines."""
         if dist.get_rank() == 0:
             ray.get([engine.pull_weights.remote(self.weight_version) for engine in self.rollout_engines])
             ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
