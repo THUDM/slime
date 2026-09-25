@@ -1,3 +1,4 @@
+import logging
 import os
 import shutil
 import time
@@ -8,6 +9,8 @@ from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
+
+logger = logging.getLogger(__name__)
 
 
 class RayTrainGroup:
@@ -124,9 +127,9 @@ class RayTrainGroup:
                     placement_group_bundle_index=reordered_bundle_indices[rank],
                 ),
             ).remote(world_size, rank, master_addr, master_port)
+            self._actor_handlers.append(actor)
             if rank == 0:
                 master_addr, master_port = ray.get(actor.get_master_addr_and_port.remote())
-            self._actor_handlers.append(actor)
 
     def async_train(self, rollout_id, rollout_data_ref, external_data=None):
         """Do one rollout training. Returns a list of Ray refs (one per worker).
@@ -191,21 +194,30 @@ class RayTrainGroup:
         if rollout_manager is not None:
             self._rollout_manager = rollout_manager
         self.args.update_weight_start_version = self._disk_weight_version
-        self._allocate_gpus_for_actor(self._pg, self._num_gpus_per_actor)
-        start_rollout_ids = ray.get(
-            [
-                actor.init.remote(
-                    self.args,
-                    self.role,
-                    with_ref=self._with_ref,
-                    with_opd_teacher=self._with_opd_teacher,
-                )
-                for actor in self._actor_handlers
-            ]
-        )
-        if self._rollout_manager is not None:
-            self.set_rollout_manager(self._rollout_manager)
-        return start_rollout_ids
+        try:
+            self._allocate_gpus_for_actor(self._pg, self._num_gpus_per_actor)
+            start_rollout_ids = ray.get(
+                [
+                    actor.init.remote(
+                        self.args,
+                        self.role,
+                        with_ref=self._with_ref,
+                        with_opd_teacher=self._with_opd_teacher,
+                    )
+                    for actor in self._actor_handlers
+                ]
+            )
+            if self._rollout_manager is not None:
+                self.set_rollout_manager(self._rollout_manager)
+            return start_rollout_ids
+        except Exception:
+            actors, self._actor_handlers = self._actor_handlers, []
+            for actor in actors:
+                try:
+                    ray.kill(actor, no_restart=True)
+                except Exception:
+                    logger.warning("Failed to kill actor during create rollback", exc_info=True)
+            raise
 
     def clear_memory(self):
         return ray.get([actor.clear_memory.remote() for actor in self._actor_handlers])

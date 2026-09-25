@@ -779,6 +779,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_actor_group_create.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_placement_group.py"
             },
             {
