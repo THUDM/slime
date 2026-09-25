@@ -29,7 +29,8 @@ REFERENCE_CUSTOM_GENERATE_WITH_EVAL_PATH = (
     "plugin_contracts.test_plugin_generate_contracts.custom_generate_with_evaluation"
 )
 
-from slime.rollout.sglang_rollout import generate_and_rm
+from slime.rollout import rm_hub
+from slime.rollout.sglang_rollout import generate_and_rm, generate_and_rm_group
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
 
@@ -197,6 +198,45 @@ def test_generate_and_rm_group_rm_accepts_list_result_from_custom_generate(patch
     assert isinstance(result, list)
     assert len(result) == 2
     assert all(isinstance(sample, Sample) for sample in result)
+
+
+def test_generate_and_rm_group_flattens_fanout_before_group_rm(patch_generate_state, monkeypatch):
+    sglang_rollout = patch_generate_state
+    rewarded_samples = []
+
+    async def custom_generate_list(args, sample: Sample, sampling_params: dict):
+        sample.status = Sample.Status.COMPLETED
+        sibling = Sample(index=1, prompt="prompt-1", status=Sample.Status.COMPLETED)
+        return [sample, sibling]
+
+    async def group_rm(args, samples):
+        assert all(isinstance(sample, Sample) for sample in samples)
+        rewarded_samples.extend(samples)
+        return [0.25, 0.75]
+
+    functions = {
+        "plugin_contracts.fake_generate": custom_generate_list,
+        "plugin_contracts.fake_group_rm": group_rm,
+    }
+    monkeypatch.setattr(sglang_rollout, "load_function", functions.__getitem__)
+    monkeypatch.setattr(rm_hub, "load_function", functions.__getitem__)
+
+    result = asyncio.run(
+        generate_and_rm_group(
+            make_args(
+                custom_generate_function_path="plugin_contracts.fake_generate",
+                custom_rm_path="plugin_contracts.fake_group_rm",
+                group_rm=True,
+            ),
+            [Sample(index=0, prompt="prompt-0")],
+            sampling_params={"temperature": 0.3},
+            evaluation=False,
+        )
+    )
+
+    assert [[sample.index for sample in item] for item in result] == [[0, 1]]
+    assert [sample.index for sample in rewarded_samples] == [0, 1]
+    assert [sample.reward for sample in rewarded_samples] == [0.25, 0.75]
 
 
 if __name__ == "__main__":

@@ -376,9 +376,10 @@ async def generate_and_rm_group(
 
     # for the rm that need the whole group, we will do the rm here
     if not state.aborted and args.group_rm:
-        with trace_span(group, "group_reward_model"):
-            rewards = await batched_async_rm(args, group)
-        for sample, reward in zip(group, rewards, strict=False):
+        reward_samples = [sample for item in group for sample in (item if isinstance(item, list) else [item])]
+        with trace_span(reward_samples, "group_reward_model"):
+            rewards = await batched_async_rm(args, reward_samples)
+        for sample, reward in zip(reward_samples, rewards, strict=False):
             sample.reward = reward
 
     return group
