@@ -18,14 +18,15 @@ import logging
 import time
 import uuid
 from collections.abc import Callable
+from functools import partial
 from typing import Any
 
 import aiohttp
 from aiohttp import web
 
+from slime.agent.adapters.tokenizer_worker import TokenizerWorker
 from slime.agent.parsing import parse_model_output
 from slime.agent.trajectory import TrajectoryManager, TurnRecord
-
 
 __all__ = ["TurnRecord"]
 
@@ -148,7 +149,11 @@ class BaseAdapter:
         max_turns_per_sid: int | None = None,
         fork_threshold_tokens: int | None = None,
         debug_callback: Callable[..., None] | None = None,
+        tokenizer_max_pending: int = 8,
+        event_loop_lag_interval_seconds: float = 0.1,
     ) -> None:
+        if event_loop_lag_interval_seconds <= 0:
+            raise ValueError("event_loop_lag_interval_seconds must be positive")
         self.tokenizer = tokenizer
         self.sglang_url = sglang_url.rstrip("/") if isinstance(sglang_url, str) else sglang_url
         self.tool_parser = tool_parser
@@ -157,6 +162,8 @@ class BaseAdapter:
         self.inflight: dict[str, set[asyncio.Task]] = {}
         self.closed: set[str] = set()
         self.app = web.Application(client_max_size=64 * 1024 * 1024)
+        self._tokenizer_worker = TokenizerWorker(max_pending=tokenizer_max_pending)
+        self._event_loop_lag_interval_seconds = event_loop_lag_interval_seconds
 
         # one manager shared across all sids; per-sid trees live inside it.
         # fork_threshold_tokens left None means the manager uses its own default.
@@ -170,9 +177,31 @@ class BaseAdapter:
         self.max_turns_per_sid: int | None = max_turns_per_sid
         self._sid_turn_count: dict[str, int] = {}
 
+        self.app.cleanup_ctx.append(self._tokenizer_lifecycle)
         self.app.router.add_get("/healthz", _health)
         self.app.router.add_get("/v1/models", _health)
+        self.app.router.add_get("/debug/adapter_metrics", self._metrics)
         self._register_routes(self.app)
+
+    async def _tokenizer_lifecycle(self, app: web.Application):
+        self._tokenizer_worker.bind_to_current_loop()
+        lag_task = asyncio.create_task(
+            self._tokenizer_worker.monitor_event_loop_lag(self._event_loop_lag_interval_seconds),
+            name=f"{self.log_prefix}-event-loop-lag",
+        )
+        try:
+            yield
+        finally:
+            lag_task.cancel()
+            await asyncio.gather(lag_task, return_exceptions=True)
+            await self._tokenizer_worker.close()
+
+    async def _metrics(self, request: web.Request) -> web.Response:
+        return web.json_response(self.metrics_snapshot())
+
+    def metrics_snapshot(self) -> dict[str, object]:
+        """Return bounded tokenizer and event-loop metrics for this adapter."""
+        return {"tokenizer": self._tokenizer_worker.snapshot()}
 
     # -- wire hooks (subclass overrides) -------------------------------------
 
@@ -305,6 +334,15 @@ class BaseAdapter:
         self._sid_turn_count[sid] = prior + 1
         return None
 
+    def _release_turn_cap(self, sid: str) -> None:
+        if self.max_turns_per_sid is None:
+            return
+        remaining = self._sid_turn_count.get(sid, 0) - 1
+        if remaining > 0:
+            self._sid_turn_count[sid] = remaining
+        else:
+            self._sid_turn_count.pop(sid, None)
+
     def _run_debug_callback(self, sid, translated, tools_schema, manager_message, turn) -> None:
         """Run the optional debug-only data dump callback; unset in production."""
         callback = self.debug_callback
@@ -333,14 +371,31 @@ class BaseAdapter:
             return capped
 
         tok = self.tokenizer
-        s = self.store.setdefault(sid, Session())
         task = asyncio.current_task()
         self.inflight.setdefault(sid, set()).add(task)
         t0 = time.monotonic()
         try:
+            # shutdown_session can run from the rollout thread between the
+            # initial guard and inflight registration. Recheck after the task is
+            # visible so a drained sid cannot start tokenizer or SGLang work.
+            if sid in self.closed:
+                self._release_turn_cap(sid)
+                return web.Response(status=503, text="session closed")
             translated, tools_schema = self._translate(body)
-            prompt_ids = _render_token_ids(translated, tok, tools=tools_schema, add_generation_prompt=True)
+            prompt_ids = await self._tokenizer_worker.render(
+                partial(
+                    _render_token_ids,
+                    translated,
+                    tok,
+                    tools=tools_schema,
+                    add_generation_prompt=True,
+                )
+            )
+            if sid in self.closed:
+                self._release_turn_cap(sid)
+                return web.Response(status=503, text="session closed")
 
+            s = self.store.setdefault(sid, Session())
             turn = await call_sglang_generate(prompt_ids, s, body, adapter=self, session_id=sid)
 
             raw_output = tok.decode(turn.output_ids, skip_special_tokens=False) if turn.output_ids else ""
@@ -389,6 +444,10 @@ class BaseAdapter:
                 metadata={"sid": sid},
             )
             return response
+        except asyncio.CancelledError:
+            self._release_turn_cap(sid)
+            self._tokenizer_worker.record_request_cancellation()
+            raise
         finally:
             self.inflight.get(sid, set()).discard(task)
 
