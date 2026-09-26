@@ -731,6 +731,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_data_source.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_fully_async_rollout.py"
             },
             {
