@@ -201,6 +201,17 @@ def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer)
     # plateau slightly early or late. Pass ``--lr-decay-iters`` explicitly if you
     # need exact decay control.
     args.train_iters = args.num_rollout * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+    if args.train_iters == 0:
+        total_samples = args.num_rollout * args.rollout_batch_size * args.n_samples_per_prompt
+        raise ValueError(
+            f"computed train_iters is 0: num_rollout ({args.num_rollout}) * "
+            f"rollout_batch_size ({args.rollout_batch_size}) * "
+            f"n_samples_per_prompt ({args.n_samples_per_prompt}) = {total_samples} < "
+            f"global_batch_size ({args.global_batch_size}). "
+            "The optimizer LR schedule needs at least one training step; "
+            "increase num_rollout, rollout_batch_size, or n_samples_per_prompt, "
+            "or decrease global_batch_size."
+        )
     if args.lr_decay_iters is None:
         args.lr_decay_iters = args.train_iters
     lr_decay_steps = args.lr_decay_iters * args.global_batch_size
