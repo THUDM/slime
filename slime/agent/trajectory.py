@@ -129,7 +129,7 @@ def _common_prefix_len(a: list[int], b: list[int], chunk: int = 4096) -> int:
 
 class DriftKind(enum.Enum):
     CLEAN = "clean"  # drift == 0: prompt_ids exactly extends held tokens; append the tail beyond them
-    REALIGN = "realign"  # drift inside the most-recent response span and short incoming response; replace that span (loss_mask=0)
+    REALIGN = "realign"  # short prev-response + short incoming output; overwrite from the divergence (loss_mask=0)
     FORK = "fork"  # everything else: close this builder, open a fresh one as a fork
 
 
@@ -149,8 +149,10 @@ class _SampleBuilder:
     the prompt diverges from the held tokens (see :meth:`classify_token_drift`):
 
     * **CLEAN** -- no drift; append the prompt tail beyond what we hold.
-    * **REALIGN** -- a short divergence inside the most-recent response span;
-      overwrite that span from the prompt as loss_mask=0 and keep accumulating.
+    * **REALIGN** -- divergence inside the most-recent response span, and both
+      that previous response and this turn's ``output_ids`` are shorter than
+      ``fork_threshold``; overwrite from the divergence as loss_mask=0 and keep
+      accumulating. Tokens before the split keep their existing loss_mask.
     * **FORK** -- divergence too large or too early to absorb; this builder is
       rejected and the caller closes it and opens a fresh one. That boundary is
       the "fork".
@@ -172,10 +174,14 @@ class _SampleBuilder:
         The incoming turn's prompt is expected to match the tokens this builder
         already holds as an exact prefix. When token drift has occurred -- the
         prompt diverges from the held tokens -- we decide whether to REALIGN
-        (heal a short divergence inside the most-recent response span) or to FORK
-        (``len(turn.output_ids) >= fork_threshold``, or the divergence sits too
-        early to absorb). With no drift the turn is handled the CLEAN way -- a
-        plain prefix extension.
+        or to FORK. REALIGN rewrites the *previous* response from the
+        divergence, so both that sacrificed previous-response length *and*
+        ``len(turn.output_ids)`` must be ``< fork_threshold``. A long previous
+        response forks even when this turn is a short transition (otherwise a
+        61-token follow-up would zero a 28k-token trained span). Divergence
+        sitting before the most-recent response, or an empty builder, also
+        forks. With no drift the turn is handled the CLEAN way -- a plain
+        prefix extension.
         """
         realign_at = _common_prefix_len(self.tokens, turn.prompt_ids)
         drift = len(self.tokens) - realign_at
@@ -183,24 +189,34 @@ class _SampleBuilder:
         if drift == 0:
             return DriftKind.CLEAN
 
-        # REALIGN only heals drift that falls inside the most-recent response span
-        # (and is short); divergence anywhere earlier, or an empty builder, forks.
+        # REALIGN only heals drift inside the most-recent response, and only
+        # when *both* the previous response we would rewrite and this turn's
+        # new output are short. Divergence earlier, or either side at/over
+        # the threshold, forks.
         start = self.last_response_start_idx
-        if start is not None and realign_at >= start and len(turn.output_ids) < self._fork_threshold:
-            return DriftKind.REALIGN
+        if start is not None and realign_at >= start:
+            sacrificed_len = len(self.tokens) - start  # previous response length
+            both_short = (
+                len(turn.output_ids) < self._fork_threshold
+                and sacrificed_len < self._fork_threshold
+            )
+            return DriftKind.REALIGN if both_short else DriftKind.FORK
         return DriftKind.FORK
 
     def append_turn(self, turn: TurnRecord, kind: DriftKind, *, trained: bool = True) -> None:
         """Append one turn into this SampleBuilder, branching on ``kind``: for REALIGN
-        we overwrite the already-saved response span, for CLEAN we just append this
-        turn's prompt tail."""
+        we overwrite from the divergence with the prompt suffix, for CLEAN we just
+        append this turn's prompt tail."""
         assert kind is not DriftKind.FORK, "append_turn called on a builder that would fork"
 
         is_first_turn = self.last_response_start_idx is None
 
         # --- append this turn's prompt tail (loss_mask=0) ---
         if kind is DriftKind.REALIGN:
-            self._align_to_prompt(turn.prompt_ids)  # drop the drifted tail, re-append from prompt
+            # Same prefix cut classify_token_drift used to pick REALIGN; pass it
+            # through so _align_to_prompt zeros only from the divergence.
+            realign_at = _common_prefix_len(self.tokens, turn.prompt_ids)
+            self._align_to_prompt(turn.prompt_ids, realign_at)
         else:  # CLEAN: held tokens are an exact prefix of prompt_ids; append the tail beyond them
             self._append_tokens(turn.prompt_ids[len(self.tokens) :], loss_mask=0)
 
@@ -213,15 +229,19 @@ class _SampleBuilder:
         if is_first_turn:
             self.leading_prompt_len = len(turn.prompt_ids)
 
-    def _align_to_prompt(self, prompt_ids: list[int]) -> None:
-        """Heal REALIGN drift by overwriting the most-recent response span with
-        ``prompt_ids`` as loss_mask=0: the drifted tokens carry no signal, and re-appending
-        from the prompt keeps the builder contiguous. Earlier turns are untouched."""
-        response_start = self.last_response_start_idx
-        tail = prompt_ids[response_start:]
-        self.tokens[response_start:] = tail
-        self.loss_mask[response_start:] = [0] * len(tail)
-        self.logprobs[response_start:] = [0.0] * len(tail)
+    def _align_to_prompt(self, prompt_ids: list[int], realign_at: int) -> None:
+        """Heal REALIGN drift by overwriting from the divergence ``realign_at``.
+
+        Only the suffix from the BPE/template split is replaced with
+        ``prompt_ids[realign_at:]`` as loss_mask=0. Tokens before the split --
+        including already-trained tokens in the previous response -- keep their
+        existing loss_mask and logprobs. Zeroing from ``last_response_start_idx``
+        would also wipe that innocent prefix.
+        """
+        tail = prompt_ids[realign_at:]
+        self.tokens[realign_at:] = tail
+        self.loss_mask[realign_at:] = [0] * len(tail)
+        self.logprobs[realign_at:] = [0.0] * len(tail)
 
     def _append_tokens(self, ids: list[int], *, loss_mask: int, logprobs: list[float] | None = None) -> None:
         self.tokens.extend(ids)
