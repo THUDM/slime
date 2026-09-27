@@ -1,35 +1,35 @@
 <% set megatron_tests = [
     {'test_file': 'test_full_disk_weight_update.py', 'num_gpus': 4},
-    {'test_file': 'test_release_train.py', 'num_gpus': 4},
+    {'test_file': 'test_release_train.py', 'num_gpus': 4, 'straw': True},
     {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8, 'enable_eval': '0'},
     {'test_file': 'test_glm4.7_30B_A3B_pd_mooncake.py', 'num_gpus': 8},
     {'test_file': 'test_glm52_6layer_deterministic_e2e.py', 'num_gpus': 8},
     {'test_file': 'test_glm52_layerwise_zero_e2e.py', 'num_gpus': 8},
     {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1', 'enable_eval': '0'},
-    {'test_file': 'test_qwen3.6_35B_A3B_pd_mooncake.py', 'num_gpus': 8, 'use_deepep': '1'},
-    {'test_file': 'test_qwen3_30B_A3B_r3.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1', 'enable_eval': '0'},
-    {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8, 'enable_eval': '0'},
+    {'test_file': 'test_qwen3.6_35B_A3B_pd_mooncake.py', 'num_gpus': 8, 'use_deepep': '1', 'straw': True},
+    {'test_file': 'test_qwen3_30B_A3B_r3.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1', 'enable_eval': '0', 'straw': True},
+    {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8, 'enable_eval': '0', 'straw': True},
     {'test_file': 'test_qwen3_4B_ppo_disaggregate.py', 'num_gpus': 8, 'enable_eval': '0'},
     {'test_file': 'test_qwen3_4B_ppo_train_critic_only.py', 'num_gpus': 8, 'enable_eval': '0'},
     {'test_file': 'test_ppo_logprob_entropy_gpu.py', 'num_gpus': 2},
     {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8, 'enable_eval': '0'},
-    {'test_file': 'test_moonlight_16B_A3B_r3.py', 'num_gpus': 8, 'enable_eval': '0'},
-    {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
+    {'test_file': 'test_moonlight_16B_A3B_r3.py', 'num_gpus': 8, 'enable_eval': '0', 'straw': True},
+    {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8, 'straw': True},
     {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
-    {'test_file': 'test_qwen2.5_0.5B_debug_rollout_then_train.py', 'num_gpus': 8},
+    {'test_file': 'test_qwen2.5_0.5B_debug_rollout_then_train.py', 'num_gpus': 8, 'straw': True},
     {'test_file': 'test_qwen2.5_0.5B_debug_train_dump_e2e.py', 'num_gpus': 8},
     {'test_file': 'test_qwen2.5_0.5B_opd_sglang.py', 'num_gpus': 8},
     {'test_file': 'test_qwen3_4B_external_pd.py', 'num_gpus': 6},
-    {'test_file': 'test_qwen2.5_0.5B_fully_async_short.py', 'num_gpus': 4},
-    {'test_file': 'test_qwen2.5_0.5B_fanout_short.py', 'num_gpus': 4},
+    {'test_file': 'test_qwen2.5_0.5B_fully_async_short.py', 'num_gpus': 4, 'straw': True},
+    {'test_file': 'test_qwen2.5_0.5B_fanout_short.py', 'num_gpus': 4, 'straw': True},
     {'test_file': 'test_qwen3_4B_streaming_partial_rollout.py', 'num_gpus': 8},
     {'test_file': 'test_qwen3.5_0.8B_gsm8k_short.py', 'num_gpus': 4},
-    {'test_file': 'test_qwen2.5_0.5B_score_centering.py', 'num_gpus': 2},
-    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer gpu', 'num_gpus': 8},
-    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer cpu', 'num_gpus': 8},
-    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer cpu', 'num_gpus': 8},
-    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer gpu', 'num_gpus': 8},
-    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--async-save', 'num_gpus': 8},
+    {'test_file': 'test_qwen2.5_0.5B_score_centering.py', 'num_gpus': 2, 'straw': True},
+    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer gpu', 'num_gpus': 8, 'straw': True},
+    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer cpu', 'num_gpus': 8, 'straw': True},
+    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer cpu', 'num_gpus': 8, 'straw': True},
+    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer gpu', 'num_gpus': 8, 'straw': True},
+    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--async-save', 'num_gpus': 8, 'straw': True},
 ] %>
 <% set jobs = {
     'e2e-test-sglang-config': {
@@ -38,9 +38,9 @@
         {'test_file': 'utils/test_sglang_arguments.py', 'num_gpus': 0},
         {'test_file': 'utils/test_sglang_config.py', 'num_gpus': 0},
         {'test_file': 'test_qwen2.5_0.5B_sglang_config.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen2.5_0.5B_sglang_config_distributed.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen2.5_0.5B_sglang_config_distributed.py', 'num_gpus': 8, 'straw': True},
         {'test_file': 'test_sglang_config_mixed_offload.py', 'num_gpus': 8},
-        {'test_file': 'test_sglang_config_mixed_offload_ft.py', 'num_gpus': 8},
+        {'test_file': 'test_sglang_config_mixed_offload_ft.py', 'num_gpus': 8, 'straw': True},
       ],
     },
     'e2e-test-megatron': {
@@ -57,11 +57,11 @@
     'e2e-test-ckpt': {
       'label': 'run-ci-ckpt',
       'tests': [
-        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer gpu', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer cpu', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer cpu', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer gpu', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--async-save', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer gpu', 'num_gpus': 8, 'straw': True},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer cpu', 'num_gpus': 8, 'straw': True},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer cpu', 'num_gpus': 8, 'straw': True},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer gpu', 'num_gpus': 8, 'straw': True},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--async-save', 'num_gpus': 8, 'straw': True},
       ],
     },
 
@@ -304,6 +304,7 @@ jobs:
             << config.image if config.image else 'slimerl/slime:latest' >> \
             bash -lc '
               set -euo pipefail
+              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
@@ -420,6 +421,7 @@ jobs:
             slimerl/slime:latest \
             bash -lc '
               set -euo pipefail
+              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then

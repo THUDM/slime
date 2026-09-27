@@ -25,11 +25,20 @@ CPU job 不使用 Docker，不申请 GPU，也不会调用 `tests/ci/gpu_lock_ex
 GPU job 运行在自托管 GPU runner 上。每个 job 会：
 
 1. 启动 Docker container，通常使用 `slimerl/slime:latest`；镜像验证使用 `slimerl/slime-test:latest`。
-2. 通过 `pip install -e . --no-deps` 安装 slime。
+2. 从 PyPI 安装最新版 `straw-queue` wheel，并通过 `pip install -e . --no-deps` 安装 slime。
 3. 通过 `tests/ci/gpu_lock_exec.py --count <num_gpus>` 申请所需 GPU。
 4. 执行注册的测试文件：`python tests/<test_file>.py`。
 
 GPU 测试通常遵循 e2e 模式：`prepare()` 下载模型和数据集，`execute()` 构建 CLI 参数并调用 `U.execute_train(...)`。
+
+34 个独立训练 e2e 矩阵场景中，一半使用 straw；此计数排除了重复 job 和 GPU logprob/entropy 算子测试。选中的测试显式设置 `--rollout-data-transport straw`，因此本地执行、`run-ci-changed` 和固定矩阵使用同一后端：
+
+- R3：`test_qwen3_30B_A3B_r3.py` 和 `test_moonlight_16B_A3B_r3.py`。
+- SC：`test_qwen2.5_0.5B_score_centering.py`，覆盖 top-k 和 top-p。
+- Fully async、fanout、PPO、MTP、PD/Mooncake、分布式 SGLang 配置、混合 offload 故障恢复、debug 重放和 release-train。
+- 五种 checkpoint 保存/加载组合，两阶段共用 straw 目录，检查 queue/builder checkpoint，并在加载时显式恢复队列。
+
+R3、SC 和 fully async 同时启用在线 GC。普通 straw 测试使用独立临时目录，执行后清理。这些单机 GPU 测试使用本地文件系统 profile；多机 JuiceFS 持久性仍需单独验证。其余 e2e 保留 Ray object-store 或 NIXL 传输覆盖。固定矩阵和 changed-test 的 GPU 容器均安装 straw，因此发布镜像尚未包含 straw 时也能运行。
 
 ### Changed-Test Job
 

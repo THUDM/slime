@@ -1,9 +1,9 @@
 import os
 from argparse import ArgumentParser
+from pathlib import Path
 from shlex import quote
 
 import slime.utils.external_utils.command_utils as U
-
 
 ENABLE_EVAL = bool(int(os.environ.get("SLIME_TEST_ENABLE_EVAL", "1")))
 
@@ -63,9 +63,11 @@ def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
         ckpt_args += "--async-save "
     elif mode == "load":
         ckpt_args += f"--load {checkpoint_dir_arg} "
-        ckpt_args += "--ckpt-step 1 "
+        ckpt_args += "--ckpt-step 1 --rollout-queue-resume "
 
     rollout_args = (
+        "--rollout-data-transport straw "
+        f"--rollout-data-dir {quote(str(Path(checkpoint_dir) / 'rollout_data'))} "
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
         "--input-key prompt "
         "--label-key label "
@@ -151,4 +153,6 @@ if __name__ == "__main__":
         optimizer=args.save_optimizer,
         checkpoint_dir=checkpoint_dir,
     )
+    for filename in ("queue_state_1.json", "builder_state_1.json"):
+        assert (Path(checkpoint_dir) / "rollout" / filename).is_file(), f"Missing straw checkpoint: {filename}"
     execute("load", optimizer=args.load_optimizer, checkpoint_dir=checkpoint_dir)
