@@ -302,7 +302,20 @@ class Dataset:
 
 def process_rollout_data(rollout_data_ref, dp_rank, dp_size):
     assert len(rollout_data_ref) == dp_size
-    rollout_data = ray.get(rollout_data_ref[dp_rank].inner)
+    from slime.utils.rollout_transport import TrainBatchRef, unpack_rollout_payload
+
+    reference = ray.get(rollout_data_ref[dp_rank].inner)
+    if isinstance(reference, TrainBatchRef):
+        references = [ray.get(box.inner) for box in rollout_data_ref]
+        if any(
+            not isinstance(ref, TrainBatchRef)
+            or ref.batch_id != reference.batch_id
+            or ref.plan_digest != reference.plan_digest
+            or ref.rank != rank
+            for rank, ref in enumerate(references)
+        ):
+            raise ValueError("Training ranks received inconsistent batch identities or DP plans")
+    rollout_data = unpack_rollout_payload(reference)
 
     # Keep `partition` in rollout_data: each local sample's position in the
     # flattened rollout batch (== its index in the rollout debug dump's

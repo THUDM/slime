@@ -1,4 +1,4 @@
-"""Distributed index ownership and global batch processing."""
+"""Persistent queue input ownership and global batch processing."""
 
 import asyncio
 import copy
@@ -10,6 +10,7 @@ import threading
 import time
 import weakref
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from dataclasses import fields
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,13 +19,10 @@ import torch
 
 from slime.rollout.base_types import iter_samples
 from slime.rollout.data_source import RolloutDataSource
-from slime.rollout.distributed_data_source import (
-    DistributedDataSourceWithBuffer,
-    RolloutIndexAllocator,
-    _DistributedReader,
-)
+from slime.rollout.queue_data_source import QueueDataSourceWithBuffer, QueueReader, RolloutQueueController
 from slime.utils.data import Dataset, process_rollout_data
-from slime.utils.tensor_store import DiskTensorRef
+from slime.utils.rollout_transport import unpack_rollout_payload
+from slime.utils.tensor_store import TensorRef
 from slime.utils.types import Sample
 
 NUM_GPUS = 0
@@ -36,51 +34,248 @@ except ImportError:
     sys.modules["sglang_router"] = SimpleNamespace(__version__="0.3.0")
 
 
+class _LocalHandle:
+    def __init__(self, target):
+        self.target = target
+
+    def __getattr__(self, name):
+        return SimpleNamespace(remote=getattr(self.target, name))
+
+
 @pytest.fixture
-def source_factory(monkeypatch):
+def source_factory(monkeypatch, tmp_path, request):
+    import ray
+
     def init(source, args):
         source.args = args
         source.metadata = {}
+        source.sample_offset = source.epoch_id = source.sample_group_index = source.sample_index = 0
         source.dataset = Dataset.__new__(Dataset)
         source.dataset.origin_samples = [Sample(prompt=f"prompt-{i}") for i in range(7)]
         source.dataset.samples = source.dataset.origin_samples
         source.dataset.seed = 31
         source.dataset.epoch_id = -1
+        source.dataset.shuffle(0)
 
     monkeypatch.setattr(RolloutDataSource, "__init__", init)
+    monkeypatch.setattr(ray, "get", lambda value: value)
+    args = SimpleNamespace(
+        n_samples_per_prompt=2,
+        rollout_seed=31,
+        rollout_shuffle=True,
+        buffer_filter_path=None,
+        buffer_sort_by_staleness=False,
+        rollout_data_transport="straw",
+        rollout_queue_online_gc=getattr(request, "param", False),
+        rollout_data_dir=str(tmp_path),
+    )
+    controller = RolloutQueueController(args)
     sources = []
 
-    def create(allocator, worker, claim=None):
-        args = SimpleNamespace(
-            n_samples_per_prompt=2, rollout_shuffle=True, buffer_filter_path=None, buffer_sort_by_staleness=False
-        )
-        source = _DistributedReader(
-            args, claim or (lambda request, count: allocator.claim(worker, request, count)), prefetch_size=3
-        )
+    def create(worker, take=None):
+        handle = _LocalHandle(controller)
+        if take is not None:
+            handle.take = SimpleNamespace(remote=take)
+        source = QueueReader(copy.copy(args), handle, str(worker), 7)
         sources.append(source)
         return source
 
+    create.controller = controller
+    create.args = args
     yield create
     for source in sources:
         source.close()
+    controller.close()
 
 
-def test_allocator_claims_are_disjoint_and_retries_are_idempotent():
-    allocator = RolloutIndexAllocator()
-    assert allocator.claim(0, 0, 10) == (0, 10)
-    assert allocator.claim(1, 0, 5) == (10, 15)
-    assert allocator.claim(0, 0, 10) == (0, 10)
-    assert allocator.claim(0, 1, 10) == (15, 25)
-    with pytest.raises(ValueError, match="in order"):
-        allocator.claim(0, 3, 10)
-    restored = RolloutIndexAllocator()
-    restored.load_state_dict(allocator.state_dict())
-    assert restored.claim(1, 1, 5) == (25, 30)
+def test_task_claims_and_producer_cursor_survive_recovery(source_factory):
+
+    controller = source_factory.controller
+    first = controller.take("first", 2)
+    second = controller.take("second", 2)
+    ids = [a.task.task_id for a in first.assignments + second.assignments]
+    assert len(ids) == len(set(ids)) == 4
+    state = controller.queue.producer_state("dataset")
+    controller.close()
+    args = copy.copy(source_factory.args)
+    args.rollout_queue_resume = True
+    restored = RolloutQueueController(args)
+    try:
+        assert restored.queue.producer_state("dataset") == state
+        assert restored.queue.outstanding_reads() == ()
+        reclaimed = restored.take("recovered", 4)
+        assert [a.task.task_id for a in reclaimed.assignments] == ids
+        assert restored.heartbeat([first.assignments[0].lease]) == ["StaleAttempt"]
+        assert restored.queue.producer_state("dataset") == state
+    finally:
+        restored.close()
+
+
+@pytest.mark.parametrize("source_factory", [True], indirect=True)
+def test_whole_job_recovery_replays_accepted_results_and_durable_continuations(
+    source_factory,
+):
+    from dataclasses import asdict
+
+    from slime.utils.rollout_transport import pack_rollout_group
+
+    reader = source_factory("fully_async_0")
+    accepted_group, partial_group = reader.get_samples(2)
+    accepted = pack_rollout_group(accepted_group, reader.args, 0)
+    partial_group[0].tokens = [1, 7, 9]
+    partial_group[0].response_length = 2
+    partial_group[0].status = Sample.Status.ABORTED
+    partial_group[0].rollout_routed_experts = torch.arange(8).reshape(2, 2, 2)
+    reader.add_samples([partial_group])
+    task_id = partial_group[0]._queue_lease["task_id"]
+    # Drop local state, leaving only durable task progress and accepted receipts.
+    reader.buffer.clear()
+    reader.close()
+    controller = source_factory.controller
+    controller.close()
+    args = copy.copy(reader.args)
+    args.rollout_queue_resume = True
+    restored = RolloutQueueController(args)
+    try:
+        replay = restored.codec.load(restored.recover_pending_rollout())
+        assert replay == [asdict(accepted.receipt)]
+        assignment = restored.queue.acquire("new-reader", 1, task_ids=[task_id]).assignments[0]
+        assert assignment.lease.coordinator_epoch != partial_group[0]._queue_lease["coordinator_epoch"]
+        actual = restored.codec.load(assignment.task.input_ref)
+        assert actual[0].tokens == [1, 7, 9]
+        assert actual[0].response_length == 2
+        assert actual[0].rollout_routed_experts.load().flatten().tolist() == list(range(8))
+        assert len(restored.queue.commits) == 1
+        # Once a batch exists, queue state alone cannot select model/optimizer state.
+        plan = restored.codec.publish({"test": True}, submission_id="recovery-plan")
+        restored.plan_batch("batch:test", [accepted.receipt.position], plan)
+        with pytest.raises(RuntimeError, match="matching model/optimizer"):
+            restored.recover_pending_rollout()
+    finally:
+        restored.close()
+
+
+@pytest.mark.parametrize("source_factory", [True], indirect=True)
+def test_dynamic_rejection_releases_spilled_tensor_staging(source_factory):
+    from straw.tensor import publish_tensors
+
+    from slime.utils.rollout_transport import discard_rollout_group, rollout_store
+
+    reader = source_factory("filter")
+    group = reader.get_samples(1)[0]
+    source_factory.controller.store.seal()
+    store, _, _ = rollout_store(reader.args)
+    refs = publish_tensors(
+        store,
+        {
+            "rollout_routed_experts": torch.arange(8),
+            "rollout_topk_token_ids": torch.arange(4),
+        },
+        submission_id="discarded",
+    )
+    group[0].rollout_routed_experts, group[0].rollout_topk_token_ids = refs
+    source_factory.controller.store.seal()
+    discard_rollout_group(group, reader.args)
+    assert source_factory.controller.queue.collect_garbage()["reclaimed_files"] >= 1
+
+
+@pytest.mark.parametrize("missing", ["rollout_routed_experts", "rollout_topk_token_ids"])
+def test_incomplete_server_abort_retries_last_valid_durable_prefix(source_factory, missing):
+    reader = source_factory("partial")
+    reader.args.use_rollout_routing_replay = True
+    reader.args.use_score_centering = True
+    group = reader.get_samples(1)[0]
+    sample = group[0]
+    sample.tokens, sample.response_length = [7, 8, 9], 2
+    sample.status = Sample.Status.ABORTED
+    sample.rollout_routed_experts = torch.arange(8).reshape(2, 2, 2)
+    sample.rollout_topk_token_ids = torch.tensor([[1, 2], [3, 4]], dtype=torch.int32)
+    sample.rollout_topk_log_probs = torch.zeros(2, 2)
+    reader.add_samples([group])
+    group = reader.get_samples(1)[0]
+    lease = group[0]._queue_lease
+    last_input = source_factory.controller.status(lease["task_id"])["spec"]["input_ref"]
+    setattr(group[0], missing, None)  # An abort response lacks part of its capture.
+    reader.add_samples([group])
+    assert reader.get_buffer_length() == 0
+    status = source_factory.controller.status(lease["task_id"])
+    assert status["state"] == "pending" and status["failures"] == 0
+    assert status["spec"]["input_ref"] == last_input
+    resumed = reader.get_samples(1)[0][0]
+    assert resumed.tokens == [7, 8, 9] and resumed.response_length == 2
+    assert resumed._queue_lease["attempt_id"] != lease["attempt_id"]
+    assert resumed.rollout_routed_experts.load().flatten().tolist() == list(range(8))
+    assert resumed.rollout_topk_token_ids.load().tolist() == [[1, 2], [3, 4]]
+
+
+def test_generation_workers_cannot_claim_manager_collection_tasks(source_factory):
+    from straw.protocol import TaskSpec
+
+    controller = source_factory.controller
+    task_id = "collection:owned-by-manager"
+    controller.queue.submit_tasks("manager-submit", [TaskSpec(task_id, allow_empty=True)])
+    groups = source_factory(0).get_samples(2)
+    assert len(groups) == 2
+    assert controller.status(task_id)["state"] == "pending"
+    collection = controller.queue.acquire("manager", 1, task_ids=[task_id])
+    assert collection.assignments[0].task.task_id == task_id
+
+
+def test_group_reply_loss_returns_original_receipt_and_detects_changed_content(
+    source_factory,
+):
+    from straw.errors import IdempotencyConflict
+
+    from slime.utils.rollout_transport import pack_rollout_group
+
+    reader = source_factory(0)
+    group = reader.get_samples(1)[0]
+    group[0].rollout_routed_experts = torch.arange(8).reshape(2, 2, 2)
+    first = pack_rollout_group(group, reader.args, 0)
+    retried = pack_rollout_group(group, reader.args, 0)
+    assert retried == first
+    assert retried.manifest == retried.receipt.result_ref
+    group[0].rollout_routed_experts[0, 0, 0] += 1
+    with pytest.raises(IdempotencyConflict):
+        pack_rollout_group(group, reader.args, 0)
+    assert source_factory.controller.queue.read_commits().cursor == 1
+
+
+def test_collection_request_reuses_lease_after_response_loss(source_factory):
+    controller = source_factory.controller
+    lease = controller.begin_collection("rollout-1")
+    assert controller.begin_collection("rollout-1") == lease
+    ref = controller.codec.publish(
+        [],
+        submission_id="collection-test",
+        metadata={"task_id": lease.task_id, "attempt_id": lease.attempt_id},
+    )
+    receipt = controller.complete(lease, ref)
+    assert controller.begin_collection("rollout-1") == lease
+    assert controller.complete(lease, ref) == receipt
+    assert controller.queue.read_commits().cursor == 1
+
+
+def test_failed_initial_refill_does_not_advance_dataset_cursor(source_factory, monkeypatch):
+    controller = source_factory.controller
+
+    def fail_publication(*args, **kwargs):
+        raise OSError("injected input publication failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(controller.codec, "publish_many", fail_publication)
+        with pytest.raises(OSError, match="input publication failure"):
+            controller.take("reader", 1)
+    assert controller.queue.producer_state("dataset") is None
+    group = source_factory(0).get_samples(1)[0]
+    assert [sample.index for sample in group] == [0, 1]
+    order = list(range(7))
+    random.Random(31).shuffle(order)
+    assert group[0].prompt == f"prompt-{order[0]}"
 
 
 def test_workers_read_locally_across_epochs_without_duplicate_ids(source_factory):
-    allocator = RolloutIndexAllocator()
-    first, second = source_factory(allocator, 0), source_factory(allocator, 1)
+    first, second = source_factory(0), source_factory(1)
     groups = []
     for source, count in ((first, 4), (second, 9), (first, 12), (second, 3)):
         groups.extend(source.get_samples(count))
@@ -96,47 +291,178 @@ def test_workers_read_locally_across_epochs_without_duplicate_ids(source_factory
 
 
 def test_buffered_partial_group_stays_with_its_local_reader(source_factory):
-    allocator = RolloutIndexAllocator()
-    source = source_factory(allocator, 0)
-    other = source_factory(allocator, 1)
+    source, other = source_factory(0), source_factory(1)
     group = source.get_samples(1)[0]
     group[0].tokens = [1, 2, 3]
     group[0].status = Sample.Status.ABORTED
     source.add_samples([group])
     assert other.get_samples(1)[0][0].group_index != group[0].group_index
     assert source.get_buffer_length() == 1
-    assert source.get_samples(1)[0] is group
-    assert group[0].tokens == [1, 2, 3]
+    restored = source.get_samples(1)[0]
+    assert restored[0].index == group[0].index
+    assert restored[0].tokens == [1, 2, 3]
+    assert restored[0].status == Sample.Status.ABORTED
 
 
-def test_checkpoint_preserves_unused_claims_and_buffer(source_factory):
-    allocator = RolloutIndexAllocator()
-    source = source_factory(allocator, 0)
+def test_explicit_rebuffer_of_completed_group_preserves_identity_and_receipt(
+    source_factory,
+):
+    from slime.utils.rollout_transport import pack_rollout_group
+
+    reader = source_factory(0)
+    group = reader.get_samples(1)[0]
+    result = pack_rollout_group(group, reader.args, 0)
+    reader.add_samples([group])
+    returned = reader.get_samples(1)[0]
+    assert returned is group
+    assert all(not hasattr(sample, "_queue_lease") for sample in returned)
+    assert all(sample._queue_receipt["commit_id"] == result.receipt.commit_id for sample in returned)
+    assert source_factory.controller.queue.read_commits().cursor == 1
+
+
+def test_older_partial_buffer_keeps_receipt_of_later_completion(source_factory):
+    from slime.utils.rollout_transport import pack_rollout_group
+
+    reader = source_factory("owner")
+    group = reader.get_samples(1)[0]
+    for sample in group:
+        sample.tokens = [1, 2]
+        sample.status = Sample.Status.ABORTED
+    reader.add_samples([group])
+    state = reader.state_dict()
+    group = reader.get_samples(1)[0]
+    for sample in group:
+        sample.tokens.append(3)
+        sample.status = Sample.Status.COMPLETED
+    accepted = pack_rollout_group(group, reader.args, 0)
+    reader.load_state_dict(state)
+    restored = reader.get_samples(1)[0]
+    assert all(sample.tokens == [1, 2] for sample in restored)
+    assert all(sample._queue_receipt["commit_id"] == accepted.receipt.commit_id for sample in restored)
+    assert all(sample._queue_resume_origin["task_id"] == accepted.receipt.task_id for sample in restored)
+    assert all(sample._queue_generation_start == 2 and not hasattr(sample, "_queue_lease") for sample in restored)
+    assert source_factory.controller.queue.read_commits().cursor == 1
+
+
+def test_legacy_rollout_return_completes_borrowed_inputs(source_factory):
+    from slime.rollout.base_types import RolloutFnTrainOutput
+    from slime.utils.rollout_transport import accept_raw_rollout, load_rollout_samples
+
+    reader = source_factory(0)
+    groups = reader.get_samples(2)
+    leases = [group[0]._queue_lease for group in groups]
+    ref = accept_raw_rollout(RolloutFnTrainOutput(samples=groups), reader.args, 0)
+    reader.close()
+    assert all(source_factory.controller.status(lease["task_id"])["state"] == "completed" for lease in leases)
+    restored = load_rollout_samples(ref)
+    assert [[sample.index for sample in group] for group in restored] == [
+        [0, 1],
+        [2, 3],
+    ]
+
+
+def test_checkpoint_buffer_and_latest_continuation_survive_reader_release(
+    source_factory,
+):
+    source = source_factory(0)
     used = source.get_samples(2)
+    used[0][0].tokens = [7, 8]
     source.add_samples([used[0]])
     state = source.state_dict()
-    global_state = allocator.state_dict()
-    expected = source.get_samples(12)
-    restored_allocator = RolloutIndexAllocator()
-    restored_allocator.load_state_dict(global_state)
-    restored = source_factory(restored_allocator, 0)
+    source.close()
+    restored = source_factory(0)
     restored.load_state_dict(state)
-    actual = restored.get_samples(12)
-    assert [[s.index for s in g] for g in actual] == [[s.index for s in g] for g in expected]
-    assert [[s.prompt for s in g] for g in actual] == [[s.prompt for s in g] for g in expected]
+    group = restored.get_samples(1)[0]
+    assert [s.index for s in group] == [s.index for s in used[0]]
+    assert group[0].tokens == [7, 8]
+    assert group[0]._queue_lease != used[0][0]._queue_lease
+    # Closing returned the other unfinished task, without reserving/discarding a range.
+    assert [s.index for s in restored.get_samples(1)[0]] == [s.index for s in used[1]]
 
 
-def test_slow_index_claim_does_not_block_async_generation(source_factory):
+@pytest.mark.parametrize("source_factory", [True], indirect=True)
+def test_buffer_checkpoint_reuses_durable_groups_and_protects_them_from_gc(
+    source_factory,
+):
+    reader = source_factory("compact-buffer")
+    groups = reader.get_samples(32)
+    for group in groups:
+        for sample in group:
+            sample.tokens = list(range(8192))
+            sample.status = Sample.Status.ABORTED
+    root = Path(reader.args.rollout_data_dir)
+
+    def pack_bytes():
+        return sum(path.stat().st_size for path in root.rglob("*.pack"))
+
+    before = pack_bytes()
+    reader.add_samples(groups)
+    continuation_bytes = pack_bytes() - before
+    before = pack_bytes()
+    saved = reader.state_dict()
+    assert pack_bytes() - before < continuation_bytes / 10
+    checkpoint = saved.load()
+    assert checkpoint["version"] == 2
+    assert len(checkpoint["buffer"]) == len(groups)
+    for group, entry in zip(groups, checkpoint["buffer"], strict=True):
+        lease = group[0]._queue_lease
+        assert entry["lease"] == lease
+        assert entry["group"].manifest == reader._leased_inputs[lease["task_id"]]
+    source_factory.controller.reader_state("snapshot", saved.manifest)
+    reader.close()
+    source_factory.controller.store.seal()
+    source_factory.controller.queue.collect_garbage()
+    restored = source_factory("compact-buffer")
+    restored.load_state_dict(saved)
+    assert all(sample.tokens == list(range(8192)) for group in restored.get_samples(32) for sample in group)
+
+
+def test_buffer_checkpoint_retains_reacquired_lease_without_rewriting_input(
+    source_factory,
+):
+    reader = source_factory("lease-snapshot")
+    group = reader.get_samples(1)[0]
+    group[0].tokens = [1, 7, 9]
+    reader.add_samples([group])
+    saved = reader.state_dict()
+    reader.close()
+    restored = source_factory("lease-snapshot")
+    restored.load_state_dict(saved)
+    lease = restored.buffer[0][0]._queue_lease
+    assert lease != group[0]._queue_lease
+    saved_again = restored.state_dict()
+    assert saved_again.load()["buffer"][0]["group"].manifest == saved.load()["buffer"][0]["group"].manifest
+    restored.load_state_dict(saved_again)
+    returned = restored.get_samples(1)[0]
+    assert returned[0].tokens == [1, 7, 9]
+    assert returned[0]._queue_lease == lease
+
+
+def test_legacy_inline_buffer_checkpoint_remains_readable(source_factory):
+    from slime.utils.rollout_transport import pack_rollout_payload
+
+    reader = source_factory("legacy-buffer")
+    group = reader.get_samples(1)[0]
+    group[0].tokens = [2, 3, 5]
+    reader.add_samples([group])
+    saved = pack_rollout_payload({"version": 1, "buffer": [group], "metadata": {"epoch": 7}}, reader.args, -1)
+    reader.load_state_dict(saved)
+    assert reader.get_metadata() == {"epoch": 7}
+    compact = reader.state_dict()
+    reader.load_state_dict(compact)
+    assert reader.get_samples(1)[0][0].tokens == [2, 3, 5]
+
+
+def test_slow_task_acquire_does_not_block_async_generation(source_factory):
     entered, release = threading.Event(), threading.Event()
-    allocator = RolloutIndexAllocator()
 
-    def claim(request, count):
+    def take(reader, count):
         entered.set()
         if not release.wait(10):
-            raise TimeoutError("test did not release index allocation")
-        return allocator.claim(0, request, count)
+            raise TimeoutError("test did not release task acquire")
+        return source_factory.controller.take(reader, count)
 
-    source = source_factory(allocator, 0, claim)
+    source = source_factory(0, take)
 
     async def exercise():
         task = asyncio.create_task(source.get_samples_async(1))
@@ -155,7 +481,7 @@ def test_slow_index_claim_does_not_block_async_generation(source_factory):
 
 
 def test_shuffle_does_not_reseed_user_random_state(source_factory):
-    source = source_factory(RolloutIndexAllocator(), 0)
+    source = source_factory(0)
     state = random.getstate()
     source.get_samples(20)
     assert random.getstate() == state
@@ -202,11 +528,14 @@ def scheduler_factory(monkeypatch):
         releases.append(release)
         submitted, workers = [], []
         args = SimpleNamespace(
-            rollout_batch_size=batch, rollout_sample_filter_path=None, rollout_all_samples_process_path=None
+            rollout_batch_size=batch,
+            rollout_sample_filter_path=None,
+            rollout_all_samples_process_path=None,
+            rollout_data_transport="object-store",
         )
 
         def make_generator(worker):
-            async def execute(rollout_id):
+            async def execute(rollout_id, group=None):
                 index = len(submitted)
                 submitted.append((worker, index))
                 if worker == slow_worker:
@@ -218,10 +547,15 @@ def scheduler_factory(monkeypatch):
                     raise ray.exceptions.RayActorError("worker process exited")
                 group = [Sample(index=index, group_index=index, metadata={"worker": worker})]
                 return group, DynamicFilterOutput(
-                    keep=not reject(index), reason="test", keep_when_insufficient=keep_when_insufficient
+                    keep=not reject(index),
+                    reason="test",
+                    keep_when_insufficient=keep_when_insufficient,
                 )
 
             return execute
+
+        async def initial_groups(count):
+            return [[None] for _ in range(count)]
 
         for i, capacity in enumerate(capacities):
             actor = _GenerationActor.__new__(_GenerationActor)
@@ -229,10 +563,14 @@ def scheduler_factory(monkeypatch):
             actor.producer = None
             actor.running = False
             actor._generate_group = make_generator(i)
+            actor.data_source = SimpleNamespace(get_samples_async=initial_groups)
             actors.append(actor)
             workers.append(
                 SimpleNamespace(
-                    start=remote(actor.start), next=remote(actor.next), pause=remote(actor.pause), actor=actor
+                    start=remote(actor.start),
+                    next=remote(actor.next),
+                    pause=remote(actor.pause),
+                    actor=actor,
                 )
             )
         scheduler = RolloutScheduler(args, workers, capacities)
@@ -303,7 +641,9 @@ def test_distributed_rollout_rejects_all_samples_hook_before_starting_workers():
         DistributedRollout(args, None)
 
 
-def test_async_scheduler_fast_worker_fills_batch_without_waiting_for_slow_worker(scheduler_factory):
+def test_async_scheduler_fast_worker_fills_batch_without_waiting_for_slow_worker(
+    scheduler_factory,
+):
     scheduler, submitted, release = scheduler_factory(5, [1, 1], slow_worker=0, reject=lambda i: i > 5)
     with ThreadPoolExecutor(1) as consumer:
         future = consumer.submit(scheduler.generate, 0, prefetch=2)
@@ -358,7 +698,9 @@ def test_slow_worker_control_does_not_block_collection_or_close(scheduler_factor
             scheduler.close()
 
 
-def test_fully_async_filter_never_keeps_rejected_groups_to_fill_batch(scheduler_factory):
+def test_fully_async_filter_never_keeps_rejected_groups_to_fill_batch(
+    scheduler_factory,
+):
     scheduler, _, _ = scheduler_factory(12, [1], reject=lambda index: index < 16, keep_when_insufficient=True)
     result = scheduler.generate(0, prefetch=2)
     assert len(result.samples) == 12
@@ -411,34 +753,29 @@ def test_scheduler_close_unblocks_waiting_consumer(scheduler_factory):
             release.set()
 
 
-def test_reader_materializes_checkpoint_and_transferred_samples(tmp_path):
-    path = tmp_path / "spill" / "buffer.safetensors"
-    reference = DiskTensorRef.write(torch.tensor([1, 2]), path)
-    sample = Sample(index=0, rollout_routed_experts=reference)
-    reader = _DistributedReader.__new__(_DistributedReader)
-    reader.args = SimpleNamespace(
-        rollout_routed_experts_store_dir=str(path.parent),
-        keep_rollout_routed_experts_files=False,
-    )
-    reader._lock = threading.RLock()
-    reader._buffer_files = {str(path)}
-    reader.buffer = [[sample]]
-    reader._prefetch = None
-    reader._ranges = []
-    reader._request_id = 0
-    reader.metadata = {}
+def test_reader_adopts_checkpoint_tensors_from_another_pool(tmp_path, source_factory):
+    from straw import SharedFilesystemStore
+    from straw.tensor import publish_tensors
+
+    with SharedFilesystemStore(tmp_path / "source", "source", codecs=("tensor.v1",)) as store:
+        (reference,) = publish_tensors(store, {"routes": torch.tensor([1, 2])}, submission_id="buffer")
+    path = Path(reference.path)
+    reader = source_factory(0)
+    group = reader.get_samples(1)[0]
+    group[0].rollout_routed_experts = reference
+    reader.add_samples([group])
     saved = reader.state_dict()
-    assert saved["buffer"][0][0].rollout_routed_experts.tolist() == [1, 2]
-    assert path.exists()  # Snapshotting preserves the live buffer's files.
-    groups = reader.materialize_samples([[sample]])
-    assert groups[0][0].rollout_routed_experts.tolist() == [1, 2]
-    assert sample.rollout_routed_experts is reference
-    assert not path.exists() and not reader._buffer_files
+    path.unlink()
+    checkpoint = saved.load()
+    saved_group = unpack_rollout_payload(checkpoint["buffer"][0]["group"])
+    assert saved_group[0].rollout_routed_experts.load().tolist() == [1, 2]
+    transferred = reader.materialize_samples(reader.get_samples(1))
+    assert transferred[0][0].rollout_routed_experts.tolist() == [1, 2]
 
 
 @pytest.mark.parametrize("fanout", [False, True])
 def test_distributed_completed_groups_keep_rewards_and_masks(monkeypatch, fanout):
-    from slime.rollout import sglang_rollout
+    from slime.rollout import fully_async_distributed, sglang_rollout
     from slime.rollout.fully_async_distributed import _GenerationActor
 
     sample = Sample(
@@ -452,6 +789,7 @@ def test_distributed_completed_groups_keep_rewards_and_masks(monkeypatch, fanout
         status=Sample.Status.COMPLETED,
     )
     group = [[sample]] if fanout else [sample]
+    sample._queue_receipt = {"position": 7}
 
     async def get_samples(count):
         assert count == 1
@@ -460,15 +798,26 @@ def test_distributed_completed_groups_keep_rewards_and_masks(monkeypatch, fanout
     async def unexpected_generation(*args):
         raise AssertionError("completed groups must bypass generation and group reward")
 
+    async def republish_buffered(*args, **kwargs):
+        return SimpleNamespace(receipt=None)
+
     monkeypatch.setattr(sglang_rollout, "generate_and_rm_group", unexpected_generation)
+    monkeypatch.setattr(fully_async_distributed, "publish_rollout_async", republish_buffered)
     worker = _GenerationActor.__new__(_GenerationActor)
-    worker.args = SimpleNamespace(partial_rollout=True, mask_offpolicy_in_partial_rollout=True)
+    worker.running = True
+    worker.args = SimpleNamespace(
+        partial_rollout=True,
+        mask_offpolicy_in_partial_rollout=True,
+        rollout_data_transport="object-store",
+        _rollout_queue_controller=object(),
+    )
     worker.dynamic_filter = None
     worker.data_source = SimpleNamespace(get_samples_async=get_samples, materialize_samples=lambda value: value)
     result, _ = asyncio.run(worker._generate_group(3))
     assert result is group
     assert sample.reward == 0.0
     assert sample.loss_mask == [1, 1]
+    assert sample._queue_receipt == {"position": 7}
 
 
 def test_worker_refills_locally_and_slow_group_does_not_block_results():
@@ -483,7 +832,7 @@ def test_worker_refills_locally_and_slow_group_does_not_block_results():
     in_flight = 0
     maximum = 0
 
-    async def generate_group(rollout_id):
+    async def generate_group(rollout_id, group=None):
         nonlocal in_flight, maximum
         index = len(generated)
         generated.append(index)
@@ -499,6 +848,13 @@ def test_worker_refills_locally_and_slow_group_does_not_block_results():
             in_flight -= 1
 
     worker._generate_group = generate_group
+    claims = []
+
+    async def initial_groups(count):
+        claims.append(count)
+        return [[None] for _ in range(count)]
+
+    worker.data_source = SimpleNamespace(get_samples_async=initial_groups)
 
     async def exercise():
         await worker._start(0)
@@ -506,6 +862,7 @@ def test_worker_refills_locally_and_slow_group_does_not_block_results():
             first = await asyncio.wait_for(worker._next(), timeout=5)
             second = await asyncio.wait_for(worker._next(), timeout=5)
             assert first > 0 and second > 0 and first != second
+            assert claims == [worker.capacity]
             assert not release.is_set()
             # No manager-issued credits: consuming results lets slots pull more.
             received = [first, second]
@@ -553,15 +910,25 @@ async def _generate_locally(args, sample, sampling_params):
     sample.response = "answer"
     sample.response_length = 2
     sample.loss_mask = [1, 1]
+    sample.rollout_log_probs = [-0.5, -0.7]
+    for key, tensor in (
+        ("rollout_topk_token_ids", torch.tensor([[2, 4], [3, 5]], dtype=torch.int32)),
+        (
+            "rollout_topk_log_probs",
+            torch.tensor([[-0.5, -2.0], [-0.7, -2.5]], dtype=torch.float32),
+        ),
+    ):
+        setattr(sample, key, tensor)
     sample.status = Sample.Status.COMPLETED
     if sample.index % 2 == 0:
         sample.multimodal_train_inputs = {"pixel_values": torch.ones(1, 3, 2, 2)}
-    sample.rollout_routed_experts = DiskTensorRef.write(
-        torch.full((2, 1, 1), sample.index % 8, dtype=torch.uint8),
-        Path(args.rollout_routed_experts_store_dir) / f"{sample.index}.safetensors",
-    )
+    sample.rollout_routed_experts = torch.full((2, 1, 1), sample.index % 8, dtype=torch.uint8)
     if args.test_fanout:
-        children = [copy.deepcopy(sample) for _ in range(2)]
+        # A real custom hook can construct new Samples, without private queue fields.
+        children = [
+            Sample(**{field.name: copy.deepcopy(getattr(sample, field.name)) for field in fields(Sample)})
+            for _ in range(2)
+        ]
         for offset, child in enumerate(children):
             child.rollout_id = sample.index
             child.index = 2 * sample.index + offset
@@ -596,16 +963,37 @@ def _filter_complete_group(args, group):
     return DynamicFilterOutput(keep=True)
 
 
-@pytest.mark.parametrize("fanout", [False, True])
-def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout):
-    multiplier = 2 if fanout else 1
+def _read_training_locally(refs, rank):
     import ray
-    from ray.cluster_utils import Cluster
+
+    data = process_rollout_data(refs, rank, 2)
+    for key in (
+        "rollout_routed_experts",
+        "rollout_topk_token_ids",
+        "rollout_topk_log_probs",
+    ):
+        for ref in data[key]:
+            value = ref.load() if isinstance(ref, TensorRef) else ref
+            assert value.shape[0] == 2
+            assert torch.isfinite(value).all()
+    return {"node_id": ray.get_runtime_context().get_node_id(), "samples": len(data["tokens"])}
+
+
+def _load_queue_checkpoint(args, rollout_id):
+    from straw.protocol import RecordSetRef
+
+    from slime.utils.rollout_transport import DiskPayloadRef
+
+    path = Path(args.save) / "rollout" / f"queue_state_{rollout_id}.json"
+    index = json.loads(path.read_text())
+    return DiskPayloadRef(RecordSetRef.from_dict(index["manifest"]), index["root"]).load()
+
+
+def _rollout_args(tmp_path, *, fanout=False, transport="straw"):
+    """Bounded local dataset, tokenizer and R3/SC configuration shared by Ray tests."""
     from tokenizers import Tokenizer
     from tokenizers.models import WordLevel
     from transformers import PreTrainedTokenizerFast
-
-    from slime.ray.rollout import RolloutManager
 
     tokenizer_dir = tmp_path / "tokenizer"
     PreTrainedTokenizerFast(
@@ -614,9 +1002,9 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout):
     ).save_pretrained(tokenizer_dir)
     dataset = tmp_path / "data.jsonl"
     dataset.write_text("\n".join(json.dumps({"text": f"hello {i}"}) for i in range(7)))
-    args = SimpleNamespace(
+    return SimpleNamespace(
         rollout_batch_size=4,
-        data_source_path="slime.rollout.distributed_data_source.DistributedDataSourceWithBuffer",
+        data_source_path="slime.rollout.queue_data_source.QueueDataSourceWithBuffer",
         debug_train_only=False,
         test_fanout=fanout,
         test_generation_gate=str(tmp_path / "generation-gate"),
@@ -649,20 +1037,20 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout):
         advantage_estimator="grpo",
         rewards_normalization=True,
         grpo_std_normalization=True,
-        use_score_centering=False,
+        use_score_centering=True,
+        score_centering_top_k=2,
         rollout_top_p=1.0,
-        use_rollout_routing_replay=False,
-        rollout_data_transport="object-store",
+        use_rollout_routing_replay=True,
+        rollout_data_transport=transport,
+        rollout_data_dir=str(tmp_path / "queue"),
         use_distributed_post=False,
         debug_rollout_only=False,
         save_debug_rollout_data=str(tmp_path / "debug" / "rollout_{rollout_id}.pt"),
         ci_test=False,
         load_debug_rollout_data=None,
-        keep_rollout_routed_experts_files=False,
         save=str(tmp_path / "checkpoint"),
         load=None,
         dump_details=None,
-        rollout_routed_experts_store_dir=str(tmp_path / "spill"),
         global_batch_size=8,
         micro_batch_size=1,
         use_dynamic_batch_size=False,
@@ -677,7 +1065,9 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout):
         rollout_sample_filter_path=None,
         rollout_all_samples_process_path=None,
         custom_generate_function_path="test_distributed_rollout._generate_locally",
-        custom_rm_path="test_distributed_rollout._score_fanout" if fanout else "test_distributed_rollout._score_group",
+        custom_rm_path=(
+            "test_distributed_rollout._score_fanout" if fanout else "test_distributed_rollout._score_group"
+        ),
         dynamic_sampling_filter_path="test_distributed_rollout._filter_complete_group",
         sglang_dp_size=1,
         group_rm=not fanout,
@@ -691,25 +1081,68 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout):
         rollout_skip_special_tokens=False,
         rollout_sample_hook_path=None,
     )
-    config = {"dp_size": 2, "cp_size": 1, "vpp_size": 1, "microbatch_group_size_per_vp_stage": 1}
+
+
+@pytest.mark.parametrize(
+    "fanout,transport",
+    [(False, "straw"), (True, "straw")],
+)
+def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout, transport):
+    multiplier = 2 if fanout else 1
+    import ray
+    from ray.cluster_utils import Cluster
+
+    from slime.ray.rollout import RolloutManager
+
+    args = _rollout_args(tmp_path, fanout=fanout, transport=transport)
+    config = {
+        "dp_size": 2,
+        "cp_size": 1,
+        "vpp_size": 1,
+        "microbatch_group_size_per_vp_stage": 1,
+    }
+    node_count = 2
     cluster = Cluster()
     source = None
     try:
-        for _ in range(2):
-            cluster.add_node(num_cpus=2, num_gpus=0, object_store_memory=128 * 1024**2, include_dashboard=False)
+        for _ in range(node_count):
+            cluster.add_node(
+                num_cpus=2,
+                num_gpus=0,
+                object_store_memory=128 * 1024**2,
+                include_dashboard=False,
+            )
         ray.init(
             address=cluster.address,
             runtime_env={
                 "env_vars": {
-                    "PYTHONPATH": os.pathsep.join([str(Path(__file__).parent), str(Path(__file__).parent.parent)]),
+                    "PYTHONPATH": os.pathsep.join(
+                        [
+                            str(Path(__file__).parent),
+                            str(Path(__file__).parent.parent),
+                            os.environ.get("PYTHONPATH", ""),
+                        ]
+                    ),
                 }
             },
         )
         from slime.utils.misc import load_function
+        from slime.utils.rollout_transport import check_rollout_storage
 
+        if transport == "straw":
+            check_rollout_storage(args)
         source = load_function(args.data_source_path)(args)
         assert not source.consumers
         returned = source.get_samples(1)[0]
+        if transport == "straw":
+            for sample in returned:
+                sample.tokens = [1, 2, 3]
+                sample.response_length = 2
+                sample.loss_mask = [1, 1]
+                sample.status = Sample.Status.ABORTED
+                sample.rollout_routed_experts = torch.tensor([[[1]], [[2]]], dtype=torch.int32)
+                sample.rollout_topk_token_ids = torch.tensor([[1, 3], [2, 4]], dtype=torch.int32).numpy()
+                sample.rollout_topk_log_probs = torch.tensor([[-0.5, -2], [-0.7, -2.5]]).numpy()
         source.add_samples([returned])
 
         cls = RolloutManager.__ray_metadata__.modified_class
@@ -718,8 +1151,10 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout):
         from slime.utils.misc import load_function
 
         rollout_function = load_function(args.rollout_function_path)
-        manager.train_parallel_config = config
-        manager._active_routed_experts_rollouts = set()
+        from slime.rollout.batch_builder import BatchBuilder
+
+        manager.batch_builder = BatchBuilder(args)
+        manager.set_train_parallel_config(config)
         manager.health_monitoring_resume = lambda: None
         manager._get_updatable_server = lambda: None
         calls = []
@@ -730,7 +1165,12 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout):
             assert data_source is source
             assert not evaluation
             calls.append(("rollout", 4))
-            return rollout_function(global_args, rollout_id, data_source, evaluation=evaluation)
+            output = rollout_function(global_args, rollout_id, data_source, evaluation=evaluation)
+            if args.rollout_data_transport == "straw":
+                from slime.utils.rollout_transport import DiskPayloadRef
+
+                assert isinstance(output.samples, DiskPayloadRef)
+            return output
 
         manager.generate_rollout = custom_rollout
         manager.eval_generate_rollout = load_function(args.eval_function_path)
@@ -748,24 +1188,47 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout):
             assert global_args is args
             assert len(samples) == 8 * multiplier
             calls.append(("convert", len(samples)))
-            manager.custom_convert_samples_to_train_data_func = None
+            manager.batch_builder.custom_convert_samples_to_train_data_func = None
             try:
-                return manager._convert_samples_to_train_data(samples)
+                return manager.batch_builder.convert(samples)
             finally:
-                manager.custom_convert_samples_to_train_data_func = convert
+                manager.batch_builder.custom_convert_samples_to_train_data_func = convert
 
-        manager.custom_reward_post_process_func = postprocess
-        manager.custom_convert_samples_to_train_data_func = convert
+        manager.batch_builder.custom_reward_post_process_func = postprocess
+        manager.batch_builder.custom_convert_samples_to_train_data_func = convert
 
         def fetch(rollout_id):
             manager.data_source = source
             previous = len(calls)
             refs = manager.generate(rollout_id)
-            assert calls[previous:] == [("rollout", 4), ("convert", 8 * multiplier), ("rewards", 8 * multiplier)]
+            assert calls[previous:] == [
+                ("rollout", 4),
+                ("convert", 8 * multiplier),
+                ("rewards", 8 * multiplier),
+            ]
             dump = torch.load(tmp_path / "debug" / f"rollout_{rollout_id}.pt", weights_only=False)
             assert len(dump["samples"]) == 8 * multiplier
-            assert all(isinstance(sample["rollout_routed_experts"], torch.Tensor) for sample in dump["samples"])
+            assert all(
+                isinstance(sample["rollout_routed_experts"], (torch.Tensor, TensorRef)) for sample in dump["samples"]
+            )
             assert not list((tmp_path / "debug").glob("worker_*"))
+            if rollout_id == 0:
+                from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
+
+                remote_read = ray.remote(_read_training_locally)
+                nodes = [node for node in ray.nodes() if node["Alive"]]
+                assert len(nodes) == node_count
+                reports = ray.get(
+                    [
+                        remote_read.options(
+                            num_cpus=0,
+                            scheduling_strategy=NodeAffinitySchedulingStrategy(node["NodeID"], soft=False),
+                        ).remote(refs, i % 2)
+                        for i, node in enumerate(nodes)
+                    ]
+                )
+                assert {report["node_id"] for report in reports} == {node["NodeID"] for node in nodes}
+                assert all(report["samples"] == 4 * multiplier for report in reports)
             batches = [process_rollout_data(refs, rank, 2) for rank in range(2)]
             rows = {}
             multimodal_samples = 0
@@ -777,44 +1240,60 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout):
                         multimodal_samples += 1
                         assert batch["multimodal_train_inputs"][i]["pixel_values"].shape == (1, 3, 2, 2)
                     assert index not in rows
-                    assert isinstance(batch["rollout_routed_experts"][i], torch.Tensor)
+                    assert isinstance(
+                        batch["rollout_routed_experts"][i],
+                        (torch.Tensor, TensorRef),
+                    )
                     rows[index] = batch["tokens"][i].tolist()
                     assert rows[index][0] == index + 1
             assert len(rows) == 8 * multiplier
             assert multimodal_samples == 4 * multiplier
+            # Mock trainer completion after every rank has read the same batch.
+            # This tests runtime capacity only, not model/optimizer checkpointing.
+            manager.training_completed(rollout_id)
+            if transport == "straw":
+                assert ray.get(source.controller.metrics.remote())["usage_with_reservations"]["ready_bytes"] == 0
             return rows
 
         first = fetch(0)
         assert source.get_buffer_length() == 1  # The owner's buffer stays local.
         runtime = source.consumers["fully_async"]
-        assert len(runtime.workers) == 2
+        assert len(runtime.workers) == node_count
         manager.save(0)
-        path = Path(args.save) / "rollout" / "distributed_data_source_0.pt"
-        state = torch.load(path, weights_only=False)["consumers"]["fully_async"]
+        state = _load_queue_checkpoint(args, 0)["consumers"]["fully_async"]
         assert len(state["scheduler"]["ready"]) >= 4
         assert all(
             sample.metadata["reward_calls"] == 1
             for group, _ in state["scheduler"]["ready"]
-            for sample in iter_samples(group)
+            for sample in iter_samples(unpack_rollout_payload(group))
         )
-        manager.cleanup_rollout_data(0)
         expected = fetch(1)
         assert not first.keys() & expected.keys()
         source.close()
         source = None
         args.load = args.save
-        source = DistributedDataSourceWithBuffer(args)
+        args.rollout_queue_resume = True
+        source = QueueDataSourceWithBuffer(args)
         source.data_config["n_samples_per_prompt"] += 1
-        with pytest.raises(ValueError, match="samples per prompt"):
+        with pytest.raises(ValueError, match="n_samples_per_prompt"):
             source.load(0)
         source.data_config["n_samples_per_prompt"] -= 1
         source.load(0)
+        if transport == "straw":
+            manager.batch_builder.load(0)
         assert not source.consumers  # Execution state is restored when fully async starts.
         source.save(0)  # Saving before the first generate must preserve the restored queue.
         actual = fetch(1)
         assert actual == expected
         restored_group = source.get_samples(1)[0]
         assert [sample.index for sample in restored_group] == [sample.index for sample in returned]
+        if transport == "straw":
+            for sample in restored_group:
+                assert isinstance(sample.rollout_routed_experts, TensorRef)
+                assert isinstance(sample.rollout_topk_token_ids, TensorRef)
+                assert isinstance(sample.rollout_topk_log_probs, TensorRef)
+                assert sample.rollout_routed_experts.load().flatten().tolist() == [1, 2]
+                assert sample.rollout_topk_token_ids.load().tolist() == [[1, 3], [2, 4]]
         assert not {sample.index for sample in returned} & (first.keys() | actual.keys())
         manager.eval(1)
         evaluation = torch.load(tmp_path / "debug" / "rollout_eval_1.pt", weights_only=False)
@@ -832,13 +1311,16 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout):
             try:
                 deadline = time.monotonic() + 10
                 with runtime.condition:
-                    while len(runtime.pending) != 2:
-                        assert time.monotonic() < deadline, "both workers should receive work"
+                    while len(runtime.pending) != node_count:
+                        assert time.monotonic() < deadline, "all workers should receive work"
                         runtime.condition.wait(timeout=0.01)
                 failed = 0
                 if fanout:
                     node = next(node for node in cluster.list_all_nodes() if node != cluster.head_node)
-                    nodes = sorted(ray.nodes(), key=lambda node: (node["NodeManagerAddress"], node["NodeID"]))
+                    nodes = sorted(
+                        ray.nodes(),
+                        key=lambda node: (node["NodeManagerAddress"], node["NodeID"]),
+                    )
                     failed = next(i for i, item in enumerate(nodes) if item["NodeID"] == node.node_id)
                     cluster.remove_node(node, allow_graceful=False)
                 else:
@@ -854,28 +1336,37 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout):
             after_failure = future.result(timeout=30)
         runtime.pause()
         assert runtime.capacities[failed] == 0
-        assert runtime.capacity == 6
+        assert runtime.capacity == 12 - 12 // node_count
         assert runtime.error is None
         assert not after_failure.keys() & actual.keys()
         source.save(2)
-        saved = torch.load(Path(args.save) / "rollout" / "distributed_data_source_2.pt", weights_only=False)
+        saved = _load_queue_checkpoint(args, 2)
         assert saved["consumers"]["fully_async"]["readers"][failed] is None
         assert len(fetch(3)) == 8 * multiplier
 
         if not fanout:
             # A restart with the same topology preserves retired worker slots.
             source.close()
-            source = DistributedDataSourceWithBuffer(args)
+            source = QueueDataSourceWithBuffer(args)
             source.load(2)
             assert len(fetch(3)) == 8
             runtime = source.consumers["fully_async"]
             assert runtime.capacities[failed] == 0
-            assert runtime.capacity == 6
+            assert runtime.capacity == 12 - 12 // node_count
             runtime.pause()
             runtime.ready.clear()
             for i, worker in enumerate(runtime.workers):
                 if runtime.capacities[i]:
                     ray.kill(worker, no_restart=True)
+            runtime.resume()
+            # Killed workers can still have committed results in the journal.
+            # Wait for death notifications before checking exhausted capacity;
+            # an earlier generate may correctly deliver a recovered warm batch.
+            with runtime.condition:
+                deadline = time.monotonic() + 30
+                while runtime.error is None and time.monotonic() < deadline:
+                    runtime.condition.wait(timeout=0.1)
+                assert runtime.capacity == 0
             with pytest.raises(RuntimeError, match="All rollout workers are unavailable"):
                 runtime.generate(4, prefetch=runtime.capacity)
     finally:
@@ -885,5 +1376,535 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout):
         cluster.shutdown()
 
 
+def test_filtered_accepts_and_lost_delivery_are_accounted(source_factory, monkeypatch):
+    from slime.rollout.base_types import finalize_rollout_groups
+    from slime.utils import misc
+    from slime.utils.rollout_transport import DiskPayloadRef, pack_rollout_group, pack_rollout_payload
+
+    source = source_factory("worker")
+    controller = source_factory.controller
+    groups = source.get_samples(4)
+    refs = [pack_rollout_group(group, source.args, 0) for group in groups[:3]]
+    source.args.rollout_sample_filter_path = "test.filter"
+    monkeypatch.setattr(misc, "load_function", lambda _: lambda args, groups: groups.pop(0))
+    output = finalize_rollout_groups(source.args, 0, refs[:2])
+    assert len(output.samples.load()) == 1
+    assert controller.training_state()["processed_cursor"] == 1
+    # One reply arrived; another was accepted but the process died before replying.
+    delivered = pack_rollout_payload([refs[1].receipt.position], source.args, 0)
+    recovered = controller.recover_reader_results("worker", delivered.manifest)
+    receipts = DiskPayloadRef(recovered, source.args.rollout_data_dir).load()
+    assert [r["position"] for r in receipts] == [refs[2].receipt.position]
+    assert controller.status(groups[3][0]._queue_lease["task_id"])["state"] == "pending"
+    from straw.errors import StaleAttempt
+
+    with pytest.raises(StaleAttempt):
+        pack_rollout_group(groups[3], source.args, 0)
+    assert len(controller.queue.read_commits().commits) == 3
+    from slime.utils.rollout_transport import discard_rollout_group, load_rollout_samples
+
+    # A previously accepted warm group can fail a later dynamic filter too.
+    discard_rollout_group(load_rollout_samples([refs[2]])[0], source.args, "warm group rejected")
+    assert controller.queue._usage()["accepted_unprocessed"]["records"] == 1
+    assert len(controller.queue.read_commits().commits) == 3
+
+
+def test_fresh_samples_inherit_authorization_and_reject_conflicting_hooks(
+    source_factory,
+):
+    from slime.utils.rollout_transport import inherit_queue_context, pack_rollout_group
+
+    source = source_factory("worker")
+    group = source.get_samples(1)[0]
+    children = [[Sample(index=2 * parent.index + i, tokens=[1, 2]) for i in range(2)] for parent in group]
+    for parent, output in zip(group, children, strict=True):
+        parent.queue_generation_requests = [{"sampling_params": {"temperature": 0.7}}]
+        inherit_queue_context(parent, output)
+    ref = pack_rollout_group(children, source.args, 0)
+    assert ref.receipt is not None
+    assert all(
+        s.queue_generation_requests[0]["sampling_params"]["temperature"] == 0.7 for s in iter_samples(ref.load())
+    )
+    children[0][0]._queue_lease = {"task_id": "another-task"}
+    with pytest.raises(ValueError, match="different queue task authorization"):
+        inherit_queue_context(group[0], children)
+
+
+def _restore_source_fixture(controller, payload):
+    store, codec = controller.store, controller.codec
+    source = codec.publish({"old_buffer": payload}, submission_id="old-source")
+    state = codec.publish(
+        dict(version=1, fetch_cursor=0, processed_cursor=0, processed_positions=[], batches=[], finished_batches=[]),
+        submission_id="old-training-state",
+    )
+    store.retain("checkpoint:old", [source, state])
+    store.release_publications([source, state])
+    store.seal()
+    controller.restore_training_state(state, 0, 0, retained_ref=source)
+    return source, state
+
+
+@pytest.mark.parametrize("source_factory", [True], indirect=True)
+def test_restore_source_handoff_releases_obsolete_snapshot_graphs(source_factory):
+    from dataclasses import asdict
+
+    from slime.utils.rollout_transport import DiskPayloadRef
+
+    controller = source_factory.controller
+    store, codec = controller.store, controller.codec
+    old = codec.publish({"tensor": torch.arange(4096)}, submission_id="obsolete")
+    old_pack = store.backend.root / old.manifest.segment.path
+    store.seal()
+    source, saved_state = _restore_source_fixture(controller, DiskPayloadRef(old, str(store.backend.root)))
+    restored = controller._training_state()
+    decision = restored["disposition"].load()
+    assert decision["checkpoint_state"] == asdict(saved_state)
+    assert decision["retained_source"] == asdict(source)
+    assert restored["restored_source"].manifest == source
+    # Replacing the latest filter audit must not drop recovery ownership.
+    filtered = codec.publish({"reason": "filter", "positions": []}, submission_id="filter")
+    controller.record_dispositions(filtered)
+    assert controller._training_state()["restored_source"].manifest == source
+    for index in range(2):
+        batch = f"completed-{index}"
+        plan = codec.publish({"batch_id": batch}, submission_id=f"plan-{index}")
+        controller.plan_batch(batch, [], plan)
+        ready = codec.publish({"batch_id": batch}, submission_id=f"ready-{index}")
+        controller.ready_batch(batch, ready)
+        controller.finish_batch(batch)
+    replacement = codec.publish({"buffer": []}, submission_id="empty-source")
+    store.retain("checkpoint:new", [replacement])
+    store.release_publications([replacement])
+    controller.handoff_restored_source(replacement)
+    store.seal()
+    controller._collect_storage()
+    assert old_pack.exists()  # The original checkpoint has not been retired.
+    store.release("checkpoint:old")
+    result = controller._collect_storage()
+    assert result["reclaimed_files"] > 0
+    assert not old_pack.exists()
+    state = controller._training_state()
+    assert state["restored_source"].manifest == replacement
+    assert state["batches"] == []
+    assert state["disposition"].load() == {"reason": "filter", "positions": []}
+
+
+@pytest.mark.parametrize("failure", [None, "retain", "report", "persist"])
+@pytest.mark.parametrize("source_factory", [True], indirect=True)
+def test_restore_source_handoff_preserves_lazy_consumers_and_failed_save(
+    source_factory, monkeypatch, tmp_path, failure
+):
+    import json
+    from dataclasses import asdict
+
+    import straw.reporting
+
+    from slime.rollout.queue_data_source import QueueDataSourceWithBuffer
+    from slime.utils.rollout_transport import DiskPayloadRef
+
+    controller = source_factory.controller
+    store, codec = controller.store, controller.codec
+    source = source_factory("owner")
+    source.__class__ = QueueDataSourceWithBuffer
+    source._owns_controller = False
+    source.data_config = {"test": True}
+    source.args.save = str(tmp_path / "checkpoints")
+    source.consumers = {}
+    prefix = codec.publish({"r3": torch.arange(4096)}, submission_id="lazy-prefix")
+    prefix_pack = store.backend.root / prefix.manifest.segment.path
+    store.seal()
+    source._restored_consumers = {"not_started": {"prefix": DiskPayloadRef(prefix, str(store.backend.root))}}
+    original, _ = _restore_source_fixture(controller, source._restored_consumers)
+    source.args._queue_restored_source_ref = original
+    before = controller.training_state()
+    with monkeypatch.context() as patch:
+
+        def fail(*args, **kwargs):
+            raise RuntimeError("injected save failure")
+
+        if failure == "retain":
+            patch.setattr(store, "retain", fail)
+        elif failure == "report":
+            patch.setattr(straw.reporting, "write_report", fail)
+        elif failure == "persist":
+            patch.setattr(controller._queue, "save_consumer_state", fail)
+        if failure:
+            with pytest.raises(RuntimeError, match="injected save failure"):
+                source.save(0)
+            assert controller.training_state() == before
+            store.seal()
+            controller._collect_storage()
+            assert prefix_pack.exists()
+    source.save(1)
+    saved = json.loads((Path(source.args.save) / "rollout/queue_state_1.json").read_text())
+    assert asdict(controller._training_state()["restored_source"].manifest) == saved["manifest"]
+    store.release("checkpoint:old")
+    store.seal()
+    controller._collect_storage()
+    current = controller._training_state()["restored_source"].load()
+    assert current["consumers"].keys() == {"not_started"}
+    actual = current["consumers"]["not_started"]["prefix"].load()["r3"]
+    torch.testing.assert_close(actual, torch.arange(4096), rtol=0, atol=0)
+    # Once the lazy consumer has consumed its buffer, a subsequent cut drops it.
+    source._restored_consumers = {}
+    source.save(2)
+    store.release(saved["storage_owner"])
+    if failure in {"persist", None}:
+        # A failed prepared snapshot remains protected until explicitly retired.
+        store.seal()
+        controller._collect_storage()
+        assert prefix_pack.exists() == (failure == "persist")
+
+
+@pytest.mark.parametrize("source_factory", [True], indirect=True)
+def test_restore_source_handoff_preserves_prefix_before_later_accepted_result(source_factory):
+    from slime.rollout.queue_data_source import QueueDataSourceWithBuffer
+    from slime.utils.rollout_transport import pack_rollout_group
+
+    controller = source_factory.controller
+    reader = source_factory("old-reader")
+    group = reader.get_samples(1)[0]
+    for sample in group:
+        sample.tokens = [7, 8, 9]
+        sample.response_length = 2
+        sample.status = Sample.Status.ABORTED
+        sample.rollout_routed_experts = torch.arange(8).reshape(2, 2, 2)
+    reader.add_samples([group])
+    prefix = reader.state_dict()
+    original, _ = _restore_source_fixture(controller, prefix)
+    later = reader.get_samples(1)[0]
+    for sample in later:
+        sample.tokens = [7, 8, 9, 10]
+        sample.response_length = 3
+        sample.rollout_routed_experts = torch.arange(12).reshape(3, 2, 2)
+    accepted = pack_rollout_group(later, reader.args, 0)
+    restored = source_factory("owner")
+    restored.__class__ = QueueDataSourceWithBuffer
+    restored._owns_controller = False
+    restored.data_config = {"test": True}
+    restored.consumers, restored._restored_consumers = {}, {}
+    restored.args.save = str(Path(reader.args.rollout_data_dir) / "saved")
+    restored.args._queue_restored_source_ref = original
+    restored.load_state_dict(prefix)
+    assert all(not hasattr(sample, "_queue_lease") for sample in restored.buffer[0])
+    assert all(sample._queue_receipt["position"] == accepted.receipt.position for sample in restored.buffer[0])
+    restored.save(0)
+    controller.store.release("checkpoint:old")
+    controller.store.seal()
+    controller._collect_storage()
+    current = controller._training_state()["restored_source"].load()
+    checkpoint = current["reader"].load()["buffer"][0]["group"].load()
+    assert [sample.tokens for sample in checkpoint] == [[7, 8, 9]] * 2
+    for sample in checkpoint:
+        torch.testing.assert_close(
+            sample.rollout_routed_experts.load(), torch.arange(8).reshape(2, 2, 2), rtol=0, atol=0
+        )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
+
+
+def test_rebuffer_traffic_is_linear_and_continuations_survive_worker_loss(
+    source_factory,
+):
+    from slime.utils.rollout_transport import pack_rollout_payload
+
+    reader = source_factory("buffered")
+    groups = reader.get_samples(64)
+    for group in groups:
+        for sample in group:
+            sample.tokens = [1, 2, 3]
+            sample.status = Sample.Status.ABORTED
+    root = Path(reader.args.rollout_data_dir)
+
+    def size():
+        return sum(p.stat().st_size for p in root.rglob("*.pack"))
+
+    before = size()
+    for group in groups[:32]:
+        reader.add_samples([group])
+    halfway = size() - before
+    for group in groups[32:]:
+        reader.add_samples([group])
+    assert size() - before < halfway * 2.5
+    controller = source_factory.controller
+    delivered = pack_rollout_payload([], reader.args, -1)
+    controller.recover_reader_results("buffered", delivered.manifest)
+    replacement = source_factory("replacement")
+    resumed = replacement.get_samples(64)
+    assert all(sample.tokens == [1, 2, 3] for group in resumed for sample in group)
+
+
+def test_cancelled_rebuffer_waiter_does_not_drop_its_continuation():
+    from slime.rollout.fully_async_distributed import _GenerationActor
+
+    actor = _GenerationActor.__new__(_GenerationActor)
+    persisted = []
+    actor.data_source = SimpleNamespace(add_samples=lambda groups: persisted.append(groups))
+
+    async def exercise():
+        waiters = [asyncio.create_task(actor._rebuffer(i)) for i in range(130)]
+        await asyncio.sleep(0.001)
+        waiters[0].cancel()
+        await asyncio.gather(*waiters, return_exceptions=True)
+        assert sorted(group for batch in persisted for group in batch) == list(range(130))
+        assert all(len(batch) <= 64 for batch in persisted)
+        assert len(persisted) == 3
+
+    asyncio.run(exercise())
+
+
+def test_reader_retries_when_another_reader_takes_the_just_refilled_batch(
+    source_factory,
+):
+    from straw.protocol import AcquireResult
+
+    calls = []
+    controller = source_factory.controller
+
+    def contested_take(reader_id, count):
+        calls.append(count)
+        if len(calls) == 1:
+            return AcquireResult("empty")
+        return controller.take(reader_id, count)
+
+    reader = source_factory("contended", take=contested_take)
+    groups = reader.get_samples(64)
+    assert len(groups) == 64
+    assert len({group[0].group_index for group in groups}) == 64
+    assert calls[:2] == [64, 64]
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_shutdown_allows_large_buffers_and_propagates_deadline_failure(monkeypatch, timeout):
+    import ray
+
+    from slime.rollout.fully_async_distributed import DistributedRollout, RolloutScheduler
+
+    scheduler = DistributedRollout.__new__(DistributedRollout)
+    scheduler.workers = [SimpleNamespace(close=SimpleNamespace(remote=lambda i=i: i)) for i in range(2)]
+    scheduler.capacities = [4096, 4096]
+    monkeypatch.setattr(RolloutScheduler, "close", lambda self: None)
+    clock = iter([100, 100, 140])
+    monkeypatch.setattr(
+        "slime.rollout.fully_async_distributed.time",
+        SimpleNamespace(monotonic=lambda: next(clock)),
+    )
+    waits, killed = [], []
+
+    def get(ref, *, timeout):
+        waits.append(timeout)
+        if fail:
+            raise ray.exceptions.GetTimeoutError("unfinished durable writes")
+        assert timeout > 40  # A valid large flush exceeds the old 30-second limit.
+
+    fail = timeout
+    monkeypatch.setattr(ray, "get", get)
+    monkeypatch.setattr(ray, "kill", lambda actor, **kwargs: killed.append(actor))
+    if timeout:
+        with pytest.raises(ray.exceptions.GetTimeoutError):
+            scheduler.close()
+    else:
+        scheduler.close()
+        assert waits == [300, 260]
+    assert killed == scheduler.workers
+
+
+@pytest.mark.parametrize("source_factory", [True], indirect=True)
+def test_online_gc_waits_for_training_completion_and_checkpoint_release(source_factory):
+    from straw import SharedFilesystemStore
+    from straw.protocol import RecordSetRef
+    from straw.tensor import publish_tensors
+
+    from slime.rollout.queue_codec import CODECS, SampleCodec
+    from slime.utils.rollout_transport import DiskPayloadRef
+
+    controller = source_factory.controller
+    assignment = controller.take("worker", 1).assignments[0]
+    lease = assignment.lease
+    writer = SharedFilesystemStore(controller.store.backend.root, controller.store.run_id, codecs=CODECS)
+    tensor = publish_tensors(writer, {"routes": torch.arange(1024)}, submission_id="routes")[0]
+    raw = SampleCodec(writer).publish(
+        {"routes": tensor},
+        submission_id="result",
+        metadata={"task_id": lease.task_id, "attempt_id": lease.attempt_id},
+    )
+    receipt = controller.complete(lease, raw)
+    writer.seal()
+    plan = controller.codec.publish({"raw": DiskPayloadRef(raw, str(writer.backend.root))}, submission_id="plan")
+    controller.plan_batch("batch", [receipt.position], plan)
+    ready = controller.codec.publish(
+        {"batch_id": "batch", "raw": DiskPayloadRef(raw, str(writer.backend.root))},
+        submission_id="ready",
+    )
+    controller.ready_batch("batch", ready)
+    controller._collect_storage()
+    assert torch.equal(tensor.load(), torch.arange(1024))
+    state = RecordSetRef.from_dict(controller.training_state()["state_ref"])
+    controller.store.retain("checkpoint:test", [state])
+    controller.finish_batch("batch")
+    assert controller._training_state()["batches"] == []
+    assert torch.equal(tensor.load(), torch.arange(1024))
+    controller.store.release("checkpoint:test")
+    report = controller._collect_storage()
+    assert report["reclaimed_files"] >= 1
+    assert not Path(tensor.path).exists()
+
+
+@pytest.mark.parametrize("failure", [None, "cursor", "persist"])
+def test_joint_restore_starts_gc_only_after_consumer_state_is_durable(tmp_path, monkeypatch, failure):
+    from straw.errors import StorageUnavailable
+
+    args = SimpleNamespace(
+        rollout_data_transport="straw",
+        rollout_data_dir=str(tmp_path),
+        rollout_queue_online_gc=True,
+        _joint_resume={"rollout_id": 0},
+    )
+    controller = RolloutQueueController(args)
+    try:
+        assert controller._gc_thread is None
+        state = dict(
+            version=1, fetch_cursor=0, processed_cursor=0, processed_positions=[], batches=[], finished_batches=[]
+        )
+        ref = controller.codec.publish(state, submission_id="saved-training")
+        save = controller._queue.save_consumer_state
+        persisted = []
+
+        def save_before_gc(*a, **kw):
+            assert controller._gc_thread is None
+            if failure == "persist":
+                raise StorageUnavailable("injected storage failure")
+            result = save(*a, **kw)
+            persisted.append(result)
+            return result
+
+        monkeypatch.setattr(controller._queue, "save_consumer_state", save_before_gc)
+        if failure:
+            with pytest.raises((ValueError, StorageUnavailable)):
+                controller.restore_training_state(ref, 1 if failure == "cursor" else 0, 0)
+            assert controller._gc_thread is None
+            assert not persisted
+        else:
+            restored = controller.restore_training_state(ref, 0, 0)
+            assert persisted and controller.codec.load(restored) == state
+            assert controller._gc_thread.is_alive()
+            thread = controller._gc_thread
+            controller._start_gc()
+            assert controller._gc_thread is thread
+    finally:
+        controller.close()
+
+
+@pytest.mark.parametrize("error_name", ["UnsafeRecovery", "StorageUnavailable"])
+def test_background_gc_failure_stops_queue_work_and_fails_close(tmp_path, monkeypatch, error_name):
+    from straw import Record, TaskSpec, errors
+
+    args = SimpleNamespace(rollout_data_transport="straw", rollout_data_dir=str(tmp_path))
+    controller = RolloutQueueController(args)
+    queue = controller.queue
+    ref = controller.store.publish([Record("input", b"still protected")], submission_id="input")
+    queue.submit_tasks("input", [TaskSpec("prompt:0", input_ref=ref)])
+    lease = queue.acquire("reader").assignments[0].lease
+    controller.store.seal()
+    before = queue.journal.path.read_bytes()
+    error = getattr(errors, error_name)("injected GC failure")
+    calls = []
+
+    def fail():
+        calls.append("collect")
+        raise error
+
+    monkeypatch.setattr(queue, "collect_garbage", fail)
+    monkeypatch.setattr(controller._gc_stop, "wait", lambda timeout: False)
+    controller._gc_thread = threading.Thread(target=controller._gc_loop)
+    controller._gc_thread.start()
+    controller._gc_thread.join(5)
+    assert not controller._gc_thread.is_alive()
+    assert controller._gc_stop.is_set() and calls == ["collect"]
+
+    for operation in (
+        controller.configuration,
+        controller.identity,
+        lambda: controller.take("another-reader", 1),
+        lambda: controller.complete(lease, ref),
+        lambda: controller.progress(lease, ref),
+        lambda: controller.finish_batch("batch"),
+        controller.training_state,
+        lambda: controller._save_training_state({}),
+    ):
+        with pytest.raises(RuntimeError, match="GC failed") as raised:
+            operation()
+        assert raised.value.__cause__ is error
+    assert queue.journal.path.read_bytes() == before
+    closed = []
+    original_close = queue.close
+
+    def close_queue():
+        original_close()
+        closed.append(True)
+
+    monkeypatch.setattr(queue, "close", close_queue)
+    with pytest.raises(RuntimeError, match="GC failed") as raised:
+        controller.close()
+    assert raised.value.__cause__ is error and closed == [True]
+    assert next(controller.store.read(ref)).payload == b"still protected"
+
+
+def test_admission_pause_acknowledges_workers_without_waiting_for_responses(scheduler_factory):
+    scheduler, submitted, release = scheduler_factory(1, [1, 1], slow_worker=0)
+    scheduler.generate(0, prefetch=2)
+    with ThreadPoolExecutor(1) as pool:
+        paused = pool.submit(scheduler.pause, drain=False)
+        try:
+            assert paused.result(timeout=3) is False
+            assert not release.is_set()
+            assert all(not worker.actor.running for worker in scheduler.workers)
+            count = len(submitted)
+        finally:
+            release.set()
+    assert scheduler.pause() is True
+    assert len(submitted) == count
+    assert not scheduler.pending and not scheduler.running_workers
+    scheduler.resume()
+    assert len(scheduler.generate(1, prefetch=2).samples) == 1
+
+
+def test_queue_fetch_finishing_after_pause_preserves_group_without_new_generation(monkeypatch):
+    from slime.rollout import sglang_rollout
+    from slime.rollout.fully_async_distributed import _GenerationActor
+
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+        sample = Sample(tokens=[1, 2], status=Sample.Status.ABORTED)
+        sample._queue_lease = {"task_id": "borrowed"}
+        group = [sample]
+        buffered = []
+
+        async def fetch(count):
+            entered.set()
+            await release.wait()
+            return [group]
+
+        async def rebuffer(value):
+            buffered.append(value)
+
+        async def unexpected(*args):
+            raise AssertionError("Paused worker admitted a generation request")
+
+        monkeypatch.setattr(sglang_rollout, "generate_and_rm_group", unexpected)
+        worker = _GenerationActor.__new__(_GenerationActor)
+        worker.running = True
+        worker.data_source = SimpleNamespace(get_samples_async=fetch)
+        worker._rebuffer = rebuffer
+        task = asyncio.create_task(worker._generate_group(0))
+        await entered.wait()
+        await worker._pause()
+        release.set()
+        assert await task is None
+        assert buffered == [group]
+        assert sample._queue_lease == {"task_id": "borrowed"}
+        assert sample.tokens == [1, 2]
+
+    asyncio.run(run())

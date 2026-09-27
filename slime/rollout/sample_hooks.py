@@ -50,7 +50,7 @@ async def _apply_to_sample(args, sample: Sample, paths: list[str], **kwargs) -> 
 
 
 async def apply_rollout_sample_hooks(args, value, **kwargs):
-    """Apply configured hooks to every Sample leaf while preserving list shape."""
+    """Apply user hooks; the owning queue publication persists replay tensors."""
 
     paths = getattr(args, "rollout_sample_hook_path", None) or []
     if not paths:

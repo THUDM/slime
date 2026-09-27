@@ -2,14 +2,12 @@
 
 import math
 import os
-import uuid
-from pathlib import Path
 
 import numpy as np
 import torch
 
 from slime.utils.ppo_utils import get_pg_loss_type, importance_weights
-from slime.utils.tensor_store import DiskTensorRef
+from slime.utils.tensor_store import TensorRef
 
 SAMPLER_TOPK_FIELDS = ("rollout_topk_token_ids", "rollout_topk_log_probs")
 
@@ -232,7 +230,7 @@ def validate_sampler_top_p(ids, offsets, logps, count, loss_mask=None, tokens=No
 
 
 def validate_sampler_topk(sample, k):
-    """Validate arrays once before spilling; subsequent transport checks only references."""
+    """Validate arrays before publication; subsequent transport checks only references."""
     ids, logps = sample.rollout_topk_token_ids, sample.rollout_topk_log_probs
     if sample.response_length == 0 and ids is None and logps is None:
         sample.rollout_topk_token_ids = torch.empty((0, k), dtype=torch.int32)
@@ -241,7 +239,7 @@ def validate_sampler_topk(sample, k):
     if ids is None or logps is None:
         raise ValueError("Score centering requires rollout_topk_token_ids and rollout_topk_log_probs on every sample.")
     shape = (sample.response_length, k)
-    disk = [isinstance(value, DiskTensorRef) for value in (ids, logps)]
+    disk = [isinstance(value, TensorRef) for value in (ids, logps)]
     if any(disk):
         if not all(disk):
             raise ValueError("Sampler top-k ids and logprobs must both be disk references.")
@@ -250,8 +248,7 @@ def validate_sampler_topk(sample, k):
                 raise ValueError(f"Sampler top-k disk reference must have shape {shape} and dtype {dtype}.")
             if value.kind != key:
                 raise ValueError(f"Unexpected sampler top-k disk reference kind: {value.kind}")
-            if not Path(value.path).is_file():
-                raise FileNotFoundError(value.path)
+            value.validate()
         if ids.validated and logps.validated:
             return
     else:
@@ -264,39 +261,3 @@ def validate_sampler_topk(sample, k):
         _validate_head_arrays(
             np.asarray(ids[start : start + 1024]), np.asarray(logps[start : start + 1024], dtype=np.float64)
         )
-
-
-def spill_sampler_topk(args, sample, rollout_id):
-    """Keep sampler heads beside routes under the existing R3 spill directory."""
-    if not getattr(args, "use_score_centering", False):
-        return
-    if getattr(args, "rollout_top_p", 1.0) < 1:
-        return
-    store_dir = getattr(args, "rollout_routed_experts_store_dir", None)
-    if not store_dir:
-        if any(isinstance(getattr(sample, key), DiskTensorRef) for key in SAMPLER_TOPK_FIELDS):
-            raise ValueError("Sampler top-k file retention requires --rollout-routed-experts-store-dir")
-        return
-    validate_sampler_topk(sample, args.score_centering_top_k)
-    component = "unknown" if rollout_id is None else f"{int(rollout_id):08d}"
-    directory = Path(store_dir) / f"rollout_{component}"
-    for key, dtype in zip(SAMPLER_TOPK_FIELDS, (torch.int32, torch.float32), strict=True):
-        value = getattr(sample, key)
-        if isinstance(value, DiskTensorRef):
-            if Path(value.path).parent.resolve() != directory.resolve():
-                setattr(
-                    sample, key, value.link(directory / f"sample_{sample.index}_{key}_{uuid.uuid4().hex}.safetensors")
-                )
-            continue
-        # Ray may return read-only arrays; writing safetensors only reads them.
-        array = np.asarray(value)
-        if not array.flags.writeable:
-            array = array.copy()
-        tensor = torch.as_tensor(array, dtype=dtype)
-        ref = DiskTensorRef.write(
-            tensor,
-            directory / f"sample_{sample.index}_{key}_{uuid.uuid4().hex}.safetensors",
-            kind=key,
-            validated=True,
-        )
-        setattr(sample, key, ref)

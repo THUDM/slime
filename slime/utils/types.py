@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from slime.utils.misc import decode_int32_meta_array
-from slime.utils.tensor_store import DiskTensorRef
+from slime.utils.tensor_store import TensorRef
 
 _TOP_P_TOKEN_ID_META_KEYS = ("top_p_token_ids", "top_p_kept_token_ids")
 _TOP_P_TOKEN_OFFSET_META_KEYS = ("top_p_token_offsets", "top_p_kept_token_offsets")
@@ -122,14 +122,14 @@ class Sample:
     loss_mask: list[int] | None = None
     weight_versions: list[str] = field(default_factory=list)
     rollout_log_probs: list[float] | None = None  # Log probabilities from rollout engine
-    rollout_topk_token_ids: np.ndarray | torch.Tensor | list[list[int]] | DiskTensorRef | None = None
-    rollout_topk_log_probs: np.ndarray | torch.Tensor | list[list[float]] | DiskTensorRef | None = None
+    rollout_topk_token_ids: np.ndarray | torch.Tensor | list[list[int]] | TensorRef | None = None
+    rollout_topk_log_probs: np.ndarray | torch.Tensor | list[list[float]] | TensorRef | None = None
     # Ragged top-p nucleus token ids replayed from rollout sampling. For response
     # token i, kept ids are rollout_top_p_token_ids[offsets[i]:offsets[i + 1]].
     rollout_top_p_token_ids: list[int] | torch.Tensor | None = None
     rollout_top_p_token_offsets: list[int] | torch.Tensor | None = None
     rollout_top_p_log_probs: np.ndarray | torch.Tensor | list[float] | None = None
-    rollout_routed_experts: list[list[int]] | list[torch.Tensor] | torch.Tensor | DiskTensorRef | None = (
+    rollout_routed_experts: list[list[int]] | list[torch.Tensor] | torch.Tensor | TensorRef | None = (
         None  # Routed experts from rollout engine
     )
     remove_sample: bool = False
@@ -295,7 +295,7 @@ class Sample:
             k = args.score_centering_top_k
             for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
                 value = getattr(self, key)
-                if isinstance(value, DiskTensorRef):
+                if isinstance(value, TensorRef):
                     setattr(self, key, value.load().numpy())
             if trainable:
                 ids, logps = extract_sampler_topk(meta_info or {}, len(tokens), k)
@@ -486,7 +486,7 @@ class Sample:
         existing = self.rollout_routed_experts
         if existing is None:
             self.rollout_routed_experts = routed_experts
-        elif isinstance(existing, DiskTensorRef):
+        elif isinstance(existing, TensorRef):
             self.rollout_routed_experts = [existing.load(), routed_experts]
         elif isinstance(existing, list) and all(torch.is_tensor(item) for item in existing):
             existing.append(routed_experts)
@@ -497,7 +497,7 @@ class Sample:
         routed_experts = self.rollout_routed_experts
         if routed_experts is None:
             return 0
-        if isinstance(routed_experts, DiskTensorRef):
+        if isinstance(routed_experts, TensorRef):
             return int(routed_experts.shape[0])
         if torch.is_tensor(routed_experts):
             return int(routed_experts.shape[0])
@@ -513,7 +513,7 @@ class Sample:
         routed_experts = self.rollout_routed_experts
         if routed_experts is None:
             return None
-        if isinstance(routed_experts, DiskTensorRef):
+        if isinstance(routed_experts, TensorRef):
             tensor = routed_experts.load()
         elif torch.is_tensor(routed_experts):
             tensor = routed_experts.reshape(*routed_experts.shape)

@@ -71,7 +71,7 @@
       'cpu': True,
       'extra_pip_deps': 'transformers wandb',
       'tests': [
-        {'test_file': 'test_megatron_argument_validation.py', 'num_gpus': 0},
+        {'test_file': 'test_megatron_argument_validation.py', 'num_gpus': 0, 'straw': True},
         {'test_file': 'utils/test_megatron_role_config.py', 'num_gpus': 0},
         {'test_file': 'test_deep_ep_tms_patch.py', 'num_gpus': 0},
         {'test_file': 'test_stateless_adam.py', 'num_gpus': 0},
@@ -91,9 +91,9 @@
         {'test_file': 'test_ppo_kl_metric.py', 'num_gpus': 0},
         {'test_file': 'test_cispo_loss.py', 'num_gpus': 0},
         {'test_file': 'test_policy_loss.py', 'num_gpus': 0},
-        {'test_file': 'test_score_centering.py', 'num_gpus': 0},
+        {'test_file': 'test_score_centering.py', 'num_gpus': 0, 'straw': True},
         {'test_file': 'test_score_centering_binary.py', 'num_gpus': 0},
-        {'test_file': 'test_score_centering_transport.py', 'num_gpus': 0},
+        {'test_file': 'test_score_centering_transport.py', 'num_gpus': 0, 'straw': True},
         {'test_file': 'test_ppo_logprob_entropy.py', 'num_gpus': 0},
         {'test_file': 'test_discounted_returns.py', 'num_gpus': 0},
         {'test_file': 'test_block_fp8_zero_block.py', 'num_gpus': 0},
@@ -109,11 +109,16 @@
         {'test_file': 'test_filter_long_prompt.py', 'num_gpus': 0},
         {'test_file': 'test_read_file_slicing.py', 'num_gpus': 0},
         {'test_file': 'test_fully_async_rollout.py', 'num_gpus': 0},
-        {'test_file': 'test_distributed_rollout.py', 'num_gpus': 0},
+        {'test_file': 'test_distributed_rollout.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_straw_fully_async_recovery.py', 'num_gpus': 0, 'straw': True},
         {'test_file': 'test_rollout_buffer_order.py', 'num_gpus': 0},
         {'test_file': 'test_server_control.py', 'num_gpus': 0},
         {'test_file': 'test_cuda_stack_offload.py', 'num_gpus': 0},
-        {'test_file': 'test_r3_spill.py', 'num_gpus': 0},
+        {'test_file': 'test_straw_r3.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_routed_experts_disk_layout.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_rollout_straw_transport.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_optional_straw.py', 'num_gpus': 0},
+        {'test_file': 'test_queue_sample_codec.py', 'num_gpus': 0, 'straw': True},
         {'test_file': 'test_rollout_sample_hooks.py', 'num_gpus': 0},
         {'test_file': 'test_hf_to_megatron.py', 'num_gpus': 0},
         {'test_file': 'test_qwen3_5_vl_native.py', 'num_gpus': 0},
@@ -231,6 +236,13 @@ jobs:
           pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors psutil
 <% if config.get('extra_pip_deps') %>
           pip install << config.extra_pip_deps >>
+<% endif %>
+
+<% if job_name == 'cpu-unittest' %>
+      - name: Install straw for queue tests
+        if: matrix.info.straw == true
+        shell: bash
+        run: python -m pip install --upgrade --only-binary=straw-queue straw-queue
 <% endif %>
 
       - name: Install

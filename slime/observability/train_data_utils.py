@@ -5,7 +5,7 @@ from typing import Any
 
 import torch
 
-from slime.utils.tensor_store import DiskTensorRef, retain_debug_tensor_refs
+from slime.utils.tensor_store import TensorRef, materialize_tensor_refs
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ def restore_context_parallel_fields_to_cpu(
         full_values = [] if keep_restored else None
         for value, total_length, response_length in zip(values, total_lengths, response_lengths, strict=True):
             # Disk references and allgather-CP heads retain full response rows.
-            if isinstance(value, DiskTensorRef) or allgather_cp:
+            if isinstance(value, TensorRef) or allgather_cp:
                 full_value = value
                 if len(full_value) != response_length:
                     raise ValueError(f"Full sampler head field {key!r} must have {response_length} rows.")
@@ -303,5 +303,4 @@ def save_debug_train_data(args, *, rollout_id, rollout_data):
     logger.info(f"Save debug train data from {dp_size} DP shard(s) to {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
     dump_data = _build_dump_payload(dp_shards, rollout_id=rollout_id, writer_rank=rank)
-    retain_debug_tensor_refs(dump_data, path)
-    torch.save(dump_data, path)
+    torch.save(materialize_tensor_refs(dump_data), path)

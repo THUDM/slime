@@ -45,6 +45,16 @@ changed-test job 本身走 self-hosted Docker 路径。当 `NUM_GPUS = 0` 时，
 
 ## CI Jobs 与触发方式
 
+CPU 矩阵通过 `straw: true` 标记依赖 straw 的测试。对应 job 从 PyPI 安装最新版 `straw-queue` wheel，再运行测试。队列测试无需 Rust 工具链，也不需要访问 straw 源码仓库。
+
+`test_optional_straw.py` 的 CPU job 不安装 straw，验证默认 rollout 与训练数据路径仍可运行、启动时打印 `pip install straw-queue` 提示，以及显式选择 straw 时给出明确的安装错误。
+
+`test_straw_fully_async_recovery.py` 是自动运行的 CPU 集成测试：SIGKILL 一个包含两个本地 Ray 节点的任务，再用新进程从同一个文件系统队列恢复，分别验证在线 GC 关闭和开启。测试使用有界的小规模 R3/SC 载荷，以及确定性的推理/reward fixture。安装兼容 straw wheel 后，本地运行：
+
+```bash
+PYTHONPATH=. python tests/test_straw_fully_async_recovery.py
+```
+
 | Trigger | Job | 类型 | 说明 |
 |---|---|---|---|
 | 自动运行 | `cpu-unittest` | CPU | 默认运行的 unit/contract tests，覆盖 argument validation、schedule、reward、sample、rollout validation、checkpoint utilities 和 plugin contracts。 |

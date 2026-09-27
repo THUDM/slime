@@ -27,9 +27,9 @@ def no_gpu_server_imports(monkeypatch):
 
 
 def manager(**overrides):
-    from slime.ray.rollout import RolloutManager
+    from slime.rollout.batch_builder import BatchBuilder
 
-    cls = RolloutManager.__ray_metadata__.modified_class
+    cls = BatchBuilder
     result = cls.__new__(cls)
     result.args = args(**overrides)
     result.custom_convert_samples_to_train_data_func = None
@@ -57,7 +57,7 @@ def test_topk_training_transport_and_microbatch_order(monkeypatch):
 
     data = samples()
     data[1].rollout_topk_token_ids[0] = [5, 6, 7]
-    batch = manager()._convert_samples_to_train_data(data)
+    batch = manager().convert(data)
     tensorize_rollout_data_for_training(batch)
     assert batch["rollout_topk_token_ids"][0].dtype == torch.int32
     assert batch["rollout_topk_log_probs"][0].dtype == torch.float32
@@ -72,7 +72,7 @@ def test_missing_sampler_metadata_rejected_by_manager(field):
     data = samples()
     setattr(data[1], field, None)
     with pytest.raises(ValueError, match="Score centering"):
-        manager()._convert_samples_to_train_data(data)
+        manager().convert(data)
 
 
 def test_generate_requests_sampler_topk(monkeypatch):
@@ -99,6 +99,59 @@ def test_generate_requests_sampler_topk(monkeypatch):
     assert sample.rollout_topk_token_ids.tolist() == [[3, 1, 4]]
 
 
+@pytest.mark.parametrize(
+    "echo_start,returned_rows,error",
+    [(None, 1, None), (1, 1, None), (0, 1, "differs from request"), (None, 2, "element count")],
+)
+def test_r3_resume_appends_routes_without_replacing_the_persisted_prefix(
+    monkeypatch, echo_start, returned_rows, error
+):
+    import base64
+    from slime.rollout import sglang_rollout as rollout
+
+    a = args(
+        sglang_router_ip="localhost",
+        sglang_router_port=1234,
+        use_rollout_routing_replay=True,
+        ci_test=False,
+        num_layers=2,
+        moe_router_topk=2,
+    )
+    sample = samples()[0]
+    sample.status = Sample.Status.ABORTED
+    prefix = torch.tensor([[[1, 2], [3, 4]]], dtype=torch.int32)
+    sample.rollout_routed_experts = prefix.clone()
+    monkeypatch.setattr(rollout, "GenerateState", lambda _: SimpleNamespace(tokenizer=None, processor=None))
+    monkeypatch.setattr(rollout, "_prepare_prompt_ids", lambda sample, *_: sample.tokens)
+
+    async def post(url, payload, **kwargs):
+        assert payload["routed_experts_start_len"] == 1
+        assert payload["input_ids"] == [9, 3]
+        info = meta()
+        info.update(
+            output_token_logprobs=[[-0.5, 3, None]],
+            finish_reason={"type": "stop"},
+            routed_experts=base64.b64encode(
+                torch.tensor([[[5, 6], [7, 8]]], dtype=torch.int32).repeat(returned_rows, 1, 1).numpy().tobytes()
+            ).decode(),
+        )
+        if echo_start is not None:
+            info["routed_experts_start_len"] = echo_start
+        return {"text": "x", "meta_info": info}
+
+    monkeypatch.setattr(rollout, "post", post)
+    if error:
+        with pytest.raises(ValueError, match=error):
+            asyncio.run(rollout.generate(a, sample, {"max_new_tokens": 8}))
+        assert torch.equal(sample.materialize_rollout_routed_experts(), prefix)
+        return
+    actual = asyncio.run(rollout.generate(a, sample, {"max_new_tokens": 8}))
+    assert actual.tokens == [9, 3, 3]
+    assert torch.equal(actual.materialize_rollout_routed_experts()[:1], prefix)
+    assert actual.rollout_routed_experts[1:].flatten().tolist() == [5, 6, 7, 8]
+    assert actual.rollout_topk_token_ids.tolist() == [[3, 1, 4], [3, 1, 4]]
+
+
 def test_streaming_score_centering_rejected():
     from slime.rollout.sglang_streaming_rollout import generate_streaming
 
@@ -108,7 +161,7 @@ def test_streaming_score_centering_rejected():
 
 @pytest.mark.parametrize("transport", ["object-store", "nixl"])
 def test_dp_transport_keeps_heads_aligned(monkeypatch, transport):
-    from slime.ray import rollout
+    from slime.rollout import batch_builder as rollout
 
     mgr = manager(rollout_data_transport=transport, global_batch_size=2)
     mgr.train_parallel_config = {"dp_size": 2}
@@ -122,7 +175,7 @@ def test_dp_transport_keeps_heads_aligned(monkeypatch, transport):
     monkeypatch.setattr(rollout.ray, "put", put)
     data = samples()
     data[1].rollout_topk_token_ids[0] = [5, 6, 7]
-    refs = mgr._split_train_data_by_dp(mgr._convert_samples_to_train_data(data))
+    refs = mgr.split_by_dp(mgr.convert(data))
     assert refs[0].inner["rollout_topk_token_ids"][0].tolist() == [[5, 6, 7]]
     assert refs[1].inner["rollout_topk_token_ids"][0].tolist() == [[3, 1, 4]]
     assert captured == ([{"_tensor_transport": "nixl"}] * 2 if transport == "nixl" else [{}, {}])
@@ -168,22 +221,22 @@ def test_evaluation_preserves_training_score_centering(monkeypatch):
     assert a.use_score_centering
 
 
-def test_spilled_heads_survive_buffer_and_debug_dump_lifetimes(tmp_path):
+def test_straw_heads_survive_buffer_and_debug_dump_lifetimes(tmp_path):
     from slime.observability.rollout_data_utils import load_debug_rollout_data, save_debug_rollout_data
-    from slime.utils.routed_experts import cleanup_routed_experts_rollout, link_routed_experts_for_rollout
-    from slime.utils.score_centering import spill_sampler_topk, validate_sampler_topk
-    from slime.utils.tensor_store import DiskTensorRef
+    from slime.utils.rollout_transport import pack_rollout_payload, seal_rollout_store
+    from slime.utils.score_centering import validate_sampler_topk
+    from slime.utils.tensor_store import TensorRef
 
-    a = args(rollout_routed_experts_store_dir=str(tmp_path))
-    sample = samples()[0]
-    spill_sampler_topk(a, sample, 1)
-    assert isinstance(sample.rollout_topk_token_ids, DiskTensorRef)
-    link_routed_experts_for_rollout(a, sample, 2)
+    a = args(rollout_data_transport="straw", rollout_data_dir=str(tmp_path))
+    sample = pack_rollout_payload(samples()[0], a, 1).load()
+    assert isinstance(sample.rollout_topk_token_ids, TensorRef)
+    sample = pack_rollout_payload(sample, a, 2).load()
     path = str(tmp_path / "debug.pt")
     save_debug_rollout_data(path, [sample], rollout_id=2, evaluation=False)
-    cleanup_routed_experts_rollout(a, 1)
+    seal_rollout_store(a)
     validate_sampler_topk(sample, 3)
-    cleanup_routed_experts_rollout(a, 2)
+    for pack in tmp_path.rglob("*.pack"):
+        pack.unlink()
     restored = load_debug_rollout_data(path, rollout_id=2)[0]
     validate_sampler_topk(restored, 3)
     restored.append_response_tokens(a, tokens=[3], log_probs=[-0.5], meta_info=meta())
@@ -194,7 +247,6 @@ def test_spilled_heads_survive_buffer_and_debug_dump_lifetimes(tmp_path):
 def test_training_metrics_ignore_sampler_head_payloads(monkeypatch, tmp_path, disk):
     from megatron.core import mpu
     from slime.observability import train_metric_utils as metrics
-    from slime.utils.tensor_store import DiskTensorRef
 
     for name, value in {
         "get_tensor_model_parallel_rank": 0,
@@ -205,12 +257,18 @@ def test_training_metrics_ignore_sampler_head_payloads(monkeypatch, tmp_path, di
         monkeypatch.setattr(mpu, name, lambda *a, _value=value, **kw: _value, raising=False)
     reported = []
     monkeypatch.setattr(metrics, "gather_log_data", lambda name, args, rollout_id, data: reported.append(data))
-    batch = manager()._convert_samples_to_train_data(samples())
+    batch = manager().convert(samples())
     tensorize_rollout_data_for_training(batch)
     batch.update(total_lengths=[2, 2], global_batch_sizes=[2])
     if disk:
-        for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
-            batch[key] = [DiskTensorRef.write(x, tmp_path / f"{key}_{i}") for i, x in enumerate(batch[key])]
+        from straw import SharedFilesystemStore
+        from straw.tensor import publish_tensors
+
+        with SharedFilesystemStore(tmp_path, "metrics", codecs=("tensor.v1",)) as store:
+            for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
+                batch[key] = list(
+                    publish_tensors(store, {str(i): x for i, x in enumerate(batch[key])}, submission_id=key)
+                )
     metrics.log_rollout_data(
         0, args(ci_test=False, log_multi_turn=False, log_passrate=False, log_correct_samples=False), batch
     )
@@ -223,7 +281,7 @@ def test_training_metrics_ignore_sampler_head_payloads(monkeypatch, tmp_path, di
 def test_exact_top_p_transport_and_microbatch(monkeypatch, transport):
     import numpy as np
     from test_score_centering import binary_top_p_meta
-    from slime.ray import rollout
+    from slime.rollout import batch_builder as rollout
 
     packed = types.ModuleType("megatron.core.packed_seq_params")
     packed.PackedSeqParams = object
@@ -246,8 +304,8 @@ def test_exact_top_p_transport_and_microbatch(monkeypatch, transport):
         if i == 1:
             sample.append_response_tokens(mgr.args, tokens=[8], trainable=False)
         samples.append(sample)
-    batch = mgr._convert_samples_to_train_data(samples)
-    refs = mgr._split_train_data_by_dp(batch)
+    batch = mgr.convert(samples)
+    refs = mgr.split_by_dp(batch)
     assert refs[0].inner["rollout_top_p_token_offsets"][0].tolist() == [0, 2, 3, 3]
     for ref in refs:
         tensorize_rollout_data_for_training(ref.inner)

@@ -23,6 +23,7 @@ NUM_GPUS = 0
 
 def args(mode="none", **overrides):
     values = dict(
+        rollout_data_transport="object-store",
         pg_loss_type=None,
         use_score_centering=True,
         score_centering_top_k=3,
@@ -223,18 +224,24 @@ def distributed_worker(rank, world_size, port, layout, mode, disk=False):
         local = local.clone().requires_grad_()
         original = dict(batch)
         import tempfile
-        from pathlib import Path
-        from slime.utils.tensor_store import DiskTensorRef
 
         with tempfile.TemporaryDirectory() as directory:
             if disk:
-                for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
-                    batch[key] = [
-                        DiskTensorRef.write(
-                            value.int() if key.endswith("ids") else value, Path(directory) / f"{key}_{i}.safetensors"
+                from straw import SharedFilesystemStore
+                from straw.tensor import publish_tensors
+
+                with SharedFilesystemStore(directory, "sc", codecs=("tensor.v1",)) as store:
+                    for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
+                        batch[key] = list(
+                            publish_tensors(
+                                store,
+                                {
+                                    str(i): value.int() if key.endswith("ids") else value
+                                    for i, value in enumerate(batch[key])
+                                },
+                                submission_id=key,
+                            )
                         )
-                        for i, value in enumerate(batch[key])
-                    ]
             _check_distributed_batch(
                 rank,
                 layout,

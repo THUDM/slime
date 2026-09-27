@@ -391,28 +391,45 @@ slime 支持不同程度的自定义数据生成（rollout）。
 
 - 有的时候，我们还需要支持自定义的 reward model，可以通过配置 `--custom-rm-path` 来进行配置。
 
-### 分布式 fully async rollout
+### 持久化 rollout 队列和分布式 fully async
 
-保留 fully async 入口，通过现有的 `--data-source-path` 选择各节点本地读数据的方案：
+数据流、共享张量所有权和 checkpoint 边界详见 [straw 架构与恢复](../advanced/straw.md)。
+
+Rollout payload 默认使用 Ray `object-store`，数据源为 `slime.rollout.data_source.RolloutDataSourceWithBuffer`；此模式不需要 straw 或共享 rollout 目录。`--rollout-data-transport nixl` 则选择 Ray 的 NIXL 张量传输。
+
+安装 [straw](../advanced/straw.md) 后，通过 `--rollout-data-transport straw` 启用持久化队列和打包张量存储。straw 传输默认使用 `slime.rollout.queue_data_source.QueueDataSourceWithBuffer`，数据与协调日志存放在 `--rollout-data-dir`；设置了 `--save` 时可省略目录，使用 `<save>/rollout_data`，否则必须显式提供共享目录。Ray 仍负责 actor、RPC 和小引用传递。默认仍是同步 rollout；分布式 fully async 需要显式选择：
 
 ```bash
 --rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async \
---data-source-path slime.rollout.distributed_data_source.DistributedDataSourceWithBuffer
+--rollout-data-transport straw \
+--rollout-data-dir /shared/run/rollout_data
 ```
 
-Fully async 函数负责分布式执行，在每个有 CPU 资源的 Ray 节点上创建一个常驻生成进程，每个进程占用一个 Ray CPU。总生成并发至少要容纳每个节点一个完整 prompt group；训练 batch 可以小于节点数量。使用默认数据源时，fully async 仍走原来的本地调度。
+straw 传输下，开启 `--use-rollout-routing-replay` 后会将已完成 sample 的 R3 routes 随所属 group 一起写入 straw；开启 `--use-score-centering` 时也会在同一次发布中保存 SC 张量，包括只使用 SC 的情况。R3/SC 落盘统一使用 straw 后端；默认 object-store 传输将这些张量保存在内存中。不再提供独立的 spill hook 或目录。自定义 sample hook 先执行，R3、SC 与 sample 元数据一起发布到共享 pack，后续队列发布复用引用。大批 group 按底层写入预算拆分。Aborted prefix 由队列 continuation 路径持久化。`--rollout-queue-online-gc` 是独立开关，默认关闭：训练确认使用完成后，straw 可回收所有 owner 都已释放的 sealed pack。
 
-每个进程用相同路径、tokenizer、chat template、过滤配置和 seed 加载相同的数据副本。全局分配器只分配互不重叠的整数索引区间，无须从 manager 传输原始 prompt。初始化时会检查过滤后的数据集大小；用户需要确保各节点的数据和预处理一致。
+作业内一个禁止自动重启的 Ray actor 管理任务 lease 和串行 dataset producer。Dataset 游标与任务提交在同一日志事务中保存，worker 通过小引用直接读取共享存储中的 prompt group，替代原来的内存索引分配器。Shuffle、group/sample 编号沿用原有数据源逻辑，故障不会丢弃 reader 预留的索引区间。
 
-`DistributedDataSourceWithBuffer` 保留 `get_samples(n)` 和 `add_samples(...)`。Custom rollout 可以将 `source.reader_config("unique_reader_id")` 传给自己的远端进程，在进程内调用 `config.open()`，获得同样接口的本地 reader。应传这个小配置，而不是加载后的数据源。每个 reader 的 ID 必须唯一，`owner` 为保留名称。Buffer 保留在每个 reader 本地：`add_samples()` 放回的 group 由同一个 reader 的后续 `get_samples()` 优先取用。放入 manager 侧 reader 的 group 不会转发到生成进程。数据源本身不创建生成进程。委托给 fully async 的 custom rollout wrapper 无须额外标记，custom generate 签名也不变。
+保留 `get_samples(n)`、`add_samples(groups)` 接口。Custom producer 可以传递 `source.reader_config("unique_reader_id")`，在远端调用 `config.open()`。Reader ID 必须唯一，`owner` 为保留名称。正常执行时 buffer 仍由原 reader 优先读取；partial group 同时作为任务 continuation 持久化。Reader 定期续租，正常关闭归还未完成任务，故障 worker 的任务在 lease 到期后重试。恢复协调器前必须停止旧作业，再以相同 root/run ID 显式传入 `--rollout-queue-resume`，不自动抢占旧实例。
 
-Fully async 将配置的总并发按完整 prompt group 平分给各个生成进程。每个进程维持本地任务池：一个位置空出来就自行读取下一组数据，不向 manager 逐次申请生成额度。完成的 group 逐个回传，每个进程没有固定的训练 batch 配额，快进程可以填满 batch。收集端跨训练步骤最多额外预取一个并发窗口；每个 worker 本地还保留最多一个排队结果，以及每个并发位置对应的一个在途或已完成 group。结果消费变慢时，这些有界队列会阻止本地继续补发；checkpoint 时会将它们全部收齐到待保存的完成队列。Dynamic filter 在本地检查完整 group，fully async 与本地版本一致，始终丢弃 `keep=False` 的 group 并继续补发，不使用有限 batch 的 `keep_when_insufficient` 兜底。被丢弃的 group 只累计数量、原因和丢弃比例，不保留完整样本。分布式 fully async 不支持 `--rollout-all-samples-process-path`，配置该参数时会明确报错。
+Fully async 在每个有 CPU 资源的 Ray 节点启动一个常驻生成进程，每个占用一个 CPU，并按完整 prompt group 分配总并发。快速 worker 可以独立补足全局 batch，保留原有有界生成队列和 collector 预取。完整 group 通过现有 dynamic filter 后才提交；丢弃结果计入过滤指标。分布式 fully async 仍不支持 `--rollout-all-samples-process-path`；同步入口保留其 Samples 和调用顺序。
 
-Rollout function 向 manager 返回该 batch 的全量 Samples。Batch sample filter、reward 后处理、训练数据转换、日志和 DP 切分仍作用于全局 batch。`--save-debug-rollout-data` 沿用原来的按 rollout 写入 `torch.save` 文件的方式，每个文件包含完整 batch。进程本地的 spill tensor 在传输前读回内存，仅释放已完成 group 自己的文件。Eval 仍走原来的 eval function 和 manager 路径。目前不做分布式写数据。
+逻辑提交单位是过滤后的完整 group，物理 segment 不决定训练分组。Sample 使用显式编码，大张量成为 typed blob 依赖；采用`.pack` 追加文件中的不可变已提交区间、相对引用和校验和，不以 pickle 作为 payload 协议。不支持的自定义字段类型会报错。参阅 [straw 架构、部署与恢复指南](../advanced/straw.md)。
 
-SGLang 公共生成入口每次最多释放 64 个排队的生成调用，约 1 ms 后继续释放，不改变在途并发上限。同步 rollout 和使用该入口的 custom generate 也适用。生成进程直接发送 HTTP 请求，忽略 `--use-distributed-post`。
+内置 producer 返回 collection manifest。旧 custom rollout 仍可返回 Sample 列表，由 Manager 兜底持久化并接受一个兼容 collection；新 producer 可以直接返回关联有效 receipt 的 `RawRolloutRef`。两者进入同一个 BatchBuilder，保留 reward/conversion hook 和 DP 调度。Builder 先保存选择计划，全部 rank shard 持久化后才返回同一 batch ID/plan 的 `TrainBatchRef`。
 
-Checkpoint 会停止补发、等待在途请求完成，将分配器状态、未使用索引区间、本地 buffer 和已完成 group 一起存入 `--save/rollout/distributed_data_source_<rollout_id>.pt`。恢复需要相同节点数量、过滤后的数据集大小、每个 prompt 的样本数、seed 和 shuffle 配置。自定义分布式 rollout 需要通过 `source.register_consumer(name, consumer)` 注册执行状态以参与 checkpoint；consumer 实现 `pause()`（返回之前是否暂停）、`resume()`、`state_dict()`、`load_state_dict(state)` 和 `close()`。Fully async 内部已完成注册。生成进程或其所在节点故障时，会将该 worker 移出调度，由剩余 worker 按原有并发上限继续补足全局 batch。已收到的完整 group 会保留；故障 worker 尚未回传的 group、本地 buffer 和未使用的索引区间会丢弃，不重放。Checkpoint 会保留停用的 worker 槽位，暂不支持自动重启和弹性扩缩容。所有生成 worker 均不可用、manager 或与其同节点的索引分配器故障时仍会报错结束；custom generate 自身抛出的代码错误也仍然报错。
+Slime adapter 当前要求各节点使用同一个绝对挂载路径，并双向检查可见性；底层引用支持重新绑定 root。r3/sc 的临时文件依赖会先复制进队列，旧 spill 清理不会使已提交数据失效。默认保留队列文件；读取、batch-ready 都不删除数据。离线清理要求停止 coordinator、writer 和 reader。Debug dump 仍按需用 `torch.save` 写入，可能引用保留的队列张量；evaluation 路径保持原有行为。
+
+数据源 checkpoint 暂停注册 consumer、等待在途请求，将 buffer 和已完成 group 通过 `<save>/rollout/queue_state_<rollout_id>.json` 保存。buffer 快照引用已经持久化的 group，并单独保存当前 lease，避免在 checkpoint 或退出时再次编码所有缓存 token；旧版内嵌 group 的快照仍可读取。恢复检查数据集大小、每个 prompt 的样本数、seed、shuffle、run identity 和 fully async worker 拓扑。恢复早期 checkpoint 不回滚 journal 中的全局生产事实。Custom execution state 通过 `register_consumer(name, consumer)` 参与保存，实现 `pause`、`resume`、`state_dict`、`load_state_dict`、`close`。停用的 worker 槽位在恢复后仍停用。这是持久化队列与数据状态，不等于完整分布式 optimizer 精确恢复或训练结果逐位一致。
+
+R3 训练只读取当前 CP/TP rank 分配到的行。续跑批量发布、加载和状态保存通过有界读取会话复用已认证索引，结果回执采用批量 RPC 查询。这些优化保留 checksum、WAL 持久化和 GC 所有权约束；读取会话不能替代所有权 pin。
+
+分布式 fully async producer 在权重同步期间停止补发新 group；还有下一次训练 rollout 时，同步后恢复。已开始的请求继续返回并持久化。
+
+从联合 checkpoint 恢复时，先持久化恢复后的训练 consumer 状态及存储引用，再启动后台 GC。所需 checkpoint 数据不可用时，恢复失败且不启动 GC。
+
+恢复的 reader buffer 通过独立于过滤决策的存储引用受到保护。后续数据源 checkpoint 必须完整保存活跃及尚未启动的 consumer，并保留、持久化新快照，才能交接该引用。之后正常退役旧 checkpoint 时，可以回收过期张量，同时保留可续跑前缀。保存失败会保留原引用；checkpoint 退役仍由调用方负责。
+
+Manager 仍会读取选中的 batch 做转换，共享存储带宽和 manager 内存仍可能成为瓶颈。`--rollout-io-concurrency` 限制队列发布的 I/O 待办数量。straw 的存储、日志和 GC 由 Rust 实现，slime 保留 Python sample 转换和训练集成。改变部署默认值前，需针对实际模型、并发和共享文件系统测量吞吐。
 
 ## sglang 使用方法
 

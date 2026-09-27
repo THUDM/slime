@@ -66,6 +66,24 @@ def generate_rollout(args, rollout_id, data_source, evaluation=False) -> Rollout
 
 **示例**: 参见 [examples/fully_async](../_examples_synced/fully_async/README.md)
 
+显式设置 `--rollout-data-transport straw` 后（默认是 Ray `object-store`），`RolloutFnTrainOutput.samples` 可以是指向本批数据的 `DiskPayloadRef`。已有 custom function 返回 Sample 列表（直接返回或放在 `RolloutFnTrainOutput` 中）仍可使用，manager 会统一保存一次。新函数可以在 rollout 过程中保存已经生成、打分并筛选的 group，最后返回 manifest，避免在内存中积累完整 batch。例如，已有一个逐组产生选中数据的异步迭代器时：
+
+```python
+import asyncio
+
+from slime.rollout.base_types import finalize_rollout_groups
+from slime.utils.rollout_transport import pack_rollout_group
+
+
+async def generate_stored_batch(args, rollout_id, completed_groups):
+    refs = []
+    async for group in completed_groups:
+        refs.append(await asyncio.to_thread(pack_rollout_group, group, args, rollout_id))
+    return finalize_rollout_groups(args, rollout_id, refs)
+```
+
+`finalize_rollout_groups` 负责排序、调用一次配置的 batch sample filter，并保存 batch manifest。如果 hook 修改 Sample，会重新保存处理结果。Wrapper 需要真实 Sample 时，可调用 `slime.utils.rollout_transport.load_rollout_samples(output.samples)`。生成、reward hook 和 eval 的返回协议不变。
+
 ---
 
 ### `--custom-generate-function-path`

@@ -45,6 +45,25 @@ The changed-test job itself runs through the self-hosted Docker path. When `NUM_
 
 ## CI Jobs and Triggers
 
+The CPU matrix marks straw-dependent tests with `straw: true`. Those jobs install
+the latest `straw-queue` wheel from PyPI before running the test. Queue
+tests do not require a Rust toolchain or access to the straw source repository.
+
+`test_optional_straw.py` runs without installing straw in its CPU job. It checks
+that the default rollout and training data path works without the package,
+startup prints `pip install straw-queue`, and selecting straw fails with an
+actionable installation error.
+
+`test_straw_fully_async_recovery.py` is an automatic CPU integration test: it
+SIGKILLs a job containing two local Ray nodes, then verifies recovery from the
+same filesystem queue in a fresh process, with and without online GC. Its tiny
+R3/SC payloads are bounded and it uses deterministic inference/reward fixtures.
+To run it locally after installing the compatible straw wheel:
+
+```bash
+PYTHONPATH=. python tests/test_straw_fully_async_recovery.py
+```
+
 | Trigger | Job | Type | Description |
 |---|---|---|---|
 | Automatic | `cpu-unittest` | CPU | Always-on unit and contract tests for argument validation, schedules, rewards, samples, rollout validation, checkpoint utilities, and plugin contracts. |

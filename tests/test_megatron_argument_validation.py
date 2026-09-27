@@ -179,8 +179,15 @@ def test_update_weight_disk_dir_required_for_disk_transport(monkeypatch):
 
 def make_slime_validate_args(**overrides):
     values = dict(
+        rollout_data_transport="object-store",
+        rollout_data_dir=None,
+        rollout_queue_lease_seconds=300,
+        rollout_queue_max_pending=65536,
+        rollout_queue_max_inflight=65536,
+        rollout_queue_segment_mib=256,
+        rollout_io_concurrency=4,
         use_distributed_post=False,
-        data_source_path="slime.rollout.data_source.RolloutDataSourceWithBuffer",
+        data_source_path=None,
         eval_config=None,
         eval_prompt_data=None,
         kl_coef=0,
@@ -267,10 +274,47 @@ def test_distributed_fully_async_is_opt_in(monkeypatch):
     parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())
     defaults = parser.parse_args(["--rollout-batch-size", "1"])
     assert defaults.rollout_function_path == "slime.rollout.sglang_rollout.generate_rollout"
-    assert defaults.data_source_path == "slime.rollout.data_source.RolloutDataSourceWithBuffer"
-    path = "slime.rollout.distributed_data_source.DistributedDataSourceWithBuffer"
+    assert defaults.data_source_path is None
+    assert defaults.rollout_data_transport == "object-store"
+    assert defaults.rollout_data_dir is None
+    assert not defaults.rollout_queue_online_gc
+    path = "slime.rollout.queue_data_source.QueueDataSourceWithBuffer"
     enabled = parser.parse_args(["--rollout-batch-size", "1", "--data-source-path", path])
     assert enabled.data_source_path == path
+
+
+@pytest.mark.parametrize("transport", ["object-store", "nixl", "straw"])
+def test_rollout_transport_selects_source_and_only_straw_needs_storage(monkeypatch, tmp_path, transport):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())
+    parsed = parser.parse_args(["--rollout-batch-size", "1", "--rollout-data-transport", transport])
+    args = make_slime_validate_args(rollout_data_transport=parsed.rollout_data_transport)
+    if transport == "straw":
+        with pytest.raises(ValueError, match="--rollout-data-dir or --save"):
+            module.slime_validate_args(args)
+        args.save = str(tmp_path)
+    module.slime_validate_args(args)
+    if transport == "straw":
+        assert args.data_source_path == "slime.rollout.queue_data_source.QueueDataSourceWithBuffer"
+        assert args.rollout_data_dir == str(tmp_path / "rollout_data")
+    else:
+        assert args.data_source_path == "slime.rollout.data_source.RolloutDataSourceWithBuffer"
+        assert args.rollout_data_dir is None
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"rollout_queue_online_gc": True},
+        {"rollout_queue_resume": True},
+        {"data_source_path": "slime.rollout.queue_data_source.QueueDataSourceWithBuffer"},
+    ],
+)
+def test_queue_options_require_straw_transport(monkeypatch, overrides):
+    module = load_slime_arguments_module(monkeypatch)
+    with pytest.raises(ValueError, match="requires --rollout-data-transport straw"):
+        module.slime_validate_args(make_slime_validate_args(**overrides))
 
 
 def test_global_dataset_flag_is_removed(monkeypatch):

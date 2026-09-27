@@ -583,6 +583,7 @@ jobs:
           [
             {
               "num_gpus": 0,
+              "straw": true,
               "test_file": "test_megatron_argument_validation.py"
             },
             {
@@ -663,6 +664,7 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "straw": true,
               "test_file": "test_score_centering.py"
             },
             {
@@ -671,6 +673,7 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "straw": true,
               "test_file": "test_score_centering_transport.py"
             },
             {
@@ -735,7 +738,13 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "straw": true,
               "test_file": "test_distributed_rollout.py"
+            },
+            {
+              "num_gpus": 0,
+              "straw": true,
+              "test_file": "test_straw_fully_async_recovery.py"
             },
             {
               "num_gpus": 0,
@@ -751,7 +760,27 @@ jobs:
             },
             {
               "num_gpus": 0,
-              "test_file": "test_r3_spill.py"
+              "straw": true,
+              "test_file": "test_straw_r3.py"
+            },
+            {
+              "num_gpus": 0,
+              "straw": true,
+              "test_file": "test_routed_experts_disk_layout.py"
+            },
+            {
+              "num_gpus": 0,
+              "straw": true,
+              "test_file": "test_rollout_straw_transport.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_optional_straw.py"
+            },
+            {
+              "num_gpus": 0,
+              "straw": true,
+              "test_file": "test_queue_sample_codec.py"
             },
             {
               "num_gpus": 0,
@@ -877,6 +906,13 @@ jobs:
           pip install transformers wandb
 
 
+
+      - name: Install straw for queue tests
+        if: matrix.info.straw == true
+        shell: bash
+        run: python -m pip install --upgrade --only-binary=straw-queue straw-queue
+
+
       - name: Install
         shell: bash
         run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps
@@ -963,6 +999,8 @@ jobs:
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors psutil
+
+
 
 
       - name: Install

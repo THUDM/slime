@@ -27,7 +27,7 @@ from slime.utils.ppo_utils import (
     importance_weights,
 )
 from slime.utils.score_centering import get_score_centering_is_config, score_centering_correction
-from slime.utils.tensor_store import DiskTensorRef
+from slime.utils.tensor_store import TensorRef
 from slime.utils.types import RolloutBatch
 
 from .cp_utils import (
@@ -1041,7 +1041,7 @@ def get_score_centering_terms(args, batch, logits):
                         if mpu.get_context_parallel_world_size() == 1
                         else slice_log_prob_with_cp(value, total, response)
                     )
-                    if isinstance(value, DiskTensorRef)
+                    if isinstance(value, TensorRef)
                     else value
                 )
                 for value, total, response in zip(values, total_lengths, response_lengths, strict=True)
