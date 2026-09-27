@@ -1,5 +1,6 @@
 import asyncio
 import json
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -7,6 +8,46 @@ from slime.backends.sglang_utils import server_control
 from slime.utils import http_utils
 
 NUM_GPUS = 0
+
+
+@pytest.mark.unit
+def test_abort_uses_supported_load_sections_and_waits_for_pd_transfers(monkeypatch):
+    abort_calls = 0
+    load_calls = 0
+
+    async def post(url, payload, **kwargs):
+        nonlocal abort_calls
+        assert url == "http://engine/abort_request"
+        assert payload == {"abort_all": True}
+        abort_calls += 1
+
+    async def get(url, **kwargs):
+        nonlocal load_calls
+        request = urlsplit(url)
+        assert request.path == "/v1/loads"
+        sections = set(parse_qs(request.query)["include"][0].split(","))
+        # Match the public SGLang LoadSnapshot protocol, which has no
+        # standalone "inflight" section. PD transfers live under "disagg".
+        assert sections <= {"core", "disagg", "queues", "memory", "spec", "lora", "all"}
+        assert {"core", "disagg", "queues"} <= sections
+        load_calls += 1
+        return {
+            "loads": [
+                {
+                    "dp_rank": 0,
+                    "num_running_reqs": 0,
+                    "num_waiting_reqs": 0,
+                    "disaggregation": {"prefill_inflight_queue_reqs": int(load_calls == 1)},
+                    "queues": {"waiting": 0, "grammar": 0},
+                }
+            ]
+        }
+
+    monkeypatch.setattr(server_control, "post", post)
+    monkeypatch.setattr(server_control, "get", get)
+
+    asyncio.run(server_control.abort_server_until_idle("http://engine", retry_interval=0, timeout=0.1))
+    assert abort_calls == load_calls == 2
 
 
 @pytest.mark.unit

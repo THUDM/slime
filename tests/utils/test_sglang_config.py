@@ -5,6 +5,7 @@ import tempfile
 from argparse import Namespace
 from dataclasses import dataclass
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 import yaml
@@ -434,6 +435,85 @@ class TestZeroGpuRolloutConfig:
         assert groups[1].sglang_overrides["encoder_urls"] == ["http://encoder"]
         assert init_handles == ["regular-init-1"]
         assert ray_get_calls == [["encoder-init-0"], ["encoder-url-ref"]]
+
+
+@pytest.mark.parametrize("first_model", ["regular", "pd", "epd"])
+@pytest.mark.parametrize("second_model", ["regular", "pd", "epd"])
+def test_models_starting_concurrently_use_disjoint_ports(monkeypatch, first_model, second_model):
+    from slime.backends.sglang_utils import deployment, engine_group
+    from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
+
+    layouts = {
+        "regular": [("regular", 4)],
+        "pd": [("prefill", 2), ("decode", 2)],
+        "epd": [("encoder", 1), ("prefill", 1), ("decode", 2)],
+    }
+    config = SglangConfig(
+        models=[
+            ModelConfig(
+                name=name,
+                update_weights=(name == "actor"),
+                server_groups=[
+                    ServerGroupConfig(worker_type=worker_type, num_gpus=num_gpus)
+                    for worker_type, num_gpus in layouts[layout]
+                ],
+            )
+            for name, layout in (("actor", first_model), ("ref", second_model))
+        ]
+    )
+    engines = []
+
+    def create_engine(*args, **kwargs):
+        engine = Mock()
+        # Simulate slow initialization: ports are still free when the next
+        # model is allocated. OS availability checks cannot prevent reuse.
+        engine._get_current_node_ip_and_free_port.remote.side_effect = lambda start_port=10000, consecutive=1: (
+            "127.0.0.1",
+            start_port,
+        )
+        engine.get_url.remote.side_effect = lambda: f"http://127.0.0.1:{engine.init.remote.call_args.kwargs['port']}"
+        engines.append(engine)
+        return engine
+
+    actor = Mock()
+    actor.options.return_value.remote.side_effect = create_engine
+    monkeypatch.setattr(engine_group.ray, "remote", lambda cls: actor)
+    monkeypatch.setattr(engine_group.ray, "get", lambda refs: refs)
+    monkeypatch.setattr(engine_group, "PlacementGroupSchedulingStrategy", lambda **kwargs: None)
+    monkeypatch.setattr(deployment, "resolve_sglang_config", lambda args: config)
+    monkeypatch.setattr(
+        deployment, "_start_router", lambda args, **kwargs: ("127.0.0.1", 3456 + int(kwargs["force_new"]))
+    )
+    args = Namespace(
+        rollout_external=False,
+        rollout_num_gpus=8,
+        rollout_num_gpus_per_engine=1,
+        num_gpus_per_node=8,
+        sglang_dp_size=1,
+        debug_train_only=False,
+        debug_rollout_only=False,
+        colocate=True,
+        actor_num_nodes=1,
+        actor_num_gpus_per_node=8,
+        offload_rollout=True,
+        hf_checkpoint="/tmp/hf",
+    )
+
+    servers, init_handles = deployment.start_rollout_servers(args, pg=(None, list(range(8)), list(range(8))))
+
+    assert list(servers) == ["actor", "ref"]
+    assert len(engines) == 8
+    assert len(init_handles) == 8 - (first_model == "epd") - (second_model == "epd")
+    reserved = set()
+    for engine in engines:
+        ports = engine.init.remote.call_args.kwargs
+        dist_port = int(ports["dist_init_addr"].rsplit(":", 1)[1])
+        requested = [ports["port"], ports["nccl_port"], *range(dist_port, dist_port + 30 + args.sglang_dp_size)]
+        if "disaggregation_bootstrap_port" in ports:
+            requested.append(ports["disaggregation_bootstrap_port"])
+        assert len(requested) == len(set(requested))
+        assert reserved.isdisjoint(requested), f"Reused ports: {reserved.intersection(requested)}"
+        reserved.update(requested)
 
 
 class TestGetModelUrl:

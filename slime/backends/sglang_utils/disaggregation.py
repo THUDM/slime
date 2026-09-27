@@ -16,17 +16,17 @@ def start_pd_server_groups(
     placement: ServerGroupPlacement,
     router_ip: str,
     router_port: int,
-) -> tuple[list[ServerGroup], list[Any]]:
+    port_cursors: dict[int, int],
+) -> tuple[list[ServerGroup], list[Any], dict[int, int]]:
     """Start prefill/decode groups without waiting for final engine initialization."""
     server_groups = []
     init_handles = []
-    port_cursors: dict[int, int] = {}
     for group_config in model_config.server_groups:
         group = placement.create(group_config, router_ip, router_port)
         handles, port_cursors = group.start_engines(port_cursors)
         init_handles.extend(handles)
         server_groups.append(group)
-    return server_groups, init_handles
+    return server_groups, init_handles, port_cursors
 
 
 def start_epd_server_groups(
@@ -34,10 +34,10 @@ def start_epd_server_groups(
     placement: ServerGroupPlacement,
     router_ip: str,
     router_port: int,
-) -> tuple[list[ServerGroup], list[Any]]:
+    port_cursors: dict[int, int],
+) -> tuple[list[ServerGroup], list[Any], dict[int, int]]:
     """Start encoder groups first, then inject their URLs into LLM groups."""
     server_groups = []
-    port_cursors: dict[int, int] = {}
 
     encoder_urls: list[str] = []
     for group_config in model_config.server_groups:
@@ -71,4 +71,4 @@ def start_epd_server_groups(
         init_handles.extend(handles)
         server_groups.append(group)
 
-    return server_groups, init_handles
+    return server_groups, init_handles, port_cursors
