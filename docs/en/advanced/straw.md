@@ -15,7 +15,7 @@ separate qualification of cross-client locks, visibility and durability.
 
 | Concern | Ray object-store transport (default) | straw transport |
 |---|---|---|
-| Data source | `RolloutDataSourceWithBuffer` | `QueueDataSourceWithBuffer` backed by durable prompt tasks |
+| Data source | `RolloutDataSourceWithBuffer` | `QueueDataSource` backed by durable prompt tasks |
 | Payload exchange | Ray object references | `RecordSetRef` / tensor references into shared pack files |
 | Worker assignment | In-memory producer state | Leases, attempts, durable continuations and accepted receipts |
 | Rollout-to-training conversion | `BatchBuilder` applies hooks and DP partitioning | The same conversion, with a persisted selection plan and ready batch |
@@ -76,6 +76,45 @@ slime owns Sample schemas, rewards, filters, batching and training. straw owns
 bytes, references, persistence and storage lifetime. Custom rollout functions
 can still return Sample lists; the manager publishes a compatibility collection.
 See [customization](../get_started/customization.md).
+
+## Queue scheduling
+
+`QueueReader` is a worker's queue client: it acquires and returns groups and renews
+active leases. `QueueDataSource` adds job-level reader creation, consumer lifecycle
+and source checkpoints. It inherits the same sample-access methods; it does not
+implement another buffer. With `--rollout-data-transport straw`, the source is
+selected automatically. Explicit `--data-source-path` values should use
+`slime.rollout.queue_data_source.QueueDataSource`.
+
+`QueueReader` has no local continuation buffer. `add_samples()` publishes valid
+continuations, then `yield_tasks()` atomically replaces their inputs and returns
+them to pending in one WAL transaction per bounded batch. The old leases end;
+any worker can acquire the saved inputs with a new lease. Readers keep only
+active leases and executing samples locally. Closing a reader does not rewrite
+returned groups.
+
+The persistent order is **completed delivery → partial → fresh prompt**. Within
+a stage, the oldest numeric value in a group's `weight_versions` comes first
+(higher staleness), then FIFO submission/return order. Groups without numeric versions sort last
+within the stage. Comparing stored versions avoids rewriting queue priorities
+on every model update. This ordering does not drop stale samples automatically.
+Staleness is `current serving weight version - oldest generated-token weight version`: fresh samples have staleness 0.
+There is one indexed queue, not three independently managed queues.
+
+`--buffer-filter-path` is rejected for straw. `--buffer-sort-by-staleness` remains
+an option for the in-memory data source; straw always applies the order above.
+Reward and sample-selection hooks remain available. Already accepted groups
+explicitly returned to the source get separate delivery tasks; accepted history
+is immutable, and consuming/discarding a delivery also acknowledges its earlier
+accepted versions. The fully async scheduler still keeps a bounded ready-results
+window, with its own checkpoint state and durable accepted-result references.
+
+Source snapshots now store the shared pending tasks, their exact immutable input
+references and scheduling metadata once; worker snapshots store reader metadata.
+The reader snapshot format is version 3; old reader-local v1/v2 buffer snapshots
+require migration and are rejected explicitly. This requires an updated
+`straw-queue` build with `yield_tasks()` and persistent scheduling keys; the
+original PyPI 0.1.0 wheel does not provide these APIs.
 
 ## Shared tensors, R3 and SC
 
@@ -212,19 +251,22 @@ is not restored.
 Checkpoints contain `<save>/rollout/queue_state_<rollout_id>.json` for the source
 and registered scheduler consumers, and `builder_state_<rollout_id>.json` for
 the training consumer view. Their references retain the matching storage graph.
-Continuations are persisted incrementally, so checkpoint/close can reference
-existing data instead of rewriting every buffered token. Restoring a checkpoint
+Continuations are persisted incrementally, so checkpoints reference
+existing data instead of rewriting every returned token. Restoring a checkpoint
 does not erase later accepted history from the WAL.
 
 Partial R3/SC tensors remain lazy references in continuation snapshots and are
 loaded when generation appends new rows. Restoring source and builder state
 preserves saved warm groups and behavior-policy versions, and records which
-later outputs are excluded from the restored branch. Restored buffers retain
+later outputs are excluded from the restored branch. Restored pending tasks retain
 their storage independently of filtering. The complete source snapshot,
 including consumers that have not restarted yet, is retained and durably
 recorded before old references are released. Failed saves keep the old references;
 background GC starts only after restored consumer state commits.
 
+The dataset producer cursor is not yet part of the source checkpoint, and
+restoring a saved pending snapshot does not exclude every later-created task.
+Complete rollback to an arbitrary older training step remains future work.
 The adapter does not yet establish a joint final manifest for model, optimizer,
 RNG and queue state. Persistent rollout is therefore not a claim of exact
 optimizer recovery or bit-identical training after an arbitrary crash.

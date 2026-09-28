@@ -1,4 +1,4 @@
-"""Persistent prompt tasks and reader-local continuation buffers.
+"""Persistent prompt, continuation and delivery tasks shared by all readers.
 
 One job-owned Ray actor hosts the coordinator and a serialized dataset producer.
 Readers load task inputs directly from the shared store; datasets and generated
@@ -25,8 +25,7 @@ from straw.errors import LeaseExpired, StaleAttempt
 from straw.protocol import Lease, Limits, Record, RecordSetRef, TaskSpec, encode
 
 from slime.rollout.base_types import iter_samples
-from slime.rollout.data_source import DataSource, RolloutDataSource, pop_first, pop_oldest
-from slime.utils.misc import load_function
+from slime.rollout.data_source import DataSource, RolloutDataSource
 from slime.utils.rollout_transport import (
     DiskPayloadRef,
     group_lease,
@@ -49,6 +48,10 @@ class RolloutQueueController:
         self.args = args
         self.store, self.codec, self._writer_lock = rollout_store(args)
         self._gc_error = None
+        if not hasattr(Coordinator, "yield_tasks"):
+            raise RuntimeError(
+                "This straw transport requires a straw-queue build with yield_tasks and priority scheduling; the original PyPI 0.1.0 wheel does not support these APIs."
+            )
         self._queue = Coordinator(
             self.store,
             exclusive_owner="job owns this non-restarting actor; explicit resume confirms prior owner stopped",
@@ -151,6 +154,102 @@ class RolloutQueueController:
         self._check_gc_error()
         return {"run_id": self.store.run_id, "branch_id": self.branch_id}
 
+    def pending_snapshot(self):
+        """Capture shared pending work once, with explicit storage dependencies."""
+        tasks = []
+        for spec in self.queue.pending_tasks(task_prefix="prompt:"):
+            value = asdict(spec)
+            value["input_ref"] = DiskPayloadRef(spec.input_ref, str(self.store.backend.root))
+            tasks.append(value)
+        with self._writer_lock:
+            return self.codec.publish({"tasks": tasks}, submission_id=f"pending:{uuid.uuid4().hex}")
+
+    def pending_count(self):
+        return sum(spec.metadata.get("returned", False) for spec in self.queue.pending_tasks(task_prefix="prompt:"))
+
+    def return_groups(self, updates, deliveries):
+        """Return partials atomically; accepted results use separate delivery tasks."""
+        from straw.protocol import digest
+
+        with self._producer_lock:
+            if updates:
+                self.queue.yield_tasks(updates, request_id="return:" + digest(updates))
+            for delivery in deliveries:
+                ref = RecordSetRef.from_dict(delivery["input_ref"])
+                task_id = f"prompt:delivery:{digest(delivery)}"
+                if self.queue.task_status(task_id) is not None:
+                    continue
+                spec = TaskSpec(
+                    task_id,
+                    ref,
+                    metadata=delivery["metadata"],
+                    priority=delivery["priority"],
+                    scheduling_key=delivery["scheduling_key"],
+                    estimated_tokens=ref.tokens,
+                )
+                self.queue.submit_tasks(task_id, [spec])
+
+    def restore_pending(self, snapshot):
+        """Restore saved input versions without mutating accepted result history.
+
+        Restore is called before rollout readers start. Full dataset/model
+        rollback is a separate checkpoint protocol; this restores pending work.
+        """
+        updates, deliveries = [], []
+        for saved in self.codec.load(snapshot)["tasks"]:
+            ref = saved["input_ref"].manifest
+            status = self.queue.task_status(saved["task_id"])
+            fields = {
+                key: saved.get(key, default)
+                for key, default in (
+                    ("metadata", {}),
+                    ("priority", 0),
+                    ("scheduling_key", 0),
+                )
+            }
+            if status and status["state"] in {"pending", "leased"}:
+                if status["state"] == "leased":
+                    self.release([Lease(**status["lease"])])
+                page = self.queue.acquire("checkpoint-restore", 1, task_ids=[saved["task_id"]])
+                if not page.assignments:
+                    raise RuntimeError(f"Cannot restore pending task: {saved['task_id']} ({page.status})")
+                updates.append(
+                    {
+                        "lease": asdict(page.assignments[0].lease),
+                        "input_ref": asdict(ref),
+                        **fields,
+                    }
+                )
+            else:
+                receipt = self.result(Lease(**status["lease"])) if status and status["state"] == "completed" else None
+                metadata = dict(fields["metadata"])
+                if receipt:
+                    metadata["source_positions"] = sorted(
+                        set(metadata.get("source_positions", [])) | {receipt.position}
+                    )
+                deliveries.append(
+                    {
+                        "input_ref": asdict(ref),
+                        **fields,
+                        "metadata": metadata,
+                    }
+                )
+            if len(updates) == 64:
+                self.return_groups(updates, [])
+                updates = []
+        self.return_groups(updates, deliveries)
+
+    def reader_metadata(self, reader_id, metadata=None):
+        if metadata is not None:
+            with self._writer_lock:
+                ref = self.codec.publish(
+                    {"metadata": metadata},
+                    submission_id=f"reader-metadata:{uuid.uuid4().hex}",
+                )
+            self.reader_state(reader_id, ref)
+        state = self.reader_state(reader_id)
+        return self.codec.load(RecordSetRef.from_dict(state["state_ref"])).get("metadata", {}) if state else {}
+
     def take(self, reader_id, count):
         if reader_id in self._retired_readers:
             raise StaleAttempt("Reader was retired by the scheduler")
@@ -222,30 +321,29 @@ class RolloutQueueController:
         )
 
     def reject(self, lease, reason):
-        return self.queue.fail_task(
+        result = self.queue.fail_task(
             lease,
             request_id=f"reject:{lease.attempt_id}",
             failure={"category": "Filtered", "reason": reason},
             retryable=False,
         )
+        positions = self.queue.task_status(lease.task_id)["spec"]["metadata"].get("source_positions", [])
+        if positions:
+            # A failed delivery cannot replay its earlier accepted versions.
+            # Advance their retention only after fencing this task's lease.
+            with self._writer_lock:
+                ref = self.codec.publish(
+                    {"positions": positions, "reason": reason},
+                    submission_id=f"reject:{lease.attempt_id}",
+                )
+            self.record_dispositions(ref)
+        return result
 
     def result(self, lease):
         return self.queue.lookup_submission(f"result:{lease.attempt_id}")
 
     def results(self, leases):
         return [self.result(lease) if lease else None for lease in leases]
-
-    def progress(self, lease, input_ref):
-        return self.queue.save_task_progress(
-            lease,
-            request_id=f"progress:{lease.attempt_id}:{input_ref.digest}",
-            input_ref=input_ref,
-        )
-
-    def progress_many(self, updates):
-        from straw.protocol import digest
-
-        return self.queue.save_task_progress_many(updates, request_id="progress:" + digest(updates))
 
     def release(self, leases):
         from straw.protocol import digest
@@ -265,11 +363,17 @@ class RolloutQueueController:
             accepted = self.queue.retire_worker(reader_id)
             state = self._training_state()
             processed = set(state["processed_positions"])
+            superseded = {
+                position
+                for task in self.queue.tasks.values()
+                for position in task["spec"]["metadata"].get("source_positions", [])
+            }
             receipts = [
                 receipt
                 for receipt in accepted
                 if receipt["position"] >= state["processed_cursor"]
                 and receipt["position"] not in delivered | processed
+                and receipt["position"] not in superseded
             ]
             with self._writer_lock:
                 return self.codec.publish(receipts, submission_id=f"recover-reader:{uuid.uuid4().hex}")
@@ -290,7 +394,16 @@ class RolloutQueueController:
                     "Queue-only recovery is limited to an interrupted first rollout; "
                     "restore matching model/optimizer and rollout checkpoints after batch conversion begins"
                 )
-            receipts = [receipt for receipt in self.queue.commits if receipt["task_id"].startswith("prompt:")]
+            superseded = {
+                position
+                for task in self.queue.tasks.values()
+                for position in task["spec"]["metadata"].get("source_positions", [])
+            }
+            receipts = [
+                receipt
+                for receipt in self.queue.commits
+                if receipt["task_id"].startswith("prompt:") and receipt["position"] not in superseded
+            ]
             with self._writer_lock:
                 return self.codec.publish(receipts, submission_id=f"recover-job:{self.branch_id}")
 
@@ -347,9 +460,16 @@ class RolloutQueueController:
             }
         )
 
-    @staticmethod
-    def _advance(state, positions):
+    def _advance(self, state, positions):
         positions = set(state["processed_positions"]) | set(positions)
+        # A delivery acknowledges the earlier accepted versions it replaced,
+        # whether it reaches training or is rejected by a selection hook.
+        for position in list(positions - set(state["processed_positions"])):
+            if position < state["processed_cursor"]:
+                continue
+            receipt = self.queue.read_commits(position, 1).commits[0]
+            task = self.queue.task_status(receipt.task_id)
+            positions.update(task["spec"]["metadata"].get("source_positions", []))
         cursor = state["processed_cursor"]
         end = max(positions, default=-1) + 1
         while cursor in positions:
@@ -445,7 +565,7 @@ class RolloutQueueController:
         return self.queue.load_consumer_state("training")
 
     def handoff_restored_source(self, source_ref):
-        """Move restore ownership after all current buffers have been snapshotted.
+        """Move restore ownership after pending tasks and consumers have been snapshotted.
 
         The caller retains the complete replacement source before this call,
         with its readers paused. Old checkpoint owners remain independent until
@@ -478,6 +598,7 @@ class RolloutQueueController:
                             visited.add(value.manifest)
                             visit(self.codec.load(value.manifest))
                     elif isinstance(value, Sample):
+                        retained.update(getattr(value, "_queue_source_positions", []))
                         if receipt := getattr(value, "_queue_receipt", None):
                             retained.add(receipt["position"])
                         elif lease := getattr(value, "_queue_lease", None):
@@ -489,6 +610,7 @@ class RolloutQueueController:
                             if receipt is not None:
                                 retained.add(receipt.position)
                     elif isinstance(value, dict):
+                        retained.update(value.get("source_positions", []))
                         for item in value.values():
                             visit(item)
                     elif isinstance(value, (list, tuple)):
@@ -511,7 +633,7 @@ class RolloutQueueController:
                 with self._writer_lock:
                     decision = self.codec.publish(
                         {
-                            "reason": "checkpoint branch excludes outputs absent from its warm buffers",
+                            "reason": "checkpoint branch excludes outputs absent from its saved source",
                             "positions": abandoned,
                             "batch_ids": abandoned_batches,
                             "checkpoint_state": asdict(state_ref),
@@ -549,9 +671,6 @@ class RolloutQueueController:
 
     def status(self, task_id):
         return self.queue.task_status(task_id)
-
-    def restore_lease(self, reader_id, task_id):
-        return self.queue.acquire(reader_id, 1, task_ids=[task_id])
 
     def metrics(self):
         return self.queue.metrics()
@@ -604,22 +723,30 @@ class QueueReaderConfig:
 
 
 class QueueReader(DataSource):
+    """One process's queue client: task acquisition, returns and lease renewal.
+
+    Readers share the coordinator and durable inputs, but track their own active
+    leases. Job-wide consumers and checkpoint files belong to QueueDataSource.
+    """
+
     def __init__(self, args, controller, reader_id, dataset_size):
         self.args, self.controller, self.reader_id = args, controller, reader_id
         self.args._rollout_queue_controller = controller
         self.dataset_size = dataset_size
-        self.buffer, self.metadata = [], {}
-        self._leases, self._leased_inputs = {}, {}
+        # Only actively executing leases are local. Returned work lives in the
+        # durable queue and can be acquired by any reader after this one stops.
+        self._leases = {}
         self._closed = False
         self._lock = threading.RLock()
         self._reader = ThreadPoolExecutor(max_workers=1, thread_name_prefix="queue-input")
         self._stop = threading.Event()
         self._heartbeat_error = None
-        self.buffer_filter = (
-            load_function(args.buffer_filter_path)
-            if args.buffer_filter_path
-            else (pop_oldest if getattr(args, "buffer_sort_by_staleness", False) else pop_first)
-        )
+        filter_path = getattr(args, "buffer_filter_path", None)
+        if filter_path is not None:
+            raise ValueError(
+                "--buffer-filter-path is not supported by straw; the queue prioritizes ready groups, partials, "
+                "then fresh prompts, using older weight versions first within each stage"
+            )
         self._heartbeats = threading.Thread(target=self._heartbeat_loop, name="queue-leases", daemon=True)
         self._heartbeats.start()
 
@@ -638,7 +765,6 @@ class QueueReader(DataSource):
                                 continue  # A released attempt may already have been reacquired.
                             if outcome == "StaleAttempt":
                                 self._leases.pop(lease.task_id, None)
-                                self._leased_inputs.pop(lease.task_id, None)
                             elif outcome != "extended":
                                 raise LeaseExpired(f"Reader lost lease for {lease.task_id}: {outcome}")
             except Exception as error:
@@ -646,214 +772,184 @@ class QueueReader(DataSource):
                 return
 
     def get_samples(self, num_samples):
+        """Acquire groups from durable scheduling state.
+
+        The queue serves ready deliveries, then partials, then untouched prompts.
+        Within each stage it applies the stored scheduling key and FIFO order.
+        Payloads are read directly from shared storage; RPC carries references.
+        """
         if num_samples < 0:
             raise ValueError("num_samples must be nonnegative")
         if self._closed:
             raise RuntimeError("Queue reader is closed")
         if self._heartbeat_error:
             raise RuntimeError("Queue lease heartbeat failed") from self._heartbeat_error
-        with self._lock:
-            samples = (
-                self.buffer_filter(self.args, None, self.buffer, num_samples) if self.buffer and num_samples else []
-            )
-        leases = [group_lease(group) for group in samples]
-        receipts = ray.get(self.controller.results.remote(leases)) if samples else []
-        for group, receipt in zip(samples, receipts, strict=True):
-            if receipt:
-                for sample in iter_samples(group):
-                    del sample._queue_lease
-                    sample._queue_receipt = asdict(receipt)
-        while len(samples) < num_samples:
+        groups = []
+        while len(groups) < num_samples:
             if self._closed:
                 raise RuntimeError("Queue reader is closed")
-            page = ray.get(self.controller.take.remote(self.reader_id, min(num_samples - len(samples), 64)))
+            if self._heartbeat_error:
+                raise RuntimeError("Queue lease heartbeat failed") from self._heartbeat_error
+            page = ray.get(self.controller.take.remote(self.reader_id, min(num_samples - len(groups), 64)))
             if page.status in {"end_of_input", "draining"}:
                 break
             if not page.assignments:
-                if page.status in {"backpressured", "empty"}:
-                    if self._heartbeat_error:
-                        raise RuntimeError("Queue lease heartbeat failed") from self._heartbeat_error
-                    time.sleep(0.05)
-                    continue
-                raise RuntimeError(f"Queue cannot supply rollout inputs: {page.status}")
+                if page.status not in {"backpressured", "empty"}:
+                    raise RuntimeError(f"Queue cannot supply rollout inputs: {page.status}")
+                time.sleep(0.05)
+                continue
             store, codec, _ = rollout_store(self.args)
-            with store.read_session() as reader:
+            with store.read_session() as session:
                 for assignment in page.assignments:
-                    group = codec.load(assignment.task.input_ref, reader=reader)
+                    lease = assignment.lease
+                    group = codec.load(assignment.task.input_ref, reader=session)
                     for sample in iter_samples(group):
-                        sample._queue_lease = asdict(assignment.lease)
+                        # A delivery task has its own authorization. Prior
+                        # receipts only contribute to retention accounting.
+                        sample.__dict__.pop("_queue_receipt", None)
+                        sample._queue_lease = asdict(lease)
                         sample._queue_generation_start = len(sample.tokens)
+                        sample._queue_source_positions = assignment.task.metadata.get("source_positions", [])
                     with self._lock:
-                        self._leases[assignment.lease.task_id] = assignment.lease
-                        self._leased_inputs[assignment.lease.task_id] = assignment.task.input_ref
-                    samples.append(group)
-        return samples
+                        self._leases[lease.task_id] = lease
+                    groups.append(group)
+        return groups
 
     async def get_samples_async(self, num_samples):
+        """Run blocking queue/file reads on the reader thread, keeping asyncio responsive."""
         return await asyncio.get_running_loop().run_in_executor(self._reader, self.get_samples, num_samples)
 
     def add_samples(self, groups):
+        """Persist returned groups and make them claimable by any reader.
+
+        A usable partial yields its task with a new input_ref. Incomplete R3/SC
+        capture returns the task with its previous input instead. Already accepted
+        results get delivery tasks; their original completion remains immutable.
+        """
         if len(groups) > 64:
             for offset in range(0, len(groups), 64):
                 self.add_samples(groups[offset : offset + 64])
             return
         if not groups:
             return
-        valid, retry, incomplete = [], [], []
+        groups_to_save, leases_to_retry, retry_mismatches = [], [], []
         for group in groups:
-            missing = []
-            for sample in iter_samples(group):
-                if not sample.response_length:
-                    continue
-                if getattr(self.args, "use_rollout_routing_replay", False):
-                    rows = sample.get_rollout_routed_experts_length()
-                    if rows != len(sample.tokens) - 1:
-                        missing.append((sample.index, "routes", rows, len(sample.tokens) - 1))
-                if getattr(self.args, "use_score_centering", False) and getattr(self.args, "rollout_top_p", 1) >= 1:
-                    for name in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
-                        value = getattr(sample, name)
-                        rows = len(value) if value is not None else 0
-                        if rows != sample.response_length:
-                            missing.append((sample.index, name, rows, sample.response_length))
-            if not missing:
-                valid.append(group)
+            mismatches = self._continuation_mismatches(group)
+            if not mismatches:
+                groups_to_save.append(group)
                 continue
             lease = group_lease(group)
             if lease is None:
-                raise ValueError(f"Incomplete continuation has no durable task input to retry: {missing}")
+                raise ValueError(f"Incomplete continuation has no durable task input to retry: {mismatches}")
             release_rollout_publications(group, self.args)
-            retry.append(lease)
-            incomplete.extend(missing)
-        if retry:
-            # A server abort can return tokens without matching route/sampler
-            # metadata. Do not replace the last complete durable input with it.
+            leases_to_retry.append(lease)
+            retry_mismatches.extend(mismatches)
+        if leases_to_retry:
+            ray.get(self.controller.release.remote(leases_to_retry))
             with self._lock:
-                for lease in retry:
+                for lease in leases_to_retry:
                     if self._leases.get(lease.task_id) == lease:
                         self._leases.pop(lease.task_id)
-                        self._leased_inputs.pop(lease.task_id, None)
-            ray.get(self.controller.release.remote(retry))
             logger.warning(
                 "Requeued %d incomplete continuations from their last durable inputs; (sample, field, actual, expected): %s",
-                len(retry),
-                incomplete[:8],
+                len(leases_to_retry),
+                retry_mismatches[:8],
             )
-        groups = valid
-        if not groups:
+        if not groups_to_save:
             return
-        leases = [group_lease(group) for group in groups]
+        leases = [group_lease(group) for group in groups_to_save]
         receipts = ray.get(self.controller.results.remote(leases))
-        for i, (group, receipt) in enumerate(zip(groups, receipts, strict=True)):
+        for group, receipt in zip(groups_to_save, receipts, strict=True):
             record_generation_provenance(group, self.args)
             if receipt:
                 for sample in iter_samples(group):
-                    del sample._queue_lease
+                    sample.__dict__.pop("_queue_lease", None)
                     sample._queue_receipt = asdict(receipt)
-                leases[i] = None
         store, codec, writer_lock = rollout_store(self.args)
         with writer_lock:
             refs = codec.publish_many(
-                groups,
-                submission_ids=[f"continuation:{uuid.uuid4().hex}" for _ in groups],
+                groups_to_save,
+                submission_ids=[f"continuation:{uuid.uuid4().hex}" for _ in groups_to_save],
             )
-        updates = [
-            {"lease": asdict(lease), "input_ref": asdict(ref)}
-            for lease, ref in zip(leases, refs, strict=True)
-            if lease
-        ]
-        if updates:
-            ray.get(self.controller.progress_many.remote(updates))
-        with self._lock, store.read_session() as reader:
-            for group, lease, ref in zip(groups, leases, refs, strict=True):
-                if lease:
-                    self._leased_inputs[lease.task_id] = ref
-                durable = codec.load(ref, reader=reader)
-                for original, saved in zip(iter_samples(group), iter_samples(durable), strict=True):
-                    original.__dict__.clear()
-                    original.__dict__.update(vars(saved))
-                self.buffer.append(group)
-        # Continuations are already durable. Snapshot the complete buffer only
-        # at checkpoints/close, avoiding quadratic writes during mass aborts.
-
-    def _save_buffer(self):
-        state = self.state_dict()
-        ray.get(self.controller.reader_state.remote(self.reader_id, state.manifest))
-
-    def state_dict(self):
-        with self._lock:
-            buffered = []
-            for group in self.buffer:
-                lease = group_lease(group)
-                ref = self._leased_inputs.get(lease.task_id) if lease else None
-                buffered.append((group, lease, ref))
-            value = {
-                "version": 2,
-                "buffer": [],
-                "metadata": dict(self.metadata),
+        updates, deliveries = [], []
+        for group, lease, receipt, ref in zip(groups_to_save, leases, receipts, refs, strict=True):
+            samples = list(iter_samples(group))
+            ready = all(
+                s.status in (Sample.Status.COMPLETED, Sample.Status.TRUNCATED) and s.reward is not None
+                for s in samples
+            )
+            partial = any(s.response_length for s in samples)
+            versions = [
+                int(str(v))
+                for s in samples
+                for v in (s.weight_versions or [])
+                if str(v).isascii() and str(v).removeprefix("-").isdigit()
+            ]
+            # current_version - oldest_version orders exactly like oldest_version
+            # ascending, without rewriting every task after each weight update.
+            scheduling_key = min(versions, default=2**63 - 1)
+            scheduling_key = max(-(2**63), min(2**63 - 1, scheduling_key))
+            origin = asdict(receipt) if receipt else getattr(samples[0], "_queue_receipt", None)
+            source_positions = {p for s in samples for p in getattr(s, "_queue_source_positions", [])}
+            if origin:
+                source_positions.add(origin["position"])
+            fields = {
+                "input_ref": asdict(ref),
+                "priority": 2 if ready else 1 if partial else 0,
+                "scheduling_key": scheduling_key,
+                "metadata": {
+                    "stage": "ready" if ready else "partial" if partial else "fresh",
+                    "returned": True,
+                    "source_positions": sorted(source_positions),
+                },
             }
-        for group, lease, ref in buffered:
-            # add_samples already persisted the complete continuation. Reusing
-            # that publication avoids encoding every token again on close.
-            # Lease renewal/recovery can change authorization without changing
-            # the immutable input, so snapshot the current lease separately.
-            value["buffer"].append(
-                {
-                    "group": (
-                        DiskPayloadRef(ref, self.args.rollout_data_dir)
-                        if ref is not None
-                        else pack_rollout_payload(group, self.args, -1)
-                    ),
-                    "lease": asdict(lease) if lease else None,
-                }
-            )
-        return pack_rollout_payload(value, self.args, -1)
+            if lease and not receipt:
+                updates.append({"lease": asdict(lease), **fields})
+            else:
+                deliveries.append(fields)
+        # Publish before yielding: the WAL transition adopts the new input and
+        # ends the old lease in one transaction. A lost reply can be retried.
+        ray.get(self.controller.return_groups.remote(updates, deliveries))
+        with self._lock:
+            for lease in leases:
+                if lease and self._leases.get(lease.task_id) == lease:
+                    self._leases.pop(lease.task_id)
+        # Retain no Sample objects or input references after handing work back.
+
+    def _continuation_mismatches(self, group):
+        """Return (sample, field, actual rows, expected rows) for R3/top-k SC captures."""
+        mismatches = []
+        for sample in iter_samples(group):
+            if not sample.response_length:
+                continue
+            if getattr(self.args, "use_rollout_routing_replay", False):
+                rows = sample.get_rollout_routed_experts_length()
+                if rows != len(sample.tokens) - 1:
+                    mismatches.append((sample.index, "routes", rows, len(sample.tokens) - 1))
+            if getattr(self.args, "use_score_centering", False) and getattr(self.args, "rollout_top_p", 1) >= 1:
+                for name in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
+                    value = getattr(sample, name)
+                    rows = len(value) if value is not None else 0
+                    if rows != sample.response_length:
+                        mismatches.append((sample.index, name, rows, sample.response_length))
+        return mismatches
+
+    def state_dict(self, *, include_pending=True):
+        state = {"version": 3, "metadata": self.get_metadata()}
+        if include_pending:
+            ref = ray.get(self.controller.pending_snapshot.remote())
+            state["pending"] = DiskPayloadRef(ref, self.args.rollout_data_dir)
+        return pack_rollout_payload(state, self.args, -1)
 
     def load_state_dict(self, state):
         value = unpack_rollout_payload(state)
-        restored = []
-        for buffered in value["buffer"]:
-            ref = None
-            if value["version"] == 2:
-                ref = buffered["group"].manifest
-                group = unpack_rollout_payload(buffered["group"])
-                if buffered["lease"] is not None:
-                    for sample in iter_samples(group):
-                        sample._queue_lease = dict(buffered["lease"])
-            else:
-                group = buffered
-            lease = group_lease(group)
-            if lease:
-                status = ray.get(self.controller.status.remote(lease.task_id))
-                if status["state"] == "completed":
-                    # An older buffer can precede completion of this task. Its
-                    # saved prefix is replay input for the new collection, while
-                    # the later global result remains an immutable production fact.
-                    receipt = ray.get(self.controller.result.remote(Lease(**status["lease"])))
-                    for sample in iter_samples(group):
-                        del sample._queue_lease
-                        sample._queue_receipt = asdict(receipt)
-                        sample._queue_resume_origin = asdict(lease)
-                        sample._queue_generation_start = len(sample.tokens)
-                elif status["state"] == "leased" and status["lease"] == asdict(lease):
-                    self._leases[lease.task_id] = lease
-                    if ref is not None:
-                        self._leased_inputs[lease.task_id] = ref
-                    else:
-                        self._leased_inputs.pop(lease.task_id, None)
-                else:
-                    page = ray.get(self.controller.restore_lease.remote(self.reader_id, lease.task_id))
-                    if not page.assignments:
-                        continue
-                    assignment = page.assignments[0]
-                    group = DiskPayloadRef(assignment.task.input_ref, self.args.rollout_data_dir).load()
-                    lease = assignment.lease
-                    for sample in iter_samples(group):
-                        sample._queue_lease = asdict(lease)
-                    self._leases[lease.task_id] = lease
-                    self._leased_inputs[lease.task_id] = assignment.task.input_ref
-            restored.append(group)
-        with self._lock:
-            self.buffer, self.metadata = restored, dict(value["metadata"])
+        if value["version"] != 3:
+            raise ValueError(
+                "Reader-local buffer checkpoints require migration before using the durable queue scheduler"
+            )
+        if "pending" in value:
+            ray.get(self.controller.restore_pending.remote(value["pending"].manifest))
+        self.update_metadata(value["metadata"])
 
     def materialize_samples(self, samples, *, release_files=True):
         from slime.utils.tensor_store import TensorRef
@@ -867,13 +963,15 @@ class QueueReader(DataSource):
         return sample
 
     def get_buffer_length(self):
-        return len(self.buffer)
+        return ray.get(self.controller.pending_count.remote())
 
     def update_metadata(self, metadata):
-        self.metadata.update(metadata)
+        current = self.get_metadata()
+        current.update(metadata)
+        ray.get(self.controller.reader_metadata.remote(self.reader_id, current))
 
     def get_metadata(self):
-        return self.metadata
+        return ray.get(self.controller.reader_metadata.remote(self.reader_id))
 
     def __len__(self):
         return self.dataset_size
@@ -889,7 +987,6 @@ class QueueReader(DataSource):
             return
         self._closed = True
         self._reader.shutdown(wait=True)
-        self._save_buffer()
         with self._lock:
             leases = list(self._leases.values())
         ray.get(self.controller.release.remote(leases))
@@ -897,7 +994,14 @@ class QueueReader(DataSource):
         self._heartbeats.join(timeout=5)
 
 
-class QueueDataSourceWithBuffer(QueueReader):
+class QueueDataSource(QueueReader):
+    """Job-level data source: reader creation, consumers and source checkpoints.
+
+    The manager can read through the inherited QueueReader interface; distributed
+    workers open separate readers against the same controller. There is no extra
+    sample buffer or second implementation of get_samples/add_samples here.
+    """
+
     def __init__(self, args):
         self._owns_controller = getattr(args, "_rollout_queue_controller", None) is None
         controller = create_queue_controller(args)
@@ -905,7 +1009,7 @@ class QueueDataSourceWithBuffer(QueueReader):
         super().__init__(args, controller, "owner", self.data_config["dataset_size"])
         self.consumers, self._restored_consumers = {}, {}
 
-    def reader_config(self, reader_id, *, prefetch_size=128):
+    def reader_config(self, reader_id):
         if reader_id == "owner":
             raise ValueError("Reader ID 'owner' is reserved")
         return QueueReaderConfig(self.args, self.controller, reader_id, len(self))

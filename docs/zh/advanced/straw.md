@@ -8,7 +8,7 @@
 
 | 职责 | Ray object-store 传输（默认） | straw 传输 |
 |---|---|---|
-| 数据源 | `RolloutDataSourceWithBuffer` | 基于持久化 prompt 任务的 `QueueDataSourceWithBuffer` |
+| 数据源 | `RolloutDataSourceWithBuffer` | 基于持久化 prompt 任务的 `QueueDataSource` |
 | 载荷交换 | Ray object reference | 指向共享 pack 的 `RecordSetRef` / 张量引用 |
 | Worker 分配 | 内存中的 producer 状态 | Lease、attempt、持久化 continuation 和结果 receipt |
 | Rollout 转训练数据 | `BatchBuilder` 执行 hook 和 DP 分片 | 同一转换流程，额外持久化选择计划与 ready batch |
@@ -43,6 +43,18 @@ flowchart LR
 5. **确认完成。** 所有 rank 的训练调用返回后，Manager 报告 `training_completed`，推进运行时消费进度并释放 ready batch 容量。这与模型/优化器 checkpoint 持久化是两件事。
 
 Ray 继续负责调度、RPC 和执行进程故障；slime 负责 Sample schema、reward、filter、batch 和训练；straw 负责字节、引用、持久化和存储生命周期。自定义 rollout 仍可返回 Sample 列表，由 Manager 发布为兼容 collection。接口见[自定义指南](../get_started/customization.md)。
+
+## 队列调度
+
+`QueueReader` 是 worker 的队列客户端，负责领取、归还 group 和为正在执行的 lease 续租。`QueueDataSource` 增加整个作业的 reader 创建、consumer 生命周期和 source checkpoint 管理；它继承同一套取样方法，没有另实现一层 buffer。`--rollout-data-transport straw` 会自动选择此数据源；显式指定 `--data-source-path` 时使用 `slime.rollout.queue_data_source.QueueDataSource`。
+
+`QueueReader` 不再有本地 continuation buffer。`add_samples()` 先发布可用的续跑前缀，再通过 `yield_tasks()` 在每个有界批次的一次 WAL 事务中替换输入并归还任务。旧 lease 随之结束，任意 worker 都能用新 lease 领取这些输入。reader 本地只保留正在执行的样本和 lease，关闭时无需重写已归还的 group。
+
+持久化顺序为 **已完成待交付 → partial → 新 prompt**。同类任务按 group 中最旧的数值型 `weight_versions` 排序：版本越旧，staleness 越高，越先取用；相同版本按提交/归还的 FIFO 顺序，没有有效版本的排在同类末尾。比较已有版本即可，无需每次更新模型权重都改写队列。staleness 定义为“当前 serving 权重版本 − 最旧生成权重版本”，新鲜样本为 0。排序本身不会自动丢弃过旧样本。这是在一个队列内建立索引，不是维护三个独立队列。
+
+straw 明确拒绝 `--buffer-filter-path`；`--buffer-sort-by-staleness` 仍用于内存数据源，straw 始终采用上述顺序。reward 和样本筛选 hook 继续可用。已经接收的 group 如果显式放回，会创建独立的 delivery task，保留原 accepted 历史；消费或丢弃 delivery 时也会确认被其替代的已接收版本。fully async scheduler 仍保留有界的 ready result 窗口，其 checkpoint 状态和已接收结果引用单独持久化。
+
+source checkpoint 统一保存共享 pending 任务、准确的不可变输入引用和排序 metadata；worker checkpoint 只保存 reader metadata。reader 快照格式升级为 v3，旧 v1/v2 本地 buffer 快照需要迁移，加载时明确报错。此功能需要带 `yield_tasks()` 和持久化排序字段的新版 `straw-queue` 构建，原 PyPI 0.1.0 wheel 尚无这些接口。
 
 ## 共享张量、R3 与 SC
 
@@ -115,11 +127,13 @@ GC 失败会停止后台循环，后续 coordinator 操作传播原始原因，�
 
 Resume 要求整个旧任务（包括 coordinator 和 reader）已停止，并使用同一个 root 与 run ID。该参数是操作者声明，不是自动 fencing。尚未发布的推理可能重新执行；SGLang GPU KV cache 不会恢复。
 
-Checkpoint 的 `<save>/rollout/queue_state_<rollout_id>.json` 保存 source 和已注册 scheduler consumer；`builder_state_<rollout_id>.json` 保存训练 consumer 视图。它们的引用保留相应存储依赖图。Continuation 增量持久化，checkpoint/close 引用已有数据，不会再次重写全部 buffer token。恢复旧 checkpoint 不会抹去 WAL 中后来已接收的历史。
+Checkpoint 的 `<save>/rollout/queue_state_<rollout_id>.json` 保存 source 和已注册 scheduler consumer；`builder_state_<rollout_id>.json` 保存训练 consumer 视图。它们的引用保留相应存储依赖图。Continuation 增量持久化，checkpoint 引用已有数据，不会再次重写全部归还样本的 token。恢复旧 checkpoint 不会抹去 WAL 中后来已接收的历史。
 
-部分 R3/SC 张量在 continuation 快照中保持 lazy 引用，生成追加新行时才加载。恢复 source 和 builder 状态会保留已保存的 warm groups 和行为策略版本，并记录哪些后续输出不属于恢复分支。恢复后的 buffer 独立于过滤决策保留存储引用。包含尚未重启 consumer 的完整 source 快照，必须先保留并持久记录，才能释放旧引用；保存失败保留旧引用，后台 GC 在恢复后的 consumer 状态提交后才启动。
+部分 R3/SC 张量在 continuation 快照中保持 lazy 引用，生成追加新行时才加载。恢复 source 和 builder 状态会保留已保存的 warm groups 和行为策略版本，并记录哪些后续输出不属于恢复分支。恢复后的 pending task 独立于过滤决策保留存储引用。包含尚未重启 consumer 的完整 source 快照，必须先保留并持久记录，才能释放旧引用；保存失败保留旧引用，后台 GC 在恢复后的 consumer 状态提交后才启动。
 
 Adapter 目前尚未建立模型、优化器、RNG 与队列状态的联合最终提交 manifest。因此，持久化 rollout 不代表任意崩溃后的 optimizer 精确恢复，也不承诺训练结果逐位一致。
+
+dataset producer 游标尚未随 source checkpoint 保存，恢复 pending 快照也尚未排除所有后来新增的任务。因此，任意旧训练步的完整回退仍属于待实现能力。
 
 ## 验证与当前限制
 

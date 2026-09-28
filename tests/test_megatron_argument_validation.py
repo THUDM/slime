@@ -278,7 +278,7 @@ def test_distributed_fully_async_is_opt_in(monkeypatch):
     assert defaults.rollout_data_transport == "object-store"
     assert defaults.rollout_data_dir is None
     assert not defaults.rollout_queue_online_gc
-    path = "slime.rollout.queue_data_source.QueueDataSourceWithBuffer"
+    path = "slime.rollout.queue_data_source.QueueDataSource"
     enabled = parser.parse_args(["--rollout-batch-size", "1", "--data-source-path", path])
     assert enabled.data_source_path == path
 
@@ -295,7 +295,7 @@ def test_rollout_transport_selects_source_and_only_straw_needs_storage(monkeypat
         args.save = str(tmp_path)
     module.slime_validate_args(args)
     if transport == "straw":
-        assert args.data_source_path == "slime.rollout.queue_data_source.QueueDataSourceWithBuffer"
+        assert args.data_source_path == "slime.rollout.queue_data_source.QueueDataSource"
         assert args.rollout_data_dir == str(tmp_path / "rollout_data")
     else:
         assert args.data_source_path == "slime.rollout.data_source.RolloutDataSourceWithBuffer"
@@ -308,7 +308,7 @@ def test_rollout_transport_selects_source_and_only_straw_needs_storage(monkeypat
     [
         {"rollout_queue_online_gc": True},
         {"rollout_queue_resume": True},
-        {"data_source_path": "slime.rollout.queue_data_source.QueueDataSourceWithBuffer"},
+        {"data_source_path": "slime.rollout.queue_data_source.QueueDataSource"},
     ],
 )
 def test_queue_options_require_straw_transport(monkeypatch, overrides):

@@ -175,7 +175,7 @@ def test_dynamic_filter_drops_groups_and_refills(monkeypatch):
 @pytest.mark.unit
 @pytest.mark.parametrize(
     "versions,expected",
-    [(["10"], 1), (["8"], 3), (["3", "10"], 8), ([], None), (["bad"], None), (["11"], None), (["²"], None)],
+    [(["10"], 0), (["8"], 2), (["3", "10"], 7), ([], None), (["bad"], None), (["11"], None), (["²"], None)],
 )
 def test_sample_staleness_uses_oldest_valid_version(versions, expected):
     assert sample_staleness(SimpleNamespace(weight_versions=versions), 10) == expected
@@ -190,8 +190,8 @@ def test_staleness_metrics_use_serving_snapshot():
     ]
     assert compute_staleness_metrics(samples, 10) == {
         "staleness/unknown_count": 1,
-        "staleness/mean": 8.5,
-        "staleness/max": 9,
+        "staleness/mean": 7.5,
+        "staleness/max": 8,
     }
     assert compute_staleness_metrics(samples, None) == {}
 
