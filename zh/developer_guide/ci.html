@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 09 月 23 日"/>
+    <meta name="docbuild:last-update" content="2026 年 09 月 28 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -230,6 +230,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../advanced/low-precision.html">低精度训练与 Rollout</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/reproducibility.html">Reproducibility</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/fault-tolerance.html">容灾</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/straw.html">使用 straw 持久化 rollout</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/observability.html">观测</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD 分离</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
@@ -543,11 +544,19 @@
 <p>GPU job 运行在自托管 GPU runner 上。每个 job 会：</p>
 <ol class="arabic simple">
 <li><p>启动 Docker container，通常使用 <code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code>；镜像验证使用 <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code>。</p></li>
-<li><p>通过 <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span> <span class="pre">--no-deps</span></code> 安装 slime。</p></li>
+<li><p>从 PyPI 安装最新版 <code class="docutils literal notranslate"><span class="pre">straw-queue</span></code> wheel，并通过 <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span> <span class="pre">--no-deps</span></code> 安装 slime。</p></li>
 <li><p>通过 <code class="docutils literal notranslate"><span class="pre">tests/ci/gpu_lock_exec.py</span> <span class="pre">--count</span> <span class="pre">&lt;num_gpus&gt;</span></code> 申请所需 GPU。</p></li>
 <li><p>执行注册的测试文件：<code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/&lt;test_file&gt;.py</span></code>。</p></li>
 </ol>
 <p>GPU 测试通常遵循 e2e 模式：<code class="docutils literal notranslate"><span class="pre">prepare()</span></code> 下载模型和数据集，<code class="docutils literal notranslate"><span class="pre">execute()</span></code> 构建 CLI 参数并调用 <code class="docutils literal notranslate"><span class="pre">U.execute_train(...)</span></code>。</p>
+<p>34 个独立训练 e2e 矩阵场景中，一半使用 straw；此计数排除了重复 job 和 GPU logprob/entropy 算子测试。选中的测试显式设置 <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code>，因此本地执行、<code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> 和固定矩阵使用同一后端：</p>
+<ul class="simple">
+<li><p>R3：<code class="docutils literal notranslate"><span class="pre">test_qwen3_30B_A3B_r3.py</span></code> 和 <code class="docutils literal notranslate"><span class="pre">test_moonlight_16B_A3B_r3.py</span></code>。</p></li>
+<li><p>SC：<code class="docutils literal notranslate"><span class="pre">test_qwen2.5_0.5B_score_centering.py</span></code>，覆盖 top-k 和 top-p。</p></li>
+<li><p>Fully async、fanout、PPO、MTP、PD/Mooncake、分布式 SGLang 配置、混合 offload 故障恢复、debug 重放和 release-train。</p></li>
+<li><p>五种 checkpoint 保存/加载组合，两阶段共用 straw 目录，检查 queue/builder checkpoint，并在加载时显式恢复队列。</p></li>
+</ul>
+<p>R3、SC 和 fully async 同时启用在线 GC。普通 straw 测试使用独立临时目录，执行后清理。这些单机 GPU 测试使用本地文件系统 profile；多机 JuiceFS 持久性仍需单独验证。其余 e2e 保留 Ray object-store 或 NIXL 传输覆盖。固定矩阵和 changed-test 的 GPU 容器均安装 straw，因此发布镜像尚未包含 straw 时也能运行。</p>
 </section>
 <section id="changed-test-job">
 <h3>Changed-Test Job<a class="headerlink" href="#changed-test-job" title="链接到此标题。">#</a></h3>
@@ -561,6 +570,12 @@
 </section>
 <section id="ci-jobs">
 <h2>CI Jobs 与触发方式<a class="headerlink" href="#ci-jobs" title="链接到此标题。">#</a></h2>
+<p>CPU 矩阵通过 <code class="docutils literal notranslate"><span class="pre">straw:</span> <span class="pre">true</span></code> 标记依赖 straw 的测试。对应 job 从 PyPI 安装最新版 <code class="docutils literal notranslate"><span class="pre">straw-queue</span></code> wheel，再运行测试。队列测试无需 Rust 工具链，也不需要访问 straw 源码仓库。</p>
+<p><code class="docutils literal notranslate"><span class="pre">test_optional_straw.py</span></code> 的 CPU job 不安装 straw，验证默认 rollout 与训练数据路径仍可运行、启动时打印 <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">straw-queue</span></code> 提示，以及显式选择 straw 时给出明确的安装错误。</p>
+<p><code class="docutils literal notranslate"><span class="pre">test_straw_fully_async_recovery.py</span></code> 是自动运行的 CPU 集成测试：SIGKILL 一个包含两个本地 Ray 节点的任务，再用新进程从同一个文件系统队列恢复，分别验证在线 GC 关闭和开启。测试使用有界的小规模 R3/SC 载荷，以及确定性的推理/reward fixture。安装兼容 straw wheel 后，本地运行：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">PYTHONPATH</span><span class="o">=</span>.<span class="w"> </span>python<span class="w"> </span>tests/test_straw_fully_async_recovery.py
+</pre></div>
+</div>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Trigger</p></th>
@@ -823,7 +838,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 09 月 23 日.
+  最后更新于 2026 年 09 月 28 日.
   <br/>
 </p>
   </div>

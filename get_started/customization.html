@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Sep 23, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 28, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -230,6 +230,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../advanced/low-precision.html">Low Precision Training and Rollout</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/reproducibility.html">Reproducibility</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/fault-tolerance.html">Fault Tolerance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/straw.html">Persistent rollout with straw</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/observability.html">Observability</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD Disaggregation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/external-rollout-engines.html">External Rollout Engines Roadmap</a></li>
@@ -671,6 +672,21 @@
 <li><p>Integrating external tools or APIs during generation</p></li>
 </ul>
 <p><strong>Example</strong>: See <a class="reference internal" href="../_examples_synced/fully_async/README.html"><span class="std std-doc">examples/fully_async</span></a></p>
+<p>With <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code> (the default is Ray <code class="docutils literal notranslate"><span class="pre">object-store</span></code>), <code class="docutils literal notranslate"><span class="pre">RolloutFnTrainOutput.samples</span></code> may be a <code class="docutils literal notranslate"><span class="pre">DiskPayloadRef</span></code> pointing to the selected batch. Existing custom functions returning Sample lists (bare lists or <code class="docutils literal notranslate"><span class="pre">RolloutFnTrainOutput</span></code>) still work: the manager stores them once. New functions can persist completed, reward-scored groups during rollout and return a manifest instead of retaining a full batch in memory. For example, given an async iterator of accepted groups:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">asyncio</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">slime.rollout.base_types</span><span class="w"> </span><span class="kn">import</span> <span class="n">finalize_rollout_groups</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.rollout_transport</span><span class="w"> </span><span class="kn">import</span> <span class="n">pack_rollout_group</span>
+
+
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate_stored_batch</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">completed_groups</span><span class="p">):</span>
+    <span class="n">refs</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">async</span> <span class="k">for</span> <span class="n">group</span> <span class="ow">in</span> <span class="n">completed_groups</span><span class="p">:</span>
+        <span class="n">refs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">to_thread</span><span class="p">(</span><span class="n">pack_rollout_group</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">finalize_rollout_groups</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">refs</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">finalize_rollout_groups</span></code> sorts groups, applies the configured batch sample filter once, and stores the batch manifest. If a hook mutates Samples, its result is saved again. A wrapper that needs actual Samples can call <code class="docutils literal notranslate"><span class="pre">slime.utils.rollout_transport.load_rollout_samples(output.samples)</span></code>. Generation/reward hooks and evaluation return values keep their existing contracts.</p>
 </section>
 <hr class="docutils" />
 <section id="custom-generate-function-path">
@@ -1201,7 +1217,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Sep 23, 2026.
+  Last updated on Sep 28, 2026.
   <br/>
 </p>
   </div>

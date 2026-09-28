@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 09 月 23 日"/>
+    <meta name="docbuild:last-update" content="2026 年 09 月 28 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -230,6 +230,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../advanced/low-precision.html">低精度训练与 Rollout</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/reproducibility.html">Reproducibility</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/fault-tolerance.html">容灾</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/straw.html">使用 straw 持久化 rollout</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/observability.html">观测</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD 分离</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
@@ -511,7 +512,10 @@
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-megatron-config-path">高级 Megatron 配置（--megatron-config-path）</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout">自定义 rollout 函数</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout">自定义 rollout 函数</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-fully-async">持久化 rollout 队列和分布式 fully async</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">sglang 使用方法</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">参数配置</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#router">router 使用方法</a></li>
@@ -906,6 +910,30 @@
 </li>
 <li><p>有的时候，我们还需要支持自定义的 reward model，可以通过配置 <code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code> 来进行配置。</p></li>
 </ul>
+<section id="rollout-fully-async">
+<h3>持久化 rollout 队列和分布式 fully async<a class="headerlink" href="#rollout-fully-async" title="链接到此标题。">#</a></h3>
+<p>数据流、共享张量所有权和 checkpoint 边界详见 <a class="reference internal" href="../advanced/straw.html"><span class="std std-doc">straw 架构与恢复</span></a>。</p>
+<p>Rollout payload 默认使用 Ray <code class="docutils literal notranslate"><span class="pre">object-store</span></code>，数据源为 <code class="docutils literal notranslate"><span class="pre">slime.rollout.data_source.RolloutDataSourceWithBuffer</span></code>；此模式不需要 straw 或共享 rollout 目录。<code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">nixl</span></code> 则选择 Ray 的 NIXL 张量传输。</p>
+<p>安装 <a class="reference internal" href="../advanced/straw.html"><span class="std std-doc">straw</span></a> 后，通过 <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code> 启用持久化队列和打包张量存储。straw 传输默认使用 <code class="docutils literal notranslate"><span class="pre">slime.rollout.queue_data_source.QueueDataSourceWithBuffer</span></code>，数据与协调日志存放在 <code class="docutils literal notranslate"><span class="pre">--rollout-data-dir</span></code>；设置了 <code class="docutils literal notranslate"><span class="pre">--save</span></code> 时可省略目录，使用 <code class="docutils literal notranslate"><span class="pre">&lt;save&gt;/rollout_data</span></code>，否则必须显式提供共享目录。Ray 仍负责 actor、RPC 和小引用传递。默认仍是同步 rollout；分布式 fully async 需要显式选择：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-function-path<span class="w"> </span>slime.rollout.fully_async_rollout.generate_rollout_fully_async<span class="w"> </span><span class="se">\</span>
+--rollout-data-transport<span class="w"> </span>straw<span class="w"> </span><span class="se">\</span>
+--rollout-data-dir<span class="w"> </span>/shared/run/rollout_data
+</pre></div>
+</div>
+<p>straw 传输下，开启 <code class="docutils literal notranslate"><span class="pre">--use-rollout-routing-replay</span></code> 后会将已完成 sample 的 R3 routes 随所属 group 一起写入 straw；开启 <code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code> 时也会在同一次发布中保存 SC 张量，包括只使用 SC 的情况。R3/SC 落盘统一使用 straw 后端；默认 object-store 传输将这些张量保存在内存中。不再提供独立的 spill hook 或目录。自定义 sample hook 先执行，R3、SC 与 sample 元数据一起发布到共享 pack，后续队列发布复用引用。大批 group 按底层写入预算拆分。Aborted prefix 由队列 continuation 路径持久化。<code class="docutils literal notranslate"><span class="pre">--rollout-queue-online-gc</span></code> 是独立开关，默认关闭：训练确认使用完成后，straw 可回收所有 owner 都已释放的 sealed pack。</p>
+<p>作业内一个禁止自动重启的 Ray actor 管理任务 lease 和串行 dataset producer。Dataset 游标与任务提交在同一日志事务中保存，worker 通过小引用直接读取共享存储中的 prompt group，替代原来的内存索引分配器。Shuffle、group/sample 编号沿用原有数据源逻辑，故障不会丢弃 reader 预留的索引区间。</p>
+<p>保留 <code class="docutils literal notranslate"><span class="pre">get_samples(n)</span></code>、<code class="docutils literal notranslate"><span class="pre">add_samples(groups)</span></code> 接口。Custom producer 可以传递 <code class="docutils literal notranslate"><span class="pre">source.reader_config(&quot;unique_reader_id&quot;)</span></code>，在远端调用 <code class="docutils literal notranslate"><span class="pre">config.open()</span></code>。Reader ID 必须唯一，<code class="docutils literal notranslate"><span class="pre">owner</span></code> 为保留名称。正常执行时 buffer 仍由原 reader 优先读取；partial group 同时作为任务 continuation 持久化。Reader 定期续租，正常关闭归还未完成任务，故障 worker 的任务在 lease 到期后重试。恢复协调器前必须停止旧作业，再以相同 root/run ID 显式传入 <code class="docutils literal notranslate"><span class="pre">--rollout-queue-resume</span></code>，不自动抢占旧实例。</p>
+<p>Fully async 在每个有 CPU 资源的 Ray 节点启动一个常驻生成进程，每个占用一个 CPU，并按完整 prompt group 分配总并发。快速 worker 可以独立补足全局 batch，保留原有有界生成队列和 collector 预取。完整 group 通过现有 dynamic filter 后才提交；丢弃结果计入过滤指标。分布式 fully async 仍不支持 <code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>；同步入口保留其 Samples 和调用顺序。</p>
+<p>逻辑提交单位是过滤后的完整 group，物理 segment 不决定训练分组。Sample 使用显式编码，大张量成为 typed blob 依赖；采用<code class="docutils literal notranslate"><span class="pre">.pack</span></code> 追加文件中的不可变已提交区间、相对引用和校验和，不以 pickle 作为 payload 协议。不支持的自定义字段类型会报错。参阅 <a class="reference internal" href="../advanced/straw.html"><span class="std std-doc">straw 架构、部署与恢复指南</span></a>。</p>
+<p>内置 producer 返回 collection manifest。旧 custom rollout 仍可返回 Sample 列表，由 Manager 兜底持久化并接受一个兼容 collection；新 producer 可以直接返回关联有效 receipt 的 <code class="docutils literal notranslate"><span class="pre">RawRolloutRef</span></code>。两者进入同一个 BatchBuilder，保留 reward/conversion hook 和 DP 调度。Builder 先保存选择计划，全部 rank shard 持久化后才返回同一 batch ID/plan 的 <code class="docutils literal notranslate"><span class="pre">TrainBatchRef</span></code>。</p>
+<p>Slime adapter 当前要求各节点使用同一个绝对挂载路径，并双向检查可见性；底层引用支持重新绑定 root。r3/sc 的临时文件依赖会先复制进队列，旧 spill 清理不会使已提交数据失效。默认保留队列文件；读取、batch-ready 都不删除数据。离线清理要求停止 coordinator、writer 和 reader。Debug dump 仍按需用 <code class="docutils literal notranslate"><span class="pre">torch.save</span></code> 写入，可能引用保留的队列张量；evaluation 路径保持原有行为。</p>
+<p>数据源 checkpoint 暂停注册 consumer、等待在途请求，将 buffer 和已完成 group 通过 <code class="docutils literal notranslate"><span class="pre">&lt;save&gt;/rollout/queue_state_&lt;rollout_id&gt;.json</span></code> 保存。buffer 快照引用已经持久化的 group，并单独保存当前 lease，避免在 checkpoint 或退出时再次编码所有缓存 token；旧版内嵌 group 的快照仍可读取。恢复检查数据集大小、每个 prompt 的样本数、seed、shuffle、run identity 和 fully async worker 拓扑。恢复早期 checkpoint 不回滚 journal 中的全局生产事实。Custom execution state 通过 <code class="docutils literal notranslate"><span class="pre">register_consumer(name,</span> <span class="pre">consumer)</span></code> 参与保存，实现 <code class="docutils literal notranslate"><span class="pre">pause</span></code>、<code class="docutils literal notranslate"><span class="pre">resume</span></code>、<code class="docutils literal notranslate"><span class="pre">state_dict</span></code>、<code class="docutils literal notranslate"><span class="pre">load_state_dict</span></code>、<code class="docutils literal notranslate"><span class="pre">close</span></code>。停用的 worker 槽位在恢复后仍停用。这是持久化队列与数据状态，不等于完整分布式 optimizer 精确恢复或训练结果逐位一致。</p>
+<p>R3 训练只读取当前 CP/TP rank 分配到的行。续跑批量发布、加载和状态保存通过有界读取会话复用已认证索引，结果回执采用批量 RPC 查询。这些优化保留 checksum、WAL 持久化和 GC 所有权约束；读取会话不能替代所有权 pin。</p>
+<p>分布式 fully async producer 在权重同步期间停止补发新 group；还有下一次训练 rollout 时，同步后恢复。已开始的请求继续返回并持久化。</p>
+<p>从联合 checkpoint 恢复时，先持久化恢复后的训练 consumer 状态及存储引用，再启动后台 GC。所需 checkpoint 数据不可用时，恢复失败且不启动 GC。</p>
+<p>恢复的 reader buffer 通过独立于过滤决策的存储引用受到保护。后续数据源 checkpoint 必须完整保存活跃及尚未启动的 consumer，并保留、持久化新快照，才能交接该引用。之后正常退役旧 checkpoint 时，可以回收过期张量，同时保留可续跑前缀。保存失败会保留原引用；checkpoint 退役仍由调用方负责。</p>
+<p>Manager 仍会读取选中的 batch 做转换，共享存储带宽和 manager 内存仍可能成为瓶颈。<code class="docutils literal notranslate"><span class="pre">--rollout-io-concurrency</span></code> 限制队列发布的 I/O 待办数量。straw 的存储、日志和 GC 由 Rust 实现，slime 保留 Python sample 转换和训练集成。改变部署默认值前，需针对实际模型、并发和共享文件系统测量吞吐。</p>
+</section>
 </section>
 <section id="id7">
 <h2>sglang 使用方法<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h2>
@@ -1055,7 +1083,10 @@
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-megatron-config-path">高级 Megatron 配置（--megatron-config-path）</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout">自定义 rollout 函数</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout">自定义 rollout 函数</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-fully-async">持久化 rollout 队列和分布式 fully async</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">sglang 使用方法</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">参数配置</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#router">router 使用方法</a></li>
@@ -1100,7 +1131,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 09 月 23 日.
+  最后更新于 2026 年 09 月 28 日.
   <br/>
 </p>
   </div>

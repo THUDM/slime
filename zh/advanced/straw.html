@@ -1,0 +1,1137 @@
+
+<!DOCTYPE html>
+
+
+<html lang="zh" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>使用 straw 持久化 rollout &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
+
+    <script src="../_static/documentation_options.js?v=f9a8c948"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.12.1/dist/mermaid.esm.min.mjs";
+
+
+
+
+
+const initStyles = () => {
+    const defaultStyle = document.createElement('style');
+    defaultStyle.textContent = "pre.mermaid {\n    /* Same as .mermaid-container > pre */\n    display: block;\n    width: 100%;\n}\n\npre.mermaid > svg {\n    /* Same as .mermaid-container > pre > svg */\n    height: 500px;\n    width: 100%;\n    max-width: 100% !important;\n}";
+    document.head.appendChild(defaultStyle);
+
+    const fullscreenStyle = document.createElement('style');
+    fullscreenStyle.textContent = ".mermaid-container {\n    position: relative;\n    display: flex;\n    flex-direction: row;\n    width: 100%;\n}\n\n.mermaid-container > pre {\n    display: block;\n    width: 100%;\n}\n\n.mermaid-container > pre > svg {\n    height: 500px;\n    width: 100%;\n    max-width: 100% !important;\n}\n\n.mermaid-fullscreen-btn {\n    position: absolute;\n    width: 28px;\n    height: 28px;\n    background: rgba(255, 255, 255, 0.95);\n    border: 1px solid rgba(0, 0, 0, 0.3);\n    border-radius: 4px;\n    cursor: pointer;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n    transition: all 0.2s;\n    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);\n    font-size: 14px;\n    line-height: 1;\n    padding: 0;\n    color: #333;\n}\n\n.mermaid-fullscreen-btn:hover {\n    opacity: 100% !important;\n    background: rgba(255, 255, 255, 1);\n    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);\n    transform: scale(1.1);\n}\n\n.mermaid-fullscreen-btn.dark-theme {\n    background: rgba(50, 50, 50, 0.95);\n    border: 1px solid rgba(255, 255, 255, 0.3);\n    color: #e0e0e0;\n}\n\n.mermaid-fullscreen-btn.dark-theme:hover {\n    background: rgba(60, 60, 60, 1);\n    box-shadow: 0 3px 10px rgba(255, 255, 255, 0.2);\n}\n\n.mermaid-fullscreen-modal {\n    display: none;\n    position: fixed !important;\n    top: 0 !important;\n    left: 0 !important;\n    width: 95vw;\n    height: 100vh;\n    background: rgba(255, 255, 255, 0.98);\n    z-index: 9999;\n    padding: 20px;\n    overflow: auto;\n}\n\n.mermaid-fullscreen-modal.dark-theme {\n    background: rgba(0, 0, 0, 0.98);\n}\n\n.mermaid-fullscreen-modal.active {\n    display: flex;\n    align-items: center;\n    justify-content: center;\n}\n\n.mermaid-container-fullscreen {\n    position: relative;\n    width: 95vw;\n    height: 90vh;\n    max-width: 95vw;\n    max-height: 90vh;\n    background: white;\n    border-radius: 8px;\n    padding: 20px;\n    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);\n    overflow: auto;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n}\n\n.mermaid-container-fullscreen.dark-theme {\n    background: #1a1a1a;\n    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);\n}\n\n.mermaid-container-fullscreen pre.mermaid {\n    width: 100%;\n    height: 100%;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n}\n\n.mermaid-container-fullscreen .mermaid svg {\n    height: 100% !important;\n    width: 100% !important;\n    cursor: grab;\n}\n\n.mermaid-fullscreen-close {\n    position: fixed !important;\n    top: 20px !important;\n    right: 20px !important;\n    width: 40px;\n    height: 40px;\n    background: rgba(255, 255, 255, 0.95);\n    border: 1px solid rgba(0, 0, 0, 0.2);\n    border-radius: 50%;\n    cursor: pointer;\n    z-index: 10000;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);\n    transition: all 0.2s;\n    font-size: 24px;\n    line-height: 1;\n    color: #333;\n}\n\n.mermaid-fullscreen-close:hover {\n    background: white;\n    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);\n    transform: scale(1.1);\n}\n\n.mermaid-fullscreen-close.dark-theme {\n    background: rgba(50, 50, 50, 0.95);\n    border: 1px solid rgba(255, 255, 255, 0.2);\n    color: #e0e0e0;\n}\n\n.mermaid-fullscreen-close.dark-theme:hover {\n    background: rgba(60, 60, 60, 1);\n    box-shadow: 0 6px 16px rgba(255, 255, 255, 0.2);\n}\n\n.mermaid-fullscreen-modal .mermaid-fullscreen-btn {\n    display: none !important;\n}";
+    document.head.appendChild(fullscreenStyle);
+}
+
+// Detect if page has dark background
+const isDarkTheme = () => {
+    // We use a set of heuristics:
+    // 1. Check for common dark mode classes or attributes
+    // 2. Check computed background color brightness
+    if (document.documentElement.classList.contains('dark') ||
+        document.documentElement.getAttribute('data-theme') === 'dark' ||
+        document.body.classList.contains('dark') ||
+        document.body.getAttribute('data-theme') === 'dark') {
+        // console.log("Dark theme detected via class/attribute");
+        return true;
+    }
+    if (document.documentElement.classList.contains('light') ||
+        document.documentElement.getAttribute('data-theme') === 'light' ||
+        document.body.classList.contains('light') ||
+        document.body.getAttribute('data-theme') === 'light') {
+        // console.log("Light theme detected via class/attribute");
+        return false;
+    }
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        // console.log("Dark theme detected via prefers-color-scheme");
+        return true;
+    }
+    const bgColor = window.getComputedStyle(document.body).backgroundColor;
+    const match = bgColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)/);
+    if (match) {
+        const r = parseInt(match[1]);
+        const g = parseInt(match[2]);
+        const b = parseInt(match[3]);
+        const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+        // console.log("Background color brightness:", brightness);
+        return brightness < 128;
+    }
+    // console.log("No dark or light theme detected, defaulting to light theme");
+    return false;
+};
+
+let darkTheme = isDarkTheme();
+let modal = null;
+let modalContent = null;
+let previousScrollOffset = [window.scrollX, window.scrollY];
+let _lazyObserver = null;
+let _renderQueue = Promise.resolve();
+let closeModal = () => {};
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal?.classList.contains('active')) {
+        closeModal();
+    }
+});
+
+// Apply d3 zoom to each SVG. Idempotent: an SVG already wrapped is skipped,
+// so this is safe to call both for the initial batch and for diagrams that
+// render lazily once they become visible.
+const addZoomToSvgs = (svgs) => {
+    svgs.each(function() {
+        if (this.getAttribute('data-zoom-applied') === 'true') return;
+        var svg = d3.select(this);
+        svg.html("<g class='wrapper'>" + svg.html() + "</g>");
+        var inner = svg.select("g");
+        var zoom = d3.zoom().on("zoom", function(event) {
+            inner.attr("transform", event.transform);
+        });
+        svg.call(zoom);
+        this.setAttribute('data-zoom-applied', 'true');
+    });
+};
+
+const runMermaid = async (rerun) => {
+    console.log("Running mermaid diagrams, rerun =", rerun);
+    // clear all existing mermaid charts
+    let all_mermaids = document.querySelectorAll(".mermaid");
+
+    if (rerun) {
+        // Disconnect any previous lazy rendering observer
+        if (_lazyObserver) {
+            _lazyObserver.disconnect();
+            _lazyObserver = null;
+        }
+
+        all_mermaids.forEach((el) => {
+            el.removeAttribute('data-mermaid-deferred');
+            el.removeAttribute('data-mermaid-render-failed');
+            if(!el.hasAttribute("data-original-code")) {
+                // store original code
+                // console.log(`Storing original code for first run: `, el.innerHTML);
+                el.setAttribute('data-original-code', el.innerHTML);
+            }
+            if(el.getAttribute("data-processed") === "true") {
+                // remove and restore original
+                el.removeAttribute("data-processed");
+                // console.log(`Restoring original code for re-run: `, el.getAttribute('data-original-code'));
+                el.innerHTML = el.getAttribute('data-original-code');
+            } else {
+                // store original code
+                // console.log(`Storing original code for re-run: `, el.innerHTML);
+                el.setAttribute('data-original-code', el.innerHTML);
+            }
+        });
+
+        // Separate visible and hidden elements. Mermaid's layout engine measures
+        // text dimensions via the DOM, which fails for elements hidden by a parent
+        // (e.g., Reveal.js non-active slides, sphinx-design unopened tabs),
+        // producing broken SVGs. Render visible elements now, defer hidden ones.
+        const visible = [];
+        const hidden = [];
+        all_mermaids.forEach((el) => {
+            // offsetParent is null for display:none ancestors.
+            // getClientRects().length > 0 catches position:fixed elements
+            // (which also have null offsetParent but are still visible).
+            if (el.offsetParent !== null || el.getClientRects().length > 0) {
+                visible.push(el);
+            } else {
+                hidden.push(el);
+                el.setAttribute('data-mermaid-deferred', 'true');
+            }
+        });
+
+        if (visible.length > 0) {
+            try {
+                await mermaid.run({ nodes: visible });
+            } catch (e) {
+                console.error("Mermaid rendering failed:", e);
+            }
+        }
+
+        // Lazily render hidden elements when they become visible.
+        // Uses a promise chain (_renderQueue) to serialize rendering,
+        // since IntersectionObserver may report multiple entries at once
+        // and mermaid.run() is not safe to call concurrently.
+        if (hidden.length > 0) {
+            if (typeof IntersectionObserver === 'undefined') {
+                console.warn("IntersectionObserver not available; hidden mermaid diagrams will not render.");
+            } else {
+                _renderQueue = Promise.resolve();
+                _lazyObserver = new IntersectionObserver((entries) => {
+                    for (const entry of entries) {
+                        if (entry.isIntersecting && entry.target.getAttribute("data-processed") !== "true") {
+                            _lazyObserver.unobserve(entry.target);
+                            const el = entry.target;
+                            _renderQueue = _renderQueue.then(async () => {
+                                try {
+                                    await mermaid.run({ nodes: [el] });
+                                    el.removeAttribute('data-mermaid-deferred');
+                                    // Apply zoom to the now-rendered diagram, matching
+                                    // the decoration visible diagrams receive.
+                                    if (false) {
+                                        addZoomToSvgs(d3.selectAll("").select(function() {
+                                            return this.querySelector("svg");
+                                        }));
+                                    }
+                                } catch (e) {
+                                    console.error("Mermaid deferred rendering failed:", e);
+                                    el.removeAttribute('data-mermaid-deferred');
+                                    el.setAttribute('data-mermaid-render-failed', 'true');
+                                }
+                            });
+                        }
+                    }
+                });
+                hidden.forEach((el) => _lazyObserver.observe(el));
+            }
+        }
+    }
+
+    all_mermaids = document.querySelectorAll(".mermaid");
+    // Exclude deferred (hidden) and render-failed elements from completion checks
+    const mermaids_active = document.querySelectorAll(".mermaid:not([data-mermaid-deferred]):not([data-mermaid-render-failed])");
+    const mermaids_processed = document.querySelectorAll(".mermaid:not([data-mermaid-deferred]):not([data-mermaid-render-failed])[data-processed='true']");
+
+    if (false) {
+        const mermaids_to_add_zoom = 0 === -1 ? mermaids_active.length : 0;
+        if(mermaids_to_add_zoom > 0) {
+            var svgs = d3.selectAll("").select(function() {
+                return this.querySelector("svg");
+            });
+            // Wait until every active (visible) diagram has rendered. Deferred
+            // diagrams are excluded, so a fixed d3_node_count that counts a
+            // hidden diagram no longer loops forever waiting for its SVG.
+            if(mermaids_active.length !== mermaids_processed.length) {
+                setTimeout(() => runMermaid(false), 200);
+                return;
+            }
+            addZoomToSvgs(svgs);
+        }
+    } else if(mermaids_active.length !== mermaids_processed.length) {
+        // Wait for mermaid to process all diagrams
+        setTimeout(() => runMermaid(false), 200);
+        return;
+    }
+
+    // Stop here if not adding fullscreen capability
+    if (!true) return;
+
+    if (modal !== null ) {
+        // Destroy existing modal
+        modal.remove();
+        modal = null;
+        modalContent = null;
+    }
+
+    modal = document.createElement('div');
+    modal.className = 'mermaid-fullscreen-modal' + (darkTheme ? ' dark-theme' : '');
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-label', 'Fullscreen diagram viewer');
+    modal.innerHTML = `
+        <button class="mermaid-fullscreen-close${darkTheme ? ' dark-theme' : ''}" aria-label="Close fullscreen">✕</button>
+        <div class="mermaid-container-fullscreen${darkTheme ? ' dark-theme' : ''}"></div>
+    `;
+    document.body.appendChild(modal);
+
+    modalContent = modal.querySelector('.mermaid-container-fullscreen');
+    const closeBtn = modal.querySelector('.mermaid-fullscreen-close');
+
+    closeModal = () => {
+        modal.classList.remove('active');
+        modalContent.innerHTML = '';
+        document.body.style.overflow = ''
+        window.scrollTo({left: previousScrollOffset[0], top: previousScrollOffset[1], behavior: 'instant'});
+    };
+
+    closeBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeModal();
+    });
+    document.querySelectorAll('.mermaid').forEach((mermaidDiv) => {
+        if (mermaidDiv.parentNode.classList.contains('mermaid-container') ||
+            mermaidDiv.closest('.mermaid-fullscreen-modal')) {
+            // Already processed, adjust button class if needed
+            const existingBtn = mermaidDiv.parentNode.querySelector('.mermaid-fullscreen-btn');
+            if (existingBtn) {
+                existingBtn.className = 'mermaid-fullscreen-btn' + (darkTheme ? ' dark-theme' : '');
+            }
+            return;
+        }
+
+        const container = document.createElement('div');
+        container.className = 'mermaid-container';
+        mermaidDiv.parentNode.insertBefore(container, mermaidDiv);
+        container.appendChild(mermaidDiv);
+
+        const fullscreenBtn = document.createElement('button');
+        fullscreenBtn.className = 'mermaid-fullscreen-btn' + (darkTheme ? ' dark-theme' : '');
+        fullscreenBtn.setAttribute('aria-label', 'View diagram in fullscreen');
+        fullscreenBtn.textContent = "\u26f6";
+        fullscreenBtn.style.opacity = "50%";
+
+        // Calculate dynamic position based on diagram's margin and padding
+        const diagramStyle = window.getComputedStyle(mermaidDiv);
+        const marginTop = parseFloat(diagramStyle.marginTop) || 0;
+        const marginRight = parseFloat(diagramStyle.marginRight) || 0;
+        const paddingTop = parseFloat(diagramStyle.paddingTop) || 0;
+        const paddingRight = parseFloat(diagramStyle.paddingRight) || 0;
+        fullscreenBtn.style.top = `${marginTop + paddingTop + 4}px`;
+        fullscreenBtn.style.right = `${marginRight + paddingRight + 4}px`;
+
+        fullscreenBtn.addEventListener('click', () => {
+            previousScrollOffset = [window.scrollX, window.scrollY];
+            const clone = mermaidDiv.cloneNode(true);
+            modalContent.innerHTML = '';
+            modalContent.appendChild(clone);
+
+            const svg = clone.querySelector('svg');
+            if (svg) {
+                svg.removeAttribute('width');
+                svg.removeAttribute('height');
+                svg.style.width = '100%';
+                svg.style.height = 'auto';
+                svg.style.maxWidth = '100%';
+                svg.style.display = 'block';
+
+                if (false) {
+                    setTimeout(() => {
+                        const g = svg.querySelector('g');
+                        if (g) {
+                            var svgD3 = d3.select(svg);
+                            svgD3.html("<g class='wrapper'>" + svgD3.html() + "</g>");
+                            var inner = svgD3.select("g");
+                            var zoom = d3.zoom().on("zoom", function(event) {
+                                inner.attr("transform", event.transform);
+                            });
+                            svgD3.call(zoom);
+                        }
+                    }, 100);
+                }
+            }
+
+            modal.classList.add('active');
+            document.body.style.overflow = 'hidden';
+        });
+        container.appendChild(fullscreenBtn);
+    });
+};
+
+
+
+const load = async () => {
+    initStyles();
+
+
+    await runMermaid(true);
+
+    const reRunIfThemeChanges = async () => {
+        const newDarkTheme = isDarkTheme();
+        if (newDarkTheme !== darkTheme) {
+            darkTheme = newDarkTheme;
+            console.log("Theme change detected, re-running mermaid with", darkTheme ? "dark" : "default", "theme");
+            await mermaid.initialize(
+                {...{"startOnLoad": false},
+                ...{ darkMode: darkTheme, theme: darkTheme ? "dark" : "default" },
+                }
+            );
+            await runMermaid(true);
+        }
+    };
+
+    // Update theme classes when theme changes
+    const themeObserver = new MutationObserver(reRunIfThemeChanges);
+    themeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['class', 'style', 'data-theme']
+    });
+    themeObserver.observe(document.body, {
+        attributes: true,
+        attributeFilter: ['class', 'style', 'data-theme']
+    });
+};
+
+
+
+
+
+console.log("Initializing mermaid with", darkTheme ? "dark" : "default", "theme");
+mermaid.initialize(
+    {...{"startOnLoad": false},
+    ...{ darkMode: darkTheme, theme: darkTheme ? "dark" : "default" },
+    }
+);
+
+window.addEventListener("load", load);
+window.runMermaid = runMermaid;</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/straw';</script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="next" title="观测" href="observability.html" />
+    <link rel="prev" title="容灾" href="fault-tolerance.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="zh"/>
+  <meta name="docsearch:version" content="0.3.2" />
+    <meta name="docbuild:last-update" content="2026 年 09 月 28 日"/>
+  
+    
+    <script src="../_static/searchtools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">跳转至主要内容</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>回到顶部</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="版本警告"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="网页导航">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">搜索</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">搜索</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="当前页面">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <img src="../_static/logo.jpg" class="logo__image only-dark pst-js-only" alt="slime - Home"/>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">搜索</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">快速使用</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">使用文档</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">自定义指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/agent.html">Agentic RL 训练路线图</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">常见 Q&amp;A</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">256xH100 训练 GLM-5.2 744B-A40B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">投机采样</a></li>
+<li class="toctree-l1"><a class="reference internal" href="low-precision.html">低精度训练与 Rollout</a></li>
+<li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
+<li class="toctree-l1"><a class="reference internal" href="fault-tolerance.html">容灾</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">使用 straw 持久化 rollout</a></li>
+<li class="toctree-l1"><a class="reference internal" href="observability.html">观测</a></li>
+<li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD 分离</a></li>
+<li class="toctree-l1"><a class="reference internal" href="external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
+<li class="toctree-l1"><a class="reference internal" href="delta-weight-sync.html">Delta 权重同步</a></li>
+<li class="toctree-l1"><a class="reference internal" href="sglang-config.html">SGLang Config：高级引擎部署</a></li>
+<li class="toctree-l1"><a class="reference internal" href="megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
+<li class="toctree-l1"><a class="reference internal" href="arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI（持续集成）</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace 可视化</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="源码库"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/advanced/straw.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/advanced/straw.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fadvanced/straw.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="创建议题"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="下载此页面">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/advanced/straw.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="下载源文件"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="列印成 PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button pst-navbar-icon"
+  title="全屏模式"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="亮色"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="暗色"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>亮色</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>暗色</button></li>
+  </ul>
+</div>
+
+
+<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+</button>
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>使用 straw 持久化 rollout</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> 目录 </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">架构发生了什么变化</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">端到端数据流</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#r3-sc">共享张量、R3 与 SC</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sample">Sample 编码与完整性校验</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">启用方式</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#gc">在线 GC 与所有权</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#checkpoint">恢复与 checkpoint</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">验证与当前限制</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="straw-rollout">
+<h1>使用 straw 持久化 rollout<a class="headerlink" href="#straw-rollout" title="链接到此标题。">#</a></h1>
+<p><a class="reference external" href="https://github.com/zhuzilin/straw">straw</a> 为 slime 提供基于文件系统的持久化队列和打包张量存储。启用 <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code> 后，prompt 任务、部分 rollout、已接收结果和训练 batch 都拥有持久化身份。多台机器上的生成与训练进程通过共享文件系统直接读写载荷；Ray 调度 actor，传递控制消息和小型引用。</p>
+<p>当前共享文件系统目标为 JuiceFS。各节点需要在同一个绝对路径挂载同一存储池。包括 NFS 在内的其他网络文件系统，需要单独验证跨客户端锁、数据可见性和持久化语义。</p>
+<section id="id1">
+<h2>架构发生了什么变化<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>职责</p></th>
+<th class="head"><p>Ray object-store 传输（默认）</p></th>
+<th class="head"><p>straw 传输</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>数据源</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">RolloutDataSourceWithBuffer</span></code></p></td>
+<td><p>基于持久化 prompt 任务的 <code class="docutils literal notranslate"><span class="pre">QueueDataSourceWithBuffer</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>载荷交换</p></td>
+<td><p>Ray object reference</p></td>
+<td><p>指向共享 pack 的 <code class="docutils literal notranslate"><span class="pre">RecordSetRef</span></code> / 张量引用</p></td>
+</tr>
+<tr class="row-even"><td><p>Worker 分配</p></td>
+<td><p>内存中的 producer 状态</p></td>
+<td><p>Lease、attempt、持久化 continuation 和结果 receipt</p></td>
+</tr>
+<tr class="row-odd"><td><p>Rollout 转训练数据</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">BatchBuilder</span></code> 执行 hook 和 DP 分片</p></td>
+<td><p>同一转换流程，额外持久化选择计划与 ready batch</p></td>
+</tr>
+<tr class="row-even"><td><p>数据生命周期</p></td>
+<td><p>进程/object-store 所有权</p></td>
+<td><p>显式 task、consumer、reader 和 checkpoint 所有权</p></td>
+</tr>
+<tr class="row-odd"><td><p>清理</p></td>
+<td><p>Object-store 生命周期</p></td>
+<td><p>可选在线 GC，回收没有所有者的封存 pack</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>逻辑上分成 rollout 工作与结果、ready training batch 两个阶段。它们共享同一个 straw 存储池；只要任意阶段或 checkpoint 仍引用某个张量，该张量就保持存活，不需要为两个阶段各复制一份。slime controller 协调两个阶段，straw 用 Rust 实现存储、日志、任务接收和所有权协议。</p>
+<pre  class="mermaid">
+        flowchart LR
+    D[数据集 producer] --&gt;|cursor + 任务提交| Q[持久化 prompt 任务]
+    Q --&gt;|lease + 输入引用| W[分布式生成 worker]
+    W --&gt;|持久化部分 continuation| Q
+    W --&gt;|已接收 group 引用| R[Rollout 结果]
+    R --&gt; B[BatchBuilder: 选择计划与 DP 分片]
+    B --&gt;|ready batch 引用| T[训练 rank]
+    T --&gt;|训练完成| C[Queue controller: 进度与所有权]
+    C --&gt; G[straw 在线 GC]
+    P[(JuiceFS 共享 pack 文件)] -. 载荷读写 .-&gt; W
+    P -. 共享张量引用 .-&gt; B
+    P -. 当前 rank 所需数据 .-&gt; T
+    </pre><p>一个不自动重启的 Ray actor 持有本次运行的 coordinator，串行协调队列状态转换和数据集分配；载荷由各 producer 进程写入。因此，多机 I/O 可以并行，每个队列日志仍只有一个写入所有者。当前没有 coordinator 自动选主或故障接管。</p>
+</section>
+<section id="id2">
+<h2>端到端数据流<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
+<ol class="arabic simple">
+<li><p><strong>提交 prompt。</strong> 数据集 cursor 与 prompt 任务一起提交。Worker 领取 lease，从共享存储读取 prompt group；丢失 worker 不会永久丢弃已经预分配的数据集索引区间。</p></li>
+<li><p><strong>生成与续跑。</strong> 分布式 fully async 在每个符合资源条件的 Ray 节点上启动生成 worker。Worker 生成、评分并过滤完整 group，将部分 group 保存为持久化 continuation。R3 routes 和 SC rows 必须覆盖已保存的 token 前缀；服务端 capture 不完整时，从上一份一致的输入重试。</p></li>
+<li><p><strong>接收结果。</strong> 先持久化载荷，再接收引用。Receipt 标识已接收 group，因此即使 RPC 回复丢失也能恢复结果。任务重新分配会产生新 attempt，旧 attempt 无法接收替代结果。</p></li>
+<li><p><strong>构造训练 batch。</strong> <code class="docutils literal notranslate"><span class="pre">BatchBuilder</span></code> 在调用 reward/conversion hook 前持久化输入选择和转换配置，发布所有 DP shard 后才将整个 batch 标记为 ready。训练 reader 检查 batch、plan 和 rank 身份。Manager 仍会将选中的 sample 物化用于转换，其主机内存仍需纳入容量规划。</p></li>
+<li><p><strong>确认完成。</strong> 所有 rank 的训练调用返回后，Manager 报告 <code class="docutils literal notranslate"><span class="pre">training_completed</span></code>，推进运行时消费进度并释放 ready batch 容量。这与模型/优化器 checkpoint 持久化是两件事。</p></li>
+</ol>
+<p>Ray 继续负责调度、RPC 和执行进程故障；slime 负责 Sample schema、reward、filter、batch 和训练；straw 负责字节、引用、持久化和存储生命周期。自定义 rollout 仍可返回 Sample 列表，由 Manager 发布为兼容 collection。接口见<a class="reference internal" href="../get_started/customization.html"><span class="std std-doc">自定义指南</span></a>。</p>
+</section>
+<section id="r3-sc">
+<h2>共享张量、R3 与 SC<a class="headerlink" href="#r3-sc" title="链接到此标题。">#</a></h2>
+<p>每个 writer 进程复用 pack writer。slime adapter 默认按 <strong>256 MiB</strong> 目标大小轮换，由 <code class="docutils literal notranslate"><span class="pre">--rollout-queue-segment-mib</span></code> 配置。记录和 manifest 都嵌入 pack，<strong>不会为每个 sample 或张量单独创建文件</strong>，避免大量小文件带来的共享文件系统元数据开销。队列与所有权元数据使用追加日志。</p>
+<p>已完成的 R3 routes 和 SC 张量，在 custom sample hook 之后随其 sample group 一起发布。后续 rollout、continuation 和训练数据发布复用不可变张量依赖；修改时写入新记录，旧引用保持有效。这是张量级共享与写时复制，不是 GPU 共享内存或内存页级写时复制。R3 训练只读取分配给当前 CP/TP rank 的行。大 bundle 会按 native 写入预算拆分；SC 也支持不启用 R3 的场景。</p>
+<p>需要持久化 R3/SC 张量时，使用 <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code>；object-store 传输将它们保存在内存中。不再提供独立的 spill hook、每个 sample 的张量文件或 spill 清理步骤。导入另一个 straw 存储池的引用时，先将数据复制到目标池，再接收依赖这些数据的结果。Debug dump 直接保存张量内容，因此队列 GC 后仍可读取；启用 dump 会增加主机内存和 I/O 开销。</p>
+</section>
+<section id="sample">
+<h2>Sample 编码与完整性校验<a class="headerlink" href="#sample" title="链接到此标题。">#</a></h2>
+<p>Adapter 将 sample 保存为 <code class="docutils literal notranslate"><span class="pre">slime.v1</span></code> JSON record：<code class="docutils literal notranslate"><span class="pre">{version:</span> <span class="pre">1,</span> <span class="pre">tree:</span> <span class="pre">...}</span></code>，通过显式标签编码容器、Sample 字段、NumPy 数组、图像和 rollout 引用。嵌套 group、支持的动态字段、多模态输入、R3、SC top-k 和 ragged top-p 都会保留。未知 Python 类型及循环引用明确报错；载荷协议不使用 pickle，也不会根据存储数据中的名称导入类。</p>
+<p>Tensor 节点包含 shape、dtype、semantic kind、lazy/validated 标志，以及指向外层 manifest 依赖的 <code class="docutils literal notranslate"><span class="pre">{dependency:</span> <span class="pre">index,</span> <span class="pre">ordinal:</span> <span class="pre">index}</span></code>。物理位置保存在这些依赖 manifest 中，因此后续 sample 或训练 batch 发布可以共享相同的不可变张量记录。所有张量依赖必须先发布，才能接收所属 sample。</p>
+<p>straw 的 <code class="docutils literal notranslate"><span class="pre">tensor.v1</span></code> 保存连续、行优先、小端的 typed bytes。Lazy reader 校验元数据及所读行覆盖的每个 chunk 的 checksum，不会校验未读取的 chunk；完整检查则校验整个 segment。张量描述符批量恢复，以复用共享 pack 索引。</p>
+</section>
+<section id="id3">
+<h2>启用方式<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">requirements.txt</span></code> 已包含 <code class="docutils literal notranslate"><span class="pre">straw-queue</span></code>，标准 Docker 构建和正常安装 slime 时会自动安装。已有环境可以在每个生成和训练节点执行以下命令，同一任务的所有节点使用相同版本：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>straw-queue
+</pre></div>
+</div>
+<p>未安装 straw 时，默认 Ray <code class="docutils literal notranslate"><span class="pre">object-store</span></code> 传输仍可运行，启动日志会提示安装命令。如果显式选择 <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code>，则在启动检查阶段报错并给出同样的安装命令。</p>
+<p>Python 导入名为 <code class="docutils literal notranslate"><span class="pre">straw</span></code>。在原有训练命令中追加以下参数，使用新的共享目录：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-data-transport<span class="w"> </span>straw<span class="w"> </span><span class="se">\</span>
+--rollout-data-dir<span class="w"> </span>/shared/juicefs/jobs/my-run/rollout_data<span class="w"> </span><span class="se">\</span>
+--rollout-queue-run-id<span class="w"> </span>my-run<span class="w"> </span><span class="se">\</span>
+--rollout-storage-profile<span class="w"> </span>juicefs<span class="w"> </span><span class="se">\</span>
+--rollout-storage-declaration<span class="w"> </span>/shared/juicefs/deployment.json
+</pre></div>
+</div>
+<p>声明文件包含 <code class="docutils literal notranslate"><span class="pre">direct_mount:</span> <span class="pre">true</span></code>、<code class="docutils literal notranslate"><span class="pre">writeback:</span> <span class="pre">false</span></code>、<code class="docutils literal notranslate"><span class="pre">open_cache:</span> <span class="pre">0</span></code>、<code class="docutils literal notranslate"><span class="pre">readdir_cache:</span> <span class="pre">false</span></code>、已部署的 <code class="docutils literal notranslate"><span class="pre">client_version</span></code> 和 <code class="docutils literal notranslate"><span class="pre">durability_description</span></code>。它记录经过验证的部署设置，不会自动探测或配置挂载。详见 straw 的<a class="reference external" href="https://github.com/zhuzilin/straw/blob/main/docs/FILESYSTEM_zh.md">文件系统要求</a>。</p>
+<p>默认 <code class="docutils literal notranslate"><span class="pre">local</span></code> 存储 profile 对应 POSIX 开发契约；在共享挂载上选择它，并不意味着已验证该存储服务的持久性。</p>
+<p>存储方式和执行模式分别选择。默认传输仍为 <code class="docutils literal notranslate"><span class="pre">object-store</span></code>，默认 rollout 入口仍为同步模式。使用 straw 的分布式 fully async 时，额外添加：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-function-path<span class="w"> </span>slime.rollout.fully_async_rollout.generate_rollout_fully_async
+</pre></div>
+</div>
+<p>未指定 <code class="docutils literal notranslate"><span class="pre">--rollout-data-dir</span></code> 时，straw 模式使用 <code class="docutils literal notranslate"><span class="pre">&lt;save&gt;/rollout_data</span></code>；没有 <code class="docutils literal notranslate"><span class="pre">--save</span></code> 则必须显式指定共享目录。<code class="docutils literal notranslate"><span class="pre">--rollout-io-concurrency</span></code> 限制事件循环之外的序列化和 I/O 并发，默认 4。Adapter 使用 worker 进程和有界线程，straw 本身不创建 I/O 进程池。<code class="docutils literal notranslate"><span class="pre">--rollout-queue-max-pending</span></code> 与 <code class="docutils literal notranslate"><span class="pre">--rollout-queue-max-inflight</span></code> 限制任务准入，默认均为 65,536；它们不是保留字节数或文件数配额。</p>
+<p>权重同步期间，分布式 producer 暂停提交新任务，让在途请求完成并持久化；还有下一次训练 rollout 时恢复。权重同步本身仍是独立子系统。</p>
+<p>关闭时，所有生成 worker 共用五分钟期限完成持久化写入。超时会报告错误，不会被视为成功关闭。</p>
+</section>
+<section id="gc">
+<h2>在线 GC 与所有权<a class="headerlink" href="#gc" title="链接到此标题。">#</a></h2>
+<p>在线 GC 默认关闭，添加 <code class="docutils literal notranslate"><span class="pre">--rollout-queue-online-gc</span></code> 后，straw 可在任务运行期间回收不再使用的封存 pack。slime 通过 straw API 提供使用完成和丢弃信号。只有 task、publication、queue、reader、checkpoint 等所有者全部释放后，pack 才能删除。仅 lease 超时不能证明 reader 已停止。一条存活记录就会保留整个 pack；活跃 writer、保留 checkpoint 和 WAL 历史仍会占用空间。</p>
+<p>GC 失败会停止后台循环，后续 coordinator 操作传播原始原因，关闭时也会报告错误；它不会停止已在远端 worker 中运行的工作。数据保留供排查。容量用尽时应使用背压或由操作者明确决定处理方式，不能 reset 活跃队列或直接删除 pack 腾空间。离线删除目录要求所有参与者停止；仍需配置存储配额与应用保留策略。</p>
+<p>已处理位置和过滤决策被显式记录，避免接收顺序中的空洞使已消费数据持续占用容量。独立且有界的 control task 配额允许 Manager 在生产背压时仍能提交 collection。</p>
+</section>
+<section id="checkpoint">
+<h2>恢复与 checkpoint<a class="headerlink" href="#checkpoint" title="链接到此标题。">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>故障或重启场景</p></th>
+<th class="head"><p>支持行为与边界</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Worker 在结果接收前丢失</p></td>
+<td><p>恢复最近一次持久化 continuation，以新 attempt 重新分配</p></td>
+</tr>
+<tr class="row-odd"><td><p>已提交结果但回复丢失</p></td>
+<td><p>恢复已有 receipt，不重复进行逻辑接收</p></td>
+</tr>
+<tr class="row-even"><td><p>第一个 batch 计划生成前整个任务停止</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--rollout-queue-resume</span></code> 使用相同初始模型和 rollout 配置恢复已接收 group 与持久化前缀</p></td>
+</tr>
+<tr class="row-odd"><td><p>已生成 batch 计划后重启</p></td>
+<td><p>需要匹配的模型/优化器及 rollout checkpoint，单独恢复队列会明确报错</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Resume 要求整个旧任务（包括 coordinator 和 reader）已停止，并使用同一个 root 与 run ID。该参数是操作者声明，不是自动 fencing。尚未发布的推理可能重新执行；SGLang GPU KV cache 不会恢复。</p>
+<p>Checkpoint 的 <code class="docutils literal notranslate"><span class="pre">&lt;save&gt;/rollout/queue_state_&lt;rollout_id&gt;.json</span></code> 保存 source 和已注册 scheduler consumer；<code class="docutils literal notranslate"><span class="pre">builder_state_&lt;rollout_id&gt;.json</span></code> 保存训练 consumer 视图。它们的引用保留相应存储依赖图。Continuation 增量持久化，checkpoint/close 引用已有数据，不会再次重写全部 buffer token。恢复旧 checkpoint 不会抹去 WAL 中后来已接收的历史。</p>
+<p>部分 R3/SC 张量在 continuation 快照中保持 lazy 引用，生成追加新行时才加载。恢复 source 和 builder 状态会保留已保存的 warm groups 和行为策略版本，并记录哪些后续输出不属于恢复分支。恢复后的 buffer 独立于过滤决策保留存储引用。包含尚未重启 consumer 的完整 source 快照，必须先保留并持久记录，才能释放旧引用；保存失败保留旧引用，后台 GC 在恢复后的 consumer 状态提交后才启动。</p>
+<p>Adapter 目前尚未建立模型、优化器、RNG 与队列状态的联合最终提交 manifest。因此，持久化 rollout 不代表任意崩溃后的 optimizer 精确恢复，也不承诺训练结果逐位一致。</p>
+</section>
+<section id="id4">
+<h2>验证与当前限制<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
+<p>CPU 测试覆盖 codec、R3/SC 传输、CP/TP 按行读取、worker 故障、continuation、checkpoint 视图和 GC 所有权。straw 独立验证 Rust/Python 核心、有界所有权模型和 native 崩溃边界。物理多客户端文件系统检查及真实 GPU 训练补充这些测试。</p>
+<p><code class="docutils literal notranslate"><span class="pre">tests/test_straw_fully_async_recovery.py</span></code> 启动两个本地 Ray 节点，以 SIGKILL 中断整个 driver、coordinator 和 generation 进程树，再启动新任务读取同一个 straw 存储池，不经过正常 checkpoint。测试覆盖已接收结果重放、token/logprob/R3/SC 前缀保持不变、新 lease 和 reward 只计算一次，并分别检查在线 GC 关闭与开启的情况。推理和 reward 使用 CPU fixture，不代表 optimizer 恢复验证。此测试在 <code class="docutils literal notranslate"><span class="pre">cpu-unittest</span></code> 中自动运行，安装方式见 <a class="reference internal" href="../developer_guide/ci.html"><span class="std std-doc">CI 配置</span></a>。</p>
+<p>本地运行分布式 rollout 与中断恢复测试：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">PYTHONPATH</span><span class="o">=</span>.<span class="w"> </span>python<span class="w"> </span>tests/test_distributed_rollout.py
+<span class="nv">PYTHONPATH</span><span class="o">=</span>.<span class="w"> </span>python<span class="w"> </span>tests/test_straw_fully_async_recovery.py
+</pre></div>
+</div>
+<p>主要部署限制包括共享存储带宽、持久化延迟、coordinator 吞吐和 Manager 转换内存。目前尚无存活 pack 整理、日志压缩或 coordinator 自动接管。Rollout 参数见<a class="reference internal" href="../get_started/usage.html"><span class="std std-doc">使用指南</span></a>，存储验证及其覆盖边界见 straw 的<a class="reference external" href="https://github.com/zhuzilin/straw/blob/main/docs/VERIFICATION_zh.md">验证文档</a>。</p>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="fault-tolerance.html"
+       title="上一页">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">上一页</p>
+        <p class="prev-next-title">容灾</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="observability.html"
+       title="下一页">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">下一页</p>
+        <p class="prev-next-title">观测</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> 目录
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">架构发生了什么变化</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">端到端数据流</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#r3-sc">共享张量、R3 与 SC</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sample">Sample 编码与完整性校验</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">启用方式</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#gc">在线 GC 与所有权</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#checkpoint">恢复与 checkpoint</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">验证与当前限制</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+作者： slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  最后更新于 2026 年 09 月 28 日.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

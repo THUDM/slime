@@ -66,6 +66,24 @@ def generate_rollout(args, rollout_id, data_source, evaluation=False) -> Rollout
 
 **Example**: See [examples/fully_async](../_examples_synced/fully_async/README.md)
 
+With `--rollout-data-transport straw` (the default is Ray `object-store`), `RolloutFnTrainOutput.samples` may be a `DiskPayloadRef` pointing to the selected batch. Existing custom functions returning Sample lists (bare lists or `RolloutFnTrainOutput`) still work: the manager stores them once. New functions can persist completed, reward-scored groups during rollout and return a manifest instead of retaining a full batch in memory. For example, given an async iterator of accepted groups:
+
+```python
+import asyncio
+
+from slime.rollout.base_types import finalize_rollout_groups
+from slime.utils.rollout_transport import pack_rollout_group
+
+
+async def generate_stored_batch(args, rollout_id, completed_groups):
+    refs = []
+    async for group in completed_groups:
+        refs.append(await asyncio.to_thread(pack_rollout_group, group, args, rollout_id))
+    return finalize_rollout_groups(args, rollout_id, refs)
+```
+
+`finalize_rollout_groups` sorts groups, applies the configured batch sample filter once, and stores the batch manifest. If a hook mutates Samples, its result is saved again. A wrapper that needs actual Samples can call `slime.utils.rollout_transport.load_rollout_samples(output.samples)`. Generation/reward hooks and evaluation return values keep their existing contracts.
+
 ---
 
 ### `--custom-generate-function-path`

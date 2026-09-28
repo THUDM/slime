@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Sep 23, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 28, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -230,6 +230,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../advanced/low-precision.html">Low Precision Training and Rollout</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/reproducibility.html">Reproducibility</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/fault-tolerance.html">Fault Tolerance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/straw.html">Persistent rollout with straw</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/observability.html">Observability</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD Disaggregation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/external-rollout-engines.html">External Rollout Engines Roadmap</a></li>
@@ -515,7 +516,10 @@
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#advanced-megatron-configuration-megatron-config-path">Advanced Megatron Configuration (–megatron-config-path)</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rollout-function">Custom Rollout Function</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rollout-function">Custom Rollout Function</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#persistent-rollout-queue-and-distributed-fully-async">Persistent rollout queue and distributed fully async</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-sglang">How to Use SGLang</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parameter-configuration">Parameter Configuration</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-the-router">How to Use the Router</a></li>
@@ -909,6 +913,30 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 </li>
 <li><p>Sometimes, you may also need to support a custom reward model. This can be configured by setting <code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>.</p></li>
 </ul>
+<section id="persistent-rollout-queue-and-distributed-fully-async">
+<h3>Persistent rollout queue and distributed fully async<a class="headerlink" href="#persistent-rollout-queue-and-distributed-fully-async" title="Link to this heading">#</a></h3>
+<p>See <a class="reference internal" href="../advanced/straw.html"><span class="std std-doc">straw architecture and recovery</span></a> for the data flow, shared tensor ownership and checkpoint boundaries.</p>
+<p>Rollout payloads use Ray <code class="docutils literal notranslate"><span class="pre">object-store</span></code> by default, with <code class="docutils literal notranslate"><span class="pre">slime.rollout.data_source.RolloutDataSourceWithBuffer</span></code>. This mode needs neither straw nor a shared rollout directory. <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">nixl</span></code> selects Ray’s NIXL tensor transport.</p>
+<p>Install <a class="reference internal" href="../advanced/straw.html"><span class="std std-doc">straw</span></a>, then select <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code> to use its persistent queue and packed tensor storage. straw transport defaults to <code class="docutils literal notranslate"><span class="pre">slime.rollout.queue_data_source.QueueDataSourceWithBuffer</span></code>. It uses <code class="docutils literal notranslate"><span class="pre">--rollout-data-dir</span></code>, or <code class="docutils literal notranslate"><span class="pre">&lt;save&gt;/rollout_data</span></code> when <code class="docutils literal notranslate"><span class="pre">--save</span></code> is set; otherwise an explicit shared directory is required. Ray still runs actors and RPCs and carries small references. The synchronous rollout entrypoint remains the default. To use distributed fully async explicitly:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-function-path<span class="w"> </span>slime.rollout.fully_async_rollout.generate_rollout_fully_async<span class="w"> </span><span class="se">\</span>
+--rollout-data-transport<span class="w"> </span>straw<span class="w"> </span><span class="se">\</span>
+--rollout-data-dir<span class="w"> </span>/shared/run/rollout_data
+</pre></div>
+</div>
+<p>With straw transport, <code class="docutils literal notranslate"><span class="pre">--use-rollout-routing-replay</span></code> stores completed samples’ R3 routes in straw with their owning sample group. SC tensors are also stored in the same publication when <code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code> is enabled, including SC without R3. R3/SC persistence requires straw transport; the default object-store transport keeps these tensors in memory. There is no separate spill hook or directory. User sample hooks run first; R3, SC and sample metadata are published together into shared pack files. Later queue publications reuse their references. Large group bundles are split within the native write budget. Aborted prefixes are persisted by the queue continuation path. <code class="docutils literal notranslate"><span class="pre">--rollout-queue-online-gc</span></code> is a separate opt-in: after training acknowledges completion, straw can reclaim sealed packs whose owners have all released them. It is disabled by default.</p>
+<p>One job-owned, non-restarting Ray actor coordinates task leases and a serialized dataset producer. Dataset cursor advancement and task submission are committed together. Workers receive small task references and read prompt groups directly from shared storage. This replaces the former in-memory distributed index allocator; no per-reader index ranges are abandoned on failure. Seeded shuffle and sample/group identities remain those of the existing data source.</p>
+<p><code class="docutils literal notranslate"><span class="pre">get_samples(n)</span></code> and <code class="docutils literal notranslate"><span class="pre">add_samples(groups)</span></code> retain their interfaces. Custom producers can pass <code class="docutils literal notranslate"><span class="pre">source.reader_config(&quot;unique_reader_id&quot;)</span></code> to a remote process and call <code class="docutils literal notranslate"><span class="pre">config.open()</span></code> there. IDs must be unique; <code class="docutils literal notranslate"><span class="pre">owner</span></code> is reserved. Buffered partial groups remain with their reader during normal execution and are durably saved as task continuations. Readers renew leases; a stopped reader returns unfinished tasks, while lost workers’ tasks become available after lease expiry. Newly generated retries have new attempts. The coordinator does not automatically fail over: stop the old job before using <code class="docutils literal notranslate"><span class="pre">--rollout-queue-resume</span></code> with the same root and <code class="docutils literal notranslate"><span class="pre">--rollout-queue-run-id</span></code>.</p>
+<p>Fully async starts one generation process per Ray node with CPU resources. Each reserves one CPU and receives a share of the configured concurrency in complete prompt groups. Faster workers may fill a global batch without waiting for slower ones. Local generation queues and collector prefetch remain bounded. Complete groups pass through the existing dynamic filter before publication; rejected groups contribute filter metrics. Distributed fully async still rejects <code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>. The synchronous all-samples hook retains its existing Samples and calling order.</p>
+<p>The default logical result is a complete filtered group; physical segment boundaries do not define training groups. Workers encode Samples explicitly and store large tensors as typed dependencies. The format uses immutable committed extents in append-only <code class="docutils literal notranslate"><span class="pre">.pack</span></code> files, relative references and checksums, with no pickle payload protocol. Unsupported custom field types fail explicitly. See the <a class="reference internal" href="../advanced/straw.html"><span class="std std-doc">straw architecture, deployment and recovery guide</span></a>.</p>
+<p>Built-in producers return a collection manifest. Legacy custom rollouts can still return Sample lists; Manager publishes and accepts one compatibility collection. New producers may return an accepted <code class="docutils literal notranslate"><span class="pre">RawRolloutRef</span></code>; Manager validates its receipt and passes it to the same BatchBuilder without rewriting its payload. BatchBuilder preserves reward/conversion hooks and DP scheduling, records the selection plan, and publishes all rank shards before exposing <code class="docutils literal notranslate"><span class="pre">TrainBatchRef</span></code>s. All rank references identify the same batch and plan.</p>
+<p>The slime adapter currently binds the shared root at the same absolute path on all nodes and checks visibility in both directions. The underlying store’s references are relocatable. r3/sc dependencies are adopted into queue storage before references escape the producer; old rollout spill cleanup cannot remove them. Queue files are retained by default. Offline inspection/cleanup requires stopped writers, coordinator and readers; ordinary reads or batch-ready events never delete data. Debug dumps remain opt-in <code class="docutils literal notranslate"><span class="pre">torch.save</span></code> files and may contain retained queue tensor references. Evaluation follows the existing path.</p>
+<p>Data-source checkpoints pause registered consumers, drain in-flight requests and save reader buffers and completed groups through <code class="docutils literal notranslate"><span class="pre">queue_state_&lt;rollout_id&gt;.json</span></code> under <code class="docutils literal notranslate"><span class="pre">&lt;save&gt;/rollout</span></code>. Buffer snapshots reference already persisted groups and retain current leases separately, avoiding a second encoding of every buffered token during checkpoint or shutdown; older inline snapshots remain readable. Restore checks dataset size, samples per prompt, seed, shuffle, run identity and fully-async worker topology. Global producer history remains in the journal and is not rewound when loading an earlier checkpoint. Custom execution state participates via <code class="docutils literal notranslate"><span class="pre">register_consumer(name,</span> <span class="pre">consumer)</span></code> with <code class="docutils literal notranslate"><span class="pre">pause</span></code>, <code class="docutils literal notranslate"><span class="pre">resume</span></code>, <code class="docutils literal notranslate"><span class="pre">state_dict</span></code>, <code class="docutils literal notranslate"><span class="pre">load_state_dict</span></code> and <code class="docutils literal notranslate"><span class="pre">close</span></code> methods. Disabled worker slots remain disabled after restore. This is durable queue/data state; it does not by itself guarantee exact distributed optimizer recovery or bitwise training equivalence.</p>
+<p>R3 training reads only the CP/TP rows assigned to the current rank. Batched continuation publication, loading and state persistence reuse authenticated indices within a bounded read session; receipt lookups use batch RPCs. These optimizations preserve checksums, WAL durability and GC ownership. Read sessions do not replace ownership pins.</p>
+<p>Distributed fully async producers stop admitting new groups while weights synchronize, then resume if another training rollout remains. In-flight results still finish and persist.</p>
+<p>Joint checkpoint restore defers background GC until the saved training consumer state and its restored storage ownership are durable. Unavailable checkpoint data fails restoration before GC starts.</p>
+<p>Restored reader buffers keep an explicit storage reference independent of filter decisions. A later data-source checkpoint moves that reference only after all active and not-yet-started consumers are captured in a complete, retained, durable snapshot. Retiring an older checkpoint can then release its obsolete tensors without losing resumable prefixes. A failed save keeps the previous reference; checkpoint retirement remains the caller’s responsibility.</p>
+<p>The manager still materializes the selected batch for conversion, so manager memory and shared-storage bandwidth remain limits. <code class="docutils literal notranslate"><span class="pre">--rollout-io-concurrency</span></code> bounds publication I/O submissions. straw’s storage, journal and GC implementation is Rust; slime retains Python sample conversion and training integration. Measure throughput for the intended model, concurrency and shared filesystem before changing deployment defaults.</p>
+</section>
 </section>
 <section id="how-to-use-sglang">
 <h2>How to Use SGLang<a class="headerlink" href="#how-to-use-sglang" title="Link to this heading">#</a></h2>
@@ -1058,7 +1086,10 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#advanced-megatron-configuration-megatron-config-path">Advanced Megatron Configuration (–megatron-config-path)</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rollout-function">Custom Rollout Function</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rollout-function">Custom Rollout Function</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#persistent-rollout-queue-and-distributed-fully-async">Persistent rollout queue and distributed fully async</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-sglang">How to Use SGLang</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parameter-configuration">Parameter Configuration</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-the-router">How to Use the Router</a></li>
@@ -1103,7 +1134,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Sep 23, 2026.
+  Last updated on Sep 28, 2026.
   <br/>
 </p>
   </div>
