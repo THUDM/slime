@@ -30,6 +30,7 @@ REFERENCE_CUSTOM_GENERATE_WITH_EVAL_PATH = (
 )
 
 from slime.rollout.sglang_rollout import generate_and_rm
+from slime.utils.async_utils import AsyncPacer
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
 
@@ -58,6 +59,7 @@ class FakeGenerateState:
     def __init__(self, args) -> None:
         self.args = args
         self.semaphore = types.SimpleNamespace(__aenter__=None)
+        self.generation_pacer = AsyncPacer()
         self.pendings = set()
         self.remaining_batch_size = 0
         self.aborted = False

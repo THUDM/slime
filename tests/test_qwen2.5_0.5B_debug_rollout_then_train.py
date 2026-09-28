@@ -10,6 +10,7 @@ Uses Qwen2.5-0.5B-Instruct (smallest supported model) with 2 GPUs.
 
 import os
 import tempfile
+from shlex import quote
 
 import slime.utils.external_utils.command_utils as U
 
@@ -31,6 +32,7 @@ def _common_args(debug_data_dir: str):
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
 
     rollout_args = (
+        "--rollout-data-transport straw "
         "--prompt-data /root/datasets/gsm8k/train.parquet "
         "--input-key messages "
         "--label-key label "
@@ -89,6 +91,7 @@ def execute_rollout_only(debug_data_dir: str):
     )
 
     phase1_args = (
+        f"--rollout-data-dir {quote(os.path.join(debug_data_dir, 'rollout_queue'))} "
         f"{_common_args(debug_data_dir)} "
         f"{sglang_args} "
         "--debug-rollout-only "
@@ -110,6 +113,7 @@ def execute_train_only(debug_data_dir: str):
     """Phase 2: train-only, load saved rollout data."""
 
     phase2_args = (
+        f"--rollout-data-dir {quote(os.path.join(debug_data_dir, 'train_queue'))} "
         f"{_common_args(debug_data_dir)} "
         f"--load-debug-rollout-data {debug_data_dir}/rollout_{{rollout_id}}.pt "
         "--ci-test "
@@ -127,11 +131,10 @@ def execute_train_only(debug_data_dir: str):
 
 
 def execute():
-    debug_data_dir = tempfile.mkdtemp(prefix="slime_debug_rollout_")
-    print(f"Using temp dir for rollout data: {debug_data_dir}")
-
-    execute_rollout_only(debug_data_dir)
-    execute_train_only(debug_data_dir)
+    with tempfile.TemporaryDirectory(prefix="slime_debug_rollout_") as debug_data_dir:
+        print(f"Using temp dir for rollout data: {debug_data_dir}")
+        execute_rollout_only(debug_data_dir)
+        execute_train_only(debug_data_dir)
 
     print("=" * 60)
     print("Both phases completed successfully!")

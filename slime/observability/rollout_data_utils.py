@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 from slime.utils.routed_experts import validate_routed_experts_value
-from slime.utils.tensor_store import DiskTensorRef, retain_debug_tensor_refs
+from slime.utils.tensor_store import TensorRef, materialize_tensor_refs
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ def tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:
     for key, dtype in _ROLLOUT_DATA_TENSOR_DTYPES.items():
         if key in rollout_data:
             rollout_data[key] = [
-                value if isinstance(value, DiskTensorRef) else _cpu_tensor(value, dtype=dtype)
+                value if isinstance(value, TensorRef) else _cpu_tensor(value, dtype=dtype)
                 for value in rollout_data[key]
             ]
 
@@ -61,7 +61,7 @@ def tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:
 
 
 def validate_rollout_routed_experts_for_replay(
-    routed_experts: list[torch.Tensor | DiskTensorRef],
+    routed_experts: list[torch.Tensor | TensorRef],
     args,
     expected_rows: list[int] | None = None,
 ) -> None:
@@ -140,5 +140,4 @@ def save_debug_rollout_data(path_template, data, *, rollout_id: int, evaluation:
         samples = [sample.to_dict() for sample in data]
 
     dump_data = {"rollout_id": rollout_id, "samples": samples}
-    retain_debug_tensor_refs(dump_data, path)
-    torch.save(dump_data, path)
+    torch.save(materialize_tensor_refs(dump_data), path)

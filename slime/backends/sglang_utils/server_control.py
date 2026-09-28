@@ -111,7 +111,7 @@ async def _abort_server_once(url: str, request_timeout: float) -> None:
 
 async def _get_server_load(url: str, request_timeout: float) -> Any:
     return await asyncio.wait_for(
-        get(f"{url}/v1/loads?include=core,disagg,queues,inflight", timeout=request_timeout),
+        get(f"{url}/v1/loads?include=core,disagg,queues", timeout=request_timeout),
         timeout=request_timeout,
     )
 

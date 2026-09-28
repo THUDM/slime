@@ -2,14 +2,12 @@
 
 import math
 import os
-import uuid
-from pathlib import Path
 
 import numpy as np
 import torch
 
 from slime.utils.ppo_utils import get_pg_loss_type, importance_weights
-from slime.utils.tensor_store import DiskTensorRef
+from slime.utils.tensor_store import TensorRef
 
 SAMPLER_TOPK_FIELDS = ("rollout_topk_token_ids", "rollout_topk_log_probs")
 
@@ -206,9 +204,13 @@ def extract_sampler_top_p(meta_info, count):
 def validate_sampler_top_p(ids, offsets, logps, count, loss_mask=None, tokens=None, sampled_logps=None):
     if ids is None or offsets is None or logps is None:
         raise ValueError("Top-p score centering requires complete sampler top-p ids, offsets, and logprobs.")
-    ids, offsets, logps = np.asarray(ids), np.asarray(offsets), np.asarray(logps)
+    # Keep large supports lazy and validate bounded ranges. The sampled token
+    # and loss mask can change independently of a previously validated tensor.
+    ids = ids if isinstance(ids, TensorRef) else np.asarray(ids)
+    logps = logps if isinstance(logps, TensorRef) else np.asarray(logps)
+    offsets = np.asarray(offsets.load() if isinstance(offsets, TensorRef) else offsets)
     if (
-        ids.ndim != 1
+        len(ids.shape) != 1
         or logps.shape != ids.shape
         or offsets.shape != (count + 1,)
         or not np.issubdtype(ids.dtype, np.integer)
@@ -218,21 +220,33 @@ def validate_sampler_top_p(ids, offsets, logps, count, loss_mask=None, tokens=No
         or (np.diff(offsets) < 0).any()
     ):
         raise ValueError("Invalid top-p score-centering ids/logprobs/offsets.")
-    for row, (start, end) in enumerate(zip(offsets[:-1], offsets[1:], strict=True)):
-        if loss_mask is not None and not loss_mask[row] and start == end:
-            continue
-        row_ids, row_logps = ids[start:end], logps[start:end].astype(np.float64)
-        _validate_head_arrays(row_ids, row_logps)
-        if not np.isclose(np.exp(row_logps).sum(), 1.0, rtol=1e-4, atol=1e-6):
-            raise ValueError("Top-p score centering requires the complete normalized support, not a truncated head.")
-        if tokens is not None:
-            selected = row_logps[row_ids == tokens[row]]
-            if len(selected) != 1 or not np.isclose(selected[0], sampled_logps[row], rtol=1e-4, atol=1e-5):
-                raise ValueError("Top-p sampler distribution must include the sampled token with its rollout logprob.")
+    for value in (ids, logps):
+        if isinstance(value, TensorRef):
+            value.validate()
+    for first_row in range(0, count, 1024):
+        last_row = min(first_row + 1024, count)
+        base, stop = int(offsets[first_row]), int(offsets[last_row])
+        chunk_ids, chunk_logps = np.asarray(ids[base:stop]), np.asarray(logps[base:stop])
+        for row in range(first_row, last_row):
+            start, end = offsets[row : row + 2] - base
+            if loss_mask is not None and not loss_mask[row] and start == end:
+                continue
+            row_ids, row_logps = chunk_ids[start:end], chunk_logps[start:end].astype(np.float64)
+            _validate_head_arrays(row_ids, row_logps)
+            if not np.isclose(np.exp(row_logps).sum(), 1.0, rtol=1e-4, atol=1e-6):
+                raise ValueError(
+                    "Top-p score centering requires the complete normalized support, not a truncated head."
+                )
+            if tokens is not None:
+                selected = row_logps[row_ids == tokens[row]]
+                if len(selected) != 1 or not np.isclose(selected[0], sampled_logps[row], rtol=1e-4, atol=1e-5):
+                    raise ValueError(
+                        "Top-p sampler distribution must include the sampled token with its rollout logprob."
+                    )
 
 
 def validate_sampler_topk(sample, k):
-    """Validate arrays once before spilling; subsequent transport checks only references."""
+    """Validate arrays before publication; subsequent transport checks only references."""
     ids, logps = sample.rollout_topk_token_ids, sample.rollout_topk_log_probs
     if sample.response_length == 0 and ids is None and logps is None:
         sample.rollout_topk_token_ids = torch.empty((0, k), dtype=torch.int32)
@@ -241,7 +255,7 @@ def validate_sampler_topk(sample, k):
     if ids is None or logps is None:
         raise ValueError("Score centering requires rollout_topk_token_ids and rollout_topk_log_probs on every sample.")
     shape = (sample.response_length, k)
-    disk = [isinstance(value, DiskTensorRef) for value in (ids, logps)]
+    disk = [isinstance(value, TensorRef) for value in (ids, logps)]
     if any(disk):
         if not all(disk):
             raise ValueError("Sampler top-k ids and logprobs must both be disk references.")
@@ -250,8 +264,7 @@ def validate_sampler_topk(sample, k):
                 raise ValueError(f"Sampler top-k disk reference must have shape {shape} and dtype {dtype}.")
             if value.kind != key:
                 raise ValueError(f"Unexpected sampler top-k disk reference kind: {value.kind}")
-            if not Path(value.path).is_file():
-                raise FileNotFoundError(value.path)
+            value.validate()
         if ids.validated and logps.validated:
             return
     else:
@@ -264,39 +277,3 @@ def validate_sampler_topk(sample, k):
         _validate_head_arrays(
             np.asarray(ids[start : start + 1024]), np.asarray(logps[start : start + 1024], dtype=np.float64)
         )
-
-
-def spill_sampler_topk(args, sample, rollout_id):
-    """Keep sampler heads beside routes under the existing R3 spill directory."""
-    if not getattr(args, "use_score_centering", False):
-        return
-    if getattr(args, "rollout_top_p", 1.0) < 1:
-        return
-    store_dir = getattr(args, "rollout_routed_experts_store_dir", None)
-    if not store_dir:
-        if any(isinstance(getattr(sample, key), DiskTensorRef) for key in SAMPLER_TOPK_FIELDS):
-            raise ValueError("Sampler top-k file retention requires --rollout-routed-experts-store-dir")
-        return
-    validate_sampler_topk(sample, args.score_centering_top_k)
-    component = "unknown" if rollout_id is None else f"{int(rollout_id):08d}"
-    directory = Path(store_dir) / f"rollout_{component}"
-    for key, dtype in zip(SAMPLER_TOPK_FIELDS, (torch.int32, torch.float32), strict=True):
-        value = getattr(sample, key)
-        if isinstance(value, DiskTensorRef):
-            if Path(value.path).parent.resolve() != directory.resolve():
-                setattr(
-                    sample, key, value.link(directory / f"sample_{sample.index}_{key}_{uuid.uuid4().hex}.safetensors")
-                )
-            continue
-        # Ray may return read-only arrays; writing safetensors only reads them.
-        array = np.asarray(value)
-        if not array.flags.writeable:
-            array = array.copy()
-        tensor = torch.as_tensor(array, dtype=dtype)
-        ref = DiskTensorRef.write(
-            tensor,
-            directory / f"sample_{sample.index}_{key}_{uuid.uuid4().hex}.safetensors",
-            kind=key,
-            validated=True,
-        )
-        setattr(sample, key, ref)
