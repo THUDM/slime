@@ -243,6 +243,61 @@ def test_straw_heads_survive_buffer_and_debug_dump_lifetimes(tmp_path):
     assert restored.rollout_topk_token_ids.tolist() == [[3, 1, 4]] * 2
 
 
+@pytest.mark.parametrize("loss_mask,expected", [(None, 1.5), ([1, 0], 2.0), ([0, 0], None)])
+def test_rollout_metrics_read_only_top_p_offsets_from_straw(tmp_path, monkeypatch, loss_mask, expected):
+    import numpy as np
+    from test_score_centering import binary_top_p_meta
+
+    from slime.observability import rollout_metrics
+    from slime.utils.rollout_transport import pack_rollout_payload, seal_rollout_store
+    from slime.utils.tensor_store import TensorRef
+
+    a = args(
+        rollout_top_p=0.95,
+        rollout_data_transport="straw",
+        rollout_data_dir=str(tmp_path),
+        rollout_queue_online_gc=True,
+        rollout_num_gpus=0,
+        log_reward_category=None,
+        reward_key=None,
+        custom_rollout_log_function_path=None,
+        load_debug_rollout_data=None,
+        wandb_always_use_train_step=False,
+    )
+    sample = Sample(tokens=[9], reward=1.0, response="answer")
+    sample.append_response_tokens(a, tokens=[4, 2], log_probs=[float(np.log(0.7)), 0.0], meta_info=binary_top_p_meta())
+    sample.loss_mask = loss_mask
+    sample.status = Sample.Status.COMPLETED
+    reported = []
+    monkeypatch.setattr(rollout_metrics.logging_utils, "log", lambda args, metrics, **kw: reported.append(metrics))
+    rollout_metrics.log_rollout_data(0, a, [sample], None, 1.0)
+
+    restored = pack_rollout_payload([sample], a, 0).load()
+    seal_rollout_store(a)
+    fields = ("rollout_top_p_token_ids", "rollout_top_p_token_offsets", "rollout_top_p_log_probs")
+    refs = {key: getattr(restored[0], key) for key in fields}
+    assert all(isinstance(ref, TensorRef) for ref in refs.values())
+    load = TensorRef.load
+    reads = []
+
+    def load_offsets(ref, **kwargs):
+        assert ref.kind == "rollout_top_p_token_offsets", "Logging must not load the full sampler payload"
+        reads.append(ref)
+        return load(ref, **kwargs)
+
+    monkeypatch.setattr(TensorRef, "load", load_offsets)
+    rollout_metrics.log_rollout_data(0, a, restored, None, 1.0)
+
+    assert reported[0] == reported[1]
+    key = "rollout/top_p_kept_vocab_per_token"
+    if expected is None:
+        assert key not in reported[1]
+    else:
+        assert reported[1][key] == pytest.approx(expected)
+    assert reads == [refs["rollout_top_p_token_offsets"]]
+    assert all(getattr(restored[0], key) is ref for key, ref in refs.items())
+
+
 @pytest.mark.parametrize("disk", [False, True])
 def test_training_metrics_ignore_sampler_head_payloads(monkeypatch, tmp_path, disk):
     from megatron.core import mpu
@@ -277,8 +332,8 @@ def test_training_metrics_ignore_sampler_head_payloads(monkeypatch, tmp_path, di
     assert "rollout_log_probs" in reported[0]
 
 
-@pytest.mark.parametrize("transport", ["object-store", "nixl"])
-def test_exact_top_p_transport_and_microbatch(monkeypatch, transport):
+@pytest.mark.parametrize("transport", ["object-store", "nixl", "straw"])
+def test_exact_top_p_transport_and_microbatch(monkeypatch, tmp_path, transport):
     import numpy as np
     from test_score_centering import binary_top_p_meta
     from slime.rollout import batch_builder as rollout
@@ -291,7 +346,13 @@ def test_exact_top_p_transport_and_microbatch(monkeypatch, transport):
     monkeypatch.setitem(sys.modules, "megatron.training", training)
     from slime.backends.megatron_utils.data import DataIterator
 
-    mgr = manager(rollout_top_p=0.9, rollout_data_transport=transport, global_batch_size=2)
+    from slime.utils.rollout_transport import pack_rollout_payload, seal_rollout_store
+    from slime.utils.tensor_store import TensorRef
+
+    mgr = manager(
+        rollout_top_p=0.9, rollout_data_transport=transport, rollout_data_dir=str(tmp_path), global_batch_size=2
+    )
+    mgr.rollout_id = 0
     mgr.train_parallel_config = {"dp_size": 2}
     monkeypatch.setattr(rollout, "build_dp_schedule", lambda *a, **kw: ([[1], [0]], [[[0]], [[0]]], [1], [2]))
     monkeypatch.setattr(rollout.ray, "put", lambda data, **kwargs: data)
@@ -304,16 +365,169 @@ def test_exact_top_p_transport_and_microbatch(monkeypatch, transport):
         if i == 1:
             sample.append_response_tokens(mgr.args, tokens=[8], trainable=False)
         samples.append(sample)
+    if transport == "straw":
+        samples = pack_rollout_payload(samples, mgr.args, 0).load()
     batch = mgr.convert(samples)
     refs = mgr.split_by_dp(batch)
-    assert refs[0].inner["rollout_top_p_token_offsets"][0].tolist() == [0, 2, 3, 3]
-    for ref in refs:
-        tensorize_rollout_data_for_training(ref.inner)
-        iterator = DataIterator(ref.inner, micro_batch_indices=[[0]])
+    shards = [ref.inner.load() if transport == "straw" else ref.inner for ref in refs]
+    offsets = shards[0]["rollout_top_p_token_offsets"][0]
+    assert (offsets.load() if isinstance(offsets, TensorRef) else offsets).tolist() == [0, 2, 3, 3]
+    for shard in shards:
+        tensorize_rollout_data_for_training(shard)
+        iterator = DataIterator(shard, micro_batch_indices=[[0]])
         data = iterator.get_next(["rollout_top_p_log_probs", "rollout_top_p_token_ids", "rollout_top_p_token_offsets"])
-        assert data["rollout_top_p_log_probs"][0].dtype == torch.float32
-        torch.testing.assert_close(data["rollout_top_p_log_probs"][0].exp(), torch.tensor([0.3, 0.7, 1.0]))
-        assert data["rollout_top_p_token_ids"][0].tolist() == [1, 4, 2]
+        logps = data["rollout_top_p_log_probs"][0]
+        if transport == "straw":
+            assert isinstance(logps, TensorRef)
+            logps = logps.load()
+        assert logps.dtype == torch.float32
+        torch.testing.assert_close(logps.exp(), torch.tensor([0.3, 0.7, 1.0]))
+        ids = data["rollout_top_p_token_ids"][0]
+        assert (ids.load() if isinstance(ids, TensorRef) else ids).tolist() == [1, 4, 2]
+    if transport == "straw":
+        seal_rollout_store(mgr.args)
+
+
+@pytest.mark.parametrize("score_centering", [False, True])
+@pytest.mark.parametrize("append", ["model", "tool", "terminal"])
+def test_top_p_resume_from_straw(tmp_path, monkeypatch, score_centering, append):
+    import numpy as np
+    from test_score_centering import binary_top_p_meta
+
+    from slime.utils.rollout_transport import pack_rollout_payload, seal_rollout_store
+    from slime.utils.tensor_store import TensorRef
+
+    a = args(
+        rollout_top_p=0.95,
+        use_score_centering=score_centering,
+        rollout_data_transport="straw",
+        rollout_data_dir=str(tmp_path),
+        rollout_queue_online_gc=True,
+    )
+    sample = Sample(tokens=[9])
+    sample.append_response_tokens(a, tokens=[4, 2], log_probs=[float(np.log(0.7)), 0.0], meta_info=binary_top_p_meta())
+    sample.status = Sample.Status.ABORTED
+    original = pack_rollout_payload(sample, a, 0)
+    restored = original.load()
+    assert isinstance(restored.rollout_top_p_token_ids, TensorRef)
+    kwargs = {
+        "model": dict(tokens=[4, 2], log_probs=[float(np.log(0.7)), 0.0], meta_info=binary_top_p_meta()),
+        "tool": dict(tokens=[8], trainable=False),
+        "terminal": dict(tokens=[], meta_info={"finish_reason": {"type": "stop"}}),
+    }[append]
+    sample.append_response_tokens(a, **kwargs)
+    load = TensorRef.load
+    prefix_ids, prefix_logps = restored.rollout_top_p_token_ids, restored.rollout_top_p_log_probs
+
+    def load_changed_field(ref, **kwargs):
+        if append != "model":
+            assert ref.kind == "rollout_top_p_token_offsets", "Unchanged supports must remain shared"
+        return load(ref, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(TensorRef, "load", load_changed_field)
+        restored.append_response_tokens(a, **kwargs)
+    if append != "model":
+        assert restored.rollout_top_p_token_ids is prefix_ids
+        assert restored.rollout_top_p_log_probs is prefix_logps
+    republished = pack_rollout_payload(restored, a, 1).load()
+    seal_rollout_store(a)
+    assert republished.tokens == sample.tokens
+    assert republished.loss_mask == sample.loss_mask
+    for key in ("rollout_top_p_token_ids", "rollout_top_p_token_offsets", "rollout_top_p_log_probs"):
+        expected, actual = getattr(sample, key), getattr(republished, key)
+        if expected is not None:
+            torch.testing.assert_close(actual.load(), torch.as_tensor(expected))
+    # Continuing one reader must leave the persisted prefix usable by another.
+    assert original.load().rollout_top_p_token_offsets.load().tolist() == [0, 2, 3]
+
+
+@pytest.mark.parametrize("rank", [0, 1])
+@pytest.mark.parametrize("allgather", [False, True])
+def test_top_p_mask_reads_only_local_cp_support(tmp_path, monkeypatch, rank, allgather):
+    from megatron.core import mpu
+    from straw import SharedFilesystemStore
+    from straw.tensor import TensorRef, publish_tensors
+
+    from slime.backends.megatron_utils.loss import _build_topp_keep_mask
+
+    monkeypatch.setattr(mpu, "get_context_parallel_world_size", lambda: 2)
+    monkeypatch.setattr(mpu, "get_context_parallel_rank", lambda: rank)
+    monkeypatch.setattr(mpu, "get_tensor_model_parallel_rank", lambda: 0, raising=False)
+    with SharedFilesystemStore(tmp_path, "cp-mask", codecs=("tensor.v1",)) as store:
+        ids, offsets = publish_tensors(
+            store,
+            {"ids": torch.arange(6, dtype=torch.int32), "offsets": torch.arange(7, dtype=torch.int32)},
+            submission_id="support",
+        )
+    getitem = TensorRef.__getitem__
+    reads = []
+
+    def read_support(ref, rows):
+        assert ref is ids
+        reads.append((rows.start, rows.stop))
+        return getitem(ref, rows)
+
+    monkeypatch.setattr(TensorRef, "__getitem__", read_support)
+    mask = _build_topp_keep_mask(4, 8, torch.device("cpu"), [ids], [offsets], [8], [6], allgather)
+    positions = (
+        list(range(rank * 4, rank * 4 + 4)) if allgather else [2 * rank, 2 * rank + 1, 6 - 2 * rank, 7 - 2 * rank]
+    )
+    expected = torch.ones(4, 8, dtype=torch.bool)
+    for row, position in enumerate(positions):
+        if 1 <= position <= 6:
+            expected[row] = False
+            expected[row, position - 1] = True
+    torch.testing.assert_close(mask, expected)
+    expected_reads = (
+        ([(0, 3)] if rank == 0 else [(3, 6)]) if allgather else ([(0, 1), (5, 6)] if rank == 0 else [(1, 3), (3, 5)])
+    )
+    assert reads == expected_reads
+
+
+def test_top_p_validation_checks_shared_support_in_chunks(tmp_path, monkeypatch):
+    from slime.utils.rollout_transport import pack_rollout_payload, seal_rollout_store
+    from slime.utils.score_centering import validate_sampler_top_p
+    from slime.utils.tensor_store import TensorRef
+
+    count = 1025
+    a = args(rollout_top_p=0.95, rollout_data_transport="straw", rollout_data_dir=str(tmp_path))
+    sample = Sample(
+        tokens=[9] + [4] * count,
+        response_length=count,
+        rollout_log_probs=[0.0] * count,
+        rollout_top_p_token_ids=torch.full((count,), 4, dtype=torch.int32),
+        rollout_top_p_token_offsets=torch.arange(count + 1, dtype=torch.int32),
+        rollout_top_p_log_probs=torch.zeros(count),
+        status=Sample.Status.COMPLETED,
+    )
+    restored = pack_rollout_payload(sample, a, 0).load()
+    seal_rollout_store(a)
+    fields = (restored.rollout_top_p_token_ids, restored.rollout_top_p_token_offsets, restored.rollout_top_p_log_probs)
+    assert all(ref.validated for ref in fields)
+    load, getitem = TensorRef.load, TensorRef.__getitem__
+    reads = []
+
+    def load_offsets(ref, **kwargs):
+        assert ref.kind == "rollout_top_p_token_offsets"
+        return load(ref, **kwargs)
+
+    def read_chunk(ref, rows):
+        reads.append((ref.kind, rows.start, rows.stop))
+        return getitem(ref, rows)
+
+    monkeypatch.setattr(TensorRef, "load", load_offsets)
+    monkeypatch.setattr(TensorRef, "__getitem__", read_chunk)
+    validate_sampler_top_p(*fields, count, tokens=[4] * count, sampled_logps=[0.0] * count)
+    assert reads == [
+        (key, start, stop)
+        for start, stop in ((0, 1024), (1024, count))
+        for key in ("rollout_top_p_token_ids", "rollout_top_p_log_probs")
+    ]
+    # A shared, validated distribution is not proof that new sample metadata
+    # agrees with it. In particular, do not skip the sampled-token check.
+    with pytest.raises(ValueError, match="sampled token"):
+        validate_sampler_top_p(*fields, count, tokens=[4] * (count - 1) + [5], sampled_logps=[0.0] * count)
 
 
 def test_generate_requests_complete_top_p_probabilities(monkeypatch):

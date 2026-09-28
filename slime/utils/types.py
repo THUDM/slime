@@ -40,11 +40,15 @@ def _extract_rollout_top_p_token_data(
 
 
 def _merge_rollout_top_p_token_data(
-    base_token_ids: list[int] | torch.Tensor | None,
-    base_offsets: list[int] | torch.Tensor | None,
+    base_token_ids: list[int] | torch.Tensor | TensorRef | None,
+    base_offsets: list[int] | torch.Tensor | TensorRef | None,
     token_ids: torch.Tensor,
     offsets: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    if isinstance(base_token_ids, TensorRef):
+        base_token_ids = base_token_ids.load()
+    if isinstance(base_offsets, TensorRef):
+        base_offsets = base_offsets.load()
     base_token_ids = torch.as_tensor([] if base_token_ids is None else base_token_ids, dtype=torch.int32).reshape(-1)
     base_offsets = torch.as_tensor([0] if base_offsets is None else base_offsets, dtype=torch.int32).reshape(-1)
     base_offset = int(base_offsets[-1])
@@ -55,15 +59,19 @@ def _merge_rollout_top_p_token_data(
 
 
 def _pad_rollout_top_p_offsets(
-    token_ids: list[int] | torch.Tensor | None,
-    offsets: list[int] | torch.Tensor | None,
+    token_ids: list[int] | torch.Tensor | TensorRef | None,
+    offsets: list[int] | torch.Tensor | TensorRef | None,
     num_tokens: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor | TensorRef, torch.Tensor]:
     if offsets is None or token_ids is None:
         raise ValueError("Cannot append empty top-p spans without existing token ids and offsets.")
     if num_tokens < 0:
         raise ValueError(f"num_tokens must be non-negative, got {num_tokens}.")
-    token_ids = torch.as_tensor(token_ids, dtype=torch.int32).reshape(-1)
+    # Masked tool tokens only extend offsets; keep the immutable ids shared.
+    if not isinstance(token_ids, TensorRef):
+        token_ids = torch.as_tensor(token_ids, dtype=torch.int32).reshape(-1)
+    if isinstance(offsets, TensorRef):
+        offsets = offsets.load()
     offsets = torch.as_tensor(offsets, dtype=torch.int32).reshape(-1)
     if offsets.numel() == 0:
         raise ValueError("Cannot append empty top-p spans to empty offsets.")
@@ -90,6 +98,8 @@ def _to_float_list(values) -> list[float] | None:
 
 
 def _numel(value) -> int:
+    if isinstance(value, TensorRef):
+        return math.prod(value.shape)
     return int(torch.as_tensor(value).reshape(-1).numel())
 
 
@@ -126,9 +136,9 @@ class Sample:
     rollout_topk_log_probs: np.ndarray | torch.Tensor | list[list[float]] | TensorRef | None = None
     # Ragged top-p nucleus token ids replayed from rollout sampling. For response
     # token i, kept ids are rollout_top_p_token_ids[offsets[i]:offsets[i + 1]].
-    rollout_top_p_token_ids: list[int] | torch.Tensor | None = None
-    rollout_top_p_token_offsets: list[int] | torch.Tensor | None = None
-    rollout_top_p_log_probs: np.ndarray | torch.Tensor | list[float] | None = None
+    rollout_top_p_token_ids: list[int] | torch.Tensor | TensorRef | None = None
+    rollout_top_p_token_offsets: list[int] | torch.Tensor | TensorRef | None = None
+    rollout_top_p_log_probs: np.ndarray | torch.Tensor | list[float] | TensorRef | None = None
     rollout_routed_experts: list[list[int]] | list[torch.Tensor] | torch.Tensor | TensorRef | None = (
         None  # Routed experts from rollout engine
     )
@@ -339,7 +349,10 @@ class Sample:
                     torch.as_tensor(ids),
                     torch.as_tensor(offsets),
                 )
-                self.rollout_top_p_log_probs = np.concatenate((np.asarray(self.rollout_top_p_log_probs), logps))
+                previous_logps = self.rollout_top_p_log_probs
+                if isinstance(previous_logps, TensorRef):
+                    previous_logps = previous_logps.load()
+                self.rollout_top_p_log_probs = np.concatenate((np.asarray(previous_logps), logps))
                 # Already appended the validated replay data above.
                 meta_info = {
                     key: value
@@ -544,7 +557,10 @@ class Sample:
         if self.rollout_top_p_token_ids is None or self.rollout_top_p_token_offsets is None:
             raise ValueError("rollout top-p replay must include both token ids and offsets.")
 
-        offsets = torch.as_tensor(self.rollout_top_p_token_offsets, dtype=torch.int32).reshape(-1)
+        offsets = self.rollout_top_p_token_offsets
+        if isinstance(offsets, TensorRef):
+            offsets = offsets.load()
+        offsets = torch.as_tensor(offsets, dtype=torch.int32).reshape(-1)
         if offsets.numel() != self.response_length + 1:
             raise ValueError(
                 "rollout_top_p_token_offsets length must equal response_length + 1: "

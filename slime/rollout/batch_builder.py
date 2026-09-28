@@ -353,7 +353,7 @@ class BatchBuilder:
                     f"top-p token offsets length {len(sample.rollout_top_p_token_offsets)} "
                     f"!= response length + 1 {sample.response_length + 1}"
                 )
-                offset_end = int(sample.rollout_top_p_token_offsets[-1])
+                offset_end = int(sample.rollout_top_p_token_offsets[-1:][0])
                 assert offset_end == len(
                     sample.rollout_top_p_token_ids
                 ), f"top-p token offsets[-1] {offset_end} != token ids length {len(sample.rollout_top_p_token_ids)}"

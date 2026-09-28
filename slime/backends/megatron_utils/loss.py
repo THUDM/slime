@@ -331,7 +331,7 @@ def _build_shifted_tokens(
 
 def _fill_topp_mask_rows(
     keep: torch.Tensor,
-    ids: list[int],
+    ids: list[int] | torch.Tensor | TensorRef,
     offsets: list[int],
     response_start: int,
     local_start: int,
@@ -340,10 +340,18 @@ def _fill_topp_mask_rows(
     vocab_end: int,
 ) -> None:
     end = min(response_start + length, max(len(offsets) - 1, 0))
+    if end <= response_start:
+        return
+    # Each CP half is contiguous. Read its support in one range, never by
+    # iterating a TensorRef (which only supports contiguous slices).
+    base = offsets[response_start]
+    ids = ids[base : offsets[end]]
+    if torch.is_tensor(ids):
+        ids = ids.tolist()
     for response_idx in range(response_start, end):
         local_ids = [
             token_id - vocab_start
-            for token_id in ids[offsets[response_idx] : offsets[response_idx + 1]]
+            for token_id in ids[offsets[response_idx] - base : offsets[response_idx + 1] - base]
             if vocab_start <= token_id < vocab_end
         ]
         row = local_start + response_idx - response_start
@@ -356,8 +364,8 @@ def _build_topp_keep_mask(
     T: int,
     vocab_local: int,
     device: torch.device,
-    top_p_token_ids: list[list[int]],
-    top_p_token_offsets: list[list[int]],
+    top_p_token_ids: list[list[int] | torch.Tensor | TensorRef],
+    top_p_token_offsets: list[list[int] | torch.Tensor | TensorRef],
     total_lengths: list[int],
     response_lengths: list[int],
     allgather_cp: bool,
@@ -373,9 +381,11 @@ def _build_topp_keep_mask(
     vocab_start = tp_rank * vocab_local
     vocab_end = vocab_start + vocab_local
 
-    # Normalize ragged payloads (may arrive as CPU int32 tensors) to python lists.
-    top_p_token_ids = [t.tolist() if torch.is_tensor(t) else list(t) for t in top_p_token_ids]
-    top_p_token_offsets = [t.tolist() if torch.is_tensor(t) else list(t) for t in top_p_token_offsets]
+    # Only offsets are needed in full; ids stay lazy until selecting CP rows.
+    top_p_token_offsets = [
+        t.load().tolist() if isinstance(t, TensorRef) else t.tolist() if torch.is_tensor(t) else list(t)
+        for t in top_p_token_offsets
+    ]
 
     keep = torch.ones((T, vocab_local), dtype=torch.bool, device=device)
 
@@ -1000,13 +1010,28 @@ def get_score_centering_terms(args, batch, logits):
             batch["rollout_top_p_log_probs"],
             strict=True,
         ):
+            if isinstance(offsets, TensorRef):
+                offsets = offsets.load()
             offsets = torch.as_tensor(offsets, device="cpu", dtype=torch.long)
-            spans = [torch.arange(offsets[i], offsets[i + 1]) for i in indices.tolist()]
-            selected = torch.cat(spans) if spans else torch.empty(0, dtype=torch.long)
+            # Coalesce adjacent row supports, preserving zigzag/allgather CP
+            # order while avoiding a filesystem read per response token.
+            spans = []
+            for i in indices.tolist():
+                start, end = int(offsets[i]), int(offsets[i + 1])
+                if start == end:
+                    continue
+                if spans and spans[-1][1] == start:
+                    spans[-1] = (spans[-1][0], end)
+                else:
+                    spans.append((start, end))
             lengths = offsets[indices + 1] - offsets[indices]
             local_offsets = torch.cat((lengths.new_zeros(1), lengths.cumsum(0))).to(logits.device)
-            head_ids = torch.as_tensor(ids)[selected].to(device=logits.device, dtype=torch.long)
-            q = torch.as_tensor(q)[selected].to(device=logits.device, dtype=torch.float32)
+            head_ids, q = [
+                (
+                    torch.cat([torch.as_tensor(value[start:end]) for start, end in spans]) if spans else torch.empty(0)
+                ).to(device=logits.device, dtype=dtype)
+                for value, dtype in ((ids, torch.long), (q, torch.float32))
+            ]
             p = calculate_ragged_log_probs(
                 rows, head_ids, local_offsets, mpu.get_tensor_model_parallel_group(), args.rollout_temperature
             )

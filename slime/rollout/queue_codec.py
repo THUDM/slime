@@ -78,7 +78,7 @@ class SampleCodec:
                     for key, value in zip(fields, values, strict=True):
                         setattr(sample, key, value)
                 validate_sampler_top_p(
-                    *(value.load() if isinstance(value, QueueTensorRef) else value for value in values),
+                    *values,
                     sample.response_length,
                     loss_mask=sample.loss_mask,
                 )

@@ -204,9 +204,13 @@ def extract_sampler_top_p(meta_info, count):
 def validate_sampler_top_p(ids, offsets, logps, count, loss_mask=None, tokens=None, sampled_logps=None):
     if ids is None or offsets is None or logps is None:
         raise ValueError("Top-p score centering requires complete sampler top-p ids, offsets, and logprobs.")
-    ids, offsets, logps = np.asarray(ids), np.asarray(offsets), np.asarray(logps)
+    # Keep large supports lazy and validate bounded ranges. The sampled token
+    # and loss mask can change independently of a previously validated tensor.
+    ids = ids if isinstance(ids, TensorRef) else np.asarray(ids)
+    logps = logps if isinstance(logps, TensorRef) else np.asarray(logps)
+    offsets = np.asarray(offsets.load() if isinstance(offsets, TensorRef) else offsets)
     if (
-        ids.ndim != 1
+        len(ids.shape) != 1
         or logps.shape != ids.shape
         or offsets.shape != (count + 1,)
         or not np.issubdtype(ids.dtype, np.integer)
@@ -216,17 +220,29 @@ def validate_sampler_top_p(ids, offsets, logps, count, loss_mask=None, tokens=No
         or (np.diff(offsets) < 0).any()
     ):
         raise ValueError("Invalid top-p score-centering ids/logprobs/offsets.")
-    for row, (start, end) in enumerate(zip(offsets[:-1], offsets[1:], strict=True)):
-        if loss_mask is not None and not loss_mask[row] and start == end:
-            continue
-        row_ids, row_logps = ids[start:end], logps[start:end].astype(np.float64)
-        _validate_head_arrays(row_ids, row_logps)
-        if not np.isclose(np.exp(row_logps).sum(), 1.0, rtol=1e-4, atol=1e-6):
-            raise ValueError("Top-p score centering requires the complete normalized support, not a truncated head.")
-        if tokens is not None:
-            selected = row_logps[row_ids == tokens[row]]
-            if len(selected) != 1 or not np.isclose(selected[0], sampled_logps[row], rtol=1e-4, atol=1e-5):
-                raise ValueError("Top-p sampler distribution must include the sampled token with its rollout logprob.")
+    for value in (ids, logps):
+        if isinstance(value, TensorRef):
+            value.validate()
+    for first_row in range(0, count, 1024):
+        last_row = min(first_row + 1024, count)
+        base, stop = int(offsets[first_row]), int(offsets[last_row])
+        chunk_ids, chunk_logps = np.asarray(ids[base:stop]), np.asarray(logps[base:stop])
+        for row in range(first_row, last_row):
+            start, end = offsets[row : row + 2] - base
+            if loss_mask is not None and not loss_mask[row] and start == end:
+                continue
+            row_ids, row_logps = chunk_ids[start:end], chunk_logps[start:end].astype(np.float64)
+            _validate_head_arrays(row_ids, row_logps)
+            if not np.isclose(np.exp(row_logps).sum(), 1.0, rtol=1e-4, atol=1e-6):
+                raise ValueError(
+                    "Top-p score centering requires the complete normalized support, not a truncated head."
+                )
+            if tokens is not None:
+                selected = row_logps[row_ids == tokens[row]]
+                if len(selected) != 1 or not np.isclose(selected[0], sampled_logps[row], rtol=1e-4, atol=1e-5):
+                    raise ValueError(
+                        "Top-p sampler distribution must include the sampled token with its rollout logprob."
+                    )
 
 
 def validate_sampler_topk(sample, k):

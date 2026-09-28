@@ -14,6 +14,7 @@ from slime.observability.metric_utils import (
 )
 from slime.utils.misc import group_by, load_function
 from slime.utils.staleness import compute_staleness_metrics
+from slime.utils.tensor_store import TensorRef
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
@@ -167,6 +168,8 @@ def _compute_top_p_kept_vocab_metrics(all_samples: list[Sample]):
         offsets = sample.rollout_top_p_token_offsets
         if offsets is None or sample.response_length == 0:
             continue
+        if isinstance(offsets, TensorRef):
+            offsets = offsets.load()
         offsets = torch.as_tensor(offsets, dtype=torch.int64)
         if offsets.numel() == 0:
             continue
