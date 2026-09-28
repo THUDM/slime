@@ -1177,6 +1177,14 @@ index 75c807a5d7f9ff2a31a4b3ba1fa5e63c12909df0..56675ef0ade24c0e12d32bed7c3fc754
              hidden_states, residual = layer(
                  positions,
                  hidden_states,
+@@ -1112,6 +1117,7 @@ class Qwen3VLForConditionalGeneration(nn.Module):
+                 if "visual" in name:
+                     # adapt to VisionAttention
+                     name = name.replace(r"attn.qkv.", r"attn.qkv_proj.")
++                    name = name.replace(r"model.visual.", r"visual.")
+
+                 try:
+                     # Skip loading extra bias for GPTQ models.
 diff --git a/python/sglang/srt/multimodal/processors/glm4v.py b/python/sglang/srt/multimodal/processors/glm4v.py
 index db684259d2f6aea80ead030556042c7333384fc3..17d2cb6958afe6311a6a61e93625c28918382db3 100644
 --- a/python/sglang/srt/multimodal/processors/glm4v.py
