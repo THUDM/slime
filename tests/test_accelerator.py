@@ -53,14 +53,14 @@ class FakeAccelerator(accelerator.Accelerator):
 def reset_accelerator_selection(monkeypatch):
     registry = accelerator._REGISTRY.copy()
     selected = accelerator._ACCELERATOR
-    patch_imported = accelerator._MUSA_PATCH_IMPORTED
+    patch_imported = accelerator._MUSA_TITAN_IMPORTED
     bootstrap_checked = accelerator._MUSA_BOOTSTRAP_CHECKED
     supa_imported = accelerator._SUPA_RUNTIME_IMPORTED
     supa_bootstrap_checked = accelerator._SUPA_BOOTSTRAP_CHECKED
     for name in (
         "SLIME_ACCELERATOR",
         "MUSA_VISIBLE_DEVICES",
-        "MUSA_PATCH_PATH",
+        "MUSA_TITAN_PATH",
         "CUDA_VISIBLE_DEVICES",
         "SUPA_VISIBLE_DEVICES",
         "BIREN_HOME",
@@ -68,7 +68,7 @@ def reset_accelerator_selection(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     accelerator._REGISTRY.clear()
     accelerator.reset_accelerator()
-    accelerator._MUSA_PATCH_IMPORTED = False
+    accelerator._MUSA_TITAN_IMPORTED = False
     accelerator._MUSA_BOOTSTRAP_CHECKED = False
     accelerator._SUPA_RUNTIME_IMPORTED = False
     accelerator._SUPA_BOOTSTRAP_CHECKED = False
@@ -76,7 +76,7 @@ def reset_accelerator_selection(monkeypatch):
     accelerator._REGISTRY.clear()
     accelerator._REGISTRY.update(registry)
     accelerator._ACCELERATOR = selected
-    accelerator._MUSA_PATCH_IMPORTED = patch_imported
+    accelerator._MUSA_TITAN_IMPORTED = patch_imported
     accelerator._MUSA_BOOTSTRAP_CHECKED = bootstrap_checked
     accelerator._SUPA_RUNTIME_IMPORTED = supa_imported
     accelerator._SUPA_BOOTSTRAP_CHECKED = supa_bootstrap_checked
@@ -90,8 +90,8 @@ def test_cuda_selection_does_not_bootstrap_musa(monkeypatch):
     monkeypatch.setattr(accelerator.CUDAAccelerator, "is_available", lambda self: True)
     monkeypatch.setattr(
         accelerator,
-        "_import_musa_patch",
-        lambda: pytest.fail("CUDA selection must not import musa_patch"),
+        "_import_musa_titan",
+        lambda: pytest.fail("CUDA selection must not import musa_titan"),
     )
 
     assert accelerator.get_accelerator().name == "cuda"
@@ -104,18 +104,18 @@ def test_selected_musa_bootstraps_patch_once(monkeypatch):
     imports = []
     fake_musa = SimpleNamespace(is_available=lambda: True)
 
-    def import_musa_patch():
-        imports.append("musa_patch")
+    def import_musa_titan():
+        imports.append("musa_titan")
         monkeypatch.setattr(accelerator.torch, "musa", fake_musa, raising=False)
         return True
 
     monkeypatch.setenv("MUSA_VISIBLE_DEVICES", "0")
-    monkeypatch.setattr(accelerator, "_import_musa_patch", import_musa_patch)
+    monkeypatch.setattr(accelerator, "_import_musa_titan", import_musa_titan)
 
     assert imports == []
     assert accelerator.initialize_accelerator().name == "musa"
     assert accelerator.initialize_accelerator().name == "musa"
-    assert imports == ["musa_patch"]
+    assert imports == ["musa_titan"]
 
 
 @pytest.mark.unit
