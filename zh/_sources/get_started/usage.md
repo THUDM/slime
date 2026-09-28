@@ -397,7 +397,7 @@ slime 支持不同程度的自定义数据生成（rollout）。
 
 Rollout payload 默认使用 Ray `object-store`，数据源为 `slime.rollout.data_source.RolloutDataSourceWithBuffer`；此模式不需要 straw 或共享 rollout 目录。`--rollout-data-transport nixl` 则选择 Ray 的 NIXL 张量传输。
 
-安装 [straw](../advanced/straw.md) 后，通过 `--rollout-data-transport straw` 启用持久化队列和打包张量存储。straw 传输默认使用 `slime.rollout.queue_data_source.QueueDataSourceWithBuffer`，数据与协调日志存放在 `--rollout-data-dir`；设置了 `--save` 时可省略目录，使用 `<save>/rollout_data`，否则必须显式提供共享目录。Ray 仍负责 actor、RPC 和小引用传递。默认仍是同步 rollout；分布式 fully async 需要显式选择：
+安装 [straw](../advanced/straw.md) 后，通过 `--rollout-data-transport straw` 启用持久化队列和打包张量存储。straw 传输默认使用 `slime.rollout.queue_data_source.QueueDataSource`，数据与协调日志存放在 `--rollout-data-dir`；设置了 `--save` 时可省略目录，使用 `<save>/rollout_data`，否则必须显式提供共享目录。Ray 仍负责 actor、RPC 和小引用传递。默认仍是同步 rollout；分布式 fully async 需要显式选择：
 
 ```bash
 --rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async \
@@ -409,7 +409,7 @@ straw 传输下，开启 `--use-rollout-routing-replay` 后会将已完成 sampl
 
 作业内一个禁止自动重启的 Ray actor 管理任务 lease 和串行 dataset producer。Dataset 游标与任务提交在同一日志事务中保存，worker 通过小引用直接读取共享存储中的 prompt group，替代原来的内存索引分配器。Shuffle、group/sample 编号沿用原有数据源逻辑，故障不会丢弃 reader 预留的索引区间。
 
-保留 `get_samples(n)`、`add_samples(groups)` 接口。Custom producer 可以传递 `source.reader_config("unique_reader_id")`，在远端调用 `config.open()`。Reader ID 必须唯一，`owner` 为保留名称。正常执行时 buffer 仍由原 reader 优先读取；partial group 同时作为任务 continuation 持久化。Reader 定期续租，正常关闭归还未完成任务，故障 worker 的任务在 lease 到期后重试。恢复协调器前必须停止旧作业，再以相同 root/run ID 显式传入 `--rollout-queue-resume`，不自动抢占旧实例。
+保留 `get_samples(n)`、`add_samples(groups)` 接口。Custom producer 可以传递 `source.reader_config("unique_reader_id")`，在远端调用 `config.open()`。Reader ID 必须唯一，`owner` 为保留名称。归还的 partial group 持久化后可由任意 reader 领取，不再保留 reader 本地 sample buffer。Reader 定期续租，正常关闭归还未完成任务，故障 worker 的任务在 lease 到期后重试。恢复协调器前必须停止旧作业，再以相同 root/run ID 显式传入 `--rollout-queue-resume`，不自动抢占旧实例。
 
 Fully async 在每个有 CPU 资源的 Ray 节点启动一个常驻生成进程，每个占用一个 CPU，并按完整 prompt group 分配总并发。快速 worker 可以独立补足全局 batch，保留原有有界生成队列和 collector 预取。完整 group 通过现有 dynamic filter 后才提交；丢弃结果计入过滤指标。分布式 fully async 仍不支持 `--rollout-all-samples-process-path`；同步入口保留其 Samples 和调用顺序。
 

@@ -856,6 +856,7 @@ window.runMermaid = runMermaid;</script>
                 <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-changes-in-the-architecture">What changes in the architecture</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#end-to-end-data-flow">End-to-end data flow</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#queue-scheduling">Queue scheduling</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#shared-tensors-r3-and-sc">Shared tensors, R3 and SC</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sample-encoding-and-integrity">Sample encoding and integrity</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#enable-it">Enable it</a></li>
@@ -896,7 +897,7 @@ separate qualification of cross-client locks, visibility and durability.</p>
 <tbody>
 <tr class="row-even"><td><p>Data source</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">RolloutDataSourceWithBuffer</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">QueueDataSourceWithBuffer</span></code> backed by durable prompt tasks</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">QueueDataSource</span></code> backed by durable prompt tasks</p></td>
 </tr>
 <tr class="row-odd"><td><p>Payload exchange</p></td>
 <td><p>Ray object references</p></td>
@@ -973,6 +974,41 @@ slime owns Sample schemas, rewards, filters, batching and training. straw owns
 bytes, references, persistence and storage lifetime. Custom rollout functions
 can still return Sample lists; the manager publishes a compatibility collection.
 See <a class="reference internal" href="../get_started/customization.html"><span class="std std-doc">customization</span></a>.</p>
+</section>
+<section id="queue-scheduling">
+<h2>Queue scheduling<a class="headerlink" href="#queue-scheduling" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">QueueReader</span></code> is a worker’s queue client: it acquires and returns groups and renews
+active leases. <code class="docutils literal notranslate"><span class="pre">QueueDataSource</span></code> adds job-level reader creation, consumer lifecycle
+and source checkpoints. It inherits the same sample-access methods; it does not
+implement another buffer. With <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code>, the source is
+selected automatically. Explicit <code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code> values should use
+<code class="docutils literal notranslate"><span class="pre">slime.rollout.queue_data_source.QueueDataSource</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">QueueReader</span></code> has no local continuation buffer. <code class="docutils literal notranslate"><span class="pre">add_samples()</span></code> publishes valid
+continuations, then <code class="docutils literal notranslate"><span class="pre">yield_tasks()</span></code> atomically replaces their inputs and returns
+them to pending in one WAL transaction per bounded batch. The old leases end;
+any worker can acquire the saved inputs with a new lease. Readers keep only
+active leases and executing samples locally. Closing a reader does not rewrite
+returned groups.</p>
+<p>The persistent order is <strong>completed delivery → partial → fresh prompt</strong>. Within
+a stage, the oldest numeric value in a group’s <code class="docutils literal notranslate"><span class="pre">weight_versions</span></code> comes first
+(higher staleness), then FIFO submission/return order. Groups without numeric versions sort last
+within the stage. Comparing stored versions avoids rewriting queue priorities
+on every model update. This ordering does not drop stale samples automatically.
+Staleness is <code class="docutils literal notranslate"><span class="pre">current</span> <span class="pre">serving</span> <span class="pre">weight</span> <span class="pre">version</span> <span class="pre">-</span> <span class="pre">oldest</span> <span class="pre">generated-token</span> <span class="pre">weight</span> <span class="pre">version</span></code>: fresh samples have staleness 0.
+There is one indexed queue, not three independently managed queues.</p>
+<p><code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code> is rejected for straw. <code class="docutils literal notranslate"><span class="pre">--buffer-sort-by-staleness</span></code> remains
+an option for the in-memory data source; straw always applies the order above.
+Reward and sample-selection hooks remain available. Already accepted groups
+explicitly returned to the source get separate delivery tasks; accepted history
+is immutable, and consuming/discarding a delivery also acknowledges its earlier
+accepted versions. The fully async scheduler still keeps a bounded ready-results
+window, with its own checkpoint state and durable accepted-result references.</p>
+<p>Source snapshots now store the shared pending tasks, their exact immutable input
+references and scheduling metadata once; worker snapshots store reader metadata.
+The reader snapshot format is version 3; old reader-local v1/v2 buffer snapshots
+require migration and are rejected explicitly. This requires an updated
+<code class="docutils literal notranslate"><span class="pre">straw-queue</span></code> build with <code class="docutils literal notranslate"><span class="pre">yield_tasks()</span></code> and persistent scheduling keys; the
+original PyPI 0.1.0 wheel does not provide these APIs.</p>
 </section>
 <section id="shared-tensors-r3-and-sc">
 <h2>Shared tensors, R3 and SC<a class="headerlink" href="#shared-tensors-r3-and-sc" title="Link to this heading">#</a></h2>
@@ -1108,18 +1144,21 @@ is not restored.</p>
 <p>Checkpoints contain <code class="docutils literal notranslate"><span class="pre">&lt;save&gt;/rollout/queue_state_&lt;rollout_id&gt;.json</span></code> for the source
 and registered scheduler consumers, and <code class="docutils literal notranslate"><span class="pre">builder_state_&lt;rollout_id&gt;.json</span></code> for
 the training consumer view. Their references retain the matching storage graph.
-Continuations are persisted incrementally, so checkpoint/close can reference
-existing data instead of rewriting every buffered token. Restoring a checkpoint
+Continuations are persisted incrementally, so checkpoints reference
+existing data instead of rewriting every returned token. Restoring a checkpoint
 does not erase later accepted history from the WAL.</p>
 <p>Partial R3/SC tensors remain lazy references in continuation snapshots and are
 loaded when generation appends new rows. Restoring source and builder state
 preserves saved warm groups and behavior-policy versions, and records which
-later outputs are excluded from the restored branch. Restored buffers retain
+later outputs are excluded from the restored branch. Restored pending tasks retain
 their storage independently of filtering. The complete source snapshot,
 including consumers that have not restarted yet, is retained and durably
 recorded before old references are released. Failed saves keep the old references;
 background GC starts only after restored consumer state commits.</p>
-<p>The adapter does not yet establish a joint final manifest for model, optimizer,
+<p>The dataset producer cursor is not yet part of the source checkpoint, and
+restoring a saved pending snapshot does not exclude every later-created task.
+Complete rollback to an arbitrary older training step remains future work.
+The adapter does not yet establish a joint final manifest for model, optimizer,
 RNG and queue state. Persistent rollout is therefore not a claim of exact
 optimizer recovery or bit-identical training after an arbitrary crash.</p>
 </section>
@@ -1200,6 +1239,7 @@ for the storage checks and their scope.</p>
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-changes-in-the-architecture">What changes in the architecture</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#end-to-end-data-flow">End-to-end data flow</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#queue-scheduling">Queue scheduling</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#shared-tensors-r3-and-sc">Shared tensors, R3 and SC</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sample-encoding-and-integrity">Sample encoding and integrity</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#enable-it">Enable it</a></li>
