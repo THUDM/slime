@@ -1,7 +1,12 @@
 import ray
 
 from slime.observability.logging_utils import configure_logger, finish_tracking, init_tracking
-from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
+from slime.ray.placement_group import (
+    _resolve_start_rollout_id,
+    create_placement_groups,
+    create_rollout_manager,
+    create_training_models,
+)
 from slime.utils.arguments import parse_args
 from slime.utils.misc import should_run_periodic_action
 
@@ -56,7 +61,12 @@ def train(args):
             ray.get(rollout_manager.offload.remote())
 
         if release_train:
-            actor_model.create()
+            actor_start_rollout_ids = actor_model.create()
+            _resolve_start_rollout_id(
+                actor_start_rollout_ids,
+                requested_start_rollout_id=rollout_id,
+                allow_fresh_start=rollout_id == 0 and getattr(args, "finetune", False),
+            )
 
         actor_trains = (not args.use_critic) or rollout_id >= args.num_critic_only_steps
         if args.use_critic:

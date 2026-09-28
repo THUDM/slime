@@ -84,5 +84,29 @@ def test_data_source_reads_and_checkpoints_without_global_dataset_flag(monkeypat
     assert restored.get_samples(1)[0][0].index == 2
 
 
+def test_data_source_nonzero_resume_requires_load_path():
+    source = RolloutDataSource.__new__(RolloutDataSource)
+    source.args = SimpleNamespace(load=None)
+
+    with pytest.raises(ValueError, match=r"rollout ID 6.*--load"):
+        source.load(6)
+
+
+def test_data_source_nonzero_resume_requires_checkpoint_file(tmp_path):
+    source = RolloutDataSource.__new__(RolloutDataSource)
+    source.args = SimpleNamespace(load=str(tmp_path))
+
+    with pytest.raises(FileNotFoundError, match=r"rollout ID 6.*global_dataset_state_dict_6\.pt"):
+        source.load(6)
+
+
+@pytest.mark.parametrize("load", [None, "configured-but-empty"])
+def test_data_source_fresh_start_does_not_require_checkpoint(load, tmp_path):
+    source = RolloutDataSource.__new__(RolloutDataSource)
+    source.args = SimpleNamespace(load=None if load is None else str(tmp_path))
+
+    source.load(-1)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

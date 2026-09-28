@@ -134,10 +134,18 @@ class RolloutDataSource(DataSource):
 
     def load(self, rollout_id=None):
         if self.args.load is None:
+            if rollout_id is not None and rollout_id >= 0:
+                raise ValueError(
+                    f"Cannot load rollout data source checkpoint for rollout ID {rollout_id}: --load is not configured."
+                )
             return
 
         path = os.path.join(self.args.load, f"rollout/global_dataset_state_dict_{rollout_id}.pt")
         if not os.path.exists(path):
+            if rollout_id is not None and rollout_id >= 0:
+                raise FileNotFoundError(
+                    f"Cannot load rollout data source checkpoint for rollout ID {rollout_id}: {path} does not exist."
+                )
             logger.info(f"Checkpoint {path} does not exist.")
             return
 
