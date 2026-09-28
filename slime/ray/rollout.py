@@ -5,7 +5,6 @@ from typing import Any
 
 import ray
 
-from slime.backends.sglang_utils.deployment import start_rollout_servers
 from slime.observability import logging_utils
 from slime.observability.logging_utils import configure_logger, init_tracking
 from slime.observability.rollout_data_utils import (
@@ -50,6 +49,8 @@ class RolloutManager:
         if self.args.debug_train_only:
             self.servers: dict[str, Any] = {}
         else:
+            from slime.backends.sglang_utils.deployment import start_rollout_servers
+
             init_http_client(args)
             self.servers, rollout_init_handles = start_rollout_servers(args, pg)
 

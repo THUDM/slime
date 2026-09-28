@@ -24,6 +24,32 @@ from slime.utils.types import Sample
 NUM_GPUS = 0
 
 
+def test_cpu_rollout_imports_do_not_require_sglang():
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import importlib.abc
+import sys
+
+class NoSGLang(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'sglang', 'sglang_router'}:
+            raise ModuleNotFoundError(f'CPU rollout imported {fullname}', name=fullname)
+
+sys.meta_path.insert(0, NoSGLang())
+from slime.ray.rollout import RolloutManager
+from slime.rollout.sglang_rollout import generate_and_rm
+from slime.rollout.fully_async_distributed import RolloutScheduler
+assert not any(name.split('.')[0] in {'sglang', 'sglang_router'} for name in sys.modules)
+""",
+        ],
+        check=True,
+        timeout=60,
+    )
+
+
 @pytest.fixture
 def args(tmp_path):
     return SimpleNamespace(
