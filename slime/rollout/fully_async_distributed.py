@@ -324,7 +324,7 @@ class _GenerationActor:
             while self.running or group is not None:
                 output = await self._generate_group(self.rollout_id, group)
                 group = None
-                if output is not None:  # Aborted groups are already buffered locally.
+                if output is not None:  # Aborted groups have been returned to the durable queue.
                     await self.outputs.put(output)
                 del output
 
@@ -420,7 +420,7 @@ class _GenerationActor:
             self._rebuffer_task = None
 
     def state_dict(self):
-        state = self.data_source.state_dict()
+        state = self.data_source.state_dict(include_pending=False)
         if self.args.rollout_data_transport == "straw":
             state = pack_rollout_payload(state, self.args, self.rollout_id)
         return state
@@ -501,7 +501,7 @@ class DistributedRollout(RolloutScheduler):
             for i, node in enumerate(nodes):
                 capacity = groups_per_worker + (i < remainder)
                 capacities.append(capacity)
-                reader = data_source.reader_config(f"fully_async_{i}", prefetch_size=capacity)
+                reader = data_source.reader_config(f"fully_async_{i}")
                 workers.append(
                     ray.remote(_GenerationActor)
                     .options(

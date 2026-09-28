@@ -100,6 +100,7 @@ class BatchBuilder:
             numpy_state = np.random.get_state()
             positions = {self.raw_ref.receipt.position}
             for sample in samples:
+                positions.update(getattr(sample, "_queue_source_positions", []))
                 if receipt := getattr(sample, "_queue_receipt", None):
                     positions.add(receipt["position"])
                 elif lease := getattr(sample, "_queue_lease", None):

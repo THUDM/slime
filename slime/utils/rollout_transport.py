@@ -149,6 +149,7 @@ def inherit_queue_context(source, output):
     fields = (
         "_queue_lease",
         "_queue_receipt",
+        "_queue_source_positions",
         "_queue_resume_origin",
         "_queue_generation_start",
         "queue_policy_segments",

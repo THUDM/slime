@@ -307,9 +307,9 @@ def generate_rollout_fully_async(args, rollout_id, data_buffer, evaluation: bool
     if evaluation:
         raise ValueError("fully-async rollout doesn't support evaluation mode")
     if getattr(args, "rollout_data_transport", "object-store") == "straw":
-        from slime.rollout.queue_data_source import QueueDataSourceWithBuffer
+        from slime.rollout.queue_data_source import QueueDataSource
 
-        if isinstance(data_buffer, QueueDataSourceWithBuffer):
+        if isinstance(data_buffer, QueueDataSource):
             from slime.rollout.fully_async_distributed import DistributedRollout
 
             worker = data_buffer.consumers.get("fully_async")

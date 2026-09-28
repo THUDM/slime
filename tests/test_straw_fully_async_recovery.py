@@ -96,7 +96,7 @@ def _run_job(directory, phase, online_gc):
     from straw.reporting import write_report
 
     from slime.rollout.fully_async_rollout import generate_rollout_fully_async
-    from slime.rollout.queue_data_source import QueueDataSourceWithBuffer
+    from slime.rollout.queue_data_source import QueueDataSource
     from slime.utils.rollout_transport import DiskPayloadRef, load_rollout_samples
 
     root = Path(directory)
@@ -118,7 +118,7 @@ def _run_job(directory, phase, online_gc):
         for _ in range(2):
             cluster.add_node(num_cpus=2, num_gpus=0, object_store_memory=128 * 1024**2, include_dashboard=False)
         ray.init(address=cluster.address, runtime_env={"env_vars": {"PYTHONPATH": os.environ["PYTHONPATH"]}})
-        source = QueueDataSourceWithBuffer(args)
+        source = QueueDataSource(args)
         controller = source.controller
         if phase == "interrupt":
             failure = []

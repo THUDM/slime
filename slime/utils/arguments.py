@@ -532,7 +532,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
                 help=(
-                    "Path to the buffer filter function. "
+                    "Path to the in-memory buffer filter function (not supported by straw). "
                     "It should be able to select the samples in the buffer. "
                     "The function should take list[list[Sample]] and return list[list[Sample]]."
                 ),
@@ -542,7 +542,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_true",
                 help=(
                     "Resume buffered groups with the oldest generated-token weight version first. "
-                    "Disabled by default; an explicit --buffer-filter-path takes precedence."
+                    "For in-memory buffers this is disabled by default and --buffer-filter-path takes precedence. "
+                    "The straw queue always uses this order within ready and partial groups."
                 ),
             )
             # update weight
@@ -684,7 +685,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "The data source class. straw transport defaults to "
-                    "slime.rollout.queue_data_source.QueueDataSourceWithBuffer; other transports use "
+                    "slime.rollout.queue_data_source.QueueDataSource; other transports use "
                     "slime.rollout.data_source.RolloutDataSourceWithBuffer. Custom classes remain supported."
                 ),
             )
@@ -1936,13 +1937,13 @@ def slime_validate_args(args):
 
     if args.data_source_path is None:
         args.data_source_path = (
-            "slime.rollout.queue_data_source.QueueDataSourceWithBuffer"
+            "slime.rollout.queue_data_source.QueueDataSource"
             if args.rollout_data_transport == "straw"
             else "slime.rollout.data_source.RolloutDataSourceWithBuffer"
         )
     if args.rollout_data_transport != "straw":
-        if args.data_source_path == "slime.rollout.queue_data_source.QueueDataSourceWithBuffer":
-            raise ValueError("QueueDataSourceWithBuffer requires --rollout-data-transport straw")
+        if args.data_source_path == "slime.rollout.queue_data_source.QueueDataSource":
+            raise ValueError("QueueDataSource requires --rollout-data-transport straw")
         for name in ("rollout_queue_resume", "rollout_queue_online_gc"):
             if getattr(args, name, False):
                 raise ValueError(f"--{name.replace('_', '-')} requires --rollout-data-transport straw")
@@ -1959,6 +1960,11 @@ def slime_validate_args(args):
     if args.rollout_data_transport == "straw":
         from slime.utils.rollout_transport import resolve_rollout_data_dir
 
+        if getattr(args, "buffer_filter_path", None) is not None:
+            raise ValueError(
+                "--buffer-filter-path is not supported by straw; scheduling is persisted in the queue "
+                "and prioritizes older weight versions within ready and partial groups"
+            )
         resolve_rollout_data_dir(args)
 
     if args.save_interval is not None:
