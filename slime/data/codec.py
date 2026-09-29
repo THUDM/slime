@@ -3,7 +3,7 @@
 The representation is tagged JSON plus immutable typed byte records. It never
 imports a class named by a payload and never executes pickle. Unknown Python
 objects fail at publication. Replay tensors are stored lazily with their owning
-Sample; buffers, training batches and checkpoints share immutable records.
+Sample; continuations, training batches and checkpoints share immutable records.
 """
 
 from __future__ import annotations
@@ -194,7 +194,7 @@ class SampleCodec:
 
         def visit(value):
             nonlocal token_count
-            from slime.utils.rollout_transport import DiskPayloadRef, RawRolloutRef, RolloutGroupRef, TrainBatchRef
+            from slime.data.transport import DiskPayloadRef, RawRolloutRef, RolloutGroupRef, TrainBatchRef
 
             if isinstance(value, DiskPayloadRef):
                 dependency_index = len(dependencies)
@@ -205,6 +205,7 @@ class SampleCodec:
                     extra = {
                         "index": value.index,
                         "receipt": (dataclasses.asdict(value.receipt) if value.receipt else None),
+                        "source_positions": value.source_positions,
                     }
                 elif isinstance(value, RawRolloutRef):
                     extra = {
@@ -379,7 +380,7 @@ class SampleCodec:
             if tag == "rollout-ref":
                 from straw.protocol import CommitReceipt
 
-                from slime.utils.rollout_transport import DiskPayloadRef, RawRolloutRef, RolloutGroupRef, TrainBatchRef
+                from slime.data.transport import DiskPayloadRef, RawRolloutRef, RolloutGroupRef, TrainBatchRef
 
                 classes = {
                     cls.__name__: cls

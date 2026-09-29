@@ -743,7 +743,7 @@ def test_exact_loss_gradient(mode, dtype, disk, monkeypatch, tmp_path):
     original = dict(batch)
     if disk:
         store_top_p_batch(batch, tmp_path)
-        from slime.utils.tensor_store import TensorRef
+        from slime.data.tensor import TensorRef
 
         load = TensorRef.load
         offsets_refs = batch["rollout_top_p_token_offsets"]

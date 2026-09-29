@@ -31,25 +31,23 @@ GPU jobs run on self-hosted GPU runners. Each job:
 
 GPU tests usually follow the e2e pattern: `prepare()` downloads models/datasets, and `execute()` builds CLI arguments and calls `U.execute_train(...)`.
 
-Half of the 34 distinct training e2e matrix cases use straw; duplicate jobs and
-the GPU logprob/entropy kernel test are excluded from that count. The selected
-tests set `--rollout-data-transport straw` explicitly, so local execution and
+The straw e2e tests set `--rollout-data-transport straw` explicitly, so local execution and
 `run-ci-changed` use the same backend as the fixed matrix:
 
 - R3: `test_qwen3_30B_A3B_r3.py` and `test_moonlight_16B_A3B_r3.py`.
 - SC: `test_qwen2.5_0.5B_score_centering.py`, covering both top-k and top-p.
 - Fully async, fanout, PPO, MTP, PD/Mooncake, distributed SGLang configuration,
   mixed-offload fault recovery, debug replay and release-train.
-- All five checkpoint save/load combinations share the same straw directory
-  across both phases, verify queue/builder checkpoints and explicitly resume
-  the queue on load.
+- Checkpoint save/load tests share the straw pool across phases and verify
+  queue and training-state recovery. `test_straw_checkpoint_fork.py` covers
+  step selection, repeated rollback, automatic branch selection and debug replay.
 
 R3, SC and fully async also enable online GC. Ordinary straw tests use isolated
 temporary directories that are cleaned up after execution. These single-host
 GPU tests exercise the local filesystem profile; multi-host JuiceFS durability
 requires separate validation. The other e2e cases retain their Ray object-store
 or NIXL transport coverage. GPU containers install straw in both fixed and
-changed-test jobs, including when the published image predates straw support.
+changed-test jobs.
 
 ### Changed-Test Job
 

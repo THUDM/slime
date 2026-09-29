@@ -6,8 +6,8 @@ import os
 import numpy as np
 import torch
 
+from slime.data.tensor import TensorRef
 from slime.utils.ppo_utils import get_pg_loss_type, importance_weights
-from slime.utils.tensor_store import TensorRef
 
 SAMPLER_TOPK_FIELDS = ("rollout_topk_token_ids", "rollout_topk_log_probs")
 

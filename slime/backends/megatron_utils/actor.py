@@ -12,6 +12,7 @@ from megatron.core import mpu
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
+from slime.data.tensor import TensorRef
 from slime.observability import train_data_utils, train_metric_utils
 from slime.observability.logging_utils import init_tracking
 from slime.observability.profile_utils import TrainProfiler
@@ -34,7 +35,6 @@ from slime.utils.routed_experts import (
     RoutedExpertsMicrobatchPrefetcher,
 )
 from slime.utils.routing_replay import RoutingReplay
-from slime.utils.tensor_store import TensorRef
 from slime.utils.types import RolloutBatch
 
 from ...utils.tensor_backper import TensorBackuper
