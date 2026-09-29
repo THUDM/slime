@@ -543,6 +543,8 @@ def test_reinforce_shares_entropy_and_reference_kl(sc, monkeypatch):
         ({"advantage_estimator": "gspo"}, "ppo"),
         ({"pg_loss_type": "reinforce"}, "reinforce"),
         ({"use_score_centering": True}, "reinforce"),
+        ({"advantage_estimator": "flash_reinforce"}, "reinforce"),
+        ({"advantage_estimator": "flash_reinforce", "pg_loss_type": "ppo"}, "ppo"),
     ],
 )
 def test_pg_objective_defaults(overrides, expected):
