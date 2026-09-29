@@ -723,7 +723,8 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
     This function extracts rewards, log-probs, values, and masks from
     `rollout_data`, computes KL divergences, then applies the chosen advantage
     estimator. Supported methods: "grpo", "gspo", "cispo", "ppo",
-    "reinforce_plus_plus", and "reinforce_plus_plus_baseline". When
+    "reinforce_plus_plus", "reinforce_plus_plus_baseline", and
+    "flash_reinforce" (the batch-centered reward broadcast to every token). When
     `args.normalize_advantages` is True, advantages are whitened across the
     data-parallel-with-context-parallel group using masked statistics.
 
@@ -776,7 +777,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         custom_adv_fn(args, rollout_data)
         advantages, returns = rollout_data["advantages"], rollout_data["returns"]
 
-    elif args.advantage_estimator in ["grpo", "gspo", "cispo"]:
+    elif args.advantage_estimator in ["grpo", "gspo", "cispo", "flash_reinforce"]:
         rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
         returns = get_grpo_returns(rewards, kl)
         # TODO: is the copy necessary?
@@ -941,6 +942,72 @@ def icepop_function(
         "tis_abs": ice_abs.clone().detach(),
     }
     pg_loss = pg_loss * ice_weight
+    return pg_loss, loss_masks, metrics
+
+
+# Bound on log(pi_train / mu_rollout) before exponentiating, as in molt's PolicyLoss.
+_TRUST_REGION_LOG_RATIO_LIMIT = 30.0
+
+
+def binary_kl_trust_region_function(
+    args,
+    *,
+    pg_loss: torch.Tensor,
+    train_log_probs: list[torch.Tensor],
+    rollout_log_probs: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+    **kwargs: Any,
+) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
+    """FlashREINFORCE IS correction (NVIDIA-NeMo/labs-molt#116).
+
+    Each token is weighted by its unclipped ratio pi_train / mu_rollout, and a whole
+    sequence is dropped when the mean over its loss tokens of the sampled-token binary KL
+    KL(Bernoulli(mu(y_t)) || Bernoulli(pi(y_t))) exceeds ``--tis-binary-kl-threshold``.
+    The masks are returned unchanged: a dropped sequence contributes no policy gradient
+    but still counts in the sample-mean denominator, and its entropy/KL terms are kept.
+    """
+    with torch.no_grad():
+        local_masks = [
+            slice_log_prob_with_cp(mask, total_length, response_length).bool()
+            for mask, total_length, response_length in zip(loss_masks, total_lengths, response_lengths, strict=True)
+        ]
+        train_log_probs = torch.cat(train_log_probs, dim=0).float()
+        rollout_log_probs = torch.cat(rollout_log_probs, dim=0).float()
+        limit = _TRUST_REGION_LOG_RATIO_LIMIT
+        log_ratio = torch.nan_to_num(train_log_probs - rollout_log_probs, nan=0.0, posinf=limit, neginf=-limit)
+        ratio = log_ratio.clamp(-limit, limit).exp()
+        p = rollout_log_probs.exp().clamp(1e-6, 1 - 1e-6)
+        q = train_log_probs.exp().clamp(1e-6, 1 - 1e-6)
+        binary_kl = p * (p.log() - q.log()) + (1 - p) * ((1 - p).log() - (1 - q).log())
+
+        # Decide on the full sequence: CP ranks hold zigzag slices of each response.
+        local_lengths = [mask.numel() for mask in local_masks]
+        seq_kl = torch.stack(
+            [
+                torch.where(mask, kl, 0.0).sum()
+                for kl, mask in zip(binary_kl.split(local_lengths), local_masks, strict=True)
+            ]
+        )
+        if mpu.get_context_parallel_world_size() > 1:
+            # Every CP rank must join, including one that owns no token of this micro-batch.
+            dist.all_reduce(seq_kl, group=mpu.get_context_parallel_group())
+        seq_kl = seq_kl / torch.stack([mask.sum() for mask in loss_masks]).clamp_min(1)
+        # NaN statistics compare False and are rejected.
+        seq_keep = seq_kl <= args.tis_binary_kl_threshold
+        keep = seq_keep.repeat_interleave(torch.tensor(local_lengths, device=seq_keep.device))
+        weights = torch.where(keep, ratio, torch.zeros_like(ratio))
+
+    # The hook also runs for --get-mismatch-metrics alone; only reweight when TIS is on.
+    if args.use_tis:
+        pg_loss = pg_loss * weights
+    metrics = {
+        "tis": ratio,
+        "tis_abs": (ratio - 1).abs(),
+        "tis_binary_kl": binary_kl,
+        "tis_seq_reject_frac": (~keep).float(),
+    }
     return pg_loss, loss_masks, metrics
 
 
