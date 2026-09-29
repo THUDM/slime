@@ -66,23 +66,41 @@ def generate_rollout(args, rollout_id, data_source, evaluation=False) -> Rollout
 
 **Example**: See [examples/fully_async](../_examples_synced/fully_async/README.md)
 
-With `--rollout-data-transport straw` (the default is Ray `object-store`), `RolloutFnTrainOutput.samples` may be a `DiskPayloadRef` pointing to the selected batch. Existing custom functions returning Sample lists (bare lists or `RolloutFnTrainOutput`) still work: the manager stores them once. New functions can persist completed, reward-scored groups during rollout and return a manifest instead of retaining a full batch in memory. For example, given an async iterator of accepted groups:
+With `--rollout-data-transport straw`, custom rollout functions can return
+Sample lists directly or in `RolloutFnTrainOutput`; the manager persists them.
+`RolloutFnTrainOutput.samples` also accepts a `DiskPayloadRef`. To avoid holding
+an entire batch in memory, publish generated, scored and selected groups as they
+finish. The following helper takes the rollout function's `data_source` and an
+async iterator of completed groups:
 
 ```python
-import asyncio
-
+from slime.data.transport import publish_rollout_async
 from slime.rollout.base_types import finalize_rollout_groups
-from slime.utils.rollout_transport import pack_rollout_group
 
 
-async def generate_stored_batch(args, rollout_id, completed_groups):
+async def generate_stored_batch(args, rollout_id, data_source, completed_groups):
     refs = []
     async for group in completed_groups:
-        refs.append(await asyncio.to_thread(pack_rollout_group, group, args, rollout_id))
-    return finalize_rollout_groups(args, rollout_id, refs)
+        ref = await publish_rollout_async(
+            group, args, rollout_id, group=True, controller=data_source.controller
+        )
+        refs.append(ref)
+    return finalize_rollout_groups(args, rollout_id, refs, controller=data_source.controller)
 ```
 
-`finalize_rollout_groups` sorts groups, applies the configured batch sample filter once, and stores the batch manifest. If a hook mutates Samples, its result is saved again. A wrapper that needs actual Samples can call `slime.utils.rollout_transport.load_rollout_samples(output.samples)`. Generation/reward hooks and evaluation return values keep their existing contracts.
+The controller from the data source commits leased groups to their queue.
+`finalize_rollout_groups` sorts groups, applies the configured batch sample
+filter once and stores the batch manifest. If the hook changes Samples, its
+result is saved again. Use `slime.data.transport.load_rollout_samples(output.samples)`
+when a wrapper needs the Sample objects.
+
+The default straw data source is `slime.data.queue_data_source.QueueDataSource`.
+It provides `get_samples(n)` and `add_samples(groups)` to acquire prompt groups
+and return work for continuation. Returned groups are persisted and available
+to any reader. For a custom remote worker, pass `source.reader_config("worker_id")`
+and call `config.open()` in that process. Reader IDs must be unique (`owner` is
+reserved); close the reader after its requests and writes finish. Readers renew
+leases automatically and return unfinished work when closed.
 
 ---
 
@@ -394,11 +412,11 @@ def log_eval_rollout_data(rollout_id, args, data, extra_metrics) -> bool
 
 ### `--data-source-path`
 
-**Default**: `slime.rollout.data_source.RolloutDataSourceWithBuffer`
+**Default**: `slime.data.data_source.RolloutDataSourceWithBuffer`
 
 **Purpose**: Override the data source for rollout prompts.
 
-**Base Class**: `slime.rollout.data_source.DataSource`
+**Base Class**: `slime.data.data_source.DataSource`
 
 **Required Methods**:
 ```python

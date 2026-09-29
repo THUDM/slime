@@ -1,14 +1,41 @@
 """Commit and validate model/source boundaries for straw checkpoint forks."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 import logging
 import os
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from straw.protocol import RecordSetRef
 
 
-def save_checkpoint(args, rollout_id, actor_model, critic_model, rollout_manager, *, actor_trains):
+@dataclass(frozen=True)
+class RestorePlan:
+    """Startup decisions, separate from CLI configuration and live queue state."""
+
+    mode: Literal["new", "resume", "snapshot", "empty"] = "new"
+    root: str | None = None
+    expected_current: str | None = None
+    branch: dict | None = None
+    queue_id: str | None = None
+    dataset_cursor: str | None = None
+
+
+@dataclass(frozen=True)
+class SourceRestore:
+    """Result of restoring a source, consumed by the training batch builder."""
+
+    new_queue: bool = False
+    source_ref: RecordSetRef | None = None
+
+
+def save_checkpoint(args, rollout_id, actor_model, critic_model, rollout_manager, *, actor_trains, restore_plan=None):
     """Save training and rollout state, publishing a joint boundary for straw."""
     import ray
 
@@ -31,10 +58,10 @@ def save_checkpoint(args, rollout_id, actor_model, critic_model, rollout_manager
         model_args = [actor_model.args]
         if args.use_critic:
             model_args.append(critic_model.args)
-        commit_checkpoint(args, rollout_id, model_args=model_args)
+        commit_checkpoint(args, rollout_id, model_args=model_args, restore_plan=restore_plan)
 
 
-def commit_checkpoint(args, rollout_id, *, model_args):
+def commit_checkpoint(args, rollout_id, *, model_args, restore_plan=None):
     """Publish the boundary after synchronous model saves and rollout snapshots.
 
     The driver waits for those calls; a save exception prevents this call.
@@ -98,8 +125,8 @@ def commit_checkpoint(args, rollout_id, *, model_args):
     # Mirror the active branch's committed step at the logical root. Publish the
     # tracker first: a crash before the pointer update still selects this valid
     # commit, rather than mistaking the previous step for a user rollback.
-    if (plan := getattr(args, "_checkpoint_plan", None)) is not None:
-        logical_root = Path(plan["root"])
+    if restore_plan is not None and restore_plan.root is not None:
+        logical_root = Path(restore_plan.root)
         current = logical_root / "rollout/current.json"
         value = json.loads(current.read_text())
         if Path(value["directory"]) != root:
@@ -196,23 +223,13 @@ def resolve_checkpoint(args):
     current pointer lets callers keep using the same logical save directory.
     Before the first checkpoint, the original run can instead recover its WAL.
     """
-    if (plan := getattr(args, "_checkpoint_plan", None)) is not None:
-        if parent := plan["branch"].get("parent"):
-            if parent["queue_snapshot"]:
-                _read_checkpoint(Path(parent["directory"]), parent["step"])
-            else:
-                _read_empty_checkpoint(Path(parent["directory"]), parent["step"])
-        return
-    # Internal decisions, not command-line switches. Every launcher uses the
-    # same model checkpoint arguments to select queue restoration.
-    args._rollout_queue_resume = False
-    args._rollout_queue_fork = False
+    mode, dataset_cursor = "new", None
     if getattr(args, "rollout_data_transport", None) != "straw":
-        return
+        return RestorePlan()
     if any(getattr(args, key, False) for key in ("debug_train_only", "debug_rollout_only", "load_debug_rollout_data")):
-        return
+        return RestorePlan()
     if not getattr(args, "save", None):
-        return
+        return RestorePlan()
     save_root = Path(args.save).resolve()
     current_path = save_root / "rollout/current.json"
     expected_current = current_path.read_text() if current_path.exists() else None
@@ -283,10 +300,7 @@ def resolve_checkpoint(args):
                 raise ValueError("Interrupted run requires its original straw pool")
             args.load, args.save = branch["initial_load"], str(active)
             args.rollout_data_dir = branch["pool"]
-            args._rollout_queue_resume = True
-            args._rollout_queue_id = branch["queue_id"]
-            args._checkpoint_plan = {"root": str(save_root), "expected_current": expected_current, "branch": branch}
-            return
+            return RestorePlan("resume", str(save_root), expected_current, branch, branch["queue_id"])
         selected = (
             (root, step, _read_checkpoint(root, step))
             if direct_commit
@@ -333,12 +347,11 @@ def resolve_checkpoint(args):
             ):
                 raise ValueError("Checkpoint restoration requires the original shared straw pool")
             args.rollout_data_dir = value["rollout_data_dir"]
-            args._rollout_queue_fork = True
+            mode = "snapshot"
         else:
-            args._rollout_queue_fork = False
-            args._rollout_queue_empty_restore = True
+            mode = "empty"
             cursor = root / "rollout" / f"global_dataset_state_dict_{step}.pt"
-            args._rollout_dataset_cursor = str(cursor) if cursor.exists() else None
+            dataset_cursor = str(cursor) if cursor.exists() else None
             logging.getLogger(__name__).warning(
                 "Model checkpoint %s step %s has no queue snapshot: starting a new empty queue; %s",
                 root,
@@ -352,8 +365,6 @@ def resolve_checkpoint(args):
         args.ckpt_step, args.start_rollout_id, args.load = step, step + 1, str(root)
         # Also seed the counter when an older model has no queue snapshot.
         args.update_weight_start_version = step + 1
-        args._rollout_model_step = step
         branch["parent"] = {"directory": str(root), "step": step, "queue_snapshot": value is not None}
     args.save = str(destination)
-    args._rollout_queue_id = branch["queue_id"]
-    args._checkpoint_plan = {"root": str(save_root), "expected_current": expected_current, "branch": branch}
+    return RestorePlan(mode, str(save_root), expected_current, branch, branch["queue_id"], dataset_cursor)

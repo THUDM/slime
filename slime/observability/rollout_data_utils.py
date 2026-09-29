@@ -5,8 +5,8 @@ from typing import Any
 import numpy as np
 import torch
 
+from slime.data.tensor import TensorRef, materialize_tensor_refs
 from slime.utils.routed_experts import validate_routed_experts_value
-from slime.utils.tensor_store import TensorRef, materialize_tensor_refs
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ def validate_rollout_id_annotated(node, depth=0):
 def load_debug_rollout_data(path_template, *, rollout_id: int, subsample_ratio=None) -> list[Sample]:
     path = path_template.format(rollout_id=rollout_id)
     if path.endswith(".straw.json"):
-        from slime.utils.rollout_archive import RolloutArchive
+        from slime.data.archive import RolloutArchive
 
         with RolloutArchive(path) as archive:
             data = archive.load_samples()
@@ -142,7 +142,7 @@ def save_debug_rollout_data(path_template, data, *, rollout_id: int, evaluation:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     if str(path).endswith(".straw.json"):
-        from slime.utils.rollout_archive import RolloutArchive
+        from slime.data.archive import RolloutArchive
 
         samples = [sample for info in data.values() for sample in info["samples"]] if evaluation else data
         RolloutArchive.save(path, samples, rollout_id=rollout_id, evaluation=evaluation, args=args)

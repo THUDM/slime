@@ -11,6 +11,8 @@ from pathlib import Path
 import ray
 import torch
 
+from slime.data.tensor import TensorRef
+from slime.data.transport import DiskPayloadRef, RolloutGroupRef, TrainBatchRef, pack_rollout_payload
 from slime.observability.rollout_data_utils import (
     tensorize_rollout_data_for_training,
     validate_rollout_routed_experts_for_replay,
@@ -18,16 +20,15 @@ from slime.observability.rollout_data_utils import (
 from slime.utils.data import get_source
 from slime.utils.dp_schedule import build_dp_schedule
 from slime.utils.misc import Box, load_function
-from slime.utils.rollout_transport import DiskPayloadRef, RolloutGroupRef, TrainBatchRef, pack_rollout_payload
-from slime.utils.tensor_store import TensorRef
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
 
 
 class BatchBuilder:
-    def __init__(self, args):
+    def __init__(self, args, *, controller=None):
         self.args = args
+        self.controller = controller
         self.rollout_id = -1
         self.raw_ref = None
         self.batch_id = None
@@ -49,7 +50,7 @@ class BatchBuilder:
             return None
         from straw.protocol import Lease, RecordSetRef, digest
 
-        controller = self.args._rollout_queue_controller
+        controller = self.controller
         self.batch_id = f"batch:{self.raw_ref.receipt.commit_id}"
         configuration = {
             name: getattr(self.args, name, None)
@@ -120,7 +121,7 @@ class BatchBuilder:
         return None
 
     def _commit_ready(self, ranks, schedule):
-        controller = self.args._rollout_queue_controller
+        controller = self.controller
         ready = pack_rollout_payload(
             {
                 "version": 1,
@@ -140,21 +141,21 @@ class BatchBuilder:
         if self.batch_id is not None:
             if rollout_id != self.rollout_id:
                 raise ValueError("Training completion does not match the current batch")
-            ray.get(self.args._rollout_queue_controller.finish_batch.remote(self.batch_id))
+            ray.get(self.controller.finish_batch.remote(self.batch_id))
 
     def save(self, rollout_id):
         if self.args.rollout_data_transport != "straw":
             return
         from straw.reporting import write_report
 
-        state = ray.get(self.args._rollout_queue_controller.training_state.remote())
+        state = ray.get(self.controller.training_state.remote())
         if state is None:
             return
         from dataclasses import asdict
 
         from straw.protocol import RecordSetRef, digest
 
-        from slime.utils.rollout_transport import rollout_store
+        from slime.data.transport import rollout_store
 
         path = Path(self.args.save) / "rollout" / f"builder_state_{rollout_id}.json"
         store, _, lock = rollout_store(self.args)
@@ -173,12 +174,10 @@ class BatchBuilder:
             },
         )
 
-    def load(self, rollout_id):
+    def load(self, rollout_id, *, source_restore=None):
         if self.args.rollout_data_transport != "straw" or not self.args.load:
             return
-        if getattr(self.args, "_queue_fork_restored", False) or getattr(
-            self.args, "_rollout_queue_empty_restore", False
-        ):
+        if source_restore is not None and source_restore.new_queue:
             # A fork is taken after training completion. Saved pending/ready
             # groups were reintroduced with new receipts; old positions and
             # finished batches belong exclusively to the parent queue.
@@ -197,11 +196,11 @@ class BatchBuilder:
         state = snapshot["consumer"]
         self.consumer_state = DiskPayloadRef(RecordSetRef.from_dict(state["state_ref"]), self.args.rollout_data_dir)
         ray.get(
-            self.args._rollout_queue_controller.restore_training_state.remote(
+            self.controller.restore_training_state.remote(
                 self.consumer_state.manifest,
                 state["fetch_cursor"],
                 state["processed_cursor"],
-                getattr(self.args, "_queue_restored_source_ref", None),
+                source_restore.source_ref if source_restore is not None else None,
             )
         )
 

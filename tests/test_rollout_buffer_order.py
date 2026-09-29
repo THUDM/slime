@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from slime.rollout.data_source import RolloutDataSource, RolloutDataSourceWithBuffer, pop_first, pop_oldest
+from slime.data.data_source import RolloutDataSource, RolloutDataSourceWithBuffer, pop_first, pop_oldest
 from slime.utils.types import Sample
 
 NUM_GPUS = 0
@@ -41,13 +41,13 @@ def test_buffer_sort_is_opt_in_and_explicit_filter_takes_precedence(monkeypatch,
     assert source.get_samples(1) == [expected[0]]
     assert source.get_samples(1) == [expected[1]]
 
-    args.buffer_filter_path = "slime.rollout.data_source.pop_first"
+    args.buffer_filter_path = "slime.data.data_source.pop_first"
     source = RolloutDataSourceWithBuffer(args)
     assert source.buffer_filter is pop_first
 
 
 def test_data_source_reads_and_checkpoints_without_global_dataset_flag(monkeypatch, tmp_path):
-    import slime.rollout.data_source as module
+    import slime.data.data_source as module
 
     prompts = [Sample(prompt="first"), Sample(prompt="second")]
     monkeypatch.setattr(module, "load_tokenizer", lambda *args, **kwargs: None)

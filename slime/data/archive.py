@@ -1,7 +1,7 @@
 """Indexed rollout archives backed by immutable straw records.
 
 An archive owns its data independently of queue consumption. Keys are scoped to
-one archive, so an old rollout never resolves to a task's latest mutable state.
+one archive and identify the sample versions saved in that archive.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ class RolloutArchive:
         from straw.store import SharedFilesystemStore
         from straw.tensor import MAX_PUBLICATION_BYTES, MAX_TENSOR_BYTES
 
-        from slime.rollout.queue_codec import CODECS, SampleCodec
+        from slime.data.codec import CODECS, SampleCodec
 
         self.path = Path(path)
         self.index = json.loads(self.path.read_text())
@@ -43,8 +43,8 @@ class RolloutArchive:
         from straw.store import SharedFilesystemStore
         from straw.tensor import MAX_PUBLICATION_BYTES, MAX_TENSOR_BYTES
 
-        from slime.rollout.queue_codec import CODECS, SampleCodec
-        from slime.utils.rollout_transport import DiskPayloadRef, rollout_store
+        from slime.data.codec import CODECS, SampleCodec
+        from slime.data.transport import DiskPayloadRef, rollout_store
 
         path = Path(path)
         if path.exists():
@@ -148,10 +148,10 @@ class RolloutArchive:
         return result
 
     def export_pt(self, path):
-        """Materialize a self-contained legacy dump, independent of this pool."""
+        """Materialize a self-contained .pt dump, independent of this pool."""
         import torch
 
-        from slime.utils.tensor_store import materialize_tensor_refs
+        from slime.data.tensor import materialize_tensor_refs
 
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)

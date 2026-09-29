@@ -13,6 +13,14 @@ from ray.exceptions import RayActorError
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from straw.protocol import CommitReceipt
 
+from slime.data.transport import (
+    DiskPayloadRef,
+    RolloutGroupRef,
+    discard_rollout_group,
+    pack_rollout_payload,
+    publish_rollout_async,
+    unpack_rollout_payload,
+)
 from slime.observability import logging_utils
 from slime.observability.rollout_data_utils import validate_rollout_id_annotated
 from slime.ray.utils import add_default_ray_env_vars
@@ -22,14 +30,6 @@ from slime.rollout.sample_hooks import rollout_context
 from slime.utils.async_utils import get_async_loop
 from slime.utils.http_utils import get_rollout_num_engines, init_http_client
 from slime.utils.misc import load_function
-from slime.utils.rollout_transport import (
-    DiskPayloadRef,
-    RolloutGroupRef,
-    discard_rollout_group,
-    pack_rollout_payload,
-    publish_rollout_async,
-    unpack_rollout_payload,
-)
 from slime.utils.types import Sample
 
 
@@ -40,8 +40,9 @@ class RolloutScheduler:
     completed prefetch, so slow training applies backpressure to local pools.
     """
 
-    def __init__(self, args, workers, capacities):
+    def __init__(self, args, workers, capacities, *, controller=None):
         self.args = args
+        self.controller = controller
         self.workers = workers
         self.capacities = capacities
         self.capacity = sum(capacities)
@@ -199,7 +200,7 @@ class RolloutScheduler:
         metrics["rollout/dynamic_filter/dropped_groups"] = dropped_count
         metrics["rollout/dynamic_filter/dropped_ratio"] = dropped_count / (len(groups) + dropped_count)
         # Publish a manifest of group references outside the scheduler lock.
-        return finalize_rollout_groups(self.args, rollout_id, groups, metrics)
+        return finalize_rollout_groups(self.args, rollout_id, groups, metrics, controller=self.controller)
 
     def pause(self, *, drain=True):
         """Stop admission; optionally wait for in-flight results to become durable."""
@@ -378,13 +379,18 @@ class _GenerationActor:
                 group,
                 self.args,
                 verdict.reason or "dynamic_filter",
+                controller=self.data_source.controller,
             )
             return None, verdict
         if self.args.rollout_data_transport == "straw":
-            group = await publish_rollout_async(group, self.args, rollout_id, group=True)
+            group = await publish_rollout_async(
+                group, self.args, rollout_id, group=True, controller=self.data_source.controller
+            )
         else:
-            if getattr(self.args, "_rollout_queue_controller", None) is not None:
-                accepted = await publish_rollout_async(group, self.args, rollout_id, group=True)
+            if getattr(self.data_source, "controller", None) is not None:
+                accepted = await publish_rollout_async(
+                    group, self.args, rollout_id, group=True, controller=self.data_source.controller
+                )
                 if accepted.receipt is not None:
                     for sample in iter_samples(group):
                         sample.__dict__.pop("_queue_lease", None)
@@ -444,7 +450,7 @@ class _GenerationActor:
         # closing their files or killing this process.
         await asyncio.get_running_loop().shutdown_default_executor()
         self.data_source.close()
-        from slime.utils.rollout_transport import seal_rollout_store
+        from slime.data.transport import seal_rollout_store
 
         seal_rollout_store(self.args)
 
@@ -456,11 +462,7 @@ class DistributedRollout(RolloutScheduler):
         if self.args.rollout_data_transport != "straw":
             return
         delivered = pack_rollout_payload(sorted(self.delivered), self.args, self.rollout_id)
-        ref = ray.get(
-            self.args._rollout_queue_controller.recover_reader_results.remote(
-                f"fully_async_{worker}", delivered.manifest
-            )
-        )
+        ref = ray.get(self.controller.recover_reader_results.remote(f"fully_async_{worker}", delivered.manifest))
         for value in DiskPayloadRef(ref, self.args.rollout_data_dir).load():
             receipt = CommitReceipt.from_dict(value)
             payload = DiskPayloadRef(receipt.result_ref, self.args.rollout_data_dir)
@@ -473,8 +475,8 @@ class DistributedRollout(RolloutScheduler):
         if args.rollout_all_samples_process_path is not None:
             raise ValueError("--rollout-all-samples-process-path is not supported by distributed fully-async rollout")
         recovered = []
-        if getattr(args, "_rollout_queue_resume", False) and "fully_async" not in data_source._restored_consumers:
-            ref = ray.get(args._rollout_queue_controller.recover_pending_rollout.remote())
+        if data_source.restore_plan.mode == "resume" and "fully_async" not in data_source._restored_consumers:
+            ref = ray.get(data_source.controller.recover_pending_rollout.remote())
             for value in DiskPayloadRef(ref, args.rollout_data_dir).load():
                 receipt = CommitReceipt.from_dict(value)
                 payload = DiskPayloadRef(receipt.result_ref, args.rollout_data_dir)
@@ -522,7 +524,7 @@ class DistributedRollout(RolloutScheduler):
             for worker in workers:
                 ray.kill(worker)
             raise
-        super().__init__(args, workers, capacities)
+        super().__init__(args, workers, capacities, controller=data_source.controller)
         self.ready.extend(recovered)
         self.delivered.update(group.receipt.position for group, _ in recovered)
         logging.getLogger(__name__).info(

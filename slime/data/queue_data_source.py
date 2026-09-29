@@ -28,9 +28,9 @@ from straw.errors import LeaseExpired, StaleAttempt
 from straw.protocol import Lease, Limits, Record, RecordSetRef, TaskSpec, encode
 from straw.reporting import write_report
 
-from slime.rollout.base_types import iter_samples
-from slime.rollout.data_source import DataSource, RolloutDataSource
-from slime.utils.rollout_transport import (
+from slime.data.checkpoint import RestorePlan, SourceRestore
+from slime.data.data_source import DataSource, RolloutDataSource
+from slime.data.transport import (
     DiskPayloadRef,
     group_lease,
     pack_rollout_payload,
@@ -40,6 +40,7 @@ from slime.utils.rollout_transport import (
     rollout_store,
     unpack_rollout_payload,
 )
+from slime.rollout.base_types import iter_samples
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
@@ -51,15 +52,17 @@ class RolloutQueueController:
     The plain class also supports local tests without starting Ray.
     """
 
-    def __init__(self, args, *, producer=None):
+    def __init__(self, args, *, producer=None, restore_plan=None, defer_gc=False):
         self.args = args
+        self.restore_plan = restore_plan or RestorePlan()
         self._checkpoint_lock = None
         with ExitStack() as cleanup:
             # The controller owns both the queue and its checkpoint branch.
             # Hold the save-directory lock until close() (or actor exit), and
             # publish the branch before any queue writes can become durable.
-            if (plan := getattr(args, "_checkpoint_plan", None)) is not None:
-                root = Path(plan["root"])
+            if self.restore_plan.root is not None:
+                plan = self.restore_plan
+                root = Path(plan.root)
                 (root / "rollout").mkdir(parents=True, exist_ok=True)
                 self._checkpoint_lock = cleanup.enter_context((root / "rollout/session.lock").open("a"))
                 try:
@@ -68,10 +71,10 @@ class RolloutQueueController:
                     raise RuntimeError(f"Another training job owns save directory {root}") from error
                 path = root / "rollout/current.json"
                 current = path.read_text() if path.exists() else None
-                if current != plan["expected_current"]:
+                if current != plan.expected_current:
                     raise RuntimeError("Current checkpoint branch changed during startup; restart to resolve it again")
                 resolve_rollout_data_dir(args)
-                branch = {**plan["branch"], "pool": args.rollout_data_dir}
+                branch = {**plan.branch, "pool": args.rollout_data_dir}
                 write_report(Path(args.save) / "rollout/branch.json", branch)
                 tracker = root / "latest_checkpointed_iteration.txt"
                 if parent := branch.get("parent"):
@@ -95,11 +98,12 @@ class RolloutQueueController:
             self._gc_error = None
             if not hasattr(Coordinator, "yield_tasks"):
                 raise RuntimeError(
-                    "This straw transport requires a straw-queue build with yield_tasks and priority scheduling; the original PyPI 0.1.0 wheel does not support these APIs."
+                    "straw transport requires yield_tasks and priority scheduling. "
+                    "Upgrade on every rollout/training node: pip install --upgrade straw-queue"
                 )
-            fork = getattr(args, "_rollout_queue_fork", False)
+            fork = self.restore_plan.mode == "snapshot"
             queue_options = {}
-            queue_id = getattr(args, "_rollout_queue_id", None)
+            queue_id = self.restore_plan.queue_id
             if queue_id is not None:
                 queue_options = {"queue_id": queue_id, "namespace": True}
             if fork:
@@ -115,8 +119,8 @@ class RolloutQueueController:
                 queue_options = {"queue_id": queue_id, "namespace": True}
                 recovering = (self.store.backend.root / "queues" / digest(queue_id) / "run.json").exists()
             else:
-                recovering = getattr(args, "_rollout_queue_resume", False)
-                if recovering and queue_id is not None and getattr(args, "_checkpoint_plan", None):
+                recovering = self.restore_plan.mode == "resume"
+                if recovering and queue_id is not None and self.restore_plan.root:
                     from straw.protocol import digest
 
                     # Initialization may have stopped after publishing the branch
@@ -152,7 +156,7 @@ class RolloutQueueController:
             self._fork_active = False
             if fork and self._queue.producer_state("fork-active") is not None:
                 raise ValueError("This queue branch has already started; resolve checkpoint selection again")
-            if getattr(args, "_rollout_queue_resume", False):
+            if self.restore_plan.mode == "resume":
                 # Restart requires the entire prior job to have stopped. Unlike a
                 # lease timeout, that supervisor assertion ends old reads.
                 readers = self.queue.outstanding_reads()
@@ -165,7 +169,7 @@ class RolloutQueueController:
                     self.queue.cancel_task(task_id, request_id=f"abandon:{self.branch_id}:{task_id}")
             # Joint restore can rewind the training cursor. Reconcile its durable
             # storage ownership before GC inspects restored live result roots.
-            if not fork and not getattr(args, "_joint_resume", None):
+            if not fork and not defer_gc:
                 self._start_gc()
             # Successful construction transfers ownership to close(). A failed
             # constructor closes the coordinator and releases the save lock here.
@@ -206,7 +210,7 @@ class RolloutQueueController:
         self._check_gc_error()
         if self.producer is None:
             self.producer = RolloutDataSource(self.args)
-            if path := getattr(self.args, "_rollout_dataset_cursor", None):
+            if path := self.restore_plan.dataset_cursor:
                 import torch
 
                 state = torch.load(path, map_location="cpu", weights_only=False)
@@ -250,6 +254,7 @@ class RolloutQueueController:
             }
             if getattr(self.args, "prompt_data", None):
                 import hashlib
+
                 from slime.utils.data import _parse_generalized_path
 
                 path, row_slice = _parse_generalized_path(self.args.prompt_data)
@@ -299,9 +304,10 @@ class RolloutQueueController:
         Receipt positions are local to a queue: ready groups receive new ones.
         """
         from straw.protocol import digest
-        from slime.utils.rollout_transport import RolloutGroupRef
 
-        if not getattr(self.args, "_rollout_queue_fork", False):
+        from slime.data.transport import RolloutGroupRef
+
+        if self.restore_plan.mode != "snapshot":
             raise ValueError("Source forks require an isolated queue")
         owner = f"fork-source:{self.queue.queue_id}"
         with self._producer_lock, self._training_lock, self._writer_lock:
@@ -380,7 +386,7 @@ class RolloutQueueController:
     def _activate_fork(self):
         if not self._fork_ready:
             raise RuntimeError("Load the fork checkpoint before admitting rollout work")
-        if getattr(self.args, "_rollout_queue_fork", False):
+        if self.restore_plan.mode == "snapshot":
             from straw.reporting import write_report
 
             with self._producer_lock:
@@ -628,7 +634,7 @@ class RolloutQueueController:
         the model/optimizer version. That recovery requires a joint checkpoint.
         The restarted job must have stopped all prior readers.
         """
-        if not getattr(self.args, "_rollout_queue_resume", False):
+        if self.restore_plan.mode != "resume":
             raise RuntimeError("Whole-job replay requires automatic WAL recovery selection")
         with self._producer_lock, self._training_lock:
             state = self._training_state()
@@ -816,7 +822,7 @@ class RolloutQueueController:
         a successor joint commit allows their normal retirement.
         """
         with self._training_lock:
-            if getattr(self.args, "_rollout_queue_fork", False):
+            if self.restore_plan.mode == "snapshot":
                 self.store.retain(f"fork-source:{self.queue.queue_id}", [source_ref])
             state = self._training_state()
             if "restored_source" in state:
@@ -832,7 +838,7 @@ class RolloutQueueController:
             ):
                 raise ValueError("Consumer checkpoint cursors differ from its state")
             if retained_ref is not None:
-                from slime.utils.rollout_transport import RolloutGroupRef
+                from slime.data.transport import RolloutGroupRef
 
                 retained, visited = set(), set()
 
@@ -939,23 +945,19 @@ class RolloutQueueController:
                 self._checkpoint_lock.close()
 
 
-def create_queue_controller(args):
+def create_queue_controller(args, *, restore_plan=None):
+    """Create one job-owned actor; callers retain and explicitly share its handle."""
     resolve_rollout_data_dir(args)
-    if getattr(args, "_rollout_queue_controller", None) is None:
-        args._rollout_queue_controller = (
-            ray.remote(RolloutQueueController)
-            .options(
-                num_cpus=0,
-                max_concurrency=4,
-                max_restarts=0,
-                scheduling_strategy=NodeAffinitySchedulingStrategy(
-                    ray.get_runtime_context().get_node_id(), soft=False
-                ),
-            )
-            .remote(copy.copy(args))
+    return (
+        ray.remote(RolloutQueueController)
+        .options(
+            num_cpus=0,
+            max_concurrency=4,
+            max_restarts=0,
+            scheduling_strategy=NodeAffinitySchedulingStrategy(ray.get_runtime_context().get_node_id(), soft=False),
         )
-        args._rollout_queue_branch = ray.get(args._rollout_queue_controller.identity.remote())["branch_id"]
-    return args._rollout_queue_controller
+        .remote(copy.copy(args), restore_plan=restore_plan)
+    )
 
 
 @dataclass(frozen=True)
@@ -964,6 +966,7 @@ class QueueReaderConfig:
     controller: object
     reader_id: str
     dataset_size: int
+    branch_id: str | None = None
 
     def open(self, args=None):
         return QueueReader(
@@ -971,6 +974,7 @@ class QueueReaderConfig:
             self.controller,
             self.reader_id,
             self.dataset_size,
+            branch_id=self.branch_id,
         )
 
 
@@ -981,9 +985,9 @@ class QueueReader(DataSource):
     leases. Job-wide consumers and checkpoint files belong to QueueDataSource.
     """
 
-    def __init__(self, args, controller, reader_id, dataset_size):
+    def __init__(self, args, controller, reader_id, dataset_size, *, branch_id=None):
         self.args, self.controller, self.reader_id = args, controller, reader_id
-        self.args._rollout_queue_controller = controller
+        self.branch_id = branch_id or ray.get(controller.identity.remote())["branch_id"]
         self.dataset_size = dataset_size
         # Only actively executing leases are local. Returned work lives in the
         # durable queue and can be acquired by any reader after this one stops.
@@ -1061,6 +1065,7 @@ class QueueReader(DataSource):
                         sample.__dict__.pop("_queue_receipt", None)
                         sample._queue_lease = asdict(lease)
                         sample._queue_generation_start = len(sample.tokens)
+                        sample._queue_branch = self.branch_id
                         sample._queue_source_positions = assignment.task.metadata.get("source_positions", [])
                     with self._lock:
                         self._leases[lease.task_id] = lease
@@ -1112,7 +1117,7 @@ class QueueReader(DataSource):
         leases = [group_lease(group) for group in groups_to_save]
         receipts = ray.get(self.controller.results.remote(leases))
         for group, receipt in zip(groups_to_save, receipts, strict=True):
-            record_generation_provenance(group, self.args)
+            record_generation_provenance(group)
             if receipt:
                 for sample in iter_samples(group):
                     sample.__dict__.pop("_queue_lease", None)
@@ -1204,7 +1209,7 @@ class QueueReader(DataSource):
         self.update_metadata(value["metadata"])
 
     def materialize_samples(self, samples, *, release_files=True):
-        from slime.utils.tensor_store import TensorRef
+        from slime.data.tensor import TensorRef
 
         if isinstance(samples, list):
             return [self.materialize_samples(child) for child in samples]
@@ -1249,14 +1254,16 @@ class QueueReader(DataSource):
 class QueueDataSource(QueueReader):
     """Job-level data source: reader creation, consumers and source checkpoints.
 
-    The manager can read through the inherited QueueReader interface; distributed
-    workers open separate readers against the same controller. There is no extra
-    sample buffer or second implementation of get_samples/add_samples here.
+    The manager reads through the inherited QueueReader interface; distributed
+    workers open separate readers against the same controller.
     """
 
-    def __init__(self, args):
-        self._owns_controller = getattr(args, "_rollout_queue_controller", None) is None
-        controller = create_queue_controller(args)
+    def __init__(self, args, *, controller=None, restore_plan=None):
+        self.restore_plan = restore_plan or RestorePlan()
+        self.restored_source = SourceRestore(new_queue=self.restore_plan.mode == "empty")
+        self._owns_controller = controller is None
+        if controller is None:
+            controller = create_queue_controller(args, restore_plan=self.restore_plan)
         self.data_config = ray.get(controller.configuration.remote())
         super().__init__(args, controller, "owner", self.data_config["dataset_size"])
         self.consumers, self._restored_consumers = {}, {}
@@ -1264,7 +1271,7 @@ class QueueDataSource(QueueReader):
     def reader_config(self, reader_id):
         if reader_id == "owner":
             raise ValueError("Reader ID 'owner' is reserved")
-        return QueueReaderConfig(self.args, self.controller, reader_id, len(self))
+        return QueueReaderConfig(self.args, self.controller, reader_id, len(self), self.branch_id)
 
     def register_consumer(self, name, consumer):
         if name in self.consumers:
@@ -1310,7 +1317,7 @@ class QueueDataSource(QueueReader):
             )
             if self.data_config["queue_id"].startswith("fork:"):
                 write_report(path.parent / "fork-active.json", {"queue_id": self.data_config["queue_id"]})
-            if getattr(self.args, "_queue_restored_source_ref", None) is not None:
+            if self.restored_source.source_ref is not None:
                 ray.get(self.controller.handoff_restored_source.remote(ref.manifest))
         finally:
             for consumer, was_paused in paused:
@@ -1322,13 +1329,13 @@ class QueueDataSource(QueueReader):
 
         from straw.protocol import RecordSetRef
 
-        if not self.args.load or getattr(self.args, "_rollout_queue_empty_restore", False):
-            return
+        if not self.args.load or self.restore_plan.mode == "empty":
+            return self.restored_source
         if self.consumers:
             raise RuntimeError("Restore before starting rollout consumers")
         path = Path(self.args.load) / "rollout" / f"queue_state_{rollout_id}.json"
         if not path.exists():
-            if getattr(self.args, "_rollout_queue_fork", False):
+            if self.restore_plan.mode == "snapshot":
                 raise FileNotFoundError(path)
             return
         value = json.loads(path.read_text())
@@ -1342,7 +1349,7 @@ class QueueDataSource(QueueReader):
         ):
             if state["configuration"][key] != self.data_config[key]:
                 raise ValueError(f"Data source checkpoint differs in {key}")
-        if getattr(self.args, "_rollout_queue_fork", False):
+        if self.restore_plan.mode == "snapshot":
             if state["version"] != 2:
                 raise ValueError("Queue fork requires a checkpoint with producer state (source version 2)")
             if state["configuration"].get("dataset") != self.data_config.get("dataset"):
@@ -1351,13 +1358,16 @@ class QueueDataSource(QueueReader):
                 raise ValueError("Copy-on-write fork requires the original straw pool")
             ref = ray.get(self.controller.fork_source.remote(RecordSetRef.from_dict(value["manifest"])))
             self._restored_consumers = DiskPayloadRef(ref, self.args.rollout_data_dir).load()
-            self.args._queue_fork_restored = True
         else:
             if state["configuration"].get("queue_id", self.data_config["queue_id"]) != self.data_config["queue_id"]:
                 raise ValueError("Data source checkpoint belongs to a different queue namespace")
             self.load_state_dict(state["reader"])
             self._restored_consumers = state["consumers"]
-        self.args._queue_restored_source_ref = RecordSetRef.from_dict(value["manifest"])
+        self.restored_source = SourceRestore(
+            new_queue=self.restore_plan.mode == "snapshot",
+            source_ref=RecordSetRef.from_dict(value["manifest"]),
+        )
+        return self.restored_source
 
     def close(self):
         if self._closed:
@@ -1368,4 +1378,3 @@ class QueueDataSource(QueueReader):
         if self._owns_controller:
             ray.get(self.controller.close.remote())
             ray.kill(self.controller, no_restart=True)
-            self.args._rollout_queue_controller = None

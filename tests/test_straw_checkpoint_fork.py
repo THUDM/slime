@@ -29,7 +29,7 @@ def prepare():
 def load_source_checkpoint(directory, step):
     from straw.protocol import RecordSetRef
 
-    from slime.utils.rollout_transport import DiskPayloadRef
+    from slime.data.transport import DiskPayloadRef
 
     index = json.loads((Path(directory) / "rollout" / f"queue_state_{step}.json").read_text())
     return DiskPayloadRef(RecordSetRef.from_dict(index["manifest"]), index["root"]).load()
@@ -39,12 +39,12 @@ def checked_rollout(args, rollout_id, data_source, evaluation=False):
     """Observe the real load boundary, then run the production rollout function."""
     import ray
 
+    from slime.data.transport import DiskPayloadRef, rollout_store
     from slime.rollout.fully_async_rollout import generate_rollout_fully_async
-    from slime.utils.rollout_transport import DiskPayloadRef, rollout_store
 
-    if args._rollout_queue_fork and rollout_id == args.start_rollout_id:
+    if data_source.restore_plan.mode == "snapshot" and rollout_id == args.start_rollout_id:
         assert rollout_id == args.ckpt_step + 1
-        assert args._queue_fork_restored
+        assert data_source.restored_source.new_queue
         assert not data_source.consumers, "Check the cursor before generation starts"
         saved = load_source_checkpoint(args.load, args.ckpt_step)
         expected = saved["reader"].load()["pending"].load()
@@ -89,7 +89,7 @@ def checked_rollout(args, rollout_id, data_source, evaluation=False):
         }
         Path(args.save).mkdir(parents=True, exist_ok=True)
         Path(args.save, "restored_source.json").write_text(json.dumps(report, indent=2))
-    if getattr(args, "_rollout_queue_empty_restore", False) and rollout_id == args.start_rollout_id:
+    if data_source.restore_plan.mode == "empty" and rollout_id == args.start_rollout_id:
         import torch
 
         assert not data_source.consumers
@@ -100,7 +100,7 @@ def checked_rollout(args, rollout_id, data_source, evaluation=False):
             store, _, lock = rollout_store(args)
             with lock:
                 store.release_publications([ref])
-        expected = torch.load(args._rollout_dataset_cursor, weights_only=False)
+        expected = torch.load(data_source.restore_plan.dataset_cursor, weights_only=False)
         assert actual["producer_cursor"] == expected
         assert actual["tasks"] == [] and not actual["inflight"]
         assert not getattr(data_source, "_restored_consumers", {})
@@ -110,7 +110,7 @@ def checked_rollout(args, rollout_id, data_source, evaluation=False):
 
 def sample_values(samples):
     """Compare training input without comparing branch-specific queue authority."""
-    from slime.utils.tensor_store import materialize_tensor_refs
+    from slime.data.tensor import materialize_tensor_refs
 
     keys = (
         "index",
@@ -133,8 +133,8 @@ def sample_values(samples):
 def execute(*, model_path=None, prompt_data=None, work_dir=None, num_gpus_per_node=NUM_GPUS):
     import torch
 
-    from slime.utils.rollout_archive import RolloutArchive
-    from slime.utils.rollout_transport import load_rollout_samples
+    from slime.data.archive import RolloutArchive
+    from slime.data.transport import load_rollout_samples
 
     model_path = model_path or f"/root/models/{MODEL_NAME}"
     prompt_data = prompt_data or "/root/datasets/gsm8k/train.parquet"

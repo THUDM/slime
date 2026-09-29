@@ -583,7 +583,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Shared directory for straw rollout payloads, mounted at the same absolute path on all nodes. "
                     "Defaults to <save>/rollout_data. Required for straw transport when --save is unset. "
-                    "Files are retained for buffered samples, checkpoints and debug dumps."
+                    "Files are retained for pending samples, checkpoints and debug archives."
                 ),
             )
             parser.add_argument("--rollout-storage-profile", choices=["local", "juicefs"], default="local")
@@ -680,8 +680,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "The data source class. straw transport defaults to "
-                    "slime.rollout.queue_data_source.QueueDataSource; other transports use "
-                    "slime.rollout.data_source.RolloutDataSourceWithBuffer. Custom classes remain supported."
+                    "slime.data.queue_data_source.QueueDataSource; other transports use "
+                    "slime.data.data_source.RolloutDataSourceWithBuffer. Custom classes remain supported."
                 ),
             )
             parser.add_argument(
@@ -1670,7 +1670,12 @@ def _pre_parse_mode():
     return temp_args
 
 
-def parse_args(add_custom_arguments=None):
+def parse_args(add_custom_arguments=None, *, return_restore_plan=False):
+    """Return configuration, optionally paired with the driver's restore plan.
+
+    Custom argument providers and existing callers keep the Namespace contract;
+    queue connections and recovery progress are never attached to args.
+    """
     # Users may call `parse_args` very early, thus we ensure logger is configured here
     configure_logger()
 
@@ -1705,7 +1710,7 @@ def parse_args(add_custom_arguments=None):
         for key, value in vars(sglang_ns).items():
             setattr(args, key, value)
 
-    slime_validate_args(args)
+    restore_plan = slime_validate_args(args)
 
     if not args.debug_rollout_only:
         megatron_validate_args(args)
@@ -1713,7 +1718,7 @@ def parse_args(add_custom_arguments=None):
     if not args.debug_train_only:
         sglang_validate_args(args)
 
-    return args
+    return (args, restore_plan) if return_restore_plan else args
 
 
 def _apply_megatron_role_overrides(base_args, overrides, role):
@@ -1894,9 +1899,9 @@ def slime_validate_args(args):
 
     # Resolve the logical checkpoint directory before the model loader's
     # HuggingFace/finetune fallback can replace --load or disable optimizer load.
-    from slime.utils.rollout_checkpoint import resolve_checkpoint
+    from slime.data.checkpoint import resolve_checkpoint
 
-    resolve_checkpoint(args)
+    restore_plan = resolve_checkpoint(args)
     load_is_megatron = (
         args.load is not None
         and os.path.exists(args.load)
@@ -1938,12 +1943,12 @@ def slime_validate_args(args):
 
     if args.data_source_path is None:
         args.data_source_path = (
-            "slime.rollout.queue_data_source.QueueDataSource"
+            "slime.data.queue_data_source.QueueDataSource"
             if args.rollout_data_transport == "straw"
-            else "slime.rollout.data_source.RolloutDataSourceWithBuffer"
+            else "slime.data.data_source.RolloutDataSourceWithBuffer"
         )
     if args.rollout_data_transport != "straw":
-        if args.data_source_path == "slime.rollout.queue_data_source.QueueDataSource":
+        if args.data_source_path == "slime.data.queue_data_source.QueueDataSource":
             raise ValueError("QueueDataSource requires --rollout-data-transport straw")
         if getattr(args, "rollout_queue_online_gc", False):
             raise ValueError("--rollout-queue-online-gc requires --rollout-data-transport straw")
@@ -1958,7 +1963,7 @@ def slime_validate_args(args):
             raise ValueError(f"--{name.replace('_', '-')} must be positive")
 
     if args.rollout_data_transport == "straw":
-        from slime.utils.rollout_transport import resolve_rollout_data_dir
+        from slime.data.transport import resolve_rollout_data_dir
 
         if getattr(args, "buffer_filter_path", None) is not None:
             raise ValueError(
@@ -2193,3 +2198,5 @@ def slime_validate_args(args):
                 "--update-weight-mode=delta requires --update-weight-local-checkpoint-dir "
                 "(a rollout-host-local NVMe directory)."
             )
+
+    return restore_plan

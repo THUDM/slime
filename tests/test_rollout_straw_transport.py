@@ -8,10 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-
 from straw.errors import StorageUnavailable
-from slime.rollout.queue_data_source import RolloutQueueController
-from slime.utils.rollout_transport import (
+
+from slime.data.queue_data_source import RolloutQueueController
+from slime.data.transport import (
     DiskPayloadRef,
     RolloutGroupRef,
     load_rollout_samples,
@@ -56,6 +56,56 @@ assert not any(name.split('.')[0] in {'sglang', 'sglang_router'} for name in sys
 def args(tmp_path):
     return SimpleNamespace(
         rollout_data_transport="straw", rollout_data_dir=str(tmp_path), rollout_sample_filter_path=None, save=None
+    )
+
+
+@pytest.mark.parametrize("queue_source", [False, True])
+def test_custom_source_constructor_keeps_args_only_contract(args, monkeypatch, queue_source):
+    from slime.data import queue_data_source, transport
+    from slime.data.checkpoint import RestorePlan
+    from slime.ray import rollout
+
+    calls = []
+    handle = SimpleNamespace(close=SimpleNamespace(remote=lambda: calls.append("controller_close")))
+
+    class CustomSource(queue_data_source.QueueReader if queue_source else object):
+        def __init__(self, config):
+            assert config is args
+            calls.append("source_init")
+            if queue_source:
+                self.controller = handle
+
+        def close(self):
+            calls.append("source_close")
+
+    def create_controller(config, *, restore_plan):
+        assert config is args and restore_plan is plan
+        calls.append("controller_init")
+        return handle
+
+    plan = RestorePlan()
+    args.debug_train_only = True
+    args.data_source_path = "user.CustomSource"
+    args.rollout_function_path = args.eval_function_path = "user.rollout"
+    args.custom_reward_post_process_path = args.custom_convert_samples_to_train_data_path = None
+    original = vars(args).copy()
+    monkeypatch.setattr(rollout, "check_rollout_storage", lambda _: None)
+    monkeypatch.setattr(queue_data_source, "create_queue_controller", create_controller)
+    monkeypatch.setattr(rollout, "load_function", lambda path: CustomSource if path == args.data_source_path else None)
+    monkeypatch.setattr(rollout, "init_tracking", lambda *a, **kw: None)
+    monkeypatch.setattr(rollout.logging_utils, "finish_tracking", lambda _: None)
+    monkeypatch.setattr(rollout, "Lock", SimpleNamespace(options=lambda **kw: SimpleNamespace(remote=lambda: None)))
+    monkeypatch.setattr(rollout.ray, "get", lambda value: value)
+    monkeypatch.setattr(rollout.ray, "kill", lambda *a, **kw: None)
+    monkeypatch.setattr(transport, "seal_rollout_store", lambda _: None)
+    manager = rollout.RolloutManager.__ray_metadata__.modified_class(args, None, restore_plan=plan)
+    assert manager.controller is manager.batch_builder.controller is handle
+    assert vars(args) == original
+    manager.dispose()
+    assert calls == (
+        ["source_init", "source_close"]
+        if queue_source
+        else ["source_init", "controller_init", "source_close", "controller_close"]
     )
 
 
@@ -109,7 +159,7 @@ def test_payload_reference_is_small_and_readable_by_independent_process(args, tm
             "-c",
             """
 import pickle, sys
-from slime.utils.tensor_store import TensorRef
+from slime.data.tensor import TensorRef
 value = pickle.load(open(sys.argv[1], 'rb')).load()
 assert value['tensor'] is value['alias']
 assert value['tensor'][-1].item() == 999999
@@ -179,8 +229,8 @@ def test_fully_async_stores_groups_while_collecting_the_batch(args, monkeypatch)
     args.dynamic_sampling_filter_path = None
     saved = []
 
-    def pack(group, *a):
-        ref = pack_rollout_group(group, *a)
+    def pack(group, *a, **kwargs):
+        ref = pack_rollout_group(group, *a, **kwargs)
         saved.append(ref)
         return ref
 
@@ -193,7 +243,7 @@ def test_fully_async_stores_groups_while_collecting_the_batch(args, monkeypatch)
 
     worker = SimpleNamespace(queue_size=lambda: 0, get_completed_groups=take)
     monkeypatch.setattr(fa, "_get_global_worker", lambda *a: worker)
-    from slime.utils import rollout_transport
+    from slime.data import transport as rollout_transport
 
     monkeypatch.setattr(rollout_transport, "pack_rollout_group", pack)
     output = asyncio.run(fa._generate_rollout_async(args, 0, None))
@@ -231,8 +281,8 @@ def test_synchronous_rollout_stores_during_generation_and_preserves_legacy_hook(
             state.remaining_batch_size += len(groups)
             state.pendings.update(asyncio.create_task(generate(index)) for index in (2, 1))
 
-        def pack(group, *a):
-            ref = pack_rollout_group(group, *a)
+        def pack(group, *a, **kwargs):
+            ref = pack_rollout_group(group, *a, **kwargs)
             saved.append(ref)
             loop.call_soon_threadsafe(second.set)
             return ref
@@ -246,7 +296,7 @@ def test_synchronous_rollout_stores_during_generation_and_preserves_legacy_hook(
 
         state.submit_generate_tasks = submit
         monkeypatch.setattr(sr, "GenerateState", lambda args: state)
-        from slime.utils import rollout_transport
+        from slime.data import transport as rollout_transport
 
         monkeypatch.setattr(rollout_transport, "pack_rollout_group", pack)
         monkeypatch.setattr(sr, "abort", abort)
@@ -265,10 +315,10 @@ def test_synchronous_rollout_stores_during_generation_and_preserves_legacy_hook(
 
 @pytest.mark.parametrize("form", ["raw", "wrapped", "stored", "accepted"])
 def test_manager_adapts_legacy_samples_and_validates_accepted_refs(args, monkeypatch, form):
+    from slime.data.queue_data_source import RolloutQueueController
+    from slime.data.transport import RawRolloutRef, accept_raw_rollout
     from slime.ray import rollout
     from slime.rollout.base_types import RolloutFnTrainOutput, finalize_rollout_groups
-    from slime.rollout.queue_data_source import RolloutQueueController
-    from slime.utils.rollout_transport import RawRolloutRef, accept_raw_rollout
 
     groups = [[Sample(index=1, tokens=[1, 2], response_length=1, reward=1)]]
     result = (
@@ -277,7 +327,7 @@ def test_manager_adapts_legacy_samples_and_validates_accepted_refs(args, monkeyp
         else RolloutFnTrainOutput(samples=groups, metrics={"custom": 1})
     )
     controller = RolloutQueueController(args)
-    args._rollout_queue_controller = SimpleNamespace(
+    handle = SimpleNamespace(
         **{
             name: SimpleNamespace(remote=getattr(controller, name))
             for name in ("begin_collection", "complete", "accepted")
@@ -286,11 +336,12 @@ def test_manager_adapts_legacy_samples_and_validates_accepted_refs(args, monkeyp
     monkeypatch.setattr(rollout.ray, "get", lambda value: value)
     manager = object.__new__(rollout.RolloutManager.__ray_metadata__.modified_class)
     manager.args = args
+    manager.controller = handle
     args.load_debug_rollout_data = None
     manager.data_source = object()
     manager.batch_builder = SimpleNamespace()
     if form == "accepted":
-        result = accept_raw_rollout(result, args, 0)
+        result = accept_raw_rollout(result, args, 0, controller=handle)
     manager.generate_rollout = lambda *a, **kw: groups[0] if form == "raw" else result
     previous_files = {path: path.read_bytes() for path in Path(args.rollout_data_dir).rglob("*.pack")}
     try:
@@ -310,7 +361,7 @@ def test_manager_adapts_legacy_samples_and_validates_accepted_refs(args, monkeyp
 
 @pytest.mark.parametrize("transport", ["object-store", "nixl", "straw"])
 def test_train_partitions_preserve_top_p_and_multimodal(args, monkeypatch, transport):
-    from slime.rollout import batch_builder as rollout
+    from slime.data import batch_builder as rollout
     from slime.utils.data import process_rollout_data
 
     args.rollout_data_transport = transport
@@ -364,19 +415,19 @@ def test_train_partitions_preserve_top_p_and_multimodal(args, monkeypatch, trans
 def test_durable_batch_replays_one_plan_and_rejects_mixed_ranks(args, monkeypatch):
     from dataclasses import replace
 
-    from slime.rollout import batch_builder as module
+    from slime.data import batch_builder as module
+    from slime.data.queue_data_source import RolloutQueueController
+    from slime.data.transport import TrainBatchRef, accept_raw_rollout
     from slime.rollout.base_types import RolloutFnTrainOutput
-    from slime.rollout.queue_data_source import RolloutQueueController
     from slime.utils.data import process_rollout_data
     from slime.utils.misc import Box
-    from slime.utils.rollout_transport import TrainBatchRef, accept_raw_rollout
 
     args.custom_reward_post_process_path = None
     args.custom_convert_samples_to_train_data_path = None
     args.global_batch_size = 2
     samples = [Sample(index=i, rollout_id=i, tokens=[1, 2], response_length=1) for i in range(2)]
     controller = RolloutQueueController(args)
-    args._rollout_queue_controller = SimpleNamespace(
+    handle = SimpleNamespace(
         **{
             name: SimpleNamespace(remote=getattr(controller, name))
             for name in (
@@ -396,9 +447,9 @@ def test_durable_batch_replays_one_plan_and_rejects_mixed_ranks(args, monkeypatc
     monkeypatch.setattr(module.ray, "put", lambda value: value)
     monkeypatch.setattr(module, "build_dp_schedule", lambda *a, **kw: ([[0], [1]], [[[0]], [[0]]], [1], [2]))
     try:
-        builder = module.BatchBuilder(args)
+        builder = module.BatchBuilder(args, controller=handle)
         builder.train_parallel_config = {"dp_size": 2}
-        builder.raw_ref = accept_raw_rollout(RolloutFnTrainOutput(samples=samples), args, 0)
+        builder.raw_ref = accept_raw_rollout(RolloutFnTrainOutput(samples=samples), args, 0, controller=handle)
         assert builder.begin(samples) is None
         plan = controller.batch(builder.batch_id)
         assert not plan["ready"]
@@ -425,7 +476,7 @@ def test_durable_batch_replays_one_plan_and_rejects_mixed_ranks(args, monkeypatc
         assert controller.queue._usage()["ready_bytes"] == 0
         assert not controller.queue.checkpoints  # runtime completion is not a checkpoint
         # Later production facts survive restoring the earlier training view.
-        later = accept_raw_rollout(RolloutFnTrainOutput(samples=samples), args, 1)
+        later = accept_raw_rollout(RolloutFnTrainOutput(samples=samples), args, 1, controller=handle)
         assert later.receipt.position == 1
         args.load = args.save
         builder.load(0)
@@ -485,7 +536,7 @@ def test_debug_dump_survives_removal_of_queue_storage(args, tmp_path):
 
 
 def test_shared_storage_probe_reports_missing_mount(args, monkeypatch):
-    from slime.utils import rollout_transport
+    from slime.data import transport as rollout_transport
 
     monkeypatch.setattr(rollout_transport.ray, "nodes", lambda: [])
 
@@ -498,7 +549,7 @@ def test_shared_storage_probe_reports_missing_mount(args, monkeypatch):
 
 
 def test_failed_flush_does_not_publish_a_reference(args, tmp_path, monkeypatch):
-    from slime.utils import rollout_transport
+    from slime.data import transport as rollout_transport
 
     store, _, _ = rollout_transport.rollout_store(args)
 
@@ -517,10 +568,10 @@ def test_failed_flush_does_not_publish_a_reference(args, tmp_path, monkeypatch):
 
 
 def test_straw_debug_archive_keys_lazy_tensors_gc_and_legacy_export(args, tmp_path):
+    from slime.data.archive import RolloutArchive
+    from slime.data.tensor import TensorRef
+    from slime.data.transport import rollout_store
     from slime.observability.rollout_data_utils import load_debug_rollout_data, save_debug_rollout_data
-    from slime.utils.rollout_archive import RolloutArchive
-    from slime.utils.rollout_transport import rollout_store
-    from slime.utils.tensor_store import TensorRef
 
     args.rollout_queue_online_gc = True
     tensor = torch.arange(8, dtype=torch.int32).reshape(2, 2, 2)
@@ -557,7 +608,7 @@ def test_straw_debug_archive_keys_lazy_tensors_gc_and_legacy_export(args, tmp_pa
 
 
 def test_archive_index_reads_only_selected_chunk_and_preserves_duplicate_keys(args, tmp_path, monkeypatch):
-    from slime.utils.rollout_archive import RolloutArchive
+    from slime.data.archive import RolloutArchive
 
     samples = [Sample(index=i, tokens=[i]) for i in range(130)]
     samples[129].index = 128  # Compact trajectories can reuse a logical sample ID.
@@ -578,8 +629,8 @@ def test_archive_index_reads_only_selected_chunk_and_preserves_duplicate_keys(ar
 
 
 def test_straw_debug_archive_uses_existing_train_only_conversion(args, tmp_path):
+    from slime.data.batch_builder import BatchBuilder
     from slime.observability.rollout_data_utils import load_debug_rollout_data, save_debug_rollout_data
-    from slime.rollout.batch_builder import BatchBuilder
 
     args.custom_reward_post_process_path = args.custom_convert_samples_to_train_data_path = None
     args.reward_key = None
@@ -612,7 +663,8 @@ def test_straw_debug_archive_uses_existing_train_only_conversion(args, tmp_path)
 @pytest.mark.parametrize("step", [0, 7])
 def test_fork_requires_committed_model_and_source_and_restores_weight_version(tmp_path, step):
     import json
-    from slime.utils.rollout_checkpoint import commit_checkpoint, resolve_checkpoint
+
+    from slime.data.checkpoint import commit_checkpoint, resolve_checkpoint
 
     parent = tmp_path / "parent"
     model = parent / f"iter_{step:07d}"
@@ -626,7 +678,6 @@ def test_fork_requires_committed_model_and_source_and_restores_weight_version(tm
     args = SimpleNamespace(save=str(parent), rollout_data_dir=str(tmp_path / "pool"), rollout_queue_run_id="run")
     commit_checkpoint(args, step, model_args=[args])
     restore = SimpleNamespace(
-        _rollout_queue_fork=True,
         rollout_data_transport="straw",
         load=str(parent),
         save=str(tmp_path / "child"),
@@ -709,7 +760,7 @@ def test_training_commits_only_after_save_calls_return(tmp_path, monkeypatch, fa
     monkeypatch.setattr(module, "init_tracking", lambda args: None)
     monkeypatch.setattr(module, "finish_tracking", lambda args: None)
     monkeypatch.setattr(module, "create_placement_groups", lambda args: {"rollout": None})
-    monkeypatch.setattr(module, "create_rollout_manager", lambda *a: (manager, None))
+    monkeypatch.setattr(module, "create_rollout_manager", lambda *a, **kw: (manager, None))
     monkeypatch.setattr(module, "create_training_models", lambda *a: (actor, critic))
     marker = tmp_path / "rollout" / f"committed_{start}.json"
     if fail_at:
@@ -735,6 +786,7 @@ def test_training_commits_only_after_save_calls_return(tmp_path, monkeypatch, fa
 @pytest.mark.parametrize("mode", ["nccl", "disk", "release"])
 def test_disk_weight_updates_do_not_require_actor_return_values(tmp_path, monkeypatch, mode):
     from unittest.mock import Mock
+
     from slime.ray.actor_group import RayTrainGroup
 
     args = SimpleNamespace(
@@ -777,7 +829,8 @@ def test_disk_weight_updates_do_not_require_actor_return_values(tmp_path, monkey
 @pytest.mark.parametrize("mode", ["straw", "object-store", "critic-only", "debug-train", "debug-rollout"])
 def test_checkpoint_helper_preserves_save_modes(tmp_path, monkeypatch, mode):
     from unittest.mock import Mock
-    from slime.utils.rollout_checkpoint import save_checkpoint
+
+    from slime.data.checkpoint import save_checkpoint
 
     args = SimpleNamespace(
         rollout_data_transport="object-store" if mode == "object-store" else "straw",
@@ -814,7 +867,8 @@ def test_checkpoint_helper_preserves_save_modes(tmp_path, monkeypatch, mode):
 @pytest.mark.parametrize("omitted", ["no_save_optim", "no_save_rng"])
 def test_checkpoint_retains_critic_save_policy(tmp_path, omitted):
     import json
-    from slime.utils.rollout_checkpoint import commit_checkpoint, resolve_checkpoint
+
+    from slime.data.checkpoint import commit_checkpoint, resolve_checkpoint
 
     root, pool = tmp_path / "run", tmp_path / "pool"
     _checkpoint_fixture(root, 0, pool, queue=False)
@@ -829,10 +883,11 @@ def test_checkpoint_retains_critic_save_policy(tmp_path, omitted):
         resolve_checkpoint(_checkpoint_args(root, tmp_path / "child", step=0))
 
 
-def _checkpoint_fixture(root, step, pool, *, queue=True, checkpoint_args=None):
+def _checkpoint_fixture(root, step, pool, *, queue=True, restore_plan=None):
     """Write real joint-commit metadata around tiny model payload fixtures."""
     import json
-    from slime.utils.rollout_checkpoint import commit_checkpoint
+
+    from slime.data.checkpoint import commit_checkpoint
 
     model = root / f"iter_{step:07d}"
     model.mkdir(parents=True)
@@ -844,9 +899,7 @@ def _checkpoint_fixture(root, step, pool, *, queue=True, checkpoint_args=None):
         for name in ("queue_state", "builder_state"):
             (rollout / f"{name}_{step}.json").write_text(json.dumps({"test": name}))
         args = SimpleNamespace(save=str(root), rollout_data_dir=str(pool), rollout_queue_run_id="rollout")
-        if checkpoint_args is not None:
-            args._checkpoint_plan = checkpoint_args._checkpoint_plan
-        commit_checkpoint(args, step, model_args=[args])
+        commit_checkpoint(args, step, model_args=[args], restore_plan=restore_plan)
 
 
 def _checkpoint_args(load, save, *, step=None):
@@ -857,14 +910,13 @@ def _checkpoint_args(load, save, *, step=None):
         ckpt_step=step,
         start_rollout_id=None,
         rollout_data_dir=None,
-        _rollout_queue_fork=False,
-        _rollout_queue_resume=False,
     )
 
 
 def test_automatic_checkpoint_branches_repeat_save_and_resume_current(tmp_path):
     import json
-    from slime.utils.rollout_checkpoint import resolve_checkpoint
+
+    from slime.data.checkpoint import resolve_checkpoint
 
     root, pool = tmp_path / "run", tmp_path / "pool"
     _checkpoint_fixture(root, 1, pool)
@@ -873,12 +925,12 @@ def test_automatic_checkpoint_branches_repeat_save_and_resume_current(tmp_path):
     branches = []
     for _ in range(2):
         args = _checkpoint_args(root, root, step=1)
-        resolve_checkpoint(args)
+        plan_args = resolve_checkpoint(args)
         assert args.ckpt_step == 1 and args.start_rollout_id == 2
-        assert args._rollout_queue_fork and not args._rollout_queue_resume
+        assert (plan_args.mode == "snapshot") and not (plan_args.mode == "resume")
         destination = Path(args.save)
         assert destination.parent == root / "branches" and destination not in branches
-        with closing(RolloutQueueController(args)):
+        with closing(RolloutQueueController(args, restore_plan=plan_args)):
             assert json.loads((root / "rollout/current.json").read_text())["directory"] == str(destination)
             _checkpoint_fixture(destination, 2, pool)
         branches.append(destination)
@@ -894,14 +946,14 @@ def test_automatic_checkpoint_branches_repeat_save_and_resume_current(tmp_path):
 
 
 def test_manual_branch_and_commit_selection_exclude_abandoned_future(tmp_path):
-    from slime.utils.rollout_checkpoint import resolve_checkpoint
+    from slime.data.checkpoint import resolve_checkpoint
 
     root, pool = tmp_path / "run", tmp_path / "pool"
     _checkpoint_fixture(root, 1, pool)
     _checkpoint_fixture(root, 3, pool)
     fork = _checkpoint_args(root, root, step=1)
-    resolve_checkpoint(fork)
-    with closing(RolloutQueueController(fork)):
+    plan_fork = resolve_checkpoint(fork)
+    with closing(RolloutQueueController(fork, restore_plan=plan_fork)):
         _checkpoint_fixture(Path(fork.save), 2, pool)
     with pytest.raises(ValueError, match="No committed"):
         resolve_checkpoint(_checkpoint_args(root, tmp_path / "other", step=3))
@@ -916,7 +968,7 @@ def test_manual_branch_and_commit_selection_exclude_abandoned_future(tmp_path):
 
 
 def test_edited_tracker_rolls_back_and_explicit_step_takes_precedence(tmp_path):
-    from slime.utils.rollout_checkpoint import resolve_checkpoint
+    from slime.data.checkpoint import resolve_checkpoint
 
     root, pool = tmp_path / "run", tmp_path / "pool"
     for step in (0, 1, 2):
@@ -926,11 +978,11 @@ def test_edited_tracker_rolls_back_and_explicit_step_takes_precedence(tmp_path):
     resolve_checkpoint(args)
     assert args.ckpt_step == 0 and args.start_rollout_id == 1
     explicit = _checkpoint_args(root, root, step=1)
-    resolve_checkpoint(explicit)
+    plan_explicit = resolve_checkpoint(explicit)
     assert explicit.ckpt_step == 1
-    with closing(RolloutQueueController(explicit)):
+    with closing(RolloutQueueController(explicit, restore_plan=plan_explicit)):
         assert (root / "latest_checkpointed_iteration.txt").read_text() == "1"
-        _checkpoint_fixture(Path(explicit.save), 2, pool, checkpoint_args=explicit)
+        _checkpoint_fixture(Path(explicit.save), 2, pool, restore_plan=plan_explicit)
     assert (root / "latest_checkpointed_iteration.txt").read_text() == "2"
     # A normal restart selects the child, without treating its parent's model
     # tracker (at the same logical root) as an instruction to leave the branch.
@@ -942,7 +994,7 @@ def test_edited_tracker_rolls_back_and_explicit_step_takes_precedence(tmp_path):
     resolve_checkpoint(edited)
     assert edited.ckpt_step == 1 and edited.load == str(root)
     # Users can also edit a physical branch's tracker.
-    _checkpoint_fixture(Path(explicit.save), 3, pool, checkpoint_args=explicit)
+    _checkpoint_fixture(Path(explicit.save), 3, pool, restore_plan=plan_explicit)
     (Path(explicit.save) / "latest_checkpointed_iteration.txt").write_text("2")
     physical = _checkpoint_args(explicit.save, tmp_path / "physical")
     resolve_checkpoint(physical)
@@ -954,15 +1006,15 @@ def test_edited_tracker_rolls_back_and_explicit_step_takes_precedence(tmp_path):
 
 
 def test_edited_tracker_with_missing_queue_snapshot_starts_empty(tmp_path):
-    from slime.utils.rollout_checkpoint import resolve_checkpoint
+    from slime.data.checkpoint import resolve_checkpoint
 
     root, pool = tmp_path / "run", tmp_path / "pool"
     _checkpoint_fixture(root, 1, pool, queue=False)
     _checkpoint_fixture(root, 2, pool)
     (root / "latest_checkpointed_iteration.txt").write_text("1")
     args = _checkpoint_args(root, root)
-    resolve_checkpoint(args)
-    assert args.ckpt_step == 1 and args._rollout_queue_empty_restore
+    plan_args = resolve_checkpoint(args)
+    assert args.ckpt_step == 1 and (plan_args.mode == "empty")
     assert args.update_weight_start_version == 2
     (root / "latest_checkpointed_iteration.txt").write_text("0")
     with pytest.raises(ValueError, match="No committed"):
@@ -970,13 +1022,13 @@ def test_edited_tracker_with_missing_queue_snapshot_starts_empty(tmp_path):
 
 
 def test_branch_without_first_commit_recovers_its_parent(tmp_path):
-    from slime.utils.rollout_checkpoint import resolve_checkpoint
+    from slime.data.checkpoint import resolve_checkpoint
 
     parent, child = tmp_path / "parent", tmp_path / "child"
     _checkpoint_fixture(parent, 7, tmp_path / "pool")
     args = _checkpoint_args(parent, child, step=7)
-    resolve_checkpoint(args)
-    with closing(RolloutQueueController(args)):
+    plan_args = resolve_checkpoint(args)
+    with closing(RolloutQueueController(args, restore_plan=plan_args)):
         pass  # Crash before the child has produced a complete checkpoint.
     again = _checkpoint_args(child, child)
     resolve_checkpoint(again)
@@ -985,21 +1037,21 @@ def test_branch_without_first_commit_recovers_its_parent(tmp_path):
 
 
 def test_initial_run_recovers_wal_without_queue_flags(tmp_path):
-    from slime.utils.rollout_checkpoint import resolve_checkpoint
+    from slime.data.checkpoint import resolve_checkpoint
 
     root = tmp_path / "run"
     first = _checkpoint_args(None, root)
     first.hf_checkpoint = "initial-model"
-    resolve_checkpoint(first)
+    plan_first = resolve_checkpoint(first)
     first.rollout_data_dir = str(root / "rollout_data")
-    with closing(RolloutQueueController(first)):
+    with closing(RolloutQueueController(first, restore_plan=plan_first)):
         pass
     for load in (root, None):
         again = _checkpoint_args(load, root)
         again.hf_checkpoint = "initial-model"
-        resolve_checkpoint(again)
-        assert again._rollout_queue_resume and not again._rollout_queue_fork
-        assert again._rollout_queue_id == first._rollout_queue_id
+        plan_again = resolve_checkpoint(again)
+        assert (plan_again.mode == "resume") and not (plan_again.mode == "snapshot")
+        assert (plan_again.queue_id) == (plan_first.queue_id)
         assert again.load is None and again.save == first.save
         assert again.rollout_data_dir == first.rollout_data_dir
     changed = _checkpoint_args(root, root)
@@ -1009,36 +1061,36 @@ def test_initial_run_recovers_wal_without_queue_flags(tmp_path):
 
 
 def test_checkpoint_directory_lock_and_stale_selection(tmp_path):
-    from slime.utils.rollout_checkpoint import resolve_checkpoint
+    from slime.data.checkpoint import resolve_checkpoint
 
     root = tmp_path / "run"
     _checkpoint_fixture(root, 1, tmp_path / "pool")
     first, stale = (_checkpoint_args(root, root) for _ in range(2))
-    resolve_checkpoint(first)
-    resolve_checkpoint(stale)
-    with closing(RolloutQueueController(first)):
+    plan_first = resolve_checkpoint(first)
+    plan_stale = resolve_checkpoint(stale)
+    with closing(RolloutQueueController(first, restore_plan=plan_first)):
         with pytest.raises(RuntimeError, match="Another training job"):
-            with closing(RolloutQueueController(stale)):
+            with closing(RolloutQueueController(stale, restore_plan=plan_stale)):
                 pytest.fail("Concurrent job acquired the save directory")
     with pytest.raises(RuntimeError, match="changed during startup"):
-        with closing(RolloutQueueController(stale)):
+        with closing(RolloutQueueController(stale, restore_plan=plan_stale)):
             pytest.fail("Stale selection replaced the current branch")
     # Both failed constructors must release their descriptors, even while their
     # exceptions may still be retained by the caller.
     again = _checkpoint_args(root, root)
-    resolve_checkpoint(again)
-    with closing(RolloutQueueController(again)):
+    plan_again = resolve_checkpoint(again)
+    with closing(RolloutQueueController(again, restore_plan=plan_again)):
         pass
 
 
 @pytest.mark.parametrize("stage", ["publication", "coordinator", "after_coordinator"])
 def test_checkpoint_lock_released_when_controller_initialization_fails(tmp_path, monkeypatch, stage):
-    from slime.rollout import queue_data_source
-    from slime.utils.rollout_checkpoint import resolve_checkpoint
+    from slime.data import queue_data_source
+    from slime.data.checkpoint import resolve_checkpoint
 
     root = tmp_path / "run"
     args = _checkpoint_args(None, root)
-    resolve_checkpoint(args)
+    plan_args = resolve_checkpoint(args)
 
     def fail(*args, **kwargs):
         raise OSError("interrupted controller initialization")
@@ -1051,55 +1103,56 @@ def test_checkpoint_lock_released_when_controller_initialization_fails(tmp_path,
         else:
             patch.setattr(RolloutQueueController, "_start_gc", fail)
         with pytest.raises(OSError, match="interrupted controller initialization") as error:
-            RolloutQueueController(args)
+            RolloutQueueController(args, restore_plan=plan_args)
     # Keep the failed constructor's traceback alive: release cannot rely on GC.
     assert error.value.__traceback__ is not None
     again = _checkpoint_args(None, root)
-    resolve_checkpoint(again)
-    with closing(RolloutQueueController(again)):
+    plan_again = resolve_checkpoint(again)
+    with closing(RolloutQueueController(again, restore_plan=plan_again)):
         pass
 
 
 def test_checkpoint_lock_covers_cleanup_and_releases_on_seal_failure(tmp_path, monkeypatch):
-    from slime.utils.rollout_checkpoint import resolve_checkpoint
+    from slime.data.checkpoint import resolve_checkpoint
 
     root = tmp_path / "run"
     args = _checkpoint_args(None, root)
-    resolve_checkpoint(args)
-    controller = RolloutQueueController(args)
+    plan_args = resolve_checkpoint(args)
+    controller = RolloutQueueController(args, restore_plan=plan_args)
     again = _checkpoint_args(None, root)
-    resolve_checkpoint(again)
+    plan_again = resolve_checkpoint(again)
 
     def fail_seal():
         with pytest.raises(RuntimeError, match="Another training job"):
-            RolloutQueueController(again)
+            RolloutQueueController(again, restore_plan=plan_again)
         raise OSError("seal failed")
 
     with monkeypatch.context() as patch:
         patch.setattr(controller.store, "seal", fail_seal)
         with pytest.raises(OSError, match="seal failed"):
             controller.close()
-    with closing(RolloutQueueController(again)):
+    with closing(RolloutQueueController(again, restore_plan=plan_again)):
         pass
 
 
 def test_checkpoint_lock_released_when_controller_process_is_killed(tmp_path):
     import select
-    from slime.utils.rollout_checkpoint import resolve_checkpoint
+
+    from slime.data.checkpoint import resolve_checkpoint
 
     root = tmp_path / "run"
     args = _checkpoint_args(None, root)
-    resolve_checkpoint(args)
+    plan_args = resolve_checkpoint(args)
     process = subprocess.Popen(
         [
             sys.executable,
             "-c",
             """
 import pickle, sys
-from slime.rollout.queue_data_source import RolloutQueueController
+from slime.data.queue_data_source import RolloutQueueController
 
-args = pickle.load(sys.stdin.buffer)
-controller = RolloutQueueController(args)
+args, plan_args = pickle.load(sys.stdin.buffer)
+controller = RolloutQueueController(args, restore_plan=plan_args)
 print("ready", flush=True)
 sys.stdin.buffer.read(1)
 """,
@@ -1109,14 +1162,14 @@ sys.stdin.buffer.read(1)
         stderr=subprocess.PIPE,
     )
     try:
-        pickle.dump(args, process.stdin)
+        pickle.dump((args, plan_args), process.stdin)
         process.stdin.flush()
         assert select.select([process.stdout], [], [], 60)[0], "Controller did not start"
         assert process.stdout.readline() == b"ready\n"
         again = _checkpoint_args(None, root)
-        resolve_checkpoint(again)
+        plan_again = resolve_checkpoint(again)
         with pytest.raises(RuntimeError, match="Another training job"):
-            RolloutQueueController(again)
+            RolloutQueueController(again, restore_plan=plan_again)
     finally:
         process.kill()
         process.wait(timeout=30)
@@ -1124,13 +1177,13 @@ sys.stdin.buffer.read(1)
         process.stdout.close()
         process.stderr.close()
     # No close() ran in the killed process; the kernel must release its lock.
-    with closing(RolloutQueueController(again)):
+    with closing(RolloutQueueController(again, restore_plan=plan_again)):
         pass
 
 
 @pytest.mark.parametrize("has_cursor", [False, True])
 def test_missing_queue_snapshot_starts_empty_without_touching_old_model(tmp_path, has_cursor, caplog):
-    from slime.utils.rollout_checkpoint import resolve_checkpoint
+    from slime.data.checkpoint import resolve_checkpoint
 
     root = tmp_path / "legacy"
     _checkpoint_fixture(root, 7, tmp_path / "pool", queue=False)
@@ -1139,24 +1192,24 @@ def test_missing_queue_snapshot_starts_empty_without_touching_old_model(tmp_path
         torch.save({"sample_offset": 30}, cursor)
     before = (root / "iter_0000007/weights.pt").read_bytes()
     args = _checkpoint_args(root, root, step=7)
-    resolve_checkpoint(args)
-    assert args._rollout_queue_empty_restore and not args._rollout_queue_fork
-    assert args._rollout_dataset_cursor == (str(cursor) if has_cursor else None)
+    plan_args = resolve_checkpoint(args)
+    assert (plan_args.mode == "empty") and not (plan_args.mode == "snapshot")
+    assert plan_args.dataset_cursor == (str(cursor) if has_cursor else None)
     assert args.start_rollout_id == 8 and args.load == str(root)
     assert Path(args.save).parent == root / "branches"
     assert "new empty queue" in caplog.text
     if not has_cursor:
         assert "offset 0" in caplog.text
-    with closing(RolloutQueueController(args)):
+    with closing(RolloutQueueController(args, restore_plan=plan_args)):
         pass
     resumed = _checkpoint_args(root, root)
-    resolve_checkpoint(resumed)
-    assert resumed._rollout_queue_empty_restore and resumed.ckpt_step == 7
+    plan_resumed = resolve_checkpoint(resumed)
+    assert (plan_resumed.mode == "empty") and resumed.ckpt_step == 7
     assert (root / "iter_0000007/weights.pt").read_bytes() == before
 
 
 def test_missing_model_or_broken_queue_snapshot_never_falls_back(tmp_path):
-    from slime.utils.rollout_checkpoint import resolve_checkpoint
+    from slime.data.checkpoint import resolve_checkpoint
 
     root = tmp_path / "legacy"
     with pytest.raises(FileNotFoundError, match="model checkpoint tracker"):

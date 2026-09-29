@@ -24,7 +24,7 @@ def test_missing_straw_startup_hint(monkeypatch, caplog, transport):
     else:
         module.slime_validate_args(args)
         assert args.rollout_data_transport == transport
-        assert args.data_source_path == "slime.rollout.data_source.RolloutDataSourceWithBuffer"
+        assert args.data_source_path == "slime.data.data_source.RolloutDataSourceWithBuffer"
         assert args.rollout_data_dir is None
         assert f"continuing with {transport}" in caplog.text
         assert "pip install straw-queue" in caplog.text
@@ -45,12 +45,12 @@ def _run_default_without_straw():
     import ray
     import torch
 
+    from slime.data.batch_builder import BatchBuilder
+    from slime.data.checkpoint import save_checkpoint
+    from slime.data.transport import pack_rollout_group, pack_rollout_payload, rollout_store
     from slime.rollout import fully_async_rollout
     from slime.rollout.base_types import finalize_rollout_groups
-    from slime.rollout.batch_builder import BatchBuilder
     from slime.utils.data import process_rollout_data
-    from slime.utils.rollout_checkpoint import save_checkpoint
-    from slime.utils.rollout_transport import pack_rollout_group, pack_rollout_payload, rollout_store
     from slime.utils.types import Sample
 
     args = SimpleNamespace(

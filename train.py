@@ -1,13 +1,13 @@
 import ray
 
+from slime.data.checkpoint import save_checkpoint
 from slime.observability.logging_utils import configure_logger, finish_tracking, init_tracking
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.misc import should_run_periodic_action
-from slime.utils.rollout_checkpoint import save_checkpoint
 
 
-def train(args):
+def train(args, restore_plan=None):
     configure_logger()
     release_train = args.release_train
 
@@ -17,7 +17,7 @@ def train(args):
 
     # create the rollout manager, with sglang engines inside.
     # need to initialize rollout manager first to calculate num_rollout
-    rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"])
+    rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"], restore_plan=restore_plan)
 
     actor_model, critic_model = create_training_models(args, pgs, rollout_manager)
 
@@ -76,7 +76,15 @@ def train(args):
         if release_train or should_run_periodic_action(
             rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout
         ):
-            save_checkpoint(args, rollout_id, actor_model, critic_model, rollout_manager, actor_trains=actor_trains)
+            save_checkpoint(
+                args,
+                rollout_id,
+                actor_model,
+                critic_model,
+                rollout_manager,
+                actor_trains=actor_trains,
+                restore_plan=restore_plan,
+            )
 
         offload_train(actor_trains)
         if args.offload_rollout and not release_train:
@@ -99,5 +107,5 @@ def train(args):
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    train(args)
+    args, restore_plan = parse_args(return_restore_plan=True)
+    train(args, restore_plan)

@@ -53,7 +53,7 @@ def rollout_store(args):
             name="straw",
         ) from error
 
-    from slime.rollout.queue_codec import CODECS, SampleCodec
+    from slime.data.codec import CODECS, SampleCodec
 
     root = str(Path(args.rollout_data_dir).resolve())
     run_id = getattr(args, "rollout_queue_run_id", None) or "rollout"
@@ -95,7 +95,7 @@ class DiskPayloadRef:
 
         from straw.tensor import MAX_PUBLICATION_BYTES, MAX_TENSOR_BYTES
 
-        from slime.rollout.queue_codec import CODECS, SampleCodec
+        from slime.data.codec import CODECS, SampleCodec
 
         store = SharedFilesystemStore(
             root or self.root,
@@ -154,6 +154,7 @@ def inherit_queue_context(source, output):
         "_queue_source_positions",
         "_queue_resume_origin",
         "_queue_generation_start",
+        "_queue_branch",
         "queue_policy_segments",
         "queue_generation_requests",
     )
@@ -169,12 +170,12 @@ def inherit_queue_context(source, output):
     return output
 
 
-def record_generation_provenance(group, args):
+def record_generation_provenance(group):
     from slime.rollout.base_types import iter_samples
 
     for sample in iter_samples(group):
         start = getattr(sample, "_queue_generation_start", None)
-        branch = getattr(args, "_rollout_queue_branch", None)
+        branch = getattr(sample, "_queue_branch", None)
         if start is not None and branch is not None and len(sample.tokens) > start:
             segments = list(getattr(sample, "queue_policy_segments", []))
             if not segments and start:
@@ -191,21 +192,20 @@ def record_generation_provenance(group, args):
             sample._queue_generation_start = len(sample.tokens)
 
 
-def pack_rollout_group(group, args, rollout_id):
+def pack_rollout_group(group, args, rollout_id, *, controller=None):
     if args.rollout_data_transport != "straw":
         return group
     from slime.rollout.base_types import iter_samples
 
     first = next(iter_samples(group))
     lease = group_lease(group)
-    record_generation_provenance(group, args)
+    record_generation_provenance(group)
     metadata = {"task_id": lease.task_id, "attempt_id": lease.attempt_id} if lease else {}
     ref = pack_rollout_payload(
         group, args, rollout_id, metadata=metadata, submission_id=f"group:{lease.attempt_id}" if lease else None
     )
     receipt = None
     if lease:
-        controller = getattr(args, "_rollout_queue_controller", None)
         if controller is None:
             raise ValueError("Queue group has a lease but no coordinator binding")
         receipt = ray.get(controller.complete.remote(lease, ref.manifest))
@@ -238,13 +238,13 @@ def release_rollout_publications(group, args):
                 release_tensor_publications(store, tensors)
 
 
-def discard_rollout_group(group, args, reason="dynamic filter"):
+def discard_rollout_group(group, args, reason="dynamic filter", *, controller=None):
     lease = group_lease(group)
     release_rollout_publications(group, args)
     # Release staging while the task/accepted-result owner still protects any
     # previously adopted continuation, then acknowledge that reading is done.
     if lease:
-        ray.get(args._rollout_queue_controller.reject.remote(lease, reason))
+        ray.get(controller.reject.remote(lease, reason))
     else:
         from slime.rollout.base_types import iter_samples
 
@@ -253,7 +253,7 @@ def discard_rollout_group(group, args, reason="dynamic filter"):
         }
         if positions:
             decision = pack_rollout_payload({"positions": sorted(positions), "reason": reason}, args, -1)
-            ray.get(args._rollout_queue_controller.record_dispositions.remote(decision.manifest))
+            ray.get(controller.record_dispositions.remote(decision.manifest))
 
 
 def load_rollout_samples(value):
@@ -287,18 +287,20 @@ def pack_rollout_payload(value, args, rollout_id, *, metadata=None, submission_i
     return DiskPayloadRef(ref, str(store.backend.root))
 
 
-async def publish_rollout_async(value, args, rollout_id, *, group=False):
-    return await run_rollout_io(args, pack_rollout_group if group else pack_rollout_payload, value, args, rollout_id)
+async def publish_rollout_async(value, args, rollout_id, *, group=False, controller=None):
+    if group:
+        return await run_rollout_io(args, pack_rollout_group, value, args, rollout_id, controller=controller)
+    return await run_rollout_io(args, pack_rollout_payload, value, args, rollout_id)
 
 
-async def run_rollout_io(args, function, *values):
+async def run_rollout_io(args, function, *values, **kwargs):
     """Bound the executor backlog before submitting encoding/sync work."""
     loop = asyncio.get_running_loop()
     key = (os.getpid(), loop)
     if key not in _async_limits:
         _async_limits[key] = asyncio.Semaphore(getattr(args, "rollout_io_concurrency", 4))
     async with _async_limits[key]:
-        pending = asyncio.create_task(asyncio.to_thread(function, *values))
+        pending = asyncio.create_task(asyncio.to_thread(function, *values, **kwargs))
         try:
             return await asyncio.shield(pending)
         except asyncio.CancelledError:
@@ -319,23 +321,22 @@ def unpack_rollout_payload(value):
     return value
 
 
-def accept_raw_rollout(output, args, rollout_id):
-    """Validate accepted producers, or commit a legacy collection once.
+def accept_raw_rollout(output, args, rollout_id, *, controller):
+    """Validate an accepted collection, or persist and accept returned Samples.
 
     A small wrapper adds task provenance to existing sealed collections without
     rewriting their Sample or tensor payloads.
     """
     from straw.protocol import Lease
 
-    controller = args._rollout_queue_controller
     if isinstance(output, RawRolloutRef):
         receipt = ray.get(controller.accepted.remote(output.receipt))
         if output.manifest != receipt.result_ref:
             raise ValueError("Raw rollout manifest differs from its accepted receipt")
         return output
-    # Legacy custom producers may borrow queue inputs and return Samples without
-    # publishing task results themselves. Complete those inputs before accepting
-    # the compatibility collection, so closing the reader cannot requeue them.
+    # Custom producers can return Samples without publishing task results.
+    # Complete their borrowed inputs before accepting the collection, so closing
+    # the reader cannot requeue work that has already finished.
     from slime.rollout.base_types import iter_samples
 
     borrowed = {}
@@ -349,7 +350,7 @@ def accept_raw_rollout(output, args, rollout_id):
                 borrowed.setdefault(lease, []).append(sample)
     for lease, samples in borrowed.items():
         if ray.get(controller.result.remote(lease)) is None:
-            pack_rollout_group(samples, args, rollout_id)
+            pack_rollout_group(samples, args, rollout_id, controller=controller)
     lease = ray.get(controller.begin_collection.remote(str(rollout_id)))
     store, codec, lock = rollout_store(args)
     with lock:

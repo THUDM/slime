@@ -109,11 +109,7 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
             checkpointing_context=checkpointing_context,
             skip_load_to_model_and_opt=False,
         )
-        if (
-            (getattr(args, "_rollout_queue_fork", False) or hasattr(args, "_rollout_model_step"))
-            and not args.finetune
-            and result[0] != args.ckpt_step
-        ):
+        if getattr(args, "ckpt_step", None) is not None and not args.finetune and result[0] != args.ckpt_step:
             raise ValueError(
                 f"Model loaded step {result[0]}, but checkpoint restoration requires step {args.ckpt_step}. "
                 "The Megatron checkpoint loader must honor --ckpt-step (including zero)."
