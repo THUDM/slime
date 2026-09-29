@@ -87,8 +87,10 @@ prefix with the remaining token budget under the new weights. A finished
 sample can therefore contain tokens from several policy versions, recorded in
 `Sample.weight_versions` and summarized by the `rollout/staleness/*` metrics
 (`multi_version_frac` is the fraction of such samples). Either correct those
-tokens with importance sampling (`--use-tis`) or keep only the latest segment
-with `--partial-rollout --mask-offpolicy-in-partial-rollout`.
+tokens with importance sampling (`--use-tis`, e.g. the FlashREINFORCE trust
+region `slime.backends.megatron_utils.loss.binary_kl_trust_region_function`)
+or keep only the latest segment with
+`--partial-rollout --mask-offpolicy-in-partial-rollout`.
 
 This continuation applies to slime's `generate` and `generate_streaming`, for
 text and multimodal samples (a resumed multimodal request resends the
@@ -96,9 +98,38 @@ processor-expanded prompt ids plus the partial response with its images).
 Custom generate functions decide for themselves how to handle an `ABORTED`
 sample.
 
+## Forming Batches Like molt
+
+`--fully-async-pool-size N` switches to `PooledRolloutWorker`, which forms
+batches the way NVIDIA molt's asynchronous trainer does:
+
+* The pool holds `N` rollout groups, counting the ones still generating and
+  the finished ones not yet in a batch.
+* A batch is formed only while one of `--fully-async-max-queued-batches`
+  slots is free (default 1). Training frees a slot when it takes a batch,
+  before training on it, so at most that many batches are formed ahead.
+* While forming a batch, the worker refills the pool to `N` and takes one
+  finished group, until the batch holds `rollout_batch_size` groups. When
+  several groups have finished, it takes them in a random order fixed at
+  dispatch (molt's `ray.wait` returns an arbitrary ready one). Between
+  batches nothing is dispatched, so when training is the bottleneck the pool
+  fills with finished groups and the engines idle.
+* A group aborted by a weight update is resent at once and keeps its place in
+  the pool: SGLang holds the request until the engines continue.
+* `--fully-async-drain-each-epoch` stops refilling once every prompt of the
+  epoch is dispatched, drains the pool into a smaller last batch, and starts
+  the next epoch with the following batch. The smaller batch is trained as one
+  update: its loss is averaged over its own samples and the learning-rate
+  schedule advances one step.
+* Batch formation pauses while an evaluation runs.
+
+Keep `--sglang-server-concurrency` times the number of engines at least `N`,
+so that the request semaphore does not cap the pool.
+[`examples/flash_reinforce`](../flash_reinforce/README.md) uses this mode.
+
 ## Limitations
 
 * Distributed fully-async (`--rollout-data-transport straw`) does not support
-  evaluation yet.
+  evaluation or `--fully-async-pool-size` yet.
 * Ordering across rollouts is best-effort — within a rollout, groups are
   sorted by index before being handed to training.

@@ -192,6 +192,87 @@ def test_validation_accepts_flash_reinforce_recipe(monkeypatch):
     assert a.global_batch_size == 4
 
 
+def test_cli_parses_molt_scheduling_options(monkeypatch):
+    from test_megatron_argument_validation import load_slime_arguments_module
+
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    module.get_slime_extra_args_provider()(parser)
+    default = parser.parse_args(["--rollout-batch-size", "1"])
+    assert default.fully_async_pool_size is None and default.fully_async_max_queued_batches == 1
+    assert not default.fully_async_drain_each_epoch and not default.apply_wd_to_all_params
+    configured = parser.parse_args(
+        [
+            "--rollout-batch-size",
+            "1",
+            "--fully-async-pool-size",
+            "512",
+            "--fully-async-max-queued-batches",
+            "8",
+            "--fully-async-drain-each-epoch",
+            "--apply-wd-to-all-params",
+        ]
+    )
+    assert configured.fully_async_pool_size == 512 and configured.fully_async_max_queued_batches == 8
+    assert configured.fully_async_drain_each_epoch and configured.apply_wd_to_all_params
+
+
+@pytest.mark.parametrize(
+    "overrides,message",
+    [
+        (dict(fully_async_drain_each_epoch=True), "requires --fully-async-pool-size"),
+        (dict(fully_async_pool_size=0), "must be positive"),
+        (dict(fully_async_pool_size=8, fully_async_max_queued_batches=0), "must be positive"),
+    ],
+)
+def test_validation_rejects_inconsistent_scheduling_options(monkeypatch, overrides, message):
+    from test_megatron_argument_validation import load_slime_arguments_module, make_slime_validate_args
+
+    module = load_slime_arguments_module(monkeypatch)
+    with pytest.raises(ValueError, match=message):
+        module.slime_validate_args(make_slime_validate_args(**overrides))
+
+
+def test_validation_accepts_molt_scheduling(monkeypatch):
+    from test_megatron_argument_validation import load_slime_arguments_module, make_slime_validate_args
+
+    module = load_slime_arguments_module(monkeypatch)
+    module.slime_validate_args(
+        make_slime_validate_args(
+            fully_async_pool_size=512, fully_async_max_queued_batches=8, fully_async_drain_each_epoch=True
+        )
+    )
+
+
+def test_a_rollout_smaller_than_one_step_is_trained_as_one_step(monkeypatch):
+    """An epoch tail (fewer rollouts than global_batch_size) becomes one smaller step."""
+    from slime.rollout import batch_builder
+
+    builder = batch_builder.BatchBuilder.__new__(batch_builder.BatchBuilder)
+    builder.args = Namespace(
+        global_batch_size=4,
+        micro_batch_size=1,
+        use_dynamic_batch_size=True,
+        max_tokens_per_gpu=64,
+        balance_data=False,
+        balance_by_flops=False,
+        rollout_data_transport="object-store",
+    )
+    builder.train_parallel_config = {
+        "dp_size": 1,
+        "cp_size": 1,
+        "vpp_size": 1,
+        "microbatch_group_size_per_vp_stage": 1,
+    }
+    monkeypatch.setattr(batch_builder.ray, "put", lambda data, **kwargs: data)
+    monkeypatch.setattr(batch_builder, "tensorize_rollout_data_for_training", lambda data: None)
+    data = {"tokens": [[1, 2, 3]] * 3, "rollout_ids": [0, 1, 2], "response_lengths": [1] * 3}
+
+    (rank,) = builder.split_by_dp(data)
+    assert rank.inner["global_batch_sizes"] == [3]
+    assert rank.inner["partition"] == [0, 1, 2]
+
+
 # ------------------------------- trust region -------------------------------
 
 

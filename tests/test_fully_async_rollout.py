@@ -465,5 +465,245 @@ def test_evaluation_runs_on_the_worker_event_loop(monkeypatch):
     assert seen["loop"] is worker.event_loop
 
 
+# --- Batches formed like molt's asynchronous trainer (--fully-async-pool-size) ---
+
+
+class _PromptSource:
+    """Like RolloutDataSource: one fresh group per prompt, wrapping into the next epoch."""
+
+    def __init__(self, size=1000):
+        self.dataset = list(range(size))
+        self.sample_offset = 0
+        self.epoch_id = 0
+        self.dispatched = 0
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def get_samples(self, n):
+        groups = []
+        for _ in range(n):
+            if self.sample_offset == len(self.dataset):
+                self.epoch_id += 1
+                self.sample_offset = 0
+            sample = _pending(self.dispatched)
+            sample.metadata = {"epoch": self.epoch_id}
+            groups.append([sample])
+            self.sample_offset += 1
+            self.dispatched += 1
+        return groups
+
+
+class _PoolGenerateState:
+    def __init__(self, args):
+        self.sampling_params = {"max_new_tokens": 5}
+
+
+async def _finish_at_once(args, group, sampling_params, evaluation):
+    for sample in group:
+        sample.status = Sample.Status.COMPLETED
+    return group
+
+
+def _pooled_worker(monkeypatch, data_buffer, **overrides) -> fa.PooledRolloutWorker:
+    monkeypatch.setattr(fa, "GenerateState", _PoolGenerateState)
+    values = dict(
+        fully_async_pool_size=4,
+        fully_async_max_queued_batches=1,
+        fully_async_drain_each_epoch=False,
+        rollout_batch_size=2,
+        rollout_seed=0,
+        dynamic_sampling_filter_path=None,
+        rollout_data_transport="object-store",
+        rollout_sample_filter_path=None,
+    )
+    return fa.PooledRolloutWorker(_server_args(**(values | overrides)), data_buffer)
+
+
+@contextlib.contextmanager
+def _running(worker):
+    worker.start()
+    try:
+        yield worker
+    finally:
+        worker.stop()
+
+
+def _wait_until(predicate, timeout=5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+class _Keys:
+    """Collection-order keys handed out in dispatch order."""
+
+    def __init__(self, keys):
+        self.keys = list(keys)
+
+    def random(self):
+        return self.keys.pop(0)
+
+
+@pytest.mark.unit
+def test_pooled_worker_refills_only_while_forming_a_batch(monkeypatch):
+    monkeypatch.setattr(fa, "generate_and_rm_group", _finish_at_once)
+    source = _PromptSource()
+    worker = _pooled_worker(monkeypatch, source)
+    with _running(worker):
+        assert _wait_until(lambda: worker.formed.qsize() == 1)
+        time.sleep(0.2)
+        # Four prompts fill the pool and one refills it after the first rollout is taken. The
+        # second completes the batch; its slot is the only one, so nothing more is dispatched.
+        assert source.dispatched == 5 and worker.formed.qsize() == 1
+        groups, metrics = worker.next_batch()
+        assert len(groups) == 2
+        assert metrics["rollout/fully_async/queued_batches"] == 0
+        assert metrics["rollout/fully_async/pool_finished"] == 2
+        assert _wait_until(lambda: worker.formed.qsize() == 1)
+        time.sleep(0.2)
+        assert source.dispatched == 7
+
+
+@pytest.mark.unit
+def test_pooled_worker_takes_finished_rollouts_in_their_dispatch_key_order(monkeypatch):
+    monkeypatch.setattr(fa, "generate_and_rm_group", _finish_at_once)
+    worker = _pooled_worker(monkeypatch, _PromptSource())
+    worker._rng = _Keys([0.9, 0.1, 0.5, 0.3, 0.2, 0.7, 0.8, 0.6, 0.4])
+    with _running(worker):
+        first, _ = worker.next_batch()
+        second, _ = worker.next_batch()
+    # Prompts 0-3 fill the pool and finish: the lowest keys go first. Prompt 4 (key 0.2) refills
+    # the pool but has not finished when the first batch takes its second rollout.
+    assert sorted(group[0].index for group in first) == [1, 3]
+    assert sorted(group[0].index for group in second) == [2, 4]
+
+
+@pytest.mark.unit
+def test_pooled_worker_drains_each_epoch_into_a_smaller_last_batch(monkeypatch):
+    monkeypatch.setattr(fa, "generate_and_rm_group", _finish_at_once)
+    source = _PromptSource(size=7)
+    worker = _pooled_worker(monkeypatch, source, rollout_batch_size=3, fully_async_drain_each_epoch=True)
+    with _running(worker):
+        batches = [worker.next_batch() for _ in range(6)]
+
+    assert [len(groups) for groups, _ in batches] == [3, 3, 1, 3, 3, 1]
+    assert [metrics["rollout/fully_async/epoch_tail"] for _, metrics in batches] == [0, 0, 1, 0, 0, 1]
+    for epoch, chunk in enumerate((batches[:3], batches[3:])):
+        samples = [group[0] for groups, _ in chunk for group in groups]
+        # Every prompt of the epoch is trained once, and no batch mixes epochs.
+        assert len(samples) == 7 and {sample.metadata["epoch"] for sample in samples} == {epoch}
+
+
+@pytest.mark.unit
+def test_pooled_worker_drops_an_epoch_tail_smaller_than_the_data_parallel_size(monkeypatch):
+    monkeypatch.setattr(fa, "generate_and_rm_group", _finish_at_once)
+    worker = _pooled_worker(
+        monkeypatch,
+        _PromptSource(size=7),
+        rollout_batch_size=3,
+        fully_async_drain_each_epoch=True,
+        actor_num_nodes=1,
+        actor_num_gpus_per_node=2,
+    )
+    with _running(worker):
+        batches = [worker.next_batch() for _ in range(4)]
+    # The 1-rollout tail cannot give both data-parallel ranks a sample, so it is dropped.
+    assert [len(groups) for groups, _ in batches] == [3, 3, 3, 3]
+    assert [group[0].metadata["epoch"] for group in batches[2][0]] == [1, 1, 1]
+
+
+@pytest.mark.unit
+def test_pooled_worker_resumes_an_aborted_rollout_in_place(monkeypatch, fake_server):
+    monkeypatch.setattr(fa, "_ABORT_RETRY_DELAY", 0)
+    source = _PromptSource()
+    worker = _pooled_worker(monkeypatch, source, fully_async_pool_size=1, rollout_batch_size=1)
+    # The third reply serves the prompt dispatched once the batch is taken.
+    fake_server.replies.extend([_chunk([1, 2], "1", "abort"), _chunk([3], "2", "stop"), _chunk([4], "2", "stop")])
+    with _running(worker):
+        assert _wait_until(lambda: worker.formed.qsize() == 1)
+        # The aborted request was resent with its partial response, without taking a new prompt.
+        assert source.dispatched == 1 and len(fake_server.payloads) == 2 and fake_server.rewards == 1
+        (group,), _ = worker.next_batch()
+
+    (sample,) = group
+    assert fake_server.payloads[1]["input_ids"] == [11, 12, 13, 1, 2]
+    assert fake_server.payloads[1]["sampling_params"]["max_new_tokens"] == 3
+    assert sample.weight_versions == ["1", "2"]
+    assert sample.status == Sample.Status.COMPLETED and sample.reward == 1.0
+
+
+@pytest.mark.unit
+def test_pooled_worker_drops_a_failed_rollout_and_refills(monkeypatch):
+    async def generate(args, group, sampling_params, evaluation):
+        if group[0].index == 0:
+            raise RuntimeError("reward model down")
+        return await _finish_at_once(args, group, sampling_params, evaluation)
+
+    monkeypatch.setattr(fa, "generate_and_rm_group", generate)
+    worker = _pooled_worker(monkeypatch, _PromptSource())
+    with _running(worker):
+        groups, metrics = worker.next_batch()
+    assert 0 not in [group[0].index for group in groups] and len(groups) == 2
+    assert metrics["rollout/fully_async/failed_rollouts"] == 1
+
+
+@pytest.mark.unit
+def test_pooled_worker_applies_the_dynamic_filter(monkeypatch):
+    monkeypatch.setattr(fa, "generate_and_rm_group", _finish_at_once)
+
+    def keep_odd(args, group):
+        return DynamicFilterOutput(keep=group[0].index % 2 == 1, reason="even")
+
+    monkeypatch.setattr(fa, "load_function", lambda path: keep_odd)
+    worker = _pooled_worker(monkeypatch, _PromptSource(), dynamic_sampling_filter_path="test.keep_odd")
+    with _running(worker):
+        groups, metrics = worker.next_batch()
+    assert len(groups) == 2 and all(group[0].index % 2 == 1 for group in groups)
+    dropped = metrics["rollout/dynamic_filter/dropped_groups"]
+    assert dropped == metrics["rollout/dynamic_filter/drop_even"] >= 1
+    assert metrics["rollout/dynamic_filter/dropped_ratio"] == dropped / (dropped + 2)
+
+
+@pytest.mark.unit
+def test_pooled_worker_pauses_batch_formation_during_evaluation(monkeypatch):
+    monkeypatch.setattr(fa, "generate_and_rm_group", _finish_at_once)
+    worker = _pooled_worker(monkeypatch, _PromptSource(), rollout_batch_size=1, fully_async_max_queued_batches=10**6)
+    seen = {}
+
+    async def evaluation():
+        seen["loop"] = asyncio.get_running_loop()
+        seen["before"] = worker.formed.qsize()
+        await asyncio.sleep(0.3)
+        seen["after"] = worker.formed.qsize()
+        return "eval"
+
+    with _running(worker):
+        assert worker.evaluate(evaluation()) == "eval"
+        assert _wait_until(lambda: worker.formed.qsize() > seen["after"] + 5)
+    # A batch already being formed may finish, but no other starts while evaluating.
+    assert seen["after"] - seen["before"] <= 1
+    assert seen["loop"] is worker.event_loop
+
+
+@pytest.mark.unit
+def test_rollout_function_takes_a_formed_batch(monkeypatch):
+    from slime.rollout.base_types import RolloutFnTrainOutput
+
+    monkeypatch.setattr(fa, "generate_and_rm_group", _finish_at_once)
+    worker = _pooled_worker(monkeypatch, _PromptSource(), fully_async_max_queued_batches=2)
+    monkeypatch.setattr(fa, "_get_global_worker", lambda args, data_buffer: worker)
+    with _running(worker):
+        assert _wait_until(lambda: worker.formed.qsize() == 2)
+        output = fa.generate_rollout_fully_async(worker.args, 0, None)
+    assert isinstance(output, RolloutFnTrainOutput)
+    indices = [group[0].index for group in output.samples]
+    assert len(indices) == 2 and indices == sorted(indices)
+    assert output.metrics["rollout/fully_async/queued_batches"] == 1
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

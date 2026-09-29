@@ -486,6 +486,33 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--fully-async-pool-size",
+                type=int,
+                default=None,
+                help=(
+                    "Make slime.rollout.fully_async_rollout form batches like molt's asynchronous trainer: keep "
+                    "this many rollout groups in a pool, counting the ones generating and the finished ones not yet "
+                    "in a batch, and refill one per group taken, only while forming a batch. Unset keeps the default "
+                    "worker, which keeps --sglang-server-concurrency requests per engine in flight."
+                ),
+            )
+            parser.add_argument(
+                "--fully-async-max-queued-batches",
+                type=int,
+                default=1,
+                help="With --fully-async-pool-size: how many batches may be formed ahead of training.",
+            )
+            parser.add_argument(
+                "--fully-async-drain-each-epoch",
+                action="store_true",
+                default=False,
+                help=(
+                    "With --fully-async-pool-size: stop refilling the pool once every prompt of the epoch is "
+                    "dispatched, and end the epoch with a smaller batch of the remaining rollouts, trained as one "
+                    "update (molt's episodes)."
+                ),
+            )
+            parser.add_argument(
                 "--custom-generate-function-path",
                 type=str,
                 default=None,
@@ -1122,6 +1149,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Whether to use a stateless Adam optimizer that does not persist the first/second moment "
                     "estimates across steps. Requires --optimizer adam and --no-save-optim."
+                ),
+            )
+            parser.add_argument(
+                "--apply-wd-to-all-params",
+                action="store_true",
+                default=False,
+                help=(
+                    "Apply weight decay to every parameter. By default Megatron exempts biases and other "
+                    "one-dimensional parameters such as normalization weights."
                 ),
             )
             parser.add_argument(
@@ -1980,6 +2016,14 @@ def slime_validate_args(args):
                 "and prioritizes older weight versions within ready and partial groups"
             )
         resolve_rollout_data_dir(args)
+
+    if args.fully_async_pool_size is not None:
+        if args.fully_async_pool_size <= 0 or args.fully_async_max_queued_batches <= 0:
+            raise ValueError("--fully-async-pool-size and --fully-async-max-queued-batches must be positive")
+        if args.rollout_data_transport == "straw":
+            raise ValueError("--fully-async-pool-size does not support --rollout-data-transport straw")
+    elif args.fully_async_drain_each_epoch:
+        raise ValueError("--fully-async-drain-each-epoch requires --fully-async-pool-size")
 
     if args.save_interval is not None:
         assert args.save is not None, "'--save' is required when save_interval is set."
