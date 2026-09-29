@@ -111,8 +111,15 @@ def validate_rollout_id_annotated(node, depth=0):
 
 
 def load_debug_rollout_data(path_template, *, rollout_id: int, subsample_ratio=None) -> list[Sample]:
-    data = torch.load(path_template.format(rollout_id=rollout_id), weights_only=False)["samples"]
-    data = [Sample.from_dict(sample) for sample in data]
+    path = path_template.format(rollout_id=rollout_id)
+    if path.endswith(".straw.json"):
+        from slime.utils.rollout_archive import RolloutArchive
+
+        with RolloutArchive(path) as archive:
+            data = archive.load_samples()
+    else:
+        data = torch.load(path, weights_only=False)["samples"]
+        data = [Sample.from_dict(sample) for sample in data]
     if subsample_ratio is not None:
         original_num_rows = len(data)
         rough_subsample_num_rows = int(original_num_rows * subsample_ratio)
@@ -126,13 +133,20 @@ def load_debug_rollout_data(path_template, *, rollout_id: int, subsample_ratio=N
     return data
 
 
-def save_debug_rollout_data(path_template, data, *, rollout_id: int, evaluation: bool) -> None:
+def save_debug_rollout_data(path_template, data, *, rollout_id: int, evaluation: bool, args=None) -> None:
     if path_template is None:
         return
 
     path = Path(path_template.format(rollout_id=("eval_" if evaluation else "") + str(rollout_id)))
     logger.info(f"Save debug rollout data to {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
+
+    if str(path).endswith(".straw.json"):
+        from slime.utils.rollout_archive import RolloutArchive
+
+        samples = [sample for info in data.values() for sample in info["samples"]] if evaluation else data
+        RolloutArchive.save(path, samples, rollout_id=rollout_id, evaluation=evaluation, args=args)
+        return
 
     if evaluation:
         samples = [sample.to_dict() for info in data.values() for sample in info["samples"]]

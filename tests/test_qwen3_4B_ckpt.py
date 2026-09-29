@@ -62,8 +62,8 @@ def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
         ckpt_args += "--save-interval 2 "
         ckpt_args += "--async-save "
     elif mode == "load":
-        ckpt_args += f"--load {checkpoint_dir_arg} "
-        ckpt_args += "--ckpt-step 1 --rollout-queue-resume "
+        ckpt_args += f"--load {checkpoint_dir_arg} --save {checkpoint_dir_arg} "
+        ckpt_args += "--ckpt-step 1 "
 
     rollout_args = (
         "--rollout-data-transport straw "

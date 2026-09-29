@@ -98,7 +98,7 @@ def test_task_claims_and_producer_cursor_survive_recovery(source_factory):
     state = controller.queue.producer_state("dataset")
     controller.close()
     args = copy.copy(source_factory.args)
-    args.rollout_queue_resume = True
+    args._rollout_queue_resume = True
     restored = RolloutQueueController(args)
     try:
         assert restored.queue.producer_state("dataset") == state
@@ -133,7 +133,7 @@ def test_whole_job_recovery_replays_accepted_results_and_durable_continuations(
     controller = source_factory.controller
     controller.close()
     args = copy.copy(reader.args)
-    args.rollout_queue_resume = True
+    args._rollout_queue_resume = True
     restored = RolloutQueueController(args)
     try:
         replay = restored.codec.load(restored.recover_pending_rollout())
@@ -382,7 +382,7 @@ def test_completed_return_uses_a_delivery_without_rewriting_accepted_history(
     delivery = pack_rollout_group(returned, reader.args, 0)
     assert delivery.receipt.task_id != result.receipt.task_id
     assert source_factory.controller.queue.read_commits().cursor == 2
-    source_factory.controller.args.rollout_queue_resume = True
+    source_factory.controller.args._rollout_queue_resume = True
     replay = source_factory.controller.codec.load(source_factory.controller.recover_pending_rollout())
     assert [receipt["position"] for receipt in replay] == [delivery.receipt.position]
 
@@ -415,6 +415,35 @@ def test_older_pending_snapshot_restores_prefix_as_a_delivery(source_factory):
     assert all(sample._queue_generation_start == 2 for sample in restored)
     assert all(sample._queue_lease["task_id"] != accepted.receipt.task_id for sample in restored)
     assert source_factory.controller.queue.read_commits().cursor == 1
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_generation_worker_restores_reader_metadata_without_rng(source_factory, legacy, monkeypatch):
+    import numpy as np
+
+    from slime.rollout.fully_async_distributed import _GenerationActor
+    from slime.utils.rollout_transport import pack_rollout_payload
+
+    def unexpected_rng(*args, **kwargs):
+        raise AssertionError("Worker checkpointing must not capture or restore RNG")
+
+    for module, names in (
+        (random, ("getstate", "setstate")),
+        (np.random, ("get_state", "set_state")),
+        (torch, ("get_rng_state", "set_rng_state")),
+    ):
+        for name in names:
+            monkeypatch.setattr(module, name, unexpected_rng)
+    worker = _GenerationActor.__new__(_GenerationActor)
+    worker.data_source = source_factory("worker")
+    worker.data_source.update_metadata({"completed": 7})
+    state = worker.state_dict()
+    assert unpack_rollout_payload(state) == {"version": 3, "metadata": {"completed": 7}}
+    if legacy:
+        state = pack_rollout_payload({"worker_state": 1, "reader": state, "rng": {}}, source_factory.args, 0)
+    worker.data_source.update_metadata({"completed": 10})
+    worker.load_state_dict(state)
+    assert worker.data_source.get_metadata() == {"completed": 7}
 
 
 def test_legacy_rollout_return_completes_borrowed_inputs(source_factory):
@@ -1156,10 +1185,10 @@ def _rollout_args(tmp_path, *, fanout=False, transport="straw"):
 
 
 @pytest.mark.parametrize(
-    "fanout,transport",
-    [(False, "straw"), (True, "straw")],
+    "fanout,transport,fork",
+    [(False, "straw", False), (True, "straw", False), (True, "straw", True)],
 )
-def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout, transport):
+def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout, transport, fork):
     multiplier = 2 if fanout else 1
     import ray
     from ray.cluster_utils import Cluster
@@ -1332,7 +1361,10 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout, transport
         runtime = source.consumers["fully_async"]
         assert len(runtime.workers) == node_count
         manager.save(0)
-        state = _load_queue_checkpoint(args, 0)["consumers"]["fully_async"]
+        checkpoint = _load_queue_checkpoint(args, 0)
+        assert "rng" not in checkpoint
+        state = checkpoint["consumers"]["fully_async"]
+        assert all(set(unpack_rollout_payload(reader)) == {"version", "metadata"} for reader in state["readers"])
         assert len(state["scheduler"]["ready"]) >= 4
         assert all(
             sample.metadata["reward_calls"] == 1
@@ -1354,7 +1386,10 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout, transport
         source.close()
         source = None
         args.load = args.save
-        args.rollout_queue_resume = True
+        args._rollout_queue_resume = not fork
+        args._rollout_queue_fork = fork
+        if fork:
+            args.save = str(tmp_path / "fork-checkpoint")
         source = QueueDataSource(args)
         source.data_config["n_samples_per_prompt"] += 1
         with pytest.raises(ValueError, match="n_samples_per_prompt"):
@@ -1588,7 +1623,7 @@ def test_restore_source_handoff_preserves_lazy_consumers_and_failed_save(
     source = source_factory("owner")
     source.__class__ = QueueDataSource
     source._owns_controller = False
-    source.data_config = {"test": True}
+    source.data_config = controller.configuration()
     source.args.save = str(tmp_path / "checkpoints")
     source.consumers = {}
     prefix = codec.publish({"r3": torch.arange(4096)}, submission_id="lazy-prefix")
@@ -1664,7 +1699,7 @@ def test_restore_source_handoff_preserves_prefix_before_later_accepted_result(
     restored = source_factory("owner")
     restored.__class__ = QueueDataSource
     restored._owns_controller = False
-    restored.data_config = {"test": True}
+    restored.data_config = controller.configuration()
     restored.consumers, restored._restored_consumers = {}, {}
     restored.args.save = str(Path(reader.args.rollout_data_dir) / "saved")
     restored.args._queue_restored_source_ref = original
@@ -2001,6 +2036,224 @@ def test_queue_fetch_finishing_after_pause_preserves_group_without_new_generatio
         assert sample.tokens == [1, 2]
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("source_factory", [True], indirect=True)
+@pytest.mark.parametrize("interrupt_import", [False, True])
+def test_checkpoint_fork_restores_partial_ready_and_producer_without_parent_mutation(
+    source_factory, tmp_path, monkeypatch, interrupt_import
+):
+    from straw.protocol import Lease, RecordSetRef
+    from slime.rollout.filter_hub.base_types import DynamicFilterOutput
+    from slime.utils.rollout_transport import DiskPayloadRef, load_rollout_samples, pack_rollout_group
+
+    parent = source_factory.controller
+    source = source_factory("owner")
+    source.__class__ = QueueDataSource
+    source._owns_controller = False
+    source.args.save = str(tmp_path / "parent-checkpoint")
+    source.consumers = {}
+    source.data_config = parent.configuration()
+    partial, ready = source.get_samples(2)
+    old_lease = Lease(**partial[0]._queue_lease)
+    for sample in partial:
+        sample.tokens = [1, 2, 3]
+        sample.response_length = 2
+        sample.status = Sample.Status.ABORTED
+        sample.rollout_routed_experts = torch.arange(4).reshape(2, 1, 2)
+    source.add_samples([partial])
+    for sample in ready:
+        sample.tokens = [4, 5]
+        sample.response_length = 1
+        sample.reward = 1
+        sample.status = Sample.Status.COMPLETED
+    ready_ref = pack_rollout_group(ready, source.args, 7)
+    source._restored_consumers = {
+        "fully_async": {"scheduler": {"ready": [(ready_ref, DynamicFilterOutput(keep=True))]}, "readers": []}
+    }
+    source.save(7)
+    index = json.loads((Path(source.args.save) / "rollout/queue_state_7.json").read_text())
+    checkpoint = RecordSetRef.from_dict(index["manifest"])
+    cursor = copy.deepcopy(parent.queue.producer_state("dataset"))
+    saved_pending = DiskPayloadRef(checkpoint, source.args.rollout_data_dir).load()["reader"].load()["pending"].load()
+    saved_partial = next(task for task in saved_pending["tasks"] if task["task_id"] == old_lease.task_id)
+    original_tensor = saved_partial["input_ref"].load()[0].rollout_routed_experts
+    # Advance the original branch beyond K, including a newer version of A.
+    [newer] = source.get_samples(1)
+    for sample in newer:
+        sample.tokens.append(99)
+        sample.response_length += 1
+    source.add_samples([newer])
+    # Refill on the parent after K; the child must not adopt this newer cursor.
+    source.get_samples(8)
+    assert (
+        parent.queue.producer_state("dataset")["cursor"]["sample_group_index"] > cursor["cursor"]["sample_group_index"]
+    )
+    parent_status = copy.deepcopy(parent.queue.tasks)
+
+    args = copy.copy(source.args)
+    args.load, args.save = source.args.save, str(tmp_path / "fork-checkpoint")
+    args._rollout_queue_fork = True
+    fork = RolloutQueueController(args)
+    try:
+        if interrupt_import:
+            submit = fork.queue.submit_tasks
+
+            def fail_after_pending(request_id, tasks, **kwargs):
+                result = submit(request_id, tasks, **kwargs)
+                if request_id.startswith("fork-pending:"):
+                    raise RuntimeError("import interrupted after durable submission")
+                return result
+
+            with monkeypatch.context() as patch:
+                patch.setattr(fork.queue, "submit_tasks", fail_after_pending)
+                with pytest.raises(RuntimeError, match="import interrupted"):
+                    fork.fork_source(checkpoint)
+            fork.close()
+            fork = RolloutQueueController(args)
+        restored = fork.fork_source(checkpoint)
+        assert fork.fork_source(checkpoint) == restored
+        assert fork.queue.producer_state("dataset") == cursor
+        [assignment] = fork.take("new-reader", 1).assignments
+        actual = fork.codec.load(assignment.task.input_ref)
+        assert actual[0].tokens == [1, 2, 3]
+        assert actual[0].rollout_routed_experts.record_ref == original_tensor.record_ref
+        assert assignment.lease.queue_id != old_lease.queue_id
+        assert fork.heartbeat([old_lease]) == ["StaleAttempt"]
+        consumers = fork.codec.load(restored)
+        group, verdict = consumers["fully_async"]["scheduler"]["ready"][0]
+        assert verdict.keep and group.load().manifest == ready_ref.manifest
+        assert group.receipt.task_id.startswith("prompt:fork-ready:")
+        assert group.receipt != ready_ref.receipt
+        samples = load_rollout_samples([group])[0]
+        assert all(sample._queue_source_positions == [] for sample in samples)
+        assert parent.queue.tasks == parent_status
+        assert not fork.queue.batches
+        fork.queue.collect_garbage()
+        parent.queue.collect_garbage()
+        assert actual[0].rollout_routed_experts.load().tolist() == [[[0, 1]], [[2, 3]]]
+        fork.release([assignment.lease])
+    finally:
+        fork.close()
+    with pytest.raises(ValueError, match="already started"):
+        RolloutQueueController(args)
+    # A stopped child can also resume its own WAL, without reopening the parent.
+    args.load = args.save
+    args._rollout_queue_fork = False
+    args._rollout_queue_resume = True
+    resumed = RolloutQueueController(args)
+    try:
+        assert resumed.queue.queue_id == assignment.lease.queue_id
+        assert resumed.queue.producer_state("dataset") == cursor
+        assert resumed.codec.load(resumed.take("resumed-reader", 1).assignments[0].task.input_ref)[0].tokens == [
+            1,
+            2,
+            3,
+        ]
+        # Exhaust the restored pending inputs so take() must read the dataset
+        # again. Checking only the WAL cursor could miss a producer that still
+        # uses its initial or the parent's newer in-memory offset.
+        pending = len(resumed.queue.pending_tasks(task_prefix="prompt:"))
+        if pending:
+            assert len(resumed.take("drain-saved", pending).assignments) == pending
+        [fresh] = resumed.take("fresh-after-fork", 1).assignments
+        samples = resumed.codec.load(fresh.task.input_ref)
+        saved_cursor = cursor["cursor"]
+        order = list(range(7))
+        random.Random(31 + saved_cursor["epoch_id"]).shuffle(order)
+        assert [sample.prompt for sample in samples] == [f"prompt-{order[saved_cursor['sample_offset']]}"] * 2
+        assert [sample.index for sample in samples] == [saved_cursor["sample_index"], saved_cursor["sample_index"] + 1]
+        assert all(sample.group_index == saved_cursor["sample_group_index"] for sample in samples)
+        assert parent.queue.tasks == parent_status
+    finally:
+        resumed.close()
+
+
+@pytest.mark.parametrize("has_cursor", [False, True])
+def test_automatic_empty_restore_reads_the_saved_dataset_offset(source_factory, tmp_path, has_cursor):
+    from slime.utils.rollout_checkpoint import resolve_checkpoint
+
+    model = tmp_path / "old-model"
+    (model / "iter_0000007").mkdir(parents=True)
+    (model / "iter_0000007/weights.pt").write_bytes(b"model")
+    (model / "latest_checkpointed_iteration.txt").write_text("7")
+    cursor = dict(sample_offset=3, epoch_id=1, sample_group_index=10, sample_index=20, metadata={"seen": 9})
+    if has_cursor:
+        (model / "rollout").mkdir()
+        torch.save(cursor, model / "rollout/global_dataset_state_dict_7.pt")
+    args = copy.copy(source_factory.args)
+    args.load = args.save = str(model)
+    args.ckpt_step = 7
+    args.start_rollout_id = None
+    # An unrelated live queue in the same pool must not be reset or consumed.
+    source_factory("parent").get_samples(1)
+    parent_state = copy.deepcopy(source_factory.controller.queue.tasks)
+    resolve_checkpoint(args)
+    controller = RolloutQueueController(args)
+    try:
+        assert controller.queue.tasks == {}
+        assert controller.queue.queue_id != source_factory.controller.queue.queue_id
+        [task] = controller.take("new-reader", 1).assignments
+        samples = controller.codec.load(task.task.input_ref)
+        epoch, offset, index, group_index = (1, 3, 20, 10) if has_cursor else (0, 0, 0, 0)
+        order = list(range(7))
+        random.Random(31 + epoch).shuffle(order)
+        assert [s.prompt for s in samples] == [f"prompt-{order[offset]}"] * 2
+        assert [s.index for s in samples] == [index, index + 1]
+        assert all(s.group_index == group_index for s in samples)
+        assert controller._source().metadata == (cursor["metadata"] if has_cursor else {})
+        assert source_factory.controller.queue.tasks == parent_state
+    finally:
+        controller.close()
+
+
+@pytest.mark.parametrize("started", [False, True])
+def test_automatic_restart_before_first_checkpoint_recovers_the_same_queue(
+    source_factory, tmp_path, monkeypatch, started
+):
+    from slime.utils.rollout_checkpoint import resolve_checkpoint
+
+    args = copy.copy(source_factory.args)
+    args.save, args.load = str(tmp_path / "initial-run"), None
+    args.start_rollout_id = None
+    resolve_checkpoint(args)
+    if not started:
+        # Fail after branch publication, before the native queue exists.
+        from straw.coordinator import Coordinator
+
+        def interrupted(*args, **kwargs):
+            raise OSError("interrupted queue initialization")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Coordinator, "__init__", interrupted)
+            with pytest.raises(OSError, match="interrupted queue initialization"):
+                RolloutQueueController(args)
+    else:
+        controller = RolloutQueueController(args)
+        reader = QueueReader(args, _LocalHandle(controller), "first", 7)
+        [group] = reader.get_samples(1)
+        for sample in group:
+            sample.tokens = [1, 2, 3]
+            sample.response_length = 2
+            sample.status = Sample.Status.ABORTED
+        reader.add_samples([group])
+        cursor = copy.deepcopy(controller.queue.producer_state("dataset"))
+        reader.close()
+        controller.close()
+    resumed = copy.copy(source_factory.args)
+    resumed.load = resumed.save = args.save
+    resumed.start_rollout_id = None
+    resolve_checkpoint(resumed)
+    assert resumed._rollout_queue_resume and resumed._rollout_queue_id == args._rollout_queue_id
+    controller = RolloutQueueController(resumed)
+    try:
+        [task] = controller.take("restarted", 1).assignments
+        samples = controller.codec.load(task.task.input_ref)
+        assert samples[0].tokens == ([1, 2, 3] if started else [])
+        if started:
+            assert controller.queue.producer_state("dataset") == cursor
+    finally:
+        controller.close()
 
 
 if __name__ == "__main__":

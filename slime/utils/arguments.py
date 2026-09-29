@@ -597,11 +597,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Persistent queue run identity within rollout-data-dir.",
             )
             parser.add_argument(
-                "--rollout-queue-resume",
-                action="store_true",
-                help="Recover an existing run; requires the prior coordinator and its job to be stopped.",
-            )
-            parser.add_argument(
                 "--rollout-queue-online-gc",
                 action="store_true",
                 help="Reclaim sealed straw packs after acknowledged use; retain checkpoints explicitly.",
@@ -1334,7 +1329,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "Save the rollout data to this path for debugging. "
-                    "The file will be saved to `save_debug_rollout_data.format(rollout_id)`."
+                    "Use a {rollout_id} template; .straw.json retains an indexed straw archive with lazy tensors, "
+                    "other suffixes write the self-contained legacy .pt format."
                 ),
             )
             # --load-debug-rollout-data, --debug-rollout-only, --debug-train-only
@@ -1896,6 +1892,11 @@ def slime_validate_args(args):
         if args.opd_teacher_load is not None:
             raise ValueError("--opd-teacher-load is set but --use-opd is not enabled. Please add --use-opd flag.")
 
+    # Resolve the logical checkpoint directory before the model loader's
+    # HuggingFace/finetune fallback can replace --load or disable optimizer load.
+    from slime.utils.rollout_checkpoint import resolve_checkpoint
+
+    resolve_checkpoint(args)
     load_is_megatron = (
         args.load is not None
         and os.path.exists(args.load)
@@ -1944,9 +1945,8 @@ def slime_validate_args(args):
     if args.rollout_data_transport != "straw":
         if args.data_source_path == "slime.rollout.queue_data_source.QueueDataSource":
             raise ValueError("QueueDataSource requires --rollout-data-transport straw")
-        for name in ("rollout_queue_resume", "rollout_queue_online_gc"):
-            if getattr(args, name, False):
-                raise ValueError(f"--{name.replace('_', '-')} requires --rollout-data-transport straw")
+        if getattr(args, "rollout_queue_online_gc", False):
+            raise ValueError("--rollout-queue-online-gc requires --rollout-data-transport straw")
     for name in (
         "rollout_queue_lease_seconds",
         "rollout_queue_max_pending",

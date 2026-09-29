@@ -205,6 +205,7 @@ class SampleCodec:
                     extra = {
                         "index": value.index,
                         "receipt": (dataclasses.asdict(value.receipt) if value.receipt else None),
+                        "source_positions": value.source_positions,
                     }
                 elif isinstance(value, RawRolloutRef):
                     extra = {

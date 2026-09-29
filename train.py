@@ -4,6 +4,7 @@ from slime.observability.logging_utils import configure_logger, finish_tracking,
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.misc import should_run_periodic_action
+from slime.utils.rollout_checkpoint import save_checkpoint
 
 
 def train(args):
@@ -75,12 +76,7 @@ def train(args):
         if release_train or should_run_periodic_action(
             rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout
         ):
-            force_sync = release_train or rollout_id == args.num_rollout - 1
-            if actor_trains:
-                actor_model.save_model(rollout_id, force_sync=force_sync)
-            if args.use_critic:
-                critic_model.save_model(rollout_id, force_sync=force_sync)
-            ray.get(rollout_manager.save.remote(rollout_id))
+            save_checkpoint(args, rollout_id, actor_model, critic_model, rollout_manager, actor_trains=actor_trains)
 
         offload_train(actor_trains)
         if args.offload_rollout and not release_train:

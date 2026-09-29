@@ -187,6 +187,7 @@ class RolloutManager:
             data,
             rollout_id=rollout_id,
             evaluation=False,
+            args=self.args,
         )
         log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
         if self.args.debug_rollout_only:
@@ -212,12 +213,23 @@ class RolloutManager:
             data,
             rollout_id=rollout_id,
             evaluation=True,
+            args=self.args,
         )
         log_eval_rollout_data(rollout_id, self.args, data, result.metrics)
 
     def save(self, rollout_id):
-        self.data_source.save(rollout_id)
-        self.batch_builder.save(rollout_id)
+        # Keep admission frozen across source and builder snapshots. Source.save
+        # preserves this pre-existing pause instead of resuming between files.
+        paused = []
+        try:
+            for consumer in getattr(self.data_source, "consumers", {}).values():
+                paused.append((consumer, consumer.pause()))
+            self.data_source.save(rollout_id)
+            self.batch_builder.save(rollout_id)
+        finally:
+            for consumer, was_paused in paused:
+                if not was_paused:
+                    consumer.resume()
 
     def training_completed(self, rollout_id):
         self.batch_builder.training_completed(rollout_id)

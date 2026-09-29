@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import fcntl
+import json
 import logging
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -23,6 +26,7 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from straw.coordinator import Coordinator
 from straw.errors import LeaseExpired, StaleAttempt
 from straw.protocol import Lease, Limits, Record, RecordSetRef, TaskSpec, encode
+from straw.reporting import write_report
 
 from slime.rollout.base_types import iter_samples
 from slime.rollout.data_source import DataSource, RolloutDataSource
@@ -42,51 +46,130 @@ logger = logging.getLogger(__name__)
 
 
 class RolloutQueueController:
-    """Plain class for unit testing; the host wraps it in one concurrent Ray actor."""
+    """Own a job's durable queue and checkpoint branch in one Ray actor.
+
+    The plain class also supports local tests without starting Ray.
+    """
 
     def __init__(self, args, *, producer=None):
         self.args = args
-        self.store, self.codec, self._writer_lock = rollout_store(args)
-        self._gc_error = None
-        if not hasattr(Coordinator, "yield_tasks"):
-            raise RuntimeError(
-                "This straw transport requires a straw-queue build with yield_tasks and priority scheduling; the original PyPI 0.1.0 wheel does not support these APIs."
+        self._checkpoint_lock = None
+        with ExitStack() as cleanup:
+            # The controller owns both the queue and its checkpoint branch.
+            # Hold the save-directory lock until close() (or actor exit), and
+            # publish the branch before any queue writes can become durable.
+            if (plan := getattr(args, "_checkpoint_plan", None)) is not None:
+                root = Path(plan["root"])
+                (root / "rollout").mkdir(parents=True, exist_ok=True)
+                self._checkpoint_lock = cleanup.enter_context((root / "rollout/session.lock").open("a"))
+                try:
+                    fcntl.flock(self._checkpoint_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as error:
+                    raise RuntimeError(f"Another training job owns save directory {root}") from error
+                path = root / "rollout/current.json"
+                current = path.read_text() if path.exists() else None
+                if current != plan["expected_current"]:
+                    raise RuntimeError("Current checkpoint branch changed during startup; restart to resolve it again")
+                resolve_rollout_data_dir(args)
+                branch = {**plan["branch"], "pool": args.rollout_data_dir}
+                write_report(Path(args.save) / "rollout/branch.json", branch)
+                tracker = root / "latest_checkpointed_iteration.txt"
+                if parent := branch.get("parent"):
+                    write_report(tracker, parent["step"])
+                write_report(
+                    path,
+                    {
+                        "version": 1,
+                        "directory": args.save,
+                        "tracker": tracker.read_text() if tracker.exists() else None,
+                    },
+                )
+                logger.warning(
+                    "straw checkpoint directory: %s; logical save directory: %s; restoring: %s step %s",
+                    args.save,
+                    root,
+                    args.load,
+                    getattr(args, "ckpt_step", None),
+                )
+            self.store, self.codec, self._writer_lock = rollout_store(args)
+            self._gc_error = None
+            if not hasattr(Coordinator, "yield_tasks"):
+                raise RuntimeError(
+                    "This straw transport requires a straw-queue build with yield_tasks and priority scheduling; the original PyPI 0.1.0 wheel does not support these APIs."
+                )
+            fork = getattr(args, "_rollout_queue_fork", False)
+            queue_options = {}
+            queue_id = getattr(args, "_rollout_queue_id", None)
+            if queue_id is not None:
+                queue_options = {"queue_id": queue_id, "namespace": True}
+            if fork:
+                from straw.protocol import digest
+
+                if not getattr(args, "save", None) or not getattr(args, "load", None):
+                    raise ValueError("Checkpoint restore requires resolved load and save paths")
+                if Path(args.save).resolve() == Path(args.load).resolve():
+                    raise ValueError("Checkpoint restore requires an isolated output branch")
+                if (Path(args.save) / "rollout" / "fork-active.json").exists():
+                    raise ValueError("This queue branch has already started; resolve checkpoint selection again")
+                queue_id = queue_id or "fork:" + digest(str(Path(args.save).resolve()))
+                queue_options = {"queue_id": queue_id, "namespace": True}
+                recovering = (self.store.backend.root / "queues" / digest(queue_id) / "run.json").exists()
+            else:
+                recovering = getattr(args, "_rollout_queue_resume", False)
+                if recovering and queue_id is not None and getattr(args, "_checkpoint_plan", None):
+                    from straw.protocol import digest
+
+                    # Initialization may have stopped after publishing the branch
+                    # but before creating its queue. Only this namespace may start empty.
+                    recovering = (self.store.backend.root / "queues" / digest(queue_id) / "run.json").exists()
+                if recovering and queue_id is None and getattr(args, "load", None):
+                    branch = Path(args.load) / "rollout" / "fork-active.json"
+                    if branch.exists():
+                        queue_options = {"queue_id": json.loads(branch.read_text())["queue_id"], "namespace": True}
+            self._queue = Coordinator(
+                self.store,
+                **queue_options,
+                exclusive_owner="job owns this non-restarting actor; prior coordinator and readers must be stopped",
+                recover=recovering,
+                lease_seconds=getattr(args, "rollout_queue_lease_seconds", 300),
+                limits=Limits(
+                    pending_tasks=getattr(args, "rollout_queue_max_pending", 65536),
+                    inflight_tasks=getattr(args, "rollout_queue_max_inflight", 65536),
+                ),
             )
-        self._queue = Coordinator(
-            self.store,
-            exclusive_owner="job owns this non-restarting actor; explicit resume confirms prior owner stopped",
-            recover=getattr(args, "rollout_queue_resume", False),
-            lease_seconds=getattr(args, "rollout_queue_lease_seconds", 300),
-            limits=Limits(
-                pending_tasks=getattr(args, "rollout_queue_max_pending", 65536),
-                inflight_tasks=getattr(args, "rollout_queue_max_inflight", 65536),
-            ),
-        )
-        self.producer = producer
-        self._initial_cursor = None
-        self._producer_lock = threading.Lock()
-        self._reader_tokens = {}
-        self._retired_readers = set()
-        self.branch_id = uuid.uuid4().hex
-        self._training_token = None
-        self._training_lock = threading.RLock()
-        self._gc_stop = threading.Event()
-        self._gc_thread = None
-        if getattr(args, "rollout_queue_resume", False):
-            # This flag explicitly requires the entire prior job to have stopped;
-            # unlike a lease timeout, that supervisor assertion ends old reads.
-            readers = self.queue.outstanding_reads()
-            for offset in range(0, len(readers), 128):
-                self.queue.release_task_reads(readers[offset : offset + 128])
-        # Joint restore can rewind the training cursor. Reconcile its durable
-        # storage ownership before GC inspects restored live result roots.
-        if not getattr(args, "_joint_resume", None):
-            self._start_gc()
-        # Recovery invalidates leases; unfinished collections from the stopped
-        # manager cannot produce a new branch's batch. Accepted facts stay intact.
-        for task_id, task in list(self.queue.tasks.items()):
-            if task_id.startswith("collection:") and task["state"] == "pending":
-                self.queue.cancel_task(task_id, request_id=f"abandon:{self.branch_id}:{task_id}")
+            cleanup.callback(self._queue.close)
+            self.producer = producer
+            self._initial_cursor = None
+            self._producer_lock = threading.Lock()
+            self._reader_tokens = {}
+            self._retired_readers = set()
+            self.branch_id = uuid.uuid4().hex
+            self._training_token = None
+            self._training_lock = threading.RLock()
+            self._gc_stop = threading.Event()
+            self._gc_thread = None
+            self._fork_ready = not fork
+            self._fork_active = False
+            if fork and self._queue.producer_state("fork-active") is not None:
+                raise ValueError("This queue branch has already started; resolve checkpoint selection again")
+            if getattr(args, "_rollout_queue_resume", False):
+                # Restart requires the entire prior job to have stopped. Unlike a
+                # lease timeout, that supervisor assertion ends old reads.
+                readers = self.queue.outstanding_reads()
+                for offset in range(0, len(readers), 128):
+                    self.queue.release_task_reads(readers[offset : offset + 128])
+            # Recovery invalidates leases; unfinished collections from the stopped
+            # manager cannot produce a new branch's batch. Accepted facts stay intact.
+            for task_id, task in list(self.queue.tasks.items()):
+                if task_id.startswith("collection:") and task["state"] == "pending":
+                    self.queue.cancel_task(task_id, request_id=f"abandon:{self.branch_id}:{task_id}")
+            # Joint restore can rewind the training cursor. Reconcile its durable
+            # storage ownership before GC inspects restored live result roots.
+            if not fork and not getattr(args, "_joint_resume", None):
+                self._start_gc()
+            # Successful construction transfers ownership to close(). A failed
+            # constructor closes the coordinator and releases the save lock here.
+            cleanup.pop_all()
 
     def _check_gc_error(self):
         if self._gc_error is not None:
@@ -123,6 +206,16 @@ class RolloutQueueController:
         self._check_gc_error()
         if self.producer is None:
             self.producer = RolloutDataSource(self.args)
+            if path := getattr(self.args, "_rollout_dataset_cursor", None):
+                import torch
+
+                state = torch.load(path, map_location="cpu", weights_only=False)
+                for key in ("sample_offset", "epoch_id", "sample_group_index", "sample_index", "metadata"):
+                    if key not in state:
+                        raise ValueError(f"Dataset checkpoint is missing {key}")
+                    setattr(self.producer, key, copy.deepcopy(state[key]))
+                if self.producer.dataset is not None and self.args.rollout_shuffle:
+                    self.producer.dataset.shuffle(self.producer.epoch_id)
         if self.producer.dataset is not None and not len(self.producer.dataset):
             raise ValueError("Queue rollout dataset is empty after filtering")
         if self._initial_cursor is None:
@@ -141,6 +234,30 @@ class RolloutQueueController:
     def configuration(self):
         with self._producer_lock:
             source = self._source()
+            dataset = {
+                key: getattr(self.args, key, None)
+                for key in (
+                    "input_key",
+                    "label_key",
+                    "metadata_key",
+                    "tool_key",
+                    "multimodal_keys",
+                    "rollout_max_prompt_len",
+                    "apply_chat_template",
+                    "apply_chat_template_kwargs",
+                    "hf_checkpoint",
+                )
+            }
+            if getattr(self.args, "prompt_data", None):
+                import hashlib
+                from slime.utils.data import _parse_generalized_path
+
+                path, row_slice = _parse_generalized_path(self.args.prompt_data)
+                checksum = hashlib.sha256()
+                with open(path, "rb") as stream:
+                    for chunk in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+                        checksum.update(chunk)
+                dataset.update(sha256=checksum.hexdigest(), row_slice=str(row_slice))
             return {
                 "dataset_size": len(source),
                 "n_samples_per_prompt": self.args.n_samples_per_prompt,
@@ -148,6 +265,8 @@ class RolloutQueueController:
                 "shuffle": self.args.rollout_shuffle,
                 "run_id": self.store.run_id,
                 "branch_id": self.branch_id,
+                "queue_id": self.queue.queue_id,
+                "dataset": dataset,
             }
 
     def identity(self):
@@ -155,14 +274,124 @@ class RolloutQueueController:
         return {"run_id": self.store.run_id, "branch_id": self.branch_id}
 
     def pending_snapshot(self):
-        """Capture shared pending work once, with explicit storage dependencies."""
-        tasks = []
-        for spec in self.queue.pending_tasks(task_prefix="prompt:"):
-            value = asdict(spec)
-            value["input_ref"] = DiskPayloadRef(spec.input_ref, str(self.store.backend.root))
-            tasks.append(value)
-        with self._writer_lock:
-            return self.codec.publish({"tasks": tasks}, submission_id=f"pending:{uuid.uuid4().hex}")
+        """Capture pending inputs and the producer cursor at one refill boundary."""
+        with self._producer_lock:
+            self._source()
+            producer = self.queue.producer_state("dataset")
+            cursor = copy.deepcopy(producer["cursor"] if producer else self._initial_cursor)
+            tasks = []
+            for spec in self.queue.pending_tasks(task_prefix="prompt:"):
+                value = asdict(spec)
+                value["input_ref"] = DiskPayloadRef(spec.input_ref, str(self.store.backend.root))
+                tasks.append(value)
+            inflight = self.queue.metrics()["tasks"].get("leased", 0) > 0
+            with self._writer_lock:
+                return self.codec.publish(
+                    {"tasks": tasks, "producer_cursor": cursor, "inflight": inflight},
+                    submission_id=f"pending:{uuid.uuid4().hex}",
+                )
+
+    def fork_source(self, source_ref):
+        """Import a paused source snapshot into a new queue, sharing payload bytes.
+
+        Task submissions and ready-result acceptance are idempotent so an
+        interrupted import can finish before any generation is admitted.
+        Receipt positions are local to a queue: ready groups receive new ones.
+        """
+        from straw.protocol import digest
+        from slime.utils.rollout_transport import RolloutGroupRef
+
+        if not getattr(self.args, "_rollout_queue_fork", False):
+            raise ValueError("Source forks require an isolated queue")
+        owner = f"fork-source:{self.queue.queue_id}"
+        with self._producer_lock, self._training_lock, self._writer_lock:
+            previous = self.queue.producer_state("fork-source")
+            if previous:
+                if previous["source"] != asdict(source_ref):
+                    raise ValueError("Fork destination already belongs to a different checkpoint")
+                self._fork_ready = True
+                self._start_gc()
+                return RecordSetRef.from_dict(previous["restored"])
+            state = self.codec.load(source_ref)
+            reader = state["reader"].load()
+            pending = reader["pending"].load()
+            if "producer_cursor" not in pending or pending.get("inflight", True):
+                raise ValueError("Fork requires a producer cursor and a drained source checkpoint")
+            if set(state["consumers"]) - {"fully_async"}:
+                raise ValueError("Fork does not support custom consumer state yet")
+            # Protect the entire source graph during import, including reader
+            # metadata that consumers will only load when they start later.
+            self.store.retain(owner, [source_ref])
+            self.queue.submit_tasks(
+                f"fork-producer:{source_ref.digest}",
+                [],
+                producer_id="dataset",
+                producer_state={"version": 1, "cursor": pending["producer_cursor"]},
+            )
+            tasks = []
+            for value in pending["tasks"]:
+                value = dict(value)
+                value["input_ref"] = value["input_ref"].manifest
+                value["metadata"] = {**value["metadata"], "source_positions": []}
+                tasks.append(TaskSpec(**value))
+            for start in range(0, len(tasks), 64):
+                self.queue.submit_tasks(f"fork-pending:{source_ref.digest}:{start}", tasks[start : start + 64])
+            consumers = state["consumers"]
+            if "fully_async" in consumers:
+                ready = []
+                for index, (group, verdict) in enumerate(consumers["fully_async"]["scheduler"]["ready"]):
+                    if group is None:
+                        ready.append((group, verdict))
+                        continue
+                    task_id = f"prompt:fork-ready:{source_ref.digest}:{index}"
+                    self.queue.submit_tasks(task_id, [TaskSpec(task_id, group.manifest)])
+                    status = self.queue.task_status(task_id)
+                    if status["state"] == "completed":
+                        receipt = self.result(Lease(**status["lease"]))
+                    else:
+                        page = self.queue.acquire("fork-import", 1, task_ids=[task_id])
+                        if not page.assignments:
+                            raise RuntimeError(f"Cannot import ready group: {page.status}")
+                        lease = page.assignments[0].lease
+                        # The native protocol binds result metadata to this new
+                        # attempt. A small wrapper shares the old payload graph.
+                        result = self.codec.publish(
+                            DiskPayloadRef(group.manifest, group.root),
+                            submission_id=f"fork-result:{lease.attempt_id}",
+                            metadata={"task_id": lease.task_id, "attempt_id": lease.attempt_id},
+                        )
+                        receipt = self.complete(lease, result)
+                    ready.append((RolloutGroupRef(receipt.result_ref, group.root, group.index, receipt, ()), verdict))
+                consumers["fully_async"]["scheduler"]["ready"] = ready
+            self.reader_metadata("owner", reader["metadata"])
+            restored = self.codec.publish(consumers, submission_id=f"fork-consumers:{source_ref.digest}")
+            self.store.retain(owner, [source_ref, restored])
+            self.store.release_publications([restored])
+            self.queue.submit_tasks(
+                f"fork-complete:{digest(asdict(source_ref))}",
+                [],
+                producer_id="fork-source",
+                producer_state={"source": asdict(source_ref), "restored": asdict(restored)},
+            )
+            self._fork_ready = True
+        self._start_gc()
+        return restored
+
+    def _activate_fork(self):
+        if not self._fork_ready:
+            raise RuntimeError("Load the fork checkpoint before admitting rollout work")
+        if getattr(self.args, "_rollout_queue_fork", False):
+            from straw.reporting import write_report
+
+            with self._producer_lock:
+                if not self._fork_active:
+                    self.queue.submit_tasks(
+                        "fork-active", [], producer_id="fork-active", producer_state={"started": True}
+                    )
+                    write_report(
+                        Path(self.args.save) / "rollout" / "fork-active.json", {"queue_id": self.queue.queue_id}
+                    )
+                    self._fork_active = True
 
     def pending_count(self):
         return sum(spec.metadata.get("returned", False) for spec in self.queue.pending_tasks(task_prefix="prompt:"))
@@ -251,6 +480,14 @@ class RolloutQueueController:
         return self.codec.load(RecordSetRef.from_dict(state["state_ref"])).get("metadata", {}) if state else {}
 
     def take(self, reader_id, count):
+        """Supply queued groups, refilling an empty queue from the dataset.
+
+        The refill path takes original prompt groups from RolloutDataSource,
+        writes them to straw, then enqueues their references and the new dataset
+        cursor. Existing tasks, including partials, are acquired first. ``count``
+        counts prompt groups, each containing n_samples_per_prompt samples.
+        """
+        self._activate_fork()
         if reader_id in self._retired_readers:
             raise StaleAttempt("Reader was retired by the scheduler")
         requested = count
@@ -263,6 +500,8 @@ class RolloutQueueController:
             if page.status != "empty":
                 return page
             source = self._source()
+            # Start from the last committed cursor: a failed refill may have
+            # advanced the in-memory source without successfully enqueueing it.
             state = self.queue.producer_state("dataset")
             for key, value in (state["cursor"] if state else self._initial_cursor).items():
                 setattr(source, key, copy.deepcopy(value))
@@ -274,6 +513,7 @@ class RolloutQueueController:
             groups = source.get_samples(count)
             group_ids = [next(iter_samples(group)).group_index for group in groups]
             task_ids = [f"prompt:{group_id}" for group_id in group_ids]
+            # Persist the sample groups; queue tasks carry references only.
             with self._writer_lock:
                 refs = self.codec.publish_many(
                     groups,
@@ -299,12 +539,15 @@ class RolloutQueueController:
                     "metadata",
                 )
             }
+            # Commit tasks and the advanced cursor together, so a failed refill
+            # cannot skip dataset inputs on the next attempt.
             self.queue.submit_tasks(
                 f"dataset:{start}",
                 tasks,
                 producer_id="dataset",
                 producer_state={"version": 1, "cursor": cursor},
             )
+        # Return leases and references; readers load payloads from shared storage.
         return self.queue.acquire(reader_id, requested, task_prefix="prompt:")
 
     def heartbeat(self, leases):
@@ -383,10 +626,10 @@ class RolloutQueueController:
 
         Once conversion/training has started, queue progress alone cannot identify
         the model/optimizer version. That recovery requires a joint checkpoint.
-        --rollout-queue-resume asserts that all prior readers have stopped.
+        The restarted job must have stopped all prior readers.
         """
-        if not getattr(self.args, "rollout_queue_resume", False):
-            raise RuntimeError("Whole-job recovery requires --rollout-queue-resume")
+        if not getattr(self.args, "_rollout_queue_resume", False):
+            raise RuntimeError("Whole-job replay requires automatic WAL recovery selection")
         with self._producer_lock, self._training_lock:
             state = self._training_state()
             if self.queue.batches or state["processed_cursor"] or state["processed_positions"]:
@@ -408,6 +651,7 @@ class RolloutQueueController:
                 return self.codec.publish(receipts, submission_id=f"recover-job:{self.branch_id}")
 
     def begin_collection(self, request_id):
+        self._activate_fork()
         task_id = f"collection:{self.branch_id}:{request_id}"
         self.queue.submit_tasks(
             task_id,
@@ -572,6 +816,8 @@ class RolloutQueueController:
         a successor joint commit allows their normal retirement.
         """
         with self._training_lock:
+            if getattr(self.args, "_rollout_queue_fork", False):
+                self.store.retain(f"fork-source:{self.queue.queue_id}", [source_ref])
             state = self._training_state()
             if "restored_source" in state:
                 state["restored_source"] = DiskPayloadRef(source_ref, str(self.store.backend.root))
@@ -676,15 +922,21 @@ class RolloutQueueController:
         return self.queue.metrics()
 
     def close(self):
-        self._gc_stop.set()
-        if self._gc_thread is not None:
-            self._gc_thread.join()
         try:
-            self._queue.close()
+            self._gc_stop.set()
+            if self._gc_thread is not None:
+                self._gc_thread.join()
+            try:
+                self._queue.close()
+            finally:
+                with self._writer_lock:
+                    self.store.seal()
+            self._check_gc_error()
         finally:
-            with self._writer_lock:
-                self.store.seal()
-        self._check_gc_error()
+            # Keep the checkpoint branch locked through queue and writer cleanup,
+            # including failures. Actor termination also closes this descriptor.
+            if self._checkpoint_lock is not None:
+                self._checkpoint_lock.close()
 
 
 def create_queue_controller(args):
@@ -1029,7 +1281,7 @@ class QueueDataSource(QueueReader):
             for consumer in self.consumers.values():
                 paused.append((consumer, consumer.pause()))
             state = {
-                "version": 1,
+                "version": 2,
                 "configuration": self.data_config,
                 "reader": self.state_dict(),
                 "consumers": {
@@ -1053,8 +1305,11 @@ class QueueDataSource(QueueReader):
                     "root": ref.root,
                     "manifest": asdict(ref.manifest),
                     "storage_owner": storage_owner,
+                    "queue_id": self.data_config["queue_id"],
                 },
             )
+            if self.data_config["queue_id"].startswith("fork:"):
+                write_report(path.parent / "fork-active.json", {"queue_id": self.data_config["queue_id"]})
             if getattr(self.args, "_queue_restored_source_ref", None) is not None:
                 ray.get(self.controller.handoff_restored_source.remote(ref.manifest))
         finally:
@@ -1067,12 +1322,14 @@ class QueueDataSource(QueueReader):
 
         from straw.protocol import RecordSetRef
 
-        if not self.args.load:
+        if not self.args.load or getattr(self.args, "_rollout_queue_empty_restore", False):
             return
         if self.consumers:
             raise RuntimeError("Restore before starting rollout consumers")
         path = Path(self.args.load) / "rollout" / f"queue_state_{rollout_id}.json"
         if not path.exists():
+            if getattr(self.args, "_rollout_queue_fork", False):
+                raise FileNotFoundError(path)
             return
         value = json.loads(path.read_text())
         state = DiskPayloadRef(RecordSetRef.from_dict(value["manifest"]), value["root"]).load()
@@ -1085,8 +1342,21 @@ class QueueDataSource(QueueReader):
         ):
             if state["configuration"][key] != self.data_config[key]:
                 raise ValueError(f"Data source checkpoint differs in {key}")
-        self.load_state_dict(state["reader"])
-        self._restored_consumers = state["consumers"]
+        if getattr(self.args, "_rollout_queue_fork", False):
+            if state["version"] != 2:
+                raise ValueError("Queue fork requires a checkpoint with producer state (source version 2)")
+            if state["configuration"].get("dataset") != self.data_config.get("dataset"):
+                raise ValueError("Data source checkpoint differs in dataset identity/configuration")
+            if Path(value["root"]).resolve() != Path(self.args.rollout_data_dir).resolve():
+                raise ValueError("Copy-on-write fork requires the original straw pool")
+            ref = ray.get(self.controller.fork_source.remote(RecordSetRef.from_dict(value["manifest"])))
+            self._restored_consumers = DiskPayloadRef(ref, self.args.rollout_data_dir).load()
+            self.args._queue_fork_restored = True
+        else:
+            if state["configuration"].get("queue_id", self.data_config["queue_id"]) != self.data_config["queue_id"]:
+                raise ValueError("Data source checkpoint belongs to a different queue namespace")
+            self.load_state_dict(state["reader"])
+            self._restored_consumers = state["consumers"]
         self.args._queue_restored_source_ref = RecordSetRef.from_dict(value["manifest"])
 
     def close(self):

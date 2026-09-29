@@ -307,7 +307,6 @@ def test_rollout_transport_selects_source_and_only_straw_needs_storage(monkeypat
     "overrides",
     [
         {"rollout_queue_online_gc": True},
-        {"rollout_queue_resume": True},
         {"data_source_path": "slime.rollout.queue_data_source.QueueDataSource"},
     ],
 )
@@ -326,6 +325,16 @@ def test_global_dataset_flag_is_removed(monkeypatch):
         parser.parse_args(["--rollout-batch-size", "1", "--disable-rollout-global-dataset"])
     # Epoch-based scheduling no longer depends on this attribute.
     module.slime_validate_args(make_slime_validate_args(num_epoch=2, num_rollout=None))
+
+
+@pytest.mark.parametrize("flag", ["--rollout-queue-resume", "--rollout-queue-fork"])
+def test_queue_lifecycle_flags_are_removed(monkeypatch, flag):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())
+    defaults = parser.parse_args(["--rollout-batch-size", "1"])
+    assert not hasattr(defaults, flag[2:].replace("-", "_"))
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--rollout-batch-size", "1", flag])
 
 
 @pytest.mark.unit

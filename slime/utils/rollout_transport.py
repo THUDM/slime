@@ -111,6 +111,8 @@ class DiskPayloadRef:
 class RolloutGroupRef(DiskPayloadRef):
     index: int
     receipt: CommitReceipt | None = None
+    # A fork reuses the payload but supplies positions in its own accepted log.
+    source_positions: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -263,6 +265,8 @@ def load_rollout_samples(value):
         group = unpack_rollout_payload(reference)
         if isinstance(reference, RolloutGroupRef) and reference.receipt:
             for sample in iter_samples(group):
+                if reference.source_positions is not None:
+                    sample._queue_source_positions = list(reference.source_positions)
                 sample.__dict__.pop("_queue_lease", None)
                 sample._queue_receipt = asdict(reference.receipt)
         groups.append(group)

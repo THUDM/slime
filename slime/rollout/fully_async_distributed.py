@@ -420,13 +420,14 @@ class _GenerationActor:
             self._rebuffer_task = None
 
     def state_dict(self):
-        state = self.data_source.state_dict(include_pending=False)
-        if self.args.rollout_data_transport == "straw":
-            state = pack_rollout_payload(state, self.args, self.rollout_id)
-        return state
+        return self.data_source.state_dict(include_pending=False)
 
     def load_state_dict(self, state):
-        self.data_source.load_state_dict(unpack_rollout_payload(state))
+        state = unpack_rollout_payload(state)
+        if isinstance(state, dict) and state.get("worker_state") == 1:
+            # Older worker snapshots wrapped the reader with RNG state.
+            state = state["reader"]
+        self.data_source.load_state_dict(state)
 
     async def close(self):
         future = asyncio.run_coroutine_threadsafe(self._close(), get_async_loop().loop)
@@ -472,7 +473,7 @@ class DistributedRollout(RolloutScheduler):
         if args.rollout_all_samples_process_path is not None:
             raise ValueError("--rollout-all-samples-process-path is not supported by distributed fully-async rollout")
         recovered = []
-        if getattr(args, "rollout_queue_resume", False) and "fully_async" not in data_source._restored_consumers:
+        if getattr(args, "_rollout_queue_resume", False) and "fully_async" not in data_source._restored_consumers:
             ref = ray.get(args._rollout_queue_controller.recover_pending_rollout.remote())
             for value in DiskPayloadRef(ref, args.rollout_data_dir).load():
                 receipt = CommitReceipt.from_dict(value)

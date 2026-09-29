@@ -107,7 +107,7 @@ def _run_job(directory, phase, online_gc):
     args.rollout_queue_max_pending = 16
     args.rollout_queue_max_inflight = 4
     args.rollout_queue_online_gc = online_gc
-    args.rollout_queue_resume = phase == "resume"
+    args._rollout_queue_resume = phase == "resume"
     args.custom_generate_function_path = "test_straw_fully_async_recovery._generate_with_interrupt"
     args.custom_rm_path = "test_straw_fully_async_recovery._reward_once"
     args.group_rm = False

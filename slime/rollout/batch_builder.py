@@ -6,10 +6,8 @@ established order. The manager retains model/server and data-source lifecycle.
 
 import json
 import logging
-import random
 from pathlib import Path
 
-import numpy as np
 import ray
 import torch
 
@@ -93,11 +91,7 @@ class BatchBuilder:
                     RecordSetRef.from_dict(existing["ready_ref"]), self.args.rollout_data_dir
                 ).load()["ranks"]
                 return [Box(ray.put(ref)) for ref in refs]
-            random.setstate(plan["rng"]["python"])
-            np.random.set_state(plan["rng"]["numpy"])
-            torch.set_rng_state(plan["rng"]["torch"])
         else:
-            numpy_state = np.random.get_state()
             positions = {self.raw_ref.receipt.position}
             for sample in samples:
                 positions.update(getattr(sample, "_queue_source_positions", []))
@@ -118,11 +112,6 @@ class BatchBuilder:
                 "digest": self.plan_digest,
                 "raw": self.raw_ref,
                 "input_positions": sorted(positions),
-                "rng": {
-                    "python": random.getstate(),
-                    "numpy": (numpy_state[0], numpy_state[1].tolist(), *numpy_state[2:]),
-                    "torch": torch.get_rng_state(),
-                },
                 "producer_processing": "generation/reward/dynamic and batch filters already applied",
             }
             self._plan = pack_rollout_payload(plan, self.args, self.rollout_id)
@@ -186,6 +175,14 @@ class BatchBuilder:
 
     def load(self, rollout_id):
         if self.args.rollout_data_transport != "straw" or not self.args.load:
+            return
+        if getattr(self.args, "_queue_fork_restored", False) or getattr(
+            self.args, "_rollout_queue_empty_restore", False
+        ):
+            # A fork is taken after training completion. Saved pending/ready
+            # groups were reintroduced with new receipts; old positions and
+            # finished batches belong exclusively to the parent queue.
+            self.consumer_state = self.raw_ref = self.batch_id = self._plan = None
             return
         from straw.protocol import RecordSetRef
 

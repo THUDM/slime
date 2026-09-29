@@ -54,7 +54,7 @@ Ray 继续负责调度、RPC 和执行进程故障；slime 负责 Sample schema�
 
 straw 明确拒绝 `--buffer-filter-path`；`--buffer-sort-by-staleness` 仍用于内存数据源，straw 始终采用上述顺序。reward 和样本筛选 hook 继续可用。已经接收的 group 如果显式放回，会创建独立的 delivery task，保留原 accepted 历史；消费或丢弃 delivery 时也会确认被其替代的已接收版本。fully async scheduler 仍保留有界的 ready result 窗口，其 checkpoint 状态和已接收结果引用单独持久化。
 
-source checkpoint 统一保存共享 pending 任务、准确的不可变输入引用和排序 metadata；worker checkpoint 只保存 reader metadata。reader 快照格式升级为 v3，旧 v1/v2 本地 buffer 快照需要迁移，加载时明确报错。此功能需要带 `yield_tasks()` 和持久化排序字段的新版 `straw-queue` 构建，原 PyPI 0.1.0 wheel 尚无这些接口。
+source checkpoint 统一保存共享 pending 任务、准确的不可变输入引用、排序 metadata 和已提交的 dataset producer 游标；worker checkpoint 保存 reader metadata。reader 快照格式为 v3，旧 v1/v2 本地 buffer 快照需要迁移，加载时明确报错。此功能需要带 `yield_tasks()` 和持久化排序字段的新版 `straw-queue` 构建，原 PyPI 0.1.0 wheel 尚无这些接口。
 
 ## 共享张量、R3 与 SC
 
@@ -62,7 +62,38 @@ source checkpoint 统一保存共享 pending 任务、准确的不可变输入�
 
 已完成的 R3 routes 和 SC 张量，在 custom sample hook 之后随其 sample group 一起发布。后续 rollout、continuation 和训练数据发布复用不可变张量依赖；修改时写入新记录，旧引用保持有效。这是张量级共享与写时复制，不是 GPU 共享内存或内存页级写时复制。R3 训练只读取分配给当前 CP/TP rank 的行。大 bundle 会按 native 写入预算拆分；SC 也支持不启用 R3 的场景。
 
-需要持久化 R3/SC 张量时，使用 `--rollout-data-transport straw`；object-store 传输将它们保存在内存中。不再提供独立的 spill hook、每个 sample 的张量文件或 spill 清理步骤。导入另一个 straw 存储池的引用时，先将数据复制到目标池，再接收依赖这些数据的结果。Debug dump 直接保存张量内容，因此队列 GC 后仍可读取；启用 dump 会增加主机内存和 I/O 开销。
+需要持久化 R3/SC 张量时，使用 `--rollout-data-transport straw`；object-store 传输将它们保存在内存中。不再提供独立的 spill hook、每个 sample 的张量文件或 spill 清理步骤。导入另一个 straw 存储池的引用时，先将数据复制到目标池，再接收依赖这些数据的结果。旧 `.pt` debug dump 直接保存张量内容，队列 GC 后仍可读取；新的 `.straw.json` 索引归档保留共享张量引用。
+
+## Debug 归档与按 key 查询
+
+现有 debug 参数兼容两种格式：
+
+```bash
+--save-debug-rollout-data '/shared/debug/rollout_{rollout_id}.straw.json'
+# 在独立的只训练任务中加载，不启动 SGLang：
+--load-debug-rollout-data '/shared/debug/rollout_{rollout_id}.straw.json'
+```
+
+`.pt` 保持原来的独立文件格式。`.straw.json` 是指向 straw pack 的不可变索引，在 straw 传输下共享已有 R3/SC 张量；object-store 传输下会在索引旁创建 `straw-data` 存储池。每份归档独立持有 GC 引用，需要保留相应存储池；单独复制 JSON 不会复制数据。每个 rollout 一个索引文件，样本按 chunk 打包，不会每个 sample 一个文件。评估仍使用 `eval_<id>` 文件名约定。
+
+```python
+from slime.utils.rollout_archive import RolloutArchive
+from slime.observability.rollout_data_utils import load_debug_rollout_data
+
+with RolloutArchive('/shared/debug/rollout_7.straw.json') as archive:
+    print(archive.keys())  # 按归档顺序返回 sample key、可选的原 task key
+    samples = archive.load_samples(sample_key='sample:42')
+    group = archive.load_samples(task_key='prompt:21')
+    archive.export_pt('/shared/debug/rollout_7.pt')
+
+# 将旧格式导入新格式；不传 args 时，在索引旁创建 straw-data 存储池。
+samples = load_debug_rollout_data('/shared/debug/rollout_7.pt', rollout_id=7)
+RolloutArchive.save('/shared/debug/imported_7.straw.json', samples, rollout_id=7)
+```
+
+key 查找的是当前归档中的版本，不是实时队列中最新的任务。找不到 key 会抛出 `KeyError`。compact rollout 可能让多个样本共享同一个 index，所以接口始终返回列表；没有 index 的样本使用 `position:<序号>`。旧文件没有 task 来源信息时无法提供 task key。读取后恢复 Sample，回放张量保持 lazy，旧队列授权信息会被去掉，再进入原来的 BatchBuilder 转换流程。`--load-debug-rollout-data-subsample` 仍然有效。使用 straw 做只训练任务时，应另外指定可写的训练队列。
+
+关闭 archive 只关闭 reader，保留归档数据。确认所有 reader 都结束后，可以显式调用 `archive.release()` 释放其 GC 所有权；其他 queue、archive、checkpoint 的持有关系不受影响。导出的 `.pt` 在原 straw 数据回收后仍可独立读取。
 
 ## Sample 编码与完整性校验
 
@@ -122,24 +153,74 @@ GC 失败会停止后台循环，后续 coordinator 操作传播原始原因，�
 |---|---|
 | Worker 在结果接收前丢失 | 恢复最近一次持久化 continuation，以新 attempt 重新分配 |
 | 已提交结果但回复丢失 | 恢复已有 receipt，不重复进行逻辑接收 |
-| 第一个 batch 计划生成前整个任务停止 | `--rollout-queue-resume` 使用相同初始模型和 rollout 配置恢复已接收 group 与持久化前缀 |
+| 第一个 batch 计划生成前整个任务停止 | 用相同逻辑 `--save`、初始模型和 rollout 配置重启，自动恢复已接收 group 与持久化前缀 |
 | 已生成 batch 计划后重启 | 需要匹配的模型/优化器及 rollout checkpoint，单独恢复队列会明确报错 |
 
-Resume 要求整个旧任务（包括 coordinator 和 reader）已停止，并使用同一个 root 与 run ID。该参数是操作者声明，不是自动 fencing。尚未发布的推理可能重新执行；SGLang GPU KV cache 不会恢复。
+重启前必须停止整个旧任务，包括 coordinator 和 reader。队列 controller 对逻辑 save 目录加锁，直到关闭或退出时释放，拒绝并发任务；这不能证明遗留的远端 reader 已停止。尚未发布的推理可能重新执行；SGLang GPU KV cache 不会恢复。
 
 Checkpoint 的 `<save>/rollout/queue_state_<rollout_id>.json` 保存 source 和已注册 scheduler consumer；`builder_state_<rollout_id>.json` 保存训练 consumer 视图。它们的引用保留相应存储依赖图。Continuation 增量持久化，checkpoint 引用已有数据，不会再次重写全部归还样本的 token。恢复旧 checkpoint 不会抹去 WAL 中后来已接收的历史。
 
 部分 R3/SC 张量在 continuation 快照中保持 lazy 引用，生成追加新行时才加载。恢复 source 和 builder 状态会保留已保存的 warm groups 和行为策略版本，并记录哪些后续输出不属于恢复分支。恢复后的 pending task 独立于过滤决策保留存储引用。包含尚未重启 consumer 的完整 source 快照，必须先保留并持久记录，才能释放旧引用；保存失败保留旧引用，后台 GC 在恢复后的 consumer 状态提交后才启动。
 
-Adapter 目前尚未建立模型、优化器、RNG 与队列状态的联合最终提交 manifest。因此，持久化 rollout 不代表任意崩溃后的 optimizer 精确恢复，也不承诺训练结果逐位一致。
+### 从旧训练 checkpoint 创建分支
 
-dataset producer 游标尚未随 source checkpoint 保存，恢复 pending 快照也尚未排除所有后来新增的任务。因此，任意旧训练步的完整回退仍属于待实现能力。
+新的 source v2 快照保存 dataset offset、epoch、sample/group 编号、metadata，以及数据集内容与配置身份。正常 straw 训练先等待 actor/critic 同步保存，再在同一次 admission 暂停期间保存 source 和 builder。保存异常直接终止任务；所有保存调用返回后，由 driver 发布 `rollout/committed_<rollout_id>.json`。该标记列举模型文件，并绑定同一训练边界的 source/builder 索引。省略 optimizer 或训练 RNG 的 checkpoint 不能用于训练分支恢复。
+
+straw 不保存或恢复 data source、生成 worker 和 batch 转换的 RNG 状态。数据集顺序通过保存的游标和 shuffle seed/epoch 恢复。尚未完成的转换会使用当前 RNG 状态重新执行 hook，因此随机 hook 的结果和重新生成的 token 可能在重启后不同。旧快照里的 RNG 字段会被忽略。训练 RNG 仍由训练后端的模型 checkpoint 管理。
+
+checkpoint 按 `rollout_id + 1` 推导 serving 权重版本：第 0 轮 rollout 前会先同步一次权重，每轮 checkpoint 都在下一次同步前保存。恢复时用这个版本初始化 updater，再由首次同步发布恢复后的模型，供下一轮 rollout 使用。`save_model()` 和 `update_weights()` 都不再为 checkpoint 返回版本号。
+
+例如已经训练到 rollout 10，希望从 rollout 7 保存后的状态继续：
+
+```bash
+--rollout-data-transport straw \
+--load /shared/checkpoints/run \
+--ckpt-step 7 \
+--save /shared/checkpoints/run
+```
+
+正常使用只需要模型的 `--load`、`--save` 和可选的 `--ckpt-step`。保持原来的数据集、模型/tokenizer 配置、straw run ID、存储 profile 和 fully async worker 拓扑。省略 `--rollout-data-dir` 时从提交标记读取原共享池。step 对应保存的 rollout ID，以上例子从 rollout 8 开始。
+
+`--save` 是逻辑目录。首次运行直接写入它；复用已有目录时，自动创建唯一的 `branches/<id>` 输出目录。逻辑目录的 `rollout/current.json` 指向当前物理目录，各分支的 `rollout/branch.json` 记录父 checkpoint 和队列 namespace。已有模型 checkpoint 和队列数据不被覆盖。启动日志会打印实际路径。显式 debug 输出模板保持原样；使用不可变 `.straw.json` 归档时，每次运行应指定新的 debug 路径。
+
+之后用 `--load /shared/checkpoints/run --save /shared/checkpoints/run` 重启，会选当前分支最新的**联合提交 checkpoint**，即使模型 tracker 指向更晚但未完成的保存。若 `--save` 已有 current 指针，省略 `--load` 也会自动续跑。新分支尚未存出第一个 checkpoint 就停止，则沿记录恢复父 checkpoint。尚无任何模型 checkpoint 的首次运行，在 batch 计划生成前可以直接恢复原队列 WAL。
+
+仍然支持手动指定：
+
+| 选择方式 | 参数 |
+|---|---|
+| 当前分支历史中的某一步 | `--load /shared/checkpoints/run --ckpt-step 7` |
+| 某个已保存分支 | `--load /shared/checkpoints/run/branches/<id> --ckpt-step 7` |
+| 精确指定不可变提交，忽略 current 指针 | `--load /shared/checkpoints/run/rollout/committed_7.json` |
+| 另外选择输出目录 | `--save /shared/checkpoints/another-run` |
+
+也支持直接把 `latest_checkpointed_iteration.txt` 改成更早的 step。显式 `--ckpt-step` 或具体提交文件优先；可以修改逻辑 save 目录或当前物理分支中的 tracker。每次联合提交后，逻辑 tracker 都更新为当前分支保存的 step；恢复 step K 时，在开始生成前先将其设置为 K。current 指针同时记录上次观察到的值，以区分用户修改和启动时继承的旧值。物理 tracker 指向更大 step 但没有联合提交时，按未完成保存处理。手动选中旧模型却没有队列快照时，按下述空队列规则恢复；模型缺失或快照损坏仍然报错。
+
+沿父分支查找时，最多回到每个分叉点，不会自动选中父分支被放弃的未来。需要恢复那段未来时，直接指定它的提交文件。
+
+每次 checkpoint 恢复都在同一存储池内创建独立命名空间的队列。pending/partial 共享快照中的准确输入版本，ready group 保持顺序但重新签发 receipt。producer 恢复到保存的游标，旧 receipt position 和已完成 batch 不导入。修改时写入新记录，旧 checkpoint 仍可读取。这是应用层写时复制；模型权重在新训练保存时才产生新副本。父队列不会 reset 或截断。
+
+如果指定的**模型存在，但确实没有保存队列快照**，则启动新空队列。有旧格式 `rollout/global_dataset_state_dict_<step>.pt` 时，恢复 offset、epoch、sample/group 编号和 metadata；没有时从 offset 0 开始并明确警告，不保证数据精确重放。不会借用其他 step 的 pending、partial 或 ready 数据。模型缺失、已有队列快照不完整或损坏、被引用 payload 缺失、快照版本不受支持等情况会报错，不能静默退化成空队列。
+
+queue fork/resume 命令行参数已删除，统一使用模型的 load/save 参数选择恢复方式。模型加载后核对实际 iteration。随 Docker 提供的 Megatron patch 已处理 step 0，并阻止较新的非持久 checkpoint 覆盖显式选择的 step。
+
+增加 `--num-rollout` 还会改变 Megatron 默认优化器调度器的总步数。若延长训练但保留已保存的调度器配置，使用已有的 `--use-checkpoint-opt-param-scheduler` 参数。队列恢复不会自动覆盖优化器设置。
+
+恢复边界是完整 rollout 训练 batch，不是 batch 内任意 optimizer microstep。推理 KV cache 和服务端采样状态没有快照，因此不承诺继续生成的结果逐位一致。此命令暂不实现复制到不同 straw 存储池的独立物理副本。
 
 ## 验证与当前限制
 
 CPU 测试覆盖 codec、R3/SC 传输、CP/TP 按行读取、worker 故障、continuation、checkpoint 视图和 GC 所有权。straw 独立验证 Rust/Python 核心、有界所有权模型和 native 崩溃边界。物理多客户端文件系统检查及真实 GPU 训练补充这些测试。
 
 `tests/test_straw_fully_async_recovery.py` 启动两个本地 Ray 节点，以 SIGKILL 中断整个 driver、coordinator 和 generation 进程树，再启动新任务读取同一个 straw 存储池，不经过正常 checkpoint。测试覆盖已接收结果重放、token/logprob/R3/SC 前缀保持不变、新 lease 和 reward 只计算一次，并分别检查在线 GC 关闭与开启的情况。推理和 reward 使用 CPU fixture，不代表 optimizer 恢复验证。此测试在 `cpu-unittest` 中自动运行，安装方式见 [CI 配置](../developer_guide/ci.md)。
+
+`tests/test_straw_checkpoint_fork.py` 是注册在 Megatron e2e matrix 中的四 GPU Qwen2.5-0.5B 回归测试。先进行三步 fully async 训练，保存 checkpoint 0/1/2，再从 checkpoint 1 向同一逻辑 save 目录恢复两次，验证直接修改模型 tracker 回退，并不指定 step 自动续跑当前分支；另验证缺少队列快照的旧模型从空队列和旧 dataset 游标恢复（编号从 0 开始）。在恢复后的生成启动前，精确比较完整 producer 游标、pending 输入引用和 ready group 顺序；同时检查训练 sample 一致、新旧 task key 隔离、父分支索引未修改、梯度有限且非零，以及 `.straw.json` 和导出的 `.pt` 两种格式的 GPU 只训练重放。测试不要求 GPU 梯度或新生成 token 逐位一致。
+
+```bash
+python tests/test_straw_checkpoint_fork.py
+```
+
+多机运行时，模型、prompt 数据和 `--work-dir` 必须共享；测试支持指定这些路径和 `--num-gpus-per-node`。与 checkpoint fork 功能本身一样，需要安装 native 层支持 `pending_tasks` 和 `yield_tasks` 的 straw 构建。
 
 本地运行分布式 rollout 与中断恢复测试：
 
