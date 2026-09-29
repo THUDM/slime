@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 09 月 28 日"/>
+    <meta name="docbuild:last-update" content="2026 年 09 月 29 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -668,21 +668,23 @@
 <li><p>在生成过程中集成外部工具或 API</p></li>
 </ul>
 <p><strong>示例</strong>: 参见 <a class="reference internal" href="../_examples_synced/fully_async/README.html"><span class="std std-doc">examples/fully_async</span></a></p>
-<p>显式设置 <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code> 后（默认是 Ray <code class="docutils literal notranslate"><span class="pre">object-store</span></code>），<code class="docutils literal notranslate"><span class="pre">RolloutFnTrainOutput.samples</span></code> 可以是指向本批数据的 <code class="docutils literal notranslate"><span class="pre">DiskPayloadRef</span></code>。已有 custom function 返回 Sample 列表（直接返回或放在 <code class="docutils literal notranslate"><span class="pre">RolloutFnTrainOutput</span></code> 中）仍可使用，manager 会统一保存一次。新函数可以在 rollout 过程中保存已经生成、打分并筛选的 group，最后返回 manifest，避免在内存中积累完整 batch。例如，已有一个逐组产生选中数据的异步迭代器时：</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">asyncio</span>
-
+<p>选择 <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code> 后，自定义 rollout 函数可以直接返回 Sample 列表，也可以放在 <code class="docutils literal notranslate"><span class="pre">RolloutFnTrainOutput</span></code> 中，由 manager 持久化。<code class="docutils literal notranslate"><span class="pre">RolloutFnTrainOutput.samples</span></code> 也接受 <code class="docutils literal notranslate"><span class="pre">DiskPayloadRef</span></code>。为了避免在内存中积累整个 batch，可以逐组保存已经生成、打分并筛选的结果。以下辅助函数接收 rollout 函数的 <code class="docutils literal notranslate"><span class="pre">data_source</span></code> 和逐组返回已完成数据的异步迭代器：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.data.transport</span><span class="w"> </span><span class="kn">import</span> <span class="n">publish_rollout_async</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">slime.rollout.base_types</span><span class="w"> </span><span class="kn">import</span> <span class="n">finalize_rollout_groups</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.rollout_transport</span><span class="w"> </span><span class="kn">import</span> <span class="n">pack_rollout_group</span>
 
 
-<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate_stored_batch</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">completed_groups</span><span class="p">):</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate_stored_batch</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">data_source</span><span class="p">,</span> <span class="n">completed_groups</span><span class="p">):</span>
     <span class="n">refs</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">async</span> <span class="k">for</span> <span class="n">group</span> <span class="ow">in</span> <span class="n">completed_groups</span><span class="p">:</span>
-        <span class="n">refs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">to_thread</span><span class="p">(</span><span class="n">pack_rollout_group</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">))</span>
-    <span class="k">return</span> <span class="n">finalize_rollout_groups</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">refs</span><span class="p">)</span>
+        <span class="n">ref</span> <span class="o">=</span> <span class="k">await</span> <span class="n">publish_rollout_async</span><span class="p">(</span>
+            <span class="n">group</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">controller</span><span class="o">=</span><span class="n">data_source</span><span class="o">.</span><span class="n">controller</span>
+        <span class="p">)</span>
+        <span class="n">refs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">ref</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">finalize_rollout_groups</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">refs</span><span class="p">,</span> <span class="n">controller</span><span class="o">=</span><span class="n">data_source</span><span class="o">.</span><span class="n">controller</span><span class="p">)</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">finalize_rollout_groups</span></code> 负责排序、调用一次配置的 batch sample filter，并保存 batch manifest。如果 hook 修改 Sample，会重新保存处理结果。Wrapper 需要真实 Sample 时，可调用 <code class="docutils literal notranslate"><span class="pre">slime.utils.rollout_transport.load_rollout_samples(output.samples)</span></code>。生成、reward hook 和 eval 的返回协议不变。</p>
+<p>数据源的 controller 负责将带 lease 的 group 提交到所属队列。<code class="docutils literal notranslate"><span class="pre">finalize_rollout_groups</span></code> 排序后调用一次配置的 batch sample filter，并保存 batch manifest；hook 修改 Sample 时会重新保存结果。Wrapper 需要 Sample 对象时，可调用 <code class="docutils literal notranslate"><span class="pre">slime.data.transport.load_rollout_samples(output.samples)</span></code>。</p>
+<p>straw 默认数据源为 <code class="docutils literal notranslate"><span class="pre">slime.data.queue_data_source.QueueDataSource</span></code>，通过 <code class="docutils literal notranslate"><span class="pre">get_samples(n)</span></code> 获取 prompt group，通过 <code class="docutils literal notranslate"><span class="pre">add_samples(groups)</span></code> 归还任务以供续跑。归还的 group 持久化后可由任意 reader 领取。自定义远端 worker 可以接收 <code class="docutils literal notranslate"><span class="pre">source.reader_config(&quot;worker_id&quot;)</span></code>，在自己的进程中调用 <code class="docutils literal notranslate"><span class="pre">config.open()</span></code>。Reader ID 必须唯一，<code class="docutils literal notranslate"><span class="pre">owner</span></code> 为保留名称；请求和写入结束后应关闭 reader。Reader 自动续租，关闭时归还未完成任务。</p>
 </section>
 <hr class="docutils" />
 <section id="custom-generate-function-path">
@@ -961,9 +963,9 @@
 <hr class="docutils" />
 <section id="data-source-path">
 <h3><code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code><a class="headerlink" href="#data-source-path" title="链接到此标题。">#</a></h3>
-<p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.data_source.RolloutDataSourceWithBuffer</span></code></p>
+<p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">slime.data.data_source.RolloutDataSourceWithBuffer</span></code></p>
 <p><strong>用途</strong>: 覆盖 rollout 提示词的数据源。</p>
-<p><strong>基类</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.data_source.DataSource</span></code></p>
+<p><strong>基类</strong>: <code class="docutils literal notranslate"><span class="pre">slime.data.data_source.DataSource</span></code></p>
 <p><strong>必需方法</strong>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">CustomDataSource</span><span class="p">(</span><span class="n">DataSource</span><span class="p">):</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">get_samples</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]:</span>
@@ -1212,7 +1214,7 @@ engine 读取之前，在每个训练 rank 上调用。用于在非 POSIX 共享
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 09 月 28 日.
+  最后更新于 2026 年 09 月 29 日.
   <br/>
 </p>
   </div>

@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Sep 28, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 29, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -553,25 +553,23 @@
 <li><p>Executes the registered test file with <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/&lt;test_file&gt;.py</span></code>.</p></li>
 </ol>
 <p>GPU tests usually follow the e2e pattern: <code class="docutils literal notranslate"><span class="pre">prepare()</span></code> downloads models/datasets, and <code class="docutils literal notranslate"><span class="pre">execute()</span></code> builds CLI arguments and calls <code class="docutils literal notranslate"><span class="pre">U.execute_train(...)</span></code>.</p>
-<p>Half of the 34 distinct training e2e matrix cases use straw; duplicate jobs and
-the GPU logprob/entropy kernel test are excluded from that count. The selected
-tests set <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code> explicitly, so local execution and
+<p>The straw e2e tests set <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code> explicitly, so local execution and
 <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> use the same backend as the fixed matrix:</p>
 <ul class="simple">
 <li><p>R3: <code class="docutils literal notranslate"><span class="pre">test_qwen3_30B_A3B_r3.py</span></code> and <code class="docutils literal notranslate"><span class="pre">test_moonlight_16B_A3B_r3.py</span></code>.</p></li>
 <li><p>SC: <code class="docutils literal notranslate"><span class="pre">test_qwen2.5_0.5B_score_centering.py</span></code>, covering both top-k and top-p.</p></li>
 <li><p>Fully async, fanout, PPO, MTP, PD/Mooncake, distributed SGLang configuration,
 mixed-offload fault recovery, debug replay and release-train.</p></li>
-<li><p>All five checkpoint save/load combinations share the same straw directory
-across both phases, verify queue/builder checkpoints and explicitly resume
-the queue on load.</p></li>
+<li><p>Checkpoint save/load tests share the straw pool across phases and verify
+queue and training-state recovery. <code class="docutils literal notranslate"><span class="pre">test_straw_checkpoint_fork.py</span></code> covers
+step selection, repeated rollback, automatic branch selection and debug replay.</p></li>
 </ul>
 <p>R3, SC and fully async also enable online GC. Ordinary straw tests use isolated
 temporary directories that are cleaned up after execution. These single-host
 GPU tests exercise the local filesystem profile; multi-host JuiceFS durability
 requires separate validation. The other e2e cases retain their Ray object-store
 or NIXL transport coverage. GPU containers install straw in both fixed and
-changed-test jobs, including when the published image predates straw support.</p>
+changed-test jobs.</p>
 </section>
 <section id="changed-test-job">
 <h3>Changed-Test Job<a class="headerlink" href="#changed-test-job" title="Link to this heading">#</a></h3>
@@ -862,7 +860,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Sep 28, 2026.
+  Last updated on Sep 29, 2026.
   <br/>
 </p>
   </div>

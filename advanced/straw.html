@@ -48,364 +48,6 @@
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.12.1/dist/mermaid.esm.min.mjs";
-
-
-
-
-
-const initStyles = () => {
-    const defaultStyle = document.createElement('style');
-    defaultStyle.textContent = "pre.mermaid {\n    /* Same as .mermaid-container > pre */\n    display: block;\n    width: 100%;\n}\n\npre.mermaid > svg {\n    /* Same as .mermaid-container > pre > svg */\n    height: 500px;\n    width: 100%;\n    max-width: 100% !important;\n}";
-    document.head.appendChild(defaultStyle);
-
-    const fullscreenStyle = document.createElement('style');
-    fullscreenStyle.textContent = ".mermaid-container {\n    position: relative;\n    display: flex;\n    flex-direction: row;\n    width: 100%;\n}\n\n.mermaid-container > pre {\n    display: block;\n    width: 100%;\n}\n\n.mermaid-container > pre > svg {\n    height: 500px;\n    width: 100%;\n    max-width: 100% !important;\n}\n\n.mermaid-fullscreen-btn {\n    position: absolute;\n    width: 28px;\n    height: 28px;\n    background: rgba(255, 255, 255, 0.95);\n    border: 1px solid rgba(0, 0, 0, 0.3);\n    border-radius: 4px;\n    cursor: pointer;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n    transition: all 0.2s;\n    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);\n    font-size: 14px;\n    line-height: 1;\n    padding: 0;\n    color: #333;\n}\n\n.mermaid-fullscreen-btn:hover {\n    opacity: 100% !important;\n    background: rgba(255, 255, 255, 1);\n    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);\n    transform: scale(1.1);\n}\n\n.mermaid-fullscreen-btn.dark-theme {\n    background: rgba(50, 50, 50, 0.95);\n    border: 1px solid rgba(255, 255, 255, 0.3);\n    color: #e0e0e0;\n}\n\n.mermaid-fullscreen-btn.dark-theme:hover {\n    background: rgba(60, 60, 60, 1);\n    box-shadow: 0 3px 10px rgba(255, 255, 255, 0.2);\n}\n\n.mermaid-fullscreen-modal {\n    display: none;\n    position: fixed !important;\n    top: 0 !important;\n    left: 0 !important;\n    width: 95vw;\n    height: 100vh;\n    background: rgba(255, 255, 255, 0.98);\n    z-index: 9999;\n    padding: 20px;\n    overflow: auto;\n}\n\n.mermaid-fullscreen-modal.dark-theme {\n    background: rgba(0, 0, 0, 0.98);\n}\n\n.mermaid-fullscreen-modal.active {\n    display: flex;\n    align-items: center;\n    justify-content: center;\n}\n\n.mermaid-container-fullscreen {\n    position: relative;\n    width: 95vw;\n    height: 90vh;\n    max-width: 95vw;\n    max-height: 90vh;\n    background: white;\n    border-radius: 8px;\n    padding: 20px;\n    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);\n    overflow: auto;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n}\n\n.mermaid-container-fullscreen.dark-theme {\n    background: #1a1a1a;\n    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);\n}\n\n.mermaid-container-fullscreen pre.mermaid {\n    width: 100%;\n    height: 100%;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n}\n\n.mermaid-container-fullscreen .mermaid svg {\n    height: 100% !important;\n    width: 100% !important;\n    cursor: grab;\n}\n\n.mermaid-fullscreen-close {\n    position: fixed !important;\n    top: 20px !important;\n    right: 20px !important;\n    width: 40px;\n    height: 40px;\n    background: rgba(255, 255, 255, 0.95);\n    border: 1px solid rgba(0, 0, 0, 0.2);\n    border-radius: 50%;\n    cursor: pointer;\n    z-index: 10000;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);\n    transition: all 0.2s;\n    font-size: 24px;\n    line-height: 1;\n    color: #333;\n}\n\n.mermaid-fullscreen-close:hover {\n    background: white;\n    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);\n    transform: scale(1.1);\n}\n\n.mermaid-fullscreen-close.dark-theme {\n    background: rgba(50, 50, 50, 0.95);\n    border: 1px solid rgba(255, 255, 255, 0.2);\n    color: #e0e0e0;\n}\n\n.mermaid-fullscreen-close.dark-theme:hover {\n    background: rgba(60, 60, 60, 1);\n    box-shadow: 0 6px 16px rgba(255, 255, 255, 0.2);\n}\n\n.mermaid-fullscreen-modal .mermaid-fullscreen-btn {\n    display: none !important;\n}";
-    document.head.appendChild(fullscreenStyle);
-}
-
-// Detect if page has dark background
-const isDarkTheme = () => {
-    // We use a set of heuristics:
-    // 1. Check for common dark mode classes or attributes
-    // 2. Check computed background color brightness
-    if (document.documentElement.classList.contains('dark') ||
-        document.documentElement.getAttribute('data-theme') === 'dark' ||
-        document.body.classList.contains('dark') ||
-        document.body.getAttribute('data-theme') === 'dark') {
-        // console.log("Dark theme detected via class/attribute");
-        return true;
-    }
-    if (document.documentElement.classList.contains('light') ||
-        document.documentElement.getAttribute('data-theme') === 'light' ||
-        document.body.classList.contains('light') ||
-        document.body.getAttribute('data-theme') === 'light') {
-        // console.log("Light theme detected via class/attribute");
-        return false;
-    }
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-        // console.log("Dark theme detected via prefers-color-scheme");
-        return true;
-    }
-    const bgColor = window.getComputedStyle(document.body).backgroundColor;
-    const match = bgColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)/);
-    if (match) {
-        const r = parseInt(match[1]);
-        const g = parseInt(match[2]);
-        const b = parseInt(match[3]);
-        const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-        // console.log("Background color brightness:", brightness);
-        return brightness < 128;
-    }
-    // console.log("No dark or light theme detected, defaulting to light theme");
-    return false;
-};
-
-let darkTheme = isDarkTheme();
-let modal = null;
-let modalContent = null;
-let previousScrollOffset = [window.scrollX, window.scrollY];
-let _lazyObserver = null;
-let _renderQueue = Promise.resolve();
-let closeModal = () => {};
-
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && modal?.classList.contains('active')) {
-        closeModal();
-    }
-});
-
-// Apply d3 zoom to each SVG. Idempotent: an SVG already wrapped is skipped,
-// so this is safe to call both for the initial batch and for diagrams that
-// render lazily once they become visible.
-const addZoomToSvgs = (svgs) => {
-    svgs.each(function() {
-        if (this.getAttribute('data-zoom-applied') === 'true') return;
-        var svg = d3.select(this);
-        svg.html("<g class='wrapper'>" + svg.html() + "</g>");
-        var inner = svg.select("g");
-        var zoom = d3.zoom().on("zoom", function(event) {
-            inner.attr("transform", event.transform);
-        });
-        svg.call(zoom);
-        this.setAttribute('data-zoom-applied', 'true');
-    });
-};
-
-const runMermaid = async (rerun) => {
-    console.log("Running mermaid diagrams, rerun =", rerun);
-    // clear all existing mermaid charts
-    let all_mermaids = document.querySelectorAll(".mermaid");
-
-    if (rerun) {
-        // Disconnect any previous lazy rendering observer
-        if (_lazyObserver) {
-            _lazyObserver.disconnect();
-            _lazyObserver = null;
-        }
-
-        all_mermaids.forEach((el) => {
-            el.removeAttribute('data-mermaid-deferred');
-            el.removeAttribute('data-mermaid-render-failed');
-            if(!el.hasAttribute("data-original-code")) {
-                // store original code
-                // console.log(`Storing original code for first run: `, el.innerHTML);
-                el.setAttribute('data-original-code', el.innerHTML);
-            }
-            if(el.getAttribute("data-processed") === "true") {
-                // remove and restore original
-                el.removeAttribute("data-processed");
-                // console.log(`Restoring original code for re-run: `, el.getAttribute('data-original-code'));
-                el.innerHTML = el.getAttribute('data-original-code');
-            } else {
-                // store original code
-                // console.log(`Storing original code for re-run: `, el.innerHTML);
-                el.setAttribute('data-original-code', el.innerHTML);
-            }
-        });
-
-        // Separate visible and hidden elements. Mermaid's layout engine measures
-        // text dimensions via the DOM, which fails for elements hidden by a parent
-        // (e.g., Reveal.js non-active slides, sphinx-design unopened tabs),
-        // producing broken SVGs. Render visible elements now, defer hidden ones.
-        const visible = [];
-        const hidden = [];
-        all_mermaids.forEach((el) => {
-            // offsetParent is null for display:none ancestors.
-            // getClientRects().length > 0 catches position:fixed elements
-            // (which also have null offsetParent but are still visible).
-            if (el.offsetParent !== null || el.getClientRects().length > 0) {
-                visible.push(el);
-            } else {
-                hidden.push(el);
-                el.setAttribute('data-mermaid-deferred', 'true');
-            }
-        });
-
-        if (visible.length > 0) {
-            try {
-                await mermaid.run({ nodes: visible });
-            } catch (e) {
-                console.error("Mermaid rendering failed:", e);
-            }
-        }
-
-        // Lazily render hidden elements when they become visible.
-        // Uses a promise chain (_renderQueue) to serialize rendering,
-        // since IntersectionObserver may report multiple entries at once
-        // and mermaid.run() is not safe to call concurrently.
-        if (hidden.length > 0) {
-            if (typeof IntersectionObserver === 'undefined') {
-                console.warn("IntersectionObserver not available; hidden mermaid diagrams will not render.");
-            } else {
-                _renderQueue = Promise.resolve();
-                _lazyObserver = new IntersectionObserver((entries) => {
-                    for (const entry of entries) {
-                        if (entry.isIntersecting && entry.target.getAttribute("data-processed") !== "true") {
-                            _lazyObserver.unobserve(entry.target);
-                            const el = entry.target;
-                            _renderQueue = _renderQueue.then(async () => {
-                                try {
-                                    await mermaid.run({ nodes: [el] });
-                                    el.removeAttribute('data-mermaid-deferred');
-                                    // Apply zoom to the now-rendered diagram, matching
-                                    // the decoration visible diagrams receive.
-                                    if (false) {
-                                        addZoomToSvgs(d3.selectAll("").select(function() {
-                                            return this.querySelector("svg");
-                                        }));
-                                    }
-                                } catch (e) {
-                                    console.error("Mermaid deferred rendering failed:", e);
-                                    el.removeAttribute('data-mermaid-deferred');
-                                    el.setAttribute('data-mermaid-render-failed', 'true');
-                                }
-                            });
-                        }
-                    }
-                });
-                hidden.forEach((el) => _lazyObserver.observe(el));
-            }
-        }
-    }
-
-    all_mermaids = document.querySelectorAll(".mermaid");
-    // Exclude deferred (hidden) and render-failed elements from completion checks
-    const mermaids_active = document.querySelectorAll(".mermaid:not([data-mermaid-deferred]):not([data-mermaid-render-failed])");
-    const mermaids_processed = document.querySelectorAll(".mermaid:not([data-mermaid-deferred]):not([data-mermaid-render-failed])[data-processed='true']");
-
-    if (false) {
-        const mermaids_to_add_zoom = 0 === -1 ? mermaids_active.length : 0;
-        if(mermaids_to_add_zoom > 0) {
-            var svgs = d3.selectAll("").select(function() {
-                return this.querySelector("svg");
-            });
-            // Wait until every active (visible) diagram has rendered. Deferred
-            // diagrams are excluded, so a fixed d3_node_count that counts a
-            // hidden diagram no longer loops forever waiting for its SVG.
-            if(mermaids_active.length !== mermaids_processed.length) {
-                setTimeout(() => runMermaid(false), 200);
-                return;
-            }
-            addZoomToSvgs(svgs);
-        }
-    } else if(mermaids_active.length !== mermaids_processed.length) {
-        // Wait for mermaid to process all diagrams
-        setTimeout(() => runMermaid(false), 200);
-        return;
-    }
-
-    // Stop here if not adding fullscreen capability
-    if (!true) return;
-
-    if (modal !== null ) {
-        // Destroy existing modal
-        modal.remove();
-        modal = null;
-        modalContent = null;
-    }
-
-    modal = document.createElement('div');
-    modal.className = 'mermaid-fullscreen-modal' + (darkTheme ? ' dark-theme' : '');
-    modal.setAttribute('role', 'dialog');
-    modal.setAttribute('aria-modal', 'true');
-    modal.setAttribute('aria-label', 'Fullscreen diagram viewer');
-    modal.innerHTML = `
-        <button class="mermaid-fullscreen-close${darkTheme ? ' dark-theme' : ''}" aria-label="Close fullscreen">✕</button>
-        <div class="mermaid-container-fullscreen${darkTheme ? ' dark-theme' : ''}"></div>
-    `;
-    document.body.appendChild(modal);
-
-    modalContent = modal.querySelector('.mermaid-container-fullscreen');
-    const closeBtn = modal.querySelector('.mermaid-fullscreen-close');
-
-    closeModal = () => {
-        modal.classList.remove('active');
-        modalContent.innerHTML = '';
-        document.body.style.overflow = ''
-        window.scrollTo({left: previousScrollOffset[0], top: previousScrollOffset[1], behavior: 'instant'});
-    };
-
-    closeBtn.addEventListener('click', closeModal);
-    modal.addEventListener('click', (e) => {
-        if (e.target === modal) closeModal();
-    });
-    document.querySelectorAll('.mermaid').forEach((mermaidDiv) => {
-        if (mermaidDiv.parentNode.classList.contains('mermaid-container') ||
-            mermaidDiv.closest('.mermaid-fullscreen-modal')) {
-            // Already processed, adjust button class if needed
-            const existingBtn = mermaidDiv.parentNode.querySelector('.mermaid-fullscreen-btn');
-            if (existingBtn) {
-                existingBtn.className = 'mermaid-fullscreen-btn' + (darkTheme ? ' dark-theme' : '');
-            }
-            return;
-        }
-
-        const container = document.createElement('div');
-        container.className = 'mermaid-container';
-        mermaidDiv.parentNode.insertBefore(container, mermaidDiv);
-        container.appendChild(mermaidDiv);
-
-        const fullscreenBtn = document.createElement('button');
-        fullscreenBtn.className = 'mermaid-fullscreen-btn' + (darkTheme ? ' dark-theme' : '');
-        fullscreenBtn.setAttribute('aria-label', 'View diagram in fullscreen');
-        fullscreenBtn.textContent = "\u26f6";
-        fullscreenBtn.style.opacity = "50%";
-
-        // Calculate dynamic position based on diagram's margin and padding
-        const diagramStyle = window.getComputedStyle(mermaidDiv);
-        const marginTop = parseFloat(diagramStyle.marginTop) || 0;
-        const marginRight = parseFloat(diagramStyle.marginRight) || 0;
-        const paddingTop = parseFloat(diagramStyle.paddingTop) || 0;
-        const paddingRight = parseFloat(diagramStyle.paddingRight) || 0;
-        fullscreenBtn.style.top = `${marginTop + paddingTop + 4}px`;
-        fullscreenBtn.style.right = `${marginRight + paddingRight + 4}px`;
-
-        fullscreenBtn.addEventListener('click', () => {
-            previousScrollOffset = [window.scrollX, window.scrollY];
-            const clone = mermaidDiv.cloneNode(true);
-            modalContent.innerHTML = '';
-            modalContent.appendChild(clone);
-
-            const svg = clone.querySelector('svg');
-            if (svg) {
-                svg.removeAttribute('width');
-                svg.removeAttribute('height');
-                svg.style.width = '100%';
-                svg.style.height = 'auto';
-                svg.style.maxWidth = '100%';
-                svg.style.display = 'block';
-
-                if (false) {
-                    setTimeout(() => {
-                        const g = svg.querySelector('g');
-                        if (g) {
-                            var svgD3 = d3.select(svg);
-                            svgD3.html("<g class='wrapper'>" + svgD3.html() + "</g>");
-                            var inner = svgD3.select("g");
-                            var zoom = d3.zoom().on("zoom", function(event) {
-                                inner.attr("transform", event.transform);
-                            });
-                            svgD3.call(zoom);
-                        }
-                    }, 100);
-                }
-            }
-
-            modal.classList.add('active');
-            document.body.style.overflow = 'hidden';
-        });
-        container.appendChild(fullscreenBtn);
-    });
-};
-
-
-
-const load = async () => {
-    initStyles();
-
-
-    await runMermaid(true);
-
-    const reRunIfThemeChanges = async () => {
-        const newDarkTheme = isDarkTheme();
-        if (newDarkTheme !== darkTheme) {
-            darkTheme = newDarkTheme;
-            console.log("Theme change detected, re-running mermaid with", darkTheme ? "dark" : "default", "theme");
-            await mermaid.initialize(
-                {...{"startOnLoad": false},
-                ...{ darkMode: darkTheme, theme: darkTheme ? "dark" : "default" },
-                }
-            );
-            await runMermaid(true);
-        }
-    };
-
-    // Update theme classes when theme changes
-    const themeObserver = new MutationObserver(reRunIfThemeChanges);
-    themeObserver.observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ['class', 'style', 'data-theme']
-    });
-    themeObserver.observe(document.body, {
-        attributes: true,
-        attributeFilter: ['class', 'style', 'data-theme']
-    });
-};
-
-
-
-
-
-console.log("Initializing mermaid with", darkTheme ? "dark" : "default", "theme");
-mermaid.initialize(
-    {...{"startOnLoad": false},
-    ...{ darkMode: darkTheme, theme: darkTheme ? "dark" : "default" },
-    }
-);
-
-window.addEventListener("load", load);
-window.runMermaid = runMermaid;</script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/straw';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
     <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
@@ -417,7 +59,7 @@ window.runMermaid = runMermaid;</script>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Sep 28, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 29, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -854,15 +496,16 @@ window.runMermaid = runMermaid;</script>
             </div>
             <nav aria-label="Page">
                 <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-changes-in-the-architecture">What changes in the architecture</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#end-to-end-data-flow">End-to-end data flow</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#queue-scheduling">Queue scheduling</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#shared-tensors-r3-and-sc">Shared tensors, R3 and SC</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sample-encoding-and-integrity">Sample encoding and integrity</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#enable-it">Enable it</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#online-gc-and-ownership">Online GC and ownership</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recovery-and-checkpoints">Recovery and checkpoints</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#validation-and-remaining-limits">Validation and remaining limits</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#data-flow-and-scheduling">Data flow and scheduling</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#packed-storage-and-supported-data">Packed storage and supported data</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#online-gc">Online GC</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recovery-and-checkpoints">Recovery and checkpoints</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#resume-or-select-a-step">Resume or select a step</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#missing-state-and-recovery-limits">Missing state and recovery limits</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-archives-and-sample-lookup">Debug archives and sample lookup</a></li>
 </ul>
             </nav>
         </div>
@@ -876,192 +519,23 @@ window.runMermaid = runMermaid;</script>
                   
   <section class="tex2jax_ignore mathjax_ignore" id="persistent-rollout-with-straw">
 <h1>Persistent rollout with straw<a class="headerlink" href="#persistent-rollout-with-straw" title="Link to this heading">#</a></h1>
-<p><a class="reference external" href="https://github.com/zhuzilin/straw">straw</a> provides filesystem-based durable
-queues and packed tensor storage for slime. With <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code>,
-prompt tasks, partial rollouts, accepted results and training batches have
-persistent identities. Multiple generation and training processes access their
-payloads directly through a shared filesystem; Ray schedules actors and carries
-control messages and small references.</p>
-<p>The current shared-filesystem target is JuiceFS. Each node must mount the same
-pool at the same absolute path. Other network filesystems, including NFS, need
-separate qualification of cross-client locks, visibility and durability.</p>
-<section id="what-changes-in-the-architecture">
-<h2>What changes in the architecture<a class="headerlink" href="#what-changes-in-the-architecture" title="Link to this heading">#</a></h2>
-<div class="pst-scrollable-table-container"><table class="table">
-<thead>
-<tr class="row-odd"><th class="head"><p>Concern</p></th>
-<th class="head"><p>Ray object-store transport (default)</p></th>
-<th class="head"><p>straw transport</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>Data source</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">RolloutDataSourceWithBuffer</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">QueueDataSource</span></code> backed by durable prompt tasks</p></td>
-</tr>
-<tr class="row-odd"><td><p>Payload exchange</p></td>
-<td><p>Ray object references</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">RecordSetRef</span></code> / tensor references into shared pack files</p></td>
-</tr>
-<tr class="row-even"><td><p>Worker assignment</p></td>
-<td><p>In-memory producer state</p></td>
-<td><p>Leases, attempts, durable continuations and accepted receipts</p></td>
-</tr>
-<tr class="row-odd"><td><p>Rollout-to-training conversion</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">BatchBuilder</span></code> applies hooks and DP partitioning</p></td>
-<td><p>The same conversion, with a persisted selection plan and ready batch</p></td>
-</tr>
-<tr class="row-even"><td><p>Data lifetime</p></td>
-<td><p>Process/object-store ownership</p></td>
-<td><p>Explicit task, consumer, reader and checkpoint ownership</p></td>
-</tr>
-<tr class="row-odd"><td><p>Cleanup</p></td>
-<td><p>Object-store lifetime</p></td>
-<td><p>Optional online GC of sealed packs with no remaining owners</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>There are two logical stages: rollout work/results, and ready training batches.
-They share the same straw storage pool, so a tensor retained by either stage or
-a checkpoint remains live. These stages do not require two copies of each tensor.
-The slime controller coordinates both stages; straw implements the storage,
-journal, task acceptance and ownership protocol in Rust.</p>
-<pre  class="mermaid">
-        flowchart LR
-    D[Dataset producer] --&gt;|cursor + task submission| Q[Durable prompt tasks]
-    Q --&gt;|lease + input reference| W[Distributed generation workers]
-    W --&gt;|durable partial continuation| Q
-    W --&gt;|accepted group reference| R[Rollout results]
-    R --&gt; B[BatchBuilder: selection plan and DP shards]
-    B --&gt;|ready batch reference| T[Training ranks]
-    T --&gt;|training completed| C[Queue controller: progress and ownership]
-    C --&gt; G[straw online GC]
-    P[(Shared JuiceFS pack files)] -. payload reads and writes .-&gt; W
-    P -. shared tensor references .-&gt; B
-    P -. rank-local reads .-&gt; T
-    </pre><p>One non-restarting Ray actor owns the coordinator for the run. It serializes
-queue transitions and dataset allocation; payload writes happen in the producing
-processes. This permits parallel I/O across machines while retaining one owner
-for each queue journal. There is no automatic coordinator election or failover.</p>
-</section>
-<section id="end-to-end-data-flow">
-<h2>End-to-end data flow<a class="headerlink" href="#end-to-end-data-flow" title="Link to this heading">#</a></h2>
-<ol class="arabic simple">
-<li><p><strong>Submit prompts.</strong> The dataset cursor and prompt tasks commit together.
-Workers claim leases and load prompt groups from the shared pool. A lost
-worker does not permanently abandon a preallocated range of dataset indices.</p></li>
-<li><p><strong>Generate and continue.</strong> Distributed fully async generation uses one worker
-per eligible Ray node. Workers generate, score and filter complete groups;
-partial groups are saved as durable continuations. R3 routes and SC rows must
-cover the saved token prefix. An incomplete server capture retries from the
-previous consistent input.</p></li>
-<li><p><strong>Accept results.</strong> Payloads become durable before their references are
-accepted. Receipts identify accepted groups, allowing recovery after an RPC
-reply is lost. Reassigned tasks receive new attempts; stale attempts cannot
-accept a replacement result.</p></li>
-<li><p><strong>Build the training batch.</strong> <code class="docutils literal notranslate"><span class="pre">BatchBuilder</span></code> persists the selected inputs and
-conversion configuration before calling reward/conversion hooks. It publishes
-all DP shards before marking one batch ready. Training readers check batch,
-plan and rank identity. The manager still materializes the selected samples
-for conversion, so its host memory remains a capacity consideration.</p></li>
-<li><p><strong>Acknowledge completion.</strong> After all rank training calls return, the manager
-reports <code class="docutils literal notranslate"><span class="pre">training_completed</span></code>. This advances runtime consumption and frees
-ready-batch capacity. It is distinct from a durable model/optimizer checkpoint.</p></li>
-</ol>
-<p>Ray remains responsible for scheduling, RPC and failures of execution processes.
-slime owns Sample schemas, rewards, filters, batching and training. straw owns
-bytes, references, persistence and storage lifetime. Custom rollout functions
-can still return Sample lists; the manager publishes a compatibility collection.
-See <a class="reference internal" href="../get_started/customization.html"><span class="std std-doc">customization</span></a>.</p>
-</section>
-<section id="queue-scheduling">
-<h2>Queue scheduling<a class="headerlink" href="#queue-scheduling" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">QueueReader</span></code> is a worker’s queue client: it acquires and returns groups and renews
-active leases. <code class="docutils literal notranslate"><span class="pre">QueueDataSource</span></code> adds job-level reader creation, consumer lifecycle
-and source checkpoints. It inherits the same sample-access methods; it does not
-implement another buffer. With <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code>, the source is
-selected automatically. Explicit <code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code> values should use
-<code class="docutils literal notranslate"><span class="pre">slime.rollout.queue_data_source.QueueDataSource</span></code>.</p>
-<p><code class="docutils literal notranslate"><span class="pre">QueueReader</span></code> has no local continuation buffer. <code class="docutils literal notranslate"><span class="pre">add_samples()</span></code> publishes valid
-continuations, then <code class="docutils literal notranslate"><span class="pre">yield_tasks()</span></code> atomically replaces their inputs and returns
-them to pending in one WAL transaction per bounded batch. The old leases end;
-any worker can acquire the saved inputs with a new lease. Readers keep only
-active leases and executing samples locally. Closing a reader does not rewrite
-returned groups.</p>
-<p>The persistent order is <strong>completed delivery → partial → fresh prompt</strong>. Within
-a stage, the oldest numeric value in a group’s <code class="docutils literal notranslate"><span class="pre">weight_versions</span></code> comes first
-(higher staleness), then FIFO submission/return order. Groups without numeric versions sort last
-within the stage. Comparing stored versions avoids rewriting queue priorities
-on every model update. This ordering does not drop stale samples automatically.
-Staleness is <code class="docutils literal notranslate"><span class="pre">current</span> <span class="pre">serving</span> <span class="pre">weight</span> <span class="pre">version</span> <span class="pre">-</span> <span class="pre">oldest</span> <span class="pre">generated-token</span> <span class="pre">weight</span> <span class="pre">version</span></code>: fresh samples have staleness 0.
-There is one indexed queue, not three independently managed queues.</p>
-<p><code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code> is rejected for straw. <code class="docutils literal notranslate"><span class="pre">--buffer-sort-by-staleness</span></code> remains
-an option for the in-memory data source; straw always applies the order above.
-Reward and sample-selection hooks remain available. Already accepted groups
-explicitly returned to the source get separate delivery tasks; accepted history
-is immutable, and consuming/discarding a delivery also acknowledges its earlier
-accepted versions. The fully async scheduler still keeps a bounded ready-results
-window, with its own checkpoint state and durable accepted-result references.</p>
-<p>Source snapshots now store the shared pending tasks, their exact immutable input
-references and scheduling metadata once; worker snapshots store reader metadata.
-The reader snapshot format is version 3; old reader-local v1/v2 buffer snapshots
-require migration and are rejected explicitly. This requires an updated
-<code class="docutils literal notranslate"><span class="pre">straw-queue</span></code> build with <code class="docutils literal notranslate"><span class="pre">yield_tasks()</span></code> and persistent scheduling keys; the
-original PyPI 0.1.0 wheel does not provide these APIs.</p>
-</section>
-<section id="shared-tensors-r3-and-sc">
-<h2>Shared tensors, R3 and SC<a class="headerlink" href="#shared-tensors-r3-and-sc" title="Link to this heading">#</a></h2>
-<p>Each writer process reuses a pack writer. The slime adapter’s default rotation
-target is <strong>256 MiB</strong>, configured by <code class="docutils literal notranslate"><span class="pre">--rollout-queue-segment-mib</span></code>. Records and
-manifests are embedded in packs; there is no file per sample or tensor. This
-avoids the small-file metadata traffic that limits shared-filesystem throughput.
-Queue and ownership metadata use append logs.</p>
-<p>Completed R3 routes and SC tensors are published with their sample group after
-custom sample hooks. Later rollout/continuation/training publications reuse
-immutable tensor dependencies. Updates produce new records while earlier
-references remain valid: this is tensor-level sharing and copy-on-write, not
-GPU shared memory or page-level copy-on-write. R3 training reads only the rows
-assigned to its CP/TP rank. Large bundles are split within the native write
-budget; SC also works without R3.</p>
-<p>Use <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code> to persist R3/SC tensors. Object-store
-transport keeps them in memory. There is no separate spill hook, per-sample
-tensor file, or spill cleanup step. References from another straw storage pool
-are copied into the destination pool before dependent results are accepted.
-Debug dumps embed tensor contents so they remain readable after queue GC;
-enabling dumps therefore adds host-memory and I/O overhead.</p>
-</section>
-<section id="sample-encoding-and-integrity">
-<h2>Sample encoding and integrity<a class="headerlink" href="#sample-encoding-and-integrity" title="Link to this heading">#</a></h2>
-<p>The adapter stores samples as a <code class="docutils literal notranslate"><span class="pre">slime.v1</span></code> JSON record <code class="docutils literal notranslate"><span class="pre">{version:</span> <span class="pre">1,</span> <span class="pre">tree:</span> <span class="pre">...}</span></code>
-with explicit tags for containers, Sample fields, NumPy arrays, images and
-rollout references. It preserves nested groups, supported dynamic fields,
-multimodal inputs, R3, SC top-k and ragged top-p. Unsupported Python types and
-cycles fail explicitly. The payload protocol uses no pickle and never imports
-classes named by stored data.</p>
-<p>Tensor nodes carry shape, dtype, semantic kind, lazy/validated flags and a
-<code class="docutils literal notranslate"><span class="pre">{dependency:</span> <span class="pre">index,</span> <span class="pre">ordinal:</span> <span class="pre">index}</span></code> pointer into the enclosing manifest’s
-dependencies. Physical locations belong to those manifests, so publishing
-another sample or training batch can share the same immutable tensor records.
-All tensor dependencies must be published before the enclosing sample is accepted.</p>
-<p>straw’s <code class="docutils literal notranslate"><span class="pre">tensor.v1</span></code> stores contiguous, row-major, little-endian typed bytes.
-Lazy readers verify metadata and the checksum of each chunk covering requested
-rows; they do not verify untouched chunks. Full inspection verifies the whole
-segment. Tensor descriptors are restored in batches to reuse shared pack indices.</p>
-</section>
+<p><a class="reference external" href="https://github.com/zhuzilin/straw">straw</a> provides filesystem-based queues and
+packed tensor storage for slime. It persists prompt tasks, partial rollouts,
+completed samples and training batches. Generation and training processes read
+and write payloads in parallel across machines; Ray carries control messages
+and references.</p>
+<p>The supported shared-filesystem target is JuiceFS. All nodes must mount the
+storage pool at the same absolute path. Other network filesystems, including
+NFS, require separate verification of locking, visibility and durability.</p>
 <section id="enable-it">
 <h2>Enable it<a class="headerlink" href="#enable-it" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">requirements.txt</span></code> includes <code class="docutils literal notranslate"><span class="pre">straw-queue</span></code>, so the standard Docker build and
-normal slime installation install it automatically. For an existing environment,
-install it on every generation and training node, using the same version throughout the job:</p>
+<p>The standard slime installation and Docker build include <code class="docutils literal notranslate"><span class="pre">straw-queue</span></code>. To
+install it in an existing environment, run this on every rollout and training
+node, using the same version throughout the job:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>straw-queue
 </pre></div>
 </div>
-<p>Without straw installed, the default Ray <code class="docutils literal notranslate"><span class="pre">object-store</span></code> transport still works
-and startup logs the installation command. Selecting <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code>
-without the package fails at startup with the same command.</p>
-<p>The Python import name is <code class="docutils literal notranslate"><span class="pre">straw</span></code>. Add these arguments to your existing training
-command, using a fresh shared directory:</p>
+<p>Add these arguments to your training command:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-data-transport<span class="w"> </span>straw<span class="w"> </span><span class="se">\</span>
 --rollout-data-dir<span class="w"> </span>/shared/juicefs/jobs/my-run/rollout_data<span class="w"> </span><span class="se">\</span>
 --rollout-queue-run-id<span class="w"> </span>my-run<span class="w"> </span><span class="se">\</span>
@@ -1069,124 +543,263 @@ command, using a fresh shared directory:</p>
 --rollout-storage-declaration<span class="w"> </span>/shared/juicefs/deployment.json
 </pre></div>
 </div>
-<p>The declaration records <code class="docutils literal notranslate"><span class="pre">direct_mount:</span> <span class="pre">true</span></code>, <code class="docutils literal notranslate"><span class="pre">writeback:</span> <span class="pre">false</span></code>,
-<code class="docutils literal notranslate"><span class="pre">open_cache:</span> <span class="pre">0</span></code>, <code class="docutils literal notranslate"><span class="pre">readdir_cache:</span> <span class="pre">false</span></code>, the deployed <code class="docutils literal notranslate"><span class="pre">client_version</span></code> and a
-<code class="docutils literal notranslate"><span class="pre">durability_description</span></code>. It declares verified deployment settings; it does
-not discover or configure the mount. See straw’s
+<p>The deployment declaration describes verified mount settings; it does not
+configure the mount. It includes <code class="docutils literal notranslate"><span class="pre">direct_mount:</span> <span class="pre">true</span></code>, <code class="docutils literal notranslate"><span class="pre">writeback:</span> <span class="pre">false</span></code>,
+<code class="docutils literal notranslate"><span class="pre">open_cache:</span> <span class="pre">0</span></code>, <code class="docutils literal notranslate"><span class="pre">readdir_cache:</span> <span class="pre">false</span></code>, <code class="docutils literal notranslate"><span class="pre">client_version</span></code> and
+<code class="docutils literal notranslate"><span class="pre">durability_description</span></code>. See straw’s
 <a class="reference external" href="https://github.com/zhuzilin/straw/blob/main/docs/FILESYSTEM.md">filesystem contract</a>.
-The default <code class="docutils literal notranslate"><span class="pre">local</span></code> storage profile represents the POSIX development contract;
-using it on a shared mount does not verify that service’s durability.</p>
-<p>Storage and execution mode are separate choices. The default transport remains
-<code class="docutils literal notranslate"><span class="pre">object-store</span></code>; the default rollout entrypoint remains synchronous. To select
-distributed fully async execution with straw, also add:</p>
+Use the default <code class="docutils literal notranslate"><span class="pre">local</span></code> profile for local POSIX development and testing.</p>
+<p>If <code class="docutils literal notranslate"><span class="pre">--rollout-data-dir</span></code> is omitted, a fresh run uses <code class="docutils literal notranslate"><span class="pre">&lt;save&gt;/rollout_data</span></code>; without
+<code class="docutils literal notranslate"><span class="pre">--save</span></code>, an explicit shared directory is required. Checkpoint recovery can infer
+the pool from the saved checkpoint.</p>
+<p>Storage and execution mode are independent. The defaults are Ray <code class="docutils literal notranslate"><span class="pre">object-store</span></code>
+transport and synchronous rollout. For distributed fully async execution, also add:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-function-path<span class="w"> </span>slime.rollout.fully_async_rollout.generate_rollout_fully_async
 </pre></div>
 </div>
-<p>If <code class="docutils literal notranslate"><span class="pre">--rollout-data-dir</span></code> is omitted, straw mode uses <code class="docutils literal notranslate"><span class="pre">&lt;save&gt;/rollout_data</span></code>; without
-<code class="docutils literal notranslate"><span class="pre">--save</span></code>, an explicit shared directory is required. <code class="docutils literal notranslate"><span class="pre">--rollout-io-concurrency</span></code>
-bounds off-event-loop serialization and I/O (default 4). The adapter uses worker
-processes and bounded threads; straw does not create an I/O process pool.
-<code class="docutils literal notranslate"><span class="pre">--rollout-queue-max-pending</span></code> and <code class="docutils literal notranslate"><span class="pre">--rollout-queue-max-inflight</span></code> bound task
-admission (both default 65,536); they do not cap retained bytes or file count.</p>
-<p>During weight synchronization, distributed producers pause new admissions and
-allow in-flight work to finish and persist. They resume if another training
-rollout remains. Weight synchronization itself remains a separate subsystem.
-On shutdown, all generation workers share a five-minute deadline to finish
-durable writes. Exceeding it reports an error rather than successful shutdown.</p>
+<p>Fully async runs one generation process per Ray node with CPU resources and
+shares the configured concurrency across them. Faster workers can supply a
+training batch without waiting for every worker. Producers pause admission
+during weight synchronization and persist in-flight results before resuming.</p>
+<p>The default object-store transport works without straw installed. Selecting
+straw without the package fails at startup with the installation command.</p>
 </section>
-<section id="online-gc-and-ownership">
-<h2>Online GC and ownership<a class="headerlink" href="#online-gc-and-ownership" title="Link to this heading">#</a></h2>
-<p>Online GC is disabled by default. Enable <code class="docutils literal notranslate"><span class="pre">--rollout-queue-online-gc</span></code> to let straw
-reclaim unused sealed packs during a job. slime provides completion and discard
-signals through straw APIs. A pack is deletable only after all task, publication,
-queue, reader and checkpoint owners release it. A lease timeout alone does not
-prove that a reader has stopped. A live record retains its entire pack; active
-writers, retained checkpoints and WAL history still consume space.</p>
-<p>GC failures stop the background loop, propagate the original cause through
-later coordinator operations and surface at shutdown. They do not stop work
-already running on remote workers. Retained data stays available for inspection.
-Capacity exhaustion must be handled with
-backpressure or an explicit operator decision; do not reset a live queue or
-unlink pack files to make room. Offline removal requires all participants to
-stop. Storage quotas and application retention policies remain necessary.</p>
-<p>Processed positions and filter decisions are recorded explicitly, so gaps in
-acceptance order do not hold already-consumed capacity. A separate bounded
-control-task allowance lets the manager commit a collection under backpressure.</p>
+<section id="data-flow-and-scheduling">
+<h2>Data flow and scheduling<a class="headerlink" href="#data-flow-and-scheduling" title="Link to this heading">#</a></h2>
+<ol class="arabic simple">
+<li><p>Workers request prompt groups. The data source reads the dataset and saves
+both the groups and its updated cursor to the queue.</p></li>
+<li><p>Workers generate and score samples. Returned partial groups are persisted
+for continuation; completed, accepted groups become available for training.</p></li>
+<li><p>The batch builder applies reward/conversion hooks and divides selected
+samples among training ranks. After training finishes, slime acknowledges
+consumption so storage can be reclaimed when no other references need it.</p></li>
+</ol>
+<p>Rollout and training data share the same storage pool. Large R3 and SC tensors
+can be reused across these stages without duplicating their bytes. Queue tasks
+use renewable leases to assign work to workers; unfinished work from a lost
+worker becomes available again after lease expiry.</p>
+<p>Scheduling prioritizes <strong>completed groups → partial groups → fresh prompts</strong>.
+Within each stage, groups with older generated-token weight versions come first,
+with FIFO ordering for ties. Groups without a numeric version come last in that
+stage. Staleness is the current serving version minus the oldest generated-token
+version, so fresh samples have staleness 0. Scheduling does not automatically
+discard stale samples.</p>
+<p><code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code> is unsupported with straw. <code class="docutils literal notranslate"><span class="pre">--buffer-sort-by-staleness</span></code>
+applies to the in-memory data source; straw uses the ordering above. Reward and
+sample-selection hooks are available; distributed fully async does not support
+<code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>. See <a class="reference internal" href="../get_started/customization.html"><span class="std std-doc">customization</span></a>
+for custom rollout functions and queue readers.</p>
 </section>
-<section id="recovery-and-checkpoints">
-<h2>Recovery and checkpoints<a class="headerlink" href="#recovery-and-checkpoints" title="Link to this heading">#</a></h2>
+<section id="packed-storage-and-supported-data">
+<h2>Packed storage and supported data<a class="headerlink" href="#packed-storage-and-supported-data" title="Link to this heading">#</a></h2>
+<p>Each writer appends multiple samples and tensors to pack files. There is no
+file per sample or tensor, reducing small-file metadata overhead on shared
+storage. Immutable tensor references let rollouts, training batches and
+checkpoints share data; updates write new records while retained references
+continue to identify their original contents.</p>
+<p>The sample codec supports nested lists, tuples and dictionaries; scalar and
+byte values; NumPy arrays; PyTorch tensors; PIL images; and Sample fields,
+including supported custom fields. R3 routes and SC top-k/ragged top-p data
+are stored as typed tensors. Unsupported Python objects and cyclic structures
+raise an error when published. Stored records and tensor reads are checksummed.</p>
+<p>Use <code class="docutils literal notranslate"><span class="pre">--use-rollout-routing-replay</span></code> for R3 and <code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code> for SC.
+With straw transport, their tensors are persisted with the sample group. R3
+training reads only the rows assigned to the current CP/TP rank. Large replay
+tensors stay lazy during batch conversion, although selected Sample metadata
+and ordinary fields still occupy manager memory.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Failure or restart</p></th>
-<th class="head"><p>Supported behavior and boundary</p></th>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Default</p></th>
+<th class="head"><p>Purpose</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>Worker lost before acceptance</p></td>
-<td><p>Recover the latest durable continuation; reassign with a new attempt</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-queue-segment-mib</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">256</span></code></p></td>
+<td><p>Pack rotation target in MiB</p></td>
 </tr>
-<tr class="row-odd"><td><p>Acceptance committed but reply lost</p></td>
-<td><p>Recover the accepted receipt without a second logical acceptance</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-io-concurrency</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">4</span></code></p></td>
+<td><p>Bound concurrent serialization and filesystem I/O submissions</p></td>
 </tr>
-<tr class="row-even"><td><p>Whole job stops before its first batch is planned</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--rollout-queue-resume</span></code> recovers accepted groups and durable prefixes with the same initial model and rollout configuration</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-queue-max-pending</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">65536</span></code></p></td>
+<td><p>Pending-task admission limit</p></td>
 </tr>
-<tr class="row-odd"><td><p>Restart after batch planning</p></td>
-<td><p>Requires matching model/optimizer and rollout checkpoints; queue-only recovery fails explicitly</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-queue-max-inflight</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">65536</span></code></p></td>
+<td><p>In-flight task limit</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-queue-lease-seconds</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">300</span></code></p></td>
+<td><p>Worker lease duration; active readers renew it</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>Resume requires the entire previous job, including its coordinator and readers,
-to have stopped, and the same root and run ID. The flag is an operator assertion,
-not automatic fencing. Unpublished inference may run again; SGLang GPU KV cache
-is not restored.</p>
-<p>Checkpoints contain <code class="docutils literal notranslate"><span class="pre">&lt;save&gt;/rollout/queue_state_&lt;rollout_id&gt;.json</span></code> for the source
-and registered scheduler consumers, and <code class="docutils literal notranslate"><span class="pre">builder_state_&lt;rollout_id&gt;.json</span></code> for
-the training consumer view. Their references retain the matching storage graph.
-Continuations are persisted incrementally, so checkpoints reference
-existing data instead of rewriting every returned token. Restoring a checkpoint
-does not erase later accepted history from the WAL.</p>
-<p>Partial R3/SC tensors remain lazy references in continuation snapshots and are
-loaded when generation appends new rows. Restoring source and builder state
-preserves saved warm groups and behavior-policy versions, and records which
-later outputs are excluded from the restored branch. Restored pending tasks retain
-their storage independently of filtering. The complete source snapshot,
-including consumers that have not restarted yet, is retained and durably
-recorded before old references are released. Failed saves keep the old references;
-background GC starts only after restored consumer state commits.</p>
-<p>The dataset producer cursor is not yet part of the source checkpoint, and
-restoring a saved pending snapshot does not exclude every later-created task.
-Complete rollback to an arbitrary older training step remains future work.
-The adapter does not yet establish a joint final manifest for model, optimizer,
-RNG and queue state. Persistent rollout is therefore not a claim of exact
-optimizer recovery or bit-identical training after an arbitrary crash.</p>
+<p>Task limits do not bound retained bytes. Size storage for the workload and its
+checkpoint/archive retention. Shared-storage bandwidth, sync latency and the
+single queue coordinator can limit throughput.</p>
 </section>
-<section id="validation-and-remaining-limits">
-<h2>Validation and remaining limits<a class="headerlink" href="#validation-and-remaining-limits" title="Link to this heading">#</a></h2>
-<p>CPU coverage includes codecs, R3/SC transport, lazy CP/TP reads, worker failures,
-continuations, checkpoint views and GC ownership. straw separately checks its
-Rust/Python core, bounded ownership model and native crash boundaries. Physical
-multi-client filesystem checks and real GPU training complement these tests.
-<code class="docutils literal notranslate"><span class="pre">tests/test_straw_fully_async_recovery.py</span></code> starts two local Ray nodes, interrupts
-the entire driver/coordinator/generation process tree with SIGKILL, and starts a
-new job against the same straw pool without a graceful checkpoint. It checks
-accepted-result replay, unchanged token/logprob/R3/SC prefixes, new leases and
-single reward evaluation, with online GC both disabled and enabled. Inference
-and rewards are CPU fixtures; this test does not claim optimizer recovery.
-It runs automatically in <code class="docutils literal notranslate"><span class="pre">cpu-unittest</span></code>; see <a class="reference internal" href="../developer_guide/ci.html"><span class="std std-doc">CI setup</span></a>.</p>
-<p>Run the distributed rollout and interruption recovery tests locally with:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">PYTHONPATH</span><span class="o">=</span>.<span class="w"> </span>python<span class="w"> </span>tests/test_distributed_rollout.py
-<span class="nv">PYTHONPATH</span><span class="o">=</span>.<span class="w"> </span>python<span class="w"> </span>tests/test_straw_fully_async_recovery.py
+<section id="online-gc">
+<h2>Online GC<a class="headerlink" href="#online-gc" title="Link to this heading">#</a></h2>
+<p>Online GC is disabled by default. Enable it with <code class="docutils literal notranslate"><span class="pre">--rollout-queue-online-gc</span></code>.
+slime reports when tasks and training batches are finished or discarded. straw
+reclaims a sealed pack only after all tasks, readers, checkpoints and archives
+have released their references. One live record keeps the whole pack alive;
+active writers and journal history also consume space.</p>
+<p>Retained checkpoints and archives protect their payloads even with GC enabled,
+so rollback does not require disabling GC. Retention must also be released
+when data is no longer needed; deleting an index file alone does not release
+its storage ownership. Do not manually delete pack files from an active pool.
+For offline removal, stop all coordinators, writers and readers first.</p>
+<p>A GC failure is reported by subsequent queue operations and at shutdown.
+Capacity exhaustion requires freeing unneeded retention or increasing capacity;
+it does not reset the queue automatically. Live-pack and journal compaction are
+not implemented.</p>
+</section>
+<section id="recovery-and-checkpoints">
+<h2>Recovery and checkpoints<a class="headerlink" href="#recovery-and-checkpoints" title="Link to this heading">#</a></h2>
+<p>Save model and rollout state together through normal training checkpoints.
+They contain the dataset cursor, sample/group counters, pending and partial
+inputs, ready groups, and training progress. Payloads already in straw are
+referenced rather than copied into each checkpoint. Retaining a checkpoint
+keeps its referenced data available.</p>
+<p>Stop the entire previous job before restarting, including remote workers.
+The save-directory lock rejects concurrent coordinators, but does not stop
+orphaned readers. There is no automatic coordinator failover.</p>
+<section id="resume-or-select-a-step">
+<h3>Resume or select a step<a class="headerlink" href="#resume-or-select-a-step" title="Link to this heading">#</a></h3>
+<p>To resume the latest completed checkpoint, use the same logical directories:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-data-transport<span class="w"> </span>straw<span class="w"> </span><span class="se">\</span>
+--load<span class="w"> </span>/shared/checkpoints/run<span class="w"> </span><span class="se">\</span>
+--save<span class="w"> </span>/shared/checkpoints/run<span class="w"> </span><span class="se">\</span>
+--save-interval<span class="w"> </span><span class="m">1</span>
 </pre></div>
 </div>
-<p>The main deployment limits are shared-storage bandwidth, durability latency,
-coordinator throughput and manager conversion memory. Live-pack compaction,
-journal compaction and automatic coordinator failover are not implemented.
-See <a class="reference internal" href="../get_started/usage.html#persistent-rollout-queue-and-distributed-fully-async"><span class="std std-ref">usage</span></a>
-for the rollout controls and straw’s
-<a class="reference external" href="https://github.com/zhuzilin/straw/blob/main/docs/VERIFICATION.md">verification guide</a>
-for the storage checks and their scope.</p>
+<p>Whenever <code class="docutils literal notranslate"><span class="pre">--save</span></code> is set, Megatron requires a positive <code class="docutils literal notranslate"><span class="pre">--save-interval</span></code>.
+The example saves after each rollout; choose the interval for your workload.</p>
+<p>To restore the state saved after rollout 7, add <code class="docutils literal notranslate"><span class="pre">--ckpt-step</span> <span class="pre">7</span></code>. The next rollout
+is 8. Keep the dataset, model/tokenizer configuration, straw run ID, storage
+profile and fully async worker topology consistent with the checkpoint.
+Optimizer and training RNG state must be present for training recovery.</p>
+<p>Restoration creates an isolated queue sharing the checkpoint’s immutable
+payloads. Pending/partial inputs and ready-group order come from that checkpoint,
+with the dataset cursor restored to the saved position. Later samples from the
+source run are excluded. Further writes leave the source checkpoint intact.</p>
+<p>When <code class="docutils literal notranslate"><span class="pre">--save</span></code> already contains a run, outputs go to a unique <code class="docutils literal notranslate"><span class="pre">branches/&lt;id&gt;</span></code>
+directory. <code class="docutils literal notranslate"><span class="pre">rollout/current.json</span></code> tracks the active branch, so subsequent restarts
+can keep using the same logical <code class="docutils literal notranslate"><span class="pre">--load</span></code> and <code class="docutils literal notranslate"><span class="pre">--save</span></code>. If <code class="docutils literal notranslate"><span class="pre">--load</span></code> is omitted and
+<code class="docutils literal notranslate"><span class="pre">--save</span></code> has an active branch, it is resumed automatically. Startup logs the
+resolved paths. Give each run a fresh path for immutable <code class="docutils literal notranslate"><span class="pre">.straw.json</span></code> debug archives.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Selection</p></th>
+<th class="head"><p>Arguments</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Step in the current branch’s history</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--load</span> <span class="pre">/shared/checkpoints/run</span> <span class="pre">--ckpt-step</span> <span class="pre">7</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>A particular branch</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--load</span> <span class="pre">/shared/checkpoints/run/branches/&lt;id&gt;</span> <span class="pre">--ckpt-step</span> <span class="pre">7</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>An exact checkpoint</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--load</span> <span class="pre">/shared/checkpoints/run/rollout/committed_7.json</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>Separate output directory</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--save</span> <span class="pre">/shared/checkpoints/another-run</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>You can also edit <code class="docutils literal notranslate"><span class="pre">latest_checkpointed_iteration.txt</span></code> in the logical save
+directory or current branch to select an earlier step. Explicit <code class="docutils literal notranslate"><span class="pre">--ckpt-step</span></code>
+or an exact commit file takes precedence. Automatic selection uses completed
+model-and-queue checkpoints and does not follow a newer incomplete model save.
+It follows branch ancestry only up to each branch point; select an exact commit
+file to load an abandoned future from another branch.</p>
+</section>
+<section id="missing-state-and-recovery-limits">
+<h3>Missing state and recovery limits<a class="headerlink" href="#missing-state-and-recovery-limits" title="Link to this heading">#</a></h3>
+<p>If the model exists but no queue snapshot was saved, recovery starts an empty
+queue. When <code class="docutils literal notranslate"><span class="pre">rollout/global_dataset_state_dict_&lt;step&gt;.pt</span></code> exists, its dataset
+cursor is restored; otherwise the dataset starts at offset 0 with a warning.
+No pending, partial or ready data is taken from another step. Missing models,
+incomplete or corrupt snapshots, missing payloads and unsupported snapshot
+versions raise errors instead of silently starting empty.</p>
+<p>Before any model checkpoint exists, restarting the original run with the same
+<code class="docutils literal notranslate"><span class="pre">--save</span></code> and model/input configuration can recover persisted rollout work, but
+only before the first training batch has been planned. After batch planning,
+recovery requires a matching model/optimizer and rollout checkpoint.</p>
+<p>Recovery uses the original straw pool; copying a checkpoint directory alone
+does not copy its payloads. The recovery boundary is a completed rollout
+training batch, not an optimizer microstep. GPU KV caches and generation RNG
+state are not restored, so newly generated tokens and random hooks may differ.</p>
+<p>When extending <code class="docutils literal notranslate"><span class="pre">--num-rollout</span></code>, use Megatron’s
+<code class="docutils literal notranslate"><span class="pre">--use-checkpoint-opt-param-scheduler</span></code> if you want to retain the saved optimizer
+schedule. Queue restoration does not override optimizer settings.</p>
+</section>
+</section>
+<section id="debug-archives-and-sample-lookup">
+<h2>Debug archives and sample lookup<a class="headerlink" href="#debug-archives-and-sample-lookup" title="Link to this heading">#</a></h2>
+<p>Both <code class="docutils literal notranslate"><span class="pre">.pt</span></code> and <code class="docutils literal notranslate"><span class="pre">.straw.json</span></code> work with the debug save/load flags:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--save-debug-rollout-data<span class="w"> </span><span class="s1">'/shared/debug/rollout_{rollout_id}.straw.json'</span>
+<span class="c1"># In a separate train-only job, without SGLang:</span>
+--load-debug-rollout-data<span class="w"> </span><span class="s1">'/shared/debug/rollout_{rollout_id}.straw.json'</span>
+</pre></div>
+</div>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Format</p></th>
+<th class="head"><p>Contents</p></th>
+<th class="head"><p>Storage requirement</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">.pt</span></code></p></td>
+<td><p>Sample data and materialized tensors</p></td>
+<td><p>Self-contained file</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">.straw.json</span></code></p></td>
+<td><p>Immutable index with sample/task keys</p></td>
+<td><p>Keep the referenced straw pool available</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>An indexed archive retains its data independently of queue consumption and GC.
+It shares existing tensors when saved with straw transport; otherwise it creates
+a <code class="docutils literal notranslate"><span class="pre">straw-data</span></code> pool alongside the index. There is one index per rollout, with
+samples packed together. Evaluation uses <code class="docutils literal notranslate"><span class="pre">eval_&lt;id&gt;</span></code> in place of the rollout ID.
+Copying only the JSON index does not copy the payloads. For train-only replay
+with straw transport, choose a separate writable training queue.
+<code class="docutils literal notranslate"><span class="pre">--load-debug-rollout-data-subsample</span></code> also applies to archives.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.data.archive</span><span class="w"> </span><span class="kn">import</span> <span class="n">RolloutArchive</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">slime.observability.rollout_data_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_debug_rollout_data</span>
+
+<span class="k">with</span> <span class="n">RolloutArchive</span><span class="p">(</span><span class="s1">'/shared/debug/rollout_7.straw.json'</span><span class="p">)</span> <span class="k">as</span> <span class="n">archive</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">archive</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>  <span class="c1"># (sample key, optional task key), in archive order</span>
+    <span class="n">samples</span> <span class="o">=</span> <span class="n">archive</span><span class="o">.</span><span class="n">load_samples</span><span class="p">(</span><span class="n">sample_key</span><span class="o">=</span><span class="s1">'sample:42'</span><span class="p">)</span>
+    <span class="n">group</span> <span class="o">=</span> <span class="n">archive</span><span class="o">.</span><span class="n">load_samples</span><span class="p">(</span><span class="n">task_key</span><span class="o">=</span><span class="s1">'prompt:21'</span><span class="p">)</span>
+    <span class="n">archive</span><span class="o">.</span><span class="n">export_pt</span><span class="p">(</span><span class="s1">'/shared/debug/rollout_7.pt'</span><span class="p">)</span>
+
+<span class="c1"># Convert a .pt dump to an indexed archive with an adjacent straw-data pool.</span>
+<span class="n">samples</span> <span class="o">=</span> <span class="n">load_debug_rollout_data</span><span class="p">(</span><span class="s1">'/shared/debug/rollout_7.pt'</span><span class="p">,</span> <span class="n">rollout_id</span><span class="o">=</span><span class="mi">7</span><span class="p">)</span>
+<span class="n">RolloutArchive</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="s1">'/shared/debug/imported_7.straw.json'</span><span class="p">,</span> <span class="n">samples</span><span class="p">,</span> <span class="n">rollout_id</span><span class="o">=</span><span class="mi">7</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Keys select data as saved in that archive. Missing keys raise <code class="docutils literal notranslate"><span class="pre">KeyError</span></code>.
+Lookups return lists because compact trajectories can share a sample index.
+Samples without an index use <code class="docutils literal notranslate"><span class="pre">position:&lt;ordinal&gt;</span></code>; samples without queue
+provenance have no task key.</p>
+<p>Closing an archive closes its reader while retaining its data. After all readers
+finish, open the archive and call <code class="docutils literal notranslate"><span class="pre">archive.release()</span></code> to release its retention.
+Other checkpoints, queues and archives retain their own references. An exported
+<code class="docutils literal notranslate"><span class="pre">.pt</span></code> remains readable after straw reclaims the payloads.</p>
 </section>
 </section>
 
@@ -1237,15 +850,16 @@ for the storage checks and their scope.</p>
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-changes-in-the-architecture">What changes in the architecture</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#end-to-end-data-flow">End-to-end data flow</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#queue-scheduling">Queue scheduling</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#shared-tensors-r3-and-sc">Shared tensors, R3 and SC</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sample-encoding-and-integrity">Sample encoding and integrity</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#enable-it">Enable it</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#online-gc-and-ownership">Online GC and ownership</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recovery-and-checkpoints">Recovery and checkpoints</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#validation-and-remaining-limits">Validation and remaining limits</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#data-flow-and-scheduling">Data flow and scheduling</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#packed-storage-and-supported-data">Packed storage and supported data</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#online-gc">Online GC</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recovery-and-checkpoints">Recovery and checkpoints</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#resume-or-select-a-step">Resume or select a step</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#missing-state-and-recovery-limits">Missing state and recovery limits</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-archives-and-sample-lookup">Debug archives and sample lookup</a></li>
 </ul>
   </nav></div>
 
@@ -1279,7 +893,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Sep 28, 2026.
+  Last updated on Sep 29, 2026.
   <br/>
 </p>
   </div>

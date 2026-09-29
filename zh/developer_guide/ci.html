@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 09 月 28 日"/>
+    <meta name="docbuild:last-update" content="2026 年 09 月 29 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -549,14 +549,14 @@
 <li><p>执行注册的测试文件：<code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/&lt;test_file&gt;.py</span></code>。</p></li>
 </ol>
 <p>GPU 测试通常遵循 e2e 模式：<code class="docutils literal notranslate"><span class="pre">prepare()</span></code> 下载模型和数据集，<code class="docutils literal notranslate"><span class="pre">execute()</span></code> 构建 CLI 参数并调用 <code class="docutils literal notranslate"><span class="pre">U.execute_train(...)</span></code>。</p>
-<p>34 个独立训练 e2e 矩阵场景中，一半使用 straw；此计数排除了重复 job 和 GPU logprob/entropy 算子测试。选中的测试显式设置 <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code>，因此本地执行、<code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> 和固定矩阵使用同一后端：</p>
+<p>straw e2e 测试显式设置 <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code>，因此本地执行、<code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> 和固定矩阵使用同一后端：</p>
 <ul class="simple">
 <li><p>R3：<code class="docutils literal notranslate"><span class="pre">test_qwen3_30B_A3B_r3.py</span></code> 和 <code class="docutils literal notranslate"><span class="pre">test_moonlight_16B_A3B_r3.py</span></code>。</p></li>
 <li><p>SC：<code class="docutils literal notranslate"><span class="pre">test_qwen2.5_0.5B_score_centering.py</span></code>，覆盖 top-k 和 top-p。</p></li>
 <li><p>Fully async、fanout、PPO、MTP、PD/Mooncake、分布式 SGLang 配置、混合 offload 故障恢复、debug 重放和 release-train。</p></li>
-<li><p>五种 checkpoint 保存/加载组合，两阶段共用 straw 目录，检查 queue/builder checkpoint，并在加载时显式恢复队列。</p></li>
+<li><p>Checkpoint 保存/加载测试跨阶段共用 straw 存储池，验证队列和训练状态恢复。<code class="docutils literal notranslate"><span class="pre">test_straw_checkpoint_fork.py</span></code> 覆盖 step 选择、多次回退、自动分支选择和 debug 回放。</p></li>
 </ul>
-<p>R3、SC 和 fully async 同时启用在线 GC。普通 straw 测试使用独立临时目录，执行后清理。这些单机 GPU 测试使用本地文件系统 profile；多机 JuiceFS 持久性仍需单独验证。其余 e2e 保留 Ray object-store 或 NIXL 传输覆盖。固定矩阵和 changed-test 的 GPU 容器均安装 straw，因此发布镜像尚未包含 straw 时也能运行。</p>
+<p>R3、SC 和 fully async 同时启用在线 GC。普通 straw 测试使用独立临时目录，执行后清理。这些单机 GPU 测试使用本地文件系统 profile；多机 JuiceFS 持久性仍需单独验证。其余 e2e 保留 Ray object-store 或 NIXL 传输覆盖。固定矩阵和 changed-test 的 GPU 容器均安装 straw。</p>
 </section>
 <section id="changed-test-job">
 <h3>Changed-Test Job<a class="headerlink" href="#changed-test-job" title="链接到此标题。">#</a></h3>
@@ -838,7 +838,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 09 月 28 日.
+  最后更新于 2026 年 09 月 29 日.
   <br/>
 </p>
   </div>
