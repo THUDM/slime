@@ -154,8 +154,12 @@ To resume the latest completed checkpoint, use the same logical directories:
 ```bash
 --rollout-data-transport straw \
 --load /shared/checkpoints/run \
---save /shared/checkpoints/run
+--save /shared/checkpoints/run \
+--save-interval 1
 ```
+
+Whenever `--save` is set, Megatron requires a positive `--save-interval`.
+The example saves after each rollout; choose the interval for your workload.
 
 To restore the state saved after rollout 7, add `--ckpt-step 7`. The next rollout
 is 8. Keep the dataset, model/tokenizer configuration, straw run ID, storage

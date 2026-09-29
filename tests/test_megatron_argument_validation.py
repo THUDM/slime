@@ -1,5 +1,7 @@
 import argparse
 import importlib.util
+import runpy
+import shlex
 import sys
 import types
 from pathlib import Path
@@ -7,6 +9,41 @@ from pathlib import Path
 import pytest
 
 NUM_GPUS = 0
+
+
+@pytest.mark.parametrize("mode", ["save", "async_save", "load"])
+@pytest.mark.parametrize("optimizer", ["cpu", "gpu"])
+def test_checkpoint_e2e_launch_has_valid_save_configuration(monkeypatch, tmp_path, mode, optimizer):
+    from slime.utils import external_utils
+
+    commands = []
+    launcher = types.ModuleType("slime.utils.external_utils.command_utils")
+    launcher.execute_train = lambda **kwargs: commands.append(kwargs["train_args"])
+    launcher.get_default_wandb_args = lambda _: ""
+    monkeypatch.setitem(sys.modules, launcher.__name__, launcher)
+    monkeypatch.setattr(external_utils, "command_utils", launcher, raising=False)
+    test = runpy.run_path(str(Path(__file__).with_name("test_qwen3_4B_ckpt.py")))
+    directory = str(tmp_path / "checkpoint with spaces")
+    test["execute"](mode, optimizer=optimizer, checkpoint_dir=directory)
+    [command] = commands
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--save")
+    parser.add_argument("--save-interval", type=int)
+    parser.add_argument("--load")
+    parser.add_argument("--ckpt-step", type=int)
+    parser.add_argument("--async-save", action="store_true")
+    args, _ = parser.parse_known_args(shlex.split(command))
+
+    assert args.save == directory
+    # Megatron requires a positive save interval whenever --save is set,
+    # including when straw uses the directory to track a restored branch.
+    assert args.save_interval is not None and args.save_interval > 0
+    assert args.async_save == (mode == "async_save")
+    if mode == "load":
+        assert args.load == directory and args.ckpt_step == 1
+    else:
+        assert args.load is None
 
 
 def load_arguments_module(monkeypatch):

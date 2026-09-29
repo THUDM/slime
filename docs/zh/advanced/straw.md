@@ -87,8 +87,11 @@ GC 失败会通过后续队列操作和关闭流程报告。容量耗尽时需�
 ```bash
 --rollout-data-transport straw \
 --load /shared/checkpoints/run \
---save /shared/checkpoints/run
+--save /shared/checkpoints/run \
+--save-interval 1
 ```
+
+设置 `--save` 时，Megatron 要求同时指定正数的 `--save-interval`。示例每轮 rollout 保存一次，可按实际需求调整间隔。
 
 如需恢复 rollout 7 结束后的状态，添加 `--ckpt-step 7`，下一轮从 rollout 8 开始。Dataset、模型/tokenizer 配置、straw run ID、storage profile 和 fully async worker 拓扑应与 checkpoint 一致。训练恢复需要保留 optimizer 和训练 RNG 状态。
 
