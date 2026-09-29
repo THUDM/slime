@@ -95,8 +95,18 @@ or keep only the latest segment with
 This continuation applies to slime's `generate` and `generate_streaming`, for
 text and multimodal samples (a resumed multimodal request resends the
 processor-expanded prompt ids plus the partial response with its images).
-Custom generate functions decide for themselves how to handle an `ABORTED`
-sample.
+
+A custom multi-turn generate function should produce each model turn with
+`slime.rollout.sglang_rollout.generate_turn(args, sample, sampling_params)`.
+It sends `sample.tokens` (prompt, earlier turns and tool tokens appended with
+`trainable=False`), appends the turn with its log-probs, weight versions and
+routed experts (`--use-rollout-routing-replay`), and resends a turn cut by a
+weight update with its partial response, so the turn continues under the new
+weights while the environment and the earlier turns stay as they are.
+Restarting the whole trajectory on an abort instead can livelock once
+trajectories outlast the interval between weight updates. The pooled worker
+(below) drops a rollout that comes back `ABORTED` three times in a row without
+new tokens, which is how it treats a generate function reporting a failure.
 
 ## Forming Batches Like molt
 

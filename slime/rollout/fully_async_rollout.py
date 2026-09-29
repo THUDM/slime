@@ -255,8 +255,11 @@ class AsyncRolloutWorker:
 
 
 # A weight update aborts the requests still generating and SGLang holds a resent request
-# until the engines continue; the delay only bounds the retries of any other abort.
+# until the engines continue. A rollout that comes back ABORTED this many times in a row
+# without new tokens was aborted for another reason (e.g. a custom generate function
+# reporting a failure) and is dropped.
 _ABORT_RETRY_DELAY = 1.0
+_MAX_STALLED_RESUMES = 3
 
 
 class PooledRolloutWorker:
@@ -469,7 +472,9 @@ class PooledRolloutWorker:
         task.add_done_callback(lambda task: self._on_done(key, order, task))
 
     async def _run(self, group: list[Sample]) -> list[Sample]:
+        stalled = 0
         while True:
+            generated = sum(len(sample.tokens) for sample in iter_samples(group))
             group = await generate_and_rm_group(
                 self.args, group, sampling_params=self.state.sampling_params.copy(), evaluation=False
             )
@@ -477,6 +482,9 @@ class PooledRolloutWorker:
                 return group
             if any(isinstance(item, list) for item in group):
                 raise RuntimeError("cannot resume ABORTED samples of a custom generate function that fans out")
+            stalled = 0 if sum(len(sample.tokens) for sample in iter_samples(group)) > generated else stalled + 1
+            if stalled >= _MAX_STALLED_RESUMES:
+                raise RuntimeError(f"rollout came back ABORTED {stalled} times without new tokens")
             # A weight update aborted the request; resend it, and it resumes under the new weights.
             await asyncio.sleep(_ABORT_RETRY_DELAY)
 

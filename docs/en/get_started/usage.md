@@ -317,6 +317,7 @@ Notes:
 - The baseline is a mean over samples, so a custom rollout that returns several samples per trajectory counts that trajectory once per sample. `--custom-reward-post-process-path` replaces the centering.
 - With `--n-samples-per-prompt 1`, dynamic sampling filters that drop zero-std prompt groups, such as `check_reward_nonzero_std`, drop every group.
 - With [fully-async rollout](../_examples_synced/fully_async/README.md), in-flight trajectories continue across weight updates, so one response can contain tokens from several policy versions. The per-token importance weights and the trust region correct for this.
+- For multi-turn agents, generate each model turn with `slime.rollout.sglang_rollout.generate_turn`, which continues a turn cut by a weight update (see the fully-async README). For MoE models add `--use-rollout-routing-replay`: without it the rollout-versus-training mismatch can push most sequences outside the trust region.
 - To schedule rollouts like molt's asynchronous trainer, add `--fully-async-pool-size`, `--fully-async-max-queued-batches` and `--fully-async-drain-each-epoch` (see the fully-async README). molt's AdamW also decays every parameter, which `--apply-wd-to-all-params` reproduces; Megatron exempts biases and normalization weights by default.
 
 [`examples/flash_reinforce`](../_examples_synced/flash_reinforce/README.md) reproduces NVIDIA molt's DeepSeek-R1-Distill-Qwen-1.5B recipe with fully-async rollout.

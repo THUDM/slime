@@ -321,6 +321,7 @@ FlashREINFORCE（[NVIDIA molt](https://github.com/NVIDIA-NeMo/labs-molt)）是�
 - baseline 是按样本求的平均；如果自定义 rollout 为一条轨迹返回多个样本，这条轨迹会按样本数被重复计入。设置 `--custom-reward-post-process-path` 会替换这里的中心化。
 - `--n-samples-per-prompt 1` 时，丢弃零方差 prompt 组的动态采样过滤器（例如 `check_reward_nonzero_std`）会把所有组都丢掉。
 - 使用 [fully-async rollout](../_examples_synced/fully_async/README.md) 时，在飞的轨迹会跨权重更新继续生成，因此一条回复可能包含多个策略版本生成的 token。逐 token 的 importance weight 和门控会对此做校正。
+- 多轮 agent 请用 `slime.rollout.sglang_rollout.generate_turn` 生成每一轮，被权重更新打断的一轮会接着生成（见 fully-async 的 README）。MoE 模型要加 `--use-rollout-routing-replay`，否则推理端和训练端的差异可能让大部分序列落在信赖域之外。
 - 如果要像 molt 的异步训练器那样调度 rollout，加上 `--fully-async-pool-size`、`--fully-async-max-queued-batches` 和 `--fully-async-drain-each-epoch`（见 fully-async 的 README）。molt 的 AdamW 对所有参数都做权重衰减，可用 `--apply-wd-to-all-params` 复现；Megatron 默认不对 bias 和归一化层权重做衰减。
 
 [`examples/flash_reinforce`](../_examples_synced/flash_reinforce/README.md) 用 fully-async rollout 复现了 NVIDIA molt 的 DeepSeek-R1-Distill-Qwen-1.5B 配方。

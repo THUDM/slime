@@ -7,6 +7,7 @@ These examples provide concrete examples to leverage slime in your own RL workfl
 - **[coding_agent_rl](./coding_agent_rl)**: End-to-end SWE coding-agent RL — a real coding agent (claude-code / codex) edits code in a per-sample sandbox, and the resulting `git diff` is graded against the dataset's test harness.
 - **[eval_multi_task](./eval_multi_task)**: Example for supporting evaluation multiple tasks with different configs.
 - **[flash_reinforce](./flash_reinforce)**: FlashREINFORCE (critic-free, single-rollout asynchronous RL), reproducing NVIDIA molt's DeepSeek-R1-Distill-Qwen-1.5B recipe.
+- **[flash_reinforce_agent](./flash_reinforce_agent)**: FlashREINFORCE with a multi-turn tool-using agent on an MoE model (Moonlight-16B-A3B), showing how a custom generate function keeps its turns across fully-async weight updates.
 - **[fully_async](./fully_async)**: Demonstrates fully asynchronous rollout generation for higher efficiency.
 - **[geo3k_vlm](./geo3k_vlm)**: Training VLMs on a single-turn reasoning task using GRPO on the GEO3K dataset.
 - **[geo3k_vlm_multi_turn](./geo3k_vlm_multi_turn)**: VLM multi-turn training on Geo3k dataset.

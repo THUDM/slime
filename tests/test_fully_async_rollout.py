@@ -19,6 +19,8 @@ Three behaviours are pinned here:
 from __future__ import annotations
 
 import asyncio
+import base64
+import collections
 import contextlib
 import copy
 import sys
@@ -46,6 +48,7 @@ except ImportError:
         setattr(_tf_stub, _name, type(_name, (), {}))
     sys.modules["transformers"] = _tf_stub
 
+import numpy as np
 import pytest
 
 import slime.rollout.fully_async_rollout as fa
@@ -687,6 +690,133 @@ def test_pooled_worker_pauses_batch_formation_during_evaluation(monkeypatch):
     # A batch already being formed may finish, but no other starts while evaluating.
     assert seen["after"] - seen["before"] <= 1
     assert seen["loop"] is worker.event_loop
+
+
+@pytest.mark.unit
+def test_pooled_worker_drops_a_rollout_that_aborts_without_progress(monkeypatch):
+    monkeypatch.setattr(fa, "_ABORT_RETRY_DELAY", 0)
+    calls = collections.Counter()
+
+    async def generate(args, group, sampling_params, evaluation):
+        calls[group[0].index] += 1
+        if group[0].index == 0:
+            group[0].status = Sample.Status.ABORTED  # e.g. a custom generate function reporting a failure
+            return group
+        return await _finish_at_once(args, group, sampling_params, evaluation)
+
+    monkeypatch.setattr(fa, "generate_and_rm_group", generate)
+    worker = _pooled_worker(monkeypatch, _PromptSource())
+    with _running(worker):
+        batches = [worker.next_batch() for _ in range(2)]
+    assert calls[0] == fa._MAX_STALLED_RESUMES
+    assert 0 not in [group[0].index for groups, _ in batches for group in groups]
+    assert sum(metrics["rollout/fully_async/failed_rollouts"] for _, metrics in batches) == 1
+
+
+# --- Multi-turn turns that survive weight updates (sglang_rollout.generate_turn) ---
+
+
+def _routes(rows):
+    # num_layers = moe_router_topk = 1: one routed expert id per position
+    return base64.b64encode(np.arange(rows, dtype=np.int32).tobytes()).decode("ascii")
+
+
+@pytest.mark.unit
+def test_generate_turn_resumes_a_turn_cut_by_a_weight_update(monkeypatch, fake_server):
+    monkeypatch.setattr(sr, "_TURN_RESUME_DELAY", 0)
+    sample = _pending(0)
+    fake_server.replies.extend([_chunk([1, 2], "1", "abort"), _chunk([3], "2", "stop")])
+
+    output = asyncio.run(sr.generate_turn(_server_args(), sample, {"max_new_tokens": 5}))
+
+    assert output["text"] == "ttt" and output["meta_info"]["finish_reason"]["type"] == "stop"
+    assert [payload["input_ids"] for payload in fake_server.payloads] == [[11, 12, 13], [11, 12, 13, 1, 2]]
+    assert [payload["sampling_params"]["max_new_tokens"] for payload in fake_server.payloads] == [5, 3]
+    assert sample.tokens == [11, 12, 13, 1, 2, 3] and sample.loss_mask == [1, 1, 1]
+    assert sample.rollout_log_probs == pytest.approx([-0.1, -0.2, -0.3])
+    assert sample.weight_versions == ["1", "2"] and sample.status == Sample.Status.COMPLETED
+
+
+@pytest.mark.unit
+def test_generate_turn_keeps_tool_tokens_out_of_the_loss_across_turns(monkeypatch, fake_server):
+    monkeypatch.setattr(sr, "_TURN_RESUME_DELAY", 0)
+    args, sample = _server_args(), _pending(0)
+    fake_server.replies.extend([_chunk([1, 2], "1", "stop"), _chunk([3], "1", "abort"), _chunk([4], "2", "stop")])
+
+    asyncio.run(sr.generate_turn(args, sample, {"max_new_tokens": 4}))
+    sample.append_response_tokens(args, tokens=[50, 51], trainable=False, text="<tool>")
+    output = asyncio.run(sr.generate_turn(args, sample, {"max_new_tokens": 4}))
+
+    assert output["text"] == "tt"
+    assert fake_server.payloads[1]["input_ids"] == [11, 12, 13, 1, 2, 50, 51]
+    assert fake_server.payloads[2]["input_ids"] == [11, 12, 13, 1, 2, 50, 51, 3]
+    assert fake_server.payloads[2]["sampling_params"]["max_new_tokens"] == 3
+    assert sample.loss_mask == [1, 1, 0, 0, 1, 1]
+    assert sample.rollout_log_probs == pytest.approx([-0.1, -0.2, 0.0, 0.0, -0.3, -0.4])
+    assert sample.weight_versions == ["1", "1", "2"]
+
+
+@pytest.mark.unit
+def test_generate_turn_keeps_each_position_s_routing_across_turns(monkeypatch, fake_server):
+    monkeypatch.setattr(sr, "_TURN_RESUME_DELAY", 0)
+    args = _server_args(use_rollout_routing_replay=True, num_layers=1, moe_router_topk=1)
+    sample = _pending(0)
+    first, cut, rest = _chunk([1, 2], "1", "stop"), _chunk([3], "1", "abort"), _chunk([4], "2", "stop")
+    first["meta_info"]["routed_experts"] = _routes(4)  # positions 0-3 of [11, 12, 13, 1, 2]
+    cut["meta_info"]["routed_experts"] = _routes(3)  # position 4 (turn 1's last token) and the tool tokens
+    rest["meta_info"]["routed_experts"] = _routes(1)  # position 7 (the token generated before the abort)
+    fake_server.replies.extend([first, cut, rest])
+
+    asyncio.run(sr.generate_turn(args, sample, {"max_new_tokens": 4}))
+    sample.append_response_tokens(args, tokens=[50, 51], trainable=False)
+    asyncio.run(sr.generate_turn(args, sample, {"max_new_tokens": 4}))
+
+    # Each request asks only for positions not routed yet, so earlier routing is never replaced.
+    assert [payload.get("routed_experts_start_len") for payload in fake_server.payloads] == [None, 4, 7]
+    assert sample.get_rollout_routed_experts_length() == len(sample.tokens) - 1 == 8
+
+
+@pytest.mark.unit
+def test_generate_turn_returns_a_cancelled_rollout(monkeypatch, fake_server):
+    state = _FakeServerState(None)
+    monkeypatch.setattr(sr, "GenerateState", lambda args: state)
+
+    async def post(url, payload, **kwargs):
+        fake_server.payloads.append(payload)
+        state.aborted = True  # slime's own abort() cancels the rollout while this request runs
+        return _chunk([1], "1", "abort")
+
+    monkeypatch.setattr(sr, "post", post)
+    sample = _pending(0)
+    output = asyncio.run(sr.generate_turn(_server_args(), sample, {"max_new_tokens": 4}))
+
+    assert output["meta_info"]["finish_reason"]["type"] == "abort"
+    assert len(fake_server.payloads) == 1 and sample.status == Sample.Status.ABORTED
+    assert sample.tokens == [11, 12, 13, 1]
+
+
+@pytest.mark.unit
+def test_generate_turn_gives_up_on_aborts_without_progress(monkeypatch, fake_server):
+    monkeypatch.setattr(sr, "_TURN_RESUME_DELAY", 0)
+    sample = _pending(0)
+    fake_server.replies.extend([_chunk([], "1", "abort") for _ in range(sr._MAX_STALLED_TURN_RESUMES)])
+
+    output = asyncio.run(sr.generate_turn(_server_args(), sample, {"max_new_tokens": 4}))
+
+    assert output["meta_info"]["finish_reason"]["type"] == "abort"
+    assert len(fake_server.payloads) == sr._MAX_STALLED_TURN_RESUMES and sample.status == Sample.Status.ABORTED
+
+
+@pytest.mark.unit
+def test_generate_turn_truncates_when_its_budget_runs_out_across_resumes(monkeypatch, fake_server):
+    monkeypatch.setattr(sr, "_TURN_RESUME_DELAY", 0)
+    sample = _pending(0)
+    fake_server.replies.append(_chunk([1, 2], "1", "abort"))
+
+    output = asyncio.run(sr.generate_turn(_server_args(), sample, {"max_new_tokens": 2}))
+
+    assert output["meta_info"]["finish_reason"]["type"] == "length"
+    assert len(fake_server.payloads) == 1 and sample.status == Sample.Status.TRUNCATED
 
 
 @pytest.mark.unit
