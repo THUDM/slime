@@ -31,6 +31,7 @@ except ImportError:
 from slime.rollout import sglang_rollout
 from slime.rollout import sglang_streaming_rollout as streaming
 from slime.rollout.streaming_utils import SGLangStreamAccumulator
+from slime.utils.async_utils import AsyncPacer
 from slime.utils.types import Sample
 
 NUM_GPUS = 0
@@ -126,6 +127,7 @@ def _generation_state():
         active_server_generations=0,
         pendings=set(),
         semaphore=asyncio.Semaphore(8),
+        generation_pacer=AsyncPacer(),
         dp_rank_context=lambda: nullcontext(None),
     )
 
@@ -501,6 +503,7 @@ def test_partial_abort_buffers_and_resumes_only_aborted_siblings(monkeypatch):
         monkeypatch.setattr(sglang_rollout, "async_rm", reward)
         state.aborted = False
         state.semaphore = asyncio.Semaphore(2)
+        state.generation_pacer = AsyncPacer()
         state.dp_rank_context = lambda: nullcontext(None)
 
         resumed_group = await sglang_rollout.generate_and_rm_group(args, mixed_group, {"max_new_tokens": 1})
@@ -521,6 +524,96 @@ def test_partial_abort_buffers_and_resumes_only_aborted_siblings(monkeypatch):
     assert partial.rollout_log_probs == [-0.1, -0.2]
     assert partial.loss_mask == [0, 1]
     assert partial.reward == 2.0
+
+
+@pytest.mark.parametrize("custom", [False, True])
+def test_generation_pacing_preserves_concurrency_cancellation_and_reuse(monkeypatch, custom):
+    async def exercise():
+        state = _generation_state()
+        state.semaphore = asyncio.Semaphore(128)
+        args = _streaming_args()
+        args.custom_generate_function_path = "test.generate" if custom else None
+        started = []
+        first_batch, all_started, finish = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        timers = []
+        loop = asyncio.get_running_loop()
+        call_later = loop.call_later
+
+        def schedule(delay, callback, *args, **kwargs):
+            if delay == 0.001:
+                timers.append(callback)
+            else:
+                return call_later(delay, callback, *args, **kwargs)
+
+        async def generate(_args, sample, params, evaluation=False):
+            assert params == {"temperature": 0.5}
+            assert evaluation == custom
+            started.append(sample.index)
+            if len(started) == 64:
+                first_batch.set()
+            if len(started) == 127:
+                all_started.set()
+            await finish.wait()
+            sample.status = Sample.Status.COMPLETED
+            return sample
+
+        monkeypatch.setattr(loop, "call_later", schedule)
+        monkeypatch.setattr(sglang_rollout, "GenerateState", lambda _args: state)
+        monkeypatch.setattr(sglang_rollout, "generate", generate)
+        monkeypatch.setattr(sglang_rollout, "load_function", lambda _path: generate)
+
+        def start(index):
+            return asyncio.create_task(
+                sglang_rollout.generate_and_rm(args, Sample(index=index), {"temperature": 0.5}, evaluation=custom)
+            )
+
+        tasks = [start(i) for i in range(128)]
+        await asyncio.wait_for(first_batch.wait(), 1)
+        assert started == list(range(64))
+        assert len(timers) == 1
+        assert not any(task.done() for task in tasks)
+        tasks[70].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await tasks[70]
+        timers.pop()()
+        await asyncio.wait_for(all_started.wait(), 1)
+        assert started == [i for i in range(128) if i != 70]
+        assert state.active_server_generations == 127  # Starts are paced; in-flight work is not capped at 64.
+        finish.set()
+        await asyncio.gather(*(task for i, task in enumerate(tasks) if i != 70))
+        assert (await start(128)).status == Sample.Status.COMPLETED
+        assert not state.generation_pacer.pending
+
+    asyncio.run(exercise())
+
+
+def test_abort_while_waiting_for_generation_pacer_does_not_start_request(monkeypatch):
+    async def exercise():
+        state = _generation_state()
+        args = _streaming_args()
+        args.custom_generate_function_path = None
+        queued, release = asyncio.Event(), asyncio.Event()
+        wait = state.generation_pacer.wait
+
+        async def wait_for_release():
+            queued.set()
+            await release.wait()
+            await wait()
+
+        async def unexpected_generate(*args, **kwargs):
+            raise AssertionError("An aborted queued sample must not start generation")
+
+        monkeypatch.setattr(state.generation_pacer, "wait", wait_for_release)
+        monkeypatch.setattr(sglang_rollout, "GenerateState", lambda _args: state)
+        monkeypatch.setattr(sglang_rollout, "generate", unexpected_generate)
+        task = asyncio.create_task(sglang_rollout.generate_and_rm(args, Sample(), {}))
+        await queued.wait()
+        state.aborted = True
+        release.set()
+        assert (await task).status == Sample.Status.ABORTED
+        assert state.active_server_generations == 0
+
+    asyncio.run(exercise())
 
 
 if __name__ == "__main__":

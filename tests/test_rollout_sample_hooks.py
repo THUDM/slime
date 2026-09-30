@@ -3,7 +3,7 @@ import types
 
 import pytest
 
-from slime.rollout.sample_hooks import apply_rollout_sample_hooks, set_current_rollout_id
+from slime.rollout.sample_hooks import apply_rollout_sample_hooks, rollout_context, set_current_rollout_id
 from slime.utils.types import Sample
 
 NUM_GPUS = 0
@@ -53,6 +53,21 @@ def test_rollout_sample_hooks_are_noop_when_unconfigured():
     sample = Sample(index=0)
 
     assert asyncio.run(apply_rollout_sample_hooks(args, sample)) is sample
+
+
+def test_concurrent_groups_keep_their_own_rollout_hook_context():
+    args = types.SimpleNamespace(marker="seen", rollout_sample_hook_path=[f"{__name__}.sync_hook"])
+
+    async def generate(rollout_id):
+        with rollout_context(rollout_id):
+            await asyncio.sleep(0)
+            sample = await apply_rollout_sample_hooks(args, Sample(index=rollout_id))
+            return sample.metadata["sync_hook"]
+
+    async def exercise():
+        assert await asyncio.gather(generate(10), generate(11)) == [("seen", 10), ("seen", 11)]
+
+    asyncio.run(exercise())
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from megatron.core import mpu
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
+from slime.data.tensor import TensorRef
 from slime.observability import train_data_utils, train_metric_utils
 from slime.observability.logging_utils import init_tracking
 from slime.observability.profile_utils import TrainProfiler
@@ -20,7 +21,7 @@ from slime.ray.train_actor import TrainRayActor
 from slime.utils import accelerator
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.memory_utils import clear_memory, get_process_host_memory_gib, print_memory, reset_cuda_stack_size
+from slime.utils.memory_utils import clear_memory, print_memory, reset_cuda_stack_size
 from slime.utils.misc import Box
 from slime.utils.reloadable_process_group import (
     destroy_process_groups,
@@ -34,7 +35,6 @@ from slime.utils.routed_experts import (
     RoutedExpertsMicrobatchPrefetcher,
 )
 from slime.utils.routing_replay import RoutingReplay
-from slime.utils.tensor_store import DiskTensorRef
 from slime.utils.types import RolloutBatch
 
 from ...utils.tensor_backper import TensorBackuper
@@ -72,14 +72,16 @@ class MegatronTrainRayActor(TrainRayActor):
             self.args = args
             return 0
 
-        monkey_patch_torch_dist()
+        if args.offload_train:
+            monkey_patch_torch_dist()
         super().init(args, role, with_ref, with_opd_teacher)
-        # Destroying and recreating WORLD invalidates raw dist.group.WORLD references cached by external code.
-        # Set SLIME_DESTROY_WORLD_PROCESS_GROUP=0 when such references may outlive a train sleep/wake cycle.
-        if os.getenv("SLIME_DESTROY_WORLD_PROCESS_GROUP", "1").lower() not in {"0", "false", "no"}:
-            register_default_process_group(timeout=timedelta(minutes=args.distributed_timeout_minutes))
-        else:
-            logger.info("Default WORLD process-group destruction is disabled")
+        if args.offload_train:
+            # Destroying and recreating WORLD invalidates raw dist.group.WORLD references cached by external code.
+            # Set SLIME_DESTROY_WORLD_PROCESS_GROUP=0 when such references may outlive a train sleep/wake cycle.
+            if os.getenv("SLIME_DESTROY_WORLD_PROCESS_GROUP", "1").lower() not in {"0", "false", "no"}:
+                register_default_process_group(timeout=timedelta(minutes=args.distributed_timeout_minutes))
+            else:
+                logger.info("Default WORLD process-group destruction is disabled")
 
         init(args)
 
@@ -141,6 +143,12 @@ class MegatronTrainRayActor(TrainRayActor):
             hf_vocab = getattr(self.hf_config, "vocab_size", None)
             self.args.vocab_size = hf_vocab if hf_vocab is not None else self.tokenizer.vocab_size
 
+        # Model-only resumes keep the serving version aligned with the next
+        # rollout. Actor recreation can supply the latest version explicitly.
+        if not hasattr(args, "update_weight_start_version"):
+            args.update_weight_start_version = (
+                args.start_rollout_id if args.start_rollout_id is not None else start_rollout_id
+            )
         self.weight_updater = create_weight_updater(
             self.args,
             self.model,
@@ -264,6 +272,21 @@ class MegatronTrainRayActor(TrainRayActor):
                     strict=False,
                 )
             ]
+        for key, dtype in (("rollout_topk_token_ids", torch.int32), ("rollout_topk_log_probs", torch.float32)):
+            if key not in rollout_data:
+                continue
+            rollout_data[key] = [
+                (
+                    value
+                    if isinstance(value, TensorRef)
+                    else (value if self.args.allgather_cp else slice_log_prob_with_cp(value, total, response)).to(
+                        device="cpu", dtype=dtype
+                    )
+                )
+                for value, total, response in zip(
+                    rollout_data[key], rollout_data["total_lengths"], rollout_data["response_lengths"], strict=True
+                )
+            ]
         return rollout_data
 
     def _switch_model(self, target_tag: str) -> None:
@@ -316,7 +339,7 @@ class MegatronTrainRayActor(TrainRayActor):
             batch = iterator.get_next(["rollout_routed_experts", "tokens"])
             values = batch["rollout_routed_experts"]
 
-            disk_backed = [isinstance(value, DiskTensorRef) for value in values]
+            disk_backed = [isinstance(value, TensorRef) for value in values]
             if any(disk_backed) and not all(disk_backed):
                 raise ValueError("A routing replay microbatch cannot mix disk-backed and resident route tensors.")
 
@@ -349,15 +372,6 @@ class MegatronTrainRayActor(TrainRayActor):
         if disk_prefetcher is not None:
             disk_prefetcher.start()
             RoutingReplay.register_lazy_resource(disk_prefetcher)
-            rss_gib, hwm_gib = get_process_host_memory_gib()
-            logger.info(
-                "R3 lazy replay initialized: microbatches=%d layers=%d prefetch=%d rss=%.3f GiB hwm=%.3f GiB",
-                len(disk_prefetcher.sources),
-                len(layer_ids),
-                disk_prefetcher.prefetch_microbatches,
-                rss_gib,
-                hwm_gib,
-            )
 
         del rollout_data["rollout_routed_experts"]
 

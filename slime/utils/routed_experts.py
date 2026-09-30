@@ -1,19 +1,14 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import threading
-import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
-from pathlib import Path
 from typing import Any
 
 import torch
 
+from slime.data.tensor import TensorRef
 from slime.utils import accelerator
-from slime.utils.memory_utils import get_process_host_memory_gib
-from slime.utils.tensor_store import DiskTensorRef
-from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +20,7 @@ def validate_routed_experts_tensor(
     sample_index: int | None = None,
     expected_rows: int | None = None,
 ) -> None:
-    """Validate one rollout route tensor before R3 consumes or spills it."""
+    """Validate one rollout route tensor before publication or R3 consumption."""
 
     num_layers = int(args.num_layers)
     topk = int(args.moe_router_topk)
@@ -107,13 +102,13 @@ def validate_routed_experts_tensor(
 
 
 def validate_routed_experts_value(
-    value: torch.Tensor | DiskTensorRef,
+    value: torch.Tensor | TensorRef,
     args,
     *,
     sample_index: int | None,
     expected_rows: int | None = None,
 ) -> None:
-    if isinstance(value, DiskTensorRef) and value.validated:
+    if isinstance(value, TensorRef) and value.validated:
         expected_tail = (int(args.num_layers), int(args.moe_router_topk))
         if len(value.shape) != 3 or tuple(value.shape[1:]) != expected_tail or value.shape[0] <= 0:
             raise ValueError(
@@ -127,98 +122,12 @@ def validate_routed_experts_value(
             )
         return
 
-    tensor = value.load() if isinstance(value, DiskTensorRef) else value
+    tensor = value.load() if isinstance(value, TensorRef) else value
     validate_routed_experts_tensor(tensor, args, sample_index=sample_index, expected_rows=expected_rows)
 
 
-def link_routed_experts_for_rollout(args, sample: Sample, rollout_id: int | None) -> None:
-    """Retain spilled routes in a rollout directory using only file references."""
-    ref = sample.rollout_routed_experts
-    if not isinstance(ref, DiskTensorRef):
-        return
-    store_dir = getattr(args, "rollout_routed_experts_store_dir", None)
-    if not store_dir:
-        raise ValueError("R3 file retention requires --rollout-routed-experts-store-dir")
-    rollout_component = "unknown" if rollout_id is None else f"{int(rollout_id):08d}"
-    output_dir = Path(store_dir) / f"rollout_{rollout_component}"
-    if Path(ref.path).parent.resolve() == output_dir.resolve():
-        if not Path(ref.path).is_file():
-            raise FileNotFoundError(f"R3 disk reference no longer exists: {ref.path}")
-        return
-    sample_component = "none" if sample.index is None else str(sample.index)
-    output_path = output_dir / f"sample_{sample_component}_{uuid.uuid4().hex}.safetensors"
-    sample.rollout_routed_experts = ref.link(output_path)
-
-
-async def spill_routed_experts(
-    args,
-    sample: Sample,
-    *,
-    rollout_id: int | None = None,
-    evaluation: bool = False,
-) -> Sample:
-    """Sample hook that replaces rollout routes with a shared-filesystem reference.
-
-    The write intentionally stays on the rollout event-loop thread. This applies
-    backpressure at response completion instead of allowing a large queue of
-    completed samples to retain their routed-expert tensors in host memory.
-    """
-
-    if evaluation:
-        sample.rollout_routed_experts = None
-        return sample
-    # Aborted partial-rollout samples return to the data buffer and resume in a
-    # later rollout, after this rollout's spill directory has been deleted, so
-    # their routes must stay resident and travel with the sample instead.
-    # Keep missing routes as None too: a waiting-queue abort can have an empty
-    # loss_mask, and zero placeholders would be counted as an already captured
-    # prefix by routed_experts_start_len on retry.
-    if sample.status == Sample.Status.ABORTED:
-        return sample
-
-    store_dir = getattr(args, "rollout_routed_experts_store_dir", None)
-    if not store_dir:
-        raise ValueError("spill_routed_experts requires --rollout-routed-experts-store-dir")
-
-    if isinstance(sample.rollout_routed_experts, DiskTensorRef):
-        validate_routed_experts_value(sample.rollout_routed_experts, args, sample_index=sample.index)
-        link_routed_experts_for_rollout(args, sample, rollout_id)
-        return sample
-
-    if sample.rollout_routed_experts is None:
-        if sample.loss_mask is None or any(sample.loss_mask):
-            return sample
-        dtype = torch.uint8 if args.num_experts <= 256 else torch.int32
-        experts = torch.zeros((max(0, len(sample.tokens) - 1), args.num_layers, args.moe_router_topk), dtype=dtype)
-    else:
-        experts = sample.materialize_rollout_routed_experts(replace=False)
-        validate_routed_experts_tensor(experts, args, sample_index=sample.index)
-
-    rollout_component = "unknown" if rollout_id is None else f"{int(rollout_id):08d}"
-    output_dir = Path(store_dir) / f"rollout_{rollout_component}"
-    sample_component = "none" if sample.index is None else str(sample.index)
-    output_path = output_dir / f"sample_{sample_component}_{uuid.uuid4().hex}.safetensors"
-    sample.rollout_routed_experts = DiskTensorRef.write(
-        experts,
-        output_path,
-        kind="rollout_routed_experts",
-        validated=True,
-    )
-    return sample
-
-
-def cleanup_routed_experts_rollout(args, rollout_id: int) -> None:
-    store_dir = getattr(args, "rollout_routed_experts_store_dir", None)
-    if not store_dir or getattr(args, "keep_rollout_routed_experts_files", False):
-        return
-    path = Path(store_dir) / f"rollout_{int(rollout_id):08d}"
-    if path.exists():
-        shutil.rmtree(path)
-        logger.info("Removed routed-experts spill directory %s", path)
-
-
 def materialize_routed_experts(value: Any, *, pin_memory: bool = False) -> torch.Tensor:
-    if isinstance(value, DiskTensorRef):
+    if isinstance(value, TensorRef):
         return value.load(pin_memory=pin_memory)
     if torch.is_tensor(value):
         return value
@@ -237,22 +146,19 @@ class RoutedExpertsMicrobatchPrefetcher:
         # every microbatch from disk between forward and backward.
         self.release_stage = "forward"
         self._executor = (
-            ThreadPoolExecutor(max_workers=min(2, self.prefetch_microbatches + 1), thread_name_prefix="r3-prefetch")
+            ThreadPoolExecutor(
+                max_workers=min(2, self.prefetch_microbatches + 1),
+                thread_name_prefix="r3-prefetch",
+            )
             if self.prefetch_microbatches > 0
             else None
         )
         self._closed = False
-        self._stats_lock = threading.Lock()
-        self._resident_bytes = 0
-        self._peak_resident_bytes = 0
-        self._load_count = 0
-        self._disk_bytes = 0
 
     def add(self, source: RoutedExpertsMicrobatch) -> None:
         source.index = len(self.sources)
         source.prefetcher = self
         self.sources.append(source)
-        self._disk_bytes += sum(value.nbytes for value in source.values)
 
     def start(self) -> None:
         for index in range(min(len(self.sources), self.prefetch_microbatches)):
@@ -275,16 +181,6 @@ class RoutedExpertsMicrobatchPrefetcher:
     def executor(self) -> ThreadPoolExecutor | None:
         return None if self._closed else self._executor
 
-    def on_loaded(self, nbytes: int) -> None:
-        with self._stats_lock:
-            self._load_count += 1
-            self._resident_bytes += nbytes
-            self._peak_resident_bytes = max(self._peak_resident_bytes, self._resident_bytes)
-
-    def on_released(self, nbytes: int) -> None:
-        with self._stats_lock:
-            self._resident_bytes -= nbytes
-
     def close(self) -> None:
         if self._closed:
             return
@@ -293,18 +189,6 @@ class RoutedExpertsMicrobatchPrefetcher:
             self._executor.shutdown(wait=True, cancel_futures=True)
         for source in self.sources:
             source.release()
-        rss_gib, hwm_gib = get_process_host_memory_gib()
-        logger.info(
-            "R3 disk prefetch profile: microbatches=%d prefetch=%d source_bytes=%.3f GiB "
-            "loads=%d peak_prepared_cpu=%.3f GiB rss=%.3f GiB hwm=%.3f GiB",
-            len(self.sources),
-            self.prefetch_microbatches,
-            self._disk_bytes / 1024**3,
-            self._load_count,
-            self._peak_resident_bytes / 1024**3,
-            rss_gib,
-            hwm_gib,
-        )
 
 
 class RoutedExpertsMicrobatch:
@@ -312,7 +196,7 @@ class RoutedExpertsMicrobatch:
 
     def __init__(
         self,
-        values: list[DiskTensorRef],
+        values: list[TensorRef],
         tokens: list[torch.Tensor],
         *,
         consumer_count: int,
@@ -326,25 +210,21 @@ class RoutedExpertsMicrobatch:
         self.prefetcher: RoutedExpertsMicrobatchPrefetcher | None = None
         self._future: Future | None = None
         self._cpu_tensor: torch.Tensor | None = None
-        self._loaded_nbytes = 0
         self._lock = threading.Lock()
         self._consumed = {"forward": 0, "backward": 0}
 
     def _load_and_prepare(self) -> torch.Tensor:
         from slime.backends.megatron_utils.cp_utils import prepare_routed_experts_for_routing_replay
 
-        tensors = [value.load() for value in self.values]
-        tensor = prepare_routed_experts_for_routing_replay(
+        # Read only the CP/TP rows owned by this rank in the layout helper.
+        tensors = [
+            (value if isinstance(value, TensorRef) else materialize_routed_experts(value)) for value in self.values
+        ]
+        return prepare_routed_experts_for_routing_replay(
             tensors,
             self.tokens,
             **self.prepare_kwargs,
         )
-        nbytes = tensor.numel() * tensor.element_size()
-        with self._lock:
-            self._loaded_nbytes = nbytes
-        if self.prefetcher is not None:
-            self.prefetcher.on_loaded(nbytes)
-        return tensor
 
     def prefetch(self) -> None:
         with self._lock:
@@ -387,12 +267,8 @@ class RoutedExpertsMicrobatch:
             future = self._future
             self._future = None
             self._cpu_tensor = None
-            loaded_nbytes = self._loaded_nbytes
-            self._loaded_nbytes = 0
         if future is not None and not future.done():
             future.cancel()
-        if loaded_nbytes and self.prefetcher is not None:
-            self.prefetcher.on_released(loaded_nbytes)
 
 
 class RoutedExpertsLayerRef:

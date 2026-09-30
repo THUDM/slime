@@ -55,18 +55,39 @@ def reset_accelerator_selection(monkeypatch):
     selected = accelerator._ACCELERATOR
     patch_imported = accelerator._MUSA_PATCH_IMPORTED
     bootstrap_checked = accelerator._MUSA_BOOTSTRAP_CHECKED
-    for name in ("SLIME_ACCELERATOR", "MUSA_VISIBLE_DEVICES", "MUSA_PATCH_PATH", "CUDA_VISIBLE_DEVICES"):
+    npu_imported = accelerator._NPU_RUNTIME_IMPORTED
+    npu_bootstrap_checked = accelerator._NPU_BOOTSTRAP_CHECKED
+    supa_imported = accelerator._SUPA_RUNTIME_IMPORTED
+    supa_bootstrap_checked = accelerator._SUPA_BOOTSTRAP_CHECKED
+    for name in (
+        "SLIME_ACCELERATOR",
+        "MUSA_VISIBLE_DEVICES",
+        "MUSA_PATCH_PATH",
+        "CUDA_VISIBLE_DEVICES",
+        "ASCEND_RT_VISIBLE_DEVICES",
+        "ASCEND_HOME_PATH",
+        "SUPA_VISIBLE_DEVICES",
+        "BIREN_HOME",
+    ):
         monkeypatch.delenv(name, raising=False)
     accelerator._REGISTRY.clear()
     accelerator.reset_accelerator()
     accelerator._MUSA_PATCH_IMPORTED = False
     accelerator._MUSA_BOOTSTRAP_CHECKED = False
+    accelerator._NPU_RUNTIME_IMPORTED = False
+    accelerator._NPU_BOOTSTRAP_CHECKED = False
+    accelerator._SUPA_RUNTIME_IMPORTED = False
+    accelerator._SUPA_BOOTSTRAP_CHECKED = False
     yield
     accelerator._REGISTRY.clear()
     accelerator._REGISTRY.update(registry)
     accelerator._ACCELERATOR = selected
     accelerator._MUSA_PATCH_IMPORTED = patch_imported
     accelerator._MUSA_BOOTSTRAP_CHECKED = bootstrap_checked
+    accelerator._NPU_RUNTIME_IMPORTED = npu_imported
+    accelerator._NPU_BOOTSTRAP_CHECKED = npu_bootstrap_checked
+    accelerator._SUPA_RUNTIME_IMPORTED = supa_imported
+    accelerator._SUPA_BOOTSTRAP_CHECKED = supa_bootstrap_checked
 
 
 @pytest.mark.unit
@@ -108,6 +129,8 @@ def test_selected_musa_bootstraps_patch_once(monkeypatch):
 @pytest.mark.unit
 def test_cpu_only_initialization_does_not_require_an_accelerator(monkeypatch):
     monkeypatch.setattr(accelerator, "is_musa_available", lambda: False)
+    monkeypatch.setattr(accelerator, "is_npu_available", lambda: False)
+    monkeypatch.setattr(accelerator, "is_supa_available", lambda: False)
     monkeypatch.setattr(accelerator, "_cuda_available", lambda: False)
 
     assert accelerator.initialize_accelerator() is None
@@ -197,6 +220,119 @@ def test_musa_availability_handles_missing_torch_namespace(monkeypatch):
     monkeypatch.delattr(accelerator.torch, "musa", raising=False)
 
     assert accelerator.is_musa_available() is False
+
+
+@pytest.mark.unit
+def test_selected_npu_bootstraps_runtime_once(monkeypatch):
+    imports = []
+    fake_npu = SimpleNamespace(is_available=lambda: True)
+
+    def import_torch_npu():
+        imports.append("torch_npu")
+        monkeypatch.setattr(accelerator.torch, "npu", fake_npu, raising=False)
+        return True
+
+    monkeypatch.setenv("ASCEND_RT_VISIBLE_DEVICES", "0")
+    monkeypatch.setattr(accelerator, "_import_torch_npu", import_torch_npu)
+
+    assert imports == []
+    assert accelerator.initialize_accelerator().name == "npu"
+    assert accelerator.initialize_accelerator().name == "npu"
+    assert imports == ["torch_npu"]
+
+
+@pytest.mark.unit
+def test_npu_backend_maps_devices_and_process_groups(monkeypatch):
+    monkeypatch.setattr(accelerator.NPUAccelerator, "is_available", lambda self: True)
+    monkeypatch.setenv("ASCEND_RT_VISIBLE_DEVICES", "2,5")
+    accelerator.set_accelerator(accelerator.NPUAccelerator())
+
+    assert accelerator.device_type() == "npu"
+    assert accelerator.visible_devices_env_key() == "ASCEND_RT_VISIBLE_DEVICES"
+    assert accelerator.resolve_visible_device_id("5") == 1
+    assert accelerator.process_group_backend() == "hccl"
+    assert accelerator.weight_update_backend() == "cpu:gloo,npu:hccl"
+    assert accelerator.process_group_backend("gloo") == "gloo"
+    assert accelerator.distributed_device_id() is None
+
+
+@pytest.mark.unit
+def test_npu_backend_is_recognized_as_accelerator_backend():
+    assert accelerator.is_accelerator_backend("hccl") is True
+    assert accelerator.is_accelerator_backend("cpu:gloo,npu:hccl") is True
+    assert accelerator.is_accelerator_backend("gloo") is False
+
+
+@pytest.mark.unit
+def test_npu_availability_handles_missing_torch_namespace(monkeypatch):
+    monkeypatch.delattr(accelerator.torch, "npu", raising=False)
+
+    assert accelerator.is_npu_available() is False
+
+
+@pytest.mark.unit
+def test_cuda_selection_does_not_bootstrap_supa(monkeypatch):
+    monkeypatch.setenv("SLIME_ACCELERATOR", "cuda")
+    monkeypatch.setenv("SUPA_VISIBLE_DEVICES", "0")
+    monkeypatch.setattr(accelerator, "_cuda_available", lambda: True)
+    monkeypatch.setattr(accelerator.CUDAAccelerator, "is_available", lambda self: True)
+    monkeypatch.setattr(
+        accelerator,
+        "_import_torch_supa",
+        lambda: pytest.fail("CUDA selection must not import torch_supa"),
+    )
+
+    assert accelerator.get_accelerator().name == "cuda"
+    assert accelerator.process_group_backend() == "nccl"
+    assert accelerator.visible_devices_env_key() == "CUDA_VISIBLE_DEVICES"
+
+
+@pytest.mark.unit
+def test_selected_supa_bootstraps_runtime_once(monkeypatch):
+    imports = []
+    fake_supa = SimpleNamespace(is_available=lambda: True)
+
+    def import_torch_supa():
+        imports.append("torch_supa")
+        monkeypatch.setattr(accelerator.torch, "supa", fake_supa, raising=False)
+        return True
+
+    monkeypatch.setenv("SUPA_VISIBLE_DEVICES", "0")
+    monkeypatch.setattr(accelerator, "_import_torch_supa", import_torch_supa)
+
+    assert imports == []
+    assert accelerator.initialize_accelerator().name == "supa"
+    assert accelerator.initialize_accelerator().name == "supa"
+    assert imports == ["torch_supa"]
+
+
+@pytest.mark.unit
+def test_supa_backend_maps_devices_and_process_groups(monkeypatch):
+    monkeypatch.setattr(accelerator.SUPAAccelerator, "is_available", lambda self: True)
+    monkeypatch.setenv("SUPA_VISIBLE_DEVICES", "2,5")
+    accelerator.set_accelerator(accelerator.SUPAAccelerator())
+
+    assert accelerator.device_type() == "supa"
+    assert accelerator.visible_devices_env_key() == "SUPA_VISIBLE_DEVICES"
+    assert accelerator.resolve_visible_device_id("5") == 1
+    assert accelerator.process_group_backend() == "bccl"
+    assert accelerator.weight_update_backend() == "cpu:gloo,supa:bccl"
+    assert accelerator.process_group_backend("gloo") == "gloo"
+    assert accelerator.distributed_device_id() is None
+
+
+@pytest.mark.unit
+def test_supa_backend_is_recognized_as_accelerator_backend():
+    assert accelerator.is_accelerator_backend("bccl") is True
+    assert accelerator.is_accelerator_backend("cpu:gloo,supa:bccl") is True
+    assert accelerator.is_accelerator_backend("gloo") is False
+
+
+@pytest.mark.unit
+def test_supa_availability_handles_missing_torch_namespace(monkeypatch):
+    monkeypatch.delattr(accelerator.torch, "supa", raising=False)
+
+    assert accelerator.is_supa_available() is False
 
 
 if __name__ == "__main__":

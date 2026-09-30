@@ -20,13 +20,6 @@ def install_paths() -> None:
 
 
 def install_stubs(*, with_sglang_router: bool = False, with_transformers: bool = False) -> None:
-    if "ray" not in sys.modules:
-        ray_mod = types.ModuleType("ray")
-        ray_mod._private = types.SimpleNamespace(
-            services=types.SimpleNamespace(get_node_ip_address=lambda: "127.0.0.1")
-        )
-        sys.modules["ray"] = ray_mod
-
     if with_sglang_router and "sglang_router" not in sys.modules:
         mod = types.ModuleType("sglang_router")
         sys.modules["sglang_router"] = mod

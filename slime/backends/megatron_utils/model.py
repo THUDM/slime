@@ -115,8 +115,8 @@ except ImportError:
                         iteration = int(checkpoint_step.split("_")[1])
 
         # Allow user to specify the loaded iteration.
-        if getattr(args, "ckpt_step", None):
-            iteration = args.ckpt_step
+        if getattr(args, "ckpt_step", None) is not None:
+            iteration, release = args.ckpt_step, False
 
         return get_checkpoint_name(load_dir, iteration, release, return_base_dir=True)
 
@@ -594,6 +594,9 @@ def train_one_step(
                     "advantages",
                     "returns",
                     "rollout_log_probs",
+                    "rollout_topk_token_ids",
+                    "rollout_topk_log_probs",
+                    "rollout_top_p_log_probs",
                     "teacher_log_probs",
                     "rollout_mask_sums",
                     # Only present when dumping train debug data; lets the loss

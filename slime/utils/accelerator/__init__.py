@@ -22,11 +22,19 @@ from .base import Accelerator
 from .cuda import CUDAAccelerator
 from .musa import MUSAAccelerator
 from .musa import is_musa_available as _is_musa_available
+from .npu import NPUAccelerator
+from .npu import is_npu_available as _is_npu_available
+from .supa import SUPAAccelerator
+from .supa import is_supa_available as _is_supa_available
 
 logger = logging.getLogger(__name__)
 
 _MUSA_PATCH_IMPORTED = False
 _MUSA_BOOTSTRAP_CHECKED = False
+_NPU_RUNTIME_IMPORTED = False
+_NPU_BOOTSTRAP_CHECKED = False
+_SUPA_RUNTIME_IMPORTED = False
+_SUPA_BOOTSTRAP_CHECKED = False
 _ACCELERATOR: Accelerator | None = None
 _SELECTION_LOCK = threading.RLock()
 
@@ -122,6 +130,112 @@ def _bootstrap_musa_patch_if_needed() -> bool:
     return _try_import_musa_patch()
 
 
+def _import_torch_npu() -> bool:
+    try:
+        importlib.import_module("torch_npu")
+    except ModuleNotFoundError as exc:
+        if exc.name == "torch_npu":
+            return False
+        raise RuntimeError(f"torch_npu failed because dependency {exc.name!r} is missing") from exc
+    except Exception as exc:
+        raise RuntimeError(f"torch_npu initialization failed: {exc}") from exc
+    return True
+
+
+def is_npu_available() -> bool:
+    return _is_npu_available()
+
+
+def is_npu_environment() -> bool:
+    return (
+        is_npu_available()
+        or os.environ.get("SLIME_ACCELERATOR", "").lower() == "npu"
+        or "ASCEND_RT_VISIBLE_DEVICES" in os.environ
+        or bool(os.environ.get("ASCEND_HOME_PATH"))
+    )
+
+
+def _try_import_torch_npu() -> bool:
+    global _NPU_RUNTIME_IMPORTED
+    if _NPU_RUNTIME_IMPORTED:
+        return True
+    if not is_npu_environment():
+        return False
+    _NPU_RUNTIME_IMPORTED = _import_torch_npu()
+    if not _NPU_RUNTIME_IMPORTED and is_npu_environment():
+        logger.warning("torch_npu is not importable; continuing without Ascend NPU support")
+    return _NPU_RUNTIME_IMPORTED
+
+
+def _npu_requested() -> bool:
+    configured = os.environ.get("SLIME_ACCELERATOR", "").lower()
+    if configured and configured != "auto":
+        return configured == "npu"
+    return "ASCEND_RT_VISIBLE_DEVICES" in os.environ or bool(os.environ.get("ASCEND_HOME_PATH"))
+
+
+def _bootstrap_torch_npu_if_needed() -> bool:
+    """Bootstrap torch_npu for an already chosen NPU backend at most once."""
+    global _NPU_BOOTSTRAP_CHECKED
+    if _NPU_BOOTSTRAP_CHECKED:
+        return _NPU_RUNTIME_IMPORTED
+    _NPU_BOOTSTRAP_CHECKED = True
+    return _try_import_torch_npu()
+
+
+def _import_torch_supa() -> bool:
+    try:
+        importlib.import_module("torch_supa")
+    except ModuleNotFoundError as exc:
+        if exc.name == "torch_supa":
+            return False
+        raise RuntimeError(f"torch_supa failed because dependency {exc.name!r} is missing") from exc
+    except Exception as exc:
+        raise RuntimeError(f"torch_supa initialization failed: {exc}") from exc
+    return True
+
+
+def is_supa_available() -> bool:
+    return _is_supa_available()
+
+
+def is_supa_environment() -> bool:
+    return (
+        is_supa_available()
+        or os.environ.get("SLIME_ACCELERATOR", "").lower() == "supa"
+        or "SUPA_VISIBLE_DEVICES" in os.environ
+        or bool(os.environ.get("BIREN_HOME"))
+    )
+
+
+def _try_import_torch_supa() -> bool:
+    global _SUPA_RUNTIME_IMPORTED
+    if _SUPA_RUNTIME_IMPORTED:
+        return True
+    if not is_supa_environment():
+        return False
+    _SUPA_RUNTIME_IMPORTED = _import_torch_supa()
+    if not _SUPA_RUNTIME_IMPORTED and is_supa_environment():
+        logger.warning("torch_supa is not importable; continuing without it")
+    return _SUPA_RUNTIME_IMPORTED
+
+
+def _supa_requested() -> bool:
+    configured = os.environ.get("SLIME_ACCELERATOR", "").lower()
+    if configured and configured != "auto":
+        return configured == "supa"
+    return "SUPA_VISIBLE_DEVICES" in os.environ or bool(os.environ.get("BIREN_HOME"))
+
+
+def _bootstrap_torch_supa_if_needed() -> bool:
+    """Bootstrap the runtime for an already chosen SUPA backend at most once."""
+    global _SUPA_BOOTSTRAP_CHECKED
+    if _SUPA_BOOTSTRAP_CHECKED:
+        return _SUPA_RUNTIME_IMPORTED
+    _SUPA_BOOTSTRAP_CHECKED = True
+    return _try_import_torch_supa()
+
+
 def _cuda_available() -> bool:
     try:
         return bool(torch.cuda.is_available() and torch.cuda.device_count() > 0)
@@ -136,6 +250,12 @@ def _register_builtin_backends() -> None:
         register_accelerator(
             "musa", MUSAAccelerator, is_musa_available, priority=200, communication_backends=("mccl",)
         )
+    if "npu" not in _REGISTRY:
+        register_accelerator("npu", NPUAccelerator, is_npu_available, priority=250, communication_backends=("hccl",))
+    if "supa" not in _REGISTRY:
+        register_accelerator(
+            "supa", SUPAAccelerator, is_supa_available, priority=150, communication_backends=("bccl",)
+        )
 
 
 def _requested_name() -> str | None:
@@ -144,6 +264,10 @@ def _requested_name() -> str | None:
         return value.strip().lower()
     if _musa_requested():
         return "musa"
+    if _npu_requested():
+        return "npu"
+    if _supa_requested():
+        return "supa"
     return None
 
 
@@ -157,11 +281,22 @@ def _make_selected(name: str, explicit: bool) -> Accelerator:
         # musa_patch may expose torch.musa, so bootstrap after MUSA has been
         # chosen but before validating and constructing its backend.
         _bootstrap_musa_patch_if_needed()
+    if name == "npu":
+        # Importing torch_npu attaches torch.npu and registers the NPU device.
+        _bootstrap_torch_npu_if_needed()
+    if name == "supa":
+        # torch_supa attaches torch.supa and registers the "supa" device type,
+        # so bootstrap after SUPA has been chosen but before validating it.
+        _bootstrap_torch_supa_if_needed()
     if explicit and not entry.is_available():
         if name == "musa":
             detail = (
                 "torch.musa is unavailable; install a MUSA-enabled PyTorch runtime and set MUSA_PATCH_PATH if required"
             )
+        elif name == "npu":
+            detail = "torch.npu is unavailable; install torch_npu and ensure an Ascend device is visible"
+        elif name == "supa":
+            detail = "torch.supa is unavailable; install a SUPA-enabled PyTorch runtime that provides torch_supa"
         elif name == "cuda":
             detail = "torch.cuda.is_available() is false or no CUDA device is visible"
         else:

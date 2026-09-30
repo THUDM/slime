@@ -30,11 +30,15 @@ from types import SimpleNamespace
 # and (transitively) transformers — both deliberately absent from the CPU CI
 # env. The tests below never dial a server or touch a tokenizer, so stub the
 # imports, same as tests/test_agent/test_agent_rollout_cpu.py.
-if "sglang_router" not in sys.modules:
+try:
+    import sglang_router  # noqa: F401
+except ImportError:
     _router_stub = types.ModuleType("sglang_router")
     _router_stub.__version__ = "0.2.3"
     sys.modules["sglang_router"] = _router_stub
-if "transformers" not in sys.modules:
+try:
+    import transformers  # noqa: F401
+except ImportError:
     _tf_stub = types.ModuleType("transformers")
     for _name in ("AutoProcessor", "AutoTokenizer", "PreTrainedTokenizerBase", "ProcessorMixin"):
         setattr(_tf_stub, _name, type(_name, (), {}))
@@ -47,8 +51,23 @@ from slime.rollout.filter_hub.base_types import DynamicFilterOutput
 from slime.utils.staleness import compute_staleness_metrics, sample_staleness
 from slime.utils.types import Sample
 
-
 NUM_GPUS = 0
+
+
+def test_custom_data_source_keeps_original_entrypoint(monkeypatch):
+    args = SimpleNamespace()
+    # A custom data source may have its own unrelated scheduler attribute.
+    source = SimpleNamespace(scheduler=object())
+    expected = object()
+
+    async def generate(received_args, rollout_id, received_source):
+        assert received_args is args and received_source is source
+        assert rollout_id == 3
+        return expected
+
+    monkeypatch.setattr(fa, "_generate_rollout_async", generate)
+    monkeypatch.setattr(fa, "run", asyncio.run)
+    assert fa.generate_rollout_fully_async(args, 3, source) is expected
 
 
 class _FakeGenerateState:
@@ -81,7 +100,7 @@ def _make_group(index: int) -> list[Sample]:
 
 def _make_worker(monkeypatch, data_buffer=None, concurrency=4) -> fa.AsyncRolloutWorker:
     monkeypatch.setattr(fa, "GenerateState", _FakeGenerateState)
-    args = SimpleNamespace(rollout_global_dataset=True, rollout_batch_size=4, n_samples_per_prompt=1)
+    args = SimpleNamespace(rollout_batch_size=4, n_samples_per_prompt=1)
     return fa.AsyncRolloutWorker(args, data_buffer or _FakeDataBuffer([]), concurrency=concurrency)
 
 
@@ -92,7 +111,9 @@ def test_rollout_takes_target_groups_and_leaves_surplus_queued(monkeypatch):
         worker.output_queue.put((gid, _make_group(gid)))
     monkeypatch.setattr(fa, "_get_global_worker", lambda args, data_buffer: worker)
 
-    args = SimpleNamespace(rollout_global_dataset=True, rollout_batch_size=4)
+    args = SimpleNamespace(
+        rollout_batch_size=4, rollout_data_transport="object-store", rollout_sample_filter_path=None
+    )
     out = asyncio.run(fa._generate_rollout_async(args, rollout_id=0, data_buffer=None))
 
     assert len(out) == 4
@@ -136,16 +157,17 @@ def test_dynamic_filter_drops_groups_and_refills(monkeypatch):
 
     monkeypatch.setattr(fa, "load_function", lambda path: keep_odd)
     args = SimpleNamespace(
-        rollout_global_dataset=True,
         rollout_batch_size=3,
+        rollout_data_transport="object-store",
+        rollout_sample_filter_path=None,
         dynamic_sampling_filter_path="test.keep_odd",
     )
     result = asyncio.run(fa._generate_rollout_async(args, rollout_id=7, data_buffer=None))
 
     assert [group[0].index for group in result.samples] == [1, 3, 5]
-    dropped = result.metrics["_dropped_samples"]
-    assert [group[0].index for group in dropped] == [0, 2, 4]
-    assert all(sample.remove_sample for group in dropped for sample in group)
+    assert "_dropped_samples" not in result.metrics
+    assert result.metrics["rollout/dynamic_filter/dropped_groups"] == 3
+    assert result.metrics["rollout/dynamic_filter/dropped_ratio"] == 0.5
     assert result.metrics["rollout/dynamic_filter/drop_even"] == 3
     assert [gid for gid, _ in worker.get_completed_groups()] == [6, 7]
 
@@ -153,7 +175,7 @@ def test_dynamic_filter_drops_groups_and_refills(monkeypatch):
 @pytest.mark.unit
 @pytest.mark.parametrize(
     "versions,expected",
-    [(["10"], 1), (["8"], 3), (["3", "10"], 8), ([], None), (["bad"], None), (["11"], None), (["²"], None)],
+    [(["10"], 0), (["8"], 2), (["3", "10"], 7), ([], None), (["bad"], None), (["11"], None), (["²"], None)],
 )
 def test_sample_staleness_uses_oldest_valid_version(versions, expected):
     assert sample_staleness(SimpleNamespace(weight_versions=versions), 10) == expected
@@ -168,8 +190,8 @@ def test_staleness_metrics_use_serving_snapshot():
     ]
     assert compute_staleness_metrics(samples, 10) == {
         "staleness/unknown_count": 1,
-        "staleness/mean": 8.5,
-        "staleness/max": 9,
+        "staleness/mean": 7.5,
+        "staleness/max": 8,
     }
     assert compute_staleness_metrics(samples, None) == {}
 
