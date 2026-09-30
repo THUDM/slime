@@ -101,11 +101,13 @@ class MessageNode:
         return chain
 
     def leaves(self) -> Iterator[MessageNode]:
-        if not self.children:
-            yield self
-            return
-        for c in self.children:
-            yield from c.leaves()
+        stack = [self]
+        while stack:
+            node = stack.pop()
+            if not node.children:
+                yield node
+                continue
+            stack.extend(reversed(node.children))
 
 
 # ===========================================================================
@@ -309,17 +311,11 @@ class TrajectoryManager:
         sid: str,
         *,
         base_sample: Sample,
-        reward: float = 0.0,
         extra_metadata: dict[str, Any] | None = None,
         max_sample_tokens: int = 0,
     ) -> list[Sample]:
         """Linearize this sid's routing tree into slime ``Sample`` objects and
         consume the session.
-
-        Each routing leaf yields one or more Samples; ``reward`` is assigned in
-        full to every emitted Sample (not split across them), so each trained
-        turn carries the trajectory's outcome reward. The sid is dropped
-        afterwards, so a second call for the same sid returns ``[]``.
         """
         root = self._trees.get(sid)
         if root is None:
@@ -335,9 +331,6 @@ class TrajectoryManager:
                     chain, base_sample=base_sample, extra_metadata=extra_metadata, max_sample_tokens=max_sample_tokens
                 )
             )
-
-        for s in samples:
-            s.reward = reward
 
         self._trees.pop(sid, None)
         self._turn_count.pop(sid, None)
