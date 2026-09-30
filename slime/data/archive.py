@@ -37,7 +37,7 @@ class RolloutArchive:
         self.contents = self.codec.load(self.manifest)
 
     @classmethod
-    def save(cls, path, samples, *, rollout_id, evaluation=False, args=None):
+    def save(cls, path, samples, *, rollout_id, evaluation=False, args=None, reference=None):
         from straw.protocol import digest
         from straw.reporting import write_report
         from straw.store import SharedFilesystemStore
@@ -67,12 +67,30 @@ class RolloutArchive:
         try:
             # Bounded chunks support indexed reads without a file per sample.
             # Lazy R3/SC references in the same pool share their existing bytes.
-            chunks, entries = [], []
+            from slime.data.sample_metadata import describe_sample
+
+            chunks, entries, sample_metadata = [], [], []
             with lock:
-                for start in range(0, len(samples), 64):
+                if reference is not None:
+                    if not shared or Path(reference.root).resolve() != store.backend.root:
+                        raise ValueError("An archive reference must belong to its storage pool")
+                    for offset, sample in enumerate(samples):
+                        sample_metadata.append(describe_sample(sample))
+                        context = getattr(sample, "_queue_receipt", None) or getattr(sample, "_queue_lease", None)
+                        entries.append(
+                            {
+                                "sample_key": (
+                                    f"sample:{sample.index}" if sample.index is not None else f"position:{offset}"
+                                ),
+                                "task_key": context["task_id"] if context else None,
+                                "offset": offset,
+                            }
+                        )
+                for start in range(0, len(samples) if reference is None else 0, 64):
                     chunk = samples[start : start + 64]
                     ref = codec.publish(chunk, submission_id=f"debug-chunk:{uuid.uuid4().hex}")
                     for offset, sample in enumerate(chunk):
+                        sample_metadata.append(describe_sample(sample))
                         context = getattr(sample, "_queue_receipt", None) or getattr(sample, "_queue_lease", None)
                         entries.append(
                             {
@@ -87,9 +105,12 @@ class RolloutArchive:
                             }
                         )
                     chunks.append(DiskPayloadRef(ref, str(store.backend.root)))
-                manifest = codec.publish(
-                    {"chunks": chunks, "entries": entries}, submission_id=f"debug-index:{uuid.uuid4().hex}"
+                contents = (
+                    {"raw": reference, "entries": entries}
+                    if reference is not None
+                    else {"chunks": chunks, "entries": entries}
                 )
+                manifest = codec.publish(contents, submission_id=f"debug-index:{uuid.uuid4().hex}")
                 owner = f"debug:{path.resolve()}:{digest(asdict(manifest))}"
                 # Ownership must commit before the externally visible index.
                 store.retain(owner, [manifest])
@@ -104,11 +125,36 @@ class RolloutArchive:
                         "root": str(store.backend.root),
                         "manifest": asdict(manifest),
                         "storage_owner": owner,
+                        "sample_metadata": {"version": 1, "samples": sample_metadata},
                     },
                 )
         finally:
             if not shared:
                 store.close()
+
+    @staticmethod
+    def check_metadata(path, args):
+        """Read only the small archive index, never the collection/tensor records.
+
+        Legacy archives can have an explicitly built metadata sidecar. The
+        manifest digest binds it to this exact immutable collection.
+        """
+        from slime.data.sample_metadata import validate_sample_metadata
+
+        path = Path(path)
+        index = json.loads(path.read_text())
+        if index.get("format") != "slime.straw-debug" or index.get("version") != 1:
+            raise ValueError("Unsupported rollout archive")
+        metadata = index.get("sample_metadata")
+        if metadata is None:
+            sidecar = json.loads(path.with_suffix(path.suffix + ".metadata.json").read_text())
+            if sidecar["manifest_digest"] != index["manifest"]["digest"]:
+                raise ValueError("Metadata sidecar belongs to a different archive")
+            metadata = sidecar["sample_metadata"]
+        if metadata.get("version") != 1:
+            raise ValueError("Unsupported sample metadata version")
+        validate_sample_metadata(metadata["samples"], args)
+        return metadata["samples"]
 
     def keys(self):
         """Return sample/task keys in archive order, including duplicate sample IDs."""
@@ -129,8 +175,13 @@ class RolloutArchive:
         if not selected and (sample_key is not None or task_key is not None):
             raise KeyError((sample_key, task_key))
         loaded, result = {}, []
+        if "raw" in self.contents and selected:
+            from slime.data.transport import load_rollout_samples
+            from slime.rollout.base_types import iter_samples
+
+            loaded["raw"] = list(iter_samples(load_rollout_samples(self.contents["raw"])))
         for entry in selected:
-            chunk = entry["chunk"]
+            chunk = entry.get("chunk", "raw")
             if chunk not in loaded:
                 loaded[chunk] = self.codec.load(self.contents["chunks"][chunk].manifest)
             sample = copy.copy(loaded[chunk][entry["offset"]])

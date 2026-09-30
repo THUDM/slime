@@ -130,8 +130,8 @@ def _validate_head_arrays(chunk_ids, chunk_logps):
         or (np.diff(np.sort(chunk_ids, axis=-1), axis=-1) == 0).any()
     ):
         raise ValueError("Sampler top-k token ids must be distinct and nonnegative int32 integers.")
-    if not np.isfinite(chunk_logps).all() or (chunk_logps > 0).any() or (np.exp(chunk_logps).sum(-1) > 1.0001).any():
-        raise ValueError("Sampler top-k logprobs must describe a finite, normalized probability subdistribution.")
+    if not np.isfinite(chunk_logps).all() or (chunk_logps > 0).any():
+        raise ValueError("Sampler top-k logprobs must be finite nonpositive values.")
 
 
 def extract_sampler_topk(meta_info, count, k):
@@ -204,10 +204,32 @@ def extract_sampler_top_p(meta_info, count):
 def validate_sampler_top_p(ids, offsets, logps, count, loss_mask=None, tokens=None, sampled_logps=None):
     if ids is None or offsets is None or logps is None:
         raise ValueError("Top-p score centering requires complete sampler top-p ids, offsets, and logprobs.")
-    # Keep large supports lazy and validate bounded ranges. The sampled token
-    # and loss mask can change independently of a previously validated tensor.
+    # Supports can be large; keep them shared and read only bounded ranges.
     ids = ids if isinstance(ids, TensorRef) else np.asarray(ids)
     logps = logps if isinstance(logps, TensorRef) else np.asarray(logps)
+    trusted = all(isinstance(value, TensorRef) and value.validated for value in (ids, offsets, logps))
+    if trusted:
+        # Immutable, previously checked captures need no payload reads when
+        # republishing a collection or a cross-rollout buffer snapshot.
+        if (
+            len(ids.shape) != 1
+            or logps.shape != ids.shape
+            or offsets.shape != (count + 1,)
+            or not np.issubdtype(ids.dtype, np.integer)
+            or not np.issubdtype(offsets.dtype, np.integer)
+        ):
+            raise ValueError("Invalid top-p score-centering ids/logprobs/offsets.")
+
+        # Published samples already established one-dimensional token fields.
+        # Inspect list lengths, not np.shape(list), which traverses every token.
+        def shape(value):
+            return (len(value),) if isinstance(value, (list, tuple)) else np.shape(value)
+
+        if loss_mask is not None and shape(loss_mask) != (count,):
+            raise ValueError("Top-p loss mask must align with the response length.")
+        if tokens is not None and (shape(tokens) != (count,) or shape(sampled_logps) != (count,)):
+            raise ValueError("Top-p sampled tokens and logprobs must align with the response length.")
+        return
     offsets = np.asarray(offsets.load() if isinstance(offsets, TensorRef) else offsets)
     if (
         len(ids.shape) != 1
@@ -217,32 +239,55 @@ def validate_sampler_top_p(ids, offsets, logps, count, loss_mask=None, tokens=No
         or not np.issubdtype(offsets.dtype, np.integer)
         or offsets[0] != 0
         or offsets[-1] != len(ids)
-        or (np.diff(offsets) < 0).any()
+        or (offsets[1:] < offsets[:-1]).any()
     ):
         raise ValueError("Invalid top-p score-centering ids/logprobs/offsets.")
-    for value in (ids, logps):
-        if isinstance(value, TensorRef):
-            value.validate()
-    for first_row in range(0, count, 1024):
-        last_row = min(first_row + 1024, count)
-        base, stop = int(offsets[first_row]), int(offsets[last_row])
-        chunk_ids, chunk_logps = np.asarray(ids[base:stop]), np.asarray(logps[base:stop])
-        for row in range(first_row, last_row):
-            start, end = offsets[row : row + 2] - base
-            if loss_mask is not None and not loss_mask[row] and start == end:
-                continue
-            row_ids, row_logps = chunk_ids[start:end], chunk_logps[start:end].astype(np.float64)
-            _validate_head_arrays(row_ids, row_logps)
-            if not np.isclose(np.exp(row_logps).sum(), 1.0, rtol=1e-4, atol=1e-6):
-                raise ValueError(
-                    "Top-p score centering requires the complete normalized support, not a truncated head."
-                )
-            if tokens is not None:
-                selected = row_logps[row_ids == tokens[row]]
-                if len(selected) != 1 or not np.isclose(selected[0], sampled_logps[row], rtol=1e-4, atol=1e-5):
-                    raise ValueError(
-                        "Top-p sampler distribution must include the sampled token with its rollout logprob."
-                    )
+    offsets = offsets.astype(np.int64, copy=False)
+    mask = np.ones(count, dtype=bool) if loss_mask is None else np.asarray(loss_mask, dtype=bool)
+    if mask.shape != (count,):
+        raise ValueError("Top-p loss mask must align with the response length.")
+    if tokens is not None:
+        tokens, sampled_logps = np.asarray(tokens), np.asarray(sampled_logps)
+        if tokens.shape != (count,) or sampled_logps.shape != (count,):
+            raise ValueError("Top-p sampled tokens and logprobs must align with the response length.")
+
+    # Per-token NumPy calls block the rollout event loop at high concurrency.
+    # Reduce whole ragged rows together, bounding temporary arrays by both row
+    # and candidate counts (a single wider support is kept intact).
+    first = 0
+    while first < count:
+        stop = min(
+            count,
+            first + 4096,
+            max(first + 1, np.searchsorted(offsets, int(offsets[first]) + 2**20, side="right") - 1),
+        )
+        start, end = offsets[first], offsets[stop]
+        lengths = np.diff(offsets[first : stop + 1])
+        row_ids = np.repeat(np.arange(stop - first, dtype=np.int64), lengths)
+        chunk_ids = np.asarray(ids[int(start) : int(end)])
+        chunk_logps = np.asarray(logps[int(start) : int(end)]).astype(np.float64)
+        if (chunk_ids < 0).any() or (chunk_ids > np.iinfo(np.int32).max).any():
+            raise ValueError("Sampler top-p token ids must be distinct and nonnegative int32 integers.")
+        keys = np.sort(row_ids * 2**31 + chunk_ids.astype(np.int64, copy=False))
+        if (keys[1:] == keys[:-1]).any():
+            raise ValueError("Sampler top-p token ids must be distinct and nonnegative int32 integers.")
+        if not np.isfinite(chunk_logps).all() or (chunk_logps > 0).any():
+            raise ValueError("Sampler top-p logprobs must be finite nonpositive values.")
+        nonempty = lengths > 0
+        if (mask[first:stop] & ~nonempty).any():
+            raise ValueError("Missing top-p support for a trainable token.")
+        active = nonempty | mask[first:stop]
+        if tokens is not None:
+            selected = chunk_ids == tokens[first:stop][row_ids]
+            matched_rows = row_ids[selected]
+            if (
+                not np.array_equal(matched_rows, np.flatnonzero(active))
+                or not np.isclose(
+                    chunk_logps[selected], sampled_logps[first:stop][matched_rows], rtol=1e-4, atol=1e-5
+                ).all()
+            ):
+                raise ValueError("Top-p sampler distribution must include the sampled token with its rollout logprob.")
+        first = stop
 
 
 def validate_sampler_topk(sample, k):

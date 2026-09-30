@@ -406,7 +406,7 @@ To enable distributed fully async rollout with straw, add:
 
 All nodes must mount the directory at the same absolute path and have
 `straw-queue` installed. The standard slime installation includes it; for an
-existing environment, run `pip install straw-queue`. Configure the JuiceFS
+existing environment, run `pip install 'straw-queue>=0.1.2'`. Configure the JuiceFS
 storage profile and deployment declaration as described in the
 [straw guide](../advanced/straw.md#enable-it). Selecting straw alone uses the
 synchronous rollout entrypoint. For a fresh run, omitting `--rollout-data-dir`
@@ -416,7 +416,7 @@ With straw, `--use-rollout-routing-replay` and `--use-score-centering` persist
 R3 and SC tensors with their samples, including partial continuations.
 `--rollout-queue-online-gc` optionally reclaims unused storage; it is disabled
 by default. Recovery uses `--load`, `--save` and optional `--ckpt-step`.
-See the [straw guide](../advanced/straw.md) for scheduling, storage limits,
+See the [straw guide](../advanced/straw.md) for scheduling,
 checkpoint recovery and debug replay, and [customization](customization.md)
 for custom rollout functions.
 

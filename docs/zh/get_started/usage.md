@@ -403,9 +403,9 @@ slime 支持不同程度的自定义数据生成（rollout）。
 --rollout-data-dir /shared/run/rollout_data
 ```
 
-所有节点必须以相同绝对路径挂载该目录，并安装 `straw-queue`。标准 slime 安装已包含此依赖；已有环境可以执行 `pip install straw-queue`。JuiceFS storage profile 和部署声明的配置见 [straw 指南](../advanced/straw.md#启用方式)。只选择 straw 时使用同步 rollout 入口。新任务已设置 `--save` 时，省略 `--rollout-data-dir` 会使用 `<save>/rollout_data`。
+所有节点必须以相同绝对路径挂载该目录，并安装 `straw-queue`。标准 slime 安装已包含此依赖；已有环境可以执行 `pip install 'straw-queue>=0.1.2'`。JuiceFS storage profile 和部署声明的配置见 [straw 指南](../advanced/straw.md#启用方式)。只选择 straw 时使用同步 rollout 入口。新任务已设置 `--save` 时，省略 `--rollout-data-dir` 会使用 `<save>/rollout_data`。
 
-使用 straw 时，`--use-rollout-routing-replay` 和 `--use-score-centering` 将 R3、SC 张量随 sample 持久化，也支持 partial continuation。`--rollout-queue-online-gc` 可开启未使用存储的回收，默认关闭。恢复使用 `--load`、`--save` 和可选的 `--ckpt-step`。调度、容量限制、checkpoint 恢复和 debug 回放见 [straw 指南](../advanced/straw.md)，自定义 rollout 函数见[自定义功能](customization.md)。
+使用 straw 时，`--use-rollout-routing-replay` 和 `--use-score-centering` 将 R3、SC 张量随 sample 持久化，也支持 partial continuation。`--rollout-queue-online-gc` 可开启未使用存储的回收，默认关闭。恢复使用 `--load`、`--save` 和可选的 `--ckpt-step`。调度、checkpoint 恢复和 debug 回放见 [straw 指南](../advanced/straw.md)，自定义 rollout 函数见[自定义功能](customization.md)。
 
 ## sglang 使用方法
 

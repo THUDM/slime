@@ -1,12 +1,13 @@
 import itertools
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 import ray
 
 from slime.data.batch_builder import BatchBuilder
-from slime.data.transport import accept_raw_rollout, check_rollout_storage, load_rollout_samples
+from slime.data.transport import DiskPayloadRef, accept_raw_rollout, check_rollout_storage, load_rollout_samples
 from slime.observability import logging_utils
 from slime.observability.logging_utils import configure_logger, init_tracking
 from slime.observability.rollout_data_utils import (
@@ -15,7 +16,7 @@ from slime.observability.rollout_data_utils import (
     validate_rollout_id_annotated,
 )
 from slime.observability.rollout_metrics import log_eval_rollout_data, log_rollout_data
-from slime.rollout.base_types import call_rollout_fn
+from slime.rollout.base_types import RolloutFnTrainOutput, call_rollout_fn
 from slime.rollout.sample_hooks import set_current_rollout_id
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import init_http_client
@@ -205,6 +206,7 @@ class RolloutManager:
             rollout_id=rollout_id,
             evaluation=False,
             args=self.args,
+            reference=self.batch_builder.raw_ref if self.args.rollout_data_transport == "straw" else None,
         )
         log_rollout_data(
             rollout_id, self.args, data, metrics, time.time() - start_time, weight_version=self.weight_version
@@ -312,6 +314,29 @@ class RolloutManager:
 
     def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:
+            if (
+                self.args.rollout_data_transport == "straw"
+                and self.args.load_debug_rollout_data.endswith(".straw.json")
+                and self.args.load_debug_rollout_data_subsample is None
+            ):
+                from slime.data.archive import RolloutArchive
+
+                path = self.args.load_debug_rollout_data.format(rollout_id=rollout_id)
+                with RolloutArchive(Path(path).expanduser()) as archive:
+                    if (
+                        archive.store.backend.root != Path(self.args.rollout_data_dir).resolve()
+                        or archive.manifest.manifest.segment.run_id != self.args.rollout_queue_run_id
+                    ):
+                        raise ValueError("Debug rollout archives must belong to the same Straw storage pool and run")
+                    data = archive.load_samples()
+                    refs = [archive.contents["raw"]] if "raw" in archive.contents else archive.contents["chunks"]
+                    self.batch_builder.raw_ref = accept_raw_rollout(
+                        RolloutFnTrainOutput(samples=data, sample_refs=refs),
+                        self.args,
+                        rollout_id,
+                        controller=self.controller,
+                    )
+                return data, None
             data = load_debug_rollout_data(
                 self.args.load_debug_rollout_data,
                 rollout_id=rollout_id,
@@ -331,10 +356,15 @@ class RolloutManager:
                 self.weight_version = max(map(int, versions)) if valid else None
             data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
             if self.args.rollout_data_transport == "straw":
+                samples = getattr(data, "samples", None)
                 data = accept_raw_rollout(data, self.args, rollout_id, controller=self.controller)
                 self.batch_builder.raw_ref = data
                 metrics = data.metrics
-                data = load_rollout_samples(data)
+                data = (
+                    samples
+                    if isinstance(samples, list) and all(not isinstance(group, DiskPayloadRef) for group in samples)
+                    else load_rollout_samples(data)
+                )
             else:
                 metrics = data.metrics
                 data = load_rollout_samples(data.samples)

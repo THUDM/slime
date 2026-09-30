@@ -602,8 +602,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Reclaim sealed straw packs after acknowledged use; retain checkpoints explicitly.",
             )
             parser.add_argument("--rollout-queue-lease-seconds", type=float, default=300)
-            parser.add_argument("--rollout-queue-max-pending", type=int, default=65536)
-            parser.add_argument("--rollout-queue-max-inflight", type=int, default=65536)
             parser.add_argument(
                 "--rollout-queue-segment-mib",
                 type=int,
@@ -1954,8 +1952,6 @@ def slime_validate_args(args):
             raise ValueError("--rollout-queue-online-gc requires --rollout-data-transport straw")
     for name in (
         "rollout_queue_lease_seconds",
-        "rollout_queue_max_pending",
-        "rollout_queue_max_inflight",
         "rollout_queue_segment_mib",
         "rollout_io_concurrency",
     ):
