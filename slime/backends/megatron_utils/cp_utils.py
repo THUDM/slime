@@ -5,7 +5,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from megatron.core import mpu
 
-from slime.utils.tensor_store import TensorRef
+from slime.data.tensor import TensorRef
 
 _RoutedExpertsInput = torch.Tensor | TensorRef
 

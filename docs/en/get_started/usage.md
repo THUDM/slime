@@ -152,7 +152,7 @@ For details on some of SGLang's customizations and the principles behind how sli
 
 ### Data Format
 
-Raw data is always managed by the DataSource. The built-in DataSource loads `--prompt-data` when provided; use `--data-source-path` for custom data management. The former `--disable-rollout-global-dataset` flag has been removed; remove it from older launch scripts.
+Raw data is managed by the DataSource. The built-in DataSource loads `--prompt-data` when provided; use `--data-source-path` for custom data management.
 
 slime supports `.jsonl` and `.parquet` files; reading Parquet requires `pyarrow`. Each record in either format should contain the fields selected by `--input-key` and `--label-key`. An expanded JSONL record looks like this:
 
@@ -419,11 +419,12 @@ slime supports customizing data generation (rollout) to various degrees.
 
 ### Persistent rollout queue and distributed fully async
 
-See [straw architecture and recovery](../advanced/straw.md) for the data flow, shared tensor ownership and checkpoint boundaries.
+The default rollout transport is Ray `object-store`, which does not require a
+shared directory. `--rollout-data-transport nixl` selects Ray's NIXL tensor transport.
+For persistent queues and packed tensor storage across machines, use
+[straw](../advanced/straw.md) with a shared JuiceFS directory.
 
-Rollout payloads use Ray `object-store` by default, with `slime.rollout.data_source.RolloutDataSourceWithBuffer`. This mode needs neither straw nor a shared rollout directory. `--rollout-data-transport nixl` selects Ray's NIXL tensor transport.
-
-Install [straw](../advanced/straw.md), then select `--rollout-data-transport straw` to use its persistent queue and packed tensor storage. straw transport defaults to `slime.rollout.queue_data_source.QueueDataSource`. It uses `--rollout-data-dir`, or `<save>/rollout_data` when `--save` is set; otherwise an explicit shared directory is required. Ray still runs actors and RPCs and carries small references. The synchronous rollout entrypoint remains the default. To use distributed fully async explicitly:
+To enable distributed fully async rollout with straw, add:
 
 ```bash
 --rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async \
@@ -431,31 +432,21 @@ Install [straw](../advanced/straw.md), then select `--rollout-data-transport str
 --rollout-data-dir /shared/run/rollout_data
 ```
 
-With straw transport, `--use-rollout-routing-replay` stores completed samples' R3 routes in straw with their owning sample group. SC tensors are also stored in the same publication when `--use-score-centering` is enabled, including SC without R3. R3/SC persistence requires straw transport; the default object-store transport keeps these tensors in memory. There is no separate spill hook or directory. User sample hooks run first; R3, SC and sample metadata are published together into shared pack files. Later queue publications reuse their references. Large group bundles are split within the native write budget. Aborted prefixes are persisted by the queue continuation path. `--rollout-queue-online-gc` is a separate opt-in: after training acknowledges completion, straw can reclaim sealed packs whose owners have all released them. It is disabled by default.
+All nodes must mount the directory at the same absolute path and have
+`straw-queue` installed. The standard slime installation includes it; for an
+existing environment, run `pip install straw-queue`. Configure the JuiceFS
+storage profile and deployment declaration as described in the
+[straw guide](../advanced/straw.md#enable-it). Selecting straw alone uses the
+synchronous rollout entrypoint. For a fresh run, omitting `--rollout-data-dir`
+uses `<save>/rollout_data` when `--save` is set.
 
-One job-owned, non-restarting Ray actor coordinates task leases and a serialized dataset producer. Dataset cursor advancement and task submission are committed together. Workers receive small task references and read prompt groups directly from shared storage. This replaces the former in-memory distributed index allocator; no per-reader index ranges are abandoned on failure. Seeded shuffle and sample/group identities remain those of the existing data source.
-
-`get_samples(n)` and `add_samples(groups)` retain their interfaces. Custom producers can pass `source.reader_config("unique_reader_id")` to a remote process and call `config.open()` there. IDs must be unique; `owner` is reserved. Returned partial groups are persisted and become available to every reader; there is no reader-local sample buffer. Readers renew leases; a stopped reader returns unfinished tasks, while lost workers' tasks become available after lease expiry. Newly generated retries have new attempts. The coordinator does not automatically fail over: stop the old job before using `--rollout-queue-resume` with the same root and `--rollout-queue-run-id`.
-
-Fully async starts one generation process per Ray node with CPU resources. Each reserves one CPU and receives a share of the configured concurrency in complete prompt groups. Faster workers may fill a global batch without waiting for slower ones. Local generation queues and collector prefetch remain bounded. Complete groups pass through the existing dynamic filter before publication; rejected groups contribute filter metrics. Distributed fully async still rejects `--rollout-all-samples-process-path`. The synchronous all-samples hook retains its existing Samples and calling order.
-
-The default logical result is a complete filtered group; physical segment boundaries do not define training groups. Workers encode Samples explicitly and store large tensors as typed dependencies. The format uses immutable committed extents in append-only `.pack` files, relative references and checksums, with no pickle payload protocol. Unsupported custom field types fail explicitly. See the [straw architecture, deployment and recovery guide](../advanced/straw.md).
-
-Built-in producers return a collection manifest. Legacy custom rollouts can still return Sample lists; Manager publishes and accepts one compatibility collection. New producers may return an accepted `RawRolloutRef`; Manager validates its receipt and passes it to the same BatchBuilder without rewriting its payload. BatchBuilder preserves reward/conversion hooks and DP scheduling, records the selection plan, and publishes all rank shards before exposing `TrainBatchRef`s. All rank references identify the same batch and plan.
-
-The slime adapter currently binds the shared root at the same absolute path on all nodes and checks visibility in both directions. The underlying store's references are relocatable. r3/sc dependencies are adopted into queue storage before references escape the producer; old rollout spill cleanup cannot remove them. Queue files are retained by default. Offline inspection/cleanup requires stopped writers, coordinator and readers; ordinary reads or batch-ready events never delete data. Debug dumps remain opt-in `torch.save` files and may contain retained queue tensor references. Evaluation follows the existing path.
-
-Data-source checkpoints pause registered consumers, drain in-flight requests and save reader buffers and completed groups through `queue_state_<rollout_id>.json` under `<save>/rollout`. Buffer snapshots reference already persisted groups and retain current leases separately, avoiding a second encoding of every buffered token during checkpoint or shutdown; older inline snapshots remain readable. Restore checks dataset size, samples per prompt, seed, shuffle, run identity and fully-async worker topology. Global producer history remains in the journal and is not rewound when loading an earlier checkpoint. Custom execution state participates via `register_consumer(name, consumer)` with `pause`, `resume`, `state_dict`, `load_state_dict` and `close` methods. Disabled worker slots remain disabled after restore. This is durable queue/data state; it does not by itself guarantee exact distributed optimizer recovery or bitwise training equivalence.
-
-R3 training reads only the CP/TP rows assigned to the current rank. Batched continuation publication, loading and state persistence reuse authenticated indices within a bounded read session; receipt lookups use batch RPCs. These optimizations preserve checksums, WAL durability and GC ownership. Read sessions do not replace ownership pins.
-
-Distributed fully async producers stop admitting new groups while weights synchronize, then resume if another training rollout remains. In-flight results still finish and persist.
-
-Joint checkpoint restore defers background GC until the saved training consumer state and its restored storage ownership are durable. Unavailable checkpoint data fails restoration before GC starts.
-
-Restored reader buffers keep an explicit storage reference independent of filter decisions. A later data-source checkpoint moves that reference only after all active and not-yet-started consumers are captured in a complete, retained, durable snapshot. Retiring an older checkpoint can then release its obsolete tensors without losing resumable prefixes. A failed save keeps the previous reference; checkpoint retirement remains the caller's responsibility.
-
-The manager still materializes the selected batch for conversion, so manager memory and shared-storage bandwidth remain limits. `--rollout-io-concurrency` bounds publication I/O submissions. straw's storage, journal and GC implementation is Rust; slime retains Python sample conversion and training integration. Measure throughput for the intended model, concurrency and shared filesystem before changing deployment defaults.
+With straw, `--use-rollout-routing-replay` and `--use-score-centering` persist
+R3 and SC tensors with their samples, including partial continuations.
+`--rollout-queue-online-gc` optionally reclaims unused storage; it is disabled
+by default. Recovery uses `--load`, `--save` and optional `--ckpt-step`.
+See the [straw guide](../advanced/straw.md) for scheduling, storage limits,
+checkpoint recovery and debug replay, and [customization](customization.md)
+for custom rollout functions.
 
 ## How to Use SGLang
 
