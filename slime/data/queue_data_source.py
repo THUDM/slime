@@ -55,6 +55,10 @@ class RolloutQueueController:
     def __init__(self, args, *, producer=None, restore_plan=None, defer_gc=False):
         self.args = args
         self.restore_plan = restore_plan or RestorePlan()
+        if (getattr(args, "load_debug_rollout_data", None) or "").endswith(".straw.json"):
+            # Replay shares immutable storage, but never the source queue's
+            # leases, accepted positions or training cursor.
+            self.restore_plan = RestorePlan(queue_id=f"debug:{uuid.uuid4().hex}")
         self._checkpoint_lock = None
         with ExitStack() as cleanup:
             # The controller owns both the queue and its checkpoint branch.

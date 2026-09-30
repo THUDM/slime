@@ -228,7 +228,12 @@ It shares existing tensors when saved with straw transport; otherwise it creates
 a `straw-data` pool alongside the index. There is one index per rollout, with
 samples packed together. Evaluation uses `eval_<id>` in place of the rollout ID.
 Copying only the JSON index does not copy the payloads. For train-only replay
-with straw transport, choose a separate writable training queue.
+with straw transport automatically reuses the archive’s storage pool and run,
+overriding `--rollout-data-dir` and `--rollout-queue-run-id`. Each replay creates
+an isolated queue in that writable pool; the source queue is left untouched.
+Full replay (without subsampling) reuses the archived Sample and tensor records
+without republishing them.
+All rollout archives in one replay must belong to the same pool and run.
 `--load-debug-rollout-data-subsample` also applies to archives.
 
 ```python

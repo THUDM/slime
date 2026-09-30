@@ -129,7 +129,7 @@ Debug 保存和加载参数支持 `.pt` 与 `.straw.json` 两种格式：
 | `.pt` | Sample 数据和实际张量内容 | 独立文件 |
 | `.straw.json` | 带 sample/task key 的不可变索引 | 需要保留所引用的 straw 存储池 |
 
-索引归档独立保留数据，不受队列消费和 GC 影响。使用 straw 传输保存时复用已有张量，否则在索引旁创建 `straw-data` 存储池。每个 rollout 只有一个索引，sample 打包存储。Evaluation 使用 `eval_<id>` 替代 rollout ID。单独复制 JSON 索引不会复制载荷。使用 straw 做只训练回放时，应选择独立的可写训练队列。`--load-debug-rollout-data-subsample` 也适用于归档。
+索引归档独立保留数据，不受队列消费和 GC 影响。使用 straw 传输保存时复用已有张量，否则在索引旁创建 `straw-data` 存储池。每个 rollout 只有一个索引，sample 打包存储。Evaluation 使用 `eval_<id>` 替代 rollout ID。单独复制 JSON 索引不会复制载荷。使用 straw 做只训练回放时，自动使用归档的存储池和 run，覆盖 `--rollout-data-dir` 和 `--rollout-queue-run-id`，并在该可写存储池中新建独立队列，不改变原队列。完整回放（不抽样）直接复用已有 Sample 和张量记录，不重新写入。一次回放的所有归档必须属于同一存储池和 run。`--load-debug-rollout-data-subsample` 也适用于归档。
 
 ```python
 from slime.data.archive import RolloutArchive

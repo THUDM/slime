@@ -35,6 +35,31 @@ def seal_rollout_store(args):
 
 
 def resolve_rollout_data_dir(args):
+    debug_path = getattr(args, "load_debug_rollout_data", None)
+    if debug_path and debug_path.endswith(".straw.json"):
+        import glob
+        from string import Formatter
+
+        from straw.protocol import RecordSetRef
+
+        start = getattr(args, "start_rollout_id", None)
+        if start is None:
+            # Model loading may determine the starting rollout later. Read only
+            # an index to bind the shared pool before creating any actors.
+            pattern = "".join(
+                glob.escape(text) + ("*" if field else "") for text, field, _, _ in Formatter().parse(debug_path)
+            )
+            paths = sorted(glob.glob(str(Path(pattern).expanduser())))
+            if not paths:
+                raise FileNotFoundError(f"No Straw rollout archive matches {debug_path}")
+            path = paths[0]
+        else:
+            path = Path(debug_path.format(rollout_id=start)).expanduser()
+        index = json.loads(Path(path).read_text())
+        if index.get("format") != "slime.straw-debug" or index.get("version") != 1:
+            raise ValueError(f"Unsupported straw rollout archive: {path}")
+        args.rollout_data_dir = index["root"]
+        args.rollout_queue_run_id = RecordSetRef.from_dict(index["manifest"]).manifest.segment.run_id
     if args.rollout_data_dir is None:
         if args.save is None:
             raise ValueError("Straw rollout transport requires --rollout-data-dir or --save on shared storage")
