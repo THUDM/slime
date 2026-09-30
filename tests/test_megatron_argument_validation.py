@@ -1,5 +1,7 @@
 import argparse
 import importlib.util
+import runpy
+import shlex
 import sys
 import types
 from pathlib import Path
@@ -7,6 +9,41 @@ from pathlib import Path
 import pytest
 
 NUM_GPUS = 0
+
+
+@pytest.mark.parametrize("mode", ["save", "async_save", "load"])
+@pytest.mark.parametrize("optimizer", ["cpu", "gpu"])
+def test_checkpoint_e2e_launch_has_valid_save_configuration(monkeypatch, tmp_path, mode, optimizer):
+    from slime.utils import external_utils
+
+    commands = []
+    launcher = types.ModuleType("slime.utils.external_utils.command_utils")
+    launcher.execute_train = lambda **kwargs: commands.append(kwargs["train_args"])
+    launcher.get_default_wandb_args = lambda _: ""
+    monkeypatch.setitem(sys.modules, launcher.__name__, launcher)
+    monkeypatch.setattr(external_utils, "command_utils", launcher, raising=False)
+    test = runpy.run_path(str(Path(__file__).with_name("test_qwen3_4B_ckpt.py")))
+    directory = str(tmp_path / "checkpoint with spaces")
+    test["execute"](mode, optimizer=optimizer, checkpoint_dir=directory)
+    [command] = commands
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--save")
+    parser.add_argument("--save-interval", type=int)
+    parser.add_argument("--load")
+    parser.add_argument("--ckpt-step", type=int)
+    parser.add_argument("--async-save", action="store_true")
+    args, _ = parser.parse_known_args(shlex.split(command))
+
+    assert args.save == directory
+    # Megatron requires a positive save interval whenever --save is set,
+    # including when straw uses the directory to track a restored branch.
+    assert args.save_interval is not None and args.save_interval > 0
+    assert args.async_save == (mode == "async_save")
+    if mode == "load":
+        assert args.load == directory and args.ckpt_step == 1
+    else:
+        assert args.load is None
 
 
 def load_arguments_module(monkeypatch):
@@ -282,7 +319,7 @@ def test_distributed_fully_async_is_opt_in(monkeypatch):
     assert defaults.rollout_data_transport == "object-store"
     assert defaults.rollout_data_dir is None
     assert not defaults.rollout_queue_online_gc
-    path = "slime.rollout.queue_data_source.QueueDataSource"
+    path = "slime.data.queue_data_source.QueueDataSource"
     enabled = parser.parse_args(["--rollout-batch-size", "1", "--data-source-path", path])
     assert enabled.data_source_path == path
 
@@ -299,10 +336,10 @@ def test_rollout_transport_selects_source_and_only_straw_needs_storage(monkeypat
         args.save = str(tmp_path)
     module.slime_validate_args(args)
     if transport == "straw":
-        assert args.data_source_path == "slime.rollout.queue_data_source.QueueDataSource"
+        assert args.data_source_path == "slime.data.queue_data_source.QueueDataSource"
         assert args.rollout_data_dir == str(tmp_path / "rollout_data")
     else:
-        assert args.data_source_path == "slime.rollout.data_source.RolloutDataSourceWithBuffer"
+        assert args.data_source_path == "slime.data.data_source.RolloutDataSourceWithBuffer"
         assert args.rollout_data_dir is None
     assert not list(tmp_path.iterdir())
 
@@ -311,8 +348,7 @@ def test_rollout_transport_selects_source_and_only_straw_needs_storage(monkeypat
     "overrides",
     [
         {"rollout_queue_online_gc": True},
-        {"rollout_queue_resume": True},
-        {"data_source_path": "slime.rollout.queue_data_source.QueueDataSource"},
+        {"data_source_path": "slime.data.queue_data_source.QueueDataSource"},
     ],
 )
 def test_queue_options_require_straw_transport(monkeypatch, overrides):
@@ -330,6 +366,16 @@ def test_global_dataset_flag_is_removed(monkeypatch):
         parser.parse_args(["--rollout-batch-size", "1", "--disable-rollout-global-dataset"])
     # Epoch-based scheduling no longer depends on this attribute.
     module.slime_validate_args(make_slime_validate_args(num_epoch=2, num_rollout=None))
+
+
+@pytest.mark.parametrize("flag", ["--rollout-queue-resume", "--rollout-queue-fork"])
+def test_queue_lifecycle_flags_are_removed(monkeypatch, flag):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())
+    defaults = parser.parse_args(["--rollout-batch-size", "1"])
+    assert not hasattr(defaults, flag[2:].replace("-", "_"))
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--rollout-batch-size", "1", flag])
 
 
 @pytest.mark.unit

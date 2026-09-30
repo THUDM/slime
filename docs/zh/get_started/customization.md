@@ -66,23 +66,26 @@ def generate_rollout(args, rollout_id, data_source, evaluation=False) -> Rollout
 
 **示例**: 参见 [examples/fully_async](../_examples_synced/fully_async/README.md)
 
-显式设置 `--rollout-data-transport straw` 后（默认是 Ray `object-store`），`RolloutFnTrainOutput.samples` 可以是指向本批数据的 `DiskPayloadRef`。已有 custom function 返回 Sample 列表（直接返回或放在 `RolloutFnTrainOutput` 中）仍可使用，manager 会统一保存一次。新函数可以在 rollout 过程中保存已经生成、打分并筛选的 group，最后返回 manifest，避免在内存中积累完整 batch。例如，已有一个逐组产生选中数据的异步迭代器时：
+选择 `--rollout-data-transport straw` 后，自定义 rollout 函数可以直接返回 Sample 列表，也可以放在 `RolloutFnTrainOutput` 中，由 manager 持久化。`RolloutFnTrainOutput.samples` 也接受 `DiskPayloadRef`。为了避免在内存中积累整个 batch，可以逐组保存已经生成、打分并筛选的结果。以下辅助函数接收 rollout 函数的 `data_source` 和逐组返回已完成数据的异步迭代器：
 
 ```python
-import asyncio
-
+from slime.data.transport import publish_rollout_async
 from slime.rollout.base_types import finalize_rollout_groups
-from slime.utils.rollout_transport import pack_rollout_group
 
 
-async def generate_stored_batch(args, rollout_id, completed_groups):
+async def generate_stored_batch(args, rollout_id, data_source, completed_groups):
     refs = []
     async for group in completed_groups:
-        refs.append(await asyncio.to_thread(pack_rollout_group, group, args, rollout_id))
-    return finalize_rollout_groups(args, rollout_id, refs)
+        ref = await publish_rollout_async(
+            group, args, rollout_id, group=True, controller=data_source.controller
+        )
+        refs.append(ref)
+    return finalize_rollout_groups(args, rollout_id, refs, controller=data_source.controller)
 ```
 
-`finalize_rollout_groups` 负责排序、调用一次配置的 batch sample filter，并保存 batch manifest。如果 hook 修改 Sample，会重新保存处理结果。Wrapper 需要真实 Sample 时，可调用 `slime.utils.rollout_transport.load_rollout_samples(output.samples)`。生成、reward hook 和 eval 的返回协议不变。
+数据源的 controller 负责将带 lease 的 group 提交到所属队列。`finalize_rollout_groups` 排序后调用一次配置的 batch sample filter，并保存 batch manifest；hook 修改 Sample 时会重新保存结果。Wrapper 需要 Sample 对象时，可调用 `slime.data.transport.load_rollout_samples(output.samples)`。
+
+straw 默认数据源为 `slime.data.queue_data_source.QueueDataSource`，通过 `get_samples(n)` 获取 prompt group，通过 `add_samples(groups)` 归还任务以供续跑。归还的 group 持久化后可由任意 reader 领取。自定义远端 worker 可以接收 `source.reader_config("worker_id")`，在自己的进程中调用 `config.open()`。Reader ID 必须唯一，`owner` 为保留名称；请求和写入结束后应关闭 reader。Reader 自动续租，关闭时归还未完成任务。
 
 ---
 
@@ -394,11 +397,11 @@ def log_eval_rollout_data(rollout_id, args, data, extra_metrics) -> bool
 
 ### `--data-source-path`
 
-**默认值**: `slime.rollout.data_source.RolloutDataSourceWithBuffer`
+**默认值**: `slime.data.data_source.RolloutDataSourceWithBuffer`
 
 **用途**: 覆盖 rollout 提示词的数据源。
 
-**基类**: `slime.rollout.data_source.DataSource`
+**基类**: `slime.data.data_source.DataSource`
 
 **必需方法**:
 ```python

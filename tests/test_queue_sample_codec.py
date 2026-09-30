@@ -6,14 +6,14 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
-
 from straw import SharedFilesystemStore
 from straw.errors import CorruptData
 from straw.protocol import decode
 from straw.tensor import CHUNK_BYTES, publish_tensors
-from slime.rollout.queue_codec import CODECS, QueueTensorRef, SampleCodec
+
+from slime.data.codec import CODECS, QueueTensorRef, SampleCodec
+from slime.data.tensor import TensorRef
 from slime.utils.score_centering import validate_sampler_topk
-from slime.utils.tensor_store import TensorRef
 from slime.utils.types import Sample
 
 NUM_GPUS = 0
@@ -235,7 +235,7 @@ def test_unknown_custom_fields_fail_without_silent_loss(codec):
 def test_batch_builder_preserves_group_rewards_masks_and_r3_sc_after_replay(codec, tmp_path):
     import copy
 
-    from slime.rollout.batch_builder import BatchBuilder
+    from slime.data.batch_builder import BatchBuilder
 
     args = SimpleNamespace(
         custom_reward_post_process_path=None,
