@@ -9,7 +9,7 @@
 标准 slime 安装和 Docker 构建包含 `straw-queue`。已有环境可以在每个 rollout 和训练节点执行以下命令，同一任务使用相同版本：
 
 ```bash
-pip install straw-queue
+pip install 'straw-queue>=0.1.2'
 ```
 
 在训练命令中添加：
@@ -60,11 +60,7 @@ R3 使用 `--use-rollout-routing-replay`，SC 使用 `--use-score-centering`。�
 |---|---|---|
 | `--rollout-queue-segment-mib` | `256` | Pack 轮转的目标大小，单位 MiB |
 | `--rollout-io-concurrency` | `4` | 限制并发序列化与文件系统 I/O 提交 |
-| `--rollout-queue-max-pending` | `65536` | 等待任务的接收上限 |
-| `--rollout-queue-max-inflight` | `65536` | 在途任务上限 |
 | `--rollout-queue-lease-seconds` | `300` | Worker 租期，活跃 reader 会续租 |
-
-任务数量上限不限制保留数据的字节数。应根据负载和 checkpoint/归档保留量规划容量。共享存储带宽、同步写入延迟和单个队列 coordinator 都可能限制吞吐。
 
 ## 在线 GC
 

@@ -6,7 +6,7 @@ from typing import Any
 import ray
 
 from slime.data.batch_builder import BatchBuilder
-from slime.data.transport import accept_raw_rollout, check_rollout_storage, load_rollout_samples
+from slime.data.transport import DiskPayloadRef, accept_raw_rollout, check_rollout_storage, load_rollout_samples
 from slime.observability import logging_utils
 from slime.observability.logging_utils import configure_logger, init_tracking
 from slime.observability.rollout_data_utils import (
@@ -205,6 +205,7 @@ class RolloutManager:
             rollout_id=rollout_id,
             evaluation=False,
             args=self.args,
+            reference=self.batch_builder.raw_ref if self.args.rollout_data_transport == "straw" else None,
         )
         log_rollout_data(
             rollout_id, self.args, data, metrics, time.time() - start_time, weight_version=self.weight_version
@@ -331,10 +332,15 @@ class RolloutManager:
                 self.weight_version = max(map(int, versions)) if valid else None
             data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
             if self.args.rollout_data_transport == "straw":
+                samples = getattr(data, "samples", None)
                 data = accept_raw_rollout(data, self.args, rollout_id, controller=self.controller)
                 self.batch_builder.raw_ref = data
                 metrics = data.metrics
-                data = load_rollout_samples(data)
+                data = (
+                    samples
+                    if isinstance(samples, list) and all(not isinstance(group, DiskPayloadRef) for group in samples)
+                    else load_rollout_samples(data)
+                )
             else:
                 metrics = data.metrics
                 data = load_rollout_samples(data.samples)

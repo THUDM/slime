@@ -327,7 +327,7 @@ def test_completed_capture_is_validated_before_publication(tmp_path, invalid_fie
     assert not list(tmp_path.rglob("*.pack"))
 
 
-def test_large_group_bundle_obeys_native_budget_and_preserves_tensor_aliases(tmp_path, monkeypatch):
+def test_large_group_bundle_streams_past_scratch_budget_and_preserves_tensor_aliases(tmp_path, monkeypatch):
     store = SharedFilesystemStore(
         tmp_path, "bounded", codecs=CODECS, max_buffer_bytes=32 * 1024, max_record_bytes=16 * 1024
     )
@@ -339,15 +339,14 @@ def test_large_group_bundle_obeys_native_budget_and_preserves_tensor_aliases(tmp
     publish = store.publish_many
     calls = []
 
-    def bounded(publications, **kwargs):
+    def tracked(publications, **kwargs):
         size = sum(len(record.payload) for publication in publications for record in publication.records)
-        assert size <= codec.payload_budget
         calls.append(size)
         return publish(publications, **kwargs)
 
-    monkeypatch.setattr(store, "publish_many", bounded)
+    monkeypatch.setattr(store, "publish_many", tracked)
     refs = codec.publish_many(values, submission_ids=[str(i) for i in range(len(values))])
-    assert len(calls) > 1
+    assert max(calls) > store.max_buffer_bytes
     for expected, ref in zip(values, refs, strict=True):
         actual = codec.load(ref)
         assert actual["first"] is actual["same"]

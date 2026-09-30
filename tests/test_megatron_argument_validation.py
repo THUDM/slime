@@ -219,8 +219,6 @@ def make_slime_validate_args(**overrides):
         rollout_data_transport="object-store",
         rollout_data_dir=None,
         rollout_queue_lease_seconds=300,
-        rollout_queue_max_pending=65536,
-        rollout_queue_max_inflight=65536,
         rollout_queue_segment_mib=256,
         rollout_io_concurrency=4,
         use_distributed_post=False,
@@ -364,8 +362,16 @@ def test_global_dataset_flag_is_removed(monkeypatch):
     module.slime_validate_args(make_slime_validate_args(num_epoch=2, num_rollout=None))
 
 
-@pytest.mark.parametrize("flag", ["--rollout-queue-resume", "--rollout-queue-fork"])
-def test_queue_lifecycle_flags_are_removed(monkeypatch, flag):
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "--rollout-queue-resume",
+        "--rollout-queue-fork",
+        "--rollout-queue-max-pending",
+        "--rollout-queue-max-inflight",
+    ],
+)
+def test_removed_queue_flags_are_rejected(monkeypatch, flag):
     module = load_slime_arguments_module(monkeypatch)
     parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())
     defaults = parser.parse_args(["--rollout-batch-size", "1"])
