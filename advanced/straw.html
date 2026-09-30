@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Sep 29, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 30, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -532,7 +532,7 @@ NFS, require separate verification of locking, visibility and durability.</p>
 <p>The standard slime installation and Docker build include <code class="docutils literal notranslate"><span class="pre">straw-queue</span></code>. To
 install it in an existing environment, run this on every rollout and training
 node, using the same version throughout the job:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>straw-queue
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'straw-queue&gt;=0.1.2'</span>
 </pre></div>
 </div>
 <p>Add these arguments to your training command:</p>
@@ -624,14 +624,6 @@ and ordinary fields still occupy manager memory.</p>
 <td><p><code class="docutils literal notranslate"><span class="pre">4</span></code></p></td>
 <td><p>Bound concurrent serialization and filesystem I/O submissions</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-queue-max-pending</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">65536</span></code></p></td>
-<td><p>Pending-task admission limit</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-queue-max-inflight</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">65536</span></code></p></td>
-<td><p>In-flight task limit</p></td>
-</tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-queue-lease-seconds</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">300</span></code></p></td>
 <td><p>Worker lease duration; active readers renew it</p></td>
@@ -639,9 +631,6 @@ and ordinary fields still occupy manager memory.</p>
 </tbody>
 </table>
 </div>
-<p>Task limits do not bound retained bytes. Size storage for the workload and its
-checkpoint/archive retention. Shared-storage bandwidth, sync latency and the
-single queue coordinator can limit throughput.</p>
 </section>
 <section id="online-gc">
 <h2>Online GC<a class="headerlink" href="#online-gc" title="Link to this heading">#</a></h2>
@@ -656,7 +645,7 @@ when data is no longer needed; deleting an index file alone does not release
 its storage ownership. Do not manually delete pack files from an active pool.
 For offline removal, stop all coordinators, writers and readers first.</p>
 <p>A GC failure is reported by subsequent queue operations and at shutdown.
-Capacity exhaustion requires freeing unneeded retention or increasing capacity;
+Disk exhaustion requires freeing unneeded retention or expanding storage;
 it does not reset the queue automatically. Live-pack and journal compaction are
 not implemented.</p>
 </section>
@@ -776,7 +765,12 @@ It shares existing tensors when saved with straw transport; otherwise it creates
 a <code class="docutils literal notranslate"><span class="pre">straw-data</span></code> pool alongside the index. There is one index per rollout, with
 samples packed together. Evaluation uses <code class="docutils literal notranslate"><span class="pre">eval_&lt;id&gt;</span></code> in place of the rollout ID.
 Copying only the JSON index does not copy the payloads. For train-only replay
-with straw transport, choose a separate writable training queue.
+with straw transport automatically reuses the archive’s storage pool and run,
+overriding <code class="docutils literal notranslate"><span class="pre">--rollout-data-dir</span></code> and <code class="docutils literal notranslate"><span class="pre">--rollout-queue-run-id</span></code>. Each replay creates
+an isolated queue in that writable pool; the source queue is left untouched.
+Full replay (without subsampling) reuses the archived Sample and tensor records
+without republishing them.
+All rollout archives in one replay must belong to the same pool and run.
 <code class="docutils literal notranslate"><span class="pre">--load-debug-rollout-data-subsample</span></code> also applies to archives.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.data.archive</span><span class="w"> </span><span class="kn">import</span> <span class="n">RolloutArchive</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">slime.observability.rollout_data_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_debug_rollout_data</span>
@@ -893,7 +887,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Sep 29, 2026.
+  Last updated on Sep 30, 2026.
   <br/>
 </p>
   </div>

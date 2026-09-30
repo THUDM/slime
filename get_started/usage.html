@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Sep 29, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 30, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -927,7 +927,7 @@ For persistent queues and packed tensor storage across machines, use
 </div>
 <p>All nodes must mount the directory at the same absolute path and have
 <code class="docutils literal notranslate"><span class="pre">straw-queue</span></code> installed. The standard slime installation includes it; for an
-existing environment, run <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">straw-queue</span></code>. Configure the JuiceFS
+existing environment, run <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">'straw-queue&gt;=0.1.2'</span></code>. Configure the JuiceFS
 storage profile and deployment declaration as described in the
 <a class="reference internal" href="../advanced/straw.html#enable-it"><span class="std std-ref">straw guide</span></a>. Selecting straw alone uses the
 synchronous rollout entrypoint. For a fresh run, omitting <code class="docutils literal notranslate"><span class="pre">--rollout-data-dir</span></code>
@@ -936,7 +936,7 @@ uses <code class="docutils literal notranslate"><span class="pre">&lt;save&gt;/r
 R3 and SC tensors with their samples, including partial continuations.
 <code class="docutils literal notranslate"><span class="pre">--rollout-queue-online-gc</span></code> optionally reclaims unused storage; it is disabled
 by default. Recovery uses <code class="docutils literal notranslate"><span class="pre">--load</span></code>, <code class="docutils literal notranslate"><span class="pre">--save</span></code> and optional <code class="docutils literal notranslate"><span class="pre">--ckpt-step</span></code>.
-See the <a class="reference internal" href="../advanced/straw.html"><span class="std std-doc">straw guide</span></a> for scheduling, storage limits,
+See the <a class="reference internal" href="../advanced/straw.html"><span class="std std-doc">straw guide</span></a> for scheduling,
 checkpoint recovery and debug replay, and <a class="reference internal" href="customization.html"><span class="std std-doc">customization</span></a>
 for custom rollout functions.</p>
 </section>
@@ -1137,7 +1137,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Sep 29, 2026.
+  Last updated on Sep 30, 2026.
   <br/>
 </p>
   </div>

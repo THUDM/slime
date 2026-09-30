@@ -17,7 +17,7 @@ install it in an existing environment, run this on every rollout and training
 node, using the same version throughout the job:
 
 ```bash
-pip install straw-queue
+pip install 'straw-queue>=0.1.2'
 ```
 
 Add these arguments to your training command:
@@ -108,13 +108,7 @@ and ordinary fields still occupy manager memory.
 |---|---|---|
 | `--rollout-queue-segment-mib` | `256` | Pack rotation target in MiB |
 | `--rollout-io-concurrency` | `4` | Bound concurrent serialization and filesystem I/O submissions |
-| `--rollout-queue-max-pending` | `65536` | Pending-task admission limit |
-| `--rollout-queue-max-inflight` | `65536` | In-flight task limit |
 | `--rollout-queue-lease-seconds` | `300` | Worker lease duration; active readers renew it |
-
-Task limits do not bound retained bytes. Size storage for the workload and its
-checkpoint/archive retention. Shared-storage bandwidth, sync latency and the
-single queue coordinator can limit throughput.
 
 ## Online GC
 
@@ -131,7 +125,7 @@ its storage ownership. Do not manually delete pack files from an active pool.
 For offline removal, stop all coordinators, writers and readers first.
 
 A GC failure is reported by subsequent queue operations and at shutdown.
-Capacity exhaustion requires freeing unneeded retention or increasing capacity;
+Disk exhaustion requires freeing unneeded retention or expanding storage;
 it does not reset the queue automatically. Live-pack and journal compaction are
 not implemented.
 
@@ -234,7 +228,12 @@ It shares existing tensors when saved with straw transport; otherwise it creates
 a `straw-data` pool alongside the index. There is one index per rollout, with
 samples packed together. Evaluation uses `eval_<id>` in place of the rollout ID.
 Copying only the JSON index does not copy the payloads. For train-only replay
-with straw transport, choose a separate writable training queue.
+with straw transport automatically reuses the archive’s storage pool and run,
+overriding `--rollout-data-dir` and `--rollout-queue-run-id`. Each replay creates
+an isolated queue in that writable pool; the source queue is left untouched.
+Full replay (without subsampling) reuses the archived Sample and tensor records
+without republishing them.
+All rollout archives in one replay must belong to the same pool and run.
 `--load-debug-rollout-data-subsample` also applies to archives.
 
 ```python

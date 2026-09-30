@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 09 月 29 日"/>
+    <meta name="docbuild:last-update" content="2026 年 09 月 30 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -919,8 +919,8 @@
 --rollout-data-dir<span class="w"> </span>/shared/run/rollout_data
 </pre></div>
 </div>
-<p>所有节点必须以相同绝对路径挂载该目录，并安装 <code class="docutils literal notranslate"><span class="pre">straw-queue</span></code>。标准 slime 安装已包含此依赖；已有环境可以执行 <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">straw-queue</span></code>。JuiceFS storage profile 和部署声明的配置见 <a class="reference internal" href="../advanced/straw.html#id1"><span class="std std-ref">straw 指南</span></a>。只选择 straw 时使用同步 rollout 入口。新任务已设置 <code class="docutils literal notranslate"><span class="pre">--save</span></code> 时，省略 <code class="docutils literal notranslate"><span class="pre">--rollout-data-dir</span></code> 会使用 <code class="docutils literal notranslate"><span class="pre">&lt;save&gt;/rollout_data</span></code>。</p>
-<p>使用 straw 时，<code class="docutils literal notranslate"><span class="pre">--use-rollout-routing-replay</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code> 将 R3、SC 张量随 sample 持久化，也支持 partial continuation。<code class="docutils literal notranslate"><span class="pre">--rollout-queue-online-gc</span></code> 可开启未使用存储的回收，默认关闭。恢复使用 <code class="docutils literal notranslate"><span class="pre">--load</span></code>、<code class="docutils literal notranslate"><span class="pre">--save</span></code> 和可选的 <code class="docutils literal notranslate"><span class="pre">--ckpt-step</span></code>。调度、容量限制、checkpoint 恢复和 debug 回放见 <a class="reference internal" href="../advanced/straw.html"><span class="std std-doc">straw 指南</span></a>，自定义 rollout 函数见<a class="reference internal" href="customization.html"><span class="std std-doc">自定义功能</span></a>。</p>
+<p>所有节点必须以相同绝对路径挂载该目录，并安装 <code class="docutils literal notranslate"><span class="pre">straw-queue</span></code>。标准 slime 安装已包含此依赖；已有环境可以执行 <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">'straw-queue&gt;=0.1.2'</span></code>。JuiceFS storage profile 和部署声明的配置见 <a class="reference internal" href="../advanced/straw.html#id1"><span class="std std-ref">straw 指南</span></a>。只选择 straw 时使用同步 rollout 入口。新任务已设置 <code class="docutils literal notranslate"><span class="pre">--save</span></code> 时，省略 <code class="docutils literal notranslate"><span class="pre">--rollout-data-dir</span></code> 会使用 <code class="docutils literal notranslate"><span class="pre">&lt;save&gt;/rollout_data</span></code>。</p>
+<p>使用 straw 时，<code class="docutils literal notranslate"><span class="pre">--use-rollout-routing-replay</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code> 将 R3、SC 张量随 sample 持久化，也支持 partial continuation。<code class="docutils literal notranslate"><span class="pre">--rollout-queue-online-gc</span></code> 可开启未使用存储的回收，默认关闭。恢复使用 <code class="docutils literal notranslate"><span class="pre">--load</span></code>、<code class="docutils literal notranslate"><span class="pre">--save</span></code> 和可选的 <code class="docutils literal notranslate"><span class="pre">--ckpt-step</span></code>。调度、checkpoint 恢复和 debug 回放见 <a class="reference internal" href="../advanced/straw.html"><span class="std std-doc">straw 指南</span></a>，自定义 rollout 函数见<a class="reference internal" href="customization.html"><span class="std std-doc">自定义功能</span></a>。</p>
 </section>
 </section>
 <section id="id7">
@@ -1119,7 +1119,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 09 月 29 日.
+  最后更新于 2026 年 09 月 30 日.
   <br/>
 </p>
   </div>

@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 09 月 29 日"/>
+    <meta name="docbuild:last-update" content="2026 年 09 月 30 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -520,7 +520,7 @@
 <section id="id1">
 <h2>启用方式<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
 <p>标准 slime 安装和 Docker 构建包含 <code class="docutils literal notranslate"><span class="pre">straw-queue</span></code>。已有环境可以在每个 rollout 和训练节点执行以下命令，同一任务使用相同版本：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>straw-queue
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'straw-queue&gt;=0.1.2'</span>
 </pre></div>
 </div>
 <p>在训练命令中添加：</p>
@@ -572,14 +572,6 @@
 <td><p><code class="docutils literal notranslate"><span class="pre">4</span></code></p></td>
 <td><p>限制并发序列化与文件系统 I/O 提交</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-queue-max-pending</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">65536</span></code></p></td>
-<td><p>等待任务的接收上限</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-queue-max-inflight</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">65536</span></code></p></td>
-<td><p>在途任务上限</p></td>
-</tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-queue-lease-seconds</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">300</span></code></p></td>
 <td><p>Worker 租期，活跃 reader 会续租</p></td>
@@ -587,7 +579,6 @@
 </tbody>
 </table>
 </div>
-<p>任务数量上限不限制保留数据的字节数。应根据负载和 checkpoint/归档保留量规划容量。共享存储带宽、同步写入延迟和单个队列 coordinator 都可能限制吞吐。</p>
 </section>
 <section id="gc">
 <h2>在线 GC<a class="headerlink" href="#gc" title="链接到此标题。">#</a></h2>
@@ -671,7 +662,7 @@
 </tbody>
 </table>
 </div>
-<p>索引归档独立保留数据，不受队列消费和 GC 影响。使用 straw 传输保存时复用已有张量，否则在索引旁创建 <code class="docutils literal notranslate"><span class="pre">straw-data</span></code> 存储池。每个 rollout 只有一个索引，sample 打包存储。Evaluation 使用 <code class="docutils literal notranslate"><span class="pre">eval_&lt;id&gt;</span></code> 替代 rollout ID。单独复制 JSON 索引不会复制载荷。使用 straw 做只训练回放时，应选择独立的可写训练队列。<code class="docutils literal notranslate"><span class="pre">--load-debug-rollout-data-subsample</span></code> 也适用于归档。</p>
+<p>索引归档独立保留数据，不受队列消费和 GC 影响。使用 straw 传输保存时复用已有张量，否则在索引旁创建 <code class="docutils literal notranslate"><span class="pre">straw-data</span></code> 存储池。每个 rollout 只有一个索引，sample 打包存储。Evaluation 使用 <code class="docutils literal notranslate"><span class="pre">eval_&lt;id&gt;</span></code> 替代 rollout ID。单独复制 JSON 索引不会复制载荷。使用 straw 做只训练回放时，自动使用归档的存储池和 run，覆盖 <code class="docutils literal notranslate"><span class="pre">--rollout-data-dir</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--rollout-queue-run-id</span></code>，并在该可写存储池中新建独立队列，不改变原队列。完整回放（不抽样）直接复用已有 Sample 和张量记录，不重新写入。一次回放的所有归档必须属于同一存储池和 run。<code class="docutils literal notranslate"><span class="pre">--load-debug-rollout-data-subsample</span></code> 也适用于归档。</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.data.archive</span><span class="w"> </span><span class="kn">import</span> <span class="n">RolloutArchive</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">slime.observability.rollout_data_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_debug_rollout_data</span>
 
@@ -781,7 +772,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 09 月 29 日.
+  最后更新于 2026 年 09 月 30 日.
   <br/>
 </p>
   </div>
