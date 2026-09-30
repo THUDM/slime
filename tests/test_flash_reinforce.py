@@ -49,7 +49,7 @@ def no_gpu_server_imports(monkeypatch):
 
 
 def post_process(rewards, **overrides):
-    from slime.rollout.batch_builder import BatchBuilder
+    from slime.data.batch_builder import BatchBuilder
 
     values = dict(
         custom_reward_post_process_path=None,

@@ -270,6 +270,11 @@ jobs:
             {
               "num_gpus": 4,
               "straw": true,
+              "test_file": "test_straw_checkpoint_fork.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
               "test_file": "test_qwen2.5_0.5B_fanout_short.py"
             },
             {
@@ -1191,6 +1196,11 @@ jobs:
             {
               "num_gpus": 4,
               "test_file": "test_qwen2.5_0.5B_flash_reinforce.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_file": "test_straw_checkpoint_fork.py"
             },
             {
               "num_gpus": 4,

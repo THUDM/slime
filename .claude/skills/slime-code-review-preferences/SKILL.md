@@ -27,3 +27,10 @@ Apply these lightweight review heuristics when changing slime code.
 - Add an abstraction only when it removes real duplication, hides fragile mechanics, or clarifies ownership.
 - When a review comment points out repeated indirection, look for a smaller public surface rather than adding another alias.
 - Preserve existing behavior intentionally. If cleanup changes error handling, logging, or failure visibility, call that out in the final response.
+
+## Keep Runtime State Out of Args
+
+- Treat `args` as configuration. Do not add ad hoc `args._xxx` attributes to pass actor handles, caches, recovery progress, current versions, or other runtime state between components. Renaming these to public attributes does not fix the ownership problem.
+- Put live state on the component that owns its lifecycle. Pass dependencies explicitly, and use typed return values for startup plans or restoration results shared between components.
+- Avoid replacing scattered temporary fields with a generic `args.context` bag. Keep each state object's responsibility and lifetime clear.
+- Preserve existing custom hook signatures, call arguments, and return conventions when refactoring internal state. User implementations must not need new parameters merely to accommodate an internal cleanup.

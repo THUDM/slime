@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from megatron.core import mpu
 from torch.utils.checkpoint import checkpoint
 
+from slime.data.tensor import TensorRef
 from slime.utils.distributed_utils import distributed_masked_whiten
 from slime.utils.misc import load_function
 from slime.utils.ppo_utils import (
@@ -27,7 +28,6 @@ from slime.utils.ppo_utils import (
     importance_weights,
 )
 from slime.utils.score_centering import get_score_centering_is_config, score_centering_correction
-from slime.utils.tensor_store import TensorRef
 from slime.utils.types import RolloutBatch
 
 from .cp_utils import (
