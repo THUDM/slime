@@ -246,7 +246,7 @@ def test_validation_accepts_molt_scheduling(monkeypatch):
 
 def test_a_rollout_smaller_than_one_step_is_trained_as_one_step(monkeypatch):
     """An epoch tail (fewer rollouts than global_batch_size) becomes one smaller step."""
-    from slime.rollout import batch_builder
+    from slime.data import batch_builder
 
     builder = batch_builder.BatchBuilder.__new__(batch_builder.BatchBuilder)
     builder.args = Namespace(
