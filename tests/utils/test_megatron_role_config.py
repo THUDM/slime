@@ -57,7 +57,6 @@ def _base_args(**overrides):
         use_critic=False,
         megatron_config_path=None,
         start_rollout_id=None,
-        rollout_global_dataset=False,
     )
     args.update(overrides)
     return Namespace(**args)
@@ -178,16 +177,19 @@ class TestMegatronRoleConfig:
         monkeypatch.setattr(placement_group_module, "allocate_train_group", fake_allocate_train_group)
         monkeypatch.setattr(placement_group_module.ray, "get", lambda value: value)
 
+        loaded_rollout_ids = []
+        rollout_manager = types.SimpleNamespace(load=types.SimpleNamespace(remote=loaded_rollout_ids.append))
         actor_model, critic_model = placement_group_module.create_training_models(
             args,
             {"actor": None, "critic": None},
-            object(),
+            rollout_manager,
         )
 
         assert critic_model is None
         assert actor_model.args.lr == 1e-6
         assert actor_model.create_calls[0]["args"].lr == 1e-6
         assert args.start_rollout_id == 7
+        assert loaded_rollout_ids == [6]
 
 
 if __name__ == "__main__":

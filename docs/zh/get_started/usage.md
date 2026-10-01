@@ -156,6 +156,8 @@ sglang 的加载非常简单，只需要：
 
 ### 数据格式
 
+原始数据统一由 DataSource 管理。有 `--prompt-data` 时内置 DataSource 会加载数据；需要自行管理数据时可通过 `--data-source-path` 提供自定义实现。
+
 slime 支持加载 `.jsonl` 和 `.parquet` 格式文件；读取 Parquet 需要安装 `pyarrow`。两种格式中的每条记录都应包含 `--input-key` 和 `--label-key` 指定的字段。下面是一条 JSONL 数据展开后的示例：
 
 ```json
@@ -388,6 +390,22 @@ slime 支持不同程度的自定义数据生成（rollout）。
    更完备的版本请查看 [slime/rollout/sglang_rollout.py](https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py)。
 
 - 有的时候，我们还需要支持自定义的 reward model，可以通过配置 `--custom-rm-path` 来进行配置。
+
+### 持久化 rollout 队列和分布式 fully async
+
+默认 rollout 传输为 Ray `object-store`，不需要共享目录。`--rollout-data-transport nixl` 选择 Ray 的 NIXL 张量传输。需要跨机持久化队列和打包张量存储时，使用 [straw](../advanced/straw.md) 和共享 JuiceFS 目录。
+
+启用使用 straw 的分布式 fully async rollout：
+
+```bash
+--rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async \
+--rollout-data-transport straw \
+--rollout-data-dir /shared/run/rollout_data
+```
+
+所有节点必须以相同绝对路径挂载该目录，并安装 `straw-queue`。标准 slime 安装已包含此依赖；已有环境可以执行 `pip install 'straw-queue>=0.1.2'`。JuiceFS storage profile 和部署声明的配置见 [straw 指南](../advanced/straw.md#启用方式)。只选择 straw 时使用同步 rollout 入口。新任务已设置 `--save` 时，省略 `--rollout-data-dir` 会使用 `<save>/rollout_data`。
+
+使用 straw 时，`--use-rollout-routing-replay` 和 `--use-score-centering` 将 R3、SC 张量随 sample 持久化，也支持 partial continuation。`--rollout-queue-online-gc` 可开启未使用存储的回收，默认关闭。恢复使用 `--load`、`--save` 和可选的 `--ckpt-step`。调度、checkpoint 恢复和 debug 回放见 [straw 指南](../advanced/straw.md)，自定义 rollout 函数见[自定义功能](customization.md)。
 
 ## sglang 使用方法
 

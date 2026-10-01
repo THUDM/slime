@@ -1,34 +1,27 @@
 import itertools
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
-import psutil
 import ray
-import torch
 
-from slime.backends.sglang_utils.deployment import start_rollout_servers
+from slime.data.batch_builder import BatchBuilder
+from slime.data.transport import DiskPayloadRef, accept_raw_rollout, check_rollout_storage, load_rollout_samples
 from slime.observability import logging_utils
 from slime.observability.logging_utils import configure_logger, init_tracking
 from slime.observability.rollout_data_utils import (
     load_debug_rollout_data,
     save_debug_rollout_data,
-    tensorize_rollout_data_for_training,
     validate_rollout_id_annotated,
-    validate_rollout_routed_experts_for_replay,
 )
 from slime.observability.rollout_metrics import log_eval_rollout_data, log_rollout_data
-from slime.rollout.base_types import call_rollout_fn
+from slime.rollout.base_types import RolloutFnTrainOutput, call_rollout_fn
 from slime.rollout.sample_hooks import set_current_rollout_id
-from slime.utils.data import get_source
-from slime.utils.dp_schedule import build_dp_schedule
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import init_http_client
-from slime.utils.memory_utils import get_process_host_memory_gib
-from slime.utils.misc import Box, load_function
+from slime.utils.misc import load_function
 from slime.utils.staleness import fully_async_metrics_enabled
-from slime.utils.tensor_store import DiskTensorRef
-from slime.utils.types import Sample
 
 from .utils import Lock, add_default_ray_env_vars
 
@@ -42,32 +35,47 @@ logger = logging.getLogger(__name__)
 class RolloutManager:
     """The class to run rollout and convert rollout data to training data."""
 
-    def __init__(self, args, pg):
+    def __init__(self, args, pg, *, restore_plan=None):
         configure_logger()
 
         self.pg = pg
         self.args = args
+        self.controller = None
+        self._owns_controller = False
+        self.weight_version = None
+        if args.rollout_data_transport == "straw":
+            check_rollout_storage(args)
 
         rollout_init_handles: list[Any] = []
         if self.args.debug_train_only:
             self.servers: dict[str, Any] = {}
         else:
+            from slime.backends.sglang_utils.deployment import start_rollout_servers
+
             init_http_client(args)
             self.servers, rollout_init_handles = start_rollout_servers(args, pg)
 
         data_source_cls = load_function(self.args.data_source_path)
-        self.data_source = data_source_cls(args)
+        if args.rollout_data_transport == "straw":
+            from slime.data.queue_data_source import QueueDataSource, QueueReader, create_queue_controller
+
+            if data_source_cls is QueueDataSource:
+                self.controller = create_queue_controller(args, restore_plan=restore_plan)
+                self._owns_controller = True
+                self.data_source = data_source_cls(args, controller=self.controller, restore_plan=restore_plan)
+            else:
+                self.data_source = data_source_cls(args)
+                if isinstance(self.data_source, QueueReader):
+                    self.controller = self.data_source.controller
+                else:
+                    self.controller = create_queue_controller(args, restore_plan=restore_plan)
+                    self._owns_controller = True
+        else:
+            self.data_source = data_source_cls(args)
 
         self.generate_rollout = load_function(self.args.rollout_function_path)
         self.eval_generate_rollout = load_function(self.args.eval_function_path)
-        self.custom_reward_post_process_func = None
-        if self.args.custom_reward_post_process_path is not None:
-            self.custom_reward_post_process_func = load_function(self.args.custom_reward_post_process_path)
-        self.custom_convert_samples_to_train_data_func = None
-        if self.args.custom_convert_samples_to_train_data_path is not None:
-            self.custom_convert_samples_to_train_data_func = load_function(
-                self.args.custom_convert_samples_to_train_data_path
-            )
+        self.batch_builder = BatchBuilder(args, controller=self.controller)
         logger.info(f"import {self.args.rollout_function_path} as generate_rollout function.")
         logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
@@ -81,7 +89,6 @@ class RolloutManager:
             runtime_env={"env_vars": add_default_ray_env_vars()},
         ).remote()
         self.rollout_id = -1
-        self._active_routed_experts_rollouts: set[int] = set()
 
         self._health_monitors = []
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
@@ -118,18 +125,30 @@ class RolloutManager:
             except Exception as e:
                 logger.warning(f"CI Fault Injection failed: {e}")
 
+    def pause_rollout_admission(self):
+        """Stop the distributed producer before engines drain for a weight update."""
+        worker = getattr(self.data_source, "consumers", {}).get("fully_async")
+        return worker.pause(drain=False) if worker is not None else True
+
+    def resume_rollout_admission(self, was_paused):
+        if not was_paused:
+            self.data_source.consumers["fully_async"].resume()
+
     def dispose(self):
         for monitor in self._health_monitors:
             monitor.stop()
-        for rollout_id in list(self._active_routed_experts_rollouts):
-            self.cleanup_rollout_data(rollout_id)
+        if close := getattr(self.data_source, "close", None):
+            close()
+        if self._owns_controller:
+            controller = self.controller
+            ray.get(controller.close.remote())
+            ray.kill(controller, no_restart=True)
+            self.controller = None
+            self._owns_controller = False
+        from slime.data.transport import seal_rollout_store
+
+        seal_rollout_store(self.args)
         logging_utils.finish_tracking(self.args)
-
-    def cleanup_rollout_data(self, rollout_id: int) -> None:
-        from slime.utils.routed_experts import cleanup_routed_experts_rollout
-
-        cleanup_routed_experts_rollout(self.args, rollout_id)
-        self._active_routed_experts_rollouts.discard(rollout_id)
 
     @property
     def server(self) -> Any | None:
@@ -170,49 +189,36 @@ class RolloutManager:
         return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets, parallel_configs
 
     def get_num_rollout_per_epoch(self):
-        assert self.args.rollout_global_dataset
         return len(self.data_source) // self.args.rollout_batch_size
 
     def generate(self, rollout_id):
         start_time = time.time()
         self.rollout_id = rollout_id
+        self.batch_builder.rollout_id = rollout_id
         set_current_rollout_id(rollout_id)
         self.health_monitoring_resume()
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
         data, metrics = self._get_rollout_data(rollout_id=rollout_id)
-        disk_routes = [
-            value
-            for sample in data
-            for value in (sample.rollout_routed_experts, sample.rollout_topk_token_ids, sample.rollout_topk_log_probs)
-            if isinstance(value, DiskTensorRef)
-        ]
-        if disk_routes:
-            self._active_routed_experts_rollouts.add(rollout_id)
-            rss_gib, hwm_gib = get_process_host_memory_gib()
-            logger.info(
-                "R3 manager spill profile: rollout_id=%d samples=%d files=%d disk_bytes=%.3f GiB "
-                "rss=%.3f GiB hwm=%.3f GiB host_available=%.3f GiB",
-                rollout_id,
-                len(data),
-                len(disk_routes),
-                sum(ref.nbytes for ref in disk_routes) / 1024**3,
-                rss_gib,
-                hwm_gib,
-                psutil.virtual_memory().available / 1024**3,
-            )
         save_debug_rollout_data(
             self.args.save_debug_rollout_data,
             data,
             rollout_id=rollout_id,
             evaluation=False,
+            args=self.args,
+            reference=self.batch_builder.raw_ref if self.args.rollout_data_transport == "straw" else None,
         )
-        log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
+        log_rollout_data(
+            rollout_id, self.args, data, metrics, time.time() - start_time, weight_version=self.weight_version
+        )
         if self.args.debug_rollout_only:
             # if debug rollout only, we don't convert samples to train data and directly return
             return
-        data = self._convert_samples_to_train_data(data)
-        return self._split_train_data_by_dp(data)
+        cached = self.batch_builder.begin(data)
+        if cached is not None:
+            return cached
+        data = self.batch_builder.convert(data)
+        return self.batch_builder.split_by_dp(data)
 
     def eval(self, rollout_id):
         if self.args.debug_train_only:
@@ -228,14 +234,36 @@ class RolloutManager:
             data,
             rollout_id=rollout_id,
             evaluation=True,
+            args=self.args,
         )
         log_eval_rollout_data(rollout_id, self.args, data, result.metrics)
 
     def save(self, rollout_id):
-        self.data_source.save(rollout_id)
+        # Keep admission frozen across source and builder snapshots. Source.save
+        # preserves this pre-existing pause instead of resuming between files.
+        paused = []
+        try:
+            for consumer in getattr(self.data_source, "consumers", {}).values():
+                paused.append((consumer, consumer.pause()))
+            self.data_source.save(rollout_id)
+            self.batch_builder.save(rollout_id)
+        finally:
+            for consumer, was_paused in paused:
+                if not was_paused:
+                    consumer.resume()
+
+    def training_completed(self, rollout_id):
+        self.batch_builder.training_completed(rollout_id)
 
     def load(self, rollout_id=None):
-        self.data_source.load(rollout_id)
+        from slime.data.checkpoint import SourceRestore
+
+        source_restore = self.data_source.load(rollout_id)
+        # Custom sources keep their existing load() contract; only the built-in
+        # queue returns a source/builder restoration handoff.
+        self.batch_builder.load(
+            rollout_id, source_restore=source_restore if isinstance(source_restore, SourceRestore) else None
+        )
 
     def offload(self):
         self.health_monitoring_pause()
@@ -286,6 +314,29 @@ class RolloutManager:
 
     def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:
+            if (
+                self.args.rollout_data_transport == "straw"
+                and self.args.load_debug_rollout_data.endswith(".straw.json")
+                and self.args.load_debug_rollout_data_subsample is None
+            ):
+                from slime.data.archive import RolloutArchive
+
+                path = self.args.load_debug_rollout_data.format(rollout_id=rollout_id)
+                with RolloutArchive(Path(path).expanduser()) as archive:
+                    if (
+                        archive.store.backend.root != Path(self.args.rollout_data_dir).resolve()
+                        or archive.manifest.manifest.segment.run_id != self.args.rollout_queue_run_id
+                    ):
+                        raise ValueError("Debug rollout archives must belong to the same Straw storage pool and run")
+                    data = archive.load_samples()
+                    refs = [archive.contents["raw"]] if "raw" in archive.contents else archive.contents["chunks"]
+                    self.batch_builder.raw_ref = accept_raw_rollout(
+                        RolloutFnTrainOutput(samples=data, sample_refs=refs),
+                        self.args,
+                        rollout_id,
+                        controller=self.controller,
+                    )
+                return data, None
             data = load_debug_rollout_data(
                 self.args.load_debug_rollout_data,
                 rollout_id=rollout_id,
@@ -302,10 +353,21 @@ class RolloutManager:
                 valid = bool(versions) and all(
                     str(version).isascii() and str(version).isdigit() for version in versions
                 )
-                self.args._rollout_weight_version = max(map(int, versions)) if valid else None
+                self.weight_version = max(map(int, versions)) if valid else None
             data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
-            metrics = data.metrics
-            data = data.samples
+            if self.args.rollout_data_transport == "straw":
+                samples = getattr(data, "samples", None)
+                data = accept_raw_rollout(data, self.args, rollout_id, controller=self.controller)
+                self.batch_builder.raw_ref = data
+                metrics = data.metrics
+                data = (
+                    samples
+                    if isinstance(samples, list) and all(not isinstance(group, DiskPayloadRef) for group in samples)
+                    else load_rollout_samples(data)
+                )
+            else:
+                metrics = data.metrics
+                data = load_rollout_samples(data.samples)
             # Enforce the rollout_id contract before flattening: any list[Sample]
             # encountered in the nested output must have rollout_id set on every
             # element. Default rollouts inherit it from the data source; compact /
@@ -314,298 +376,10 @@ class RolloutManager:
             # the rollout once instead of N times.
             validate_rollout_id_annotated(data)
             # flatten the data if it is a list of lists
-            while isinstance(data[0], list):
+            while data and isinstance(data[0], list):
                 data = list(itertools.chain.from_iterable(data))
 
         return data, metrics
 
-    def _post_process_rewards(self, samples: list[Sample] | list[list[Sample]]):
-        if self.custom_reward_post_process_func is not None:
-            return self.custom_reward_post_process_func(self.args, samples)
-
-        raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
-        if (
-            self.args.advantage_estimator in ["grpo", "gspo", "cispo", "reinforce_plus_plus_baseline"]
-            and self.args.rewards_normalization
-        ):
-            # group norm
-            rewards = torch.tensor(raw_rewards, dtype=torch.float)
-            if rewards.shape[-1] == self.args.n_samples_per_prompt * self.args.rollout_batch_size:
-                rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
-            else:
-                # when samples count are not equal in each group
-                rewards = rewards.view(-1, rewards.shape[-1])
-            mean = rewards.mean(dim=-1, keepdim=True)
-            rewards = rewards - mean
-
-            if self.args.advantage_estimator in ["grpo", "gspo", "cispo"] and self.args.grpo_std_normalization:
-                std = rewards.std(dim=-1, keepdim=True)
-                rewards = rewards / (std + 1e-6)
-
-            return raw_rewards, rewards.flatten().tolist()
-
-        return raw_rewards, raw_rewards
-
-    def _convert_samples_to_train_data(self, samples: list[Sample] | list[list[Sample]]):
-        """
-        Convert inference generated samples to training data.
-        """
-        if self.custom_convert_samples_to_train_data_func is not None:
-            return self.custom_convert_samples_to_train_data_func(self.args, samples)
-
-        raw_rewards, rewards = self._post_process_rewards(samples)
-
-        assert len(raw_rewards) == len(samples)
-        assert len(rewards) == len(samples)
-
-        rollout_ids = [sample.rollout_id for sample in samples]
-        existed_rollout_id_values = set(rid for rid in rollout_ids if rid is not None)
-        tmp_id = 0
-        for i in range(len(rollout_ids)):
-            if rollout_ids[i] is None:
-                while tmp_id in existed_rollout_id_values:
-                    tmp_id += 1
-                rollout_ids[i] = tmp_id
-                existed_rollout_id_values.add(tmp_id)
-
-        train_data = {
-            "tokens": [sample.tokens for sample in samples],
-            "response_lengths": [sample.response_length for sample in samples],
-            # some reward model, e.g. remote rm, may return multiple rewards,
-            # we could use key to select the reward.
-            "rewards": rewards,
-            "raw_reward": raw_rewards,
-            "truncated": [1 if sample.status == Sample.Status.TRUNCATED else 0 for sample in samples],
-            "sample_indices": [sample.index for sample in samples],
-            "rollout_ids": rollout_ids,
-        }
-
-        # loss mask
-        # TODO: compress the loss mask
-        loss_masks = []
-        for sample in samples:
-            # always instantiate loss_mask if not provided
-            if sample.loss_mask is None:
-                sample.loss_mask = [1] * sample.response_length
-
-            assert (
-                len(sample.loss_mask) == sample.response_length
-            ), f"loss mask length {len(sample.loss_mask)} != response length {sample.response_length}"
-            if sample.remove_sample:
-                sample.loss_mask = [0] * sample.response_length
-            loss_masks.append(sample.loss_mask)
-        train_data["loss_masks"] = loss_masks
-
-        # Per-rollout aggregate, precomputed at the step level (where we can
-        # see every sample of every rollout) and broadcast per-sample so the
-        # per-mb loss reducer uses the correct whole-rollout denominator even
-        # when a rollout's samples land in different micro-batches (first-fit
-        # packing can split a rollout across mbs):
-        #
-        #   ``rollout_mask_sums[i]`` — sum of loss-mask totals over every
-        #   sample in sample i's rollout. Used as the reducer's denominator
-        #   so summing partial contributions across mbs yields one
-        #   token-weighted mean per rollout.
-        rollout_id_list = train_data["rollout_ids"]
-        mask_sums_per_sample = [sum(m) for m in loss_masks]
-        rollout_total_mask: dict[int, int] = {}
-        for rid, ms in zip(rollout_id_list, mask_sums_per_sample, strict=True):
-            rollout_total_mask[rid] = rollout_total_mask.get(rid, 0) + ms
-        train_data["rollout_mask_sums"] = [rollout_total_mask[rid] for rid in rollout_id_list]
-
-        # Overwrite raw_reward when available. Mixed-source batches may only
-        # populate this field for a subset of samples (e.g. SWE but not code).
-        if any(sample.metadata and "raw_reward" in sample.metadata for sample in samples):
-            train_data["raw_reward"] = [
-                sample.metadata["raw_reward"] if sample.metadata and "raw_reward" in sample.metadata else sample.reward
-                for sample in samples
-            ]
-
-        # For rollout buffer
-        if samples[0].metadata and "round_number" in samples[0].metadata:
-            train_data["round_number"] = [sample.metadata["round_number"] for sample in samples]
-
-        # Add rollout log probabilities for off-policy correction
-        if samples[0].rollout_log_probs is not None:
-            train_data["rollout_log_probs"] = [sample.rollout_log_probs for sample in samples]
-
-        if getattr(self.args, "use_score_centering", False):
-            from slime.utils.score_centering import validate_sampler_top_p, validate_sampler_topk
-
-            for sample in samples:
-                if sample.rollout_log_probs is None or len(sample.rollout_log_probs) != sample.response_length:
-                    raise ValueError("Score centering requires sampler logprobs for every response token.")
-                if self.args.rollout_top_p < 1:
-                    if sample.response_length == 0 and sample.rollout_top_p_token_ids is None:
-                        sample.rollout_top_p_token_ids = torch.empty(0, dtype=torch.int32)
-                        sample.rollout_top_p_token_offsets = torch.zeros(1, dtype=torch.int32)
-                        sample.rollout_top_p_log_probs = torch.empty(0, dtype=torch.float32)
-                    validate_sampler_top_p(
-                        sample.rollout_top_p_token_ids,
-                        sample.rollout_top_p_token_offsets,
-                        sample.rollout_top_p_log_probs,
-                        sample.response_length,
-                        sample.loss_mask,
-                        sample.tokens[-sample.response_length :] if sample.response_length else [],
-                        sample.rollout_log_probs,
-                    )
-                else:
-                    validate_sampler_topk(sample, self.args.score_centering_top_k)
-            if self.args.rollout_top_p < 1:
-                train_data["rollout_top_p_log_probs"] = [sample.rollout_top_p_log_probs for sample in samples]
-            else:
-                train_data["rollout_topk_token_ids"] = [sample.rollout_topk_token_ids for sample in samples]
-                train_data["rollout_topk_log_probs"] = [sample.rollout_topk_log_probs for sample in samples]
-
-        if getattr(self.args, "rollout_top_p", 1.0) != 1.0:
-            for sample in samples:
-                assert sample.rollout_top_p_token_ids is not None
-                assert sample.rollout_top_p_token_offsets is not None
-                assert len(sample.rollout_top_p_token_offsets) == sample.response_length + 1, (
-                    f"top-p token offsets length {len(sample.rollout_top_p_token_offsets)} "
-                    f"!= response length + 1 {sample.response_length + 1}"
-                )
-                offset_end = int(sample.rollout_top_p_token_offsets[-1])
-                assert offset_end == len(
-                    sample.rollout_top_p_token_ids
-                ), f"top-p token offsets[-1] {offset_end} != token ids length {len(sample.rollout_top_p_token_ids)}"
-            train_data["rollout_top_p_token_ids"] = [sample.rollout_top_p_token_ids for sample in samples]
-            train_data["rollout_top_p_token_offsets"] = [sample.rollout_top_p_token_offsets for sample in samples]
-
-        routed_experts_present = [sample.rollout_routed_experts is not None for sample in samples]
-        dead_sample_indices = {
-            idx
-            for idx, (present, sample) in enumerate(zip(routed_experts_present, samples, strict=True))
-            if not present and sample.loss_mask is not None and not any(sample.loss_mask)
-        }
-        live_missing = [
-            idx for idx, present in enumerate(routed_experts_present) if not present and idx not in dead_sample_indices
-        ]
-        routing_replay_enabled = getattr(self.args, "use_rollout_routing_replay", False)
-        if live_missing and (routing_replay_enabled or any(routed_experts_present)):
-            raise ValueError(f"Rollout routed experts are missing for live sample indices {live_missing[:32]}.")
-
-        if any(routed_experts_present) or (routing_replay_enabled and dead_sample_indices):
-            dtype = torch.uint8 if self.args.num_experts <= 256 else torch.int32
-            routed_experts = [
-                (
-                    (
-                        sample.rollout_routed_experts
-                        if isinstance(sample.rollout_routed_experts, DiskTensorRef)
-                        else sample.materialize_rollout_routed_experts()
-                    )
-                    if present
-                    else torch.zeros(
-                        (max(0, len(sample.tokens) - 1), self.args.num_layers, self.args.moe_router_topk),
-                        dtype=dtype,
-                    )
-                )
-                for sample, present in zip(samples, routed_experts_present, strict=True)
-            ]
-            if routing_replay_enabled and any(routed_experts_present):
-                captured_pairs = [
-                    (experts, max(0, len(sample.tokens) - 1))
-                    for sample, experts, present in zip(samples, routed_experts, routed_experts_present, strict=True)
-                    if present
-                ]
-                validate_rollout_routed_experts_for_replay(
-                    [experts for experts, _ in captured_pairs],
-                    self.args,
-                    expected_rows=[rows for _, rows in captured_pairs],
-                )
-            if dead_sample_indices:
-                logger.warning(
-                    "Using all-zero routed experts for %d fully loss-masked samples (indices %s).",
-                    len(dead_sample_indices),
-                    sorted(dead_sample_indices)[:16],
-                )
-            train_data["rollout_routed_experts"] = routed_experts
-
-        if samples[0].train_metadata is not None:
-            train_data["metadata"] = [sample.train_metadata for sample in samples]
-
-        if any(sample.multimodal_train_inputs is not None for sample in samples):
-            train_data["multimodal_train_inputs"] = [sample.multimodal_train_inputs for sample in samples]
-
-        if samples[0].teacher_log_probs is not None:
-            train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
-
-        if samples[0].metadata is not None:
-            train_data["source_names"] = [get_source(sample) for sample in samples]
-
-        return train_data
-
     def set_train_parallel_config(self, config: dict):
-        self.train_parallel_config = config
-
-    def _split_train_data_by_dp(self, data):
-        """Compute the DP/mbs schedule and package each rank's rollout_data
-        into a Ray Box. The schedule itself is computed by
-        :func:`build_dp_schedule` so it stays unit-testable without Ray/sglang.
-
-        Step split is by rollout id (``samples[i].rollout_id``, falling back
-        to ``samples[i].index``); each step holds exactly
-        ``args.global_batch_size`` rollouts so the training-step count per
-        rollout is fixed at ``rollout_batch_size * n_samples_per_prompt //
-        global_batch_size`` regardless of how many training samples each
-        rollout produced.
-        """
-        dp_size = self.train_parallel_config["dp_size"]
-        total_lengths = [len(t) for t in data["tokens"]]
-        data["total_lengths"] = total_lengths
-
-        partitions, micro_batch_indices, num_microbatches, global_batch_sizes = build_dp_schedule(
-            self.args,
-            self.train_parallel_config,
-            total_lengths,
-            global_batch_size=self.args.global_batch_size,
-            rollout_indices=data["rollout_ids"],
-        )
-
-        # Package per-rank rollout_data
-        rollout_data_refs = []
-        for r in range(dp_size):
-            partition = partitions[r]
-            rollout_data = {"partition": partition}
-            for key in [
-                "tokens",
-                "multimodal_train_inputs",
-                "response_lengths",
-                "rewards",
-                "truncated",
-                "loss_masks",
-                "round_number",
-                "sample_indices",
-                "rollout_ids",
-                "rollout_mask_sums",
-                "rollout_log_probs",
-                "rollout_topk_token_ids",
-                "rollout_topk_log_probs",
-                "rollout_top_p_token_ids",
-                "rollout_top_p_token_offsets",
-                "rollout_top_p_log_probs",
-                "rollout_routed_experts",
-                "source_names",
-                "prompt",
-                "teacher_log_probs",
-            ]:
-                if key not in data:
-                    continue
-                rollout_data[key] = [data[key][j] for j in partition]
-            # keys that need to be splited at train side
-            for key in ["raw_reward", "total_lengths"]:
-                if key not in data:
-                    continue
-                rollout_data[key] = data[key]
-            rollout_data["global_batch_sizes"] = global_batch_sizes
-            rollout_data["num_microbatches"] = num_microbatches
-            rollout_data["micro_batch_indices"] = micro_batch_indices[r]
-            tensorize_rollout_data_for_training(rollout_data)
-            transport = getattr(self.args, "rollout_data_transport", "object-store")
-            if transport == "nixl":
-                rollout_data_refs.append(Box(ray.put(rollout_data, _tensor_transport="nixl")))
-            elif transport == "object-store":
-                rollout_data_refs.append(Box(ray.put(rollout_data)))
-            else:
-                raise ValueError(f"Unsupported rollout data transport: {transport!r}")
-        return rollout_data_refs
+        self.batch_builder.train_parallel_config = config

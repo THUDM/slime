@@ -149,21 +149,21 @@ class RayTrainGroup:
             for actor in self._actor_handlers
         ]
 
-    def save_model(self, rollout_id, force_sync=False):
-        """Save actor model"""
-        ret = ray.get([actor.save_model.remote(rollout_id, force_sync=force_sync) for actor in self._actor_handlers])
+    def save_model(self, rollout_id, force_sync=False) -> None:
+        """Save on all ranks; force_sync also waits for asynchronous writes."""
+        ray.get([actor.save_model.remote(rollout_id, force_sync=force_sync) for actor in self._actor_handlers])
         if self._release_train_enabled():
             self.args.load = self.args.save
             self.args.ckpt_step = None
             self.args.finetune = False
             self.args.no_load_optim = self.args.no_save_optim
             self.args.no_load_rng = False
-        return ret
 
-    def update_weights(self):
-        """Broadcast weights from rank 0 to all other ranks."""
+    def update_weights(self) -> None:
+        """Publish actor weights; disk reload is coordinated after all ranks save."""
         if not self._full_disk_weight_update_enabled():
-            return ray.get([actor.update_weights.remote() for actor in self._actor_handlers])
+            ray.get([actor.update_weights.remote() for actor in self._actor_handlers])
+            return
 
         weight_version = self._disk_weight_version + 1
         disk_weight_dir = Path(self.args.update_weight_disk_dir) / f"weight_v{weight_version:06d}"

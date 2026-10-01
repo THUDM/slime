@@ -56,6 +56,7 @@ jobs:
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_file": "test_qwen2.5_0.5B_sglang_config_distributed.py"
             },
             {
@@ -64,6 +65,7 @@ jobs:
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_file": "test_sglang_config_mixed_offload_ft.py"
             }
           ]
@@ -121,6 +123,7 @@ jobs:
             slimerl/slime:latest \
             bash -lc '
               set -euo pipefail
+              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
@@ -157,6 +160,7 @@ jobs:
             },
             {
               "num_gpus": 4,
+              "straw": true,
               "test_file": "test_release_train.py"
             },
             {
@@ -185,12 +189,14 @@ jobs:
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_file": "test_qwen3.6_35B_A3B_pd_mooncake.py",
               "use_deepep": "1"
             },
             {
               "enable_eval": "0",
               "num_gpus": 8,
+              "straw": true,
               "test_file": "test_qwen3_30B_A3B_r3.py",
               "use_deepep": "1",
               "use_fp8_rollout": "1"
@@ -198,6 +204,7 @@ jobs:
             {
               "enable_eval": "0",
               "num_gpus": 8,
+              "straw": true,
               "test_file": "test_qwen3_4B_ppo.py"
             },
             {
@@ -222,10 +229,12 @@ jobs:
             {
               "enable_eval": "0",
               "num_gpus": 8,
+              "straw": true,
               "test_file": "test_moonlight_16B_A3B_r3.py"
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_file": "test_mimo_7B_mtp_only_grad.py"
             },
             {
@@ -234,6 +243,7 @@ jobs:
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_file": "test_qwen2.5_0.5B_debug_rollout_then_train.py"
             },
             {
@@ -250,10 +260,17 @@ jobs:
             },
             {
               "num_gpus": 4,
+              "straw": true,
               "test_file": "test_qwen2.5_0.5B_fully_async_short.py"
             },
             {
               "num_gpus": 4,
+              "straw": true,
+              "test_file": "test_straw_checkpoint_fork.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
               "test_file": "test_qwen2.5_0.5B_fanout_short.py"
             },
             {
@@ -266,30 +283,36 @@ jobs:
             },
             {
               "num_gpus": 2,
+              "straw": true,
               "test_file": "test_qwen2.5_0.5B_score_centering.py"
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_args": "--save-optimizer gpu --load-optimizer gpu",
               "test_file": "test_qwen3_4B_ckpt.py"
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_args": "--save-optimizer gpu --load-optimizer cpu",
               "test_file": "test_qwen3_4B_ckpt.py"
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_args": "--save-optimizer cpu --load-optimizer cpu",
               "test_file": "test_qwen3_4B_ckpt.py"
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_args": "--save-optimizer cpu --load-optimizer gpu",
               "test_file": "test_qwen3_4B_ckpt.py"
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_args": "--async-save",
               "test_file": "test_qwen3_4B_ckpt.py"
             }
@@ -348,6 +371,7 @@ jobs:
             slimerl/slime:latest \
             bash -lc '
               set -euo pipefail
+              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
@@ -441,6 +465,7 @@ jobs:
             slimerl/slime:latest \
             bash -lc '
               set -euo pipefail
+              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
@@ -473,26 +498,31 @@ jobs:
           [
             {
               "num_gpus": 8,
+              "straw": true,
               "test_args": "--save-optimizer gpu --load-optimizer gpu",
               "test_file": "test_qwen3_4B_ckpt.py"
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_args": "--save-optimizer gpu --load-optimizer cpu",
               "test_file": "test_qwen3_4B_ckpt.py"
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_args": "--save-optimizer cpu --load-optimizer cpu",
               "test_file": "test_qwen3_4B_ckpt.py"
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_args": "--save-optimizer cpu --load-optimizer gpu",
               "test_file": "test_qwen3_4B_ckpt.py"
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_args": "--async-save",
               "test_file": "test_qwen3_4B_ckpt.py"
             }
@@ -551,6 +581,7 @@ jobs:
             slimerl/slime:latest \
             bash -lc '
               set -euo pipefail
+              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
@@ -583,6 +614,7 @@ jobs:
           [
             {
               "num_gpus": 0,
+              "straw": true,
               "test_file": "test_megatron_argument_validation.py"
             },
             {
@@ -675,6 +707,7 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "straw": true,
               "test_file": "test_score_centering.py"
             },
             {
@@ -683,6 +716,7 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "straw": true,
               "test_file": "test_score_centering_transport.py"
             },
             {
@@ -747,6 +781,16 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "straw": true,
+              "test_file": "test_distributed_rollout.py"
+            },
+            {
+              "num_gpus": 0,
+              "straw": true,
+              "test_file": "test_straw_fully_async_recovery.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_rollout_buffer_order.py"
             },
             {
@@ -759,7 +803,27 @@ jobs:
             },
             {
               "num_gpus": 0,
-              "test_file": "test_r3_spill.py"
+              "straw": true,
+              "test_file": "test_straw_r3.py"
+            },
+            {
+              "num_gpus": 0,
+              "straw": true,
+              "test_file": "test_routed_experts_disk_layout.py"
+            },
+            {
+              "num_gpus": 0,
+              "straw": true,
+              "test_file": "test_rollout_straw_transport.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_optional_straw.py"
+            },
+            {
+              "num_gpus": 0,
+              "straw": true,
+              "test_file": "test_queue_sample_codec.py"
             },
             {
               "num_gpus": 0,
@@ -885,6 +949,13 @@ jobs:
           pip install transformers wandb
 
 
+
+      - name: Install straw for queue tests
+        if: matrix.info.straw == true
+        shell: bash
+        run: python -m pip install --upgrade --only-binary=straw-queue straw-queue
+
+
       - name: Install
         shell: bash
         run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps
@@ -973,6 +1044,8 @@ jobs:
           pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors psutil
 
 
+
+
       - name: Install
         shell: bash
         run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps
@@ -1017,6 +1090,7 @@ jobs:
             },
             {
               "num_gpus": 4,
+              "straw": true,
               "test_file": "test_release_train.py"
             },
             {
@@ -1045,12 +1119,14 @@ jobs:
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_file": "test_qwen3.6_35B_A3B_pd_mooncake.py",
               "use_deepep": "1"
             },
             {
               "enable_eval": "0",
               "num_gpus": 8,
+              "straw": true,
               "test_file": "test_qwen3_30B_A3B_r3.py",
               "use_deepep": "1",
               "use_fp8_rollout": "1"
@@ -1058,6 +1134,7 @@ jobs:
             {
               "enable_eval": "0",
               "num_gpus": 8,
+              "straw": true,
               "test_file": "test_qwen3_4B_ppo.py"
             },
             {
@@ -1082,10 +1159,12 @@ jobs:
             {
               "enable_eval": "0",
               "num_gpus": 8,
+              "straw": true,
               "test_file": "test_moonlight_16B_A3B_r3.py"
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_file": "test_mimo_7B_mtp_only_grad.py"
             },
             {
@@ -1094,6 +1173,7 @@ jobs:
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_file": "test_qwen2.5_0.5B_debug_rollout_then_train.py"
             },
             {
@@ -1110,10 +1190,17 @@ jobs:
             },
             {
               "num_gpus": 4,
+              "straw": true,
               "test_file": "test_qwen2.5_0.5B_fully_async_short.py"
             },
             {
               "num_gpus": 4,
+              "straw": true,
+              "test_file": "test_straw_checkpoint_fork.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
               "test_file": "test_qwen2.5_0.5B_fanout_short.py"
             },
             {
@@ -1126,30 +1213,36 @@ jobs:
             },
             {
               "num_gpus": 2,
+              "straw": true,
               "test_file": "test_qwen2.5_0.5B_score_centering.py"
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_args": "--save-optimizer gpu --load-optimizer gpu",
               "test_file": "test_qwen3_4B_ckpt.py"
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_args": "--save-optimizer gpu --load-optimizer cpu",
               "test_file": "test_qwen3_4B_ckpt.py"
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_args": "--save-optimizer cpu --load-optimizer cpu",
               "test_file": "test_qwen3_4B_ckpt.py"
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_args": "--save-optimizer cpu --load-optimizer gpu",
               "test_file": "test_qwen3_4B_ckpt.py"
             },
             {
               "num_gpus": 8,
+              "straw": true,
               "test_args": "--async-save",
               "test_file": "test_qwen3_4B_ckpt.py"
             }
@@ -1208,6 +1301,7 @@ jobs:
             slimerl/slime-test:latest \
             bash -lc '
               set -euo pipefail
+              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
@@ -1324,6 +1418,7 @@ jobs:
             slimerl/slime:latest \
             bash -lc '
               set -euo pipefail
+              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then

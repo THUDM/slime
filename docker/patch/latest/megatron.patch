@@ -1005,3 +1005,36 @@ index e9736ac08..6567ed426 100644
                  )
                  for (model_chunk_idx, model_chunk) in enumerate(model)
              ]
+diff --git a/megatron/training/checkpointing.py b/megatron/training/checkpointing.py
+index 7c87eca191a525915502a1deb7622f03990c89de..bdb62df91b9ca2fe6e13d166a21f38e1b1e90e64 100644
+--- a/megatron/training/checkpointing.py
++++ b/megatron/training/checkpointing.py
+@@ -212,8 +212,8 @@
+             iteration, release = read_metadata(tracker_filename)
+
+     # Allow user to specify the loaded iteration.
+-    if getattr(args, "ckpt_step", None):
+-        iteration = args.ckpt_step
++    if getattr(args, "ckpt_step", None) is not None:
++        iteration, release = args.ckpt_step, False
+
+     return get_checkpoint_name(load_dir, iteration, release, return_base_dir=True)
+
+@@ -1185,14 +1185,14 @@
+             iteration, release = read_metadata(tracker_filename)
+
+     # Allow user to specify the loaded iteration.
+-    if getattr(args, "ckpt_step", None):
+-        iteration = args.ckpt_step
++    if getattr(args, "ckpt_step", None) is not None:
++        iteration, release = args.ckpt_step, False
+
+     # Record the iteration loaded (stored separately from args to avoid
+     # polluting checkpoints, since args is saved in checkpoints).
+     set_loaded_iteration(iteration)
+
+-    if non_persistent_iteration != -1:  # there is a non-persistent checkpoint
++    if non_persistent_iteration != -1 and getattr(args, "ckpt_step", None) is None:
+         if non_persistent_iteration >= iteration:
+             return _load_non_persistent_base_checkpoint(
+                 non_persistent_global_dir,
