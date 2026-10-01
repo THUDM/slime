@@ -723,10 +723,13 @@ diff --git a/megatron/core/transformer/transformer_config.py b/megatron/core/tra
 index d55bebe7e..1eecbbd38 100644
 --- a/megatron/core/transformer/transformer_config.py
 +++ b/megatron/core/transformer/transformer_config.py
-@@ -173,6 +173,10 @@ class TransformerConfig(ModelParallelConfig):
+@@ -173,6 +173,13 @@ class TransformerConfig(ModelParallelConfig):
      qk_layernorm: bool = False
      """Whether to apply `normalization` type of normalization to the query and key embeddings."""
  
++    rotary_percent: Optional[float] = None
++    """Percent of rotary dimension to use for rotary position embeddings."""
++
 +    post_self_attn_layernorm: bool = False
 +    post_mlp_layernorm: bool = False
 +    use_gated_attention: bool = False
