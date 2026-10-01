@@ -1,0 +1,57 @@
+# Trainer Communication Timeline
+
+slime can write a low-overhead JSONL timeline for training and weight synchronization. It is disabled by default and does not change collective ordering or add synchronization to the training path.
+
+Enable it with a per-rank path:
+
+```bash
+python train.py \
+  ... \
+  --communication-timeline /path/to/traces/slime-{role}-{rank}.jsonl
+```
+
+The equivalent environment variable is `SLIME_COMMUNICATION_TIMELINE`. Paths support `{rank}`, `{trainer_rank}`, `{local_rank}`, `{pid}`, `{hostname}`, `{role}`, and `{world_size}`. If a multi-rank path has no rank placeholder, slime adds a `.rank-N` suffix. Actor, critic, and disk-orchestrator roles also get separate suffixes when `{role}` is omitted. This works for any world size; there is no topology-specific rank layout. slime generates one shared `run_id` for the actor group; use `--communication-timeline-run-id` or `SLIME_COMMUNICATION_TIMELINE_RUN_ID` to supply one explicitly.
+
+## Built-in phases
+
+The trainer records:
+
+- `train_forward_backward`: the Megatron forward/backward schedule;
+- `grad_sync`: Megatron's final gradient synchronization callback;
+- `optimizer_step`;
+- `weight_convert`: work performed while producing each HF weight bucket;
+- `weight_bucket_ready` and `weight_bucket_send`;
+- `engine_bucket_receive`: the trainer's observation that transfer has completed;
+- `engine_load_weights`: time until the engine update request returns;
+- `weight_sync_complete`.
+
+`engine_bucket_receive` is a trainer-side observation, not an engine-side timestamp. The `observation` metadata says which boundary produced it.
+
+Every record carries the common fields `global_step`, `rollout_id`, `weight_version`, `bucket_id`, `trainer_rank`, `engine_id`, `message_bytes`, and `transport`. Fields that do not apply at a boundary are `null`. `sequence_id` is process-local and monotonic, while `logical_operation_id` combines the available lifecycle identifiers with the operation name.
+
+CUDA spans use events on the current framework stream. Events are queried without blocking during normal execution and drained at process shutdown. Schema v2 labels this provenance explicitly with `gpu_timestamp_semantics="event-bracket"`, `timestamp_domain="process-realtime-projected-cuda-event"`, and `clock_sync_error_bound_us=null`. The projected GPU interval brackets framework eligibility and observed completion; it does not claim to be the exact start of an NCCL kernel on an internal ProcessGroupNCCL stream, and the process realtime clocks have no measured cross-rank error bound. Each span also emits an NVTX range named `slime.comm/<operation>` so Nsight Systems can provide exact kernel correlation.
+
+Do not use these event-bracket timestamps to select or apply an automatic communication policy. Such a consumer must fail closed until an adapter supplies kernel-observed timestamps and a measured clock-synchronization error bound for every participating rank. The built-in timeline remains useful for lifecycle diagnostics and for correlating its NVTX ranges with an exact profiler trace.
+
+When the timeline is not configured, the public helpers use one shared no-op phase. They do not read clocks, import torch, allocate CUDA events, push NVTX, scan bucket tensor sizes, update context variables, serialize JSON, open files, or synchronize. Host-only, CUDA-event, and external-profiler overhead must be measured as separate modes; profiler runs must not be mixed into non-profiler throughput samples.
+
+## Add semantic phases from custom code
+
+slime deliberately does not patch Megatron's internal MoE implementation. A custom Megatron hook or plugin can add `ep_dispatch` and `ep_combine` without changing the schema:
+
+```python
+from slime.observability.communication_timeline import communication_context, communication_phase
+
+with communication_context(global_step=step, rollout_id=rollout_id):
+    with communication_phase(
+        "ep_dispatch",
+        message_bytes=dispatch_bytes,
+        transport="nccl",
+        layer=layer_id,
+    ):
+        dispatch_tokens()
+```
+
+Use `communication_event(...)` for an instantaneous boundary and call `mark_consumer()` on the object yielded by `communication_phase(...)` when the first consumer is observed.
+
+This timeline is process-oriented and complements the per-sample [Trace Viewer](./trace.md). For kernel-level analysis, correlate its NVTX ranges with [Profiling](./profiling.md).

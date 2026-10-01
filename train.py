@@ -90,7 +90,7 @@ def train(args, restore_plan=None):
         if args.offload_rollout and not release_train:
             ray.get(rollout_manager.onload_weights.remote())
         was_paused = ray.get(rollout_manager.pause_rollout_admission.remote())
-        actor_model.update_weights()
+        actor_model.update_weights(rollout_id=rollout_id)
         # Final evaluation uses the synchronized engines directly. Keep training
         # producers paused when no later rollout will consume their new work.
         if rollout_id + 1 < args.num_rollout:
