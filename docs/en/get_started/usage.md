@@ -152,7 +152,7 @@ For details on some of SGLang's customizations and the principles behind how sli
 
 ### Data Format
 
-Raw data is always managed by the DataSource. The built-in DataSource loads `--prompt-data` when provided; use `--data-source-path` for custom data management. The former `--disable-rollout-global-dataset` flag has been removed; remove it from older launch scripts.
+Raw data is managed by the DataSource. The built-in DataSource loads `--prompt-data` when provided; use `--data-source-path` for custom data management.
 
 slime supports `.jsonl` and `.parquet` files; reading Parquet requires `pyarrow`. Each record in either format should contain the fields selected by `--input-key` and `--label-key`. An expanded JSONL record looks like this:
 
@@ -388,6 +388,37 @@ slime supports customizing data generation (rollout) to various degrees.
     For a more complete version, please refer to [slime/rollout/sglang_rollout.py](https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py).
 
   - Sometimes, you may also need to support a custom reward model. This can be configured by setting `--custom-rm-path`.
+
+### Persistent rollout queue and distributed fully async
+
+The default rollout transport is Ray `object-store`, which does not require a
+shared directory. `--rollout-data-transport nixl` selects Ray's NIXL tensor transport.
+For persistent queues and packed tensor storage across machines, use
+[straw](../advanced/straw.md) with a shared JuiceFS directory.
+
+To enable distributed fully async rollout with straw, add:
+
+```bash
+--rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async \
+--rollout-data-transport straw \
+--rollout-data-dir /shared/run/rollout_data
+```
+
+All nodes must mount the directory at the same absolute path and have
+`straw-queue` installed. The standard slime installation includes it; for an
+existing environment, run `pip install 'straw-queue>=0.1.2'`. Configure the JuiceFS
+storage profile and deployment declaration as described in the
+[straw guide](../advanced/straw.md#enable-it). Selecting straw alone uses the
+synchronous rollout entrypoint. For a fresh run, omitting `--rollout-data-dir`
+uses `<save>/rollout_data` when `--save` is set.
+
+With straw, `--use-rollout-routing-replay` and `--use-score-centering` persist
+R3 and SC tensors with their samples, including partial continuations.
+`--rollout-queue-online-gc` optionally reclaims unused storage; it is disabled
+by default. Recovery uses `--load`, `--save` and optional `--ckpt-step`.
+See the [straw guide](../advanced/straw.md) for scheduling,
+checkpoint recovery and debug replay, and [customization](customization.md)
+for custom rollout functions.
 
 ## How to Use SGLang
 

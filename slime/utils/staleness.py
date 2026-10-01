@@ -1,4 +1,4 @@
-"""Policy age in weight-update units (fresh samples have age one)."""
+"""Policy age in weight-update units (fresh samples have age zero)."""
 
 from slime.utils.types import Sample
 
@@ -14,7 +14,7 @@ def sample_staleness(sample: Sample, current_weight_version: int) -> int | None:
     numeric_versions = [int(v) for v in versions]
     if max(numeric_versions) > current_weight_version:
         return None
-    return current_weight_version + 1 - min(numeric_versions)
+    return current_weight_version - min(numeric_versions)
 
 
 def compute_staleness_metrics(samples: list[Sample], current_weight_version: int | None) -> dict[str, float | int]:

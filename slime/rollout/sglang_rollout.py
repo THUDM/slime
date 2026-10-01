@@ -13,11 +13,12 @@ import numpy as np
 from tqdm import tqdm
 
 from slime.backends.sglang_utils.server_control import abort_servers_until_idle
+from slime.data.transport import discard_rollout_group, publish_rollout_async
 from slime.observability.trace_utils import build_sglang_meta_trace_attrs, trace_function, trace_span
-from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
+from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput, finalize_rollout_groups
 from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter, should_drop_dynamic_filter_output
 from slime.rollout.sample_hooks import apply_rollout_sample_hooks
-from slime.utils.async_utils import run
+from slime.utils.async_utils import AsyncPacer, run
 from slime.utils.data import Dataset
 from slime.utils.eval_config import EvalDatasetConfig
 from slime.utils.http_utils import get, get_rollout_num_engines, post
@@ -85,13 +86,16 @@ class GenerateState(metaclass=SingletonMeta):
     The global state for the generation process.
     """
 
-    def __init__(self, args: Namespace) -> None:
+    def __init__(self, args: Namespace, *, concurrency: int | None = None) -> None:
         # persistent state for the generation process
         self.args = args
         self.tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
         self.processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
-        self.semaphore = asyncio.Semaphore(args.sglang_server_concurrency * get_rollout_num_engines(args))
+        self.semaphore = asyncio.Semaphore(
+            concurrency if concurrency is not None else args.sglang_server_concurrency * get_rollout_num_engines(args)
+        )
+        self.generation_pacer = AsyncPacer()
         self.sampling_params: dict[str, Any] = dict(
             temperature=args.rollout_temperature,
             top_p=args.rollout_top_p,
@@ -185,6 +189,14 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     payload.update(score_centering_request(args, sampling_params))
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
+        if sample.response_length:
+            captured = sample.get_rollout_routed_experts_length()
+            if captured != len(sample.tokens) - 1:
+                raise ValueError(
+                    f"R3 continuation {sample.index} has {captured} routes, expected {len(sample.tokens) - 1}; "
+                    "refusing to overwrite missing historical routing with a different policy"
+                )
+            payload["routed_experts_start_len"] = captured
 
     images = sample.multimodal_inputs.get("images") if sample.multimodal_inputs else None
     if images:
@@ -216,6 +228,14 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
             ),
         )
         span.update(build_sglang_meta_trace_attrs(output["meta_info"]))
+
+    if "routed_experts_start_len" in payload:
+        start = payload["routed_experts_start_len"]
+        # Community SGLang returns the requested slice without echoing its
+        # offset. Keep the request's origin; Sample still checks the row count.
+        returned_start = output["meta_info"].setdefault("routed_experts_start_len", start)
+        if returned_start != start:
+            raise ValueError(f"SGLang routed_experts_start_len differs from request: {returned_start} != {start}")
 
     if "output_token_logprobs" in output["meta_info"]:
         new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
@@ -289,8 +309,25 @@ async def generate_and_rm(
         args = copy.copy(args)
         args.use_score_centering = False
 
+    # Custom generation and sample hooks may return freshly constructed Samples.
+    # Their task authorization and requested configuration belong to the input.
+    from slime.data.transport import inherit_queue_context
+
+    queue_input = copy.copy(sample)
+    if hasattr(sample, "_queue_lease") or hasattr(sample, "_queue_receipt"):
+        queue_input.queue_generation_requests = list(getattr(sample, "queue_generation_requests", [])) + [
+            {
+                "sampling_params": copy.deepcopy(sampling_params),
+                "generate_function": sample.generate_function_path or args.custom_generate_function_path,
+                "input_index": sample.index,
+                "input_group_index": sample.group_index,
+                "branch": getattr(sample, "_queue_branch", None),
+            }
+        ]
+
     # generate
     async with state.semaphore:
+        await state.generation_pacer.wait()
         if state.aborted:
             sample.status = Sample.Status.ABORTED
             return sample
@@ -309,7 +346,9 @@ async def generate_and_rm(
             else:
                 sample = await _run_server_abort_generate(state, generate_call)
 
+    sample = inherit_queue_context(queue_input, sample)
     sample = await apply_rollout_sample_hooks(args, sample, evaluation=evaluation)
+    sample = inherit_queue_context(queue_input, sample)
 
     # for the rm that need the whole group, we will not do the rm here
     if args.group_rm:
@@ -445,6 +484,8 @@ async def generate_rollout_async(
     """
 
     state = GenerateState(args)
+    reader = getattr(data_source, "__self__", None)
+    controller = getattr(reader, "controller", None)
 
     # instantiate data filters
     dynamic_filter = (
@@ -458,12 +499,18 @@ async def generate_rollout_async(
 
     data = []
     all_data = []
+    # The legacy all-samples hook can mutate selected and rejected groups.
+    # Preserve those objects until it runs; otherwise keep only stored refs.
+    keep_all_samples = args.rollout_all_samples_process_path is not None
     do_print = True
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
     while len(data) < target_data_size:
         while state.remaining_batch_size < target_data_size:
             # get samples from the buffer and submit the generation requests.
-            samples = data_source(args.over_sampling_batch_size)
+            if hasattr(reader, "get_samples_async"):
+                samples = await reader.get_samples_async(args.over_sampling_batch_size)
+            else:
+                samples = data_source(args.over_sampling_batch_size)
             state.submit_generate_tasks(samples)
 
         # wait for the generation to finish
@@ -479,7 +526,8 @@ async def generate_rollout_async(
                 do_print = False
 
             assert len(group) == args.n_samples_per_prompt
-            all_data.append(group)
+            if keep_all_samples:
+                all_data.append(group)
 
             dynamic_filter_output = call_dynamic_filter(dynamic_filter, args, group)
             if should_drop_dynamic_filter_output(
@@ -487,6 +535,14 @@ async def generate_rollout_async(
                 remaining_batch_size=state.remaining_batch_size,
                 target_data_size=target_data_size,
             ):
+                if not keep_all_samples:
+                    await asyncio.to_thread(
+                        discard_rollout_group,
+                        group,
+                        args,
+                        dynamic_filter_output.reason or "dynamic_filter",
+                        controller=controller,
+                    )
                 metric_gatherer.on_dynamic_filter_drop(reason=dynamic_filter_output.reason)
                 state.remaining_batch_size -= 1
                 continue
@@ -494,11 +550,13 @@ async def generate_rollout_async(
             # add the samples to the data
             # NOTE: here we have not stored all the unused samples back to the data buffer.
             if len(data) < target_data_size:
+                sample = group[0][0] if isinstance(group[0], list) else group[0]
+                if args.rollout_data_transport == "straw" and not keep_all_samples:
+                    group = await publish_rollout_async(group, args, rollout_id, group=True, controller=controller)
                 data.append(group)
                 pbar.update(args.n_samples_per_prompt)
 
     pbar.close()
-    sample = data[-1][0][0] if isinstance(data[-1][0], list) else data[-1][0]
     logger.info(
         f"Finish rollout: {[str(sample.prompt) + sample.response]}, label: {str(sample.label)[:100]}, reward: {sample.reward}",
     )
@@ -507,23 +565,30 @@ async def generate_rollout_async(
     aborted_samples = await abort(args, rollout_id)
 
     assert len(data) == args.rollout_batch_size, f"Got {len(data)} samples, expected {args.rollout_batch_size}"
-    data = sorted(data, key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index)
-    all_samples = sorted(
-        all_data, key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index
-    )
-
     # reset the global state to prevent effects on the next rollout or eval.
     state.reset()
-    if args.rollout_sample_filter_path is not None:
-        filter_func = load_function(args.rollout_sample_filter_path)
-        filter_func(args, data)
-
-    # There can be circumstances where users want to process all samples including filtered ones.
-    if args.rollout_all_samples_process_path is not None:
+    if keep_all_samples:
+        data.sort(key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index)
+        all_data.sort(key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index)
+        if args.rollout_sample_filter_path is not None:
+            load_function(args.rollout_sample_filter_path)(args, data)
         process_func = load_function(args.rollout_all_samples_process_path)
-        process_func(args, all_samples, data_source)
-
-    return RolloutFnTrainOutput(samples=data, metrics=metric_gatherer.collect()), aborted_samples
+        process_func(args, all_data, data_source)
+        if args.rollout_data_transport == "straw":
+            data = [
+                await publish_rollout_async(group, args, rollout_id, group=True, controller=controller)
+                for group in data
+            ]
+            data = await publish_rollout_async(data, args, rollout_id)
+        output = RolloutFnTrainOutput(samples=data, metrics=metric_gatherer.collect())
+    elif args.rollout_sample_filter_path is not None:
+        # Preserve the calling thread/context of custom batch hooks.
+        output = finalize_rollout_groups(args, rollout_id, data, metric_gatherer.collect(), controller=controller)
+    else:
+        output = await asyncio.to_thread(
+            finalize_rollout_groups, args, rollout_id, data, metric_gatherer.collect(), controller=controller
+        )
+    return output, aborted_samples
 
 
 EVAL_PROMPT_DATASET = {}
