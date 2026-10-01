@@ -108,7 +108,10 @@ RUN pip install --ignore-installed PyJWT && \
 # Pin both packages together so downgrading NumPy does not leave an incompatible SciPy.
 RUN pip install "numpy==1.26.4" "scipy==1.17.1"
 
-RUN pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-9daabcd/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
+# requirements.txt installs sglang-router and its dependencies above. Replace
+# only the router with the fork wheel; re-resolving its unbounded dependencies
+# here can trigger extensive aiohttp backtracking and alter the existing stack.
+RUN pip install --no-deps --force-reinstall https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-9daabcd/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl
 RUN python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
 
 RUN rm -rf /root/.cache/pip /root/flash-attention

@@ -4,6 +4,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from slime.data.tensor import TensorRef
 from slime.observability import logging_utils
 from slime.observability.metric_utils import (
     compute_pass_rate,
@@ -13,7 +14,7 @@ from slime.observability.metric_utils import (
     has_repetition,
 )
 from slime.utils.misc import group_by, load_function
-from slime.utils.staleness import compute_staleness_metrics, fully_async_metrics_enabled
+from slime.utils.staleness import compute_staleness_metrics
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
@@ -167,6 +168,8 @@ def _compute_top_p_kept_vocab_metrics(all_samples: list[Sample]):
         offsets = sample.rollout_top_p_token_offsets
         if offsets is None or sample.response_length == 0:
             continue
+        if isinstance(offsets, TensorRef):
+            offsets = offsets.load()
         offsets = torch.as_tensor(offsets, dtype=torch.int64)
         if offsets.numel() == 0:
             continue
@@ -254,7 +257,7 @@ def log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any] 
     return log_dict
 
 
-def log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_time):
+def log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_time, *, weight_version=None):
     if args.custom_rollout_log_function_path is not None:
         custom_log_func = load_function(args.custom_rollout_log_function_path)
         if custom_log_func(rollout_id, args, samples, rollout_extra_metrics, rollout_time):
@@ -264,11 +267,7 @@ def log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_t
         return
 
     log_dict = {**(rollout_extra_metrics or {})}
-    if fully_async_metrics_enabled(args):
-        log_dict.pop("_dropped_samples", None)
-    log_dict |= dict_add_prefix(
-        compute_staleness_metrics(samples, getattr(args, "_rollout_weight_version", None)), "rollout/"
-    )
+    log_dict |= dict_add_prefix(compute_staleness_metrics(samples, weight_version), "rollout/")
     log_dict |= dict_add_prefix(compute_metrics_from_samples(args, samples), "rollout/")
     log_dict |= dict_add_prefix(compute_perf_metrics_from_samples(args, samples, rollout_time), "perf/")
     logger.info(f"perf {rollout_id}: {log_dict}")

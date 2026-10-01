@@ -5,8 +5,8 @@ from typing import Any
 import numpy as np
 import torch
 
+from slime.data.tensor import TensorRef, materialize_tensor_refs
 from slime.utils.routed_experts import validate_routed_experts_value
-from slime.utils.tensor_store import DiskTensorRef, retain_debug_tensor_refs
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ def tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:
     for key, dtype in _ROLLOUT_DATA_TENSOR_DTYPES.items():
         if key in rollout_data:
             rollout_data[key] = [
-                value if isinstance(value, DiskTensorRef) else _cpu_tensor(value, dtype=dtype)
+                value if isinstance(value, TensorRef) else _cpu_tensor(value, dtype=dtype)
                 for value in rollout_data[key]
             ]
 
@@ -61,7 +61,7 @@ def tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:
 
 
 def validate_rollout_routed_experts_for_replay(
-    routed_experts: list[torch.Tensor | DiskTensorRef],
+    routed_experts: list[torch.Tensor | TensorRef],
     args,
     expected_rows: list[int] | None = None,
 ) -> None:
@@ -111,8 +111,15 @@ def validate_rollout_id_annotated(node, depth=0):
 
 
 def load_debug_rollout_data(path_template, *, rollout_id: int, subsample_ratio=None) -> list[Sample]:
-    data = torch.load(path_template.format(rollout_id=rollout_id), weights_only=False)["samples"]
-    data = [Sample.from_dict(sample) for sample in data]
+    path = path_template.format(rollout_id=rollout_id)
+    if path.endswith(".straw.json"):
+        from slime.data.archive import RolloutArchive
+
+        with RolloutArchive(path) as archive:
+            data = archive.load_samples()
+    else:
+        data = torch.load(path, weights_only=False)["samples"]
+        data = [Sample.from_dict(sample) for sample in data]
     if subsample_ratio is not None:
         original_num_rows = len(data)
         rough_subsample_num_rows = int(original_num_rows * subsample_ratio)
@@ -126,7 +133,9 @@ def load_debug_rollout_data(path_template, *, rollout_id: int, subsample_ratio=N
     return data
 
 
-def save_debug_rollout_data(path_template, data, *, rollout_id: int, evaluation: bool) -> None:
+def save_debug_rollout_data(
+    path_template, data, *, rollout_id: int, evaluation: bool, args=None, reference=None
+) -> None:
     if path_template is None:
         return
 
@@ -134,11 +143,19 @@ def save_debug_rollout_data(path_template, data, *, rollout_id: int, evaluation:
     logger.info(f"Save debug rollout data to {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
 
+    if str(path).endswith(".straw.json"):
+        from slime.data.archive import RolloutArchive
+
+        samples = [sample for info in data.values() for sample in info["samples"]] if evaluation else data
+        RolloutArchive.save(
+            path, samples, rollout_id=rollout_id, evaluation=evaluation, args=args, reference=reference
+        )
+        return
+
     if evaluation:
         samples = [sample.to_dict() for info in data.values() for sample in info["samples"]]
     else:
         samples = [sample.to_dict() for sample in data]
 
     dump_data = {"rollout_id": rollout_id, "samples": samples}
-    retain_debug_tensor_refs(dump_data, path)
-    torch.save(dump_data, path)
+    torch.save(materialize_tensor_refs(dump_data), path)
