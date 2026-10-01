@@ -55,7 +55,13 @@ class _FakeEngine:
 
 
 def _install_fake_deps(monkeypatch):
-    dist_state = types.SimpleNamespace(rank=0, world_size=2, gathered=None, local_object=None)
+    dist_state = types.SimpleNamespace(
+        rank=0,
+        world_size=2,
+        gathered=None,
+        local_object=None,
+        broadcast_value=None,
+    )
 
     slime_pkg = types.ModuleType("slime")
     slime_pkg.__path__ = [str(REPO_ROOT / "slime")]
@@ -71,6 +77,7 @@ def _install_fake_deps(monkeypatch):
     accelerator_mod.device = lambda: "cuda:0"
     accelerator_mod.current_device = lambda: "cuda:0"
     accelerator_mod.ipc_collect = lambda: None
+    accelerator_mod.empty_cache = lambda: None
 
     dist_mod = types.ModuleType("torch.distributed")
 
@@ -79,9 +86,17 @@ def _install_fake_deps(monkeypatch):
         if object_gather_list is not None:
             object_gather_list[:] = dist_state.gathered(obj)
 
+    def broadcast_object_list(status, src, group):
+        assert group is not None
+        if dist_state.rank == src:
+            dist_state.broadcast_value = status[0]
+        else:
+            status[0] = dist_state.broadcast_value
+
     dist_mod.get_rank = lambda: dist_state.rank
     dist_mod.get_world_size = lambda group=None: dist_state.world_size
     dist_mod.gather_object = gather_object
+    dist_mod.broadcast_object_list = broadcast_object_list
 
     torch_mod = types.ModuleType("torch")
     torch_mod.Tensor = object
@@ -95,6 +110,7 @@ def _install_fake_deps(monkeypatch):
 
     ray_mod = types.ModuleType("ray")
     ray_mod.ObjectRef = object
+    ray_mod.get = lambda refs: refs
     ray_actor_mod = types.ModuleType("ray.actor")
     ray_actor_mod.ActorHandle = object
 
@@ -129,8 +145,8 @@ def _install_fake_deps(monkeypatch):
     )
     update_from_distributed_mod.connect_rollout_engines_from_distributed = lambda *args, **kwargs: None
     update_from_distributed_mod.disconnect_rollout_engines_from_distributed = lambda *args, **kwargs: None
+    update_from_distributed_mod.launch_weights_from_distributed = lambda *args, **kwargs: ([], [])
     update_from_distributed_mod.post_process_weights = lambda *args, **kwargs: None
-    update_from_distributed_mod.update_weights_from_distributed = lambda *args, **kwargs: []
 
     monkeypatch.setitem(sys.modules, "slime", slime_pkg)
     monkeypatch.setitem(sys.modules, "slime.backends", slime_backends_pkg)
@@ -226,6 +242,232 @@ def test_source_rank_pads_empty_colocated_bucket_entries(monkeypatch):
             "weight_version": "7",
         }
     ]
+
+
+def test_tensor_credit_window_launches_all_admitted_buckets_before_waiting(monkeypatch):
+    module, _ = _load_update_weight_module(monkeypatch)
+    events = []
+
+    class _Tensor:
+        def __init__(self, size):
+            self.size = size
+
+        def numel(self):
+            return self.size
+
+        def element_size(self):
+            return 1
+
+    class _Handle:
+        def __init__(self, name):
+            self.name = name
+
+        def wait(self):
+            events.append(("wait", self.name))
+
+    updater = object.__new__(module.UpdateWeightFromTensor)
+    updater._weight_sync_credit = module.WeightSyncCreditController(
+        max_inflight_buckets=2,
+        max_inflight_bytes=10,
+    )
+    updater._weight_sync_credit.begin_version(4)
+    updater._weight_bucket_bytes = lambda bucket: sum(tensor.numel() for _, tensor in bucket)
+    updater._ipc_gather_group = None
+    updater._ipc_gather_src = None
+    updater.rank = 0
+
+    def send_hf_params(bucket):
+        name = bucket[0][0]
+        events.append(("launch", name))
+        return [f"ref-{name}"], [_Handle(name)], object()
+
+    updater._send_hf_params = send_hf_params
+    module.ray.get = lambda refs: events.append(("get", refs[0]))
+    buckets = [[("b0", _Tensor(6))], [("b1", _Tensor(4))], [("b2", _Tensor(5))]]
+
+    updater._send_weight_bucket_windows(iter(buckets))
+    updater._weight_sync_credit.commit_version(4)
+
+    assert events == [
+        ("launch", "b0"),
+        ("launch", "b1"),
+        ("wait", "b0"),
+        ("get", "ref-b0"),
+        ("wait", "b1"),
+        ("get", "ref-b1"),
+        ("launch", "b2"),
+        ("wait", "b2"),
+        ("get", "ref-b2"),
+    ]
+    assert buckets == [[], [], []]
+
+
+def test_tensor_byte_credit_uses_the_largest_trainer_rank_bucket(monkeypatch):
+    module, _ = _load_update_weight_module(monkeypatch)
+
+    class _Tensor:
+        def numel(self):
+            return 5
+
+        def element_size(self):
+            return 1
+
+    class _Scalar:
+        def __init__(self, value):
+            self.value = value
+
+        def item(self):
+            return self.value
+
+    updater = object.__new__(module.UpdateWeightFromTensor)
+    updater._weight_sync_credit = module.WeightSyncCreditController(max_inflight_bytes=16)
+    monkeypatch.setattr(module.torch, "int64", "int64", raising=False)
+    monkeypatch.setattr(module.torch, "tensor", lambda value, **_: _Scalar(value), raising=False)
+    monkeypatch.setattr(module.dist, "ReduceOp", types.SimpleNamespace(MAX="max"), raising=False)
+
+    def all_reduce(value, *, op, group):
+        assert op == "max"
+        assert group is not None
+        value.value = 12
+
+    monkeypatch.setattr(module.dist, "all_reduce", all_reduce, raising=False)
+
+    assert updater._weight_bucket_bytes([("local", _Tensor())]) == 12
+
+
+def test_colocated_source_broadcasts_load_failure_before_credit_release(monkeypatch):
+    module, dist_state = _load_update_weight_module(monkeypatch)
+    error = RuntimeError("engine load failed")
+    updater = object.__new__(module.UpdateWeightFromTensor)
+    updater.rank = 0
+    updater._ipc_gather_src = 0
+    updater._ipc_gather_group = object()
+    updater._weight_sync_credit = module.WeightSyncCreditController(max_inflight_buckets=1)
+    updater._weight_sync_credit.begin_version(6)
+    reservation = updater._weight_sync_credit.reserve(8)
+    assert reservation is not None
+    updater._weight_sync_credit.mark_launched(
+        reservation,
+        transport_bytes=8,
+        staging_bytes=16,
+        consumer_objects=1,
+    )
+    module.ray.get = lambda _refs: (_ for _ in ()).throw(error)
+
+    with pytest.raises(RuntimeError, match="engine load failed") as raised:
+        updater._wait_for_bucket_completion(reservation, [], ["engine-ref"])
+    assert raised.value is error
+    assert dist_state.broadcast_value == "RuntimeError: engine load failed"
+    assert updater._weight_sync_credit.snapshot.inflight_buckets == 1
+    assert updater._weight_sync_credit.snapshot.pending_consumer_objects == 1
+
+    updater._weight_sync_credit.fail_version(6, error)
+    with pytest.raises(RuntimeError, match="cannot commit failed weight version"):
+        updater._weight_sync_credit.commit_version(6)
+
+
+def test_colocated_non_source_observes_source_failure(monkeypatch):
+    module, dist_state = _load_update_weight_module(monkeypatch)
+    dist_state.rank = 1
+    dist_state.broadcast_value = "RuntimeError: engine load failed"
+    updater = object.__new__(module.UpdateWeightFromTensor)
+    updater.rank = 1
+    updater._ipc_gather_src = 0
+    updater._ipc_gather_group = object()
+    updater._weight_sync_credit = module.WeightSyncCreditController(max_inflight_buckets=1)
+    updater._weight_sync_credit.begin_version(6)
+    reservation = updater._weight_sync_credit.reserve(8)
+    assert reservation is not None
+    updater._weight_sync_credit.mark_launched(
+        reservation,
+        transport_bytes=8,
+        staging_bytes=16,
+        consumer_objects=0,
+    )
+
+    with pytest.raises(RuntimeError, match="consumer failed on engine source rank"):
+        updater._wait_for_bucket_completion(reservation, [], [])
+    assert updater._weight_sync_credit.snapshot.inflight_buckets == 1
+    assert updater._weight_sync_credit.snapshot.transport_outstanding_bytes == 8
+
+
+def _make_empty_update_updater(module, events, continue_result="continue-ref"):
+    class _EventRemote:
+        def __init__(self, name, result):
+            self.name = name
+            self.result = result
+
+        def remote(self):
+            events.append(self.name)
+            return self.result
+
+    colocated_engine = types.SimpleNamespace(
+        pause_generation=_EventRemote("pause", "pause-ref"),
+        flush_cache=_EventRemote("flush", "flush-ref"),
+        continue_generation=_EventRemote("continue", continue_result),
+    )
+    distributed_engine = types.SimpleNamespace(
+        pause_generation=_EventRemote("pause-distributed", "pause-distributed-ref"),
+        flush_cache=_EventRemote("flush-distributed", "flush-distributed-ref"),
+        continue_generation=_EventRemote("continue-distributed", "continue-distributed-ref"),
+    )
+    updater = object.__new__(module.UpdateWeightFromTensor)
+    updater.rank = 0
+    updater.weight_version = 0
+    updater.rollout_engines = [colocated_engine]
+    updater._all_rollout_engines = [colocated_engine, distributed_engine]
+    updater.quantization_config = None
+    updater._weight_sync_credit = module.WeightSyncCreditController(max_inflight_buckets=1)
+    updater.weights_getter = lambda: {}
+    updater._expert_transfer_plan = []
+    updater._non_expert_param_info_buckets = None
+    updater._full_param_info_buckets = ()
+    updater._hf_weight_iterator = types.SimpleNamespace(get_hf_weight_chunks=lambda *args, **kwargs: iter(()))
+    updater.update_weight_metrics = {}
+    return updater
+
+
+def test_tensor_version_commits_only_after_consumers_resume(monkeypatch):
+    module, _ = _load_update_weight_module(monkeypatch)
+    events = []
+    updater = _make_empty_update_updater(module, events)
+    module.dist.barrier = lambda **_: events.append("barrier")
+    original_commit = updater._weight_sync_credit.commit_version
+
+    def commit_version(version):
+        assert "continue" in events
+        events.append("commit")
+        original_commit(version)
+
+    updater._weight_sync_credit.commit_version = commit_version
+    updater.update_weights()
+
+    assert events[-1] == "commit"
+    assert "continue-distributed" in events
+    assert updater._weight_sync_credit.snapshot.active_version is None
+    assert updater.update_weight_metrics["perf/update_weights_sync_seconds"] >= 0
+
+
+def test_tensor_resume_failure_poisons_version(monkeypatch):
+    module, _ = _load_update_weight_module(monkeypatch)
+    events = []
+    updater = _make_empty_update_updater(module, events, continue_result="failed-ref")
+    module.dist.barrier = lambda **_: events.append("barrier")
+    error = RuntimeError("resume failed")
+
+    def ray_get(refs):
+        if "failed-ref" in refs:
+            raise error
+        return refs
+
+    module.ray.get = ray_get
+    with pytest.raises(RuntimeError, match="resume failed") as raised:
+        updater.update_weights()
+    assert raised.value is error
+    assert updater._weight_sync_credit.snapshot.active_version == 1
+    assert updater._weight_sync_credit.snapshot.failed_reason == "RuntimeError: resume failed"
+    with pytest.raises(RuntimeError, match="cannot commit failed weight version"):
+        updater._weight_sync_credit.commit_version(1)
 
 
 if __name__ == "__main__":
