@@ -92,6 +92,8 @@ slime 被当作 RL 基础设施来开发，因为“脚本能跑起来”远远�
 - **rollout (SGLang + router)**：生成新数据（含 reward/verifier），存储至 Data Buffer；通过 custom generate 可以在其上叠加 multi-turn loop、tool call、environment/sandbox 交互以及 verifier-based reward；
 - **data buffer**：桥梁模块，管理 prompt 初始化、自定义数据与 rollout 生成方法（包括以同一套接口产出 sample 的 agentic workflow）。
 
+默认载荷传输为 Ray `object-store`。选择 `--rollout-data-transport straw` 后，通过 [straw](https://github.com/zhuzilin/straw) 在 JuiceFS 共享存储上持久化 prompt 任务、rollout continuation 和训练 batch。Ray 传递控制消息与引用，生成和训练进程直接并行读写打包载荷。详见 [straw 使用与恢复指南](docs/zh/advanced/straw.md)。
+
 ## 快速开始
 
 有关环境配置、数据准备、训练启动和关键代码分析的完整快速开始指南，请参考：

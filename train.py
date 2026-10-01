@@ -1,5 +1,6 @@
 import ray
 
+from slime.data.checkpoint import save_checkpoint
 from slime.observability.logging_utils import configure_logger, finish_tracking, init_tracking
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
@@ -17,7 +18,7 @@ def _update_actor_weights(actor_model, rollout_manager) -> None:
         ray.get(rollout_manager.after_weight_update.remote(succeeded=succeeded))
 
 
-def train(args):
+def train(args, restore_plan=None):
     configure_logger()
     release_train = args.release_train
 
@@ -27,7 +28,7 @@ def train(args):
 
     # create the rollout manager, with sglang engines inside.
     # need to initialize rollout manager first to calculate num_rollout
-    rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"])
+    rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"], restore_plan=restore_plan)
 
     actor_model, critic_model = create_training_models(args, pgs, rollout_manager)
 
@@ -79,22 +80,32 @@ def train(args):
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
 
+        # Runtime completion releases queue capacity, without claiming that the
+        # model/optimizer or this data progress have a durable joint checkpoint.
+        ray.get(rollout_manager.training_completed.remote(rollout_id))
+
         if release_train or should_run_periodic_action(
             rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout
         ):
-            force_sync = release_train or rollout_id == args.num_rollout - 1
-            if actor_trains:
-                actor_model.save_model(rollout_id, force_sync=force_sync)
-            if args.use_critic:
-                critic_model.save_model(rollout_id, force_sync=force_sync)
-            ray.get(rollout_manager.save.remote(rollout_id))
-
-        ray.get(rollout_manager.cleanup_rollout_data.remote(rollout_id))
+            save_checkpoint(
+                args,
+                rollout_id,
+                actor_model,
+                critic_model,
+                rollout_manager,
+                actor_trains=actor_trains,
+                restore_plan=restore_plan,
+            )
 
         offload_train(actor_trains)
         if args.offload_rollout and not release_train:
             ray.get(rollout_manager.onload_weights.remote())
+        was_paused = ray.get(rollout_manager.pause_rollout_admission.remote())
         _update_actor_weights(actor_model, rollout_manager)
+        # Final evaluation uses the synchronized engines directly. Keep training
+        # producers paused when no later rollout will consume their new work.
+        if rollout_id + 1 < args.num_rollout:
+            ray.get(rollout_manager.resume_rollout_admission.remote(was_paused))
 
         if args.offload_rollout:
             ray.get(rollout_manager.onload_kv.remote())
@@ -107,5 +118,5 @@ def train(args):
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    train(args)
+    args, restore_plan = parse_args(return_restore_plan=True)
+    train(args, restore_plan)

@@ -194,3 +194,7 @@ glm/
 _examples_synced/
 .env
 .DS_Store
+
+# Local straw verification output and cross-project coordination
+/benchmark-results/
+/STRAW_COORDINATION.md

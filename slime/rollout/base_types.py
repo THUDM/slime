@@ -1,13 +1,22 @@
-from dataclasses import dataclass
-from typing import Any
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 from slime.utils.types import Sample
+
+if TYPE_CHECKING:
+    from slime.data.transport import DiskPayloadRef
 
 
 @dataclass
 class RolloutFnTrainOutput:
-    samples: list[list[Sample]]
+    # Accept Sample groups or a straw manifest referencing the selected batch.
+    samples: list[list[Sample]] | DiskPayloadRef
     metrics: dict[str, Any] = None
+    on_accepted: Callable[[], None] | None = field(default=None, repr=False, compare=False)
+    sample_refs: list[list[DiskPayloadRef]] | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -17,10 +26,79 @@ class RolloutFnEvalOutput:
 
 
 def call_rollout_fn(fn, *args, evaluation: bool, **kwargs):
+    from slime.data.transport import DiskPayloadRef, RawRolloutRef
+
     output = fn(*args, **kwargs, evaluation=evaluation)
+    if isinstance(output, RawRolloutRef):
+        if evaluation:
+            raise TypeError("An accepted training collection cannot be used as evaluation output")
+        return output
 
-    # compatibility for legacy version
-    if not isinstance(output, (RolloutFnTrainOutput, RolloutFnEvalOutput)):
-        output = RolloutFnEvalOutput(data=output) if evaluation else RolloutFnTrainOutput(samples=output)
+    if evaluation:
+        if isinstance(output, RolloutFnEvalOutput):
+            return output
+        if isinstance(output, dict):
+            return RolloutFnEvalOutput(data=output)
+    else:
+        if isinstance(output, RolloutFnTrainOutput):
+            if not isinstance(output.samples, (list, DiskPayloadRef)):
+                raise TypeError("Training output must contain Samples or a supported rollout reference")
+            return output
+        if isinstance(output, (list, DiskPayloadRef)):
+            return RolloutFnTrainOutput(samples=output)
+    raise TypeError(f"Unsupported rollout output: {type(output).__name__}")
 
-    return output
+
+def finalize_rollout_groups(args, rollout_id, groups, metrics=None, *, controller=None):
+    """Order selected groups, run the batch hook once, and publish the batch."""
+    from slime.data.transport import RolloutGroupRef, load_rollout_samples, pack_rollout_payload
+    from slime.utils.misc import load_function
+
+    groups.sort(
+        key=lambda group: (group.index if isinstance(group, RolloutGroupRef) else next(iter_samples(group)).index) or 0
+    )
+    dropped = set()
+    incoming = set()
+    if args.rollout_data_transport != "straw":
+        incoming = {
+            sample._queue_receipt["position"] for sample in iter_samples(groups) if hasattr(sample, "_queue_receipt")
+        }
+    if args.rollout_sample_filter_path is not None:
+        # A custom batch hook can mutate arbitrary Sample fields. Its result
+        # must be serialized again; without a hook, retain existing group refs.
+        groups = load_rollout_samples(groups)
+        incoming = {
+            sample._queue_receipt["position"] for sample in iter_samples(groups) if hasattr(sample, "_queue_receipt")
+        }
+        load_function(args.rollout_sample_filter_path)(args, groups)
+        selected = {
+            sample._queue_receipt["position"] for sample in iter_samples(groups) if hasattr(sample, "_queue_receipt")
+        }
+        dropped = incoming - selected
+    samples = pack_rollout_payload(groups, args, rollout_id) if args.rollout_data_transport == "straw" else groups
+    if dropped and args.rollout_data_transport == "straw":
+        import ray
+
+        decision = pack_rollout_payload(
+            {"positions": sorted(dropped), "reason": "rollout_sample_filter", "output": samples}, args, rollout_id
+        )
+        ray.get(controller.record_dispositions.remote(decision.manifest))
+    elif incoming and args.rollout_data_transport != "straw":
+        import ray
+
+        decision = pack_rollout_payload(
+            {"positions": sorted(incoming), "reason": "legacy object-store delivery after batch filter"},
+            args,
+            rollout_id,
+        )
+        ray.get(controller.record_dispositions.remote(decision.manifest))
+    return RolloutFnTrainOutput(samples=samples, metrics=metrics)
+
+
+def iter_samples(value):
+    """Visit Sample leaves without changing custom generation's nested shape."""
+    if isinstance(value, Sample):
+        yield value
+    else:
+        for child in value:
+            yield from iter_samples(child)

@@ -91,6 +91,8 @@ Useful engineering docs:
 - **rollout (SGLang + router)**: Generates new data (including rewards/verifier outputs) and stores it in the Data Buffer. Custom generate functions can wrap this with multi-turn loops, tool calls, environment/sandbox interaction, and verifier-based reward.
 - **data buffer**: A bridge module that manages prompt initialization, custom data, and rollout generation methods (including agentic workflows that produce samples through the same interface).
 
+The default payload transport is Ray `object-store`. Selecting `--rollout-data-transport straw` uses [straw](https://github.com/zhuzilin/straw) for persistent prompt tasks, rollout continuations and training batches on shared JuiceFS storage. Ray carries control messages and references; generation and training processes read and write packed payloads directly. See the [straw usage and recovery guide](docs/en/advanced/straw.md).
+
 ## Quick Start
 
 For a comprehensive quick start guide covering environment setup, data preparation, training startup, and key code analysis, please refer to:

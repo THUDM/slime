@@ -32,7 +32,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from slime.rollout.base_types import RolloutFnTrainOutput
+from slime.data.transport import discard_rollout_group, publish_rollout_async
+from slime.rollout.base_types import RolloutFnTrainOutput, finalize_rollout_groups
 from slime.rollout.filter_hub.base_types import call_dynamic_filter
 from slime.rollout.sglang_rollout import GenerateState, generate_and_rm_group
 from slime.utils.async_utils import run
@@ -412,8 +413,8 @@ async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> Rollout
         worker.queue_size(),
     )
 
-    collected: dict[int, list[Sample]] = {}
-    dropped: list[list[Sample]] = []
+    collected = []
+    dropped_count = 0
     drop_reasons: dict[str, int] = {}
     dynamic_filter = (
         load_function(args.dynamic_sampling_filter_path)
@@ -432,23 +433,27 @@ async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> Rollout
             limit=target - len(collected),
             max_policy_version_lag=args.max_policy_version_lag,
         ):
-            gid, group = record.gid, record.group
+            group = record.group
             drained += 1
-            if not filters_enabled:
-                collected[gid] = group
-                continue
-
             verdict = call_dynamic_filter(dynamic_filter, args, group)
             if verdict.keep:
-                collected[gid] = group
+                worker.record_processed_groups([group])
+                if args.rollout_data_transport == "straw":
+                    group = await publish_rollout_async(
+                        group, args, rollout_id, group=True, controller=getattr(data_buffer, "controller", None)
+                    )
+                collected.append(group)
                 continue
 
+            await asyncio.to_thread(
+                discard_rollout_group,
+                group,
+                args,
+                verdict.reason or "dynamic_filter",
+                controller=getattr(data_buffer, "controller", None),
+            )
             reason = verdict.reason or "dynamic_filter"
-            for sample in group:
-                sample.remove_sample = True
-                if sample.metadata is not None:
-                    sample.metadata["removed_reason"] = reason
-            dropped.append(group)
+            dropped_count += 1
             drop_reasons[reason] = drop_reasons.get(reason, 0) + 1
 
         if not drained:
@@ -461,41 +466,39 @@ async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> Rollout
                 rollout_id,
                 len(collected),
                 target,
-                len(dropped),
+                dropped_count,
                 worker.queue_size(),
                 now - started,
             )
             last_log = now
 
-    # Order by sample.index for determinism (slime convention).
-    def _key(group: list[Sample]) -> int:
-        for s in group:
-            idx = getattr(s, "index", None)
-            if idx is not None:
-                return int(idx)
-        return 0
-
-    out = sorted(collected.values(), key=_key)
-    dropped = sorted(dropped, key=_key)
-    if (filter_path := getattr(args, "rollout_sample_filter_path", None)) is not None:
-        load_function(filter_path)(args, out)
     logger.info(
         "fully-async rollout %d: done in %.1fs, kept=%d dropped=%d (%s), queue_left=%d",
         rollout_id,
         time.time() - started,
-        len(out),
-        len(dropped),
+        len(collected),
+        dropped_count,
         drop_reasons,
         worker.queue_size(),
     )
-    worker.record_processed_groups(out)
-    if not filters_enabled:
-        return out
     metrics = {f"rollout/dynamic_filter/drop_{reason}": count for reason, count in drop_reasons.items()}
-    metrics["rollout/dynamic_filter/dropped_groups"] = len(dropped)
-    metrics["rollout/dynamic_filter/dropped_ratio"] = len(dropped) / (len(out) + len(dropped))
-    metrics["_dropped_samples"] = dropped
-    return RolloutFnTrainOutput(samples=out, metrics=metrics)
+    metrics["rollout/dynamic_filter/dropped_groups"] = dropped_count
+    metrics["rollout/dynamic_filter/dropped_ratio"] = dropped_count / (len(collected) + dropped_count)
+    if args.rollout_sample_filter_path is not None:
+        # Preserve the calling thread/context of custom batch hooks.
+        output = finalize_rollout_groups(
+            args, rollout_id, collected, metrics, controller=getattr(data_buffer, "controller", None)
+        )
+    else:
+        output = await asyncio.to_thread(
+            finalize_rollout_groups,
+            args,
+            rollout_id,
+            collected,
+            metrics if filters_enabled else None,
+            controller=getattr(data_buffer, "controller", None),
+        )
+    return output if filters_enabled or args.rollout_data_transport == "straw" else output.samples
 
 
 def generate_rollout_fully_async(args, rollout_id, data_buffer, evaluation: bool = False):
@@ -503,6 +506,17 @@ def generate_rollout_fully_async(args, rollout_id, data_buffer, evaluation: bool
 
     if evaluation:
         raise ValueError("fully-async rollout doesn't support evaluation mode")
+    if getattr(args, "rollout_data_transport", "object-store") == "straw":
+        from slime.data.queue_data_source import QueueDataSource
+
+        if isinstance(data_buffer, QueueDataSource):
+            from slime.rollout.fully_async_distributed import DistributedRollout
+
+            worker = data_buffer.consumers.get("fully_async")
+            if worker is None:
+                worker = DistributedRollout(args, data_buffer)
+                data_buffer.register_consumer("fully_async", worker)
+            return worker.generate(rollout_id, prefetch=worker.capacity)
     result = run(_generate_rollout_async(args, rollout_id, data_buffer))
     with _worker_lock:
         worker = _global_worker
