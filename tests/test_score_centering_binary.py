@@ -58,12 +58,18 @@ def test_binary_roundtrip_and_sample_resume():
         ([[-1, 2]], [[-1.0, -1.0]]),
         ([[1, 2]], [[float("nan"), -1.0]]),
         ([[1, 2]], [[0.1, -1.0]]),
-        ([[1, 2]], [[-0.1, -0.1]]),
     ],
 )
 def test_binary_rejects_invalid_distribution(ids, logps):
     with pytest.raises(ValueError):
         extract_sampler_topk(binary_meta(ids, logps), 1, 2)
+
+
+def test_binary_does_not_recheck_sampler_normalization():
+    # Normalization is the sampler's responsibility; decoding preserves its values.
+    ids, logps = extract_sampler_topk(binary_meta([[1, 2]], [[-0.1, -0.1]]), 1, 2)
+    np.testing.assert_array_equal(ids, [[1, 2]])
+    np.testing.assert_array_equal(logps, np.asarray([[-0.1, -0.1]], dtype=np.float32))
 
 
 def test_binary_rejects_missing_or_misaligned_rows():

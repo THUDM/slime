@@ -238,6 +238,14 @@ class UpdateWeightFromTensor:
         for request in dist.batch_isend_irecv(p2p_ops) if p2p_ops else ():
             request.wait()
 
+        # NCCL Work.wait() only orders the current CUDA stream. A fast rank
+        # must not enter quantization's CUDA allocations/copies while peers
+        # are still issuing grouped P2P calls: those host calls can synchronize
+        # with the unfinished transfer and prevent its peers from launching.
+        # Include ranks without local transfers so every batch has one fence.
+        dist.barrier(group=get_gloo_group())
+        torch.cuda.synchronize()
+
         hf_named_tensors = []
         for expert_param, tensor in local_params:
             hf_named_tensors.extend(
