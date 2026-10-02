@@ -221,9 +221,6 @@ class RolloutManager:
         return self.batch_builder.split_by_dp(data)
 
     def eval(self, rollout_id):
-        if self.args.debug_train_only:
-            # if debug train only, we don't generate evaluation data
-            return
         set_current_rollout_id(rollout_id)
         self.health_monitoring_resume()
 
