@@ -28,10 +28,12 @@ except ImportError:
         ProcessorMixin=object,
     )
 
+from slime.data.data_source import pop_oldest
 from slime.rollout import sglang_rollout
 from slime.rollout import sglang_streaming_rollout as streaming
 from slime.rollout.streaming_utils import SGLangStreamAccumulator
 from slime.utils.async_utils import AsyncPacer
+from slime.utils.staleness import sample_staleness
 from slime.utils.types import Sample
 
 NUM_GPUS = 0
@@ -329,7 +331,7 @@ def test_server_abort_keeps_last_observed_prefix(monkeypatch):
 
     async def lines():
         state.aborted = True
-        yield "data: " + json.dumps(_chunk("a", [[-0.1, 11, None]], 1))
+        yield "data: " + json.dumps(_chunk("a", [[-0.1, 11, None]], 1, weight_version="2"))
         raise AssertionError("server-aborted stream should stop after the next observed chunk")
 
     _patch_streaming(monkeypatch, state, _http_stream(lines=lines))
@@ -343,6 +345,10 @@ def test_server_abort_keeps_last_observed_prefix(monkeypatch):
 
     assert result.status == Sample.Status.ABORTED
     assert (result.tokens, result.rollout_log_probs, result.response) == ([1, 2, 11], [-0.1], "a")
+    assert result.weight_versions == ["2"]
+    assert sample_staleness(result, current_weight_version=3) == 1
+    newer_group = [Sample(weight_versions=["3"])]
+    assert pop_oldest(None, None, [newer_group, [result]], 1) == [[result]]
     assert not state.cancellable_tasks
 
 

@@ -474,6 +474,13 @@ class Sample:
                         dim=0,
                     )
 
+        # Streaming chunks can be retained after a request abort, without ever
+        # receiving terminal metadata. Record the version of their tokens now.
+        if new_token_count > 0 and "weight_version" in meta_info:
+            version = meta_info["weight_version"]
+            if not self.weight_versions or self.weight_versions[-1] != version:
+                self.weight_versions.append(version)
+
         if not update_terminal_info or "finish_reason" not in meta_info:
             return
 
@@ -483,9 +490,6 @@ class Sample:
 
         # Collect prefix cache statistics
         self.prefix_cache_info.add(meta_info=meta_info)
-
-        if new_token_count > 0 and "weight_version" in meta_info:
-            self.weight_versions.append(meta_info["weight_version"])
 
         match meta_info["finish_reason"]["type"]:
             case "length":
