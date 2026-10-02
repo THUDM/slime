@@ -210,7 +210,7 @@ def validate_sampler_top_p(ids, offsets, logps, count, loss_mask=None, tokens=No
     trusted = all(isinstance(value, TensorRef) and value.validated for value in (ids, offsets, logps))
     if trusted:
         # Immutable, previously checked captures need no payload reads when
-        # republishing a collection or a cross-rollout buffer snapshot.
+        # republishing without new sampled-token metadata to compare.
         if (
             len(ids.shape) != 1
             or logps.shape != ids.shape
@@ -229,7 +229,8 @@ def validate_sampler_top_p(ids, offsets, logps, count, loss_mask=None, tokens=No
             raise ValueError("Top-p loss mask must align with the response length.")
         if tokens is not None and (shape(tokens) != (count,) or shape(sampled_logps) != (count,)):
             raise ValueError("Top-p sampled tokens and logprobs must align with the response length.")
-        return
+        if tokens is None:
+            return
     offsets = np.asarray(offsets.load() if isinstance(offsets, TensorRef) else offsets)
     if (
         len(ids.shape) != 1

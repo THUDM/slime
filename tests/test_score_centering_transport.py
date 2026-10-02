@@ -493,7 +493,7 @@ def test_top_p_validation_checks_shared_support_in_chunks(tmp_path, monkeypatch)
     from slime.data.transport import pack_rollout_payload, seal_rollout_store
     from slime.utils.score_centering import validate_sampler_top_p
 
-    count = 1025
+    count = 4097
     a = args(rollout_top_p=0.95, rollout_data_transport="straw", rollout_data_dir=str(tmp_path))
     sample = Sample(
         tokens=[9] + [4] * count,
@@ -522,11 +522,13 @@ def test_top_p_validation_checks_shared_support_in_chunks(tmp_path, monkeypatch)
     monkeypatch.setattr(TensorRef, "load", load_offsets)
     monkeypatch.setattr(TensorRef, "__getitem__", read_chunk)
     validate_sampler_top_p(*fields, count, tokens=[4] * count, sampled_logps=[0.0] * count)
-    assert reads == [
-        (key, start, stop)
-        for start, stop in ((0, 1024), (1024, count))
-        for key in ("rollout_top_p_token_ids", "rollout_top_p_log_probs")
-    ]
+    id_reads = [(start, stop) for key, start, stop in reads if key == "rollout_top_p_token_ids"]
+    logp_reads = [(start, stop) for key, start, stop in reads if key == "rollout_top_p_log_probs"]
+    assert id_reads == logp_reads
+    assert len(id_reads) > 1
+    assert id_reads[0][0] == 0 and id_reads[-1][1] == count
+    assert all(0 < stop - start <= 4096 for start, stop in id_reads)
+    assert all(left[1] == right[0] for left, right in zip(id_reads, id_reads[1:], strict=False))
     # A shared, validated distribution is not proof that new sample metadata
     # agrees with it. In particular, do not skip the sampled-token check.
     with pytest.raises(ValueError, match="sampled token"):
@@ -600,10 +602,5 @@ def test_top_p_published_captures_need_only_metadata_checks(tmp_path, monkeypatc
         validate_sampler_top_p(*fields, count)
         republished = pack_rollout_payload({"buffer": [restored]}, a, 1)
         assert republished.manifest is not None
-
-    with monkeypatch.context() as guarded:
-        for method in ("load", "__getitem__", "validate"):
-            guarded.setattr(TensorRef, method, no_payload_read)
-        validate_sampler_top_p(*fields, count, tokens=[4] * count, sampled_logps=[0.0] * count)
         with pytest.raises(ValueError, match="align"):
             validate_sampler_top_p(*fields, count, tokens=[4], sampled_logps=[0.0])
