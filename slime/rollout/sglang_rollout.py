@@ -33,7 +33,7 @@ from slime.utils.types import Sample
 
 from .rm_hub import async_rm, batched_async_rm
 
-__all__ = ["generate_rollout", "get_model_url"]
+__all__ = ["generate_rollout", "generate_turn", "get_model_url"]
 
 logger = logging.getLogger(__name__)
 
@@ -201,10 +201,13 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     images = sample.multimodal_inputs.get("images") if sample.multimodal_inputs else None
     if images:
         payload["image_data"] = [encode_image_for_rollout_engine(image) for image in images]
-        # For single-turn multimodal requests, send text so SGLang expands the
+    if images and not sample.response_length:
+        # A fresh single-turn multimodal request sends text so SGLang expands the
         # image placeholders with its own processor rules.
         payload["text"] = sample.prompt
     else:
+        # Token ids carry the partial response of a resumed sample; for a multimodal
+        # sample they are the processor-expanded prompt ids, as in multi-turn VLM rollouts.
         payload["input_ids"] = prompt_ids
 
     if not sample.tokens:
@@ -253,6 +256,96 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     )
 
     return sample
+
+
+# A weight update aborts the requests in flight and SGLang holds a resent request until the
+# engines continue. These bound the resends of an abort that makes no progress.
+_TURN_RESUME_DELAY = 1.0
+_MAX_STALLED_TURN_RESUMES = 3
+
+
+async def generate_turn(
+    args: Namespace,
+    sample: Sample,
+    sampling_params: dict[str, Any],
+    *,
+    image_data: list[str] | None = None,
+) -> dict[str, Any]:
+    """Generate one model turn after ``sample.tokens`` and append it to ``sample``.
+
+    For custom multi-turn generate functions (``--custom-generate-function-path``):
+    ``sample.tokens`` is the whole context so far, i.e. the prompt, earlier turns and
+    tool or environment tokens appended with ``append_response_tokens(...,
+    trainable=False)``. The turn is appended as trainable tokens with its rollout
+    log-probs, weight versions and, with ``--use-rollout-routing-replay``, the routed
+    experts of every position not captured yet (tool tokens get theirs from this
+    turn's prefill).
+
+    A weight update during fully-async rollout aborts the requests in flight. The turn
+    is then resent with its partial response and the remaining ``max_new_tokens``, so
+    it continues under the new weights and the caller sees one uninterrupted turn,
+    with its earlier turns and environment state untouched. Only an abort from slime's
+    own rollout cancellation (``GenerateState.aborted``), or one that keeps making no
+    progress, is returned, with ``sample.status`` set to ``ABORTED``.
+
+    Returns SGLang's output for the turn: ``text`` covers the whole turn and
+    ``meta_info`` (whose ``finish_reason`` ended the turn) is that of its last request.
+    A stop string split across a resume is not matched; stop token ids are unaffected.
+
+    With routing replay, tool tokens are routed only by the prefill of a later turn, so a
+    trajectory must end on a model turn, not on appended tool tokens.
+    """
+    state = GenerateState(args)
+    url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
+    headers = None
+    if sample.session_id and getattr(args, "router_policy", None) == "consistent_hashing":
+        headers = {"X-SMG-Routing-Key": sample.session_id}
+
+    budget = sampling_params.get("max_new_tokens")
+    text, generated, stalled = "", 0, 0
+    while True:
+        if state.aborted:
+            sample.status = Sample.Status.ABORTED
+            return {"text": text, "meta_info": {"finish_reason": {"type": "abort"}}}
+        params = dict(sampling_params)
+        if budget is not None:
+            params["max_new_tokens"] = budget - generated
+            if params["max_new_tokens"] <= 0:
+                sample.status = Sample.Status.TRUNCATED
+                return {"text": text, "meta_info": {"finish_reason": {"type": "length"}}}
+
+        payload = {"input_ids": list(sample.tokens), "sampling_params": params, "return_logprob": True}
+        if image_data:
+            payload["image_data"] = image_data
+        if args.use_rollout_routing_replay:
+            payload["return_routed_experts"] = True
+            if captured := sample.get_rollout_routed_experts_length():
+                payload["routed_experts_start_len"] = captured
+
+        output = await post(url, payload, headers=headers)
+        meta_info = output["meta_info"]
+        if "routed_experts_start_len" in payload:
+            start = payload["routed_experts_start_len"]
+            if meta_info.setdefault("routed_experts_start_len", start) != start:
+                raise ValueError(f"SGLang routed_experts_start_len differs from the request's {start}")
+        tokens = [item[1] for item in meta_info.get("output_token_logprobs") or []]
+        log_probs = [item[0] for item in meta_info.get("output_token_logprobs") or []]
+        if not tokens:
+            # Nothing to align routes with; the next request covers these positions.
+            meta_info = {key: value for key, value in meta_info.items() if key != "routed_experts"}
+        sample.append_response_tokens(
+            args, tokens=tokens, log_probs=log_probs, trainable=True, meta_info=meta_info, text=output["text"]
+        )
+        text += output["text"]
+        generated += len(tokens)
+
+        if meta_info["finish_reason"]["type"] != "abort" or state.aborted:
+            return {**output, "text": text}
+        stalled = 0 if tokens else stalled + 1
+        if stalled >= _MAX_STALLED_TURN_RESUMES:
+            logger.warning("sample %s: turn aborted %d times without progress, giving up", sample.index, stalled)
+            return {**output, "text": text}
+        await asyncio.sleep(_TURN_RESUME_DELAY)
 
 
 async def _run_request_abortable_generate(
@@ -413,8 +506,13 @@ async def generate_and_rm_group(
 
     group = await asyncio.gather(*tasks)
 
-    # for the rm that need the whole group, we will do the rm here
-    if not state.aborted and args.group_rm:
+    # For the rm that needs the whole group, score it here. Fully-async requeues a group
+    # with an ABORTED member and resumes it later, so only a finished group is scored.
+    if (
+        not state.aborted
+        and args.group_rm
+        and not any(getattr(sample, "status", None) == Sample.Status.ABORTED for sample in group)
+    ):
         with trace_span(group, "group_reward_model"):
             rewards = await batched_async_rm(args, group)
         for sample, reward in zip(group, rewards, strict=False):

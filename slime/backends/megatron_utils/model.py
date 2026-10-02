@@ -196,10 +196,10 @@ def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer)
     # schedule (and ``lr_decay_iters`` defaults to it). With variable per-rollout
     # sample counts (dynamic sampling / filtering / custom step splitter) the
     # *actual* total can drift; the schedule still tracks the true progress via
-    # ``opt_param_scheduler.num_steps`` (samples consumed, also persisted across
-    # resume), so the worst case is the cosine/linear schedule reaches its
-    # plateau slightly early or late. Pass ``--lr-decay-iters`` explicitly if you
-    # need exact decay control.
+    # ``opt_param_scheduler.num_steps`` (``global_batch_size`` per update, also
+    # persisted across resume), so the worst case is the cosine/linear schedule
+    # reaches its plateau slightly early or late. Pass ``--lr-decay-iters``
+    # explicitly if you need exact decay control.
     args.train_iters = args.num_rollout * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
     if args.lr_decay_iters is None:
         args.lr_decay_iters = args.train_iters
@@ -308,11 +308,22 @@ def setup_model_and_optimizer(
         assert config.optimizer == "adam", "Stateless Adam only supports --optimizer adam."
         assert args.no_save_optim, "Stateless Adam does not save Adam moment states. Please set --no-save-optim."
 
+    config_overrides = None  # Megatron's standard overrides: no weight decay on biases and 1-D parameters
+    if args.apply_wd_to_all_params:
+        from megatron.core.optimizer import get_standard_config_overrides
+
+        config_overrides = {
+            key: override
+            for key, override in get_standard_config_overrides(config).items()
+            if "wd_mult" not in override
+        }
+
     optimizer_context = _patch_megatron_adam(StatelessAdam) if args.use_stateless_adam else nullcontext()
     with optimizer_context:
         optimizer = get_megatron_optimizer(
             config=config,
             model_chunks=model,
+            config_overrides=config_overrides,
             use_gloo_process_groups=args.enable_gloo_process_groups,
         )
     if args.use_stateless_adam:
@@ -683,10 +694,10 @@ def train_one_step(
         # Update parameters.
         update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
 
-        # Update learning rate. Use the per-step global_batch_size when dynamic
-        # batching is on so the scheduler's samples-seen counter tracks reality.
+        # Update learning rate: one scheduler iteration per update, also for a
+        # smaller final batch (e.g. an epoch tail under --fully-async-drain-each-epoch).
         assert update_successful
-        opt_param_scheduler.step(increment=step_global_batch_size)
+        opt_param_scheduler.step(increment=args.global_batch_size)
 
     # release grad
     for model_chunk in model:

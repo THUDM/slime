@@ -26,4 +26,8 @@ def compute_staleness_metrics(samples: list[Sample], current_weight_version: int
     if known:
         metrics["staleness/mean"] = sum(known) / len(known)
         metrics["staleness/max"] = max(known)
+    if samples:
+        # A trajectory continued across a weight update carries tokens from several policies.
+        multi_version = sum(len(set(sample.weight_versions or [])) > 1 for sample in samples)
+        metrics["staleness/multi_version_frac"] = multi_version / len(samples)
     return metrics

@@ -265,6 +265,10 @@ jobs:
             },
             {
               "num_gpus": 4,
+              "test_file": "test_qwen2.5_0.5B_flash_reinforce.py"
+            },
+            {
+              "num_gpus": 4,
               "straw": true,
               "test_args": "--transport nccl",
               "test_file": "test_qwen2.5_0.5B_pipeline_rl.py"
@@ -724,6 +728,18 @@ jobs:
               "num_gpus": 0,
               "straw": true,
               "test_file": "test_score_centering_transport.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_flash_reinforce.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_wandb_utils.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_flash_reinforce_agent.py"
             },
             {
               "num_gpus": 0,
@@ -1202,6 +1218,10 @@ jobs:
               "num_gpus": 4,
               "straw": true,
               "test_file": "test_qwen2.5_0.5B_fully_async_short.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_file": "test_qwen2.5_0.5B_flash_reinforce.py"
             },
             {
               "num_gpus": 4,
