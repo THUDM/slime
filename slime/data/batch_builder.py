@@ -204,6 +204,11 @@ class BatchBuilder:
             return self.custom_reward_post_process_func(self.args, samples)
 
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
+        if self.args.advantage_estimator == "flash_reinforce" and self.args.rewards_normalization:
+            # One baseline for the whole rollout batch (n_samples_per_prompt=1 has no prompt group); no std.
+            rewards = torch.tensor(raw_rewards, dtype=torch.float)
+            return raw_rewards, (rewards - rewards.mean()).tolist()
+
         if (
             self.args.advantage_estimator in ["grpo", "gspo", "cispo", "reinforce_plus_plus_baseline"]
             and self.args.rewards_normalization
@@ -425,7 +430,9 @@ class BatchBuilder:
         ``args.global_batch_size`` rollouts so the training-step count per
         rollout is fixed at ``rollout_batch_size * n_samples_per_prompt //
         global_batch_size`` regardless of how many training samples each
-        rollout produced.
+        rollout produced. A rollout with fewer rollouts than one step (e.g. an
+        epoch tail under ``--fully-async-drain-each-epoch``) is trained as one
+        smaller step.
         """
         dp_size = self.train_parallel_config["dp_size"]
         total_lengths = [len(t) for t in data["tokens"]]
@@ -435,7 +442,7 @@ class BatchBuilder:
             self.args,
             self.train_parallel_config,
             total_lengths,
-            global_batch_size=self.args.global_batch_size,
+            global_batch_size=min(self.args.global_batch_size, len(set(data["rollout_ids"]))),
             rollout_indices=data["rollout_ids"],
         )
 

@@ -202,10 +202,11 @@ The recommended contract is to put the source identifier in `metadata["source_na
     - `cispo` ([https://arxiv.org/abs/2506.13585](https://arxiv.org/abs/2506.13585))
     - `reinforce_plus_plus` and `reinforce_plus_plus_baseline` ([https://arxiv.org/abs/2501.03262](https://arxiv.org/abs/2501.03262))
     - `ppo` ([https://arxiv.org/abs/1707.06347](https://arxiv.org/abs/1707.06347))
+    - `flash_reinforce` (FlashREINFORCE, from [NVIDIA molt](https://github.com/NVIDIA-NeMo/labs-molt)); see [FlashREINFORCE](#flashreinforce) below.
 
   Note: On-policy distillation (OPD) is now orthogonal to the advantage estimator. Use `--use-opd` and `--opd-kl-coef` to enable OPD on top of any estimator.
 - `--calculate-per-token-loss`: By default, slime calculates loss on a per-sample basis, i.e., `mean(sum(sample_i) / len(sample_i))`. Enable this flag to calculate loss on a per-token basis, i.e., `sum(sum(sample_i)) / sum(len(sample_i))`.
-- `--use-tis`: Enable this setting to use TIS (Truncated Importance Sampling) (https://fengyao.notion.site/off-policy-rl).
+- `--use-tis`: Enable this setting to use TIS (Truncated Importance Sampling) (https://fengyao.notion.site/off-policy-rl). `--custom-tis-function-path` selects another correction, including the built-in `slime.backends.megatron_utils.loss.icepop_function` and `slime.backends.megatron_utils.loss.binary_kl_trust_region_function` (FlashREINFORCE).
 - `--use-score-centering`: Enable [Score Centering](https://arxiv.org/abs/2609.20807), optionally combined with TIS. See [Score Centering](#score-centering) below.
 
 #### GRPO Algorithm
@@ -289,6 +290,36 @@ Add the following options to an existing RL launch:
 Top-p probabilities stay on CPU with replay IDs/offsets and support partial rollouts, masked tool tokens, DP, TP, and both CP layouts. PD metadata currently holds at most 4096 tokens per step; SC fails if that capacity is exceeded instead of falling back to the sampled token alone. Exact top-p SC does not currently support the Ascend sampler.
 
 Sampler heads survive partial-rollout continuation, masked tool tokens, DP partitioning, microbatch selection, TP and both CP layouts. With the R3 spill hook, they share its file lifetime. Logged metrics include `sc_correction`, `sc_sampler_head_mass`, `sc_train_head_mass` and `sc_importance_weight`.
+
+#### FlashREINFORCE
+
+FlashREINFORCE ([NVIDIA molt](https://github.com/NVIDIA-NeMo/labs-molt)) is critic-free RL with a single rollout per prompt, designed for asynchronous rollout. In slime it is a combination of options:
+
+```bash
+--advantage-estimator flash_reinforce \
+--n-samples-per-prompt 1 \
+--num-steps-per-rollout 1 \
+--use-tis \
+--custom-tis-function-path slime.backends.megatron_utils.loss.binary_kl_trust_region_function \
+--tis-binary-kl-threshold 5e-3 \
+--kl-coef 0 \
+--entropy-coef 0
+```
+
+- `--advantage-estimator flash_reinforce`: The advantage of each sample is its reward minus the mean reward of the whole rollout batch, broadcast to every response token. There are no per-prompt groups, no std normalization and no whitening. With binary rewards this balances positive and negative gradient mass, and a batch whose rewards are all equal produces no update. The policy-gradient objective defaults to `--pg-loss-type reinforce`.
+- `--num-steps-per-rollout 1`: One optimizer step per rollout batch. slime then reuses the training forward as the old log-probs instead of running a separate forward pass. `--kl-coef` other than 0, `--use-rollout-logprobs` and `--get-mismatch-metrics` disable this reuse.
+- `binary_kl_trust_region_function`: Each response token is weighted by its unclipped importance ratio between the trainer and the rollout engine. For each sequence, the binary KL between the rollout and training probabilities of the sampled token is averaged over the loss tokens. A sequence whose mean exceeds `--tis-binary-kl-threshold` contributes no policy gradient but still counts in the loss denominator; its entropy and KL terms are not affected. `--tis-binary-kl-threshold inf` disables the gate. Logged metrics are `tis`, `tis_abs`, `tis_binary_kl` and `tis_seq_reject_frac`.
+- Keep the default per-sample loss (do not set `--calculate-per-token-loss`) and do not set `--normalize-advantages`.
+
+Notes:
+
+- The trust region compares the rollout engine's log-probs with the trainer's, so keep `SGLANG_RETURN_ORIGINAL_LOGPROB` unset.
+- The baseline is a mean over samples, so a custom rollout that returns several samples per trajectory counts that trajectory once per sample. `--custom-reward-post-process-path` replaces the centering.
+- With `--n-samples-per-prompt 1`, dynamic sampling filters that drop zero-std prompt groups, such as `check_reward_nonzero_std`, drop every group.
+- With [fully-async rollout](../_examples_synced/fully_async/README.md), in-flight trajectories continue across weight updates, so one response can contain tokens from several policy versions. The per-token importance weights and the trust region correct for this.
+- To schedule rollouts like molt's asynchronous trainer, add `--fully-async-pool-size`, `--fully-async-max-queued-batches` and `--fully-async-drain-each-epoch` (see the fully-async README). molt's AdamW also decays every parameter, which `--apply-wd-to-all-params` reproduces; Megatron exempts biases and normalization weights by default.
+
+[`examples/flash_reinforce`](../_examples_synced/flash_reinforce/README.md) reproduces NVIDIA molt's DeepSeek-R1-Distill-Qwen-1.5B recipe with fully-async rollout.
 
 ### Advanced Megatron Configuration (--megatron-config-path)
 
