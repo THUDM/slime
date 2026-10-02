@@ -49,6 +49,14 @@ requires separate validation. The other e2e cases retain their Ray object-store
 or NIXL transport coverage. GPU containers install straw in both fixed and
 changed-test jobs.
 
+`test_qwen2.5_0.5B_pipeline_rl.py` runs three real GRPO steps with fully async
+rollout on 4 GPUs. Its probes verify that the same HTTP requests keep generating
+across weight updates, and that policy weights actually change. The fixed
+matrix covers NCCL and full disk weight sync with `--flush-cache-interval 0`,
+plus periodic refresh with NCCL and interval `2`. `test_pipeline_rl.py` checks
+the cache schedule and SGLang control payloads on CPU. These are functional
+checks; they do not measure PipelineRL learning quality or throughput gains.
+
 ### Changed-Test Job
 
 `run-ci-changed` dynamically detects added or modified files under `tests/test_*.py` and `tests/plugin_contracts/test_*.py` relative to `origin/main`.
