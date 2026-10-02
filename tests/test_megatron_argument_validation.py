@@ -248,6 +248,7 @@ def make_slime_validate_args(**overrides):
         normalize_advantages=False,
         use_rollout_logprobs=False,
         use_tis=False,
+        tis_binary_kl_threshold=5e-3,
         get_mismatch_metrics=False,
         custom_tis_function_path=None,
         use_dynamic_batch_size=False,
