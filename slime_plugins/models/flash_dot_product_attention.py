@@ -18,6 +18,7 @@ from megatron.core.transformer.utils import is_layer_window_attention
 from megatron.core.utils import divide
 from torch import Tensor
 
+from slime.utils import accelerator
 from slime_plugins.models.learnable_softmax_attention import learnable_softmax_flash_attn_varlen
 
 
@@ -75,7 +76,7 @@ class FlashDotProductAttention(MegatronModule):
         elif config.softmax_type == "off-by-one":
             self.softmax_offset = torch.zeros(
                 num_heads_per_partition,
-                device=torch.cuda.current_device(),
+                device=accelerator.current_device(),
                 dtype=config.params_dtype,
             )
         elif config.softmax_type == "learnable":
@@ -84,7 +85,7 @@ class FlashDotProductAttention(MegatronModule):
                 torch.nn.Parameter(
                     torch.empty(
                         num_heads_per_partition,
-                        device=torch.cuda.current_device(),
+                        device=accelerator.current_device(),
                         dtype=config.params_dtype,
                     )
                 ),

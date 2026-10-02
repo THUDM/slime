@@ -12,7 +12,7 @@ from slime.backends.megatron_utils.hf_checkpoint_saver import (
     _finalize_local_shards,
     _SafetensorShardWriter,
     _write_pending_chunk,
-    save_hf_model_direct_to_path,
+    save_hf_model_to_path,
 )
 
 NUM_GPUS = 0
@@ -54,11 +54,11 @@ def test_clear_existing_hf_weights_removes_old_weight_files_only(tmp_path: Path)
     assert not (tmp_path / "pytorch_model.bin").exists()
 
 
-def test_save_hf_model_direct_to_path_rejects_origin_checkpoint(tmp_path: Path):
+def test_save_hf_model_to_path_rejects_origin_checkpoint(tmp_path: Path):
     args = SimpleNamespace(hf_checkpoint=str(tmp_path))
 
     with pytest.raises(ValueError, match="same directory as --hf-checkpoint"):
-        save_hf_model_direct_to_path(args, tmp_path, model=None)
+        save_hf_model_to_path(args, tmp_path, model=None)
 
 
 def test_safetensor_shard_writer_writes_hf_index(tmp_path: Path):

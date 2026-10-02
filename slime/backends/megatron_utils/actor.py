@@ -12,11 +12,16 @@ from megatron.core import mpu
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
+from slime.data.tensor import TensorRef
+from slime.observability import train_data_utils, train_metric_utils
+from slime.observability.logging_utils import init_tracking
+from slime.observability.profile_utils import TrainProfiler
+from slime.observability.timer import Timer, inverse_timer, timer, with_defer
 from slime.ray.train_actor import TrainRayActor
+from slime.utils import accelerator
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.logging_utils import init_tracking
-from slime.utils.memory_utils import clear_memory, print_memory
+from slime.utils.memory_utils import clear_memory, print_memory, reset_cuda_stack_size
 from slime.utils.misc import Box
 from slime.utils.reloadable_process_group import (
     destroy_process_groups,
@@ -24,16 +29,18 @@ from slime.utils.reloadable_process_group import (
     register_default_process_group,
     reload_process_groups,
 )
+from slime.utils.routed_experts import (
+    RoutedExpertsLayerRef,
+    RoutedExpertsMicrobatch,
+    RoutedExpertsMicrobatchPrefetcher,
+)
 from slime.utils.routing_replay import RoutingReplay
-from slime.utils.timer import Timer, inverse_timer, timer, with_defer
 from slime.utils.types import RolloutBatch
 
-from ...utils.profile_utils import TrainProfiler
 from ...utils.tensor_backper import TensorBackuper
-from . import train_dump_utils
 from .checkpoint import load_checkpoint
 from .cp_utils import prepare_routed_experts_for_routing_replay, slice_log_prob_with_cp
-from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data
+from .data import DataIterator, get_data_iterator
 from .hf_checkpoint_saver import save_hf_model_to_path
 from .initialize import init, is_megatron_main_rank
 from .loss import (
@@ -44,10 +51,8 @@ from .loss import (
     get_values,
 )
 from .model import forward_only, initialize_model_and_optimizer, save, train
+from .update_weight import create_weight_updater
 from .update_weight.common import named_params_and_buffers
-from .update_weight.update_weight_from_disk import UpdateWeightFromDisk
-from .update_weight.update_weight_from_distributed import UpdateWeightFromDistributed
-from .update_weight.update_weight_from_tensor import UpdateWeightFromTensor
 
 logging.getLogger("megatron").setLevel(logging.WARNING)
 
@@ -67,14 +72,16 @@ class MegatronTrainRayActor(TrainRayActor):
             self.args = args
             return 0
 
-        monkey_patch_torch_dist()
+        if args.offload_train:
+            monkey_patch_torch_dist()
         super().init(args, role, with_ref, with_opd_teacher)
-        # Destroying and recreating WORLD invalidates raw dist.group.WORLD references cached by external code.
-        # Set SLIME_DESTROY_WORLD_PROCESS_GROUP=0 when such references may outlive a train sleep/wake cycle.
-        if os.getenv("SLIME_DESTROY_WORLD_PROCESS_GROUP", "1").lower() not in {"0", "false", "no"}:
-            register_default_process_group(timeout=timedelta(minutes=args.distributed_timeout_minutes))
-        else:
-            logger.info("Default WORLD process-group destruction is disabled")
+        if args.offload_train:
+            # Destroying and recreating WORLD invalidates raw dist.group.WORLD references cached by external code.
+            # Set SLIME_DESTROY_WORLD_PROCESS_GROUP=0 when such references may outlive a train sleep/wake cycle.
+            if os.getenv("SLIME_DESTROY_WORLD_PROCESS_GROUP", "1").lower() not in {"0", "false", "no"}:
+                register_default_process_group(timeout=timedelta(minutes=args.distributed_timeout_minutes))
+            else:
+                logger.info("Default WORLD process-group destruction is disabled")
 
         init(args)
 
@@ -117,13 +124,8 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.sleep()
             return start_rollout_id
 
-        self.weights_backuper = TensorBackuper.create(
-            source_getter=lambda: named_params_and_buffers(
-                self.args,
-                self.model,
-                convert_to_global_name=True,
-            ),
-            single_tag=None,
+        self.weights_backuper = TensorBackuper(
+            source_getter=lambda: named_params_and_buffers(self.args, self.model),
         )
         self._active_model_tag: str | None = "actor"
         self.weights_backuper.backup("actor")
@@ -135,51 +137,25 @@ class MegatronTrainRayActor(TrainRayActor):
         if with_opd_teacher:
             self.load_other_checkpoint("teacher", args.opd_teacher_load)
 
-        if self.args.keep_old_actor:
-            # Load old_actor checkpoint
-            self.load_other_checkpoint("old_actor", args.load)
-            # Create rollout_actor as a copy of current actor
-            if args.update_weights_interval == 1:
-                self.weights_backuper.backup("rollout_actor")
-
         if self.args.vocab_size is None:
             # Prefer HF config vocab_size (which may include model-native padding)
             # over tokenizer vocab_size, which may be smaller.
             hf_vocab = getattr(self.hf_config, "vocab_size", None)
             self.args.vocab_size = hf_vocab if hf_vocab is not None else self.tokenizer.vocab_size
 
-        update_weight_mode = self.args.update_weight_mode
-        update_weight_transport = self.args.update_weight_transport
-
-        if update_weight_mode == "delta":
-            # Delta sync is disk-transport only: each engine's /pull_weights applies the published
-            # deltas into a host-local checkpoint on every host it spans, and the engines reload
-            # via vanilla update_weights_from_disk.
-            assert not self.args.colocate, "--update-weight-mode=delta is not supported with --colocate"
-            assert (
-                update_weight_transport == "disk"
-            ), "--update-weight-mode=delta requires --update-weight-transport=disk"
-            from .update_weight.update_weight_from_disk_delta import UpdateWeightFromDiskDelta
-
-            update_weight_cls = UpdateWeightFromDiskDelta
-        elif update_weight_transport == "disk":
-            update_weight_cls = UpdateWeightFromDisk
-        elif self.args.colocate:
-            update_weight_cls = UpdateWeightFromTensor
-        else:
-            assert update_weight_mode == "full"
-            assert (
-                update_weight_transport == "nccl"
-            ), f"unsupported weight sync mode/transport: {update_weight_mode!r}/{update_weight_transport!r}"
-            update_weight_cls = UpdateWeightFromDistributed
-        self.weight_updater = update_weight_cls(
+        # Model-only resumes keep the serving version aligned with the next
+        # rollout. Actor recreation can supply the latest version explicitly.
+        if not hasattr(args, "update_weight_start_version"):
+            args.update_weight_start_version = (
+                args.start_rollout_id if args.start_rollout_id is not None else start_rollout_id
+            )
+        self.weight_updater = create_weight_updater(
             self.args,
             self.model,
             weights_getter=lambda: self.weights_backuper.get("actor"),
             model_name=type(self.hf_config).__name__.lower() if self.args.model_name is None else self.args.model_name,
             quantization_config=getattr(self.hf_config, "quantization_config", None),
         )
-        self.weight_updater.weight_version = getattr(self.args, "update_weight_start_version", 0)
 
         # empty cache after initialization
         clear_memory()
@@ -217,6 +193,7 @@ class MegatronTrainRayActor(TrainRayActor):
         destroy_process_groups()
 
         torch_memory_saver.pause()
+        reset_cuda_stack_size()
 
         print_memory("after offload model")
 
@@ -237,7 +214,7 @@ class MegatronTrainRayActor(TrainRayActor):
             # that is the first NCCL operation on a group.  Prime WORLD here,
             # after the memory saver is resumed, so later stages cannot miss its
             # lazy initialization.  Sleep still destroys it completely.
-            dist.barrier(device_ids=[torch.cuda.current_device()])
+            dist.barrier(device_ids=[accelerator.current_device()])
         if self.role == "actor":
             self._switch_model("actor")
         print_memory("after wake_up model")
@@ -246,14 +223,13 @@ class MegatronTrainRayActor(TrainRayActor):
         # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
         # Both first pp stage and the last pp stage will receive the data.
         rollout_data = process_rollout_data(
-            self.args,
             rollout_data_ref,
             mpu.get_data_parallel_rank(with_context_parallel=False),
             mpu.get_data_parallel_world_size(with_context_parallel=False),
         )
         # TODO: this is ugly, move to somewhere else?
         # move tokens to GPU in advance
-        device = torch.cuda.current_device()
+        device = accelerator.current_device()
         rollout_data["tokens"] = [
             t.to(device=device, dtype=torch.long, non_blocking=True) for t in rollout_data["tokens"]
         ]
@@ -296,6 +272,21 @@ class MegatronTrainRayActor(TrainRayActor):
                     strict=False,
                 )
             ]
+        for key, dtype in (("rollout_topk_token_ids", torch.int32), ("rollout_topk_log_probs", torch.float32)):
+            if key not in rollout_data:
+                continue
+            rollout_data[key] = [
+                (
+                    value
+                    if isinstance(value, TensorRef)
+                    else (value if self.args.allgather_cp else slice_log_prob_with_cp(value, total, response)).to(
+                        device="cpu", dtype=dtype
+                    )
+                )
+                for value, total, response in zip(
+                    rollout_data[key], rollout_data["total_lengths"], rollout_data["response_lengths"], strict=True
+                )
+            ]
         return rollout_data
 
     def _switch_model(self, target_tag: str) -> None:
@@ -315,38 +306,72 @@ class MegatronTrainRayActor(TrainRayActor):
 
         from slime.utils.routing_replay import RoutingReplay
 
+        layer_ids = []
+        for vp_stage, model in enumerate(self.model):
+            config = model.module.config
+            num_layers_to_build = get_num_layers_to_build(config, vp_stage=vp_stage)
+            offset = get_transformer_layer_offset(config, vp_stage=vp_stage)
+            for layer_id in range(offset, offset + num_layers_to_build):
+                if isinstance(config.moe_layer_freq, int):
+                    if layer_id % config.moe_layer_freq != 0:
+                        continue
+                elif isinstance(config.moe_layer_freq, list):
+                    assert len(config.moe_layer_freq) == config.num_layers
+                    if config.moe_layer_freq[layer_id] == 0:
+                        continue
+                layer_ids.append(layer_id)
+        assert len(layer_ids) == len(RoutingReplay.all_routing_replays)
+
         for iterator in data_iterator:
             iterator.reset()
 
+        replay_source = rollout_data["rollout_routed_experts"]
+        disk_prefetcher = None
+        prepare_kwargs = {
+            "num_experts": self.args.num_experts,
+            "data_pad_size_multiplier": self.args.data_pad_size_multiplier,
+            "sequence_parallel": self.args.sequence_parallel,
+            "allgather_cp": self.args.allgather_cp,
+        }
         for _ in range(sum(num_microbatches)):
-            batch = data_iterator[0].get_next(["rollout_routed_experts", "tokens"])
-            rollout_routed_experts = prepare_routed_experts_for_routing_replay(
-                batch["rollout_routed_experts"],
-                batch["tokens"],
-                num_experts=self.args.num_experts,
-                data_pad_size_multiplier=self.args.data_pad_size_multiplier,
-                sequence_parallel=self.args.sequence_parallel,
-                allgather_cp=self.args.allgather_cp,
-            )
+            iterator = data_iterator[0]
+            batch_indices = iterator.micro_batch_indices[iterator.offset]
+            batch = iterator.get_next(["rollout_routed_experts", "tokens"])
+            values = batch["rollout_routed_experts"]
 
-            routing_replay_offset = 0
-            for vp_stage, model in enumerate(self.model):
-                config = model.module.config
-                num_layers_to_build = get_num_layers_to_build(config, vp_stage=vp_stage)
-                offset = get_transformer_layer_offset(config, vp_stage=vp_stage)
-                for layer_id in range(offset, offset + num_layers_to_build):
-                    # skip dense layer
-                    if isinstance(config.moe_layer_freq, int):
-                        if layer_id % config.moe_layer_freq != 0:
-                            continue
-                    elif isinstance(config.moe_layer_freq, list):
-                        assert len(config.moe_layer_freq) == config.num_layers
-                        if config.moe_layer_freq[layer_id] == 0:
-                            continue
-                    layer_routed_experts = rollout_routed_experts[:, layer_id]
-                    RoutingReplay.all_routing_replays[routing_replay_offset].record(layer_routed_experts)
-                    routing_replay_offset += 1
-            assert routing_replay_offset == len(RoutingReplay.all_routing_replays)
+            disk_backed = [isinstance(value, TensorRef) for value in values]
+            if any(disk_backed) and not all(disk_backed):
+                raise ValueError("A routing replay microbatch cannot mix disk-backed and resident route tensors.")
+
+            if layer_ids and all(disk_backed):
+                if disk_prefetcher is None:
+                    disk_prefetcher = RoutedExpertsMicrobatchPrefetcher(self.args.routing_replay_prefetch_microbatches)
+                source = RoutedExpertsMicrobatch(
+                    values,
+                    batch["tokens"],
+                    consumer_count=len(layer_ids),
+                    prepare_kwargs=prepare_kwargs,
+                )
+                disk_prefetcher.add(source)
+                for replay, layer_id in zip(RoutingReplay.all_routing_replays, layer_ids, strict=True):
+                    replay.record(RoutedExpertsLayerRef(source, layer_id))
+            elif layer_ids:
+                rollout_routed_experts = prepare_routed_experts_for_routing_replay(
+                    values,
+                    batch["tokens"],
+                    **prepare_kwargs,
+                )
+                for replay, layer_id in zip(RoutingReplay.all_routing_replays, layer_ids, strict=True):
+                    replay.record(rollout_routed_experts[:, layer_id])
+
+            # Drop manager-owned references as soon as this microbatch has
+            # been registered, bounding actor RSS during setup.
+            for sample_idx in batch_indices:
+                replay_source[sample_idx] = None
+
+        if disk_prefetcher is not None:
+            disk_prefetcher.start()
+            RoutingReplay.register_lazy_resource(disk_prefetcher)
 
         del rollout_data["rollout_routed_experts"]
 
@@ -358,8 +383,8 @@ class MegatronTrainRayActor(TrainRayActor):
         data_iterator: list[DataIterator],
         num_microbatches: list[int],
         store_prefix: str = "",
+        use_rollout_top_p_replay: bool = True,
     ) -> dict[str, list[torch.Tensor]]:
-
         with timer(f"{store_prefix}log_probs"):
             return forward_only(
                 get_log_probs_and_entropy,
@@ -368,7 +393,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 data_iterator,
                 num_microbatches,
                 store_prefix=store_prefix,
-                use_rollout_top_p_replay=True,
+                use_rollout_top_p_replay=use_rollout_top_p_replay,
             )
 
     def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):
@@ -441,6 +466,7 @@ class MegatronTrainRayActor(TrainRayActor):
                             data_iterator,
                             num_microbatches,
                             store_prefix="ref_",
+                            use_rollout_top_p_replay=False,
                         )
                     )
 
@@ -457,7 +483,7 @@ class MegatronTrainRayActor(TrainRayActor):
                         )
                     )
 
-                self._switch_model("old_actor" if self.args.keep_old_actor else "actor")
+                self._switch_model("actor")
                 can_reuse_log_probs_in_loss = (
                     len(num_microbatches) == 1
                     and self.args.loss_type == "policy_loss"
@@ -465,7 +491,6 @@ class MegatronTrainRayActor(TrainRayActor):
                     and not self.args.use_rollout_logprobs
                     and not self.args.get_mismatch_metrics
                     and not self.args.use_critic
-                    and not self.args.keep_old_actor
                     and not self.args.use_opd
                     and (not self.args.use_routing_replay or self.args.use_rollout_routing_replay)
                     and self.args.advantage_estimator != "gspo"
@@ -476,6 +501,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     if self.args.use_routing_replay:
                         if self.args.use_rollout_routing_replay:
                             os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
+                            RoutingReplay.begin_lazy_pass("forward")
                         else:
                             os.environ["ROUTING_REPLAY_STAGE"] = "record"
                     rollout_data.update(
@@ -505,7 +531,7 @@ class MegatronTrainRayActor(TrainRayActor):
             if self.rollout_data_postprocess is not None:
                 self.rollout_data_postprocess(self.args, rollout_id, rollout_data)
 
-            log_rollout_data(
+            train_metric_utils.log_rollout_data(
                 rollout_id,
                 self.args,
                 rollout_data,
@@ -514,6 +540,10 @@ class MegatronTrainRayActor(TrainRayActor):
             # Train
             if self.args.use_routing_replay:
                 os.environ["ROUTING_REPLAY_STAGE"] = "replay_backward"
+                if self.args.use_rollout_routing_replay:
+                    # Hold each microbatch across forward and recompute; release
+                    # it after the backward replay has consumed every layer.
+                    RoutingReplay.begin_lazy_pass("backward")
             # When dumping train debug data but the actor log_probs were not
             # recomputed separately (can_reuse_log_probs_in_loss / use_rollout_logprobs),
             # snapshot them from the training forward so the dump still carries
@@ -542,7 +572,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
             self.prof.step(rollout_id=rollout_id)
 
-        train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
+        train_data_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
 
         if self.args.use_routing_replay:
             RoutingReplay.clear_all()
@@ -561,7 +591,11 @@ class MegatronTrainRayActor(TrainRayActor):
                     logger.info(f"Updating ref model at rollout_id {rollout_id}")
                 self.weights_backuper.backup("ref")
 
-        log_perf_data(rollout_id, self.args, extra_metrics=self.weight_updater.pop_metrics())
+        train_metric_utils.log_perf_data(
+            rollout_id,
+            self.args,
+            extra_metrics=self.weight_updater.pop_metrics(),
+        )
 
     @timer
     def save_model(self, rollout_id: int, force_sync: bool = False) -> None:
@@ -636,17 +670,6 @@ class MegatronTrainRayActor(TrainRayActor):
             self.weight_updater.update_weights()
             print_memory("after update_weights")
 
-            if getattr(self.args, "keep_old_actor", False):
-                if self.args.update_weights_interval == 1:
-                    logger.info("updating model queue: rollout_actor -> old_actor, actor -> rollout_actor")
-                    # Queue-style update: rollout_actor params -> old_actor, actor params -> rollout_actor
-                    # First copy rollout_actor to old_actor
-                    self.weights_backuper.copy(src_tag="rollout_actor", dst_tag="old_actor")
-                    # Then copy current actor to rollout_actor
-                    self.weights_backuper.backup("rollout_actor")
-                else:
-                    self.weights_backuper.backup("old_actor")
-
         if reconnect_rollout_engines:
             self.sleep()
         elif self.args.offload_train:
@@ -675,7 +698,6 @@ class MegatronTrainRayActor(TrainRayActor):
             None,
             None,
             checkpointing_context={},
-            skip_load_to_model_and_opt=False,
         )
         (
             self.args.load,

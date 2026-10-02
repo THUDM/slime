@@ -186,3 +186,7 @@ def test_whitened_advantages_are_cp_invariant(dp_size, cp_size, tmp_path):
             f"dp={dp_size} cp={cp_size}: sample {sample_idx} whitened to {got[sample_idx]}, "
             f"single-rank baseline is {expected}"
         )
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

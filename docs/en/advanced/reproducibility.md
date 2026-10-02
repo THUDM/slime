@@ -46,7 +46,7 @@ PYTHONPATH=/root/Megatron-LM/ python \
 Run training with:
 
 ```bash
-bash script/run-qwen2.5-0.5B-reproducibility.sh
+bash scripts/run-qwen2.5-0.5B-reproducibility.sh
 ```
 
 The wandb screenshots are recorded in [pull#370](https://github.com/THUDM/slime/pull/370).

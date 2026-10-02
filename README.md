@@ -17,7 +17,7 @@ This makes slime one of the most battle-tested open RL post-training frameworks:
 
 ## Why This Design Matters
 
-- **Battle-tested by frontier model training**: slime is the RL framework behind [GLM-5.2](https://z.ai/blog/glm-5.2), [GLM-5.1](https://z.ai/blog/glm-5.1), [GLM-5](https://z.ai/blog/glm-5), [GLM-4.7](https://z.ai/blog/glm-4.7), [GLM-4.6](https://z.ai/blog/glm-4.6), and [GLM-4.5](https://z.ai/blog/glm-4.5). This validates the full post-training loop, not only isolated examples.
+- **Battle-tested by frontier model training**: slime is the RL framework behind [GLM-5.3](https://z.ai/blog/glm-5.3), [GLM-5.2](https://z.ai/blog/glm-5.2), [GLM-5.1](https://z.ai/blog/glm-5.1), [GLM-5](https://z.ai/blog/glm-5), [GLM-4.7](https://z.ai/blog/glm-4.7), [GLM-4.6](https://z.ai/blog/glm-4.6), and [GLM-4.5](https://z.ai/blog/glm-4.5). This validates the full post-training loop, not only isolated examples.
 - **Correctness-first infrastructure**: RL bugs are often silent. slime keeps the dataflow explicit, supports separate rollout-only and train-only debugging paths, and documents reproducibility, fault tolerance, tracing, profiling, and CI as first-class engineering concerns.
 - **Native by design**: slime passes Megatron arguments through directly and exposes installed SGLang arguments with a `--sglang-` prefix. New upstream training and serving optimizations can be used without adding another abstraction layer inside slime.
 - **Maximum data-generation freedom**: math, code, search, tools, sandboxes, verifiers, environments, multi-agent systems, and long-horizon agentic workflows plug in as data generation or reward workflows. They do not fork the training kernel.
@@ -51,7 +51,7 @@ Choosing SGLang as the single rollout backend is also intentional. Multi-backend
 
 ## Correctness, Stability, and CI
 
-slime is developed as RL infrastructure, where "the script runs" is not enough. The project maintains CPU unit tests, contract tests for customization hooks, and GPU end-to-end tests covering dense and MoE models, Megatron training paths, SGLang deployment configurations, checkpointing, numerical precision, async rollout, OPD, PPO-style workflows, and debug rollout-then-train replay.
+slime is developed as RL infrastructure, where "the script runs" is not enough. The project maintains CPU unit tests, contract tests for customization hooks, and GPU end-to-end tests covering dense and MoE models, Megatron training paths, SGLang deployment configurations, checkpointing, numerical precision, fully-async rollout, OPD, PPO-style workflows, and debug rollout-then-train replay.
 
 Useful engineering docs:
 
@@ -91,6 +91,8 @@ Useful engineering docs:
 - **rollout (SGLang + router)**: Generates new data (including rewards/verifier outputs) and stores it in the Data Buffer. Custom generate functions can wrap this with multi-turn loops, tool calls, environment/sandbox interaction, and verifier-based reward.
 - **data buffer**: A bridge module that manages prompt initialization, custom data, and rollout generation methods (including agentic workflows that produce samples through the same interface).
 
+The default payload transport is Ray `object-store`. Selecting `--rollout-data-transport straw` uses [straw](https://github.com/zhuzilin/straw) for persistent prompt tasks, rollout continuations and training batches on shared JuiceFS storage. Ray carries control messages and references; generation and training processes read and write packed payloads directly. See the [straw usage and recovery guide](docs/en/advanced/straw.md).
+
 ## Quick Start
 
 For a comprehensive quick start guide covering environment setup, data preparation, training startup, and key code analysis, please refer to:
@@ -102,7 +104,7 @@ We also provide examples for some use cases not covered in the quick start guide
 
 For agentic RL workloads, the following examples plug into the standard rollout / Data Buffer loop through customization interfaces — they are not separate frameworks:
 
-- [`examples/multi_agent`](examples/multi_agent/README.md): Multi-agent rollout via a custom `--rollout-function-path`.
+- [`examples/multi_agent`](examples/multi_agent/README.md): Multi-agent generation via `--custom-generate-function-path` inside the standard rollout loop.
 - [`examples/search-r1`](examples/search-r1/): Search/RAG-style multi-turn generation via `--custom-generate-function-path`.
 - [`examples/fully_async`](examples/fully_async/README.md): Fully-async rollout, useful for long-tail agentic generation where some samples take much longer than others.
 - [`examples/coding_agent_rl`](examples/coding_agent_rl/README.md): End-to-end SWE coding-agent RL with sandboxed tool use, test-based rewards, and token-correct trajectory segments via `--custom-generate-function-path`.
@@ -131,7 +133,7 @@ These are not just demos. They are independent systems that use slime as a reusa
 
 ### 🦞 OpenClaw-RL: Train a Personalized Clawbot Simply by Talking to It
 
-[**OpenClaw-RL**](https://github.com/Gen-Verse/OpenClaw-RL) is an RL server for personalized OpenClaw agents. It hosts the OpenClaw model and improves it from prior conversations across deployments, while slime's asynchronous RL infrastructure prevents training from interfering with API serving. It supports two automatic optimization methods: GRPO with binary feedback inferred from subsequent states, and on-policy distillation that extracts hindsight hints from later feedback for the current policy.
+[**OpenClaw-RL**](https://github.com/Gen-Verse/OpenClaw-RL) is an RL server for personalized OpenClaw agents. It hosts the OpenClaw model and improves it from prior conversations across deployments, while slime's decoupled RL infrastructure prevents training from interfering with API serving. It supports two automatic optimization methods: GRPO with binary feedback inferred from subsequent states, and on-policy distillation that extracts hindsight hints from later feedback for the current policy.
 
 ### ⚛️ P1: Mastering Physics Olympiads with Reinforcement Learning
 
@@ -168,6 +170,23 @@ Arguments in slime are divided into three categories:
 3.  **slime-specific arguments**: Please refer to: [slime/utils/arguments.py](slime/utils/arguments.py)
 
 For complete usage instructions, please refer to the [Usage Documentation](docs/en/get_started/usage.md).
+
+## Code Reading Path
+
+Start from the training loop and follow the calls only as deep as needed:
+
+```text
+train.py: train
+├─ slime/ray/placement_group.py       Ray resource and worker initialization
+├─ slime/ray/rollout.py              RolloutManager.generate: rollout orchestration
+│  └─ slime/rollout/sglang_rollout.py  Sample generation and reward computation
+└─ slime/ray/actor_group.py          RayTrainGroup.async_train: training dispatch
+   └─ slime/backends/megatron_utils/actor.py
+      ├─ model.py                    Megatron model execution
+      └─ loss.py                     RL losses and advantages
+```
+
+On a first pass, treat `slime/utils/arguments.py` as the configuration entry point. The deployment details in `slime/backends/sglang_utils/` and the weight-sync implementations under `slime/backends/megatron_utils/update_weight/` can also wait until you need to change those areas.
 
 ## Developer Guide
 

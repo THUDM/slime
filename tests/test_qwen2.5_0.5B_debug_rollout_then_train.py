@@ -1,15 +1,17 @@
 """
-Two-phase debug test:
+Debug rollout and replay test:
   Phase 1 – debug_rollout_only: launch sglang, generate rollout data for 2 steps,
             and save them to a temp directory.
   Phase 2 – load_debug_rollout_data (train only): skip sglang entirely, load the
-            saved rollout data, and run 2 training steps.
+            saved Straw archives, and run 2 training steps without copying Samples.
+  Phase 3 – replay exported .pt files to retain coverage of the legacy format.
 
-Uses Qwen2.5-0.5B-Instruct (smallest supported model) with 2 GPUs.
+Uses Qwen2.5-0.5B-Instruct (smallest supported model) with 8 GPUs.
 """
 
 import os
 import tempfile
+from shlex import quote
 
 import slime.utils.external_utils.command_utils as U
 
@@ -25,12 +27,13 @@ def prepare():
     U.hf_download_dataset("zhuzilin/gsm8k")
 
 
-def _common_args(debug_data_dir: str):
-    """Arguments shared by both phases."""
+def _common_args():
+    """Arguments shared by generation and replay."""
 
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
 
     rollout_args = (
+        "--rollout-data-transport straw "
         "--prompt-data /root/datasets/gsm8k/train.parquet "
         "--input-key messages "
         "--label-key label "
@@ -89,10 +92,11 @@ def execute_rollout_only(debug_data_dir: str):
     )
 
     phase1_args = (
-        f"{_common_args(debug_data_dir)} "
+        f"--rollout-data-dir {quote(os.path.join(debug_data_dir, 'rollout_queue'))} "
+        f"{_common_args()} "
         f"{sglang_args} "
         "--debug-rollout-only "
-        f"--save-debug-rollout-data {debug_data_dir}/rollout_{{rollout_id}}.pt "
+        f"--save-debug-rollout-data {debug_data_dir}/rollout_{{rollout_id}}.straw.json "
     )
 
     print("=" * 60)
@@ -106,17 +110,18 @@ def execute_rollout_only(debug_data_dir: str):
     )
 
 
-def execute_train_only(debug_data_dir: str):
-    """Phase 2: train-only, load saved rollout data."""
+def execute_train_only(debug_data_dir: str, extension: str):
+    """Train from a saved archive or its self-contained export."""
 
     phase2_args = (
-        f"{_common_args(debug_data_dir)} "
-        f"--load-debug-rollout-data {debug_data_dir}/rollout_{{rollout_id}}.pt "
+        (f"--rollout-data-dir {quote(os.path.join(debug_data_dir, 'train_queue'))} " if extension == "pt" else "")
+        + f"{_common_args()} "
+        f"--load-debug-rollout-data {debug_data_dir}/rollout_{{rollout_id}}.{extension} "
         "--ci-test "
     )
 
     print("=" * 60)
-    print("Phase 2: load-debug-rollout-data (train only)")
+    print(f"Replay {extension}: load-debug-rollout-data (train only)")
     print("=" * 60)
 
     U.execute_train(
@@ -127,14 +132,20 @@ def execute_train_only(debug_data_dir: str):
 
 
 def execute():
-    debug_data_dir = tempfile.mkdtemp(prefix="slime_debug_rollout_")
-    print(f"Using temp dir for rollout data: {debug_data_dir}")
+    with tempfile.TemporaryDirectory(prefix="slime_debug_rollout_") as debug_data_dir:
+        print(f"Using temp dir for rollout data: {debug_data_dir}")
+        execute_rollout_only(debug_data_dir)
+        # Export before replay so both formats use exactly the same samples.
+        from slime.data.archive import RolloutArchive
 
-    execute_rollout_only(debug_data_dir)
-    execute_train_only(debug_data_dir)
+        for rollout_id in range(NUM_ROLLOUT):
+            with RolloutArchive(f"{debug_data_dir}/rollout_{rollout_id}.straw.json") as archive:
+                archive.export_pt(f"{debug_data_dir}/rollout_{rollout_id}.pt")
+        execute_train_only(debug_data_dir, "straw.json")
+        execute_train_only(debug_data_dir, "pt")
 
     print("=" * 60)
-    print("Both phases completed successfully!")
+    print("Generation and both replay formats completed successfully!")
     print("=" * 60)
 
 

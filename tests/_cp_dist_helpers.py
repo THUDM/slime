@@ -41,7 +41,6 @@ import socket
 import sys
 import types
 
-
 # --- Stub ``megatron.core.mpu`` (must run before cp_utils is imported) ---
 #
 # Both this module and any test file that imports it should *import this

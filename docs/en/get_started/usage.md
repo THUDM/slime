@@ -32,9 +32,8 @@ Additionally, slime supports Prefill and Decode disaggregation (PD Disaggregatio
 
 ### Choosing Training Backend
 
-slime supports multiple training backends, which can be selected via the `--train-backend` parameter:
-
-- `megatron` (default): Uses Megatron-LM as the training backend, supporting efficient training of large-scale models.
+slime currently uses Megatron-LM as its training backend. The compatibility option
+`--train-backend megatron` may still be supplied explicitly.
 
 ### Loading Megatron
 
@@ -153,7 +152,9 @@ For details on some of SGLang's customizations and the principles behind how sli
 
 ### Data Format
 
-Currently, slime only supports loading files in `.jsonl` format, where each line of the file is a JSON object. An example of a single data entry (expanded) is as follows:
+Raw data is managed by the DataSource. The built-in DataSource loads `--prompt-data` when provided; use `--data-source-path` for custom data management.
+
+slime supports `.jsonl` and `.parquet` files; reading Parquet requires `pyarrow`. Each record in either format should contain the fields selected by `--input-key` and `--label-key`. An expanded JSONL record looks like this:
 
 ```json
 {
@@ -205,6 +206,7 @@ The recommended contract is to put the source identifier in `metadata["source_na
   Note: On-policy distillation (OPD) is now orthogonal to the advantage estimator. Use `--use-opd` and `--opd-kl-coef` to enable OPD on top of any estimator.
 - `--calculate-per-token-loss`: By default, slime calculates loss on a per-sample basis, i.e., `mean(sum(sample_i) / len(sample_i))`. Enable this flag to calculate loss on a per-token basis, i.e., `sum(sum(sample_i)) / sum(len(sample_i))`.
 - `--use-tis`: Enable this setting to use TIS (Truncated Importance Sampling) (https://fengyao.notion.site/off-policy-rl).
+- `--use-score-centering`: Enable [Score Centering](https://arxiv.org/abs/2609.20807), optionally combined with TIS. See [Score Centering](#score-centering) below.
 
 #### GRPO Algorithm
 
@@ -253,6 +255,40 @@ PPO-related parameters:
 - `--eps-clip`: PPO clip range.
 - `--value-clip`: Clip range for value loss.
 - `--kl-coef`: KL penalty coefficient for reward shaping.
+
+#### Score Centering
+
+[Score Centering Stabilizes Off-policy Reinforcement Learning](https://arxiv.org/abs/2609.20807) introduces an additive correction to reduce drift caused by training-inference mismatch. It can also be combined with importance sampling. In slime, score centering (SC) is supported by the Megatron backend with non-streaming SGLang rollouts.
+
+Add the following options to an existing RL launch:
+
+```bash
+--use-score-centering \
+--score-centering-top-k 128 \
+--pg-loss-type reinforce \
+--advantage-estimator grpo \
+--disable-grpo-std-normalization \
+--calculate-per-token-loss \
+--rollout-temperature 1.0 \
+--rollout-top-p 1.0 \
+--rollout-top-k -1 \
+--entropy-coef 0 \
+--kl-coef 0
+```
+
+- `--use-score-centering`: Enable the REINFORCE score-centering objective. If `--pg-loss-type` is omitted, SC selects `reinforce` automatically. Without SC, the existing PPO/CISPO default is preserved. SC cannot be combined with `--pg-loss-type ppo` or the GSPO/CISPO advantage estimators; PPO clipping parameters do not affect the REINFORCE objective.
+- `--score-centering-top-k`: Applies only when `--rollout-top-p 1`. Number of sampler top-k token IDs and logprobs retained for each response token; defaults to 128 and must fit the model vocabulary. The head retains its full-vocabulary probability mass. The remaining sampler mass is modeled as proportional to the current trainer's tail mass.
+- `--use-tis`: Optional and independent of SC. Combine the two to center the weighted scores using `--tis-clip-low` and `--tis-clip`. The built-in `slime.backends.megatron_utils.loss.icepop_function` is also supported through `--custom-tis-function-path`; arbitrary custom TIS callbacks are not supported with SC. REINFORCE uses detached current-trainer/sampler weights, while PPO preserves its old-trainer/sampler weights.
+
+**Sampling requirements:** Use a positive temperature, `0 < top_p <= 1`, `top_k=-1`, `min_p=0`, and no repetition/frequency/presence penalties or constrained decoding. Keep `SGLANG_RETURN_ORIGINAL_LOGPROB` unset or false on all sampler workers when temperature differs from one or top_p is below one. Per-request temperature or top_p changes and streaming SC are unsupported. Evaluation does not request SC data and may use its own sampling settings.
+
+**Combining with top-p replay:** Change `--rollout-top-p 1.0` above to, for example, `--rollout-top-p 0.9`. SC automatically sums over the complete replay support and ignores `--score-centering-top-k`. Rollout returns all support IDs and their post-truncation, normalized sampler logprobs. The trainer normalizes on the same support and computes the correction `sum(stop_gradient(q * weight) * log p)`. This uses no tail approximation and excludes tokens outside the support. Full trainer logits cannot reconstruct the sampler probabilities, so the original probabilities must still be stored. Payload size varies with the support and can greatly exceed fixed top-k heads when top-p approaches one. Exactness is relative to the recorded replay support, including replay's existing rule for retaining sampled boundary tokens.
+
+**SGLang support:** Use an image built with `docker/patch/latest/sglang-top_p.patch`, which provides binary top-k and complete top-p probability outputs. Slime requests `top_logprobs_num=k` when `top_p=1`, or `custom_params.return_top_p_log_probs` when `top_p<1`, and stores the original sampler probabilities without recomputing them with a newer checkpoint. Custom generators should call `score_centering_request` from `slime.utils.score_centering` and pass the response metadata to `Sample.append_response_tokens`.
+
+Top-p probabilities stay on CPU with replay IDs/offsets and support partial rollouts, masked tool tokens, DP, TP, and both CP layouts. PD metadata currently holds at most 4096 tokens per step; SC fails if that capacity is exceeded instead of falling back to the sampled token alone. Exact top-p SC does not currently support the Ascend sampler.
+
+Sampler heads survive partial-rollout continuation, masked tool tokens, DP partitioning, microbatch selection, TP and both CP layouts. With the R3 spill hook, they share its file lifetime. Logged metrics include `sc_correction`, `sc_sampler_head_mass`, `sc_train_head_mass` and `sc_importance_weight`.
 
 ### Advanced Megatron Configuration (--megatron-config-path)
 
@@ -352,6 +388,75 @@ slime supports customizing data generation (rollout) to various degrees.
     For a more complete version, please refer to [slime/rollout/sglang_rollout.py](https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py).
 
   - Sometimes, you may also need to support a custom reward model. This can be configured by setting `--custom-rm-path`.
+
+### Persistent rollout queue and distributed fully async
+
+The default rollout transport is Ray `object-store`, which does not require a
+shared directory. `--rollout-data-transport nixl` selects Ray's NIXL tensor transport.
+For persistent queues and packed tensor storage across machines, use
+[straw](../advanced/straw.md) with a shared JuiceFS directory.
+
+To enable distributed fully async rollout with straw, add:
+
+```bash
+--rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async \
+--rollout-data-transport straw \
+--rollout-data-dir /shared/run/rollout_data
+```
+
+All nodes must mount the directory at the same absolute path and have
+`straw-queue` installed. The standard slime installation includes it; for an
+existing environment, run `pip install 'straw-queue>=0.1.2'`. Configure the JuiceFS
+storage profile and deployment declaration as described in the
+[straw guide](../advanced/straw.md#enable-it). Selecting straw alone uses the
+synchronous rollout entrypoint. For a fresh run, omitting `--rollout-data-dir`
+uses `<save>/rollout_data` when `--save` is set.
+
+With straw, `--use-rollout-routing-replay` and `--use-score-centering` persist
+R3 and SC tensors with their samples, including partial continuations.
+`--rollout-queue-online-gc` optionally reclaims unused storage; it is disabled
+by default. Recovery uses `--load`, `--save` and optional `--ckpt-step`.
+See the [straw guide](../advanced/straw.md) for scheduling,
+checkpoint recovery and debug replay, and [customization](customization.md)
+for custom rollout functions.
+
+### Preserve KV across weight updates (PipelineRL)
+
+`--flush-cache-interval` controls the cache refresh policy at weight synchronization:
+
+| Value | Behavior |
+| --- | --- |
+| `1` (default) | Keep the existing behavior: abort generation, flush KV, update weights, then resume. |
+| `<= 0` | Pause generation in place, update weights, and continue unfinished requests with their existing KV. |
+| `N > 1` | Fully flush every N training weight updates; preserve KV on the intervening updates. |
+
+The initial weight publication always flushes, including after checkpoint recovery.
+For example, `2` preserves KV at serving version 2, flushes at version 3, and
+preserves it again at version 4. This counts weight synchronizations, rather
+than optimizer steps or rollout batches.
+
+Values other than `1` automatically select the fully async rollout implementation
+when using the default rollout function. Custom rollout functions keep their
+own scheduling. Training and rollout must use separate GPUs, without rollout
+offload or `--release-train`. Stock evaluation remains available through the
+standard SGLang rollout function.
+
+```bash
+--flush-cache-interval 8 \
+--use-rollout-logprobs
+```
+
+This uses SGLang's existing `pause_generation(mode="in_place")` API and does
+not require a SGLang source patch. Requests spanning an update use KV computed
+with older weights; rollout log probabilities reflect the policies that
+generated their tokens. Periodic full refreshes abort unfinished requests, which
+the stock fully async worker requeues.
+
+Shared prefixes can also retain old KV between refreshes. With `<= 0`, frequently
+reused prefixes have no age bound. To prevent prefix reuse across requests while
+preserving each unfinished request's KV, optionally add
+`--sglang-disable-radix-cache`. Periodic refresh bounds the lifetime of shared KV
+without introducing weight-version cache namespaces.
 
 ## How to Use SGLang
 

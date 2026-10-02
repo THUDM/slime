@@ -30,6 +30,8 @@ import pytest
 import slime.agent.sandbox as sandbox_mod
 from slime.agent.sandbox import exec_and_wait
 
+NUM_GPUS = 0
+
 
 _POLL_RE = re.compile(r"test -f (\S+) && cat \1")
 _SPAWN_RE = re.compile(r"mkdir (\S+) 2>/dev/null \|\| exit 0; (.*)$")
@@ -159,3 +161,7 @@ def test_transport_retry_of_the_spawn_stays_deduped(fast_marker_polls):
     # The per-invocation cleanup must NOT ride inside the guarded spawn —
     # behind the guard it never runs on a replayed tag.
     assert not any("rm -" in c and "setsid" in c for c in sb.exec_log)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

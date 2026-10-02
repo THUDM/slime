@@ -110,3 +110,7 @@ def test_no_processor_path_still_preserves_order():
     kept = filter_long_prompt(samples, _Tokenizer(), None, max_length=100)
 
     assert [s.prompt for s in kept] == ["p0:5", "p2:5"]
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

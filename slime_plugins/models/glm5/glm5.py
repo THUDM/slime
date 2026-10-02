@@ -566,6 +566,7 @@ class DSAMLASelfAttention(DSAMultiLatentAttention):
         cp_comm_type: str | None = None,
         model_comm_pgs=None,
         pg_collection=None,
+        name: str | None = None,
     ):
         super().__init__(
             config=config,

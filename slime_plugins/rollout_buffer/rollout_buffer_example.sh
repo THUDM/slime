@@ -113,7 +113,7 @@ ray job submit --address="http://127.0.0.1:8265" \
         "NCCL_CUMEM_ENABLE": "0"
      }
    }' \
-   -- python3 train_async.py \
+   -- python3 train.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 4 \
    --rollout-num-gpus 4 \
@@ -127,7 +127,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
    --rollout-buffer-url http://${MASTER_ADDR}:8889 \
-   --keep-old-actor \
    --disable-rewards-normalization \
    --loss-mask-type distill_qwen \
    --log-passrate

@@ -187,7 +187,7 @@ def create_training_models(args, pgs, rollout_manager, actor_cls=None):
     actor_model, actor_start_rollout_ids = create_actor_model(args, pgs, rollout_manager, actor_cls=actor_cls)
 
     critic_model = None
-    if args.use_critic:
+    if args.use_critic and args.num_rollout != 0:
         from slime.utils.arguments import parse_megatron_role_args
 
         critic_args = (
@@ -208,7 +208,7 @@ def create_training_models(args, pgs, rollout_manager, actor_cls=None):
         critic_start_rollout_ids = critic_model.create(rollout_manager=rollout_manager)
 
     # TODO how to decide rollout start id when critic is involved? For now we just require user to specify it via args.
-    if args.use_critic:
+    if critic_model is not None:
         start_rollout_ids = critic_start_rollout_ids
     else:
         start_rollout_ids = actor_start_rollout_ids
@@ -218,13 +218,12 @@ def create_training_models(args, pgs, rollout_manager, actor_cls=None):
     if args.start_rollout_id is None:
         args.start_rollout_id = start_rollout_ids[0]
 
-    if args.rollout_global_dataset:
-        ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
+    ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
 
     return actor_model, critic_model
 
 
-def create_rollout_manager(args, pg):
+def create_rollout_manager(args, pg, *, restore_plan=None):
     from .rollout import RolloutManager
 
     rollout_manager_options = {
@@ -234,7 +233,7 @@ def create_rollout_manager(args, pg):
     }
     if getattr(args, "rollout_data_transport", "object-store") == "nixl":
         rollout_manager_options["enable_tensor_transport"] = True
-    rollout_manager = RolloutManager.options(**rollout_manager_options).remote(args, pg)
+    rollout_manager = RolloutManager.options(**rollout_manager_options).remote(args, pg, restore_plan=restore_plan)
 
     # calculate num_rollout from num_epoch
     num_rollout_per_epoch = None

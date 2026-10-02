@@ -8,10 +8,13 @@ import torch.nn.functional as F
 from megatron.core import mpu
 from torch.utils.checkpoint import checkpoint
 
+from slime.data.tensor import TensorRef
 from slime.utils.distributed_utils import distributed_masked_whiten
 from slime.utils.misc import load_function
 from slime.utils.ppo_utils import (
     calculate_log_probs_and_entropy,
+    calculate_ragged_log_probs,
+    calculate_topk_log_probs,
     compute_approx_kl,
     compute_cispo_loss,
     compute_gspo_kl,
@@ -19,9 +22,12 @@ from slime.utils.ppo_utils import (
     compute_policy_loss,
     get_advantages_and_returns_batch,
     get_grpo_returns,
+    get_pg_loss_type,
     get_reinforce_plus_plus_baseline_advantages,
     get_reinforce_plus_plus_returns,
+    importance_weights,
 )
+from slime.utils.score_centering import get_score_centering_is_config, score_centering_correction
 from slime.utils.types import RolloutBatch
 
 from .cp_utils import (
@@ -325,7 +331,7 @@ def _build_shifted_tokens(
 
 def _fill_topp_mask_rows(
     keep: torch.Tensor,
-    ids: list[int],
+    ids: list[int] | torch.Tensor | TensorRef,
     offsets: list[int],
     response_start: int,
     local_start: int,
@@ -334,10 +340,18 @@ def _fill_topp_mask_rows(
     vocab_end: int,
 ) -> None:
     end = min(response_start + length, max(len(offsets) - 1, 0))
+    if end <= response_start:
+        return
+    # Each CP half is contiguous. Read its support in one range, never by
+    # iterating a TensorRef (which only supports contiguous slices).
+    base = offsets[response_start]
+    ids = ids[base : offsets[end]]
+    if torch.is_tensor(ids):
+        ids = ids.tolist()
     for response_idx in range(response_start, end):
         local_ids = [
             token_id - vocab_start
-            for token_id in ids[offsets[response_idx] : offsets[response_idx + 1]]
+            for token_id in ids[offsets[response_idx] - base : offsets[response_idx + 1] - base]
             if vocab_start <= token_id < vocab_end
         ]
         row = local_start + response_idx - response_start
@@ -350,8 +364,8 @@ def _build_topp_keep_mask(
     T: int,
     vocab_local: int,
     device: torch.device,
-    top_p_token_ids: list[list[int]],
-    top_p_token_offsets: list[list[int]],
+    top_p_token_ids: list[list[int] | torch.Tensor | TensorRef],
+    top_p_token_offsets: list[list[int] | torch.Tensor | TensorRef],
     total_lengths: list[int],
     response_lengths: list[int],
     allgather_cp: bool,
@@ -367,9 +381,11 @@ def _build_topp_keep_mask(
     vocab_start = tp_rank * vocab_local
     vocab_end = vocab_start + vocab_local
 
-    # Normalize ragged payloads (may arrive as CPU int32 tensors) to python lists.
-    top_p_token_ids = [t.tolist() if torch.is_tensor(t) else list(t) for t in top_p_token_ids]
-    top_p_token_offsets = [t.tolist() if torch.is_tensor(t) else list(t) for t in top_p_token_offsets]
+    # Only offsets are needed in full; ids stay lazy until selecting CP rows.
+    top_p_token_offsets = [
+        t.load().tolist() if isinstance(t, TensorRef) else t.tolist() if torch.is_tensor(t) else list(t)
+        for t in top_p_token_offsets
+    ]
 
     keep = torch.ones((T, vocab_local), dtype=torch.bool, device=device)
 
@@ -771,11 +787,11 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         rewards = []
         kl_coef = -args.kl_coef
         cp_rank = mpu.get_context_parallel_rank()
-        for reward, k in zip(old_rewards, kl, strict=False):
-            k *= kl_coef
+        for reward, per_token_kl in zip(old_rewards, kl, strict=False):
+            token_level_rewards = per_token_kl * kl_coef
             if cp_rank == 0:
-                k[-1] += reward
-            rewards.append(k)
+                token_level_rewards[-1] += reward
+            rewards.append(token_level_rewards)
         advantages, returns = get_advantages_and_returns_batch(
             total_lengths, response_lengths, values, rewards, args.gamma, args.lambd
         )
@@ -798,7 +814,6 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         advantages = get_reinforce_plus_plus_baseline_advantages(
             rewards=rewards,
             kl=kl,
-            loss_masks=loss_masks,
             kl_coef=args.kl_coef,
         )
         returns = advantages
@@ -894,7 +909,7 @@ def vanilla_tis_function(
     old_log_probs = torch.cat(train_log_probs, dim=0)
     tis = torch.exp(old_log_probs - rollout_log_probs)
     tis_abs = (torch.exp(old_log_probs - rollout_log_probs) - 1).abs()
-    tis_weights = torch.clamp(tis, min=args.tis_clip_low, max=args.tis_clip)
+    tis_weights = importance_weights(tis, mode="tis", low=args.tis_clip_low, high=args.tis_clip)
     tis_clipfrac = (tis_weights != tis).float()
     metrics = {
         "tis": tis.clone().detach(),
@@ -918,9 +933,7 @@ def icepop_function(
     old_log_probs = torch.cat(train_log_probs, dim=0)
     ice_ratio = torch.exp(old_log_probs - rollout_log_probs)
     ice_abs = (torch.exp(old_log_probs - rollout_log_probs) - 1).abs()
-    ice_weight = torch.where(
-        (ice_ratio >= args.tis_clip_low) & (ice_ratio <= args.tis_clip), ice_ratio, torch.zeros_like(ice_ratio)
-    )
+    ice_weight = importance_weights(ice_ratio, mode="mis", low=args.tis_clip_low, high=args.tis_clip)
     ice_clipfrac = (ice_weight != ice_ratio).float()
     metrics = {
         "tis": ice_ratio.clone().detach(),
@@ -931,19 +944,182 @@ def icepop_function(
     return pg_loss, loss_masks, metrics
 
 
+def _slice_allgather_response_rows(
+    values: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+    logits_local_len: int,
+) -> list[torch.Tensor]:
+    """Slice full per-sample `[R, ...]` response tensors to this rank's rows under
+    allgather-CP, mirroring the allgather branch of `get_responses`."""
+    cp_rank = mpu.get_context_parallel_rank()
+    chunk_start = cp_rank * logits_local_len
+    chunk_end = chunk_start + logits_local_len
+
+    sliced = []
+    seq_start = 0
+    for value, total_length, response_length in zip(values, total_lengths, response_lengths, strict=True):
+        prompt_length = total_length - response_length
+        logit_global_start = seq_start + prompt_length - 1
+        logit_global_end = seq_start + total_length - 1
+
+        s = max(logit_global_start, chunk_start)
+        e = min(logit_global_end, chunk_end)
+        sliced.append(value[0:0] if e <= s else value[s - logit_global_start : e - logit_global_start])
+        seq_start += total_length
+    return sliced
+
+
+def get_score_centering_terms(args, batch, logits):
+    """Compute per-token centering corrections and head-mass diagnostics.
+
+    With top-p replay, sum over the complete recorded support. Otherwise use
+    the paper's top-k approximation. Redistribute the scalar correction before
+    multiplying by zigzag-CP advantages.
+    """
+    total_lengths, response_lengths = batch["total_lengths"], batch["response_lengths"]
+    if args.rollout_top_p < 1:
+        if batch.get("rollout_top_p_log_probs") is None or batch.get("rollout_log_probs") is None:
+            raise ValueError("Top-p score centering requires complete sampler top-p and sampled-token logprobs.")
+        get_rollout_top_p_logprob_kwargs(args, batch)
+        # Ragged replay data remains complete on CPU across CP ranks. Slice row
+        # indices first, then gather only the supports consumed by this rank.
+        row_indices = [torch.arange(length) for length in response_lengths]
+        allgather_cp = args.allgather_cp and mpu.get_context_parallel_world_size() > 1
+        if allgather_cp:
+            row_indices = _slice_allgather_response_rows(row_indices, total_lengths, response_lengths, logits.size(1))
+        else:
+            row_indices = [
+                slice_log_prob_with_cp(indices, total, response)
+                for indices, total, response in zip(row_indices, total_lengths, response_lengths, strict=True)
+            ]
+        weighting = get_score_centering_is_config(args)
+        res = {"sc_correction": [], "sc_sampler_head_mass": [], "sc_train_head_mass": []}
+        for (rows, _), indices, ids, offsets, q in zip(
+            get_responses(
+                logits,
+                args=args,
+                unconcat_tokens=batch["unconcat_tokens"],
+                total_lengths=total_lengths,
+                response_lengths=response_lengths,
+                apply_temperature=False,
+            ),
+            row_indices,
+            batch["rollout_top_p_token_ids"],
+            batch["rollout_top_p_token_offsets"],
+            batch["rollout_top_p_log_probs"],
+            strict=True,
+        ):
+            if isinstance(offsets, TensorRef):
+                offsets = offsets.load()
+            offsets = torch.as_tensor(offsets, device="cpu", dtype=torch.long)
+            # Coalesce adjacent row supports, preserving zigzag/allgather CP
+            # order while avoiding a filesystem read per response token.
+            spans = []
+            for i in indices.tolist():
+                start, end = int(offsets[i]), int(offsets[i + 1])
+                if start == end:
+                    continue
+                if spans and spans[-1][1] == start:
+                    spans[-1] = (spans[-1][0], end)
+                else:
+                    spans.append((start, end))
+            lengths = offsets[indices + 1] - offsets[indices]
+            local_offsets = torch.cat((lengths.new_zeros(1), lengths.cumsum(0))).to(logits.device)
+            head_ids, q = [
+                (
+                    torch.cat([torch.as_tensor(value[start:end]) for start, end in spans]) if spans else torch.empty(0)
+                ).to(device=logits.device, dtype=dtype)
+                for value, dtype in ((ids, torch.long), (q, torch.float32))
+            ]
+            p = calculate_ragged_log_probs(
+                rows, head_ids, local_offsets, mpu.get_tensor_model_parallel_group(), args.rollout_temperature
+            )
+            row_ids = torch.repeat_interleave(torch.arange(len(rows), device=logits.device), lengths.to(logits.device))
+            with torch.no_grad():
+                coefficients = q.exp() * importance_weights((p - q).exp(), **weighting)
+                q_mass = q.new_zeros(len(rows)).scatter_add_(0, row_ids, q.exp())
+                p_mass = p.new_zeros(len(rows)).scatter_add_(0, row_ids, p.exp())
+            correction = p.new_zeros(len(rows)).scatter_add_(0, row_ids, coefficients * p)
+            for key, value in zip(res, (correction, q_mass, p_mass), strict=True):
+                res[key].append(value)
+        if allgather_cp:
+            _allgather_cp_redistribute(
+                res, logits_local_len=logits.size(1), total_lengths=total_lengths, response_lengths=response_lengths
+            )
+        return {key: torch.cat(values) for key, values in res.items()}
+    ids, sampler_head = batch.get("rollout_topk_token_ids"), batch.get("rollout_topk_log_probs")
+    if ids is None or sampler_head is None or batch.get("rollout_log_probs") is None:
+        raise ValueError("Score centering requires sampler top-k ids, top-k logprobs, and sampled-token logprobs.")
+    allgather_cp = args.allgather_cp and mpu.get_context_parallel_world_size() > 1
+    if allgather_cp:
+        ids = _slice_allgather_response_rows(ids, total_lengths, response_lengths, logits.size(1))
+        sampler_head = _slice_allgather_response_rows(sampler_head, total_lengths, response_lengths, logits.size(1))
+    else:
+        # Resident values were CP-sliced by the actor. Disk references stay full
+        # until this microbatch, then read only this rank's zigzag response rows.
+        def local_heads(values):
+            return [
+                (
+                    (
+                        value[:]
+                        if mpu.get_context_parallel_world_size() == 1
+                        else slice_log_prob_with_cp(value, total, response)
+                    )
+                    if isinstance(value, TensorRef)
+                    else value
+                )
+                for value, total, response in zip(values, total_lengths, response_lengths, strict=True)
+            ]
+
+        ids, sampler_head = local_heads(ids), local_heads(sampler_head)
+    weighting = get_score_centering_is_config(args)
+    res = {"sc_correction": [], "sc_sampler_head_mass": [], "sc_train_head_mass": []}
+    for (rows, _), head_ids, q in zip(
+        get_responses(
+            logits,
+            args=args,
+            unconcat_tokens=batch["unconcat_tokens"],
+            total_lengths=total_lengths,
+            response_lengths=response_lengths,
+            apply_temperature=False,
+        ),
+        ids,
+        sampler_head,
+        strict=True,
+    ):
+        head_ids = head_ids.to(device=logits.device, dtype=torch.long, non_blocking=True)
+        q = q.to(device=logits.device, non_blocking=True)
+        p = calculate_topk_log_probs(
+            rows,
+            head_ids,
+            mpu.get_tensor_model_parallel_group(),
+            chunk_size=args.log_probs_chunk_size,
+            temperature=args.rollout_temperature,
+        )
+        correction, q_mass, p_mass = score_centering_correction(p, q, **weighting)
+        for key, value in zip(res, (correction, q_mass, p_mass), strict=True):
+            res[key].append(value)
+    if allgather_cp:
+        _allgather_cp_redistribute(
+            res, logits_local_len=logits.size(1), total_lengths=total_lengths, response_lengths=response_lengths
+        )
+    return {key: torch.cat(values) for key, values in res.items()}
+
+
 def policy_loss_function(
     args: Namespace,
     batch: RolloutBatch,
     logits: torch.Tensor,
     sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Compute policy loss (PPO/GSPO) and metrics.
+    """Compute policy loss (PPO/GSPO, CISPO or REINFORCE) and metrics.
 
     Computes current log-probabilities and entropy from model logits, then
-    calculates PPO-style clipped policy gradient loss. For GSPO, gathers
+    calculates the configured policy gradient loss. For GSPO, gathers
     full sequences via context-parallel all-gather before computing per-sample
     KL. Optionally applies TIS (Truncated Importance Sampling) correction and
-    adds KL loss term if configured.
+    adds score centering and a KL loss term if configured.
 
     Args:
         args: Configuration controlling advantage estimator, clipping thresholds,
@@ -961,6 +1137,8 @@ def policy_loss_function(
         "tis", "ois", "tis_clipfrac" are included when the respective features
         are enabled.
     """
+    pg_loss_type = get_pg_loss_type(args)
+    use_score_centering = getattr(args, "use_score_centering", False)
     advantages = torch.cat(batch["advantages"], dim=0)
     old_log_probs = batch["rollout_log_probs"] if args.use_rollout_logprobs else batch.get("log_probs")
 
@@ -985,7 +1163,7 @@ def policy_loss_function(
     if not args.use_rollout_logprobs and not old_log_probs:
         old_log_probs = [log_prob.detach() for log_prob in log_probs]
     train_log_probs_for_tis = batch.get("log_probs")
-    if not train_log_probs_for_tis:
+    if pg_loss_type == "reinforce" or not train_log_probs_for_tis:
         train_log_probs_for_tis = [log_prob.detach() for log_prob in log_probs]
 
     # Pre-gather log probs if needed by OPSM or GSPO to avoid duplicate gathering
@@ -1032,7 +1210,10 @@ def policy_loss_function(
         log_probs = torch.cat(log_probs, dim=0)
         ppo_kl = old_log_probs - log_probs
 
-    if args.advantage_estimator == "cispo":
+    if pg_loss_type == "reinforce":
+        pg_loss = -advantages.detach() * log_probs
+        pg_clipfrac = torch.zeros_like(log_probs)
+    elif pg_loss_type == "cispo":
         pg_loss, pg_clipfrac = compute_cispo_loss(ppo_kl, log_probs, advantages, args.eps_clip, args.eps_clip_high)
     else:
         pg_loss, pg_clipfrac = compute_policy_loss(
@@ -1091,6 +1272,16 @@ def policy_loss_function(
             args.calculate_per_token_loss,
         )
 
+    sc_terms = {}
+    if use_score_centering:
+        # Add the correction AFTER weighting the sampled score. The head/tail
+        # coefficients already contain the same IS rule and must not be weighted twice.
+        sc_terms = get_score_centering_terms(args, batch, logits)
+        pg_loss = pg_loss + advantages.detach() * sc_terms["sc_correction"]
+        with torch.no_grad():
+            sampled_ratio = (log_probs - torch.cat(batch["rollout_log_probs"])).exp()
+            sc_terms["sc_importance_weight"] = importance_weights(sampled_ratio, **get_score_centering_is_config(args))
+
     # Determine pg_loss reducer: use custom if specified, otherwise default
     if getattr(args, "custom_pg_loss_reducer_function_path", None) is not None:
         custom_pg_loss_reducer_func = load_function(args.custom_pg_loss_reducer_function_path)
@@ -1136,7 +1327,7 @@ def policy_loss_function(
     train_rollout_logprob_abs_diff = None
     if "rollout_log_probs" in batch and batch["rollout_log_probs"]:
         rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
-        log_probs_to_compare = log_probs if args.use_rollout_logprobs else old_log_probs
+        log_probs_to_compare = log_probs if args.use_rollout_logprobs or use_score_centering else old_log_probs
         train_rollout_logprob_abs_diff = sum_of_sample_mean((log_probs_to_compare - rollout_log_probs).abs())
 
     reported_loss = {
@@ -1146,6 +1337,9 @@ def policy_loss_function(
         "pg_clipfrac": pg_clipfrac.clone().detach(),
         "ppo_kl": ppo_kl.clone().detach(),
     }
+
+    for key, value in sc_terms.items():
+        reported_loss[key] = sum_of_sample_mean(value.detach())
 
     if train_rollout_logprob_abs_diff is not None:
         reported_loss["train_rollout_logprob_abs_diff"] = train_rollout_logprob_abs_diff.clone().detach()

@@ -11,13 +11,15 @@ from ray import ObjectRef
 from ray.actor import ActorHandle
 from tqdm import tqdm
 
+from slime.utils import accelerator
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.types import ParamInfo
+from slime.utils.weight_sync import should_flush_cache
 
 from ..megatron_to_hf import convert_to_hf
 from ..sglang import FlattenedTensorBucket, MultiprocessingSerializer
 from .expert_routing import configure_expert_routing
-from .hf_weight_iterator_base import HfWeightIteratorBase
+from .hf_weight_iterator_direct import HfWeightIteratorDirect
 from .update_weight_from_distributed import (
     connect_rollout_engines_from_distributed,
     disconnect_rollout_engines_from_distributed,
@@ -31,7 +33,7 @@ def _build_flattened_tensor_data(
 ) -> dict[str, Any]:
     if not named_tensors:
         return {
-            "flattened_tensor": torch.empty(0, dtype=torch.uint8, device=torch.cuda.current_device()),
+            "flattened_tensor": torch.empty(0, dtype=torch.uint8, device=accelerator.current_device()),
             "metadata": [],
         }
 
@@ -77,7 +79,7 @@ class UpdateWeightFromTensor:
         self.weight_version = 0
         self.update_weight_metrics: dict[str, float] = {}
 
-        self._hf_weight_iterator = HfWeightIteratorBase.create(
+        self._hf_weight_iterator = HfWeightIteratorDirect(
             args=args, model=model, model_name=model_name, quantization_config=quantization_config
         )
         param_info_buckets = getattr(self._hf_weight_iterator, "megatron_local_param_info_buckets", None)
@@ -139,7 +141,7 @@ class UpdateWeightFromTensor:
             if self._is_distributed_src_rank:
                 if self._model_update_groups is not None:
                     disconnect_rollout_engines_from_distributed(
-                        self.args, self._group_name, self._model_update_groups, self.distributed_rollout_engines
+                        self._group_name, self._model_update_groups, self.distributed_rollout_engines
                     )
 
                 self._model_update_groups = connect_rollout_engines_from_distributed(
@@ -209,7 +211,7 @@ class UpdateWeightFromTensor:
                 offset = buffer_offsets[key]
                 buffer_offsets[key] = offset + 1
                 if offset == len(pool):
-                    pool.append(torch.empty(info.shape, dtype=info.dtype, device="cuda"))
+                    pool.append(torch.empty(info.shape, dtype=info.dtype, device=accelerator.device()))
                 tensor = pool[offset]
                 if self.rank == transfer.source_rank:
                     source = megatron_local_weights[info.name]
@@ -229,6 +231,14 @@ class UpdateWeightFromTensor:
 
         for request in dist.batch_isend_irecv(p2p_ops) if p2p_ops else ():
             request.wait()
+
+        # NCCL Work.wait() only orders the current CUDA stream. A fast rank
+        # must not enter quantization's CUDA allocations/copies while peers
+        # are still issuing grouped P2P calls: those host calls can synchronize
+        # with the unfinished transfer and prevent its peers from launching.
+        # Include ranks without local transfers so every batch has one fence.
+        dist.barrier(group=get_gloo_group())
+        torch.cuda.synchronize()
 
         hf_named_tensors = []
         for expert_param, tensor in local_params:
@@ -266,23 +276,32 @@ class UpdateWeightFromTensor:
                 refs, long_lived_tensors = self._send_hf_params(hf_named_tensors)
                 ray.get(refs)
                 dist.barrier(group=get_gloo_group())
-                torch.cuda.synchronize()
+                accelerator.synchronize()
                 del refs, long_lived_tensors, hf_named_tensors
-                torch.cuda.ipc_collect()
-                torch.cuda.empty_cache()
+                accelerator.ipc_collect()
+                accelerator.empty_cache()
         del staging_buffers
-        torch.cuda.empty_cache()
+        accelerator.empty_cache()
 
     @torch.no_grad()
     def update_weights(self) -> None:
         """
-        version++, flush caches, process buckets. Progress on rank 0.
+        version++, pause generation, optionally flush caches, process buckets.
         """
         self.weight_version += 1
+        flush_cache = should_flush_cache(
+            self.args.flush_cache_interval, self.weight_version, getattr(self.args, "update_weight_start_version", 0)
+        )
 
         if self.rank == 0:
-            ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
-            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
+            ray.get(
+                [
+                    engine.pause_generation.remote(mode="abort" if flush_cache else "in_place")
+                    for engine in self.rollout_engines
+                ]
+            )
+            if flush_cache:
+                ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
             if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
                 post_process_weights(
                     restore_weights_before_load=True,
@@ -306,8 +325,8 @@ class UpdateWeightFromTensor:
             # then release CUDA IPC cache entries whose consumers (sglang engines)
             # have already closed their IPC handles.
             del refs, long_lived_tensors, hf_named_tensors
-            torch.cuda.ipc_collect()
-            torch.cuda.empty_cache()
+            accelerator.ipc_collect()
+            accelerator.empty_cache()
 
         if self._expert_transfer_plan:
             self._update_expert_weights(megatron_local_weights)
@@ -316,8 +335,8 @@ class UpdateWeightFromTensor:
         dist.barrier(group=get_gloo_group())
         # After the barrier all engines have returned, so every rank's last-chunk
         # IPC handles are now released by the consumers.  Clean them up.
-        torch.cuda.ipc_collect()
-        torch.cuda.empty_cache()
+        accelerator.ipc_collect()
+        accelerator.empty_cache()
 
         # int4/fp4 post_process
         if self.rank == 0:
@@ -426,6 +445,6 @@ def _send_to_colocated_engine(
 
 def _empty_flattened_tensor_data():
     return {
-        "flattened_tensor": torch.empty(0, dtype=torch.uint8, device=torch.cuda.current_device()),
+        "flattened_tensor": torch.empty(0, dtype=torch.uint8, device=accelerator.current_device()),
         "metadata": [],
     }

@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import torch
 
-from slime.ray.rollout import _compute_top_p_kept_vocab_metrics
+from slime.observability.rollout_metrics import _compute_top_p_kept_vocab_metrics
 from slime.utils.misc import decode_int32_meta_array
 from slime.utils.types import Sample
 
@@ -31,7 +31,7 @@ def test_top_p_kept_vocab_metric_uses_loss_mask():
         ),
     ]
 
-    metrics = _compute_top_p_kept_vocab_metrics(None, samples)
+    metrics = _compute_top_p_kept_vocab_metrics(samples)
 
     assert metrics["top_p_kept_vocab_per_token"] == pytest.approx(3.5)
 
@@ -47,7 +47,7 @@ def test_top_p_kept_vocab_metric_skips_removed_samples():
         )
     ]
 
-    assert _compute_top_p_kept_vocab_metrics(None, samples) == {}
+    assert _compute_top_p_kept_vocab_metrics(samples) == {}
 
 
 def _b64_int32(values: list[int]) -> str:
@@ -215,3 +215,7 @@ def test_append_response_tokens_rejects_non_trainable_log_probs():
 
     with pytest.raises(ValueError, match="non-trainable response tokens should not pass rollout log probabilities"):
         sample.append_response_tokens(tokens=[10], log_probs=[-0.1], trainable=False)
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

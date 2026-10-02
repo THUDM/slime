@@ -1,5 +1,6 @@
 import argparse
 import copy
+import importlib.util
 import json
 import logging
 import os
@@ -10,8 +11,8 @@ import yaml
 from slime.backends.sglang_utils.arguments import sglang_parse_args
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 from slime.backends.sglang_utils.external import apply_external_engine_info_to_args
+from slime.observability.logging_utils import configure_logger
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
-from slime.utils.logging_utils import configure_logger
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=json.loads,
                 default="{}",
                 help="Extra environment variables for training process, e.g. PyTorch memory management ones.",
+            )
+            parser.add_argument(
+                "--force-fp8-ue8m0-scale",
+                action="store_true",
+                default=False,
+                help=(
+                    "Quantize block-FP8 rollout weights with power-of-two FP32 scales, "
+                    "independent of the training GPU architecture. Blackwell-only scale "
+                    "packing remains controlled by the rollout runtime requirements."
+                ),
             )
             # Delta weight sync.
             parser.add_argument(
@@ -326,6 +337,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--flush-cache-interval",
+                type=int,
+                default=1,
+                help=(
+                    "Flush rollout KV cache every N weight syncs after the initial publication. "
+                    "1 preserves the default abort/flush behavior; values <= 0 never flush during training. "
+                    "Other syncs pause generation in place and preserve unfinished sequences (PipelineRL). "
+                    "Values other than 1 select fully-async rollout by default and require separate GPUs."
+                ),
+            )
+            parser.add_argument(
                 "--rollout-function-path",
                 type=str,
                 default="slime.rollout.sglang_rollout.generate_rollout",
@@ -335,7 +357,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "and then set this to the path of your custom rollout function. "
                     "The signature of the function should be "
                     "`def generate_rollout(args, rollout_id, data_source, evaluation=False) -> RolloutFnTrainOutput | RolloutFnEvalOutput`"
-                    "and within the output sample, you should at least set `tokens`, `response_length`, `reward` "
+                    ". With straw transport, training output.samples may be a stored batch reference; "
+                    "legacy Sample lists are stored automatically by the manager."
+                    " Each sample must at least set `tokens`, `response_length`, `reward` "
                     "and `status`."
                 ),
             )
@@ -343,7 +367,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--rollout-temperature",
                 type=float,
                 default=1.0,
-                help="the temperature for the inference engine during rollout.",
+                help="the temperature for the inference engine during rollout. Must be > 0.",
             )
             parser.add_argument(
                 "--rollout-top-p", type=float, default=1.0, help="the top-p for the inference engine during rollout."
@@ -452,7 +476,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "use `slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std_with_fallback`."
                 ),
             )
-
             # partial rollout
             parser.add_argument(
                 "--partial-rollout",
@@ -479,7 +502,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "Only substitue the `def generate(args, sample, sampling_params)` function within the example rollout function. "
-                    "This should be useful if you need to implement some special rollout logic, e.g. multi-turn, function calling."
+                    "This should be useful if you need to implement some special rollout logic, e.g. multi-turn, function calling. "
+                    "Set `abort_mode = 'request'` on the function when it implements request-level abort; otherwise "
+                    "Slime uses server-wide abort."
                 ),
             )
             parser.add_argument(
@@ -518,9 +543,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
                 help=(
-                    "Path to the buffer filter function. "
+                    "Path to the in-memory buffer filter function (not supported by straw). "
                     "It should be able to select the samples in the buffer. "
                     "The function should take list[list[Sample]] and return list[list[Sample]]."
+                ),
+            )
+            parser.add_argument(
+                "--buffer-sort-by-staleness",
+                action="store_true",
+                help=(
+                    "Resume buffered groups with the oldest generated-token weight version first. "
+                    "For in-memory buffers this is disabled by default and --buffer-filter-path takes precedence. "
+                    "The straw queue always uses this order within ready and partial groups."
                 ),
             )
             # update weight
@@ -534,18 +568,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--update-weights-interval",
-                type=int,
-                default=1,
-                help="Interval for updating the weights",
-            )
-            parser.add_argument(
-                "--keep-old-actor",
-                action="store_true",
-                help="Whether to keep the rollout model on training process",
-            )
-
-            parser.add_argument(
                 "--rollout-data-postprocess-path",
                 type=str,
                 default=None,
@@ -557,13 +579,51 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-data-transport",
                 type=str,
-                choices=["object-store", "nixl"],
+                choices=["straw", "object-store", "nixl"],
                 default="object-store",
                 help=(
-                    "Transport for rollout data refs sent from rollout manager to trainer. Large rollout "
-                    "fields are tensorized on CPU before the refs are stored. Set to nixl to transfer "
-                    "those torch tensors via Ray NIXL."
+                    "Rollout payload transport. Defaults to Ray object-store. straw uses packed storage "
+                    "under --rollout-data-dir for rollout and training payloads, sending only references through "
+                    "Ray. nixl uses Ray's NIXL tensor transport. Ray still manages actors and RPCs in every mode."
                 ),
+            )
+            parser.add_argument(
+                "--rollout-data-dir",
+                type=str,
+                default=None,
+                help=(
+                    "Shared directory for straw rollout payloads, mounted at the same absolute path on all nodes. "
+                    "Defaults to <save>/rollout_data. Required for straw transport when --save is unset. "
+                    "Files are retained for pending samples, checkpoints and debug archives."
+                ),
+            )
+            parser.add_argument("--rollout-storage-profile", choices=["local", "juicefs"], default="local")
+            parser.add_argument(
+                "--rollout-storage-declaration",
+                help="JSON file declaring JuiceFS mount and backing-store durability settings; see the straw project README.",
+            )
+            parser.add_argument(
+                "--rollout-queue-run-id",
+                default="rollout",
+                help="Persistent queue run identity within rollout-data-dir.",
+            )
+            parser.add_argument(
+                "--rollout-queue-online-gc",
+                action="store_true",
+                help="Reclaim sealed straw packs after acknowledged use; retain checkpoints explicitly.",
+            )
+            parser.add_argument("--rollout-queue-lease-seconds", type=float, default=300)
+            parser.add_argument(
+                "--rollout-queue-segment-mib",
+                type=int,
+                default=256,
+                help="Append queue publications to a pack file until this target size; a single larger publication is kept intact.",
+            )
+            parser.add_argument(
+                "--rollout-io-concurrency",
+                type=int,
+                default=4,
+                help="Bounded off-event-loop rollout serialization and filesystem I/O.",
             )
             parser.add_argument(
                 "--rollout-external-engine-addrs",
@@ -624,22 +684,14 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
 
             parser.add_argument(
-                "--disable-rollout-global-dataset",
-                action="store_false",
-                dest="rollout_global_dataset",
-                help=(
-                    "Whether to use a global dataset for rollout. "
-                    "If set, the rollout will use the `--prompt-data` as the prompt dataset, "
-                    "and the prompts for rollout will be sampled from the dataset. "
-                    "If not set, you need to manage the data by your self."
-                ),
-            )
-
-            parser.add_argument(
                 "--data-source-path",
                 type=str,
-                default="slime.rollout.data_source.RolloutDataSourceWithBuffer",
-                help="The data source class for rollout data.",
+                default=None,
+                help=(
+                    "The data source class. straw transport defaults to "
+                    "slime.data.queue_data_source.QueueDataSource; other transports use "
+                    "slime.data.data_source.RolloutDataSourceWithBuffer. Custom classes remain supported."
+                ),
             )
             parser.add_argument(
                 "--prompt-data",
@@ -647,8 +699,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "The path to the prompt data. "
-                    "Currently we only support jsonl format, and each line should contains --input-key and --label-key, "
-                    "which will be used as the prompt and the label respectively. "
+                    "Supported formats are JSONL and Parquet (Parquet requires pyarrow). "
+                    "Each record should contain --input-key and --label-key, which will be used as the prompt and "
+                    "the label respectively. "
                     "If you want to use a custom template, you can set --apply-chat-template to true, in that case, "
                     "the input should be the same structure as an openai message, e.g. [{'role': 'user', 'content': 'blabla'}]. "
                 ),
@@ -838,6 +891,31 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             return parser
 
         def add_algo_arguments(parser):
+            parser.add_argument(
+                "--pg-loss-type",
+                choices=["ppo", "reinforce"],
+                default=None,
+                help=(
+                    "Policy gradient objective. Defaults to REINFORCE with score centering, "
+                    "otherwise preserves the existing PPO/CISPO objective."
+                ),
+            )
+            parser.add_argument(
+                "--use-score-centering",
+                action="store_true",
+                help=(
+                    "Use the REINFORCE score-centering objective from "
+                    "Score Centering Stabilizes Off-policy Reinforcement Learning "
+                    "(https://arxiv.org/abs/2609.20807). Uses exact centering on the complete replay support "
+                    "when rollout-top-p < 1, otherwise uses the paper's top-k tail approximation."
+                ),
+            )
+            parser.add_argument(
+                "--score-centering-top-k",
+                type=int,
+                default=128,
+                help="Number of sampler top logprobs retained when rollout-top-p=1; ignored for exact top-p centering.",
+            )
             parser.add_argument(
                 "--ref-load",
                 type=str,
@@ -1061,7 +1139,10 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--use-tis",
                 action="store_true",
                 default=False,
-                help="Enable TIS from https://fengyao.notion.site/off-policy-rl for off-policy importance sampling.",
+                help=(
+                    "Enable TIS for off-policy importance sampling. With --use-score-centering, "
+                    "center the weighted scores using the same --tis-clip/--tis-clip-low bounds."
+                ),
             )
             parser.add_argument(
                 "--tis-clip",
@@ -1099,6 +1180,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_true",
                 default=False,
                 help="The rollout routing replay technique from https://arxiv.org/abs/2510.11370",
+            )
+            parser.add_argument(
+                "--routing-replay-prefetch-microbatches",
+                type=int,
+                default=1,
+                help="Number of upcoming disk-backed R3 microbatches to prefetch into CPU memory.",
             )
             parser.add_argument(
                 "--use-opsm",
@@ -1251,7 +1338,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "Save the rollout data to this path for debugging. "
-                    "The file will be saved to `save_debug_rollout_data.format(rollout_id)`."
+                    "Use a {rollout_id} template; .straw.json retains an indexed straw archive with lazy tensors, "
+                    "other suffixes write the self-contained legacy .pt format."
                 ),
             )
             # --load-debug-rollout-data, --debug-rollout-only, --debug-train-only
@@ -1303,13 +1391,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--memory-snapshot-num-steps",
                 type=int,
                 default=None,
-            )
-            parser.add_argument(
-                "--profile-target",
-                type=str,
-                choices=["train_overall", "train_actor", "train_log_probs"],
-                default=["train_overall"],
-                nargs="+",
             )
             parser.add_argument(
                 "--memory-recorder",
@@ -1443,7 +1524,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "Path to the rollout all samples process function that "
-                    "can process all samples including filtered ones."
+                    "can process all samples including filtered ones. "
+                    "Not supported by distributed fully-async rollout."
                 ),
             )
             return parser
@@ -1597,7 +1679,12 @@ def _pre_parse_mode():
     return temp_args
 
 
-def parse_args(add_custom_arguments=None):
+def parse_args(add_custom_arguments=None, *, return_restore_plan=False):
+    """Return configuration, optionally paired with the driver's restore plan.
+
+    Custom argument providers and existing callers keep the Namespace contract;
+    queue connections and recovery progress are never attached to args.
+    """
     # Users may call `parse_args` very early, thus we ensure logger is configured here
     configure_logger()
 
@@ -1632,15 +1719,15 @@ def parse_args(add_custom_arguments=None):
         for key, value in vars(sglang_ns).items():
             setattr(args, key, value)
 
-    slime_validate_args(args)
+    restore_plan = slime_validate_args(args)
 
-    if pre.train_backend == "megatron" and not args.debug_rollout_only:
+    if not args.debug_rollout_only:
         megatron_validate_args(args)
 
     if not args.debug_train_only:
         sglang_validate_args(args)
 
-    return args
+    return (args, restore_plan) if return_restore_plan else args
 
 
 def _apply_megatron_role_overrides(base_args, overrides, role):
@@ -1765,7 +1852,17 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
 
 
 def slime_validate_args(args):
+    from slime.utils.ppo_utils import get_pg_loss_type
+    from slime.utils.score_centering import validate_score_centering_args
+
+    get_pg_loss_type(args)
+    validate_score_centering_args(args)
     args.eval_datasets = _resolve_eval_datasets(args)
+
+    if args.rollout_temperature <= 0:
+        raise ValueError(
+            "--rollout-temperature must be > 0; temperature 0 is greedy decoding and is not a valid RL policy."
+        )
 
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):
@@ -1809,6 +1906,11 @@ def slime_validate_args(args):
         if args.opd_teacher_load is not None:
             raise ValueError("--opd-teacher-load is set but --use-opd is not enabled. Please add --use-opd flag.")
 
+    # Resolve the logical checkpoint directory before the model loader's
+    # HuggingFace/finetune fallback can replace --load or disable optimizer load.
+    from slime.data.checkpoint import resolve_checkpoint
+
+    restore_plan = resolve_checkpoint(args)
     load_is_megatron = (
         args.load is not None
         and os.path.exists(args.load)
@@ -1841,6 +1943,48 @@ def slime_validate_args(args):
                 "--eval-function-path that can run without SGLang."
             )
 
+    if importlib.util.find_spec("straw") is None:
+        if args.rollout_data_transport == "straw":
+            raise ModuleNotFoundError(
+                "--rollout-data-transport straw requires straw-queue. "
+                "Install it on every rollout/training node: pip install straw-queue",
+                name="straw",
+            )
+        logger.warning(
+            "straw-queue is not installed; continuing with %s rollout transport. "
+            "To enable --rollout-data-transport straw, run on every rollout/training node: pip install straw-queue",
+            args.rollout_data_transport,
+        )
+
+    if args.data_source_path is None:
+        args.data_source_path = (
+            "slime.data.queue_data_source.QueueDataSource"
+            if args.rollout_data_transport == "straw"
+            else "slime.data.data_source.RolloutDataSourceWithBuffer"
+        )
+    if args.rollout_data_transport != "straw":
+        if args.data_source_path == "slime.data.queue_data_source.QueueDataSource":
+            raise ValueError("QueueDataSource requires --rollout-data-transport straw")
+        if getattr(args, "rollout_queue_online_gc", False):
+            raise ValueError("--rollout-queue-online-gc requires --rollout-data-transport straw")
+    for name in (
+        "rollout_queue_lease_seconds",
+        "rollout_queue_segment_mib",
+        "rollout_io_concurrency",
+    ):
+        if getattr(args, name) <= 0:
+            raise ValueError(f"--{name.replace('_', '-')} must be positive")
+
+    if args.rollout_data_transport == "straw":
+        from slime.data.transport import resolve_rollout_data_dir
+
+        if getattr(args, "buffer_filter_path", None) is not None:
+            raise ValueError(
+                "--buffer-filter-path is not supported by straw; scheduling is persisted in the queue "
+                "and prioritizes older weight versions within ready and partial groups"
+            )
+        resolve_rollout_data_dir(args)
+
     if args.save_interval is not None:
         assert args.save is not None, "'--save' is required when save_interval is set."
 
@@ -1852,7 +1996,7 @@ def slime_validate_args(args):
             "require advantage normalization. Please add `--normalize-advantages` to your command."
         )
 
-    if args.use_rollout_logprobs:
+    if args.use_rollout_logprobs and get_pg_loss_type(args) != "reinforce":
         assert not args.use_tis, "use_rollout_logprobs and use_tis cannot be set at the same time."
 
     if args.get_mismatch_metrics:
@@ -1891,6 +2035,9 @@ def slime_validate_args(args):
     if args.dump_details is not None:
         args.save_debug_rollout_data = f"{args.dump_details}/rollout_data/{{rollout_id}}.pt"
         args.save_debug_train_data = f"{args.dump_details}/train_data/{{rollout_id}}.pt"
+
+    if args.save_debug_train_data is not None and args.save_debug_train_data == args.save_debug_rollout_data:
+        raise ValueError("--save-debug-train-data must not be equal to --save-debug-rollout-data.")
 
     if args.load_debug_rollout_data is not None:
         logger.info(
@@ -1963,7 +2110,7 @@ def slime_validate_args(args):
         args.disable_grad_buffers_cpu_backup = True
         args.disable_param_buffers_cpu_backup = True
 
-    if args.eval_function_path is None:
+    if args.flush_cache_interval == 1 and args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path
 
     if args.num_steps_per_rollout is not None:
@@ -1991,11 +2138,6 @@ def slime_validate_args(args):
     if args.num_epoch is not None:
         if args.num_rollout is not None:
             logger.info("Both num_epoch and num_rollout are set, num_epoch will be ignored.")
-        else:
-            assert args.rollout_global_dataset, (
-                "num_epoch is set, but rollout_global_dataset is not set, "
-                "please remove --disable-rollout-global-dataset to use num_epoch"
-            )
     else:
         # if num_epoch is not set, we should set num_rollout
         assert args.num_rollout is not None, (
@@ -2007,6 +2149,8 @@ def slime_validate_args(args):
 
     if args.use_rollout_routing_replay:
         args.use_routing_replay = True
+        if args.routing_replay_prefetch_microbatches < 0:
+            raise ValueError("--routing-replay-prefetch-microbatches must be non-negative")
 
     if args.custom_config_path:
         with open(args.custom_config_path) as f:
@@ -2042,12 +2186,8 @@ def slime_validate_args(args):
             "a filesystem shared between the trainer and the rollout engines."
         )
     if args.release_train:
-        if args.train_backend != "megatron":
-            raise ValueError("--release-train is only supported with the Megatron train backend.")
         if args.use_critic:
             raise ValueError("--release-train does not support critic training yet.")
-        if args.keep_old_actor:
-            raise ValueError("--release-train does not support --keep-old-actor.")
         if args.save is None:
             raise ValueError("--release-train requires --save so the next Megatron actor can reload.")
         if args.save_interval is None:
@@ -2071,3 +2211,21 @@ def slime_validate_args(args):
                 "--update-weight-mode=delta requires --update-weight-local-checkpoint-dir "
                 "(a rollout-host-local NVMe directory)."
             )
+
+    if args.flush_cache_interval != 1:
+        if args.colocate or args.offload_rollout or args.release_train:
+            raise ValueError(
+                "--flush-cache-interval values other than 1 require separate training/rollout GPUs "
+                "without rollout offload or release-train."
+            )
+        if args.debug_train_only or args.debug_rollout_only or args.load_debug_rollout_data:
+            raise ValueError("--flush-cache-interval values other than 1 require live rollout and training.")
+        if args.rollout_function_path == "slime.rollout.sglang_rollout.generate_rollout":
+            args.rollout_function_path = "slime.rollout.fully_async_rollout.generate_rollout_fully_async"
+        if args.eval_function_path is None:
+            args.eval_function_path = "slime.rollout.sglang_rollout.generate_rollout"
+
+    if args.eval_function_path is None:
+        args.eval_function_path = args.rollout_function_path
+
+    return restore_plan

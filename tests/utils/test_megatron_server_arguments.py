@@ -30,7 +30,6 @@ def _server_args(**overrides):
         kl_coef=0.1,
         use_opd=True,
         use_critic=True,
-        keep_old_actor=True,
         no_load_optim=False,
         no_load_rng=False,
         only_train_params_name_list=["actor"],
@@ -71,7 +70,6 @@ def test_configure_megatron_server_args_forces_teacher_only_mode():
     assert args.use_kl_loss is False
     assert args.use_opd is False
     assert args.use_critic is False
-    assert args.keep_old_actor is False
     assert args.no_load_optim is True
     assert args.no_load_rng is True
     assert args.only_train_params_name_list == ["nothing_to_train"]

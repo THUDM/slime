@@ -1,7 +1,15 @@
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 
+// HIP's __shfl_xor_sync requires a 64-bit mask (a wavefront is 64 lanes), so
+// 0xFFFFFFFF does not compile. The reductions only ever span one 32-lane group,
+// which the maskless __shfl_xor with width=32 expresses identically.
+#if defined(__HIP_PLATFORM_AMD__)
+#define WARP_XOR(val, mask) __shfl_xor((val), (mask), 32)
+#else
 #define FINAL_MASK 0xFFFFFFFF
+#define WARP_XOR(val, mask) __shfl_xor_sync(FINAL_MASK, (val), (mask), 32)
+#endif
 
 __device__ __host__ __forceinline__
 int ceil_div(int a, int b) {
@@ -12,7 +20,7 @@ __device__ __forceinline__
 float warpReduceMax(float val) {
 #pragma unroll
     for (int mask = 16; mask > 0; mask >>= 1)
-        val = fmaxf(val, __shfl_xor_sync(FINAL_MASK, val, mask, 32));
+        val = fmaxf(val, WARP_XOR(val, mask));
     return val;
 }
 
@@ -21,7 +29,7 @@ __device__ __forceinline__
 float warpReduceMin(float val) {
 #pragma unroll
     for (int mask = 16; mask > 0; mask >>= 1)
-        val = fminf(val, __shfl_xor_sync(FINAL_MASK, val, mask, 32));
+        val = fminf(val, WARP_XOR(val, mask));
     return val;
 }
 
@@ -345,7 +353,13 @@ fake_int4_quant_cuda(
         at::ScalarType::BFloat16,
         x.scalar_type(), "int4_quant_cuda", [&] {
         launch_int4_quant_kernel<scalar_t>(
+#if defined(__HIP_PLATFORM_AMD__)
+            // the templated const_data_ptr<T> does not link under hipcc: clang mangles
+            // its enable_if template parameter differently from the gcc that built libtorch
+            static_cast<const scalar_t*>(x.const_data_ptr()),
+#else
             x.const_data_ptr<scalar_t>(),
+#endif
             out.data_ptr<scalar_t>(),
             out_scale.data_ptr<scalar_t>(),
             out_zero.data_ptr<scalar_t>(),

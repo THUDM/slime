@@ -48,7 +48,7 @@ real DDP buffer code, fused optimizers, mixed-precision. We use a plain
 The contract here is on *our* scaling math (steps 1 + 4 are slime's;
 step 2 is what Megatron does to our 3-tuple). If Megatron later changes
 step 2 — e.g. drops the ``/= num_microbatches`` — this test won't catch
-it, but the real GPU integration suite (``test_qwen2.5_0.5B_short.py``)
+it, but the real GPU parallelism suite (``test_qwen3_0.6B_parallel_check.py``)
 will.
 """
 

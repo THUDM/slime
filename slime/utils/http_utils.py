@@ -2,10 +2,10 @@ import asyncio
 import ipaddress
 import json
 import logging
-import multiprocessing
 import os
 import random
 import socket
+import ssl
 
 import httpx
 
@@ -127,23 +127,6 @@ def run_router(args):
         return 1
 
 
-def terminate_process(process: multiprocessing.Process, timeout: float = 1.0) -> None:
-    """Terminate a process gracefully, with forced kill as fallback.
-
-    Args:
-        process: The process to terminate
-        timeout: Seconds to wait for graceful termination before forcing kill
-    """
-    if not process.is_alive():
-        return
-
-    process.terminate()
-    process.join(timeout=timeout)
-    if process.is_alive():
-        process.kill()
-        process.join()
-
-
 _http_client: httpx.AsyncClient | None = None
 _client_concurrency: int = 0
 
@@ -162,16 +145,65 @@ def _next_actor():
     return actor
 
 
-async def _post(client, url, payload, max_retries=60, headers=None):
+class _ShardedHTTPTransport(httpx.AsyncBaseTransport):
+    """Reduce asyncio CPU stalls from httpcore's per-request connection scans.
+
+    Split this client's connection budget across pools of at most 128
+    connections, so each synchronous scan touches a small pool. The pools
+    operate concurrently: 128 is a per-pool limit, not a client-wide request
+    limit. Their connection limits sum to max_connections; requests assigned
+    to a full pool wait for a connection there.
+
+    Allow each pool to retain its entire connection budget as idle keep-alive
+    connections, subject to the usual expiry. This avoids closing/reopening
+    most sockets after a request wave; httpx otherwise keeps at most 20 idle
+    connections per pool. That idle limit is separate from active concurrency.
+    """
+
+    def __init__(self, max_connections: int):
+        count = max(1, (max_connections + 127) // 128)
+        size, remainder = divmod(max(1, max_connections), count)
+        tls = ssl.create_default_context()
+        self._transports = [
+            httpx.AsyncHTTPTransport(
+                verify=tls,
+                trust_env=False,
+                limits=httpx.Limits(
+                    max_connections=size + (i < remainder),
+                    max_keepalive_connections=size + (i < remainder),
+                ),
+            )
+            for i in range(count)
+        ]
+        self._next = 0
+
+    async def handle_async_request(self, request):
+        transport = self._transports[self._next]
+        self._next = (self._next + 1) % len(self._transports)
+        return await transport.handle_async_request(request)
+
+    async def aclose(self):
+        await asyncio.gather(*(transport.aclose() for transport in self._transports))
+
+
+async def _post(client, url, payload, max_retries=60, headers=None, timeout=None, score_centering_top_k=None):
     retry_count = 0
     while retry_count < max_retries:
         response = None
         try:
-            response = await client.post(url, json=payload or {}, headers=headers)
+            request_kwargs = {"json": payload or {}, "headers": headers}
+            if timeout is not None:
+                request_kwargs["timeout"] = timeout
+            response = await client.post(url, **request_kwargs)
             response.raise_for_status()
             content = await response.aread()
             try:
-                output = json.loads(content)
+                if score_centering_top_k is not None:
+                    from slime.utils.score_centering import decode_score_centering_response
+
+                    output = await asyncio.to_thread(decode_score_centering_response, content, score_centering_top_k)
+                else:
+                    output = json.loads(content)
             except json.JSONDecodeError:
                 output = content.decode() if isinstance(content, bytes) else content
         except Exception as e:
@@ -183,7 +215,7 @@ async def _post(client, url, payload, max_retries=60, headers=None):
                 response_text = None
 
             logger.info(
-                f"Error: {e}, retrying... (attempt {retry_count}/{max_retries}, url={url}, response={response_text})"
+                f"Error: {e!r}, retrying... (attempt {retry_count}/{max_retries}, url={url}, response={response_text})"
             )
             if retry_count >= max_retries:
                 logger.info(f"Max retries ({max_retries}) reached, failing... (url={url})")
@@ -210,17 +242,17 @@ def get_rollout_num_engines(args) -> int:
     return max(1, rollout_num_gpus // rollout_num_gpus_per_engine)
 
 
-def init_http_client(args):
+def init_http_client(args, *, concurrency: int | None = None):
     """Initialize HTTP client and optionally enable distributed POST via Ray."""
     global _http_client, _client_concurrency, _distributed_post_enabled
     num_engines = get_rollout_num_engines(args)
     if num_engines <= 0:
         return
 
-    _client_concurrency = args.sglang_server_concurrency * num_engines
+    _client_concurrency = concurrency if concurrency is not None else args.sglang_server_concurrency * num_engines
     if _http_client is None:
         _http_client = httpx.AsyncClient(
-            limits=httpx.Limits(max_connections=_client_concurrency),
+            transport=_ShardedHTTPTransport(_client_concurrency),
             timeout=httpx.Timeout(None),
             trust_env=False,  # internal SGLang comm only — never route through system proxy
         )
@@ -257,13 +289,21 @@ def _init_ray_distributed_post(args):
         def __init__(self, concurrency: int):
             # Lazy creation to this actor's event loop
             self._client = httpx.AsyncClient(
-                limits=httpx.Limits(max_connections=max(1, concurrency)),
+                transport=_ShardedHTTPTransport(concurrency),
                 timeout=httpx.Timeout(None),
                 trust_env=False,  # internal SGLang comm only — never route through system proxy
             )
 
-        async def do_post(self, url, payload, max_retries=60, headers=None):
-            return await _post(self._client, url, payload, max_retries, headers=headers)
+        async def do_post(self, url, payload, max_retries=60, headers=None, timeout=None, score_centering_top_k=None):
+            return await _post(
+                self._client,
+                url,
+                payload,
+                max_retries,
+                headers=headers,
+                timeout=timeout,
+                score_centering_top_k=score_centering_top_k,
+            )
 
     # Create actors per node
     created = []
@@ -288,7 +328,7 @@ def _init_ray_distributed_post(args):
     _post_actors = created
 
 
-async def post(url, payload, max_retries=60, headers=None):
+async def post(url, payload, max_retries=60, headers=None, timeout=None, score_centering_top_k=None):
     # If distributed mode is enabled and actors exist, dispatch via Ray.
     if _distributed_post_enabled and _post_actors:
         try:
@@ -300,18 +340,35 @@ async def post(url, payload, max_retries=60, headers=None):
                 # `min(32, cpu+4)`), which becomes a hard upper bound on the
                 # number of in-flight POSTs that can be waited on in parallel
                 # and produces large tail latencies under high concurrency.
-                obj_ref = actor.do_post.remote(url, payload, max_retries, headers=headers)
+                obj_ref = actor.do_post.remote(
+                    url,
+                    payload,
+                    max_retries,
+                    headers=headers,
+                    timeout=timeout,
+                    score_centering_top_k=score_centering_top_k,
+                )
                 return await obj_ref
         except Exception as e:
             logger.info(f"[http_utils] Distributed POST failed, falling back to local: {e} (url={url})")
             # fall through to local
 
-    return await _post(_http_client, url, payload, max_retries, headers=headers)
+    return await _post(
+        _http_client,
+        url,
+        payload,
+        max_retries,
+        headers=headers,
+        timeout=timeout,
+        score_centering_top_k=score_centering_top_k,
+    )
 
 
-async def get(url):
-    response = await _http_client.get(url)
-    response.raise_for_status()
-    content = await response.aread()
-    output = json.loads(content)
-    return output
+async def get(url, *, timeout=None):
+    response = await _http_client.get(url, timeout=timeout)
+    try:
+        response.raise_for_status()
+        content = await response.aread()
+        return json.loads(content)
+    finally:
+        await response.aclose()

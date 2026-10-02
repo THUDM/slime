@@ -140,9 +140,9 @@ def assert_rollout_function_matches_default_contract(fn) -> None:
 
     data_source = ContractDataSource()
     train_output = call_rollout_fn(fn, None, 2, data_source, evaluation=False)
-    eval_output = call_rollout_fn(fn, None, 2, data_source, evaluation=True)
-
     assert_train_rollout_contract(train_output, n_samples_per_prompt=2)
+
+    eval_output = call_rollout_fn(fn, None, 2, data_source, evaluation=True)
     assert_eval_rollout_contract(eval_output)
 
 

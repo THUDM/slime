@@ -3,8 +3,12 @@ import logging
 
 from megatron.training.arguments import parse_args as _megatron_parse_args
 from megatron.training.arguments import validate_args as _megatron_validate_args
-from megatron.training.tokenizer.tokenizer import _vocab_size_with_padding
 from transformers import AutoConfig
+
+try:
+    from megatron.core.tokenizers.utils.build_tokenizer import vocab_size_with_padding as _vocab_size_with_padding
+except ImportError:
+    from megatron.training.tokenizer.tokenizer import _vocab_size_with_padding
 
 __all__ = ["validate_args", "megatron_parse_args", "set_default_megatron_args"]
 
@@ -147,6 +151,8 @@ def _hf_validate_args(args, hf_config):
 def _set_default_megatron_args(args):
     # always use zero optimizer
     args.use_distributed_optimizer = True
+    if not hasattr(args, "enable_gloo_process_groups"):
+        args.enable_gloo_process_groups = True
     # TODO: maybe change this after megatron has good fp8 support
     args.bf16 = not args.fp16
     # Checkpoint I/O defaults: these keep checkpoint contents unchanged while

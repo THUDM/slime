@@ -9,6 +9,8 @@ from megatron.core.transformer.transformer_block import get_num_layers_to_build
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
 from transformers.activations import ACT2FN
 
+from slime.utils import accelerator
+
 try:
     from fla.modules import FusedRMSNormGated, ShortConvolution
 except ImportError:
@@ -77,7 +79,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
             self.head_v_dim,
             eps=self.layer_norm_epsilon,
             activation=self.activation,
-            device=torch.cuda.current_device(),
+            device=accelerator.current_device(),
             dtype=config.dtype if config.dtype is not None else torch.get_default_dtype(),
         )
 
@@ -159,6 +161,7 @@ class Attention(HuggingfaceAttention):
         layer_number: int,
         cp_comm_type: str = "p2p",
         pg_collection=None,
+        name: str | None = None,
     ):
         super().__init__(
             args,

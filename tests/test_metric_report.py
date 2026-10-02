@@ -1,8 +1,7 @@
 """Single-process metric-report invariance tests.
 
 Pins train-side / rollout-side report formulas implemented in
-``slime.backends.megatron_utils.cp_utils.reduce_train_step_metrics`` and
-``rollout_log_metric_contribution``: the reported number for a given set
+``slime.observability.train_metric_utils``: the reported number for a given set
 of samples must be the same regardless of
 
   - how samples are distributed across micro-batches / DP ranks
@@ -28,10 +27,11 @@ import torch
 from slime.backends.megatron_utils.cp_utils import (  # noqa: E402
     get_logits_and_tokens_offset_with_cp,
     get_sum_of_sample_mean,
+)
+from slime.observability.train_metric_utils import (  # noqa: E402
     reduce_train_step_metrics,
     rollout_log_metric_contribution,
 )
-
 
 NUM_GPUS = 0
 
@@ -143,7 +143,7 @@ def _simulate_rollout_report(samples_per_rank):
     per-token metric branch.
 
     Each "rank" applies the reducer once over its full sample subset, then
-    ``rollout_log_metric_contribution`` (the same helper data.py uses) emits
+    ``rollout_log_metric_contribution`` (the same helper the reporter uses) emits
     the ``(per_rank_sum, count)`` tuple. We aggregate via
     ``Σsum / Σcount`` — the same shape ``gather_log_data`` uses.
     """

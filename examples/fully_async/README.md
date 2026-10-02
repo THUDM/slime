@@ -41,13 +41,12 @@ fully-async rollout 0: done in ...s, queue_left=...
 
 ## How To Plug Your Own Generate Into This
 
-Two pieces flip the standard pipeline into fully-async:
+Fully-async uses the standard `python3 train.py` entrypoint. Select the
+rollout implementation with:
 
-1. Use the async training driver: `python3 train_async.py` (not `train.py`).
-2. Set the rollout function path:
-   ```
-   --rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async
-   ```
+```
+--rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async
+```
 
 For custom per-sample logic, use slime's standard plug-in points — they
 work unchanged under fully-async:

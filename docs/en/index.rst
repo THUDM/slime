@@ -18,7 +18,7 @@ Why This Design Matters
 - **SGLang-focused rollout**: slime chooses one rollout backend intentionally. This avoids flattening multiple inference engines into a lowest-common-denominator abstraction and lets RL workloads use SGLang-specific serving, routing, caching, disaggregation, and weight-sync behavior directly.
 - **Agentic workflows as data generation**: tool use, sandbox interaction, verifier rewards, environment feedback, multi-agent loops, and long-horizon agentic workflows plug into the same training / rollout / Data Buffer path instead of forking the training kernel.
 - **BF16 training with FP8 rollout**: large MoE recipes use Megatron BF16 training state with SGLang FP8 rollout/inference; long-context rollout can also use ``--sglang-kv-cache-dtype fp8_e4m3`` to increase effective KV cache capacity.
-- **Tested as RL infrastructure**: CPU correctness tests run automatically, while GPU e2e tests cover real Megatron + SGLang training/rollout paths, including dense/MoE recipes, async rollout, SGLang config, checkpointing, precision, and debug replay. See :doc:`developer_guide/ci`.
+- **Tested as RL infrastructure**: CPU correctness tests run automatically, while GPU e2e tests cover real Megatron + SGLang training/rollout paths, including dense/MoE recipes, fully-async rollout, SGLang config, checkpointing, precision, and debug replay. See :doc:`developer_guide/ci`.
 
 Production Validation
 ---------------------
@@ -38,6 +38,7 @@ Start by Use Case
 - Build agentic RL workflows: :doc:`get_started/agent`
 - Configure production SGLang rollout topology: :doc:`advanced/sglang-config`
 - Connect external rollout engines: :doc:`advanced/external-rollout-engines`
+- Persist distributed rollout and shared tensors with straw: :doc:`advanced/straw`
 - Sync weights as byte-level deltas: :doc:`advanced/delta-weight-sync`
 - Use PD disaggregation: :doc:`advanced/pd-disaggregation`
 - Use BF16 training with FP8 rollout or FP8 KV cache: :doc:`advanced/low-precision`
@@ -80,6 +81,7 @@ Start by Use Case
    advanced/low-precision.md
    advanced/reproducibility.md
    advanced/fault-tolerance.md
+   advanced/straw.md
    advanced/observability.md
    advanced/pd-disaggregation.md
    advanced/external-rollout-engines.md

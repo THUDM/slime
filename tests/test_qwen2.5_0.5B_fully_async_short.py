@@ -1,7 +1,6 @@
 """CI smoke test for the fully-async rollout path.
 
-Mirrors ``test_qwen2.5_0.5B_async_short`` (Qwen2.5-0.5B + dapo-math-17k +
-3 rollouts of GRPO) but flips the rollout function over to
+Uses Qwen2.5-0.5B with dapo-math-17k and GRPO, selecting
 ``slime.rollout.fully_async_rollout.generate_rollout_fully_async`` so the
 fully-async worker path gets exercised end-to-end.
 
@@ -10,6 +9,8 @@ existing 0.5B short tests.
 """
 
 import os
+import tempfile
+from shlex import quote
 
 import slime.utils.external_utils.command_utils as U
 
@@ -28,8 +29,9 @@ def execute():
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
 
     rollout_args = (
-        # The only line that differs from test_qwen2.5_0.5B_async_short.py:
-        # use the public fully-async rollout function.
+        "--rollout-data-transport straw "
+        "--rollout-queue-online-gc "
+        # Select the public fully-async rollout function.
         "--rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async "
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
         "--input-key prompt "
@@ -108,12 +110,13 @@ def execute():
         f"{misc_args} "
     )
 
-    U.execute_train(
-        train_args=train_args,
-        num_gpus_per_node=NUM_GPUS,
-        megatron_model_type=MODEL_TYPE,
-        train_script="train_async.py",
-    )
+    with tempfile.TemporaryDirectory(prefix="slime_straw_") as rollout_dir:
+        train_args += f"--rollout-data-dir {quote(rollout_dir)} "
+        U.execute_train(
+            train_args=train_args,
+            num_gpus_per_node=NUM_GPUS,
+            megatron_model_type=MODEL_TYPE,
+        )
 
 
 if __name__ == "__main__":

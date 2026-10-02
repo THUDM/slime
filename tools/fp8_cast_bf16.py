@@ -10,6 +10,8 @@ import triton.language as tl
 from safetensors.torch import load_file, save_file
 from tqdm import tqdm
 
+from slime.utils import accelerator
+
 
 @triton.jit
 def weight_dequant_kernel(x_ptr, s_ptr, y_ptr, M, N, BLOCK_SIZE: tl.constexpr):
@@ -60,7 +62,7 @@ def main(fp8_path, bf16_path):
         file_name = weight_map[tensor_name]
         if file_name not in loaded_files:
             file_path = os.path.join(fp8_path, file_name)
-            loaded_files[file_name] = load_file(file_path, device="cuda")
+            loaded_files[file_name] = load_file(file_path, device=accelerator.device_name())
         return loaded_files[file_name][tensor_name]
 
     safetensor_files = list(glob(os.path.join(fp8_path, "*.safetensors")))
@@ -68,7 +70,7 @@ def main(fp8_path, bf16_path):
     for safetensor_file in tqdm(safetensor_files):
         print(f"Handling file: {safetensor_file}")
         file_name = os.path.basename(safetensor_file)
-        current_state_dict = load_file(safetensor_file, device="cuda")
+        current_state_dict = load_file(safetensor_file, device=accelerator.device_name())
         loaded_files[file_name] = current_state_dict
 
         new_state_dict = {}
@@ -95,7 +97,7 @@ def main(fp8_path, bf16_path):
         if len(loaded_files) > 2:
             oldest_file = next(iter(loaded_files))
             del loaded_files[oldest_file]
-            torch.cuda.empty_cache()
+            accelerator.empty_cache()
 
     # Update model index
     new_model_index_file = os.path.join(bf16_path, "model.safetensors.index.json")

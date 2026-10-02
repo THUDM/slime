@@ -123,7 +123,7 @@ def log_raw_info(args, all_meta_info, rollout_id):
                         wandb.log(log_dict)
 
                     if args.use_tensorboard:
-                        from slime.utils.tensorboard_utils import _TensorboardAdapter
+                        from slime.observability.tensorboard_utils import _TensorboardAdapter
 
                         tb = _TensorboardAdapter(args)
                         tb.log(data=log_dict, step=step)

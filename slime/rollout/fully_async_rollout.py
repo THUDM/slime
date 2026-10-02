@@ -21,6 +21,9 @@ generation short-circuits on those signals on its own and surfaces
 **redirecting ABORTED groups back to ``data_buffer``** instead of shipping
 them to training, so the next rollout (with refreshed weights) can pick
 them up.
+
+``--dynamic-sampling-filter-path`` is honoured DAPO-style: rejected groups do
+not count toward ``rollout_batch_size`` and are replaced from the warm queue.
 """
 
 from __future__ import annotations
@@ -32,9 +35,13 @@ import queue
 import threading
 import time
 
+from slime.data.transport import discard_rollout_group, publish_rollout_async
+from slime.rollout.base_types import RolloutFnTrainOutput, finalize_rollout_groups
+from slime.rollout.filter_hub.base_types import call_dynamic_filter
 from slime.rollout.sglang_rollout import GenerateState, generate_and_rm_group
 from slime.utils.async_utils import run
 from slime.utils.http_utils import get_rollout_num_engines
+from slime.utils.misc import load_function
 from slime.utils.types import Sample
 
 __all__ = [
@@ -80,7 +87,7 @@ class AsyncRolloutWorker:
     def __init__(self, args, data_buffer, concurrency: int = 10):
         self.args = args
         self.data_buffer = data_buffer
-        self.concurrency = concurrency
+        self.concurrency = max(1, concurrency // getattr(args, "n_samples_per_prompt", 1))
         self.running = True
         # Unbounded on purpose: put() runs inside the event-loop thread (task
         # done-callback), so a bounded queue that fills up would block the loop
@@ -144,6 +151,10 @@ class AsyncRolloutWorker:
                         except Exception as e:  # noqa: BLE001
                             logger.warning("fully-async task crashed: %r", e)
                     active_tasks -= done
+                    if done:
+                        # Done callbacks requeue ABORTED groups. Let them run
+                        # before asking the data source for replacement work.
+                        await asyncio.sleep(0)
 
                 # Top up. The qsize gate is the queue's backpressure: once a
                 # full pool of completed groups is waiting, stop pulling new
@@ -208,8 +219,10 @@ class AsyncRolloutWorker:
         return _cb
 
 
-async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> list[list[Sample]]:
-    assert args.rollout_global_dataset
+async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> RolloutFnTrainOutput | list[list[Sample]]:
+    filters_enabled = bool(
+        getattr(args, "dynamic_sampling_filter_path", None) or getattr(args, "rollout_sample_filter_path", None)
+    )
     worker = _get_global_worker(args, data_buffer)
 
     target = args.rollout_batch_size
@@ -220,7 +233,14 @@ async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> list[li
         worker.queue_size(),
     )
 
-    collected: dict[int, list[Sample]] = {}
+    collected = []
+    dropped_count = 0
+    drop_reasons: dict[str, int] = {}
+    dynamic_filter = (
+        load_function(args.dynamic_sampling_filter_path)
+        if getattr(args, "dynamic_sampling_filter_path", None) is not None
+        else None
+    )
     started = time.time()
     last_log = started
     LOG_EVERY = 30.0
@@ -229,9 +249,27 @@ async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> list[li
         # Pull only what this rollout still needs; the surplus stays queued for
         # the next rollout (that is the "queue stays warm" contract).
         drained = 0
-        for gid, group in worker.get_completed_groups(limit=target - len(collected)):
-            collected[gid] = group
+        for _gid, group in worker.get_completed_groups(limit=target - len(collected)):
             drained += 1
+            verdict = call_dynamic_filter(dynamic_filter, args, group)
+            if verdict.keep:
+                if args.rollout_data_transport == "straw":
+                    group = await publish_rollout_async(
+                        group, args, rollout_id, group=True, controller=getattr(data_buffer, "controller", None)
+                    )
+                collected.append(group)
+                continue
+
+            await asyncio.to_thread(
+                discard_rollout_group,
+                group,
+                args,
+                verdict.reason or "dynamic_filter",
+                controller=getattr(data_buffer, "controller", None),
+            )
+            reason = verdict.reason or "dynamic_filter"
+            dropped_count += 1
+            drop_reasons[reason] = drop_reasons.get(reason, 0) + 1
 
         if not drained:
             await asyncio.sleep(0.05)
@@ -239,31 +277,43 @@ async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> list[li
         now = time.time()
         if now - last_log > LOG_EVERY:
             logger.info(
-                "fully-async rollout %d: collected %d/%d, queue=%d, elapsed=%.1fs",
+                "fully-async rollout %d: collected %d/%d (dropped %d), queue=%d, elapsed=%.1fs",
                 rollout_id,
                 len(collected),
                 target,
+                dropped_count,
                 worker.queue_size(),
                 now - started,
             )
             last_log = now
 
-    # Order by sample.index for determinism (slime convention).
-    def _key(group: list[Sample]) -> int:
-        for s in group:
-            idx = getattr(s, "index", None)
-            if idx is not None:
-                return int(idx)
-        return 0
-
-    out = sorted(collected.values(), key=_key)
     logger.info(
-        "fully-async rollout %d: done in %.1fs, queue_left=%d",
+        "fully-async rollout %d: done in %.1fs, kept=%d dropped=%d (%s), queue_left=%d",
         rollout_id,
         time.time() - started,
+        len(collected),
+        dropped_count,
+        drop_reasons,
         worker.queue_size(),
     )
-    return out
+    metrics = {f"rollout/dynamic_filter/drop_{reason}": count for reason, count in drop_reasons.items()}
+    metrics["rollout/dynamic_filter/dropped_groups"] = dropped_count
+    metrics["rollout/dynamic_filter/dropped_ratio"] = dropped_count / (len(collected) + dropped_count)
+    if args.rollout_sample_filter_path is not None:
+        # Preserve the calling thread/context of custom batch hooks.
+        output = finalize_rollout_groups(
+            args, rollout_id, collected, metrics, controller=getattr(data_buffer, "controller", None)
+        )
+    else:
+        output = await asyncio.to_thread(
+            finalize_rollout_groups,
+            args,
+            rollout_id,
+            collected,
+            metrics if filters_enabled else None,
+            controller=getattr(data_buffer, "controller", None),
+        )
+    return output if filters_enabled or args.rollout_data_transport == "straw" else output.samples
 
 
 def generate_rollout_fully_async(args, rollout_id, data_buffer, evaluation: bool = False):
@@ -271,4 +321,15 @@ def generate_rollout_fully_async(args, rollout_id, data_buffer, evaluation: bool
 
     if evaluation:
         raise ValueError("fully-async rollout doesn't support evaluation mode")
+    if getattr(args, "rollout_data_transport", "object-store") == "straw":
+        from slime.data.queue_data_source import QueueDataSource
+
+        if isinstance(data_buffer, QueueDataSource):
+            from slime.rollout.fully_async_distributed import DistributedRollout
+
+            worker = data_buffer.consumers.get("fully_async")
+            if worker is None:
+                worker = DistributedRollout(args, data_buffer)
+                data_buffer.register_consumer("fully_async", worker)
+            return worker.generate(rollout_id, prefetch=worker.capacity)
     return run(_generate_rollout_async(args, rollout_id, data_buffer))

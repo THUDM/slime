@@ -8,6 +8,8 @@ from typing import Any
 
 import torch
 
+from slime.utils import accelerator
+
 logger = logging.getLogger(__name__)
 
 _HF_WEIGHT_FILE_NAMES = {
@@ -20,26 +22,6 @@ _HF_WEIGHT_FILE_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth", ".ckpt", ".ms
 
 
 def save_hf_model_to_path(
-    args,
-    output_dir: str | Path,
-    model,
-    *,
-    model_name: str | None = None,
-    quantization_config: dict[str, Any] | None = None,
-    progress_desc: str = "Save HF checkpoint",
-) -> None:
-    """Save a Megatron model as an HF checkpoint at a concrete directory."""
-    save_hf_model_direct_to_path(
-        args,
-        output_dir,
-        model,
-        model_name=model_name,
-        quantization_config=quantization_config,
-        progress_desc=progress_desc,
-    )
-
-
-def save_hf_model_direct_to_path(
     args,
     output_dir: str | Path,
     model,
@@ -108,7 +90,7 @@ def save_hf_model_direct_to_path(
         quantization_config=quantization_config,
         transform_ue8m0=False,
     )
-    megatron_local_weights = dict(named_params_and_buffers(args, model, convert_to_global_name=True))
+    megatron_local_weights = dict(named_params_and_buffers(args, model))
     num_save_nodes, save_node_rank, is_writer_rank, writer_ranks = _get_node_save_layout(args)
     if is_save_rank:
         logger.info(
@@ -223,9 +205,10 @@ def _write_pending_chunk(
     if pending_write is not None:
         shard_idx, named_tensors = pending_write
         writer.write(named_tensors, shard_idx=shard_idx)
-        if torch.cuda.is_available():
-            torch.cuda.ipc_collect()
-            torch.cuda.empty_cache()
+        selected_accelerator = accelerator.initialize_accelerator()
+        if selected_accelerator is not None:
+            selected_accelerator.ipc_collect()
+            selected_accelerator.empty_cache()
 
     return None
 

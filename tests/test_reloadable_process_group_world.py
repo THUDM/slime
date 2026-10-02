@@ -26,10 +26,10 @@ def _run_pp_group_reload_worker(rank: int, world_size: int, rendezvous_path: str
     distributed_utils.init_gloo_group()
     rpg.register_default_process_group(timeout=timeout)
 
-    # Exercise the NCCL lifecycle with Gloo so this remains a CPU test.  The
-    # relevant contract is the global ordering of WORLD and subgroup teardown,
-    # not the backend implementation.
-    rpg._uses_nccl = lambda _backend: True
+    # Exercise the accelerator lifecycle with Gloo so this remains a CPU test.
+    # The contract under test is WORLD/subgroup teardown ordering, not a vendor
+    # communication backend.
+    rpg._uses_accelerator_backend = lambda _backend: True
 
     group_specs = [
         ([0], "TP_0"),
@@ -65,6 +65,49 @@ def _run_pp_group_reload_worker(rank: int, world_size: int, rendezvous_path: str
     dist.destroy_process_group()
 
 
+def _run_backend_normalization_worker(_rank: int) -> None:
+    calls = []
+    mapped_backends = []
+
+    def old_new_group(*args, **kwargs):
+        calls.append((args, kwargs))
+        return f"group-{len(calls)}"
+
+    def process_group_backend(backend):
+        mapped_backends.append(backend)
+        return "mccl" if backend == "nccl" else backend
+
+    rpg.old_new_group_dict.clear()
+    rpg.default_process_group_states.clear()
+    rpg.dist.new_group = old_new_group
+    rpg.dist.get_backend = lambda: "gloo"
+    rpg.accelerator.process_group_backend = process_group_backend
+    rpg.monkey_patch_torch_dist()
+
+    gloo_group = rpg.dist.new_group(ranks=[0], backend="gloo")
+    assert gloo_group == "group-1"
+    assert calls[-1][1]["backend"] == "gloo"
+    assert mapped_backends == []
+
+    mccl_group = rpg.dist.new_group([0], None, "nccl")
+    assert mccl_group == "group-2"
+    assert calls[-1][0][2] == "mccl"
+    assert mapped_backends == ["nccl"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("backend", ["nccl", "mccl", "cpu:gloo,musa:mccl"])
+def test_accelerator_backend_detection(backend):
+    assert rpg._uses_accelerator_backend(backend)
+
+
+@pytest.mark.unit
+def test_new_group_normalizes_only_logical_nccl_backend():
+    # monkey_patch_torch_dist replaces process-wide torch.distributed symbols,
+    # so isolate this behavior check in a spawned process.
+    mp.spawn(_run_backend_normalization_worker, nprocs=1, join=True)
+
+
 @pytest.mark.unit
 def test_register_default_process_group_captures_rendezvous_state(monkeypatch):
     timeout = timedelta(minutes=7)
@@ -83,7 +126,7 @@ def test_register_default_process_group_captures_rendezvous_state(monkeypatch):
     assert state.store == "rendezvous-store"
     assert state.rank == 3
     assert state.world_size == 8
-    assert not state.nccl_world_destroyed
+    assert not state.accelerator_world_destroyed
 
 
 @pytest.mark.unit
@@ -127,7 +170,7 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
 
     rpg.destroy_process_groups()
 
-    assert state.nccl_world_destroyed
+    assert state.accelerator_world_destroyed
     assert state.generation == 1
     assert events == [
         ("barrier", "canonical-gloo"),
@@ -150,7 +193,7 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
     events.clear()
     rpg.reload_process_groups()
 
-    assert not state.nccl_world_destroyed
+    assert not state.accelerator_world_destroyed
     assert state.generation == 2
     assert events == [
         ("barrier", "WORLD"),

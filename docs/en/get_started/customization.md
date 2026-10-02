@@ -8,26 +8,26 @@ Below is a summary of all available customization interfaces and their purposes.
 
 | Interface Argument | Purpose |
 | :--- | :--- |
-| [`--rollout-function-path`](#1-rollout-function---rollout-function-path) | Override the entire rollout generation logic. |
-| [`--custom-generate-function-path`](#2-custom-generate-function---custom-generate-function-path) | Override only the generation step (e.g., for RAG or tool use). |
-| [`--custom-rm-path`](#3-reward-model---custom-rm-path) | Implement custom reward computation logic. |
-| [`--dynamic-sampling-filter-path`](#4-dynamic-sampling-filter---dynamic-sampling-filter-path) | Filter samples during dynamic sampling (e.g., DAPO). |
-| [`--buffer-filter-path`](#5-buffer-filter---buffer-filter-path) | Filter samples in the rollout buffer before training. |
-| [`--rollout-sample-filter-path`](#6-rollout-sample-filter---rollout-sample-filter-path) | Determine if individual samples participate in loss calculation. |
-| [`--rollout-all-samples-process-path`](#7-rollout-all-samples-process---rollout-all-samples-process-path) | Process all samples (including filtered ones) after rollout. |
-| [`--rollout-data-postprocess-path`](#8-rollout-data-postprocess---rollout-data-postprocess-path) | Post-process rollout data after log probs are computed. |
-| [`--custom-loss-function-path`](#9-custom-loss-function---custom-loss-function-path) | Implement custom training loss computation. |
-| [`--custom-tis-function-path`](#10-custom-tisrs-function---custom-tis-function-path) | Implement custom importance sampling for off-policy correction. |
-| [`--custom-pg-loss-reducer-function-path`](#11-custom-pg-loss-reducer---custom-pg-loss-reducer-function-path) | Customize pg_loss reduction (e.g., for Dr.GRPO). |
-| [`--custom-reward-post-process-path`](#12-reward-post-processing---custom-reward-post-process-path) | Custom post-processing of rewards before advantage computation. |
-| [`--custom-convert-samples-to-train-data-path`](#13-samples-to-train-data-conversion---custom-convert-samples-to-train-data-path) | Override the conversion of samples to training data format. |
-| [`--custom-rollout-log-function-path`](#14-logging-functions) | Custom logging for training rollouts. |
-| [`--custom-eval-rollout-log-function-path`](#14-logging-functions) | Custom logging for evaluation rollouts. |
-| [`--data-source-path`](#15-data-source---data-source-path) | Override the data source for rollout prompts. |
-| [`--eval-function-path`](#16-evaluation-function---eval-function-path) | Override the rollout function specifically for evaluation. |
-| [`--custom-megatron-init-path`](#17-megatron-hooks) | Custom initialization after Megatron setup. |
-| [`--custom-megatron-before-log-prob-hook-path`](#17-megatron-hooks) | Custom logic before log probability computation. |
-| [`--custom-megatron-before-train-step-hook-path`](#17-megatron-hooks) | Custom logic before each training step. |
+| [`--rollout-function-path`](#rollout-function-path) | Override the entire rollout generation logic. |
+| [`--custom-generate-function-path`](#custom-generate-function-path) | Override only the generation step (e.g., for RAG or tool use). |
+| [`--custom-rm-path`](#custom-rm-path) | Implement custom reward computation logic. |
+| [`--dynamic-sampling-filter-path`](#dynamic-sampling-filter-path) | Filter samples during dynamic sampling (e.g., DAPO). |
+| [`--buffer-filter-path`](#buffer-filter-path) | Filter samples in the rollout buffer before training. |
+| [`--rollout-sample-filter-path`](#rollout-sample-filter-path) | Determine if individual samples participate in loss calculation. |
+| [`--rollout-all-samples-process-path`](#rollout-all-samples-process-path) | Process all samples (including filtered ones) after rollout. |
+| [`--rollout-data-postprocess-path`](#rollout-data-postprocess-path) | Post-process rollout data after log probs are computed. |
+| [`--custom-loss-function-path`](#custom-loss-function-path) | Implement custom training loss computation. |
+| [`--custom-tis-function-path`](#custom-tis-function-path) | Implement custom importance sampling for off-policy correction. |
+| [`--custom-pg-loss-reducer-function-path`](#custom-pg-loss-reducer-function-path) | Customize pg_loss reduction (e.g., for Dr.GRPO). |
+| [`--custom-reward-post-process-path`](#custom-reward-post-process-path) | Custom post-processing of rewards before advantage computation. |
+| [`--custom-convert-samples-to-train-data-path`](#custom-convert-samples-to-train-data-path) | Override the conversion of samples to training data format. |
+| [`--custom-rollout-log-function-path`](#logging-functions) | Custom logging for training rollouts. |
+| [`--custom-eval-rollout-log-function-path`](#logging-functions) | Custom logging for evaluation rollouts. |
+| [`--data-source-path`](#data-source-path) | Override the data source for rollout prompts. |
+| [`--eval-function-path`](#eval-function-path) | Override the rollout function specifically for evaluation. |
+| [`--custom-megatron-init-path`](#megatron-hooks) | Custom initialization after Megatron setup. |
+| [`--custom-megatron-before-log-prob-hook-path`](#megatron-hooks) | Custom logic before log probability computation. |
+| [`--custom-megatron-before-train-step-hook-path`](#megatron-hooks) | Custom logic before each training step. |
 
 ## Agentic workflows through customization interfaces
 
@@ -37,18 +37,18 @@ For most agentic use cases, **start with `--custom-generate-function-path` plus 
 
 | If you need to … | Use |
 | :--- | :--- |
-| Run a custom agent loop, tool calls, RAG, sandbox execution, browser/terminal interaction, or multi-turn generation for each sample, while reusing slime's default rollout loop | [`--custom-generate-function-path`](#2-custom-generate-function---custom-generate-function-path) |
-| Compute verifier rewards, test-based rewards, environment success checks, rule-based rewards, or call an external reward service | [`--custom-rm-path`](#3-reward-model---custom-rm-path) |
-| Replace the entire rollout orchestration (only when per-sample customization is not enough) | [`--rollout-function-path`](#1-rollout-function---rollout-function-path) |
-| Control task sampling, buffering, requeueing, or custom prompt/task sources | [`--data-source-path`](#15-data-source---data-source-path) |
-| Attach custom loss masks, metadata, or convert agentic outputs into training data | [`--rollout-data-postprocess-path`](#8-rollout-data-postprocess---rollout-data-postprocess-path), [`--custom-convert-samples-to-train-data-path`](#13-samples-to-train-data-conversion---custom-convert-samples-to-train-data-path) |
-| Debug long-running custom generation, verifier calls, tool calls, or sandbox steps | trace utilities in [`slime.utils.trace_utils`](../developer_guide/trace.md) |
+| Run a custom agent loop, tool calls, RAG, sandbox execution, browser/terminal interaction, or multi-turn generation for each sample, while reusing slime's default rollout loop | [`--custom-generate-function-path`](#custom-generate-function-path) |
+| Compute verifier rewards, test-based rewards, environment success checks, rule-based rewards, or call an external reward service | [`--custom-rm-path`](#custom-rm-path) |
+| Replace the entire rollout orchestration (only when per-sample customization is not enough) | [`--rollout-function-path`](#rollout-function-path) |
+| Control task sampling, buffering, requeueing, or custom prompt/task sources | [`--data-source-path`](#data-source-path) |
+| Attach custom loss masks, metadata, or convert agentic outputs into training data | [`--rollout-data-postprocess-path`](#rollout-data-postprocess-path), [`--custom-convert-samples-to-train-data-path`](#custom-convert-samples-to-train-data-path) |
+| Debug long-running custom generation, verifier calls, tool calls, or sandbox steps | trace utilities in [`slime.observability.trace_utils`](../developer_guide/trace.md) |
 
-A native example of this pattern is [`examples/search-r1`](../../../examples/search-r1/), which adds search-augmented multi-turn generation via `--custom-generate-function-path` while keeping slime's default `sglang_rollout` outer loop. See also [`examples/multi_agent`](../../../examples/multi_agent/README.md) for a `--rollout-function-path`-based multi-agent pattern and [`examples/fully_async`](../../../examples/fully_async/README.md) for long-tail agentic generation.
+A native example of this pattern is [`examples/search-r1`](../_examples_synced/search-r1/README.md), which adds search-augmented multi-turn generation via `--custom-generate-function-path` while keeping slime's default `sglang_rollout` outer loop. [`examples/multi_agent`](../_examples_synced/multi_agent/README.md) uses the same interface for per-sample multi-agent generation; when the entire rollout orchestration must be replaced, see [`examples/fully_async`](../_examples_synced/fully_async/README.md).
 
 ## Detailed Interface Reference
 
-### 1. Rollout Function (`--rollout-function-path`)
+### `--rollout-function-path`
 
 **Default**: `slime.rollout.sglang_rollout.generate_rollout`
 
@@ -64,11 +64,47 @@ def generate_rollout(args, rollout_id, data_source, evaluation=False) -> Rollout
 - Adding custom sampling strategies
 - Integrating external tools or APIs during generation
 
-**Example**: See [examples/multi_agent/rollout_with_multi_agents.py](../../../examples/multi_agent/rollout_with_multi_agents.py)
+**Example**: See [examples/fully_async](../_examples_synced/fully_async/README.md)
+
+With `--rollout-data-transport straw`, custom rollout functions can return
+Sample lists directly or in `RolloutFnTrainOutput`; the manager persists them.
+`RolloutFnTrainOutput.samples` also accepts a `DiskPayloadRef`. To avoid holding
+an entire batch in memory, publish generated, scored and selected groups as they
+finish. The following helper takes the rollout function's `data_source` and an
+async iterator of completed groups:
+
+```python
+from slime.data.transport import publish_rollout_async
+from slime.rollout.base_types import finalize_rollout_groups
+
+
+async def generate_stored_batch(args, rollout_id, data_source, completed_groups):
+    refs = []
+    async for group in completed_groups:
+        ref = await publish_rollout_async(
+            group, args, rollout_id, group=True, controller=data_source.controller
+        )
+        refs.append(ref)
+    return finalize_rollout_groups(args, rollout_id, refs, controller=data_source.controller)
+```
+
+The controller from the data source commits leased groups to their queue.
+`finalize_rollout_groups` sorts groups, applies the configured batch sample
+filter once and stores the batch manifest. If the hook changes Samples, its
+result is saved again. Use `slime.data.transport.load_rollout_samples(output.samples)`
+when a wrapper needs the Sample objects.
+
+The default straw data source is `slime.data.queue_data_source.QueueDataSource`.
+It provides `get_samples(n)` and `add_samples(groups)` to acquire prompt groups
+and return work for continuation. Returned groups are persisted and available
+to any reader. For a custom remote worker, pass `source.reader_config("worker_id")`
+and call `config.open()` in that process. Reader IDs must be unique (`owner` is
+reserved); close the reader after its requests and writes finish. Readers renew
+leases automatically and return unfinished work when closed.
 
 ---
 
-### 2. Custom Generate Function (`--custom-generate-function-path`)
+### `--custom-generate-function-path`
 
 **Default**: `None` (uses built-in generate function)
 
@@ -116,11 +152,11 @@ async def custom_generate(args, sample: Sample, sampling_params: dict) -> list[S
 
 If one full trajectory has a single total reward but is split into `K` training segments, a common pattern is to distribute that reward across the segments, for example by assigning `reward / K` to each segment, so the same rollout reward is not amplified.
 
-**Example**: See [examples/search-r1/generate_with_search.py](../../../examples/search-r1/generate_with_search.py)
+**Example**: See [examples/search-r1/generate_with_search.py](../../../examples/search-r1/generate_with_search.py) and [examples/multi_agent/rollout_with_multi_agents.py](../../../examples/multi_agent/rollout_with_multi_agents.py)
 
 ---
 
-### 3. Reward Model (`--custom-rm-path`)
+### `--custom-rm-path`
 
 **Default**: `None` (uses built-in reward models based on `--rm-type`)
 
@@ -152,7 +188,7 @@ async def batched_custom_rm(args, samples: list[Sample]) -> list[float]
 
 ---
 
-### 4. Dynamic Sampling Filter (`--dynamic-sampling-filter-path`)
+### `--dynamic-sampling-filter-path`
 
 **Default**: `None`
 
@@ -180,7 +216,7 @@ class DynamicFilterOutput:
 
 ---
 
-### 5. Buffer Filter (`--buffer-filter-path`)
+### `--buffer-filter-path`
 
 **Default**: `None`
 
@@ -198,7 +234,7 @@ def buffer_filter(args, rollout_id, buffer: list[list[Sample]], num_samples: int
 
 ---
 
-### 6. Rollout Sample Filter (`--rollout-sample-filter-path`)
+### `--rollout-sample-filter-path`
 
 **Default**: `None`
 
@@ -217,7 +253,7 @@ def filter_function(args, samples: list[Sample]) -> None
 
 ---
 
-### 7. Rollout All Samples Process (`--rollout-all-samples-process-path`)
+### `--rollout-all-samples-process-path`
 
 **Default**: `None`
 
@@ -234,7 +270,7 @@ def process_function(args, samples: list[list[Sample]], data_source) -> None
 
 ---
 
-### 8. Rollout Data Postprocess (`--rollout-data-postprocess-path`)
+### `--rollout-data-postprocess-path`
 
 **Default**: `None`
 
@@ -251,7 +287,7 @@ def postprocess_function(args, samples: list[list[Sample]]) -> None
 
 ---
 
-### 9. Custom Loss Function (`--custom-loss-function-path`)
+### `--custom-loss-function-path`
 
 **Default**: `None` (requires `--loss-type custom_loss`)
 
@@ -264,7 +300,7 @@ def postprocess_function(args, samples: list[list[Sample]]) -> None
 
 ---
 
-### 10. Custom TIS/RS Function (`--custom-tis-function-path`)
+### `--custom-tis-function-path`
 
 **Default**: `None`
 
@@ -278,7 +314,7 @@ def postprocess_function(args, samples: list[list[Sample]]) -> None
 
 ---
 
-### 11. Custom pg_loss Reducer (`--custom-pg-loss-reducer-function-path`)
+### `--custom-pg-loss-reducer-function-path`
 
 **Default**: `None`
 
@@ -300,7 +336,7 @@ def get_pg_loss_reducer(
 
 ---
 
-### 12. Reward Post-Processing (`--custom-reward-post-process-path`)
+### `--custom-reward-post-process-path`
 
 **Default**: `None` (uses default GRPO normalization)
 
@@ -312,7 +348,7 @@ def get_pg_loss_reducer(
 
 ---
 
-### 13. Samples to Train Data Conversion (`--custom-convert-samples-to-train-data-path`)
+### `--custom-convert-samples-to-train-data-path`
 
 **Default**: `None` (uses built-in conversion logic)
 
@@ -352,7 +388,7 @@ dict: {
 
 ---
 
-### 14. Logging Functions
+### Logging functions
 
 #### Training Rollout Logging (`--custom-rollout-log-function-path`)
 
@@ -374,13 +410,13 @@ def log_eval_rollout_data(rollout_id, args, data, extra_metrics) -> bool
 
 ---
 
-### 15. Data Source (`--data-source-path`)
+### `--data-source-path`
 
-**Default**: `slime.rollout.data_source.RolloutDataSourceWithBuffer`
+**Default**: `slime.data.data_source.RolloutDataSourceWithBuffer`
 
 **Purpose**: Override the data source for rollout prompts.
 
-**Base Class**: `slime.rollout.data_source.DataSource`
+**Base Class**: `slime.data.data_source.DataSource`
 
 **Required Methods**:
 ```python
@@ -403,7 +439,7 @@ class CustomDataSource(DataSource):
 
 ---
 
-### 16. Evaluation Function (`--eval-function-path`)
+### `--eval-function-path`
 
 **Default**: Same as `--rollout-function-path`
 
@@ -415,7 +451,7 @@ class CustomDataSource(DataSource):
 
 ---
 
-### 17. Megatron Hooks
+### Megatron hooks
 
 #### Megatron Initialization (`--custom-megatron-init-path`)
 

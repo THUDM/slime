@@ -9,6 +9,8 @@ from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.transformer.module import MegatronModule
 from transformers import AutoConfig
 
+from slime.utils import accelerator
+
 from .qwen3_5 import get_qwen3_5_spec
 from .qwen3_5_vl_utils import build_packed_mrope_position_ids, gather_packed_input_ids, get_packed_cp_local_indices
 
@@ -56,8 +58,8 @@ def _load_vision_model(hf_config, dtype: torch.dtype, use_cpu_initialization: bo
 
         vision_model_cls = Qwen3_5VisionModel
 
-    device = torch.device("cpu") if use_cpu_initialization else torch.device("cuda", torch.cuda.current_device())
-    with device:
+    device = torch.device("cpu") if use_cpu_initialization else accelerator.current_device()
+    with torch.device(device):
         vision_model = vision_model_cls._from_config(hf_config.vision_config)
     vision_model.to(dtype=dtype)
 

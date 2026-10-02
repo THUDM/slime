@@ -14,7 +14,7 @@ If you feel the same way, you'll share our vision:
 
 That's why we present [slime](https://github.com/THUDM/slime), a post-training framework designed to be:
 
-- **Versatile** – with a fully customizable rollout interface and flexible training setups (colocated or decoupled, synchronous or asynchronous, RL or SFT cold start).
+- **Versatile** – with a fully customizable rollout interface and flexible training setups (colocated or decoupled, standard or fully-async rollout, RL or SFT cold start).
 - **Performant** - integrating SGLang for inference and Megatron-LM for training, natively.
 - **Maintainable** - with a lightweight codebase and smooth transition from Megatron pretraining to SGLang deployment.
 
@@ -30,7 +30,7 @@ Here’s how we made it happen.
 > — *The Bitter Lesson*
 > 
 
-A prevailing misconception within the RL community is the need for separate frameworks for different tasks: one for plain math, one for multi-turn tool calling, one for asynchronous training, one for agentic tasks, and so on. Forking and maintaining multiple frameworks is dreadful, leading to time-wasting bugfix cherry-picking, or worse, training crashes by missing patches.
+A prevailing misconception within the RL community is the need for separate frameworks for different tasks: one for plain math, one for multi-turn tool calling, one for fully-async rollout, one for agentic tasks, and so on. Forking and maintaining multiple frameworks is dreadful, leading to time-wasting bugfix cherry-picking, or worse, training crashes by missing patches.
 
 It wasn’t always like this: no one forks PyTorch just for a new dataloader. We believe the current chaos stems from the trap of dictating how people should build their applications. If we insist on defining a universal template for every rollout scenario, we’ll inevitably create an RL framework that meets only a fraction of real-world needs.
 
@@ -42,7 +42,7 @@ With the sgl-router, users only need to send HTTP requests to a single endpoint.
 
 Regarding training schemes, slime uses Ray for resource management, enabling **colocated** (same GPUs) or **decoupled** (separate GPUs) setups with a single flag (`--colocate`).
 
-And with Ray's asynchronous execution via `.remote()`, slime naturally supports asynchronous training. Changing synchronization behavior is as simple as moving the `ray.get` operation. And to make experimenting with different strategies easy, we didn't wrap the code with trainer classes, but simply exposed the training loop in entrypoint  `train.py`.
+slime keeps a single training entrypoint, `train.py`. Fully-async behavior lives in the rollout implementation instead of a separate training loop: select `slime.rollout.fully_async_rollout.generate_rollout_fully_async` with `--rollout-function-path`. Its background worker keeps individual generations in flight and carries a warm queue across training steps.
 
 ## Built for Performance
 

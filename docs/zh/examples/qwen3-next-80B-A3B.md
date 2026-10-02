@@ -1,4 +1,4 @@
-# 8xH100 训练 Qwen3-30B-A3B
+# Qwen3-Next-80B-A3B 训练示例
 
 ## 环境准备
 
@@ -83,7 +83,7 @@ PYTHONPATH=/root/Megatron-LM/ torchrun --nproc-per-node 8 \
 cd /root/slime
 export BASE_FOLDER=/root
 export MASTER_ADDR=127.0.0.1
-bash scripts/run-qwen3-next-80B-A3B-8gpus.sh 
+ACTOR_NUM_NODES=1 CP_SIZE=1 bash scripts/run-qwen3-next-80B-A3B.sh
 ```
 如果显存不够，考虑disable `--accumulate-allreduce-grads-in-fp32`，enable `--grad-reduce-in-bf16`
 
@@ -94,5 +94,6 @@ bash scripts/run-qwen3-next-80B-A3B-8gpus.sh
 cd /root/slime
 export BASE_FOLDER=/root
 export MASTER_ADDR=your_master_addr
-bash scripts/run-qwen3-next-80B-A3B.sh 
+export HOSTFILE=/path/to/hostfile
+bash scripts/run-qwen3-next-80B-A3B.sh
 ```

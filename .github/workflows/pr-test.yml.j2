@@ -1,44 +1,50 @@
 <% set megatron_tests = [
     {'test_file': 'test_full_disk_weight_update.py', 'num_gpus': 4},
-    {'test_file': 'test_release_train.py', 'num_gpus': 4},
+    {'test_file': 'test_release_train.py', 'num_gpus': 4, 'straw': True},
     {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8, 'enable_eval': '0'},
     {'test_file': 'test_glm4.7_30B_A3B_pd_mooncake.py', 'num_gpus': 8},
     {'test_file': 'test_glm52_6layer_deterministic_e2e.py', 'num_gpus': 8},
     {'test_file': 'test_glm52_layerwise_zero_e2e.py', 'num_gpus': 8},
     {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1', 'enable_eval': '0'},
-    {'test_file': 'test_qwen3.6_35B_A3B_pd_mooncake.py', 'num_gpus': 8, 'use_deepep': '1'},
-    {'test_file': 'test_qwen3_30B_A3B_r3.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1', 'enable_eval': '0'},
-    {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8, 'enable_eval': '0'},
+    {'test_file': 'test_qwen3.6_35B_A3B_pd_mooncake.py', 'num_gpus': 8, 'use_deepep': '1', 'straw': True},
+    {'test_file': 'test_qwen3_30B_A3B_r3.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1', 'enable_eval': '0', 'straw': True},
+    {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8, 'enable_eval': '0', 'straw': True},
     {'test_file': 'test_qwen3_4B_ppo_disaggregate.py', 'num_gpus': 8, 'enable_eval': '0'},
     {'test_file': 'test_qwen3_4B_ppo_train_critic_only.py', 'num_gpus': 8, 'enable_eval': '0'},
     {'test_file': 'test_ppo_logprob_entropy_gpu.py', 'num_gpus': 2},
     {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8, 'enable_eval': '0'},
-    {'test_file': 'test_moonlight_16B_A3B_r3.py', 'num_gpus': 8, 'enable_eval': '0'},
-    {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
+    {'test_file': 'test_moonlight_16B_A3B_r3.py', 'num_gpus': 8, 'enable_eval': '0', 'straw': True},
+    {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8, 'straw': True},
     {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
-    {'test_file': 'test_qwen2.5_0.5B_debug_rollout_then_train.py', 'num_gpus': 8},
+    {'test_file': 'test_qwen2.5_0.5B_debug_rollout_then_train.py', 'num_gpus': 8, 'straw': True},
     {'test_file': 'test_qwen2.5_0.5B_debug_train_dump_e2e.py', 'num_gpus': 8},
     {'test_file': 'test_qwen2.5_0.5B_opd_sglang.py', 'num_gpus': 8},
     {'test_file': 'test_qwen3_4B_external_pd.py', 'num_gpus': 6},
-    {'test_file': 'test_qwen2.5_0.5B_fully_async_short.py', 'num_gpus': 4},
-    {'test_file': 'test_qwen2.5_0.5B_fanout_short.py', 'num_gpus': 4},
+    {'test_file': 'test_qwen2.5_0.5B_fully_async_short.py', 'num_gpus': 4, 'straw': True},
+    {'test_file': 'test_qwen2.5_0.5B_pipeline_rl.py', 'test_args': '--transport nccl', 'num_gpus': 4, 'straw': True},
+    {'test_file': 'test_qwen2.5_0.5B_pipeline_rl.py', 'test_args': '--transport disk', 'num_gpus': 4, 'straw': True},
+    {'test_file': 'test_qwen2.5_0.5B_pipeline_rl.py', 'test_args': '--transport nccl --flush-cache-interval 2', 'num_gpus': 4, 'straw': True},
+    {'test_file': 'test_straw_checkpoint_fork.py', 'num_gpus': 4, 'straw': True},
+    {'test_file': 'test_qwen2.5_0.5B_fanout_short.py', 'num_gpus': 4, 'straw': True},
     {'test_file': 'test_qwen3_4B_streaming_partial_rollout.py', 'num_gpus': 8},
     {'test_file': 'test_qwen3.5_0.8B_gsm8k_short.py', 'num_gpus': 4},
-    {'test_file': 'test_qwen3.5_0.8B_gsm8k_async_short.py', 'num_gpus': 4},
-    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer gpu', 'num_gpus': 8},
-    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer cpu', 'num_gpus': 8},
-    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer cpu', 'num_gpus': 8},
-    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer gpu', 'num_gpus': 8},
-    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--async-save', 'num_gpus': 8},
+    {'test_file': 'test_qwen2.5_0.5B_score_centering.py', 'num_gpus': 2, 'straw': True},
+    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer gpu', 'num_gpus': 8, 'straw': True},
+    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer cpu', 'num_gpus': 8, 'straw': True},
+    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer cpu', 'num_gpus': 8, 'straw': True},
+    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer gpu', 'num_gpus': 8, 'straw': True},
+    {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--async-save', 'num_gpus': 8, 'straw': True},
 ] %>
 <% set jobs = {
     'e2e-test-sglang-config': {
       'label': 'run-ci-sglang-config',
       'tests': [
+        {'test_file': 'utils/test_sglang_arguments.py', 'num_gpus': 0},
+        {'test_file': 'utils/test_sglang_config.py', 'num_gpus': 0},
         {'test_file': 'test_qwen2.5_0.5B_sglang_config.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen2.5_0.5B_sglang_config_distributed.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen2.5_0.5B_sglang_config_distributed.py', 'num_gpus': 8, 'straw': True},
         {'test_file': 'test_sglang_config_mixed_offload.py', 'num_gpus': 8},
-        {'test_file': 'test_sglang_config_mixed_offload_ft.py', 'num_gpus': 8},
+        {'test_file': 'test_sglang_config_mixed_offload_ft.py', 'num_gpus': 8, 'straw': True},
       ],
     },
     'e2e-test-megatron': {
@@ -48,17 +54,18 @@
     'e2e-test-precision': {
       'label': 'run-ci-precision',
       'tests': [
+        {'test_file': 'test_glm5_indexer_q_norm.py', 'num_gpus': 0},
         {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
       ],
     },
     'e2e-test-ckpt': {
       'label': 'run-ci-ckpt',
       'tests': [
-        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer gpu', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer cpu', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer cpu', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer gpu', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--async-save', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer gpu', 'num_gpus': 8, 'straw': True},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer gpu --load-optimizer cpu', 'num_gpus': 8, 'straw': True},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer cpu', 'num_gpus': 8, 'straw': True},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--save-optimizer cpu --load-optimizer gpu', 'num_gpus': 8, 'straw': True},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'test_args': '--async-save', 'num_gpus': 8, 'straw': True},
       ],
     },
 
@@ -66,25 +73,34 @@
       'label': 'run-ci-cpu-unittest',
       'always': True,
       'cpu': True,
-      'extra_pip_deps': 'transformers',
+      'extra_pip_deps': 'transformers wandb',
       'tests': [
-        {'test_file': 'test_megatron_argument_validation.py', 'num_gpus': 0},
+        {'test_file': 'test_megatron_argument_validation.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'utils/test_megatron_role_config.py', 'num_gpus': 0},
         {'test_file': 'test_deep_ep_tms_patch.py', 'num_gpus': 0},
         {'test_file': 'test_stateless_adam.py', 'num_gpus': 0},
         {'test_file': 'utils/test_megatron_server_arguments.py', 'num_gpus': 0},
         {'test_file': 'test_dp_schedule.py', 'num_gpus': 0},
         {'test_file': 'test_cp_utils.py', 'num_gpus': 0},
-        {'test_file': 'test_train_dump.py', 'num_gpus': 0},
+        {'test_file': 'test_train_data_utils.py', 'num_gpus': 0},
+        {'test_file': 'test_rollout_data_utils.py', 'num_gpus': 0},
+        {'test_file': 'test_rollout_metrics.py', 'num_gpus': 0},
         {'test_file': 'test_metric_report.py', 'num_gpus': 0},
         {'test_file': 'test_metric_report_dist.py', 'num_gpus': 0},
         {'test_file': 'test_loss_cp_invariance.py', 'num_gpus': 0},
         {'test_file': 'test_advantage_whiten_cp.py', 'num_gpus': 0},
         {'test_file': 'test_logprob_response_spans.py', 'num_gpus': 0},
+        {'test_file': 'observability/test_trace_utils.py', 'num_gpus': 0},
         {'test_file': 'test_value_temperature.py', 'num_gpus': 0},
+        {'test_file': 'test_ppo_kl_metric.py', 'num_gpus': 0},
         {'test_file': 'test_cispo_loss.py', 'num_gpus': 0},
         {'test_file': 'test_policy_loss.py', 'num_gpus': 0},
+        {'test_file': 'test_score_centering.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_score_centering_binary.py', 'num_gpus': 0},
+        {'test_file': 'test_score_centering_transport.py', 'num_gpus': 0, 'straw': True},
         {'test_file': 'test_ppo_logprob_entropy.py', 'num_gpus': 0},
         {'test_file': 'test_discounted_returns.py', 'num_gpus': 0},
+        {'test_file': 'test_block_fp8_zero_block.py', 'num_gpus': 0},
         {'test_file': 'test_rm_f1.py', 'num_gpus': 0},
         {'test_file': 'test_rm_gpqa.py', 'num_gpus': 0},
         {'test_file': 'test_rm_math.py', 'num_gpus': 0},
@@ -92,24 +108,41 @@
         {'test_file': 'test_rm_deepscaler.py', 'num_gpus': 0},
         {'test_file': 'test_sample.py', 'num_gpus': 0},
         {'test_file': 'test_eval_config.py', 'num_gpus': 0},
+        {'test_file': 'test_docs_consistency.py', 'num_gpus': 0},
         {'test_file': 'test_process_rollout_data.py', 'num_gpus': 0},
         {'test_file': 'test_filter_long_prompt.py', 'num_gpus': 0},
         {'test_file': 'test_read_file_slicing.py', 'num_gpus': 0},
-        {'test_file': 'test_rollout_validation.py', 'num_gpus': 0},
         {'test_file': 'test_fully_async_rollout.py', 'num_gpus': 0},
+        {'test_file': 'test_pipeline_rl.py', 'num_gpus': 0},
+        {'test_file': 'test_distributed_rollout.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_straw_fully_async_recovery.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_rollout_buffer_order.py', 'num_gpus': 0},
+        {'test_file': 'test_server_control.py', 'num_gpus': 0},
+        {'test_file': 'test_cuda_stack_offload.py', 'num_gpus': 0},
+        {'test_file': 'test_straw_r3.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_routed_experts_disk_layout.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_rollout_straw_transport.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_optional_straw.py', 'num_gpus': 0},
+        {'test_file': 'test_queue_sample_codec.py', 'num_gpus': 0, 'straw': True},
         {'test_file': 'test_rollout_sample_hooks.py', 'num_gpus': 0},
         {'test_file': 'test_hf_to_megatron.py', 'num_gpus': 0},
         {'test_file': 'test_qwen3_5_vl_native.py', 'num_gpus': 0},
+        {'test_file': 'test_qwen3_linear_attention_cu_seqlens.py', 'num_gpus': 0},
+        {'test_file': 'test_accelerator.py', 'num_gpus': 0},
         {'test_file': 'test_reloadable_process_group_world.py', 'num_gpus': 0},
+        {'test_file': 'test_reloadable_process_group_memory_check.py', 'num_gpus': 0},
         {'test_file': 'test_placement_group.py', 'num_gpus': 0},
         {'test_file': 'test_external_sglang_engines.py', 'num_gpus': 0},
+        {'test_file': 'test_streaming_rollout.py', 'num_gpus': 0},
         {'test_file': 'test_empty_colocated_weight_bucket.py', 'num_gpus': 0},
         {'test_file': 'test_expert_routing.py', 'num_gpus': 0},
         {'test_file': 'test_glm5_indexer_short_context.py', 'num_gpus': 0},
         {'test_file': 'test_model_provider_freeze.py', 'num_gpus': 0},
         {'test_file': 'test_glm52_layerwise_comparison.py', 'num_gpus': 0},
         {'test_file': 'test_layerwise_alignment.py', 'num_gpus': 0},
+        {'test_file': 'test_tau_bench_token_delta.py', 'num_gpus': 0},
         {'test_file': 'utils/test_hf_checkpoint_saver.py', 'num_gpus': 0},
+        {'test_file': 'utils/test_loss_mask_type_qwen35.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_rollout_contracts.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_runtime_hook_contracts.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_path_loading_contracts.py', 'num_gpus': 0},
@@ -210,6 +243,13 @@ jobs:
           pip install << config.extra_pip_deps >>
 <% endif %>
 
+<% if job_name == 'cpu-unittest' %>
+      - name: Install straw for queue tests
+        if: matrix.info.straw == true
+        shell: bash
+        run: python -m pip install --upgrade --only-binary=straw-queue straw-queue
+<% endif %>
+
       - name: Install
         shell: bash
         run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps
@@ -269,6 +309,7 @@ jobs:
             << config.image if config.image else 'slimerl/slime:latest' >> \
             bash -lc '
               set -euo pipefail
+              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
@@ -316,7 +357,7 @@ jobs:
             FIRST=true
             for filepath in $CHANGED; do
               # Extract NUM_GPUS from the test file, default to 8
-              NGPU=$(grep -oP '^NUM_GPUS\s*=\s*\K\d+' "$filepath" | head -1)
+              NGPU=$(grep -m1 -oP '^NUM_GPUS\s*=\s*\K\d+' "$filepath" || true)
               NGPU=${NGPU:-8}
               if [ "$FIRST" = true ]; then FIRST=false; else MATRIX+=","; fi
               MATRIX+="{\"test_file\":\"$filepath\",\"num_gpus\":$NGPU}"
@@ -385,6 +426,7 @@ jobs:
             slimerl/slime:latest \
             bash -lc '
               set -euo pipefail
+              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then

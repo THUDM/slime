@@ -25,11 +25,27 @@ CPU job 不使用 Docker，不申请 GPU，也不会调用 `tests/ci/gpu_lock_ex
 GPU job 运行在自托管 GPU runner 上。每个 job 会：
 
 1. 启动 Docker container，通常使用 `slimerl/slime:latest`；镜像验证使用 `slimerl/slime-test:latest`。
-2. 通过 `pip install -e . --no-deps` 安装 slime。
+2. 从 PyPI 安装最新版 `straw-queue` wheel，并通过 `pip install -e . --no-deps` 安装 slime。
 3. 通过 `tests/ci/gpu_lock_exec.py --count <num_gpus>` 申请所需 GPU。
 4. 执行注册的测试文件：`python tests/<test_file>.py`。
 
 GPU 测试通常遵循 e2e 模式：`prepare()` 下载模型和数据集，`execute()` 构建 CLI 参数并调用 `U.execute_train(...)`。
+
+straw e2e 测试显式设置 `--rollout-data-transport straw`，因此本地执行、`run-ci-changed` 和固定矩阵使用同一后端：
+
+- R3：`test_qwen3_30B_A3B_r3.py` 和 `test_moonlight_16B_A3B_r3.py`。
+- SC：`test_qwen2.5_0.5B_score_centering.py`，覆盖 top-k 和 top-p。
+- Fully async、fanout、PPO、MTP、PD/Mooncake、分布式 SGLang 配置、混合 offload 故障恢复、debug 重放和 release-train。
+- Checkpoint 保存/加载测试跨阶段共用 straw 存储池，验证队列和训练状态恢复。`test_straw_checkpoint_fork.py` 覆盖 step 选择、多次回退、自动分支选择和 debug 回放。
+
+R3、SC 和 fully async 同时启用在线 GC。普通 straw 测试使用独立临时目录，执行后清理。这些单机 GPU 测试使用本地文件系统 profile；多机 JuiceFS 持久性仍需单独验证。其余 e2e 保留 Ray object-store 或 NIXL 传输覆盖。固定矩阵和 changed-test 的 GPU 容器均安装 straw。
+
+`test_qwen2.5_0.5B_pipeline_rl.py` 使用 4 张 GPU，运行 fully async rollout
+和三个真实 GRPO step。探针验证同一个 HTTP 请求跨权重更新持续生成，并检查
+训练确实改变了策略权重。固定矩阵覆盖 `--flush-cache-interval 0` 下的 NCCL
+和 full disk 权重同步，以及 NCCL 下 interval `2` 的周期性刷新。
+`test_pipeline_rl.py` 在 CPU 上检查刷新周期和 SGLang 控制请求。这些测试验证
+功能，不衡量 PipelineRL 的学习效果或吞吐增益。
 
 ### Changed-Test Job
 
@@ -45,12 +61,22 @@ changed-test job 本身走 self-hosted Docker 路径。当 `NUM_GPUS = 0` 时，
 
 ## CI Jobs 与触发方式
 
+CPU 矩阵通过 `straw: true` 标记依赖 straw 的测试。对应 job 从 PyPI 安装最新版 `straw-queue` wheel，再运行测试。队列测试无需 Rust 工具链，也不需要访问 straw 源码仓库。
+
+`test_optional_straw.py` 的 CPU job 不安装 straw，验证默认 rollout 与训练数据路径仍可运行、启动时打印 `pip install straw-queue` 提示，以及显式选择 straw 时给出明确的安装错误。
+
+`test_straw_fully_async_recovery.py` 是自动运行的 CPU 集成测试：SIGKILL 一个包含两个本地 Ray 节点的任务，再用新进程从同一个文件系统队列恢复，分别验证在线 GC 关闭和开启。测试使用有界的小规模 R3/SC 载荷，以及确定性的推理/reward fixture。安装兼容 straw wheel 后，本地运行：
+
+```bash
+PYTHONPATH=. python tests/test_straw_fully_async_recovery.py
+```
+
 | Trigger | Job | 类型 | 说明 |
 |---|---|---|---|
 | 自动运行 | `cpu-unittest` | CPU | 默认运行的 unit/contract tests，覆盖 argument validation、schedule、reward、sample、rollout validation、checkpoint utilities 和 plugin contracts。 |
 | 自动运行 | `agent-adapter-test` | CPU | 默认运行的 agent adapter tests，包含额外 provider SDK 依赖。 |
 | `run-ci-sglang-config` | `e2e-test-sglang-config` | GPU | SGLang config 测试，覆盖高级 rollout engine deployment 和 mixed/offload 场景。 |
-| `run-ci-megatron` | `e2e-test-megatron` | GPU | 核心 Megatron 训练测试，覆盖 dense、MoE、PPO、MTP、OPD、async rollout、PD/Mooncake 和 debug replay 路径。 |
+| `run-ci-megatron` | `e2e-test-megatron` | GPU | 核心 Megatron 训练测试，覆盖 dense、MoE、PPO、MTP、OPD、fully-async rollout、PD/Mooncake 和 debug replay 路径。 |
 | `run-ci-precision` | `e2e-test-precision` | GPU | 数值精度和并行一致性检查。 |
 | `run-ci-ckpt` | `e2e-test-ckpt` | GPU | Checkpoint save/load 正确性，包括 CPU/GPU optimizer state 和 async save。 |
 | `run-ci-image` | `e2e-test-image` | GPU | 在 `slimerl/slime-test:latest` 上运行与 `run-ci-megatron` 相同的 matrix。 |
@@ -77,7 +103,7 @@ Agent adapter tests 单独放在一个 CPU job 中，因为它们需要额外 SD
 常用本地命令：
 
 ```bash
-python tests/test_agent_trajectory.py
+python tests/test_agent/test_trajectory_manager_branching.py
 python -m pytest tests/test_megatron_argument_validation.py tests/plugin_contracts/test_plugin_generate_contracts.py
 ```
 
@@ -86,7 +112,7 @@ python -m pytest tests/test_megatron_argument_validation.py tests/plugin_contrac
 GPU e2e tests 验证 CPU tests 无法覆盖的集成训练/rollout 行为：
 
 - `run-ci-sglang-config`：高级 SGLang deployment path，包括 config-based engine layouts。
-- `run-ci-megatron`：主要 Megatron backend coverage，包括 dense/MoE recipe、async rollout、OPD、PPO-style path、PD/Mooncake 和 debug rollout-then-train replay。
+- `run-ci-megatron`：主要 Megatron backend coverage，包括 dense/MoE recipe、fully-async rollout、OPD、PPO-style path、PD/Mooncake 和 debug rollout-then-train replay。
 - `run-ci-precision`：不同并行设置下的数值一致性。
 - `run-ci-ckpt`：checkpoint save/load 组合和 async save。
 - `run-ci-image`：与 `run-ci-megatron` 相同的 matrix，但运行在 release/test image 上。

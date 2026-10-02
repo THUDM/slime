@@ -27,7 +27,6 @@ def _load_megatron_utils_init(monkeypatch, buffer_cls, tms_impl, module_name):
     )
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, module_name, module)
-    monkeypatch.setitem(sys.modules, f"{module_name}.megatron_patch", types.ModuleType("megatron_patch"))
     spec.loader.exec_module(module)
 
 

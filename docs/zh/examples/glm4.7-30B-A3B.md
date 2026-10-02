@@ -31,12 +31,12 @@ PYTHONPATH=/root/Megatron-LM/ torchrun --nproc-per-node 8 \
 
 ```bash
 cd /root/slime
-bash scripts/run-glm4.7-30B-A3B-8gpus.sh
+bash scripts/run-glm4.7-30B-A3B.sh
 ```
 
 ### 参数简介
 
-这里我们简单介绍一下脚本 [run-glm4.7-30B-A3B-8gpus.sh](https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-30B-A3B-8gpus.sh) 中的关键部分。
+这里我们简单介绍一下脚本 [run-glm4.7-30B-A3B.sh](../../../scripts/run-glm4.7-30B-A3B.sh) 中的关键部分。
 
 #### MoE 配置
 
@@ -122,20 +122,15 @@ SPEC_ARGS=(
 >
 > 对于其他支持 MTP 训练的模型（如 MiMo），可参考 `scripts/run-mimo-7B-rl-eagle.sh`。
 
-### 多机支持
+### 多机适配
 
-对于多机训练（例如 2×8 H100），使用多机脚本：
-
-```bash
-cd /root/slime
-export BASE_DIR=/shared/path  # 所有节点都可以访问的路径
-bash scripts/run-glm4.7-30B-A3B.sh
-```
+仓库中的 `scripts/run-glm4.7-30B-A3B.sh` 会启动本地单节点 Ray，并固定传入 `--actor-num-nodes 1`，不能直接作为多机启动器。要把这份配置适配到多机训练（例如 2×8 H100），需要先让所有 worker 加入同一个 Ray 集群，并修改启动脚本：
 
 对于多机环境，需要进行如下修改：
 
 - 将训练模型、数据放在所有机器都可以访问到的路径上；
 - 设置各台机器都可以访问到的 `MASTER_ADDR`；
+- 把 `--actor-num-nodes` 从 `1` 改为训练节点数；
 - 去掉 CPU Adam 相关的配置，因为使用了 distributed optimizer，多机环境下 optimizer 的显存占比会明显下降。
 - 调整并行度：例如 TP=4, PP=2, EP=8, CP=2。
 

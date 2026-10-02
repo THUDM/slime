@@ -92,7 +92,7 @@ logger = logging.getLogger(__name__)
 __all__ = ["save_checkpoint"]
 
 
-def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_context, skip_load_to_model_and_opt):
+def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_context):
     # ref: how megatron `load_checkpoint` gets directory
     args = get_args()
     load_path = args.load
@@ -102,13 +102,19 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
     ), f"{args.load=} does not exist or is an empty directory. Did you specify the wrong folder?"
 
     if _is_megatron_checkpoint(load_path):
-        return _load_checkpoint_megatron(
+        result = _load_checkpoint_megatron(
             ddp_model=ddp_model,
             optimizer=optimizer,
             opt_param_scheduler=opt_param_scheduler,
             checkpointing_context=checkpointing_context,
-            skip_load_to_model_and_opt=skip_load_to_model_and_opt,
+            skip_load_to_model_and_opt=False,
         )
+        if getattr(args, "ckpt_step", None) is not None and not args.finetune and result[0] != args.ckpt_step:
+            raise ValueError(
+                f"Model loaded step {result[0]}, but checkpoint restoration requires step {args.ckpt_step}. "
+                "The Megatron checkpoint loader must honor --ckpt-step (including zero)."
+            )
+        return result
     else:
         return _load_checkpoint_hf(
             ddp_model=ddp_model,

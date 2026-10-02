@@ -7,7 +7,7 @@ directory; each engine's `/pull_weights` applies them into a host-local checkpoi
 host it spans, and the engines reload through the ordinary `update_weights_from_disk` path —
 slime only ever talks to one endpoint per engine.
 
-See [Delta Weight Sync](../../docs/en/advanced/delta-weight-sync.md) for the full mechanism,
+See [Delta Weight Sync](https://github.com/THUDM/slime/blob/main/docs/en/advanced/delta-weight-sync.md) for the full mechanism,
 encodings, integrity checks, and shared-filesystem visibility hooks.
 
 ## Try it

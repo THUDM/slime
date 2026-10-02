@@ -80,3 +80,7 @@ def test_negative_slices(jsonl_path, suffix, expected):
 def test_negative_slice_larger_than_file(jsonl_path):
     # "@[-100:]" on a 10-row file is simply the whole file, like list slicing.
     assert _ids(jsonl_path + "@[-100:]") == list(range(10))
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))
